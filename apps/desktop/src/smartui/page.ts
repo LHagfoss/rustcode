@@ -32,6 +32,7 @@ export function pageTheme(mode: ThemeMode, token: (name: string) => string): Pag
     "--rc-muted": token("--rc-text-muted"),
     "--rc-faint": token("--rc-text-faint"),
     "--rc-accent": token("--rc-accent"),
+    "--rc-accent-text": token("--rc-accent-text"),
     "--rc-surface": token("--rc-surface"),
     "--rc-separator": token("--rc-border"),
     "--rc-danger": token("--rc-danger"),
@@ -84,7 +85,7 @@ button { font: inherit; font-weight: 500; color: var(--rc-text); background: var
 button:hover { background: color-mix(in srgb, var(--rc-text) 9%, transparent); }
 button:active { opacity: 0.75; }
 button:focus-visible { outline: 2px solid color-mix(in srgb, var(--rc-accent) 60%, transparent); outline-offset: 1px; }
-button.primary, button[data-primary] { background: var(--rc-accent); color: #fff; border-color: transparent; }
+button.primary, button[data-primary] { background: var(--rc-accent); color: var(--rc-accent-text); border-color: transparent; }
 button:disabled { opacity: 0.45; cursor: default; }
 code, kbd, pre { font-family: var(--rc-mono); font-size: 12px; }
 pre { background: var(--rc-surface); padding: 8px 10px; border-radius: var(--rc-radius); overflow: auto; margin: 0 0 8px; }

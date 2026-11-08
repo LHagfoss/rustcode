@@ -4,7 +4,7 @@
 // itself. Pure, so the details card and its tests share one answer
 // (ui/ThreadDetails.tsx).
 
-import { isActive, type Link, MAX_ACTIVE_LINKS } from "./orchestration";
+import { isActive, type Link, MAX_DELEGATES_PER_THREAD } from "./orchestration";
 
 /** A thread above this one, live or settled. */
 export interface ParentRelation {
@@ -90,7 +90,7 @@ export function threadLineage(
   const inbound = links.filter((link) => link.target === id && link.orchestrator !== id);
   const outbound = links
     .filter((link) => link.orchestrator === id && link.target !== id)
-    .slice(-MAX_ACTIVE_LINKS * 2);
+    .slice(-MAX_DELEGATES_PER_THREAD * 2);
   // A thread that names itself as its parent is a broken record too.
   const meta = parentMeta?.id === id ? undefined : parentMeta;
   const startedLink = newest(inbound, (link) => !!link.started);

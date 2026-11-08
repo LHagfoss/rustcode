@@ -107,6 +107,19 @@ export function orderHarnesses(list: Harness[]): Harness[] {
   return [...list].sort((a, b) => rank(a) - rank(b));
 }
 
+/**
+ * Settings' list split: the harnesses RustCode ships with (the engine's
+ * `known`), then the custom commands the user wrote into `[[harnesses]]` by
+ * hand, each in display order. Only a custom one can be removed.
+ */
+export function groupHarnesses(list: Harness[]): { standard: Harness[]; custom: Harness[] } {
+  const ordered = orderHarnesses(list);
+  return {
+    standard: ordered.filter((h) => h.known),
+    custom: ordered.filter((h) => !h.known),
+  };
+}
+
 /** First-run default: Claude Code when it can run, else the first agent that can, else RustCode. */
 export function preferredDefault(snapshot: HarnessSnapshot): {
   harness: string;

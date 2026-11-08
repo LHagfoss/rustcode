@@ -15,9 +15,12 @@ import {
   elapsedOf,
   flattenViews,
   forestTotal,
+  runningAgents,
+  runningSubagents,
   timeLabel,
 } from "./delegates";
 import type { Link } from "./orchestration";
+import type { TranscriptItem } from "./thread";
 
 const MINUTE = 60_000;
 
@@ -252,10 +255,11 @@ describe("the strip above the composer", () => {
     const bar = branchBar(total(), starts, 20 * MINUTE);
     expect(bar.working).toBe(2);
     expect(bar.needs).toBe(1);
-    // Every thread the branch holds, working and finished, is still the cap's own count.
-    expect(bar.threads).toBe(5);
-    expect(bar.label).toBe("5 threads");
-    expect(bar.status).toBe("2 working · 1 needs you");
+    expect(bar.live).toBe(3);
+    // The two finished delegates are history: the header counts what runs now.
+    expect(bar.label).toBe("2 running");
+    expect(bar.status).toBe("1 needs you");
+    expect(bar.show).toBe(true);
   });
 
   test("the time is the longest working thread's wall clock, never a sum", () => {
@@ -266,7 +270,25 @@ describe("the strip above the composer", () => {
     expect(branchBar(total(), [4 * MINUTE, 10 * MINUTE], 20 * MINUTE).longestMs).toBe(16 * MINUTE);
   });
 
-  test("nothing working is one quiet count of what is done, with no time", () => {
+  test("a thread only waiting on the user says that alone", () => {
+    const asking = [
+      link("root", "one", { state: "needs_user", waitingSince: MINUTE }),
+      link("root", "two", { state: "needs_user", waitingSince: 2 * MINUTE }),
+    ];
+    const bar = branchBar(
+      forestTotal(delegateViews(delegateTree("root", asking), read({ activity: () => undefined }))),
+      [],
+      3 * MINUTE,
+    );
+    expect(bar.working).toBe(0);
+    expect(bar.needs).toBe(2);
+    expect(bar.label).toBe("2 need you");
+    expect(bar.status).toBe("");
+    expect(bar.state).toBe("needs");
+    expect(bar.show).toBe(true);
+  });
+
+  test("a branch that only finished has nothing to show, however long it ran", () => {
     const done = [
       link("root", "one", { state: "done", settledAt: MINUTE }),
       link("root", "two", { state: "done", settledAt: 2 * MINUTE }),
@@ -278,34 +300,38 @@ describe("the strip above the composer", () => {
       60 * MINUTE,
     );
     expect(bar.working).toBe(0);
+    expect(bar.live).toBe(0);
     expect(bar.longestMs).toBeUndefined();
-    expect(bar.label).toBe("3 delegates done");
+    expect(bar.label).toBe("");
     expect(bar.status).toBe("");
-    expect(bar.state).toBe("done");
-    const one = branchBar(
+    expect(bar.show).toBe(false);
+    // A stopped delegate is the user's own doing, and history too.
+    const stopped = branchBar(
       forestTotal(
-        delegateViews(
-          delegateTree("root", [link("root", "only", { state: "done", settledAt: MINUTE })]),
-          read({ activity: () => undefined }),
-        ),
+        delegateViews(delegateTree("root", [link("root", "stopped", { state: "cancelled" })]), read()),
       ),
       [],
       2 * MINUTE,
     );
-    expect(one.label).toBe("1 delegate done");
+    expect(stopped.show).toBe(false);
+    expect(stopped.label).toBe("");
   });
 
-  test("a failure is still named when nothing works", () => {
+  test("a failure that settled stops naming itself", () => {
+    // A failed delegate from hours ago is history: the inbox and the details panel keep it, and it
+    // does not pin a header over the composer forever.
     const failed = [link("root", "broken", { state: "failed", settledAt: MINUTE })];
     const bar = branchBar(
       forestTotal(delegateViews(delegateTree("root", failed), read({ activity: () => undefined }))),
       [],
       2 * MINUTE,
     );
-    expect(bar.label).toBe("1 thread");
-    expect(bar.status).toBe("1 failed");
-    expect(bar.state).toBe("failed");
+    expect(bar.failed).toBe(1);
+    expect(bar.label).toBe("");
+    expect(bar.status).toBe("");
+    expect(bar.state).toBe("done");
     expect(bar.longestMs).toBeUndefined();
+    expect(bar.show).toBe(false);
   });
 });
 
@@ -321,5 +347,83 @@ describe("the words on a row", () => {
     expect(costLabel(0.31)).toBe("$0.31");
     expect(costLabel(0.31, true)).toBe("≈$0.31");
     expect(costLabel(undefined, true)).toBe("—");
+  });
+});
+
+/**
+ * A tool call as the transcript holds it. `diffs` is all else a call needs:
+ * what it started, who it is and how it goes are what these tests read.
+ */
+const call = (id: string, title: string, extra: Partial<TranscriptItem> = {}): TranscriptItem =>
+  ({
+    kind: "tool",
+    id,
+    title,
+    status: "in_progress",
+    diffs: [],
+    ...extra,
+  }) as TranscriptItem;
+
+describe("a harness's own subagents", () => {
+  test("one at work reads beside the delegates, with the steps it is on", () => {
+    const items: TranscriptItem[] = [
+      call("agent", "Agent", {
+        toolName: "Agent",
+        input: { subagent_type: "Explore", description: "Study t3.codes" },
+      }),
+      call("step", "Read", { parent: "agent", title: "Read" }),
+      call("done", "Agent", {
+        status: "completed",
+        toolName: "Agent",
+        input: { subagent_type: "Explore", description: "Already answered" },
+      }),
+    ];
+    const rows = runningSubagents(items);
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.item.id).toBe("agent");
+    expect(rows[0]!.steps.map((step) => step.id)).toEqual(["step"]);
+  });
+
+  test("a finished agent stays in the transcript, not in the strip", () => {
+    const items: TranscriptItem[] = [
+      call("done", "Task", { status: "completed", toolName: "Task", input: { description: "Did it" } }),
+    ];
+    expect(runningSubagents(items)).toEqual([]);
+  });
+
+  test("RustCode's own delegate calls are the links, never native agent rows", () => {
+    const items: TranscriptItem[] = [
+      call("start", "start_session", { input: { prompt: "Fix the failing test" } }),
+      call("read", "Read"),
+    ];
+    expect(runningSubagents(items)).toEqual([]);
+  });
+});
+
+describe("RustCode's own subagents", () => {
+  const agent = (status: "running" | "completed", id: number) => ({
+    id,
+    name: id === 1 ? "Explore" : "Reviewer",
+    task: `Task ${id}`,
+    agentType: "default",
+    status,
+    activeTurn: false,
+    depth: 0,
+    writeAccess: false,
+    toolCalls: 0,
+    requests: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cachedInputTokens: 0,
+  });
+
+  test("one still at work is a row, though its spawn_agent call already returned", () => {
+    const spawn = call("spawn", "spawn_agent", {
+      status: "completed",
+      output: '{"agent_id": 1, "name": "Explore"}',
+    });
+    expect(runningSubagents([spawn])).toEqual([]);
+    const rows = runningAgents([agent("running", 1), agent("completed", 2)]);
+    expect(rows.map((a) => a.name)).toEqual(["Explore"]);
   });
 });

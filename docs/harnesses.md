@@ -89,6 +89,7 @@ All methods are on the client's existing `rustcode --acp` connection.
     "name": "Codex",
     "kind": "codex",
     "builtin": false,           // true only for "rustcode"
+    "known": true,              // one RustCode ships with: turn off, never remove
     "enabled": true,            // user turned it on (onboarding / Settings)
     "command": ["codex", "app-server"],
     "installed": true,          // command resolves on PATH
@@ -130,7 +131,10 @@ offers no choice) and `default_effort` (the profile's `reasoning_effort`, else
 have their own sign-in). `last` is what `_rustcode/harnesses/remember` kept
 (always present, `null` when nothing is kept, so a client can tell an engine
 that remembers from an older one). `login_command` and `install_hint` are `null` for custom
-harnesses. Detection is cached for a minute; `set` and `remove` refresh it.
+harnesses. `known` is true for `rustcode` and every harness in the table below,
+and false for one the user added by hand: a client shows "Remove" only for the
+latter, and groups those apart. Detection is cached for a minute; `set` and
+`remove` refresh it.
 
 | id | kind | command | version from | auth from |
 | --- | --- | --- | --- | --- |
@@ -478,6 +482,17 @@ What each part does for an external thread:
   RustCode created — once, never after `session/load`. It never reaches the
   thread's history, title or search index, and the agent's own echo of it as
   `user_message_chunk` is stripped.
+- **Native subagents.** A `claude-code` session RustCode starts with the
+  orchestrator attached gets
+  `_meta.claudeCode.options.disallowedTools: ["Task", "Agent"]` on
+  `session/new` and `session/load` — the shape `claude-agent-acp` forwards to
+  the Claude Agent SDK and merges with its own list. The thread delegates
+  through `start_session` and `fan_out` instead, so every subagent is a
+  RustCode thread in the delegate UI. The rustcode MCP server is untouched.
+  Without the orchestrator (orchestration off in Settings, or a platform
+  where it has no socket) nothing is disallowed: the thread keeps its own
+  subagent tool rather than losing delegation entirely. Another harness's
+  session gets no `_meta` from RustCode.
 - **Codex events.** Message deltas are `agent_message_chunk`, reasoning
   summaries `agent_thought_chunk`, command, file-change, MCP and web-search
   items `tool_call`/`tool_call_update` (command output and diffs as text
@@ -581,15 +596,23 @@ the composer's model picker › Harness switches an open thread.
 
 ## Compaction
 
-Each harness compacts its own context; RustCode does not compact on a
-threshold of its own. `/compact` on its own asks for a
-compaction now: the Codex adapter calls Codex's `thread/compact/start`
+Each harness compacts its own context with its own command; the desktop app
+decides when to ask, but it never writes the summary itself. `/compact` on its
+own asks for a compaction now: the Codex adapter calls Codex's `thread/compact/start`
 instead of sending the text to the model, and an ACP harness (Claude Code,
 OpenCode) gets `/compact` as its prompt and runs its own command. Codex's
 `contextCompaction` item, whether asked for or automatic mid-turn, becomes
 the engine's compaction card (`_meta.rustcode.kind = "compaction"`), which
 the desktop app shows as one quiet "Context compacted" row. The context
 panel has *Compact now*, which sends `/compact`.
+
+The desktop app can also decide to compact on its own (#3170): after a turn
+above its size threshold, and in the minute after a prompt cache is due to
+expire (about 4.5 minutes after a turn) when the context is above 60k. It
+sends the same `/compact`, so each harness compacts with its own command.
+Claude Code uses both rules, Codex only the cache rule (it already compacts
+inside a turn), and the built-in harness keeps its own pre-request compaction.
+An ACP agent that does not advertise `/compact` is skipped.
 
 ## Configuration
 
@@ -631,11 +654,15 @@ name = "Paral 2"
 config_dir = "~/.claude-paral-2"
 ```
 
-Known harnesses (`rustcode`, `codex`, `claude-code`, `gemini`, `opencode`)
+Known harnesses (`rustcode`, `codex`, `claude-code`, `gemini`, `opencode`, `pi`)
 need only `id` and `enabled`; their commands are built in and can be
 overridden with `command`. An entry without `enabled` is on. `model` and
 `effort` are optional on any entry (older configs without them load
-unchanged). Both sections are optional and only read from the user config: a
+unchanged). An entry whose id is a known harness, such as a `pi` entry written
+by hand before Settings listed it, *is* that harness: it is listed once, with
+the user's `command` and `enabled`, never as a second, custom row. Any other id
+needs a `command` and is a custom harness, which Settings shows under "Added by
+hand". Both sections are optional and only read from the user config: a
 project's `.rustcode/config.toml` cannot add a harness or change a command.
 
 `silence_timeout_minutes` is the turn silence deadline below: 10 minutes by

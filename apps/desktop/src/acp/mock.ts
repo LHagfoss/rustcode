@@ -47,6 +47,12 @@ export interface MockOptions {
    * `links`, since surviving one is the point of a receipt.
    */
   receipts?: JsonObject;
+  /**
+   * Remote access the mock starts in (`?remote=`): `disconnected` shares with
+   * the gateway unreachable, `expired` issues a pairing code that has already
+   * run out. The default starts idle.
+   */
+  remote?: "disconnected" | "expired";
 }
 
 interface MockThread {
@@ -238,6 +244,7 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         name: "RustCode",
         kind: "builtin",
         builtin: true,
+        known: true,
         enabled: true,
         command: [],
         installed: true,
@@ -257,6 +264,7 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         name: "Codex",
         kind: "codex",
         builtin: false,
+        known: true,
         enabled: onboarded,
         command: ["codex", "app-server"],
         installed: true,
@@ -286,6 +294,7 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         name: "Claude Code",
         kind: "acp",
         builtin: false,
+        known: true,
         enabled: false,
         command: ["claude-agent-acp"],
         installed: true,
@@ -318,6 +327,7 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         name: "Gemini CLI",
         kind: "acp",
         builtin: false,
+        known: true,
         enabled: false,
         command: ["gemini", "--experimental-acp"],
         installed: false,
@@ -334,6 +344,7 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         name: "OpenCode",
         kind: "acp",
         builtin: false,
+        known: true,
         enabled: false,
         command: ["opencode", "acp"],
         installed: true,
@@ -341,6 +352,42 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
         auth: "unknown",
         login_command: ["opencode", "auth", "login"],
         install_hint: "brew install opencode",
+        capabilities: ACP_CAPS,
+        accounts: [],
+        models: [],
+        error: null,
+      },
+      // A standard harness that is not installed: it still lists, with its
+      // install hint and a switch that cannot be turned on.
+      {
+        id: "pi",
+        name: "Pi",
+        kind: "acp",
+        builtin: false,
+        known: true,
+        enabled: false,
+        command: ["npx", "-y", "pi-acp"],
+        installed: false,
+        auth: "unknown",
+        login_command: ["pi"],
+        install_hint: "npm install -g @earendil-works/pi-coding-agent",
+        capabilities: ACP_CAPS,
+        accounts: [],
+        models: [],
+        error: null,
+      },
+      // A harness the user wrote into config.toml by hand.
+      {
+        id: "local-agent",
+        name: "Local Agent",
+        kind: "acp",
+        builtin: false,
+        known: false,
+        enabled: true,
+        command: ["local-agent", "--acp"],
+        installed: true,
+        version: "0.3.1",
+        auth: "unknown",
         capabilities: ACP_CAPS,
         accounts: [],
         models: [],
@@ -1741,13 +1788,23 @@ export class MockEngine {
   /** The payload-capture switches (docs/data-store.md › Captured payloads), off as `config.toml` defaults them. */
   private payloadCapture = { providerPayloads: false, harnessRpcPayloads: false };
   /**
-   * Remote access (docs/remote.md): the machine's switch, the pairing
-   * challenge on screen and the devices paired with this Mac. Off until
-   * Settings › Remote access switches it on, as `remote/disabled` holds it.
+  /**
+   * Remote access (docs/remote.md), as the engine's gateway reports it: a
+   * machine-wide switch and gateway, the threads this app shared (whatever
+   * harness runs them), one paired phone, and the pairing offer while it
+   * lasts. `refused` holds the threads the host turns down and why, which the
+   * machine's answer counts as `notShared` and a thread's answer names.
    */
-  private remoteEnabled = false;
-  private remoteDevices: JsonObject[] = [{ id: "device-1", name: "Lars's iPhone" }];
-  private remotePairing: { code: string; expiresAt: number; attemptsLeft: number } | null = null;
+  private remote = {
+    enabled: false,
+    shared: new Set<string>(),
+    gateway: null as JsonObject | null,
+    devices: [{ id: "7c1f3a2b", name: "Lars's iPhone" }],
+    offer: null as JsonObject | null,
+    pairingDue: false,
+    pairingError: null as string | null,
+    refused: new Map<string, string>(),
+  };
   private removedWorktrees = new Set<string>();
   /** The link book the app keeps in the data store: none until it saves one, and kept in `options` as the engine's disk does. */
   private get linkBook(): JsonObject | undefined {
@@ -1800,56 +1857,6 @@ export class MockEngine {
       remainingSecs: 42 * 60,
     },
   ];
-
-  /**
-   * `_rustcode/remote`: the machine's gateway, paired devices and pairing
-   * challenge, or one thread's share, shaped as the engine answers
-   * (engine/src/acp/remote.rs).
-   */
-  private remoteStatus(sessionId: string | undefined): JsonObject {
-    const pairing = this.remotePairing;
-    const secondsLeft = pairing ? Math.max(0, Math.round((pairing.expiresAt - Date.now()) / 1000)) : 0;
-    if (pairing && secondsLeft === 0) this.remotePairing = null;
-    const open = this.remoteEnabled;
-    return {
-      available: true,
-      enabled: open,
-      shared: sessionId ? open : false,
-      ...(sessionId ? { sessionId, target: "rustcode", registrationEpoch: 1 } : {}),
-      gateway: open
-        ? {
-            connected: true,
-            advertisedAddress: "192.168.31.185:17879",
-            listenAddress: "192.168.31.185:17879",
-            loopbackOnly: false,
-            pairedDevices: this.remoteDevices.length,
-            // A phone attached to the thread on screen, so its header shows it.
-            attachedDevices: sessionId ? ["Lars's iPhone"] : [],
-            connectedDevices: ["Lars's iPhone"],
-            pairingOpen: !!pairing && secondsLeft > 0,
-            pairing: pairing ? { expiresInSecs: secondsLeft, attemptsLeft: pairing.attemptsLeft } : null,
-          }
-        : null,
-      offer:
-        pairing && secondsLeft > 0
-          ? {
-              qrPayload: '{"protocol_version":1,"address":"192.168.31.185:17879"}',
-              qrRows: mockQrRows(),
-              code: pairing.code,
-              address: "192.168.31.185:17879",
-              expiresInSecs: secondsLeft,
-              loopbackOnly: false,
-              challenge: 7,
-              lockedForSecs: null,
-            }
-          : null,
-      pairingExpired: !!pairing && secondsLeft === 0,
-      pairingPending: false,
-      pairingError: null,
-      pairedDevices: this.remoteDevices.length,
-      devices: this.remoteDevices,
-    };
-  }
 
   /** A timed approval the user just gave in the mock: listed and revocable like the engine's. */
   private addGrant(prefix: string) {
@@ -2127,6 +2134,141 @@ export class MockEngine {
   trashThread(id: string) {
     this.thread(id);
     this.threads = this.threads.filter((t) => t.id !== id);
+  }
+
+  /**
+   * The gateway as the engine names it: the phones connected to it and the
+   * ones attached to the thread being read, both by name (arrays, as
+   * `acp/remote.rs` sends them), and whether anything is connected at all.
+   */
+  private remoteGateway(): JsonObject {
+    const connected = this.options.remote !== "disconnected";
+    const phones = connected ? this.remote.devices.map((device) => str(device.name) ?? "phone") : [];
+    return {
+      connected,
+      advertisedAddress: "192.168.1.24:17879",
+      listenAddress: "192.168.1.24:17879",
+      loopbackOnly: false,
+      attachedDevices: phones,
+      connectedDevices: phones,
+      pairedDevices: this.remote.devices.length,
+    };
+  }
+
+  /** The pairing challenge as the engine's offer: the rows are drawn, the payload is not scannable in a mock. */
+  private remoteOffer(): JsonObject | null {
+    const stored = obj(this.remote.offer);
+    if (!stored) return null;
+    const expiresAt = num(stored.expiresAt) ?? 0;
+    if (expiresAt <= Date.now()) return null;
+    const offer: JsonObject = {
+      qrPayload: str(stored.qrPayload) ?? "",
+      qrRows: mockQrRows(),
+      code: str(stored.code) ?? "",
+      address: str(stored.address) ?? "",
+      expiresInSecs: Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000)),
+      loopbackOnly: stored.loopbackOnly === true,
+      gatewayId: str(stored.gatewayId) ?? "",
+      challenge: num(stored.challenge) ?? 0,
+    };
+    const lockedFor = num(stored.lockedForSecs);
+    if (lockedFor !== undefined) offer.lockedForSecs = lockedFor;
+    return offer;
+  }
+
+  /** The machine's answer: the switch, the gateway, the open challenge and the paired devices. */
+  private remoteHost(): JsonObject {
+    const stored = obj(this.remote.offer);
+    const expiresAt = num(stored?.expiresAt) ?? 0;
+    const offer = this.remoteOffer();
+    const host: JsonObject = {
+      available: true,
+      enabled: this.remote.enabled,
+      shared: false,
+      pairingPending: this.remote.pairingDue,
+      pairingExpired: stored !== undefined && expiresAt <= Date.now(),
+      pairingError: this.remote.pairingError,
+      notShared: this.remote.refused.size,
+      pairedDevices: this.remote.devices.length,
+      devices: this.remote.devices,
+    };
+    if (this.remote.gateway) {
+      const gateway: JsonObject = {
+        ...this.remote.gateway,
+        pairedDevices: this.remote.devices.length,
+        pairingOpen: offer !== null,
+        sessions: this.remote.shared.size,
+      };
+      if (offer) {
+        gateway.pairing = {
+          expiresInSecs: num(offer.expiresInSecs) ?? 0,
+          attemptsLeft: num(stored?.attemptsLeft) ?? 5,
+          challenge: num(offer.challenge) ?? 0,
+        };
+      }
+      host.gateway = gateway;
+    }
+    if (offer) host.offer = offer;
+    return host;
+  }
+
+  /**
+   * The answer `_rustcode/remote` gives: with no session, the machine's; with
+   * one it shares, that thread's; with one it does not, the machine's plus the
+   * thread and why the host holds it back (`notShared`), as the engine does.
+   */
+  private remoteStatus(sessionId: string): Json {
+    const shared = sessionId !== "" && this.remote.shared.has(sessionId);
+    if (!shared) {
+      const host = this.remoteHost();
+      if (!sessionId) return host;
+      const held: JsonObject = { ...host, sessionId };
+      const reason = this.remote.refused.get(sessionId);
+      if (reason !== undefined) held.notShared = reason;
+      return held as Json;
+    }
+    const stored = obj(this.remote.offer);
+    const expiresAt = num(stored?.expiresAt) ?? 0;
+    const share: JsonObject = {
+      available: true,
+      enabled: this.remote.enabled,
+      shared: true,
+      sessionId,
+      target: this.thread(sessionId).harness,
+      registrationEpoch: 1,
+      offer: this.remoteOffer(),
+      pairingPending: this.remote.pairingDue,
+      pairingExpired: stored !== undefined && expiresAt <= Date.now(),
+      pairedDevices: this.remote.devices.length,
+      devices: this.remote.devices,
+    };
+    if (this.remote.gateway) share.gateway = this.remoteGateway();
+    if (this.remote.pairingError) share.pairingError = this.remote.pairingError;
+    return share as Json;
+  }
+
+  /** A fresh pairing challenge: the QR payload carries the credential, the code is typed by hand. */
+  private issueRemoteOffer() {
+    const address = "192.168.1.24:17879";
+    this.remote.gateway = this.remoteGateway();
+    this.remote.offer = {
+      qrPayload: JSON.stringify({
+        protocol_version: 1,
+        address,
+        gateway_id: "9f2c1d0b4a6e8c7d5b3a1908f7e6d5c4",
+        credential: "jH8sK2mQ9xT4vLpR6nB1yC3fW7gZ0aE5uI2oP8sD4qX",
+        host_name: "Mock MacBook Pro",
+      }),
+      code: "4927-3318",
+      address,
+      expiresAt: Date.now() + (this.options.remote === "expired" ? -1_000 : 120_000),
+      loopbackOnly: false,
+      gatewayId: "9f2c1d0b4a6e8c7d5b3a1908f7e6d5c4",
+      challenge: 17,
+      attemptsLeft: 5,
+    };
+    this.remote.pairingDue = false;
+    this.remote.pairingError = null;
   }
 
   private snapshot(): Json {
@@ -2617,6 +2759,48 @@ export class MockEngine {
             ],
           },
         };
+      case "_rustcode/pulls/state": {
+        const branch = str(obj(params)?.branch) || "feat/delegate-pull";
+        return {
+          branch,
+          pull: {
+            number: 2790,
+            title: "feat(mcp): report and finish delegate pull requests",
+            state: "open",
+            merged: false,
+            draft: false,
+            url: "https://github.com/LHagfoss/rustcode/pull/2790",
+            branch,
+            headSha: "58961fc5aa",
+            ci: "pending",
+            failing: [],
+            pending: 1,
+            passed: 5,
+          },
+        };
+      }
+      case "_rustcode/pulls/merge":
+        return {
+          merge: {
+            number: num(obj(params)?.number) ?? 2790,
+            state: "merged",
+            merged: true,
+            failing: [],
+            url: "https://github.com/LHagfoss/rustcode/pull/2790",
+            waitedSecs: 42,
+            message: "squash-merged and the branch was deleted",
+          },
+        };
+      case "_rustcode/worktrees/cleanup":
+        return {
+          cleanup: {
+            removed: true,
+            branch: str(obj(params)?.branch) ?? "feat/delegate-pull",
+            branch_removed: true,
+            base: "main",
+            commit_count: 0,
+          },
+        };
       case "_rustcode/pulls/view":
         return {
           pull: {
@@ -2661,6 +2845,53 @@ export class MockEngine {
         if (at < 0) throw Object.assign(new Error("No such message"), { code: -32602 });
         thread.history.splice(at);
         return {};
+      }
+      case "_rustcode/remote": {
+        const sessionId = str(params.sessionId) ?? "";
+        return this.remoteStatus(sessionId);
+      }
+      case "_rustcode/remote/start": {
+        const sessionId = str(params.sessionId) ?? "";
+        // Settings' switch names no thread: remote access is on for the
+        // machine and every open thread is shared. A thread's own start
+        // shares that thread, as the engine's auto-share pass does.
+        await this.sleep(this.delay * 2);
+        if (!sessionId) {
+          this.remote.enabled = true;
+          this.remote.gateway = this.remoteGateway();
+          for (const open of this.threads) this.remote.shared.add(open.id);
+          this.remote.refused.clear();
+          if (params.pair === true) this.issueRemoteOffer();
+          return this.remoteStatus("");
+        }
+        const thread = this.thread(sessionId);
+        this.remote.enabled = true;
+        this.remote.gateway = this.remoteGateway();
+        this.remote.shared.add(thread.id);
+        if (params.pair === true) this.issueRemoteOffer();
+        return this.remoteStatus(thread.id);
+      }
+      case "_rustcode/remote/pair": {
+        const sessionId = str(params.sessionId) ?? "";
+        // A challenge is the gateway's, so a thread the app does not share
+        // still pairs the machine (acp/remote.rs › `pair`).
+        await this.sleep(this.delay * 2);
+        this.remote.enabled = true;
+        if (!this.remote.gateway) this.remote.gateway = this.remoteGateway();
+        this.issueRemoteOffer();
+        return this.remoteStatus(sessionId);
+      }
+      case "_rustcode/remote/stop": {
+        const sessionId = str(params.sessionId) ?? "";
+        await this.sleep(this.delay * 2);
+        this.remote.enabled = false;
+        this.remote.shared.clear();
+        this.remote.gateway = null;
+        this.remote.offer = null;
+        this.remote.pairingDue = false;
+        this.remote.pairingError = null;
+        this.remote.refused.clear();
+        return this.remoteStatus(sessionId);
       }
       case "_rustcode/warm":
         return {};
@@ -2784,36 +3015,6 @@ export class MockEngine {
       }
       case "_rustcode/presence":
         return { enabled: this.presence, discordDetected: true };
-      case "_rustcode/remote": {
-        const sessionId = str(params.sessionId);
-        return this.remoteStatus(sessionId);
-      }
-      case "_rustcode/remote/start": {
-        const sessionId = str(params.sessionId);
-        // Settings' switch names no thread and switches the machine on; a
-        // thread's own start shares that thread.
-        if (!sessionId) {
-          await this.sleep(this.delay * 4);
-          this.remoteEnabled = true;
-        }
-        return this.remoteStatus(sessionId);
-      }
-      case "_rustcode/remote/pair": {
-        await this.sleep(this.delay * 4);
-        this.remoteEnabled = true;
-        this.remotePairing = {
-          code: "4821-7730",
-          expiresAt: Date.now() + 2 * 60_000,
-          attemptsLeft: 5,
-        };
-        return this.remoteStatus(str(params.sessionId));
-      }
-      case "_rustcode/remote/stop": {
-        await this.sleep(this.delay * 3);
-        this.remoteEnabled = false;
-        this.remotePairing = null;
-        return this.remoteStatus(str(params.sessionId));
-      }
       case "_rustcode/presence/set":
         this.presence = params.enabled === true;
         return { enabled: this.presence, discordDetected: true };
@@ -2839,6 +3040,7 @@ export class MockEngine {
             name: str(params.name) ?? id,
             kind: "acp",
             builtin: false,
+            known: false,
             enabled: true,
             command: arr(params.command).map(String),
             installed: true,
@@ -2858,11 +3060,7 @@ export class MockEngine {
         return this.snapshot();
       }
       case "_rustcode/harnesses/remove": {
-        this.harnesses.harnesses = this.harnesses.harnesses.filter(
-          (h) =>
-            h.id !== params.id ||
-            ["rustcode", "codex", "claude-code", "gemini", "opencode", "pi"].includes(h.id),
-        );
+        this.harnesses.harnesses = this.harnesses.harnesses.filter((h) => h.id !== params.id || h.known);
         return this.snapshot();
       }
       case "_rustcode/harnesses/default":
@@ -3410,6 +3608,38 @@ export class MockEngine {
       if (!thread.title) {
         thread.title = prompt.split("\n")[0]?.slice(0, 60) || "New thread";
         this.notify(update(sid, { sessionUpdate: "session_info_update", title: thread.title }));
+      }
+      // Two row states that only exist while something happens, so the sidebar's status chip can be
+      // seen without a model: "keep working" leaves a turn running for two minutes (`Working 0:12`
+      // with its clock, then `Waiting`), and "fail this turn" ends it with an error (`Failed` until
+      // the row is opened). `?scenario=delegates` covers `Waiting`, `Needs you` and the stack.
+      if (/\bfail this turn\b/i.test(prompt)) throw new Error("The mock failed this turn, as asked.");
+      if (/\bkeep working\b/i.test(prompt)) {
+        const callId = `live-${++this.counter}`;
+        push({
+          sessionUpdate: "tool_call",
+          toolCallId: callId,
+          title: "bash",
+          kind: "execute",
+          status: "in_progress",
+          rawInput: { command: "bun test --watch", summary: "Keep the turn running" },
+        });
+        for (let i = 0; i < 60 && !run.cancelled; i++) {
+          await this.sleep(2_000);
+          push({
+            sessionUpdate: "tool_call_update",
+            toolCallId: callId,
+            _meta: { rustcode: { outputDelta: `✓ ${i + 1} tests still passing\n` } },
+          });
+        }
+        if (run.cancelled) return done("cancelled");
+        push({
+          sessionUpdate: "tool_call_update",
+          toolCallId: callId,
+          status: "completed",
+          rawOutput: { content: "✓ 60 pass, 0 fail\n", exitCode: 0 },
+        });
+        return done("end_turn");
       }
       for (const chunk of [
         "**Reading the request**\n",
@@ -3986,7 +4216,7 @@ export class MockTransport implements Transport {
       const path = String(args.path);
       if (path.startsWith("/") && !path.startsWith(String((args.roots as string[])[0] ?? "")))
         throw new Error("Pictures outside the thread's folder are not shown.");
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="200" viewBox="0 0 480 200"><rect width="480" height="200" rx="12" fill="#18181a"/><polyline fill="none" stroke="#5b8def" stroke-width="3" points="20,180 80,170 140,150 200,110 260,40 320,40 380,40 440,40"/><text x="20" y="28" fill="#a1a1a1" font-family="-apple-system" font-size="14">${path}</text></svg>`;
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="200" viewBox="0 0 480 200"><rect width="480" height="200" rx="12" fill="#18181a"/><polyline fill="none" stroke="#93a3e8" stroke-width="3" points="20,180 80,170 140,150 200,110 260,40 320,40 380,40 440,40"/><text x="20" y="28" fill="#a1a1a1" font-family="-apple-system" font-size="14">${path}</text></svg>`;
       return { name: path.split("/").pop(), mimeType: "image/svg+xml", data: btoa(svg) };
     }
     if (command === "skill_create") return `~/.config/rustcode/skills/${String(args.name)}/SKILL.md`;

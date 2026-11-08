@@ -593,10 +593,13 @@ fn same_path(left: &Path, right: &Path) -> bool {
     canonical(left) == canonical(right)
 }
 
-fn status_counts(path: &Path, base: &str) -> (bool, u64, u64) {
+/// Whether the worktree has uncommitted changes, and how far it is ahead of and
+/// behind its upstream (or `base`). A git that cannot answer is an error, never
+/// "clean": removal must not proceed on an unknown state.
+fn status_counts(path: &Path, base: &str) -> Result<(bool, u64, u64), String> {
     let dirty = git(path, &["status", "--porcelain", "--untracked-files=normal"])
         .map(|out| !out.trim().is_empty())
-        .unwrap_or(false);
+        .map_err(|message| format!("git status failed: {message}"))?;
     let against = git_line(path, &["rev-parse", "--abbrev-ref", "@{upstream}"])
         .ok()
         .unwrap_or_else(|| base.to_owned());
@@ -609,13 +612,18 @@ fn status_counts(path: &Path, base: &str) -> (bool, u64, u64) {
             &format!("HEAD...{against}"),
         ],
     )
-    .ok()
+    .map_err(|message| format!("git rev-list failed: {message}"))
     .and_then(|line| {
         let mut parts = line.split_whitespace();
-        Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
-    })
-    .unwrap_or((0, 0));
-    (dirty, ahead, behind)
+        match (parts.next(), parts.next()) {
+            (Some(ahead), Some(behind)) => match (ahead.parse::<u64>(), behind.parse::<u64>()) {
+                (Ok(ahead), Ok(behind)) => Ok((ahead, behind)),
+                _ => Err(format!("git rev-list answered '{line}'")),
+            },
+            _ => Err(format!("git rev-list answered '{line}'")),
+        }
+    })?;
+    Ok((dirty, ahead, behind))
 }
 
 /// The worktrees RustCode made for `repo`, with their state.
@@ -662,7 +670,20 @@ pub(crate) fn list(repo: &Path) -> Result<Vec<Value>, WorktreeError> {
                 base_ref: None,
                 created_at: String::new(),
             });
-        let (dirty, ahead, behind) = status_counts(&path, &worktree.base);
+        // A worktree whose git state cannot be read (a prunable folder, a
+        // broken checkout) still exists and still lists: the row says its
+        // state is unknown. Removal is where unknown refuses.
+        let counts = status_counts(&path, &worktree.base);
+        let (dirty, ahead, behind) = match &counts {
+            Ok((dirty, ahead, behind)) => (json!(dirty), json!(ahead), json!(behind)),
+            Err(message) => {
+                crate::dbg_log!(
+                    "[worktrees] {} has no readable state: {message}",
+                    path.display()
+                );
+                (Value::Null, Value::Null, Value::Null)
+            }
+        };
         let mut row = serde_json::to_value(Worktree {
             branch: if branch.is_empty() {
                 worktree.branch.clone()
@@ -673,9 +694,9 @@ pub(crate) fn list(repo: &Path) -> Result<Vec<Value>, WorktreeError> {
         })
         .unwrap_or_default();
         if let Some(object) = row.as_object_mut() {
-            object.insert("dirty".into(), json!(dirty));
-            object.insert("ahead".into(), json!(ahead));
-            object.insert("behind".into(), json!(behind));
+            object.insert("dirty".into(), dirty);
+            object.insert("ahead".into(), ahead);
+            object.insert("behind".into(), behind);
             object.insert(
                 "session_ids".into(),
                 json!(record.map(|record| record.session_ids).unwrap_or_default()),
@@ -712,7 +733,13 @@ pub(crate) fn remove(path: &Path, force: bool) -> Result<Value, WorktreeError> {
         .map(|record| record.worktree.base.clone())
         .filter(|base| !base.is_empty());
     if !force {
-        let (dirty, _, _) = status_counts(&path, base.as_deref().unwrap_or("HEAD"));
+        let (dirty, _, _) =
+            status_counts(&path, base.as_deref().unwrap_or("HEAD")).map_err(|message| {
+                WorktreeError {
+                    reason: "unknown",
+                    message,
+                }
+            })?;
         if dirty {
             return Err(WorktreeError {
                 reason: "dirty",
@@ -766,6 +793,352 @@ pub(crate) fn remove(path: &Path, force: bool) -> Result<Value, WorktreeError> {
         let _ = std::fs::remove_file(record);
     }
     Ok(json!({ "removed": true, "branch_removed": branch_removed }))
+}
+
+// ---------------------------------------------------------- cleanup ----
+
+/// A commit `git cherry` marks `+` for the base branch: its sha and subject.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CherryCommit {
+    pub sha: String,
+    pub subject: String,
+}
+
+/// What the worktree's state says about removing it once its pull request is
+/// done (#3153). `safe` is only true when nothing in the worktree would be
+/// lost.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CleanupDecision {
+    pub safe: bool,
+    /// `dirty` or `unmerged` when it is not safe.
+    pub reason: &'static str,
+    /// The commits `git cherry` says the base branch does not have.
+    pub unique: Vec<CherryCommit>,
+}
+
+/// Whether a merged delegate's worktree may go. A dirty worktree never may.
+/// The commits `git cherry` marks `+` are unique to the branch, so they need one
+/// of two proofs that their content is already on the base: the branch's tree
+/// matches it (`git diff --quiet main branch`, which is what a squash merge
+/// leaves when nothing else landed), or `merged_safe` says every one of them is
+/// part of the merged pull request's head (a squash merge whose local `main`
+/// has not caught up). A commit made after the pull request merged is in
+/// neither, so it still blocks the cleanup.
+pub(crate) fn cleanup_decision(
+    dirty: bool,
+    unique: Vec<CherryCommit>,
+    same_content: bool,
+    merged_safe: bool,
+) -> CleanupDecision {
+    if dirty {
+        return CleanupDecision {
+            safe: false,
+            reason: "dirty",
+            unique,
+        };
+    }
+    if unique.is_empty() || same_content || merged_safe {
+        return CleanupDecision {
+            safe: true,
+            reason: "",
+            unique,
+        };
+    }
+    CleanupDecision {
+        safe: false,
+        reason: "unmerged",
+        unique,
+    }
+}
+
+/// Whether `branch` is one cleanup must never delete: the base it is compared
+/// against, or the repository's default branch. The short forms catch
+/// `origin/main` standing for `main`.
+pub(crate) fn protected_branch(branch: &str, base: &str, default: Option<&str>) -> bool {
+    fn short(name: &str) -> &str {
+        name.rsplit('/').next().unwrap_or(name)
+    }
+    branch == base
+        || branch == short(base)
+        || default.is_some_and(|default| branch == default || branch == short(default))
+}
+
+/// Ignored paths that are ordinary build output, which cleanup may delete.
+const IGNORED_BUILD_DIRS: [&str; 9] = [
+    "target",
+    "node_modules",
+    "dist",
+    "build",
+    ".turbo",
+    ".next",
+    ".cache",
+    "coverage",
+    ".venv",
+];
+/// Ignored entries one refusal names; the rest are counted.
+const MAX_IGNORED_LISTED: usize = 20;
+
+/// The ref a worktree's branch is compared against for cleanup: the branch it
+/// was made from when that still exists, else `main` or `master`, else the base
+/// commit it recorded.
+fn cleanup_base(repo: &Path, record: Option<&Record>) -> Option<String> {
+    let mut candidates: Vec<String> = Vec::new();
+    if let Some(record) = record {
+        if let Some(base_ref) = record.worktree.base_ref.clone() {
+            candidates.push(base_ref);
+        }
+    }
+    candidates.push("main".to_owned());
+    candidates.push("master".to_owned());
+    if let Some(record) = record {
+        candidates.push(record.worktree.base.clone());
+    }
+    candidates.into_iter().find(|candidate| {
+        !candidate.is_empty()
+            && git_line(
+                repo,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("{candidate}^{{commit}}"),
+                ],
+            )
+            .is_ok()
+    })
+}
+
+/// The commits `git cherry -v <base> <branch>` marks `+`: the ones the base
+/// branch does not have, with their subjects. A git that cannot answer is an
+/// error, never "no unique work".
+fn cherry_commits(repo: &Path, base: &str, branch: &str) -> Result<Vec<CherryCommit>, String> {
+    let lines = git(repo, &["cherry", "-v", base, branch])
+        .map_err(|message| format!("git cherry failed: {message}"))?;
+    let mut unique = Vec::new();
+    for line in lines.lines() {
+        let Some(rest) = line.strip_prefix("+ ") else {
+            continue;
+        };
+        let mut parts = rest.splitn(2, ' ');
+        let sha = parts.next().unwrap_or("");
+        if sha.is_empty() {
+            return Err(format!("git cherry answered '{line}'"));
+        }
+        unique.push(CherryCommit {
+            sha: sha.to_owned(),
+            subject: parts.next().unwrap_or("").trim().to_owned(),
+        });
+    }
+    Ok(unique)
+}
+
+/// Whether the branch's tree is already the base's tree.
+fn same_tree(repo: &Path, base: &str, branch: &str) -> Result<bool, String> {
+    let tree = |reference: &str| git_line(repo, &["rev-parse", &format!("{reference}^{{tree}}")]);
+    Ok(
+        tree(base).map_err(|message| format!("git rev-parse failed: {message}"))?
+            == tree(branch).map_err(|message| format!("git rev-parse failed: {message}"))?,
+    )
+}
+
+/// Whether `sha` is part of `head`. A head git cannot resolve is not proof of
+/// anything, so it answers false.
+fn commit_reachable(repo: &Path, sha: &str, head: &str) -> bool {
+    git_line(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{head}^{{commit}}"),
+        ],
+    )
+    .is_ok()
+        && git(repo, &["merge-base", "--is-ancestor", sha, head]).is_ok()
+}
+
+/// Ignored files in the worktree that are not known build output, which
+/// `git worktree remove` would delete silently. `target/`, `node_modules/` and
+/// the like are expected; `.env.local`, notes and credentials are not.
+fn ignored_files(path: &Path) -> Result<Vec<String>, String> {
+    let out = git(path, &["status", "--porcelain", "--ignored=matching"])
+        .map_err(|message| format!("git status --ignored failed: {message}"))?;
+    let mut others = std::collections::BTreeSet::new();
+    let mut more = false;
+    for line in out.lines() {
+        let Some(entry) = line.strip_prefix("!! ") else {
+            continue;
+        };
+        let entry = entry.trim_end_matches('/');
+        // Any component counts: `apps/desktop/node_modules` and
+        // `apps/desktop/src-tauri/target` are the same build output as the
+        // root's, not a user file to refuse.
+        if entry
+            .split('/')
+            .any(|component| IGNORED_BUILD_DIRS.contains(&component))
+        {
+            continue;
+        }
+        if others.len() >= MAX_IGNORED_LISTED {
+            more = true;
+            continue;
+        }
+        others.insert(entry.to_owned());
+    }
+    let mut listed: Vec<String> = others.into_iter().collect();
+    if more {
+        listed.push("...".to_owned());
+    }
+    Ok(listed)
+}
+
+/// The branch a worktree is on. A detached HEAD is its own refusal; a git that
+/// cannot answer is `unknown`, never "not on a branch".
+fn worktree_branch(path: &Path) -> Result<String, WorktreeError> {
+    match git_line(path, &["symbolic-ref", "--quiet", "--short", "HEAD"]) {
+        Ok(branch) if !branch.is_empty() => Ok(branch),
+        // `--quiet` exits 1 with no stderr for a detached HEAD.
+        Ok(_) => Err(WorktreeError {
+            reason: "detached",
+            message: "the worktree is on a detached HEAD, so there is no branch to clean up"
+                .to_owned(),
+        }),
+        Err(error) if error.trim().is_empty() => Err(WorktreeError {
+            reason: "detached",
+            message: "the worktree is on a detached HEAD, so there is no branch to clean up"
+                .to_owned(),
+        }),
+        Err(error) => Err(WorktreeError {
+            reason: "unknown",
+            message: format!("git symbolic-ref failed: {error}"),
+        }),
+    }
+}
+
+/// Remove a merged delegate's worktree and branch (#3153), refusing when the
+/// worktree is dirty, its commits are not on the base branch, it is on a
+/// different branch than the caller named, or it holds ignored files that are
+/// not build output. Unlike [`remove`], a squash merge is not mistaken for lost
+/// work: the pull request's merged state (read by the caller) counts only for
+/// the commits that are part of its head. The branch is deleted with `-D`,
+/// which the decision above makes safe.
+pub(crate) fn cleanup(
+    path: &Path,
+    expected_branch: Option<&str>,
+    pr_head: Option<&str>,
+    pr_merged: bool,
+) -> Result<Value, WorktreeError> {
+    let path = std::fs::canonicalize(path)
+        .map_err(|error| WorktreeError::failed(format!("invalid path: {error}")))?;
+    let inside = root()
+        .and_then(|root| std::fs::canonicalize(root).ok())
+        .is_some_and(|root| path.starts_with(&root) && path != root);
+    if !inside {
+        return Err(WorktreeError {
+            reason: "not_managed",
+            message: "only worktrees under RustCode's worktrees folder can be cleaned up"
+                .to_owned(),
+        });
+    }
+    let record = load_record(&path);
+    let repo = main_checkout(&path).ok_or_else(|| WorktreeError {
+        reason: "not_git",
+        message: format!("{} is not a git worktree", path.display()),
+    })?;
+    let branch = worktree_branch(&path)?;
+    // The caller cleaned up the worktree it read the pull request for. A
+    // delegate that switched branches must not take the new one down with it.
+    if let Some(expected) = expected_branch.filter(|branch| !branch.trim().is_empty())
+        && expected != branch
+    {
+        return Err(WorktreeError {
+            reason: "branch_changed",
+            message: format!("the worktree is on {branch}, not {expected}; nothing was removed"),
+        });
+    }
+    let Some(base) = cleanup_base(&repo, record.as_ref()) else {
+        return Err(WorktreeError {
+            reason: "no_base",
+            message: "no base branch to compare the worktree against".to_owned(),
+        });
+    };
+    let default_branch = git_line(&repo, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok();
+    if protected_branch(&branch, &base, default_branch.as_deref()) {
+        return Err(WorktreeError {
+            reason: "protected_branch",
+            message: format!("{branch} is the base or default branch; it is never deleted"),
+        });
+    }
+    let unknown = |message: String| WorktreeError {
+        reason: "unknown",
+        message,
+    };
+    let (dirty, _, _) = status_counts(&path, &base).map_err(unknown)?;
+    let unique = cherry_commits(&repo, &base, &branch).map_err(unknown)?;
+    let same_content = same_tree(&repo, &base, &branch).map_err(unknown)?;
+    // The PR merged proves its content is on the base, not that a commit made
+    // after its head is. Without a head to check against, only the other proofs count.
+    let merged_safe = pr_merged
+        && match pr_head.filter(|head| !head.trim().is_empty()) {
+            Some(head) => unique
+                .iter()
+                .all(|commit| commit_reachable(&repo, &commit.sha, head)),
+            None => unique.is_empty(),
+        };
+    let decision = cleanup_decision(dirty, unique, same_content, merged_safe);
+    if !decision.safe {
+        let message = match decision.reason {
+            "dirty" => {
+                "the worktree has uncommitted changes; commit or discard them first".to_owned()
+            }
+            _ => format!(
+                "{} commit(s) are not on {base} and are not part of the merged pull request: {}",
+                decision.unique.len(),
+                decision
+                    .unique
+                    .iter()
+                    .map(|commit| commit.subject.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
+        };
+        return Err(WorktreeError {
+            reason: decision.reason,
+            message,
+        });
+    }
+    let ignored = ignored_files(&path).map_err(unknown)?;
+    if !ignored.is_empty() {
+        return Err(WorktreeError {
+            reason: "ignored_files",
+            message: format!(
+                "the worktree holds ignored files that removing it would delete: {}",
+                ignored.join(", ")
+            ),
+        });
+    }
+    let path_text = path.to_string_lossy().into_owned();
+    if path.exists() {
+        git(&repo, &["worktree", "remove", &path_text]).map_err(|message| {
+            WorktreeError::failed(format!("git worktree remove failed: {message}"))
+        })?;
+    }
+    let _ = git(&repo, &["worktree", "prune"]);
+    // The threads that ran here move back to the repository before the branch goes.
+    if let Some(record) = record.as_ref() {
+        move_threads_to_repo(&record.session_ids, &repo);
+    }
+    let branch_removed = git(&repo, &["branch", "-D", &branch]).is_ok();
+    if let Some(record) = record_path(&path) {
+        let _ = std::fs::remove_file(record);
+    }
+    Ok(json!({
+        "removed": true,
+        "branch": branch,
+        "branch_removed": branch_removed,
+        "base": base,
+        "commit_count": decision.unique.len(),
+    }))
 }
 
 // ------------------------------------------------------------ threads ----
@@ -1021,6 +1394,274 @@ pub(crate) mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .subsec_nanos() as u64
+    }
+
+    fn cherry(subject: &str) -> CherryCommit {
+        CherryCommit {
+            sha: format!("{:040x}", subject.len()),
+            subject: subject.to_owned(),
+        }
+    }
+
+    fn tip_of(repo: &Path, branch: &str) -> String {
+        git_line(repo, &["rev-parse", &format!("refs/heads/{branch}")]).unwrap()
+    }
+
+    #[test]
+    fn a_cleanup_refuses_dirty_or_unmerged_work_and_allows_a_squash_merge() {
+        let unique = || vec![cherry("feat(mcp): add the tool")];
+        // Nothing to lose: nothing unique, an identical tree, or a merged PR.
+        assert!(cleanup_decision(false, Vec::new(), false, false).safe);
+        assert!(cleanup_decision(false, unique(), true, false).safe);
+        let squash = cleanup_decision(false, unique(), false, true);
+        assert!(squash.safe, "{squash:?}");
+        assert_eq!(squash.unique, unique());
+        // Uncommitted work never goes, whatever the PR says.
+        let dirty = cleanup_decision(true, unique(), true, true);
+        assert!(!dirty.safe);
+        assert_eq!(dirty.reason, "dirty");
+        // Unique commits, no matching content and no merged PR: refused, and it says which.
+        let unmerged = cleanup_decision(false, unique(), false, false);
+        assert!(!unmerged.safe);
+        assert_eq!(unmerged.reason, "unmerged");
+        assert_eq!(unmerged.unique.len(), 1);
+    }
+
+    #[test]
+    fn a_cleanup_refuses_the_base_and_default_branches() {
+        assert!(protected_branch("main", "main", None));
+        assert!(protected_branch("main", "origin/main", Some("main")));
+        assert!(protected_branch("trunk", "origin/main", Some("trunk")));
+        assert!(!protected_branch("feat/login", "origin/main", Some("main")));
+        assert!(!protected_branch("feat/main", "main", Some("main")));
+    }
+
+    #[test]
+    fn a_cleanup_refuses_what_it_cannot_read_and_says_unknown() {
+        let (_dir, repo) = repo();
+        // A git that cannot answer is an error, never "no unique work".
+        let error = cherry_commits(&repo, "no-such-base", "main").unwrap_err();
+        assert!(error.contains("git cherry failed"), "{error}");
+        assert!(same_tree(&repo, "no-such-base", "main").is_err());
+    }
+
+    #[test]
+    fn a_cleanup_takes_the_worktree_it_was_asked_for_or_none() {
+        let (_dir, repo) = repo();
+        let worktree = create(&CreateRequest {
+            repo: repo.clone(),
+            title: Some("Add the login form".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        let refused =
+            cleanup(&worktree.path, Some("feat/somewhere-else"), None, false).unwrap_err();
+        assert_eq!(refused.reason, "branch_changed");
+        assert!(worktree.path.exists());
+        // The branch it is on is fine.
+        cleanup(
+            &worktree.path,
+            Some(&worktree.branch),
+            Some(&tip_of(&repo, &worktree.branch)),
+            false,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_cleanup_allows_a_squash_merge_only_for_commits_in_the_pr_head() {
+        let (_dir, repo) = repo();
+        let worktree = create(&CreateRequest {
+            repo: repo.clone(),
+            title: Some("Add the login form".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        std::fs::write(worktree.path.join("login.txt"), "login\n").unwrap();
+        git(&worktree.path, &["add", "-A"]).unwrap();
+        git(&worktree.path, &["commit", "-q", "-m", "add login"]).unwrap();
+        let head = tip_of(&repo, &worktree.branch);
+        // The PR merged at this head, and its commit is part of it: the squash
+        // merge GitHub did is enough, even with a stale local main.
+        let answer = cleanup(&worktree.path, Some(&worktree.branch), Some(&head), true).unwrap();
+        assert_eq!(answer["removed"], true);
+        assert_eq!(answer["branch_removed"], true);
+        assert_eq!(answer["commit_count"], 1);
+        assert!(!worktree.path.exists());
+        assert!(
+            git(
+                &repo,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("refs/heads/{}", worktree.branch)
+                ]
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn a_cleanup_refuses_a_commit_made_after_the_pull_request_merged() {
+        let (_dir, repo) = repo();
+        let worktree = create(&CreateRequest {
+            repo: repo.clone(),
+            title: Some("Add the login form".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        std::fs::write(worktree.path.join("login.txt"), "login\n").unwrap();
+        git(&worktree.path, &["add", "-A"]).unwrap();
+        git(&worktree.path, &["commit", "-q", "-m", "add login"]).unwrap();
+        let head = tip_of(&repo, &worktree.branch);
+        std::fs::write(worktree.path.join("after.txt"), "after\n").unwrap();
+        git(&worktree.path, &["add", "-A"]).unwrap();
+        git(&worktree.path, &["commit", "-q", "-m", "after the merge"]).unwrap();
+        // The PR merged at `head`; the newer commit is not part of it.
+        let refused =
+            cleanup(&worktree.path, Some(&worktree.branch), Some(&head), true).unwrap_err();
+        assert_eq!(refused.reason, "unmerged");
+        assert!(
+            refused.message.contains("after the merge"),
+            "{}",
+            refused.message
+        );
+        assert!(worktree.path.exists());
+    }
+
+    #[test]
+    fn a_cleanup_refuses_ignored_files_that_are_not_build_output() {
+        let (_dir, repo) = repo();
+        // Build output is ignored too, but cleanup may delete it.
+        let gitignore = std::fs::read_to_string(repo.join(".gitignore")).unwrap();
+        std::fs::write(
+            repo.join(".gitignore"),
+            format!("{gitignore}target/\nnode_modules/\ndist/\n"),
+        )
+        .unwrap();
+        git(&repo, &["add", "-A"]).unwrap();
+        git(&repo, &["commit", "-q", "-m", "ignore target"]).unwrap();
+        let worktree = create(&CreateRequest {
+            repo: repo.clone(),
+            title: Some("Add the login form".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        // A local secret is not build output and would be deleted silently.
+        std::fs::write(worktree.path.join("ignored.txt"), "secret\n").unwrap();
+        let refused = cleanup(&worktree.path, Some(&worktree.branch), None, false).unwrap_err();
+        assert_eq!(refused.reason, "ignored_files");
+        assert!(
+            refused.message.contains("ignored.txt"),
+            "{}",
+            refused.message
+        );
+        assert!(worktree.path.exists());
+        // Remove it and leave only build output: that may go.
+        std::fs::remove_file(worktree.path.join("ignored.txt")).unwrap();
+        for (dir, file) in [
+            ("target/debug", "app"),
+            ("apps/desktop/node_modules/left-pad", "index.js"),
+            ("apps/desktop/dist/assets", "app.js"),
+            ("apps/desktop/src-tauri/target/debug", "build"),
+        ] {
+            std::fs::create_dir_all(worktree.path.join(dir)).unwrap();
+            std::fs::write(worktree.path.join(dir).join(file), "built\n").unwrap();
+        }
+        let answer = cleanup(
+            &worktree.path,
+            Some(&worktree.branch),
+            Some(&tip_of(&repo, &worktree.branch)),
+            false,
+        )
+        .unwrap();
+        assert_eq!(answer["removed"], true);
+    }
+
+    #[test]
+    fn a_list_keeps_a_worktree_whose_state_cannot_be_read() {
+        let (_dir, repo) = repo();
+        let worktree = create(&CreateRequest {
+            repo: repo.clone(),
+            title: Some("Add the login form".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        // A prunable checkout: git still knows the worktree, but its state
+        // cannot be read. It is listed with null state rather than failing
+        // the whole list; removal is where it refuses.
+        std::fs::remove_dir_all(&worktree.path).unwrap();
+        let rows = list(&repo).unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row["branch"] == worktree.branch.as_str())
+            .unwrap_or_else(|| panic!("{} is still listed: {rows:?}", worktree.branch));
+        assert_eq!(row["dirty"], Value::Null);
+        assert_eq!(row["ahead"], Value::Null);
+        assert_eq!(row["behind"], Value::Null);
+    }
+
+    #[test]
+    fn a_cleanup_tells_a_detached_head_from_a_git_error() {
+        let (_dir, repo) = repo();
+        let worktree = create(&CreateRequest {
+            repo: repo.clone(),
+            title: Some("Add the login form".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        git(&worktree.path, &["checkout", "--detach", "-q"]).unwrap();
+        let refused = cleanup(&worktree.path, Some(&worktree.branch), None, false).unwrap_err();
+        assert_eq!(refused.reason, "detached");
+        // A folder git cannot read is an unknown state, not a detached HEAD.
+        let other = tempfile::tempdir().unwrap();
+        assert_eq!(worktree_branch(other.path()).unwrap_err().reason, "unknown");
+    }
+
+    #[test]
+    fn a_cleanup_refuses_unmerged_commits_and_a_dirty_worktree() {
+        let (_dir, repo) = repo();
+        let worktree = create(&CreateRequest {
+            repo: repo.clone(),
+            title: Some("Add the logout form".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        std::fs::write(worktree.path.join("logout.txt"), "logout\n").unwrap();
+        git(&worktree.path, &["add", "-A"]).unwrap();
+        git(&worktree.path, &["commit", "-q", "-m", "add logout"]).unwrap();
+        let refused = cleanup(&worktree.path, Some(&worktree.branch), None, false).unwrap_err();
+        assert_eq!(refused.reason, "unmerged");
+        assert!(
+            refused.message.contains("add logout"),
+            "{}",
+            refused.message
+        );
+        // A dirty worktree is refused even when the PR merged.
+        std::fs::write(worktree.path.join("notes.txt"), "wip\n").unwrap();
+        let refused = cleanup(
+            &worktree.path,
+            Some(&worktree.branch),
+            Some(&tip_of(&repo, &worktree.branch)),
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(refused.reason, "dirty");
+        // Nothing was removed: the worktree and its branch are still there.
+        assert!(worktree.path.exists());
+        assert!(
+            git(
+                &repo,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("refs/heads/{}", worktree.branch)
+                ]
+            )
+            .is_ok()
+        );
     }
 
     #[test]

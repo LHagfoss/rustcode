@@ -41,6 +41,8 @@ export const Method = {
   /** The two payload-capture switches (`engine/src/acp/telemetry.rs`). */
   telemetry: "_rustcode/config/telemetry",
   telemetrySet: "_rustcode/config/telemetry/set",
+  pullState: "_rustcode/pulls/state",
+  pullMerge: "_rustcode/pulls/merge",
   pullView: "_rustcode/pulls/view",
   pullDiff: "_rustcode/pulls/diff",
   pullReview: "_rustcode/pulls/review",
@@ -70,15 +72,6 @@ export const Method = {
   /** The timed approvals still in force ("Allow for 1 hour"), and revoking one. */
   permissions: "_rustcode/permissions",
   permissionsRevoke: "_rustcode/permissions/revoke",
-  /**
-   * Remote access (`docs/remote.md`): share this app's threads with paired
-   * devices. Each takes a `sessionId`, or none for the machine's own switch,
-   * gateway and pairing challenge (Settings › Remote access).
-   */
-  remote: "_rustcode/remote",
-  remoteStart: "_rustcode/remote/start",
-  remotePair: "_rustcode/remote/pair",
-  remoteStop: "_rustcode/remote/stop",
 } as const;
 
 // ---------------------------------------------------------------- initialize
@@ -859,6 +852,11 @@ export interface Harness {
   name: string;
   kind: "builtin" | "acp" | "codex";
   builtin: boolean;
+  /**
+   * One RustCode ships with (`rustcode`, Codex, Claude Code, …): turn it off,
+   * never remove it. False for a harness the user added by hand.
+   */
+  known: boolean;
   enabled: boolean;
   command: string[];
   installed: boolean;
@@ -1013,6 +1011,13 @@ export function parseHarnessLast(value: Json | undefined): HarnessLast | null {
   return model || effort ? { model, effort } : null;
 }
 
+/**
+ * The standard harnesses of an engine that predates the snapshot's `known`
+ * (before issue 2881). Current engines say which are standard, so this only
+ * keeps an older engine's Codex from offering "Remove", which it refuses.
+ */
+const LEGACY_KNOWN_HARNESSES = ["codex", "claude-code", "gemini", "opencode", "pi"];
+
 export function parseHarnessSnapshot(value: Json): HarnessSnapshot {
   const root = obj(value) ?? {};
   let remembers = false;
@@ -1031,6 +1036,9 @@ export function parseHarnessSnapshot(value: Json): HarnessSnapshot {
         name: str(o.name) ?? id,
         kind: kind === "builtin" || kind === "codex" ? kind : "acp",
         builtin,
+        // The engine says which harnesses are standard; an older one did not,
+        // so the ids it shipped with stand in until it does.
+        known: bool(o.known) ?? (builtin || LEGACY_KNOWN_HARNESSES.includes(id)),
         enabled: bool(o.enabled) ?? false,
         command: arr(o.command).flatMap((c) => (typeof c === "string" ? [c] : [])),
         installed: bool(o.installed) ?? false,
@@ -1075,6 +1083,7 @@ export function fallbackHarnessSnapshot(): HarnessSnapshot {
         name: "RustCode",
         kind: "builtin",
         builtin: true,
+        known: true,
         enabled: true,
         command: [],
         installed: true,
@@ -1114,147 +1123,17 @@ export function parseSessionHarness(result: Json): SessionHarness | undefined {
 
 // ---------------------------------------------------------------- remote access
 
-/** A phone or tablet paired with this Mac, as `_rustcode/remote` names it. */
-export interface RemoteDevice {
-  id: string;
-  name: string;
-}
-
-/**
- * One pairing challenge: what a device scans or types, and how long it has.
- * `qrRows` is the code itself, one string per row of `0` (light) and `1`
- * (dark) modules with the quiet zone included, so the app draws it without a
- * QR encoder (`engine/src/remote_gateway/qr.rs`).
- */
-export interface RemoteOffer {
-  qrPayload?: string;
-  qrRows?: string[];
-  code?: string;
-  address?: string;
-  expiresInSecs: number;
-  loopbackOnly?: boolean;
-  challenge?: number;
-  /** Pairing is locked on this host for this long after too many wrong codes. */
-  lockedForSecs?: number;
-}
-
-/** Where the gateway listens and who is on it. */
-export interface RemoteGateway {
-  connected: boolean;
-  advertisedAddress?: string;
-  listenAddress?: string;
-  /** The address is loopback: no phone on the network can reach it. */
-  loopbackOnly?: boolean;
-  /** Devices attached to this thread, when the answer names one. */
-  attachedDevices?: string[];
-  /** Devices connected to the gateway, attached to this thread or not. */
-  connectedDevices?: string[];
-  /** A pairing challenge is open right now (the machine's answer says so). */
-  pairingOpen?: boolean;
-  /** Devices connected to the gateway, attached to this thread or not. */
-  pairedDevices?: number;
-  /** Wrong codes the open challenge still tolerates, and how long it has. */
-  pairing?: { expiresInSecs?: number; attemptsLeft?: number; lockedForSecs?: number } | null;
-}
-
-/**
- * The engine's answer to `_rustcode/remote` (status), `/start`, `/pair` and
- * `/stop`. With no `sessionId` it describes the machine; with one, that
- * thread's share.
- */
-export interface RemoteStatus {
-  available: boolean;
-  /** Remote access is switched on for this machine. */
-  enabled: boolean;
-  /** This thread is shared with paired devices. */
-  shared: boolean;
-  sessionId?: string;
-  /** The harness the shared thread runs on. */
-  target?: string;
-  gateway?: RemoteGateway | null;
-  offer?: RemoteOffer | null;
-  pairingExpired?: boolean;
-  pairingPending?: boolean;
-  pairingError?: string | null;
-  /** Why sharing ended, when it did. */
-  error?: string | null;
-  /**
-   * Why this thread is not shared with devices right now, on the machine's
-   * answer; a count on the machine's own answer (`status.notShared`).
-   */
-  notShared?: string | number | null;
-  pairedDevices: number;
-  devices: RemoteDevice[];
-}
-
-function parseOffer(value: Json | undefined): RemoteOffer | undefined {
-  const o = obj(value);
-  if (!o) return undefined;
-  return {
-    qrPayload: str(o.qrPayload),
-    qrRows: arr(o.qrRows)
-      ?.map((row) => str(row))
-      .filter((row): row is string => !!row),
-    code: str(o.code),
-    address: str(o.address),
-    expiresInSecs: num(o.expiresInSecs) ?? 0,
-    loopbackOnly: bool(o.loopbackOnly),
-    challenge: num(o.challenge),
-    lockedForSecs: num(o.lockedForSecs),
-  };
-}
-
-function parseGateway(value: Json | undefined): RemoteGateway | undefined {
-  const o = obj(value);
-  if (!o) return undefined;
-  const pairing = obj(o.pairing);
-  const names = (list: Json | undefined) =>
-    arr(list)
-      ?.map((name) => str(name))
-      .filter((name): name is string => !!name) ?? [];
-  return {
-    connected: bool(o.connected) ?? false,
-    advertisedAddress: str(o.advertisedAddress),
-    listenAddress: str(o.listenAddress),
-    loopbackOnly: bool(o.loopbackOnly),
-    attachedDevices: names(o.attachedDevices),
-    connectedDevices: names(o.connectedDevices),
-    pairedDevices: num(o.pairedDevices),
-    pairingOpen: bool(o.pairingOpen),
-    pairing: pairing
-      ? {
-          expiresInSecs: num(pairing.expiresInSecs),
-          attemptsLeft: num(pairing.attemptsLeft),
-          lockedForSecs: num(pairing.lockedForSecs),
-        }
-      : undefined,
-  };
-}
-
-export function parseRemoteStatus(value: Json): RemoteStatus {
-  const root = obj(value);
-  return {
-    available: bool(root?.available) ?? true,
-    enabled: bool(root?.enabled) ?? false,
-    shared: bool(root?.shared) ?? false,
-    sessionId: str(root?.sessionId),
-    target: str(root?.target),
-    gateway: parseGateway(root?.gateway),
-    offer: parseOffer(root?.offer),
-    pairingExpired: bool(root?.pairingExpired),
-    pairingPending: bool(root?.pairingPending),
-    pairingError: str(root?.pairingError),
-    error: str(root?.error),
-    notShared: num(root?.notShared) ?? (str(root?.notShared) ? str(root?.notShared) : undefined),
-    pairedDevices: num(root?.pairedDevices) ?? 0,
-    devices:
-      arr(root?.devices)
-        ?.map((device) => {
-          const entry = obj(device);
-          const id = str(entry?.id);
-          const name = str(entry?.name);
-          return id && name ? { id, name } : null;
-        })
-        .filter((device): device is RemoteDevice => !!device) ?? [],
-  };
-}
+// The remote shapes and their parser live in `remote.ts`, next to the methods
+// the page calls; they are re-exported here so every ACP shape stays reachable
+// from this module.
+export {
+  heldBackCount,
+  heldBackReason,
+  parseRemoteStatus,
+  type RemoteDevice,
+  type RemoteGateway,
+  RemoteMethod,
+  type RemoteOffer,
+  type RemotePairing,
+  type RemoteStatus,
+} from "./remote";

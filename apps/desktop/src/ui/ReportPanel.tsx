@@ -45,7 +45,7 @@ export function ReportPanel({ text }: { text: string }) {
       aria-label={view.title ?? "Command result"}
       className="elevated flex max-h-[min(360px,45vh)] flex-col rc-in"
     >
-      <header className="flex shrink-0 items-center gap-2 px-3.5 pt-2.5 pb-1.5">
+      <header className="flex shrink-0 items-center gap-2 px-3 pt-2 pb-1.5">
         <span className="min-w-0 flex-1 truncate font-semibold text-body">{view.title ?? "Result"}</span>
         <CopyButton text={text} iconOnly label="Copy the result" />
         <button
@@ -57,7 +57,7 @@ export function ReportPanel({ text }: { text: string }) {
           <X size={13} />
         </button>
       </header>
-      <div className="selectable min-h-0 overflow-y-auto px-3.5 pb-3">
+      <div className="selectable min-h-0 overflow-y-auto px-3 pb-3">
         {view.sections ? (
           <div className="flex flex-col gap-3">
             {view.sections.map((section, i) => (

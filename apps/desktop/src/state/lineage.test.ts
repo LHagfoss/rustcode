@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { threadLineage } from "./lineage";
-import type { Link, LinkState } from "./orchestration";
+import { type Link, type LinkState, MAX_DELEGATES_PER_THREAD } from "./orchestration";
 
 const link = (n: number, change: Partial<Link>): Link => ({
   id: `a/${n}`,
@@ -252,7 +252,7 @@ describe("a thread's lineage", () => {
   });
 
   test("the outbound list stays bounded like the details card always was", () => {
-    const outbound = Array.from({ length: 20 }, (_, i) =>
+    const outbound = Array.from({ length: MAX_DELEGATES_PER_THREAD * 2 + 4 }, (_, i) =>
       link(i + 1, {
         id: `me/${i + 1}`,
         orchestrator: "me",
@@ -262,8 +262,8 @@ describe("a thread's lineage", () => {
       }),
     );
     const { started } = threadLineage("me", outbound);
-    expect(started).toHaveLength(16);
+    expect(started).toHaveLength(MAX_DELEGATES_PER_THREAD * 2);
     expect(started[0]?.link.target).toBe("child-5");
-    expect(started.at(-1)?.link.target).toBe("child-20");
+    expect(started.at(-1)?.link.target).toBe(`child-${MAX_DELEGATES_PER_THREAD * 2 + 4}`);
   });
 });

@@ -8,9 +8,18 @@
 // The store imports this module and this module imports the store; nothing
 // here touches the store at load time.
 
-import { type Json, type JsonObject, RpcError } from "../acp/jsonrpc";
-import { parsePullError, parsePullList, pullErrorTitle } from "../acp/rustcode";
+import { bool, type Json, type JsonObject, obj, RpcError, str } from "../acp/jsonrpc";
+import {
+  cleanupRefusal,
+  type DelegatePull,
+  parseMergeOutcome,
+  parsePullError,
+  parsePullList,
+  parsePullState,
+  pullErrorTitle,
+} from "../acp/rustcode";
 import { type Harness, Method, projectName } from "../acp/types";
+import { V2Method } from "../acp/v2";
 import { hasShell, shellCall } from "../lib/shell";
 import { childTitle, titleFrom } from "../lib/title";
 import { selectOption, unavailableReason, usableHarnesses } from "./harness";
@@ -30,6 +39,7 @@ import {
   checkMessage,
   checkQueryData,
   checkStart,
+  type DelegateLimits,
   delivered,
   emptyBook,
   type Failure,
@@ -53,7 +63,8 @@ import {
   linkResult,
   linksLeft,
   listSessions,
-  MAX_ACTIVE_LINKS,
+  MAX_DELEGATES,
+  MAX_DELEGATES_PER_THREAD,
   MAX_PROJECTS,
   MAX_PULL_REQUESTS,
   MAX_QUEUE_ITEMS,
@@ -255,8 +266,27 @@ function setBook(fn: (book: LinkBook) => LinkBook) {
 }
 
 const book = () => useApp.getState().links;
-/** How many distinct threads one thread may run at once (Settings › Agents). */
-const threadLimit = () => useApp.getState().threadLimit;
+/** The two delegate limits (Settings › Agents): one thread's own, and the machine's total. */
+const delegateLimits = (): DelegateLimits => ({
+  perThread: useApp.getState().threadLimit,
+  total: useApp.getState().totalLimit,
+});
+
+/**
+ * The calls that open a link run one at a time: each checks the book, asks the
+ * user and only then writes the link, so two calls arriving together would
+ * both see the same free slot and overshoot a limit. The queue is a promise
+ * chain, so a call starts when the one before it has finished, failed or not.
+ */
+let linkGate: Promise<unknown> = Promise.resolve();
+function withLinkGate<T>(run: () => Promise<T>): Promise<T> {
+  const next = linkGate.then(run, run);
+  linkGate = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
 
 // A tab or window closing mid-turn still leaves the store with what happened.
 if (typeof window !== "undefined") {
@@ -370,6 +400,10 @@ export function verb(q: GrantAsk): string {
       return `change the model of “${q.target}”`;
     case "transfer":
       return `move “${q.target}” to another harness`;
+    case "merge":
+      return `merge “${q.target}”'s pull request`;
+    case "cleanup":
+      return `clean up “${q.target}”`;
   }
 }
 
@@ -391,6 +425,8 @@ const TOOL_OF_KIND: Record<GrantAsk["kind"], string> = {
   interrupt: "interrupt_session",
   configure: "configure_session",
   transfer: "transfer_session",
+  merge: "merge_when_green",
+  cleanup: "cleanup_worktree",
 };
 
 /** What the app did on the thread's behalf, when its call's row is not in flight to say it. */
@@ -403,6 +439,8 @@ const ALLOWED_NOTICE: Record<GrantAsk["kind"], string> = {
   interrupt: "Stopped a thread",
   configure: "Changed a thread's model",
   transfer: "Moved a thread to another harness",
+  merge: "Merged a delegate's pull request",
+  cleanup: "Cleaned up a delegate's worktree",
 };
 
 async function permitted(caller: RuleThread, key: string, question: GrantAsk): Promise<Failure | null> {
@@ -627,6 +665,12 @@ async function perform(
       return transferSession(caller, call.target, call.harness);
     case "list_pending_requests":
       return listPendingRequests(caller);
+    case "thread_status":
+      return threadStatus(caller, call.target);
+    case "merge_when_green":
+      return mergeWhenGreen(caller, call);
+    case "cleanup_worktree":
+      return cleanupWorktree(caller, call);
     case "thread_usage": {
       const scope = usageScope(caller, acrossProjects(), call.project);
       if (isFailure(scope)) return failureJson(scope);
@@ -812,6 +856,255 @@ async function listPullRequests(caller: RuleThread, state: PullStateChoice): Pro
       ...(p.url ? { url: p.url } : {}),
     })),
   };
+}
+
+/** A thread's pull request and checks, read through the engine's `gh` call. */
+async function delegatePull(
+  target: RuleThread,
+): Promise<{ branch?: string; pull?: DelegatePull; error?: Failure }> {
+  const cwd = projectOf(target);
+  if (!cwd) return { error: failure("failed", "this thread has no project folder") };
+  try {
+    const result = await request(
+      Method.pullState,
+      { cwd, ...(target.worktree?.branch ? { branch: target.worktree.branch } : {}) },
+      60_000,
+    );
+    const answer = parsePullState(result);
+    if (answer.error) return { error: pullFailure(answer.error) };
+    return { branch: answer.branch, pull: answer.pull };
+  } catch (error) {
+    return {
+      error: failure("target_unavailable", `the pull request could not be read: ${errorText(error)}`),
+    };
+  }
+}
+
+/**
+ * The delegates a thread has: the targets of its links, newest first, one row
+ * each, capped so the gh reads stay well inside the request timeout.
+ */
+function delegateTargets(caller: RuleThread): { targets: RuleThread[]; omitted: number } {
+  const ids = new Set(
+    book()
+      .links.filter((link) => link.orchestrator === caller.id)
+      .map((l) => l.target),
+  );
+  ids.delete(caller.id);
+  const all = [...ids].reverse().flatMap((id) => ruleThread(useApp.getState(), id) ?? []);
+  return { targets: all.slice(0, MAX_DELEGATES), omitted: Math.max(0, all.length - MAX_DELEGATES) };
+}
+
+/**
+ * `thread_status`: where each delegate stands — worktree, branch, pull request
+ * and checks — in one call, instead of combining read_session, list_pull_requests
+ * and a shell poll of `gh pr checks`. A read: no approval, same project. The
+ * delegates are read concurrently, so a dozen do not add up to a timeout.
+ */
+async function threadStatus(caller: RuleThread, target?: string): Promise<JsonObject> {
+  const asked = target ? undefined : delegateTargets(caller);
+  const targets = target ? [manageTarget(caller, target)] : (asked?.targets ?? []);
+  const entries: RuleThread[] = [];
+  for (const entry of targets) {
+    if (isFailure(entry)) return failureJson(entry);
+    if (entry.id === caller.id) {
+      return failureJson(
+        failure("not_allowed", "a thread reports its own pull request through list_pull_requests"),
+      );
+    }
+    entries.push(entry);
+  }
+  const settled = await Promise.allSettled(
+    entries.map(async (entry) => ({ entry, state: await delegatePull(entry) })),
+  );
+  const delegates: JsonObject[] = [];
+  for (const result of settled) {
+    if (result.status === "rejected") {
+      delegates.push({ error: { code: "failed", message: errorText(result.reason) } });
+      continue;
+    }
+    const { entry, state } = result.value;
+    delegates.push({
+      session_id: entry.id,
+      title: entry.title,
+      status: entry.status ?? (entry.running ? "running" : "idle"),
+      project: projectOf(entry),
+      ...(entry.worktree ? { worktree: { path: entry.worktree.path, branch: entry.worktree.branch } } : {}),
+      ...(state.branch ? { branch: state.branch } : {}),
+      pull: state.pull
+        ? {
+            number: state.pull.number,
+            title: state.pull.title,
+            state: state.pull.state,
+            merged: state.pull.merged,
+            draft: state.pull.draft,
+            branch: state.pull.branch,
+            head_sha: state.pull.headSha,
+            ci: state.pull.ci,
+            failing: state.pull.failing,
+            pending: state.pull.pending,
+            passed: state.pull.passed,
+            ...(state.pull.url ? { url: state.pull.url } : {}),
+          }
+        : null,
+      ...(state.error ? { error: { code: state.error.code, message: state.error.message } } : {}),
+    });
+  }
+  return {
+    delegates,
+    ...(asked?.omitted ? { omitted_delegates: asked.omitted } : {}),
+    ...(delegates.length === 0 ? { note: "this thread has no delegates; start one with start_session" } : {}),
+  };
+}
+
+/**
+ * `merge_when_green`: waits for a delegate's checks and squash-merges, with the
+ * semantics of scripts/pr-merge.sh (advisory jobs ignored, two quiet rounds,
+ * a failing check stops it). The engine waits; the app asks the user first.
+ */
+async function mergeWhenGreen(
+  caller: RuleThread,
+  call: Extract<ReturnType<typeof parseCall>, { tool: "merge_when_green" }>,
+): Promise<JsonObject> {
+  const target = manageTarget(caller, call.target);
+  if (isFailure(target)) return failureJson(target);
+  if (target.id === caller.id) {
+    return failureJson(failure("not_allowed", "a thread merges a delegate's pull request, not its own"));
+  }
+  const state = await delegatePull(target);
+  if (state.error) return failureJson(state.error);
+  const pull = state.pull;
+  if (!pull) {
+    return failureJson(
+      failure("not_found", `“${target.title}” has no pull request on ${state.branch ?? "its branch"} yet`),
+    );
+  }
+  if (pull.merged) {
+    return {
+      session_id: target.id,
+      number: pull.number,
+      merged: true,
+      state: "merged",
+      ...(pull.url ? { url: pull.url } : {}),
+    };
+  }
+  const no = await permitted(caller, `merge:${target.id}:${pull.number}`, {
+    kind: "merge",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: target.title,
+    detail: `It would wait for pull request #${pull.number}'s checks and squash-merge it once every one passes, then delete its branch. A failing check stops it and reports the names.`,
+  });
+  if (no) return failureJson(no);
+  let result: Json;
+  try {
+    result = await request(
+      Method.pullMerge,
+      {
+        cwd: projectOf(target),
+        number: pull.number,
+        ...(target.worktree?.branch ? { branch: target.worktree.branch } : {}),
+        timeoutMs: call.timeoutMs,
+      },
+      call.timeoutMs + 120_000,
+    );
+  } catch (error) {
+    return failureJson(failure("failed", `the merge did not answer: ${errorText(error)}`));
+  }
+  const error = parsePullError(result);
+  if (error) return failureJson(pullFailure(error));
+  const outcome = parseMergeOutcome(result);
+  if (!outcome) return failureJson(failure("failed", "the engine answered without a merge result"));
+  return {
+    session_id: target.id,
+    number: outcome.number,
+    state: outcome.state,
+    merged: outcome.merged,
+    ...(outcome.url ? { url: outcome.url } : {}),
+    ...(outcome.failing.length ? { failing: outcome.failing } : {}),
+    waited_secs: outcome.waitedSecs,
+    detail: outcome.message,
+  };
+}
+
+/**
+ * `cleanup_worktree`: removes a merged delegate's worktree and branch, then
+ * settles it, after the engine confirms nothing unique is lost (git cherry,
+ * allowing a squash merge's content). Refuses a dirty worktree or one still
+ * running. The user approves it.
+ */
+async function cleanupWorktree(
+  caller: RuleThread,
+  call: Extract<ReturnType<typeof parseCall>, { tool: "cleanup_worktree" }>,
+): Promise<JsonObject> {
+  const target = manageTarget(caller, call.target);
+  if (isFailure(target)) return failureJson(target);
+  if (target.id === caller.id) {
+    return failureJson(failure("not_allowed", "a thread cannot clean up the checkout it runs in"));
+  }
+  if (!target.worktree) {
+    return failureJson(failure("not_allowed", `“${target.title}” does not run in a worktree`));
+  }
+  if (target.running) {
+    return failureJson(failure("conflict", `“${target.title}” is working; wait for its turn to finish`));
+  }
+  // A pull request read that fails leaves `merged` false, so the engine falls
+  // back to the worktree's own `git cherry` check, which is the stricter one.
+  const state = await delegatePull(target);
+  const merged = state.pull?.merged ?? false;
+  const branch = target.worktree.branch;
+  const no = await permitted(caller, `cleanup:${target.id}`, {
+    kind: "cleanup",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: target.title,
+    detail: `It would remove the worktree at ${target.worktree.path} and delete the branch ${branch}${merged ? " (its pull request merged)" : ""}, then ${call.settle ? "settle the thread" : "leave the thread as it is"}. It refuses when anything there would be lost.`,
+  });
+  if (no) return failureJson(no);
+  let result: Json;
+  try {
+    result = await request(
+      V2Method.worktreeCleanup,
+      {
+        path: target.worktree.path,
+        branch,
+        headSha: state.pull?.headSha ?? "",
+        merged,
+      },
+      120_000,
+    );
+  } catch (error) {
+    if (error instanceof RpcError) {
+      const reason = cleanupRefusal(error.data);
+      if (reason) {
+        // "unknown" is not a refusal to fix but a git that could not answer.
+        const code = reason === "unknown" ? "target_unavailable" : "conflict";
+        // The engine's detail (which commits or files, which branch) is in
+        // `error.data.message`; `error.message` alone is "Invalid params".
+        return failureJson(failure(code, `${reason}: ${errorText(error)}`));
+      }
+    }
+    return failureJson(failure("failed", `the worktree could not be cleaned up: ${errorText(error)}`));
+  }
+  const cleanup = obj(result)?.cleanup;
+  // The worktree is gone and the engine moved the thread back to the
+  // repository; the store must not keep offering the old folder.
+  const repo = projectOf(target);
+  useApp.setState((s) => ({
+    sessions: s.sessions.map((x) => (x.id === target.id ? { ...x, worktree: undefined, cwd: repo } : x)),
+  }));
+  updateThread(target.id, (t) => ({ ...t, worktree: undefined, cwd: repo }));
+  const answer: JsonObject = {
+    session_id: target.id,
+    removed: bool(obj(cleanup)?.removed) ?? true,
+    branch: str(obj(cleanup)?.branch) ?? branch,
+    branch_removed: bool(obj(cleanup)?.branch_removed) ?? false,
+  };
+  if (call.settle) {
+    await setThreadStatus(target.id, "done");
+    answer.settled = true;
+  }
+  return answer;
 }
 
 // ---------------------------------------------------------------- managing threads
@@ -1051,9 +1344,13 @@ export function turnsOf(items: TranscriptItem[]): JsonObject[] {
   return out;
 }
 
-async function message(caller: RuleThread, targetId: string, text: string): Promise<JsonObject> {
+function message(caller: RuleThread, targetId: string, text: string): Promise<JsonObject> {
+  return withLinkGate(() => messageNow(caller, targetId, text));
+}
+
+async function messageNow(caller: RuleThread, targetId: string, text: string): Promise<JsonObject> {
   const target = ruleThread(useApp.getState(), targetId);
-  const refused = checkMessage(caller, target, book(), false, false, threadLimit());
+  const refused = checkMessage(caller, target, book(), false, false, delegateLimits());
   if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
   const no = await permitted(caller, target.id, {
     kind: "message",
@@ -1070,7 +1367,7 @@ async function message(caller: RuleThread, targetId: string, text: string): Prom
     book(),
     false,
     false,
-    threadLimit(),
+    delegateLimits(),
   );
   if (again) return failureJson(again);
   await openThread(target.id);
@@ -1467,8 +1764,12 @@ async function createThreadFor(
   }
 }
 
-async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
-  const refused = checkStart(caller, book(), 1, threadLimit());
+function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
+  return withLinkGate(() => startNow(caller, call));
+}
+
+async function startNow(caller: RuleThread, call: StartCall): Promise<JsonObject> {
+  const refused = checkStart(caller, book(), 1, delegateLimits());
   if (refused) return failureJson(refused);
   const project = projectFor(caller, call.project);
   if (isFailure(project)) return failureJson(project);
@@ -1496,7 +1797,7 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
     worktree: call.worktree ?? true,
   });
   if (no) return failureJson(no);
-  const again = checkStart(caller, book(), 1, threadLimit());
+  const again = checkStart(caller, book(), 1, delegateLimits());
   if (again) return failureJson(again);
   let id: string;
   try {
@@ -1534,12 +1835,16 @@ async function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
     harness: harness.id,
     access: accessOf(id),
     ...ranWith(id),
-    links_left: linksLeft(book(), caller.id, threadLimit()),
+    links_left: linksLeft(book(), caller.id, delegateLimits()),
   };
 }
 
-async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject> {
-  const refused = checkStart(caller, book(), call.harnesses.length, threadLimit());
+function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject> {
+  return withLinkGate(() => fanOutNow(caller, call));
+}
+
+async function fanOutNow(caller: RuleThread, call: FanOutCall): Promise<JsonObject> {
+  const refused = checkStart(caller, book(), call.harnesses.length, delegateLimits());
   if (refused) return failureJson(refused);
   const chosen: { harness: Harness; model?: string; effort?: string; account: string | null }[] = [];
   const targets = new Set<string>();
@@ -1580,7 +1885,7 @@ async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject>
     worktree: true,
   });
   if (no) return failureJson(no);
-  const again = checkStart(caller, book(), chosen.length, threadLimit());
+  const again = checkStart(caller, book(), chosen.length, delegateLimits());
   if (again) return failureJson(again);
   const fanId = localId("fan");
   const out: JsonObject[] = [];
@@ -1637,7 +1942,7 @@ async function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject>
     };
     setBook((b) => ({ ...b, fanOuts: [...b.fanOuts, group] }));
   }
-  return { links: out, fan_out_id: fanId, links_left: linksLeft(book(), caller.id, threadLimit()) };
+  return { links: out, fan_out_id: fanId, links_left: linksLeft(book(), caller.id, delegateLimits()) };
 }
 
 /** A link's state now: a running turn that waits on an approval or a question needs the user. */
@@ -2513,7 +2818,7 @@ export async function keepFanOut(fanId: string, keep: string) {
 /** The links of a thread, both ways, for chips, banners and badges. */
 export function linksOf(b: LinkBook, id: string) {
   return {
-    driving: b.links.filter((l) => l.orchestrator === id).slice(-MAX_ACTIVE_LINKS * 2),
+    driving: b.links.filter((l) => l.orchestrator === id).slice(-MAX_DELEGATES_PER_THREAD * 2),
     drivenBy: [...b.links].reverse().find((l) => l.target === id && isActive(l.state)),
   };
 }

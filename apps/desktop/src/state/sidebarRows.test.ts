@@ -8,6 +8,7 @@ import {
   opensRowMenu,
   rangeRows,
   rowKeyAction,
+  rowStatus,
   threadDiff,
   visibleRows,
 } from "./sidebarRows";
@@ -162,6 +163,64 @@ describe("the keys that open a row's menu", () => {
     expect(opensRowMenu({ key: "F10" })).toBe(false);
     expect(opensRowMenu({ key: "F2", shiftKey: true })).toBe(false);
     expect(opensRowMenu({ key: "Enter" })).toBe(false);
+  });
+});
+
+describe("a row's one status chip", () => {
+  const idle = { running: false };
+
+  test("an idle or settled row has no chip: it shows its age instead", () => {
+    expect(rowStatus(idle)).toBeUndefined();
+    expect(rowStatus({ running: false, failed: false, review: false })).toBeUndefined();
+  });
+
+  test("a request outranks everything, and says whether it is a question or an approval", () => {
+    const read = { running: true, waiting: { label: "Waiting on 1 thread", title: "Ship it" }, failed: true };
+    expect(rowStatus({ ...read, request: { title: "edit src/app.ts" } })).toEqual({
+      kind: "needs",
+      label: "Needs you",
+      title: "Approval: edit src/app.ts",
+      approval: true,
+    });
+    expect(
+      rowStatus({ ...read, request: { title: "Which runner?", question: { text: "Which test runner?" } } }),
+    ).toEqual({ kind: "needs", label: "Needs you", title: "Which test runner?", approval: false });
+  });
+
+  test("working outranks waiting, and waiting outranks the failure it is clearing up", () => {
+    const waiting = { label: "Waiting on 2 threads", title: "Ship it, Review it" };
+    expect(rowStatus({ running: true, waiting, failed: true })).toEqual({
+      kind: "working",
+      label: "Working",
+    });
+    expect(rowStatus({ running: false, waiting, failed: true })).toEqual({
+      kind: "waiting",
+      label: "Waiting",
+      title: "Waiting on 2 threads: Ship it, Review it",
+    });
+  });
+
+  test("a wait says what it waits on, and one kind of wait needs no list", () => {
+    expect(
+      rowStatus({ running: false, waiting: { label: "Waiting on a background command", title: "" } }),
+    ).toEqual({
+      kind: "waiting",
+      label: "Waiting",
+      title: "Waiting on a background command",
+    });
+  });
+
+  test("a failure, then a review, each in its own words", () => {
+    expect(rowStatus({ running: false, failed: true, review: true })).toEqual({
+      kind: "failed",
+      label: "Failed",
+      title: "Its last turn failed",
+    });
+    expect(rowStatus({ running: false, review: true })).toEqual({
+      kind: "review",
+      label: "Review",
+      title: "It waits for your review",
+    });
   });
 });
 

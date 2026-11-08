@@ -10,7 +10,6 @@ import {
   CornerDownRight,
   GitBranch,
   Hand,
-  Link2,
   LoaderCircle,
   PauseCircle,
   Rows3,
@@ -18,8 +17,20 @@ import {
 } from "lucide-react";
 import { Dialog, Popover } from "radix-ui";
 import { useEffect, useMemo } from "react";
+import { agentActive, agentElapsed, type SubagentInfo, spawnedAgentId } from "../acp/rustcode";
 import type { StackAgent, StackState } from "../state/agentStack";
-import { addBranch, branchBar, flattenViews, forestTotal, ownBranch } from "../state/delegates";
+import {
+  type AgentState,
+  addBranch,
+  type BranchTotal,
+  branchBar,
+  type DelegateView,
+  flattenViews,
+  forestTotal,
+  ownBranch,
+  runningAgents,
+  runningSubagents,
+} from "../state/delegates";
 import { dismissLink, linksOf, resolveGrant, stateOf, stopLink, verb } from "../state/host";
 import {
   doneLinks,
@@ -33,9 +44,18 @@ import { modeLabel } from "../state/permissions";
 import { emptyCost } from "../state/pricing";
 import { selectThread, setView, useApp } from "../state/store";
 import { startedLinks } from "../state/thread";
-import { AgentGroupHeader, LINK_AGENT_STATE, ThreadAgentRow, useNow } from "./AgentViews";
+import {
+  AgentGroupHeader,
+  AgentRow,
+  LINK_AGENT_STATE,
+  SubagentRow,
+  ThreadAgentRow,
+  useNow,
+} from "./AgentViews";
 import { useDelegateBranch } from "./DelegateTree";
 import { cx, Pill, Tooltip } from "./primitives";
+
+const NO_AGENTS: SubagentInfo[] = [];
 
 const ICON: Record<LinkState, typeof Clock> = {
   queued: Clock,
@@ -92,21 +112,31 @@ function LinkRow({ link }: { link: Link }) {
 /** When a link's turn began, for the strip's live clock: its start, else when it was made. */
 const startedOf = (link: Link) => link.startedAt ?? link.createdAt;
 
+/** What the strip reads of the branch once per render: its header, its marks and its clock. */
+interface Strip {
+  /** The threads this one started, and the threads those started, at every depth. */
+  views: DelegateView[];
+  /** The threads the tree holds: a strip row for one of them is already counted there. */
+  inTree: ReadonlySet<string>;
+  /** What each strip row's thread does now, in row order. */
+  states: readonly LinkState[];
+  /** The branch's figures, the strip's own rows added to the tree. */
+  total: BranchTotal;
+  /** When each thread working now started its turn, for the header's clock. */
+  runningSince: number[];
+}
+
 /**
- * Three or more linked threads in the strip fold into one card header, the same
- * header a group of agents has in the transcript: the strip above the composer
- * has about 800px, and a third of it spent on a made-up title tells the reader
- * nothing. Two stay as rows of their own; they fit.
+ * What the strip reads of the branch: the details tree's figures, plus a row for
+ * each thread it only messaged (which has no node of its own), and when each
+ * thread working now started its turn.
  */
-function ManyLinks({ links, threadId }: { links: Link[]; threadId: string }) {
-  // Joined into one string so the selector's result is stable between renders.
-  const states = useApp((s) => links.map((l) => stateOf(s, l)).join(",")).split(",") as LinkState[];
-  // What the details panel draws as a tree is the authority for the branch:
-  // the threads this one started, and the threads those started, at every
-  // depth. The strip's own rows are only the links it can stop or dismiss, so
-  // its count, state and time come from the branch and not from those rows.
-  const views = useDelegateBranch(threadId);
-  const inTree = new Set(flattenViews(views).map((view) => view.id));
+function readStrip(
+  views: DelegateView[],
+  inTree: ReadonlySet<string>,
+  links: readonly Link[],
+  states: readonly LinkState[],
+): Strip {
   const at = Date.now();
   const total = links.reduce((sum, link, i) => {
     // A thread the tree already holds, at any depth, is counted there.
@@ -121,10 +151,7 @@ function ManyLinks({ links, threadId }: { links: Link[]; threadId: string }) {
     };
     return addBranch(sum, ownBranch(state, elapsed, emptyCost()));
   }, forestTotal(views));
-  // A live clock, not the branch's summed work time: how long the longest thread working now has
-  // been at it. A branch that finished is one quiet count, so nothing ticks there.
-  const now = useNow(total.counts.working > 0);
-  const starts = [
+  const runningSince = [
     ...flattenViews(views).flatMap((view) => (view.state === "working" ? [startedOf(view.link)] : [])),
     ...links.flatMap((link, i) =>
       !inTree.has(link.target) && LINK_AGENT_STATE[states[i] ?? "done"] === "working"
@@ -132,9 +159,24 @@ function ManyLinks({ links, threadId }: { links: Link[]; threadId: string }) {
         : [],
     ),
   ];
-  const bar = branchBar(total, starts, now);
-  // The marks are who works now: the finished ones are the popover's "Done", not a wall of avatars.
-  const mark = (view: (typeof views)[number]): StackAgent => ({
+  return { views, inTree, states, total, runningSince };
+}
+
+/**
+ * Three or more linked threads in the strip fold into one card header, the same
+ * header a group of agents has in the transcript: the strip above the composer
+ * has about 800px, and a third of it spent on a made-up title tells the reader
+ * nothing. Two stay as rows of their own; they fit.
+ */
+function ManyLinks({ links, threadId, strip }: { links: Link[]; threadId: string; strip: Strip }) {
+  const { views, inTree, states, total, runningSince } = strip;
+  // A live clock, not the branch's summed work time: how long the longest thread working now has
+  // been at it. Nothing runs once the branch finished, so nothing ticks there.
+  const now = useNow(total.counts.working > 0);
+  const bar = branchBar(total, runningSince, now);
+  // The marks are who is live now, working or waiting: the finished ones are the popover's "Done",
+  // not a wall of avatars.
+  const mark = (view: DelegateView): StackAgent => ({
     id: view.id,
     state: view.state === "stopped" ? "done" : view.state,
     kind: "thread",
@@ -142,16 +184,17 @@ function ManyLinks({ links, threadId }: { links: Link[]; threadId: string }) {
     label: view.title,
     since: view.link.createdAt,
   });
+  const liveState = (state: AgentState) => state === "working" || state === "needs";
   const marks: StackAgent[] = [
-    ...flattenViews(views).flatMap((view) => (view.state === "working" ? [mark(view)] : [])),
+    ...flattenViews(views).flatMap((view) => (liveState(view.state) ? [mark(view)] : [])),
     ...links.flatMap((link, i): StackAgent[] => {
       if (inTree.has(link.target)) return [];
-      const agent = LINK_AGENT_STATE[states[i] ?? "done"];
-      if (agent !== "working") return [];
+      const state = LINK_AGENT_STATE[states[i] ?? "done"];
+      if (!liveState(state)) return [];
       return [
         {
           id: link.target,
-          state: "working" as StackState,
+          state: state as StackState,
           kind: "thread" as const,
           harness: link.harness,
           label: link.targetTitle,
@@ -167,12 +210,15 @@ function ManyLinks({ links, threadId }: { links: Link[]; threadId: string }) {
   const above = new Set(links.map((link) => link.target));
   const done = settled.shown.filter((link) => !above.has(link.target));
   const more = settled.more + (settled.shown.length - done.length);
+  // Nothing runs and nothing waits: a settled branch is history the details panel keeps, not a
+  // header over the composer.
+  if (!bar.show) return null;
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
         <button
           type="button"
-          className="group flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-fill-subtle data-[state=open]:bg-fill-subtle"
+          className="group flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-fill-subtle data-[state=open]:bg-fill-subtle"
         >
           <AgentGroupHeader
             agents={marks.length ? marks : undefined}
@@ -191,7 +237,7 @@ function ManyLinks({ links, threadId }: { links: Link[]; threadId: string }) {
           align="start"
           sideOffset={8}
           aria-label="Linked threads"
-          className="elevated z-50 flex max-h-[min(420px,60vh)] w-[340px] flex-col overflow-y-auto p-1.5 rc-in"
+          className="elevated z-50 flex max-h-[min(420px,60vh)] w-[340px] flex-col overflow-y-auto p-2 rc-in"
         >
           {links.map((l) => (
             <LinkRow key={l.id} link={l} />
@@ -211,11 +257,27 @@ function ManyLinks({ links, threadId }: { links: Link[]; threadId: string }) {
   );
 }
 
-/** Above the composer: the threads this one is working with, and the thread it works for. */
+/** Above the composer: the delegates this one is working with, and the thread it works for. */
 export function LinkedThreads({ threadId }: { threadId: string }) {
   const book = useApp((s) => s.links);
   const items = useApp((s) => s.threads[threadId]?.items);
   const { driving, drivenBy } = linksOf(book, threadId);
+  const agents = useApp((s) => s.agents[threadId] ?? NO_AGENTS);
+  // A harness's own subagents, from another harness or an older session, read
+  // in this same strip: one surface for everything working under the thread.
+  const natives = useMemo(() => runningSubagents(items ?? []), [items]);
+  // RustCode's own subagents: a live `spawn_agent` call already draws its
+  // agent (`SubagentRow` reads `_rustcode/agents` for it), so only those whose
+  // call returned at launch are left to add here.
+  const builtins = useMemo(() => {
+    const drawn = new Set(
+      natives.flatMap(({ item }) => {
+        const id = item.title === "spawn_agent" ? spawnedAgentId(item.output) : undefined;
+        return id === undefined ? [] : [id];
+      }),
+    );
+    return runningAgents(agents).filter((agent) => !drawn.has(agent.id));
+  }, [agents, natives]);
   // A thread this one started reads in the transcript once it settles; the strip is its live
   // place until then, so the two never draw the same thread.
   const shown = useMemo(() => {
@@ -223,18 +285,32 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
     return new Set([...startedLinks(items ?? [], mine).values()].map((l) => l.target));
   }, [items, book.links, threadId]);
   const live = stripLinks(driving, shown);
+  // Joined into one string so the selector's result is stable between renders.
+  const states = useApp((s) => live.map((l) => stateOf(s, l)).join(",")).split(",") as LinkState[];
+  // What the details panel draws as a tree is the authority for the branch: the threads this one
+  // started, and the threads those started, at every depth. The strip's own rows only add the
+  // threads it messaged, which have a row to stop or dismiss but no node of their own.
+  const views = useDelegateBranch(threadId);
+  const inTree = useMemo(() => new Set(flattenViews(views).map((view) => view.id)), [views]);
+  const strip = readStrip(views, inTree, live, states);
   const fanOuts = book.fanOuts.filter((f) => f.orchestrator === threadId).slice(-1);
-  if (!live.length && !drivenBy && !fanOuts.length) return null;
+  // Work under way or a wait on the user, with a row of its own to draw: anything settled is the
+  // details panel's row (and a failure the inbox's), so the strip stays out of the chat's way
+  // rather than counting a lifetime or pinning an old failure. A native agent at work is a row
+  // of its own too.
+  const { working, needs } = strip.total.counts;
+  const news = live.length > 0 && working + needs > 0;
+  if (!news && !drivenBy && !fanOuts.length && !natives.length && !builtins.length) return null;
   return (
     // The one surface this strip shares with the jump-to-latest pill above it and its own group card
     // (`index.css` `.rc-glass-overlay`): the transcript keeps showing through, so a run of threads
     // reads as an overlay on the chat rather than a hole cut in it. Its rows are transparent over it.
     <div className="rc-glass-overlay relative flex flex-col gap-0.5 rounded-xl p-1 rc-in">
       {drivenBy && <WorkingFor link={drivenBy} />}
-      {(live.length > 0 || fanOuts.length > 0) && (
+      {(live.length > 0 || fanOuts.length > 0 || natives.length > 0 || builtins.length > 0) && (
         <div className="flex flex-col gap-0.5">
           {live.length > 2 ? (
-            <ManyLinks links={live} threadId={threadId} />
+            <ManyLinks links={live} threadId={threadId} strip={strip} />
           ) : (
             live.map((l) => <LinkRow key={l.id} link={l} />)
           )}
@@ -251,9 +327,32 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
               ))}
             </div>
           )}
+          {natives.map(({ item, steps }) => (
+            <SubagentRow key={item.id} item={item} steps={steps} threadId={threadId} />
+          ))}
+          {builtins.map((agent) => (
+            <BuiltinAgentRow key={agent.id} agent={agent} threadId={threadId} />
+          ))}
         </div>
       )}
     </div>
+  );
+}
+
+/** One of RustCode's own subagents at work, as the same row every agent gets. */
+function BuiltinAgentRow({ agent, threadId }: { agent: SubagentInfo; threadId: string }) {
+  const harness = useApp((s) => s.threads[threadId]?.harness?.id);
+  const now = useNow(agentActive(agent));
+  return (
+    <AgentRow
+      harness={harness}
+      state="working"
+      title={agent.name}
+      detail={agent.task.split("\n")[0]}
+      elapsed={agentElapsed(agent, now)}
+      label={`${agent.name}: ${agent.task}`}
+      showWord={false}
+    />
   );
 }
 
@@ -332,29 +431,21 @@ export function GrantDialog() {
 }
 
 /**
- * A sidebar badge: this thread works for another (↳), or messaged a thread that
- * still runs (count). Threads it started are the stack on its row, not a count,
- * so they are always left out here: a message to a thread shown elsewhere and
- * the "working for" marker are still news.
+ * A sidebar badge: this thread works for another (↳). It goes in front of the row's cluster of
+ * delegate marks, so both of the row's lines end on the same edge.
+ *
+ * The count of threads it messaged that still run is gone from the row: the threads it started are
+ * the marks beside this, and a messaged thread it waits on is what makes the row's chip say
+ * `Waiting` (`state/waiting.ts` counts those links too). Two counts on one row said the same thing
+ * twice, and neither was readable at 10px.
  */
 export function LinkBadge({ threadId }: { threadId: string }) {
   const book = useApp((s) => s.links);
-  const { driving, drivenBy } = linksOf(book, threadId);
-  const active = driving.filter((l) => isActive(l.state) && !l.started).length;
-  if (drivenBy) {
-    return (
-      <Tooltip label={`Working for “${drivenBy.orchestratorTitle}”`}>
-        <CornerDownRight size={11} className="shrink-0 text-accent" aria-label="Working for another thread" />
-      </Tooltip>
-    );
-  }
-  if (!active) return null;
+  const { drivenBy } = linksOf(book, threadId);
+  if (!drivenBy) return null;
   return (
-    <Tooltip label={`${active} linked thread${active === 1 ? "" : "s"} under way`}>
-      <span className="flex shrink-0 items-center gap-0.5 text-caption text-accent tabular">
-        <Link2 size={10} />
-        {active}
-      </span>
+    <Tooltip label={`Working for “${drivenBy.orchestratorTitle}”`}>
+      <CornerDownRight size={11} className="shrink-0 text-accent" aria-label="Working for another thread" />
     </Tooltip>
   );
 }

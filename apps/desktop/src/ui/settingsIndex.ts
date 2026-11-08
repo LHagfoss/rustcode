@@ -45,6 +45,16 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "general",
+    title: "Auto-compact",
+    keywords: "compact compaction context tokens threshold cache prompt cache idle claude codex",
+  },
+  {
+    section: "general",
+    title: "Auto-compact threshold",
+    keywords: "compact compaction context tokens size limit threshold",
+  },
+  {
+    section: "general",
     title: "System notifications",
     keywords: "notify notification alert badge dock attention approval question finished system",
   },
@@ -118,8 +128,18 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "agents",
-    title: "Threads one thread can run at once",
-    keywords: "orchestration delegation parallel slots limit concurrent children tree",
+    title: "Delegation",
+    keywords: "orchestration delegates delegate slots limit concurrent children total",
+  },
+  {
+    section: "agents",
+    title: "Delegates across all threads",
+    keywords: "orchestration delegation total machine wide global slots limit concurrent running at once",
+  },
+  {
+    section: "agents",
+    title: "Delegates one thread can run at once",
+    keywords: "orchestration delegation per thread parallel slots limit concurrent children",
   },
   {
     section: "agents",
@@ -162,22 +182,33 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   {
     section: "remote",
     title: "Share this Mac's threads with a phone",
-    keywords: "remote access phone device mobile share paired pair gateway on off switch",
+    keywords:
+      "remote access phone device mobile share paired pair gateway on off switch every thread harness",
+  },
+  {
+    section: "remote",
+    title: "Gateway address",
+    keywords: "address ip host port lan netbird remote gateway network copy connected",
   },
   {
     section: "remote",
     title: "Pair a device",
-    keywords: "pair pairing qr code scan phone device mobile address two minutes",
-  },
-  {
-    section: "remote",
-    title: "Address",
-    keywords: "address ip host port gateway netbird lan dial phone",
+    keywords: "pair pairing qr code scan phone device mobile address eight digit two minutes",
   },
   {
     section: "remote",
     title: "Paired devices",
     keywords: "devices paired attachments attached phone revoke revoke device count",
+  },
+  {
+    section: "remote",
+    title: "Open threads",
+    keywords: "threads shared open list share attached harness",
+  },
+  {
+    section: "remote",
+    title: "Held back threads",
+    keywords: "not shared held back refused limit 32 most recently used why",
   },
 
   // ------------------------------------------------------------ Appearance
@@ -285,6 +316,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     section: "about",
     title: "RustCode",
     keywords: "version update check upgrade download what's new about licences licenses open source",
+  },
+  {
+    section: "about",
+    title: "Update channel",
+    keywords: "beta stable prerelease channel release updates early",
   },
 ];
 

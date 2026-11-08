@@ -50,6 +50,10 @@ pub const THREAD_USAGE: &str = "thread_usage";
 pub const QUERY_DATA: &str = "query_data";
 pub const READ_ACTIVITY: &str = "read_activity";
 pub const MANAGE_QUEUE: &str = "manage_queue";
+/// Version 8: a delegate's pull request, merging it, and cleaning up after it.
+pub const THREAD_STATUS: &str = "thread_status";
+pub const MERGE_WHEN_GREEN: &str = "merge_when_green";
+pub const CLEANUP_WORKTREE: &str = "cleanup_worktree";
 /// The M1 tools, what a client advertising version 1 gets.
 pub const TOOL_NAMES: [&str; 3] = [LIST_SESSIONS, MESSAGE_SESSION, WAIT_SESSION];
 /// Added by version 2.
@@ -73,8 +77,10 @@ pub const V4_TOOL_NAMES: [&str; 2] = [THREAD_USAGE, QUERY_DATA];
 pub const V6_TOOL_NAMES: [&str; 1] = [READ_ACTIVITY];
 /// Added by version 7: the messages this thread queued on another one.
 pub const V7_TOOL_NAMES: [&str; 1] = [MANAGE_QUEUE];
+/// Added by version 9: a delegate's pull request, merging and cleanup.
+pub const V9_TOOL_NAMES: [&str; 3] = [THREAD_STATUS, MERGE_WHEN_GREEN, CLEANUP_WORKTREE];
 /// The newest version this engine speaks.
-pub const VERSION: u8 = 7;
+pub const VERSION: u8 = 9;
 /// Version 5 adds named account targeting to the existing `start_session` and
 /// `fan_out` args. No tool is added, but a client that advertised less never
 /// sees the `account` field and has it refused, so an older app cannot quietly
@@ -110,6 +116,11 @@ pub const MAX_SQL_BYTES: usize = 8 * 1024;
 pub const MAX_ACTIVITY_CURSOR_BYTES: usize = 128;
 /// The longest title a new thread takes.
 pub const MAX_TITLE_CHARS: usize = 200;
+/// How long `merge_when_green` waits for checks by default, and at most: under
+/// an hour, so the wait plus the engine's deadline fits inside an external
+/// harness's MCP call timeout (Codex's `tool_timeout_sec` is 61 minutes).
+pub const DEFAULT_MERGE_WAIT_MS: u64 = 55 * 60 * 1000;
+pub const MAX_MERGE_WAIT_MS: u64 = DEFAULT_MERGE_WAIT_MS;
 
 /// The most text a message or a prompt carries: 32 KiB.
 pub const MAX_MESSAGE_BYTES: usize = 32 * 1024;
@@ -148,6 +159,13 @@ pub const PROMPT_HINT_V6: &str = "\n\nRustCode's threads: `list_sessions`, `sear
 /// [`PROMPT_HINT_V6`] for version 7 clients, which can correct what they queued.
 pub const PROMPT_HINT_V7: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task, and use your own subagents for quick lookups. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those change other threads, so do them only when the user asks; the user approves.";
 
+/// [`PROMPT_HINT_V7`] for version 8 clients: delegation goes through RustCode's
+/// tools, as a Claude Code thread has no native subagent tool (#3176).
+pub const PROMPT_HINT_V8: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`, while a harness with its own subagent tool may use it for quick lookups. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those change other threads, so do them only when the user asks; the user approves.";
+
+/// [`PROMPT_HINT_V8`] for version 9 clients, which can finish a delegate's work.
+pub const PROMPT_HINT_V9: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. `thread_status` reports a delegate's worktree, branch, pull request and checks; `merge_when_green` merges it once green; `cleanup_worktree` removes its worktree and branch and settles it. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those, merge and cleanup change other threads, so do them only when the user asks; the user approves.";
+
 /// The prompt hint a client of `version` gets.
 pub fn prompt_hint(version: u8) -> &'static str {
     match version {
@@ -158,7 +176,9 @@ pub fn prompt_hint(version: u8) -> &'static str {
         4 => PROMPT_HINT_V4,
         5 => PROMPT_HINT_V5,
         6 => PROMPT_HINT_V6,
-        _ => PROMPT_HINT_V7,
+        7 => PROMPT_HINT_V7,
+        8 => PROMPT_HINT_V8,
+        _ => PROMPT_HINT_V9,
     }
 }
 
@@ -170,6 +190,7 @@ pub fn is_tool(name: &str) -> bool {
         || V4_TOOL_NAMES.contains(&name)
         || V6_TOOL_NAMES.contains(&name)
         || V7_TOOL_NAMES.contains(&name)
+        || V9_TOOL_NAMES.contains(&name)
 }
 
 /// Whether `name` needs a version 2 client.
@@ -195,6 +216,11 @@ pub fn is_v6_tool(name: &str) -> bool {
 /// Whether `name` needs a version 7 client (its own queued messages).
 pub fn is_v7_tool(name: &str) -> bool {
     V7_TOOL_NAMES.contains(&name)
+}
+
+/// Whether `name` needs a version 9 client (delegate pull requests and cleanup).
+pub fn is_v9_tool(name: &str) -> bool {
+    V9_TOOL_NAMES.contains(&name)
 }
 
 /// The tools a client of `version` gets, in order.
@@ -228,9 +254,16 @@ pub fn tool_names(version: u8) -> Vec<&'static str> {
             names.extend(V6_TOOL_NAMES);
             names
         }
-        _ => {
+        7 => {
             let mut names = tool_names(6);
             names.extend(V7_TOOL_NAMES);
+            names
+        }
+        // Version 8 adds native-subagent guidance to the hint, not another tool.
+        8 => tool_names(7),
+        _ => {
+            let mut names = tool_names(8);
+            names.extend(V9_TOOL_NAMES);
             names
         }
     }
@@ -596,6 +629,27 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             }
             Ok(())
         }
+        THREAD_STATUS => optional_name(args, "session_id"),
+        MERGE_WHEN_GREEN => {
+            required_name(args, "session_id")?;
+            match args.get("timeout_ms") {
+                None | Some(Value::Null) => Ok(()),
+                Some(timeout)
+                    if timeout
+                        .as_u64()
+                        .is_some_and(|ms| (1..=MAX_MERGE_WAIT_MS).contains(&ms)) =>
+                {
+                    Ok(())
+                }
+                Some(_) => Err(format!(
+                    "timeout_ms must be 1 to {MAX_MERGE_WAIT_MS} milliseconds"
+                )),
+            }
+        }
+        CLEANUP_WORKTREE => {
+            required_name(args, "session_id")?;
+            optional_flag(args, "settle")
+        }
         START_SESSION => {
             bounded_text(args, "prompt")?;
             optional_title(args)?;
@@ -676,6 +730,16 @@ pub fn timeout(name: &str, args: &Value) -> Duration {
             .clamp(1, MAX_WAIT_MS);
         // Room for the client to answer after its own wait ends.
         Duration::from_millis(wait) + Duration::from_secs(30)
+    } else if name == MERGE_WHEN_GREEN {
+        // The client merges once its own wait ends, re-reads the pull request,
+        // and answers; the loop's tail can outlast the wait by a poll and a
+        // second quiet round, so give it a full three minutes.
+        let wait = args
+            .get("timeout_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(DEFAULT_MERGE_WAIT_MS)
+            .clamp(1, MAX_MERGE_WAIT_MS);
+        Duration::from_millis(wait) + Duration::from_secs(180)
     } else {
         REQUEST_TIMEOUT
     }
@@ -884,7 +948,7 @@ mod tests {
         assert_eq!(version(json!({"rustcode": {"orchestration": 1}})), 1);
         assert_eq!(version(json!({"rustcode": {"orchestration": 2}})), 2);
         // A newer client gets what this engine speaks.
-        assert_eq!(version(json!({"rustcode": {"orchestration": 8}})), VERSION);
+        assert_eq!(version(json!({"rustcode": {"orchestration": 9}})), VERSION);
         assert_eq!(version(json!({"rustcode": {"preview": 1}})), 0);
         assert_eq!(client_meta_version(None), 0);
     }
@@ -921,7 +985,7 @@ mod tests {
 
     #[test]
     fn version_four_adds_the_data_store_tools_only_for_its_clients() {
-        assert_eq!(VERSION, 7);
+        assert_eq!(VERSION, 9);
         let v3 = tool_names(3);
         assert!(v3.iter().all(|name| !is_v4_tool(name)), "{v3:?}");
         let v4 = tool_names(4);
@@ -935,9 +999,15 @@ mod tests {
             tool_names(7),
             [tool_names(6), V7_TOOL_NAMES.to_vec()].concat()
         );
+        // Version 8 adds native-subagent guidance to the hint, not another tool.
+        assert_eq!(tool_names(8), tool_names(7));
         assert_eq!(
             tool_names(9),
-            tool_names(7),
+            [tool_names(8), V9_TOOL_NAMES.to_vec()].concat()
+        );
+        assert_eq!(
+            tool_names(10),
+            tool_names(9),
             "a newer client gets what this engine speaks"
         );
         for name in [THREAD_USAGE, QUERY_DATA] {
@@ -963,6 +1033,16 @@ mod tests {
             assert!(PROMPT_HINT_V7.contains(name), "{name}");
             assert!(!PROMPT_HINT_V6.contains(name), "{name} is v7 only");
         }
+        for name in V9_TOOL_NAMES {
+            assert!(is_tool(name) && is_v9_tool(name));
+            assert!(
+                !is_v7_tool(name) && !tool_names(8).contains(&name),
+                "{name} is v9 only"
+            );
+            assert!(PROMPT_HINT_V9.contains(name), "{name}");
+            assert!(!PROMPT_HINT_V8.contains(name), "{name} is v9 only");
+            assert!(!PROMPT_HINT_V7.contains(name), "{name} is v9 only");
+        }
         // The hint a client is told follows the version it advertised.
         assert_eq!(prompt_hint(1), PROMPT_HINT);
         assert_eq!(prompt_hint(2), PROMPT_HINT_V2);
@@ -971,7 +1051,9 @@ mod tests {
         assert_eq!(prompt_hint(5), PROMPT_HINT_V5);
         assert_eq!(prompt_hint(6), PROMPT_HINT_V6);
         assert_eq!(prompt_hint(7), PROMPT_HINT_V7);
-        assert_eq!(prompt_hint(9), PROMPT_HINT_V7);
+        assert_eq!(prompt_hint(8), PROMPT_HINT_V8);
+        assert_eq!(prompt_hint(9), PROMPT_HINT_V9);
+        assert_eq!(prompt_hint(10), PROMPT_HINT_V9);
         assert_eq!(prompt_hint(0), "");
         // Accounts arrived in 5: a v4 hint promises nothing it cannot do.
         assert!(!PROMPT_HINT_V4.contains("account"));
@@ -983,7 +1065,7 @@ mod tests {
                     .cloned()
                     .unwrap()
             )),
-            7
+            9
         );
         assert_eq!(
             client_meta_version(Some(
@@ -997,16 +1079,60 @@ mod tests {
         // It rides in the root prompt and in the MCP server's instructions, so
         // it is bounded: v4 adds the two data tools, v5 the account line and
         // the line that says a thread an agent starts is its delegate, v6 the
-        // activity read, v7 the queue control.
-        let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V7);
+        // activity read, v7 the queue control, v8 that native subagents go
+        // through RustCode's tools, v9 a delegate's pull request.
+
+        let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V9);
         println!(
-            "prompt hints: v3 {} tokens, v4 {} tokens, v5 {} tokens, v6 {} tokens, v7 {tokens} tokens",
+            "prompt hints: v3 {} tokens, v4 {} tokens, v5 {} tokens, v6 {} tokens, v9 {tokens} tokens",
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V3),
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V4),
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V5),
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V6)
         );
-        assert!(tokens < 350, "{tokens}");
+        // v9 adds the three delegate pull-request tools, all named with their use.
+        assert!(tokens < 460, "{tokens}");
+    }
+
+    #[test]
+    fn delegate_pull_request_arguments_are_checked() {
+        let ok = |name: &str, args: Value| validate(name, &args).is_ok();
+        assert!(ok(THREAD_STATUS, json!({})));
+        assert!(ok(THREAD_STATUS, json!({"session_id": "d1"})));
+        assert!(!ok(THREAD_STATUS, json!({"session_id": " "})));
+        assert!(ok(MERGE_WHEN_GREEN, json!({"session_id": "d1"})));
+        assert!(ok(
+            MERGE_WHEN_GREEN,
+            json!({"session_id": "d1", "timeout_ms": 60000})
+        ));
+        assert!(!ok(MERGE_WHEN_GREEN, json!({})));
+        assert!(!ok(
+            MERGE_WHEN_GREEN,
+            json!({"session_id": "d1", "timeout_ms": 0})
+        ));
+        assert!(!ok(
+            MERGE_WHEN_GREEN,
+            json!({"session_id": "d1", "timeout_ms": MAX_MERGE_WAIT_MS + 1})
+        ));
+        assert!(!ok(
+            MERGE_WHEN_GREEN,
+            json!({"session_id": "d1", "timeout_ms": "soon"})
+        ));
+        assert!(ok(CLEANUP_WORKTREE, json!({"session_id": "d1"})));
+        assert!(ok(
+            CLEANUP_WORKTREE,
+            json!({"session_id": "d1", "settle": false})
+        ));
+        assert!(!ok(CLEANUP_WORKTREE, json!({})));
+        assert!(!ok(
+            CLEANUP_WORKTREE,
+            json!({"session_id": "d1", "settle": "yes"})
+        ));
+        // The merge waits under an hour and the engine outlasts the loop's tail,
+        // still inside the external harness's 61-minute MCP timeout.
+        let deadline = timeout(MERGE_WHEN_GREEN, &json!({"session_id": "d1"}));
+        assert!(deadline >= Duration::from_millis(MAX_MERGE_WAIT_MS) + Duration::from_secs(170));
+        assert!(deadline < Duration::from_secs(61 * 60));
     }
 
     #[test]

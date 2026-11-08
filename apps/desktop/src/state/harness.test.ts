@@ -7,6 +7,7 @@ import {
   commandLine,
   controlDisabledReason,
   defaultEffort,
+  groupHarnesses,
   harnessStatus,
   normalizeDefault,
   orderHarnesses,
@@ -23,6 +24,7 @@ const base: Harness = {
   name: "Codex",
   kind: "codex",
   builtin: false,
+  known: true,
   enabled: true,
   command: ["codex", "app-server"],
   installed: true,
@@ -275,6 +277,14 @@ describe("the desktop app's preferred harness", () => {
       "codex",
       "rustcode",
     ]);
+  });
+
+  test("the list is what RustCode ships with, then what was added by hand", () => {
+    const pi: Harness = { ...base, id: "pi", name: "Pi", kind: "acp" };
+    const handwritten: Harness = { ...base, id: "my-agent", name: "My agent", known: false };
+    const { standard, custom } = groupHarnesses([handwritten, rustcode, pi, claude]);
+    expect(standard.map((h) => h.id)).toEqual(["claude-code", "pi", "rustcode"]);
+    expect(custom.map((h) => h.id)).toEqual(["my-agent"]);
   });
 
   test("a first run starts on Claude Code, else another agent, else RustCode", () => {

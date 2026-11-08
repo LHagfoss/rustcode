@@ -46,8 +46,17 @@ import { openExternal, pickFolder, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { BUILTIN_THEMES, cssName, type Theme, TOKENS } from "../lib/themes";
 import { canUpdate } from "../lib/updater";
+import { AUTO_COMPACT_DEFAULT_THRESHOLD, AUTO_COMPACT_MODES } from "../state/autoCompact";
 import { validateDefault } from "../state/harness";
-import { MAX_ACTIVE_LIMIT, MIN_ACTIVE_LINKS } from "../state/orchestration";
+import {
+  activeDelegates,
+  busiestThreadDelegates,
+  effectivePerThreadLimit,
+  MAX_DELEGATES_PER_THREAD,
+  MAX_DELEGATES_TOTAL,
+  MIN_DELEGATES_PER_THREAD,
+  MIN_DELEGATES_TOTAL,
+} from "../state/orchestration";
 import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
 import { RECAP_HOUR_OPTIONS } from "../state/recap";
 import {
@@ -63,6 +72,8 @@ import {
   type SettingsSection,
   setActiveTheme,
   setAnimateStreaming,
+  setAutoCompactMode,
+  setAutoCompactThreshold,
   setChatWidth,
   setContinueAfterLimit,
   setDefaultCwd,
@@ -80,6 +91,7 @@ import {
   setSystemNotifications,
   setTheme,
   setThreadLimit,
+  setTotalLimit,
   toast,
   useApp,
 } from "../state/store";
@@ -88,6 +100,9 @@ import {
   checkIfStale,
   checkNow,
   installProgress,
+  loadChannels,
+  offersUpdate,
+  setUpdateChannel,
   showWhatsNew,
   useUpdates,
 } from "../state/updates";
@@ -96,7 +111,7 @@ import { DefaultsForm, HarnessList } from "./Harnesses";
 import { HeaderButtonsSetting } from "./HeaderButtonsSetting";
 import { NewThreadBanner } from "./NewThreadBanner";
 import { ChromeButton, cx, Kbd, Spinner, Switch } from "./primitives";
-import { RemoteAccessPage } from "./RemoteAccess";
+import { RemoteAccessPage } from "./RemoteAccessPage";
 import { ShortcutsPage } from "./ShortcutSettings";
 import { StatisticsPage } from "./StatisticsPage";
 import { type SettingEntry, searchSettings } from "./settingsIndex";
@@ -229,6 +244,7 @@ function PresenceRow() {
 
 function GeneralPage() {
   const defaultCwd = useApp((s) => s.defaultCwd);
+  const autoCompact = useApp((s) => s.autoCompact);
   const resume = useApp((s) => s.resumeAfterRestart);
   const afterLimit = useApp((s) => s.continueAfterLimit);
   const defaultAccess = useApp((s) => s.defaultPermissionMode);
@@ -292,6 +308,43 @@ function GeneralPage() {
             onChange={setContinueAfterLimit}
           />
         </Row>
+        <Row
+          title="Auto-compact"
+          reset={
+            autoCompact.mode === SETTINGS_DEFAULTS.autoCompact.mode
+              ? undefined
+              : () => setAutoCompactMode(SETTINGS_DEFAULTS.autoCompact.mode)
+          }
+          subtitle="RustCode asks the harness to compact its own context when a turn ends above the threshold, and, for Claude Code and Codex, shortly before their prompt cache expires. Never while a turn runs, a message waits or an approval is open; turn it off for one thread in its menu."
+        >
+          <Choice
+            label="Auto-compact"
+            value={autoCompact.mode}
+            options={AUTO_COMPACT_MODES}
+            onChange={setAutoCompactMode}
+          />
+        </Row>
+        {autoCompact.mode !== "off" && (
+          <Row
+            title="Auto-compact threshold"
+            reset={
+              autoCompact.threshold === AUTO_COMPACT_DEFAULT_THRESHOLD
+                ? undefined
+                : () => setAutoCompactThreshold(AUTO_COMPACT_DEFAULT_THRESHOLD)
+            }
+            subtitle="Compact once the context passes this many tokens. The idle, pre-cache rule uses a smaller 60k threshold."
+          >
+            <Slider
+              label="Auto-compact threshold"
+              value={Math.round(autoCompact.threshold / 1_000)}
+              min={20}
+              max={500}
+              step={10}
+              onChange={(value) => setAutoCompactThreshold(value * 1_000)}
+              unit="k tokens"
+            />
+          </Row>
+        )}
       </Group>
       <Group title="Notifications">
         <Row
@@ -473,7 +526,7 @@ function AgentsPage() {
   return (
     <>
       {snapshot.unsupported && (
-        <p className="mb-4 rounded-lg bg-warning/10 px-3.5 py-2.5 text-callout">
+        <p className="mb-4 rounded-lg bg-warning/10 px-3 py-2 text-callout">
           This engine does not run other harnesses yet (no{" "}
           <code className="font-mono">_rustcode/harnesses</code>). Threads use RustCode's local engine. Update
           RustCode to add Claude Code, Codex, Gemini and others.
@@ -515,61 +568,110 @@ function AgentsPage() {
 function OrchestrationGroup() {
   const orchestration = useApp((s) => s.orchestration);
   const threadLimit = useApp((s) => s.threadLimit);
+  const totalLimit = useApp((s) => s.totalLimit);
   const readAcrossProjects = useApp((s) => s.readAcrossProjects);
   const pending = useApp((s) => s.orchestrationPending);
   const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
+  const links = useApp((s) => s.links);
+  const running = useMemo(() => activeDelegates(links), [links]);
+  const busiest = useMemo(() => busiestThreadDelegates(links), [links]);
+  const possible = effectivePerThreadLimit({ perThread: threadLimit, total: totalLimit });
   return (
-    <Group title="Orchestration">
-      <Row
-        title="Threads can start and message other threads"
-        reset={orchestration ? undefined : () => setOrchestration(SETTINGS_DEFAULTS.orchestration)}
-        subtitle="An agent can list and read threads, message one in this project, start new threads (in their own worktrees, on any harness, model or named account) and run one task on several harnesses to compare. A thread at Full access does this without asking; Auto-edit may list, read and wait. Otherwise you approve each: Allow for This Thread, Allow Once or Don't Allow. A thread it starts gets the lower of this thread's access and Default access, so it is never given more than the thread that started it."
-      >
-        <Switch
-          label="Threads can start and message other threads"
-          checked={orchestration}
-          onChange={setOrchestration}
-        />
-      </Row>
-      <Row
-        title="Threads one thread can run at once"
-        reset={
-          threadLimit === SETTINGS_DEFAULTS.threadLimit
-            ? undefined
-            : () => setThreadLimit(SETTINGS_DEFAULTS.threadLimit)
-        }
-        subtitle={`How many distinct threads one thread may have working at the same time. A message to a thread it is already running is a follow-up and takes no slot. The whole delegation tree holds twice as many: ${threadLimit * 2} now.`}
-      >
-        <Slider
-          label="Threads one thread can run at once"
-          value={threadLimit}
-          min={MIN_ACTIVE_LINKS}
-          max={MAX_ACTIVE_LIMIT}
-          onChange={setThreadLimit}
-          unit="threads"
-        />
-      </Row>
-      <Row
-        title="Let agents read threads in other projects"
-        reset={
-          readAcrossProjects ? undefined : () => setReadAcrossProjects(SETTINGS_DEFAULTS.readAcrossProjects)
-        }
-        subtitle="When on, an agent can list, search and read any thread, including in other projects. Reading a thread still follows the approval rules above. Messaging and starting threads stay in the project."
-      >
-        <Switch
-          label="Let agents read threads in other projects"
-          checked={readAcrossProjects}
-          onChange={setReadAcrossProjects}
-        />
-      </Row>
-      {pending && (
-        <Row title="Restart the engine to apply" subtitle="The engine learns this setting when it starts.">
-          <Action prominent disabled={anyRunning} onClick={() => void restartEngine()}>
-            Restart Engine
-          </Action>
+    <>
+      <Group title="Orchestration">
+        <Row
+          title="Threads can start and message other threads"
+          reset={orchestration ? undefined : () => setOrchestration(SETTINGS_DEFAULTS.orchestration)}
+          subtitle="An agent can list and read threads, message one in this project, start new threads (in their own worktrees, on any harness, model or named account) and run one task on several harnesses to compare. A thread at Full access does this without asking; Auto-edit may list, read and wait. Otherwise you approve each: Allow for This Thread, Allow Once or Don't Allow. A thread it starts gets the lower of this thread's access and Default access, so it is never given more than the thread that started it."
+        >
+          <Switch
+            label="Threads can start and message other threads"
+            checked={orchestration}
+            onChange={setOrchestration}
+          />
         </Row>
-      )}
-    </Group>
+        <Row
+          title="Let agents read threads in other projects"
+          reset={
+            readAcrossProjects ? undefined : () => setReadAcrossProjects(SETTINGS_DEFAULTS.readAcrossProjects)
+          }
+          subtitle="When on, an agent can list, search and read any thread, including in other projects. Reading a thread still follows the approval rules above. Messaging and starting threads stay in the project."
+        >
+          <Switch
+            label="Let agents read threads in other projects"
+            checked={readAcrossProjects}
+            onChange={setReadAcrossProjects}
+          />
+        </Row>
+        {pending && (
+          <Row title="Restart the engine to apply" subtitle="The engine learns this setting when it starts.">
+            <Action prominent disabled={anyRunning} onClick={() => void restartEngine()}>
+              Restart Engine
+            </Action>
+          </Row>
+        )}
+      </Group>
+      <Group
+        title="Delegation"
+        disabled={!orchestration}
+        footer={
+          orchestration
+            ? "Only live delegates take a slot; a finished one frees it at once. A message to a thread this one already runs is a follow-up and takes none."
+            : "These limits have no effect while “Threads can start and message other threads” is off."
+        }
+      >
+        <Row
+          title="Delegates across all threads"
+          reset={
+            totalLimit === SETTINGS_DEFAULTS.totalLimit
+              ? undefined
+              : () => setTotalLimit(SETTINGS_DEFAULTS.totalLimit)
+          }
+          subtitle="How many delegates may run at once across this app, whichever thread started them."
+          status={
+            running === 0
+              ? "No delegates running now"
+              : running === 1
+                ? "1 running now"
+                : `${running} running now`
+          }
+        >
+          <Slider
+            label="Delegates across all threads"
+            value={totalLimit}
+            min={MIN_DELEGATES_TOTAL}
+            max={MAX_DELEGATES_TOTAL}
+            onChange={setTotalLimit}
+            unit="delegates"
+          />
+        </Row>
+        <Row
+          title="Delegates one thread can run at once"
+          reset={
+            threadLimit === SETTINGS_DEFAULTS.threadLimit
+              ? undefined
+              : () => setThreadLimit(SETTINGS_DEFAULTS.threadLimit)
+          }
+          subtitle="How many delegates one thread may have working at the same time. The total above can make this lower."
+          status={
+            threadLimit > totalLimit
+              ? `${threadLimit} set, ${possible} possible while the total is ${totalLimit}`
+              : busiest === 0
+                ? "No delegates on any thread now"
+                : `The busiest thread has ${busiest} now`
+          }
+        >
+          <Slider
+            label="Delegates one thread can run at once"
+            value={threadLimit}
+            min={MIN_DELEGATES_PER_THREAD}
+            max={MAX_DELEGATES_PER_THREAD}
+            onChange={setThreadLimit}
+            unit="delegates"
+          />
+        </Row>
+      </Group>
+    </>
   );
 }
 
@@ -744,7 +846,7 @@ function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
     }
   };
   return (
-    <div className="rc-expand flex flex-col gap-2 border-border border-t px-4 py-3.5">
+    <div className="rc-expand flex flex-col gap-2 border-border border-t px-4 py-3">
       <div className="flex items-center gap-2">
         <input
           autoFocus
@@ -874,7 +976,7 @@ function AppearancePage() {
 function TokenList() {
   const [open, setOpen] = useState(false);
   return (
-    <section className="mb-8">
+    <section className="mb-6">
       <SectionTitle
         title="Tokens"
         action={
@@ -886,7 +988,7 @@ function TokenList() {
       {open && (
         <div className="rc-expand grid grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-2 rounded-xl bg-surface p-3">
           {TOKENS.map((t) => (
-            <div key={t} className="flex items-center gap-2 rounded-lg bg-surface-2 px-2.5 py-1.5">
+            <div key={t} className="flex items-center gap-2 rounded-lg bg-surface-2 px-2 py-1.5">
               <span
                 className="size-4 shrink-0 rounded-xs shadow-1"
                 style={{ background: `var(${cssName(t)})` }}
@@ -960,6 +1062,7 @@ function BannerSetting() {
  */
 function AppVersion() {
   const info = useUpdates((s) => s.info);
+  const channel = useUpdates((s) => s.channel);
   const installing = useUpdates((s) => s.installing);
   const progress = useUpdates((s) => s.progress);
   const background = useUpdates((s) => s.error);
@@ -967,6 +1070,7 @@ function AppVersion() {
   const [error, setError] = useState<string | null>(null);
   const shellVersion = useUpdates((s) => s.version);
   const version = info?.current ?? shellVersion ?? APP_VERSION;
+  const offered = info !== null && offersUpdate(info, channel);
   useEffect(() => checkIfStale(), []);
   const check = async () => {
     setChecking(true);
@@ -977,7 +1081,7 @@ function AppVersion() {
     setChecking(false);
   };
   const install = async () => {
-    if (!info?.canInstall) {
+    if (!offered || !info?.canInstall) {
       if (info?.page) openExternal(info.page);
       return;
     }
@@ -1027,7 +1131,7 @@ function AppVersion() {
       {canUpdate() && <Action onClick={() => void showWhatsNew(version)}>What's New</Action>}
       {!canUpdate() ? (
         <Info size={14} className="text-fg-faint" />
-      ) : info?.available && info.latest ? (
+      ) : offered && info.latest ? (
         <Action prominent disabled={installing} onClick={() => void install()}>
           {installing ? (
             <span className="flex items-center gap-1.5">
@@ -1179,7 +1283,44 @@ function AboutPage() {
       footer="RustCode is open source. The licences of everything it ships are in its release."
     >
       <AppVersion />
+      <UpdateChannelRow />
     </Group>
+  );
+}
+
+/**
+ * Settings › About › Update channel: Stable follows releases only; Beta also
+ * offers the betas of the next version, which show in the same row and install
+ * the same way. Betas build the macOS app alone, so the row is hidden where
+ * there is no beta to install. The channels come from the shell without a
+ * release check, so the row is there before one answers and when it fails.
+ */
+function UpdateChannelRow() {
+  const channels = useUpdates((s) => s.channels);
+  const channel = useUpdates((s) => s.channel);
+  useEffect(() => {
+    if (canUpdate()) void loadChannels();
+  }, []);
+  if (!canUpdate() || !channels.includes("beta")) return null;
+  return (
+    <Row
+      title="Update channel"
+      subtitle={
+        channel === "beta"
+          ? "Beta: newer betas show here and at the foot of the sidebar."
+          : "Stable releases only. Betas of the next version are skipped."
+      }
+    >
+      <Choice
+        label="Update channel"
+        value={channel}
+        onChange={setUpdateChannel}
+        options={[
+          { value: "stable", label: "Stable" },
+          { value: "beta", label: "Beta" },
+        ]}
+      />
+    </Row>
   );
 }
 
@@ -1386,7 +1527,7 @@ export function Settings() {
             <div className="flex min-w-0 flex-1 flex-col">
               <PanelHeader label={current.label} />
               <main className="scroll-stable min-h-0 flex-1">
-                <div className="@container mx-auto w-full max-w-[760px] px-4 pt-5 pb-24">
+                <div className="@container mx-auto w-full max-w-[760px] px-4 pt-4 pb-24">
                   {section === "general" && <GeneralPage />}
                   {section === "chat" && <ChatPage />}
                   {section === "agents" && <AgentsPage />}
@@ -1418,7 +1559,7 @@ export function Settings() {
 function PanelHeader({ label }: { label: string }) {
   const resets = useRowResets();
   return (
-    <header className="flex h-12 shrink-0 items-center gap-3 border-border border-b ps-5 pe-2">
+    <header className="flex h-12 shrink-0 items-center gap-3 border-border border-b ps-4 pe-2">
       <nav aria-label="Settings breadcrumb" className="min-w-0">
         <ol className="m-0 flex min-w-0 list-none items-center gap-2 p-0 text-body">
           <li className="shrink-0 font-medium text-fg-muted">Settings</li>

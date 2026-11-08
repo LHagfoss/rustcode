@@ -17,7 +17,13 @@ import {
   threadTurnEnded,
   wakeTick,
 } from "./host";
-import { emptyBook, type Link } from "./orchestration";
+import {
+  DEFAULT_DELEGATES_PER_THREAD,
+  DEFAULT_DELEGATES_TOTAL,
+  emptyBook,
+  isActive,
+  type Link,
+} from "./orchestration";
 import { pendingRequestsOn } from "./pending";
 import { QUEUE_REASON } from "./queue";
 import {
@@ -42,6 +48,7 @@ import {
   errorText,
   fetchHarnessModels,
   forgetPlans,
+  loadTotalLimit,
   localChoices,
   MAX_PANELS,
   mergePlans,
@@ -96,7 +103,9 @@ import {
   setPanel,
   setPermissionMode,
   setProjectCwd,
+  setThreadLimit,
   setThreadStatus,
+  setTotalLimit,
   settleThread,
   settleThreads,
   setView,
@@ -168,6 +177,33 @@ const selected = () => {
 beforeEach(() => resetForTests());
 
 describe("engine controller with the mock engine", () => {
+  test("the migrated delegate total is written once, so a later per-thread change does not move it", () => {
+    // An earlier build kept only the per-thread limit; its old twice-it tree ceiling becomes the
+    // total. The migration is one-shot: the total is stored, not recomputed on every launch.
+    const storage = testStorage({ "rustcode.threadLimit": "16" });
+    try {
+      expect(loadTotalLimit()).toBe(32);
+      expect(storage.data.get("rustcode.totalLimit")).toBe("32");
+      storage.data.set("rustcode.threadLimit", "32");
+      expect(loadTotalLimit()).toBe(32);
+      // Once a total is stored it wins, kept to its own 2..64 range.
+      storage.data.set("rustcode.totalLimit", "12");
+      expect(loadTotalLimit()).toBe(12);
+      storage.data.set("rustcode.totalLimit", "999");
+      expect(loadTotalLimit()).toBe(64);
+    } finally {
+      storage.done();
+    }
+    // A fresh install starts at the default and keeps it.
+    const fresh = testStorage();
+    try {
+      expect(loadTotalLimit()).toBe(DEFAULT_DELEGATES_TOTAL);
+      expect(fresh.data.get("rustcode.totalLimit")).toBe(String(DEFAULT_DELEGATES_TOTAL));
+    } finally {
+      fresh.done();
+    }
+  });
+
   test("connects, lists threads and replays one", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
@@ -654,6 +690,46 @@ describe("engine controller with the mock engine", () => {
     expect(selected()!.items.length).toBe(items);
     closeReport();
     expect(useApp.getState().report).toBeNull();
+  });
+
+  test("two starts at a limit's edge take one slot, not two", async () => {
+    setOrchestration(true);
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 2);
+    const [caller, target] = useApp.getState().sessions.map((x) => x.id) as [string, string];
+    selectThread(caller);
+    await until(() => selected()?.loaded === true);
+    // Full access answers the approval itself, so both calls reach the book without a user.
+    setPermissionMode(caller, "full");
+    setThreadLimit(2);
+    setTotalLimit(16);
+    try {
+      const staged: Link = {
+        id: `${caller}/staged`,
+        orchestrator: caller,
+        target,
+        orchestratorTitle: "Parent",
+        targetTitle: "Child",
+        message: "already working",
+        state: "working",
+        createdAt: Date.now(),
+      };
+      useApp.setState({ links: { ...emptyBook(), links: [staged], counters: { [caller]: 1 } } });
+      const start = (prompt: string) =>
+        answerOrchestration({ sessionId: caller, tool: "start_session", args: { prompt, title: prompt } });
+      // Both calls check the one free slot before either writes its link.
+      const answers = await Promise.all([start("one"), start("two")]);
+      const refused = answers.filter((answer) => answer.error);
+      expect(refused).toHaveLength(1);
+      expect((refused[0]!.error as { code?: string }).code).toBe("busy");
+      const live = useApp
+        .getState()
+        .links.links.filter((link) => link.orchestrator === caller && isActive(link.state));
+      expect(live).toHaveLength(2);
+    } finally {
+      setThreadLimit(DEFAULT_DELEGATES_PER_THREAD);
+      setTotalLimit(DEFAULT_DELEGATES_TOTAL);
+    }
   });
 
   test("a delegated thread must name a harness that can run and a model it lists", async () => {

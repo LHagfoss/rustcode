@@ -1,10 +1,10 @@
 // The composer's model pill and its card. The card opens on the effort, because that is what is
-// changed most: the current level as a large word, the model under it, a slider over the levels
-// that model itself lists, the harness's logins below and Fast mode beside the reset. The model
-// name swaps the card for the searchable list of every harness's models (one harness on top, the
-// current model checked), and picking one comes back to the slider with the effort clamped to the
-// new model's levels. What the thread's harness cannot do is greyed out with the reason, from
-// capability flags.
+// changed most: the current level and the model's name on one header row with Fast mode and the
+// reset at its end, a slider over the levels that model itself lists, and the harness's logins
+// below. The model name swaps the card for the searchable list of every harness's models (one
+// harness on top, the current model checked), and picking one comes back to the slider with the
+// effort clamped to the new model's levels. What the thread's harness cannot do is greyed out with
+// the reason, from capability flags.
 
 import { Check, ChevronLeft, ChevronRight, ChevronUp, Lock, RotateCcw, Zap } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -216,7 +216,7 @@ function EffortSlider({
   };
   return (
     // The band above the track is the dots' own labels' room, not part of the target.
-    <div className="mx-2.5 pt-6 pb-0.5">
+    <div className="mx-2 pt-6 pb-0.5">
       <div
         ref={rail}
         role="slider"
@@ -304,9 +304,9 @@ function EffortSlider({
 }
 
 /**
- * The card's first view: Fast mode and the reset on top, the effort big under them, the model
- * under that, the slider, then the harness's logins. No effort control on the harness, and the
- * slider's place says why.
+ * The card's first view: one header row with the effort and the model's name, Fast mode and the
+ * reset at its end, then the slider, then the harness's logins. No effort control on the harness,
+ * and the slider's place says why.
  */
 function EffortCard({
   levels,
@@ -344,10 +344,31 @@ function EffortCard({
   onPickAccount: (id: string | null) => void;
 }) {
   const name = modelName(model ?? undefined) ?? "Default model";
+  const showEffort = effortsShown(levels, effort);
   return (
     <div className="flex flex-col pb-0.5">
-      <div className="flex items-center justify-between px-1.5 pt-0.5">
-        {fast ? (
+      <div className="flex items-center gap-1 px-1.5 pt-1 pb-0.5">
+        <div className="flex min-w-0 flex-1 items-center gap-1">
+          {showEffort && (
+            <>
+              <span className="shrink-0 text-callout font-semibold text-accent">{effortLabel(effort!)}</span>
+              <span aria-hidden className="shrink-0 text-fg-faint">
+                ·
+              </span>
+            </>
+          )}
+          <button
+            type="button"
+            aria-label={`Model: ${name}`}
+            disabled={!!modelReason}
+            onClick={onModels}
+            className="flex min-w-0 items-center gap-0.5 rounded-full py-0.5 pr-1.5 pl-1 text-callout text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg disabled:opacity-40"
+          >
+            <span className="truncate">{name}</span>
+            <ChevronRight size={11} strokeWidth={2.5} className="shrink-0" />
+          </button>
+        </div>
+        {fast && (
           <Tooltip label="Fast mode" side="bottom">
             <button
               type="button"
@@ -356,7 +377,7 @@ function EffortCard({
               aria-label="Fast mode"
               onClick={() => onFast(!fastOn)}
               className={cx(
-                "flex size-6 items-center justify-center rounded-full",
+                "flex size-6 shrink-0 items-center justify-center rounded-full",
                 fastOn
                   ? "bg-fill-strong text-accent"
                   : "text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg",
@@ -365,8 +386,6 @@ function EffortCard({
               <Zap size={13} fill={fastOn ? "currentColor" : "none"} />
             </button>
           </Tooltip>
-        ) : (
-          <span aria-hidden className="size-6" />
         )}
         <Tooltip label="Reset effort to default" side="bottom">
           <button
@@ -374,26 +393,11 @@ function EffortCard({
             aria-label="Reset effort to default"
             disabled={!!effortReason || !defaultLevel || defaultLevel === effort}
             onClick={() => defaultLevel && onEffort(defaultLevel)}
-            className="flex size-6 items-center justify-center rounded-full text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg disabled:opacity-40"
+            className="flex size-6 shrink-0 items-center justify-center rounded-full text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg disabled:opacity-40"
           >
             <RotateCcw size={12} />
           </button>
         </Tooltip>
-      </div>
-      <div className="flex flex-col items-center gap-0.5 px-3 pb-0.5">
-        {effortsShown(levels, effort) && (
-          <span className="text-title3 font-semibold text-accent">{effortLabel(effort!)}</span>
-        )}
-        <button
-          type="button"
-          aria-label={`Model: ${name}`}
-          disabled={!!modelReason}
-          onClick={onModels}
-          className="flex max-w-full items-center gap-0.5 rounded-full px-2 py-0.5 text-callout text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg disabled:opacity-40"
-        >
-          <span className="truncate">{name}</span>
-          <ChevronRight size={11} strokeWidth={2.5} className="shrink-0" />
-        </button>
       </div>
       <div className="px-1.5">
         {effortReason ? (
@@ -618,7 +622,7 @@ function ModelPanel({
           </div>
         ))}
         {!rows.length && (
-          <div className="px-2.5 py-3 text-center text-callout text-fg-muted">
+          <div className="px-2 py-3 text-center text-callout text-fg-muted">
             {searching ? "No matching models" : "No models listed"}
           </div>
         )}

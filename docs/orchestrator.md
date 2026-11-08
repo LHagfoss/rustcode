@@ -205,7 +205,7 @@ the wait is released the same way.
 | `list_sessions` | M1 + `all_projects?: bool` | M1 + `harness`, `status`, `worktree`, and `project` with `all_projects` |
 | `read_session` | `{ session_id, last_turns?: 1..10, offset?: bytes }` (default 3 turns, offset 0) | `{ session_id, title, status, project, offset, text, next_offset?, complete }`: the rendered answer as text, one page at a time (16 KiB); when `next_offset` is present, pass it as `offset` for the rest. Pages join with nothing lost or repeated, cut on a UTF-8 character boundary. Any project's thread |
 
-| `start_session` | `{ prompt, title?, harness?, model?, effort?, account? (v5), worktree?: bool, project?: path, client_request_id? }` | `{ session_id, link_id, harness, account?, access, model?, effort?, links_left, replayed? }` — the client asks the user once, creates the thread (in a new worktree when `worktree: true`, default true for a git project), sends `prompt` as its first message. `harness` must be installed, on and signed in, `model` one the harness lists (a missing provider prefix is filled in when only one model fits), and `account` a named login that harness's `list_harnesses` entry lists; otherwise nothing starts and the error names the usable harnesses, the closest models or the accounts it does have. Without `account` the child runs on the caller's own account when it stays on the same harness, else on the login a new thread would start on. The answer reports the access, account, model and effort the thread actually runs, and the approval card shows harness · account name (id) · model · effort |
+| `start_session` | `{ prompt, title?, harness?, model?, effort?, account? (v5), worktree?: bool, project?: path, client_request_id? }` | `{ session_id, link_id, harness, account?, access, model?, effort?, links_left, replayed? }` — `links_left` is the smaller of this thread's room and the app's total — the client asks the user once, creates the thread (in a new worktree when `worktree: true`, default true for a git project), sends `prompt` as its first message. `harness` must be installed, on and signed in, `model` one the harness lists (a missing provider prefix is filled in when only one model fits), and `account` a named login that harness's `list_harnesses` entry lists; otherwise nothing starts and the error names the usable harnesses, the closest models or the accounts it does have. Without `account` the child runs on the caller's own account when it stays on the same harness, else on the login a new thread would start on. The answer reports the access, account, model and effort the thread actually runs, and the approval card shows harness · account name (id) · model · effort |
 | `message_session` | M1 + `client_request_id?` | M1 + `replayed: true` when the call was answered from its receipt |
 | `wait_session` (a settled link whose child still works) | — | answers that link as `state: "working"` with `turns`, `last_tool` and `idle_ms`, and keeps waiting: the answer it would carry is not the child's last |
 | `wait_session` | M1 (`link_id` / `link_ids`) | M1 + `status`, `files_changed`, and per link `turns`, `last_tool` and `idle_ms` (how long the child has done nothing) so a timeout says whether it thinks or is stuck; a timeout also carries `status: "timeout"`, `waited_until` and a note that a wake will come. An answer cut at 8 KiB carries `answer_truncated: true` and the `session_id`, whose `read_session` has the rest |
@@ -245,18 +245,19 @@ timed out leaves the worktree mid-state, so inspect it before rerunning.
 
 Rules (enforced by the client, as M1): same project unless `project` is given
 and the user approves it, or `all_projects` reads it (see the v3 note below);
-at most 8 distinct threads working for one thread at once by default, set to 2
-to 16 in Settings › Agents (a `busy` refusal says `links_left` and that
-`wait_session` on one comes first). A message to a thread it already works
-with is a follow-up: it queues on that thread and takes no slot, though its
-link is still created and waitable. Delegation goes two levels deep — a
-top-level thread may start children, and they may start grandchildren, while a
-thread at that depth is refused with the limit in the reason (`MAX_DEPTH` in
-`state/orchestration.ts`); a whole delegation tree holds at most twice the
-setting in active threads, 16 by default and whatever their depth (a `busy`
-refusal says how many slots the tree has left); a message that would close a
-loop — to a thread that already works for the caller, directly or further up —
-is refused; the user can stop any link;
+at most 8 delegates working for one thread at once by default, set to 2 to 32
+in Settings › Agents, and at most 16 delegates running at once across this app
+instance, set to 2 to 64 (a `busy` refusal names the limit it hit and the
+current count, says `links_left` and that `wait_session` on one comes first).
+The CLI and TUI start no delegates, so the total is one app's own. A message
+to a thread it already works with is a follow-up: it queues on that thread and
+takes no slot, though its link is still created and waitable. Delegation
+goes two levels deep — a top-level thread may start children, and they may
+start grandchildren, while a thread at that depth is refused with the limit in
+the reason (`MAX_DEPTH` in `state/orchestration.ts`); both limits count live
+delegates at every depth and free a slot as soon as one finishes; a message
+that would close a loop — to a thread that already works for the caller,
+directly or further up — is refused; the user can stop any link;
 nothing starts without the user's approval (*Allow for This Thread* / *Allow
 Once* / *Don't Allow*). A delegated thread's login is never chosen silently when
 the agent named one: an `account` that harness does not list is refused with
@@ -599,7 +600,7 @@ Built. Clients advertising `_meta.rustcode.orchestration >= 6` also get
 version is bumped rather than the tool added to v5 for the same reason as v4:
 the *client* carries it out, and a v5 app has no `_rustcode/data/activity` to
 ask. The app advertised 6 from `CAPABILITY_VERSION`
-(`state/orchestration.ts`; v7 raised it to 7), and a v5 client keeps exactly the
+(`state/orchestration.ts`; v7 raised it to 7, v8 to 8, v9 to 9), and a v5 client keeps exactly the
 v5 set and `PROMPT_HINT_V5`.
 
 | Tool | Args | Answer | Approval |
@@ -647,6 +648,79 @@ where the harness takes no message mid-turn — including a harness that would
 have to stop the turn (`interrupt_restart`), which is not steering. The queue
 lives in the app, so the engine only validates the call
 (`orchestration.rs` `validate`, `QUEUE_ACTIONS`).
+
+## Orchestration tools v8
+
+Built. Clients advertising `_meta.rustcode.orchestration >= 8` get no new tool:
+v8 is the prompt hint and the MCP server's `instructions`. It says a Claude Code
+thread has no subagent tool, so delegate even a quick lookup through
+`start_session` or `fan_out`, while a harness that has its own subagent tool may
+use it for quick lookups. A `claude-code` thread RustCode starts with the
+orchestrator attached has `Task` and `Agent` disallowed in the adapter's session
+`_meta` ([harnesses.md](harnesses.md#starting-a-thread-on-a-harness)), so every
+subagent it starts is a RustCode delegate; without the orchestrator its own tool
+stays, since there is nothing to delegate through. The app advertises 8 from
+`CAPABILITY_VERSION` (`state/orchestration.ts`), and a v7 app keeps exactly the
+v7 set and `PROMPT_HINT_V7`.
+
+## Orchestration tools v9
+
+Built. Clients advertising `_meta.rustcode.orchestration >= 9` also get the
+three tools that take a delegate from *PR open* to *merged, cleaned up and
+settled* without a background shell (#3152, #3153). Before them an orchestrator
+combined `read_session`, `list_pull_requests` and `gh pr checks`, then ran
+`scripts/pr-merge.sh`, `git worktree remove` and `branch -d` by hand and settled
+the thread; merged delegate worktrees piled up under
+`~/.config/rustcode/worktrees`. The version is bumped for the same reason as v4,
+v6 and v7: the *client* reads the threads, asks the user and carries the calls
+out, and a v8 app has neither the code nor the engine methods.
+
+| Tool | Args | Answer | Approval |
+| --- | --- | --- | --- |
+| `thread_status` | `{ session_id? }` — omit for every delegate this thread started or messaged; at most 12 are reported (`omitted_delegates` says how many more) | `{ delegates: [{ session_id, title, status, project, worktree? { path, branch }, branch?, pull, error? }], omitted_delegates?, note? }`, newest first. `pull` is `{ number, title, state, merged, draft, url?, branch, head_sha, ci, failing, pending, passed }`: `state` is `open`, `closed` or `merged`, `ci` is `none`, `passing`, `pending` or `failing` (advisory portability jobs excluded, like the merge), and `failing` names the checks that failed. `pull: null` means no pull request for the thread's branch; an unreadable one carries `error: { code, message }` on that delegate and not on the others, and all delegates are read concurrently | None: it asks nothing; a read of this project's threads, like `read_session` |
+| `merge_when_green` | `{ session_id, timeout_ms? }` — the wait defaults to and is at most 55 minutes, 165 rounds of 20 s | `{ session_id, number, state, merged, url?, failing?, waited_secs, detail }`; `state` is `merged`, `failing` (with the names), `closed`, `no_checks` (there is nothing to wait for, returned after two empty rounds) or `pending` (still waiting when the time ran out) | Asked, allowed by Full access, grant `merge:<session id>:<PR number>` (a new PR asks again) |
+| `cleanup_worktree` | `{ session_id, settle? }` — `settle` is true by default | `{ session_id, removed: true, branch, branch_removed, settled? }`. A refusal is `conflict`, with the reason (`dirty`, `unmerged`, `ignored_files`, `branch_changed`, `protected_branch`, `no_base` or `not_managed`) and, for unmerged commits, their subjects; `unknown` means git could not answer and is an `unavailable` failure | Asked, allowed by Full access, grant `cleanup:<session id>` |
+
+`thread_status` asks the engine `_rustcode/pulls/state` `{ cwd, branch? }`
+(`engine/src/pull_requests.rs` `for_branch`): the worktree's branch when there is
+one, else the folder's, matched against the host's pull requests, an open one
+first and then a merged one, and its `statusCheckRollup` mapped to
+`pending`/`passing`/`failing`/`none`. `merge_when_green` asks
+`_rustcode/pulls/merge` and reuses the same rollup: its wait is also how an
+orchestrator learns that CI finished without a shell poll loop, and a failing
+check ends it with the names. It ignores the advisory `portability coverage`
+jobs exactly as `scripts/pr-merge.sh` does, needs two
+quiet rounds so a path-filtered job that registers late is still caught, stops
+before anything merges on a failing check, and then runs
+`gh pr merge <n> --squash --delete-branch`. Nothing is forced and no other
+repository is touched. `cleanup_worktree` asks `_rustcode/worktrees/cleanup`
+(`engine/src/worktrees.rs` `cleanup`), on a blocking thread like
+`_rustcode/worktrees/remove`. It sends the branch it read the pull request for
+and the pull request's `head_sha`; the engine refuses if the worktree's `HEAD`
+is on another branch, so a delegate that switched branches cannot take the new
+one down. It also refuses a worktree that is not under the config directory, one
+on the base or default branch (the branch delete would otherwise remove it), a
+dirty one, ignored files that are not known build output (`target/`,
+`node_modules/`, `dist/`, `.turbo/`, …; `.env.local` or notes are refused and
+listed), and commits `git cherry -v <base> <branch>` marks `+` — unless the
+branch's tree already equals the base, or every one of those commits is an
+ancestor of the pull request's head (so a squash merge whose local `main` has
+not caught up is not mistaken for lost work, while a commit made after the
+merge still blocks). A git that cannot answer (a failed `status`, `cherry` or
+tree read) refuses with `unknown` instead of assuming clean. It then runs `git
+worktree remove`, `worktree prune` and `branch -D`, moves the threads that ran
+there back to the repository, and removes the worktree record; the app settles
+the thread afterwards (`_rustcode/session/status`), like `rustcode threads
+settle`. A running thread is refused, and so is the calling thread's own
+checkout.
+
+A delegated thread writes temporary files in its own directory under
+`$TMPDIR/rustcode/<session id>`, never a shared `/tmp/pr-body.md`: two delegates
+writing the same path overwrote each other's pull request bodies (#3143,
+#3144). The delegation guidance says so, and the v9 prompt hint repeats it.
+
+The app advertises 9 from `CAPABILITY_VERSION` (`state/orchestration.ts`),
+and a v8 app keeps exactly the v8 set and `PROMPT_HINT_V8`.
 
 ## External harnesses as orchestrators
 
@@ -723,6 +797,7 @@ can inject the server (unix), and in a thread's answer whether it did.
 engine does both); a thread's answer sets `checkpoints` to whether its cwd is
 in a git repository. `initialize` also advertises `_meta.rustcode.worktrees`,
 `checkpoints` and `threadStatus` (each `1`). The app advertises
-`_meta.rustcode.orchestration = 7` while threads may orchestrate
+`_meta.rustcode.orchestration = 9` while threads may orchestrate
 (`state/orchestration.ts` `CAPABILITY_VERSION`), and the newest client gets the
-v4 data-store tools, the v6 activity read and the v7 queue control.
+v4 data-store tools, the v6 activity read, the v7 queue control and the v9
+delegate pull-request tools; v8 adds no tool, only its prompt hint.

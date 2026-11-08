@@ -187,6 +187,37 @@ describe("ACP types", () => {
     expect(snapshot.default).toEqual({ harness: "codex", model: "m", effort: "low" });
     expect(fallbackHarnessSnapshot()).toMatchObject({ onboarded: true, unsupported: true });
   });
+
+  test("the engine says which harnesses are standard", () => {
+    const row = (id: string, known?: boolean) => ({
+      id,
+      name: id,
+      kind: "acp",
+      installed: true,
+      enabled: false,
+      auth: "unknown",
+      ...(known === undefined ? {} : { known }),
+    });
+    const snapshot = parseHarnessSnapshot({
+      harnesses: [
+        row("rustcode", true),
+        row("pi", true),
+        row("my-agent", false),
+        // An engine that predates the field: the standard ids it shipped stand in.
+        row("claude-code"),
+        row("someone-elses-agent"),
+      ],
+    });
+    const known = snapshot.harnesses.map((h) => [h.id, h.known]);
+    expect(known).toEqual([
+      ["rustcode", true],
+      ["pi", true],
+      ["my-agent", false],
+      ["claude-code", true],
+      ["someone-elses-agent", false],
+    ]);
+    expect(fallbackHarnessSnapshot().harnesses[0]!.known).toBe(true);
+  });
 });
 
 describe("displayPath", () => {

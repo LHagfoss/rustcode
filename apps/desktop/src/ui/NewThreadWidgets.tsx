@@ -9,10 +9,8 @@
 // the session list the sidebar shows, and the project's pulls cache
 // (`state/pulls.ts`, the one the sidebar's rows read). No new engine call.
 //
-// The cards keep one height whether their read has landed or not, and always
-// draw every card: the stack that centres the composer measures itself, so a
-// card appearing after its read would move the field. A card with nothing to
-// say says so in one line rather than turning into an empty box.
+// The optional overview sits outside the composer's centring stack. Cards keep
+// a consistent height while reads land; empty cards explain what is missing.
 
 import {
   Activity,
@@ -56,11 +54,7 @@ const SHOWN_PULLS = 3;
 /** The usage card's window: the last thirty days, counted as whole UTC days. */
 const USAGE_DAYS = 30;
 
-/**
- * The column height below which a new thread leaves the cards out: the stack is bottom-anchored,
- * and a column too short for the field and the cards would push the field's top off
- * the pane instead of scrolling (the message row must never leave the window).
- */
+/** Short columns leave the overview out to keep space for the composer. */
 export const NEW_THREAD_WIDGETS_MIN_HEIGHT = 700;
 
 /** A day's shade in the heatmap, as the design system's own fills and accent. */
@@ -88,11 +82,10 @@ function Card({
   return (
     <section
       aria-label={label}
-      // One height for every card and every state (no read, a read, nothing to say), so the stack
-      // under it never grows and the composer above it never moves. It is see-through: a third of
+      // One height for every card and state. It is see-through: a third of
       // the surface and the glass filter, no edge ring, so the picture runs on behind it.
       className={cx(
-        "rc-glass-faint flex min-h-[152px] w-[240px] shrink-0 snap-start flex-col gap-2.5 rounded-xl p-5 lg:w-auto",
+        "rc-glass-faint flex min-h-[132px] w-[240px] shrink-0 snap-start flex-col gap-2 rounded-xl p-3 lg:w-auto",
         span,
       )}
     >
@@ -427,7 +420,7 @@ export function NewThreadWidgets({ project }: { project: string }) {
       // narrow window would squeeze the labels to nothing. From `lg` they are a dashboard two rows
       // tall: the activity heatmap and the recent threads across the top (three columns each), then
       // usage, pull requests and this month in three.
-      className="flex snap-x gap-4 overflow-x-auto pb-0.5 lg:grid lg:grid-cols-6 lg:overflow-visible lg:pb-0"
+      className="flex snap-x gap-2 overflow-x-auto pb-0.5 lg:grid lg:grid-cols-6 lg:overflow-visible lg:pb-0"
       role="group"
       aria-label="Activity, usage and recent work"
     >

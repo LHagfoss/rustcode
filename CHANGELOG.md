@@ -1,3 +1,23 @@
+## [v1.20.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.20.1) - 2026-11-08
+
+### Features
+- The desktop app uses the lavender accent by default, matching the built-in themes; text on accent buttons switches to dark so it stays readable. (#3192)
+## [v1.20.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.20.0) - 2026-11-08
+
+### Features
+- The desktop app can follow betas: Settings › About › Update channel adds Beta, which offers the newest prerelease in the usual update row with Skip this beta. (#3177)
+- Keep the new-thread composer centred and make its overview optional. (#3175)
+- The model picker's header is one row: the effort and model together, with Fast mode and reset at the end. (#3180)
+- The delegate strip above the composer now shows only what runs now (`5 running · 2 need you`), with no lifetime thread count, and hides once nothing is running or waiting. (#3181)
+- Settings › Harnesses lists Pi (and every standard harness) from the engine, with hand-added harnesses grouped apart. (#3179)
+- The desktop sidebar shows a thread's status as one chip (`Working 57:13`, `Waiting`, `Needs you`, `Failed`) instead of two spinners and a link count, and a settled or idle row keeps just its age. (#3185)
+- Add Settings › Remote access: share the app's threads with a paired phone, with a locally drawn pairing QR code. (#3178)
+- Normalize gaps and padding across the desktop app: one spacing scale for the sidebar, header, Settings, menus and cards. (#3188)
+- Threads compact automatically when their context grows large, and Claude Code threads compact before their prompt cache expires; Settings › General › Threads and the thread menu turn it off. (#3186)
+- Count each Claude Code turn's usage once: a restarted harness no longer re-records its whole session total on every later turn. (#3182)
+- Add a total delegate limit alongside the per-thread one, with a Settings › Agents Delegation group showing live usage. (#3189)
+- Claude Code threads delegate through RustCode's threads instead of their own subagents. (#3187)
+- MCP orchestrators can now report a delegate's pull request and checks, merge it once green, and clean up its worktree and branch and settle the thread. (#3184)
 ## [v1.19.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.19.0) - 2026-11-07
 
 ### Features

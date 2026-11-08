@@ -1,9 +1,11 @@
 // The chat view: the header (project / title, plan, usage, panels), then one row
 // holding the chat column — transcript and composer stack with error and
 // approval cards — and the right panel docked beside it (ui/RightPanel.tsx). A
-// new thread shows the centred empty state with the composer under it.
+// new thread centres the composer and places its optional overview below it.
 
 import {
+  ChevronDown,
+  ChevronUp,
   CircleCheck,
   CircleDashed,
   CircleDot,
@@ -14,6 +16,7 @@ import {
   ListChecks,
   type LucideIcon,
   PanelRight,
+  Sparkles,
   SquareTerminal,
 } from "lucide-react";
 import { DropdownMenu, Popover } from "radix-ui";
@@ -28,10 +31,12 @@ import { chooseFolder } from "../state/folders";
 import type { HeaderButtonId } from "../state/headerButtons";
 import { heldSetup, type PendingSetup, pendingStatus } from "../state/setup";
 import {
+  autoCompactOffFor,
   dismissPendingSetup,
   refreshSessions,
   repairThread,
   retryPendingSetup,
+  setAutoCompactForThread,
   setPanel,
   setTerminalOpen,
   setThreadStatus,
@@ -43,6 +48,7 @@ import {
   worktreeOf,
 } from "../state/store";
 import { formatClock, type ThreadState } from "../state/thread";
+import { overviewExpanded, setOverviewExpanded } from "../state/widgets";
 import { AttentionCard, ResolvedApprovalBar } from "./AttentionCards";
 import { Composer } from "./Composer";
 import { HarnessIcon } from "./HarnessIcon";
@@ -65,7 +71,7 @@ import {
   surfaceCollisionPadding,
   Tooltip,
 } from "./primitives";
-import { RemoteThreadIndicator } from "./RemoteAccess";
+import { RemoteThreadIndicator } from "./RemoteAccessPage";
 import { ReportPanel } from "./ReportPanel";
 import { RightPanel } from "./RightPanel";
 import { RollingNumber } from "./RollingNumber";
@@ -82,7 +88,7 @@ function PlanButton({ thread }: { thread: ThreadState }) {
       <Popover.Trigger asChild>
         <button
           type="button"
-          className="flex h-7 items-center gap-1.5 rounded-full bg-fill-subtle px-2.5 font-medium text-callout text-fg-muted hover:bg-fill data-[state=open]:bg-fill-strong"
+          className="flex h-7 items-center gap-1.5 rounded-full bg-fill-subtle px-2 font-medium text-callout text-fg-muted hover:bg-fill data-[state=open]:bg-fill-strong"
         >
           <ListChecks size={13} />
           <span className="flex items-center gap-0.5 tabular">
@@ -131,6 +137,7 @@ function PlanButton({ thread }: { thread: ThreadState }) {
 /** The thread's status chip; a click marks it for review, settles or unsettles it. */
 function ThreadStatusMenu({ threadId }: { threadId: string }) {
   const status = useApp((s) => statusOf(s, threadId));
+  const autoCompactOff = useApp((s) => autoCompactOffFor(s, threadId));
   const wt = useApp((s) => worktreeOf(s, threadId));
   return (
     <DropdownMenu.Root>
@@ -138,7 +145,7 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
         <button
           type="button"
           aria-label={`Thread status: ${STATUS_LABEL[status]}`}
-          className="flex h-7 items-center gap-1.5 rounded-full bg-fill-subtle px-2.5 text-callout text-fg-muted hover:bg-fill data-[state=open]:bg-fill-strong"
+          className="flex h-7 items-center gap-1.5 rounded-full bg-fill-subtle px-2 text-callout text-fg-muted hover:bg-fill data-[state=open]:bg-fill-strong"
         >
           {wt && (
             <span className="flex max-w-[160px] items-center gap-1 font-mono text-caption">
@@ -178,6 +185,13 @@ function ThreadStatusMenu({ threadId }: { threadId: string }) {
             <CircleDashed size={13} /> Clear Status
           </DropdownMenu.Item>
         )}
+        <DropdownMenu.Separator className={menuSeparator} />
+        <DropdownMenu.Item
+          className={menuItem}
+          onSelect={() => setAutoCompactForThread(threadId, autoCompactOff)}
+        >
+          <Sparkles size={13} /> {autoCompactOff ? "Turn On Auto-compact" : "Turn Off Auto-compact"}
+        </DropdownMenu.Item>
       </MenuContent>
     </DropdownMenu.Root>
   );
@@ -368,7 +382,7 @@ function Header({
             <HarnessIcon id={thread.harness.id} size={14} className="text-fg-muted" />
           )}
           <h1 className="min-w-0 truncate font-semibold text-body">{title}</h1>
-          {/* A paired device is attached, or the thread is shared with them (RemoteAccess.tsx). */}
+          {/* A paired device is attached, or the thread is shared with them (RemoteAccessPage.tsx). */}
           <RemoteThreadIndicator sessionId={thread?.id} />
         </>
       }
@@ -484,7 +498,7 @@ function PendingSetupView({ pending }: { pending: PendingSetup }) {
         // under the glass header (`FIRST_ROW_PAD`), so the thread takes the screen over without
         // moving it — and arrives in 160ms from 8px below. The thread waits for that entry before it
         // takes the screen (`PENDING_ENTRY_MS`), because a session can exist in one frame.
-        className="rc-send-in mx-auto flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-3.5"
+        className="rc-send-in mx-auto flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-3"
         style={{ paddingTop: FIRST_ROW_PAD + HEADER_HEIGHT }}
       >
         <UserRow
@@ -568,6 +582,7 @@ export function ChatView() {
   const thread = useApp((s) => (s.selectedId ? s.threads[s.selectedId] : undefined));
   const stackRef = useRef<HTMLDivElement>(null);
   const [stackHeight, setStackHeight] = useState(140);
+  const [overview, setOverview] = useState(overviewExpanded);
   const [dismissed, setDismissed] = useState<string | undefined>();
   const [width, setWidth] = useState(1000);
   const [height, setHeight] = useState(800);
@@ -720,13 +735,13 @@ export function ChatView() {
               ...(isNew ? { bottom: `max(16px, calc(50% - ${Math.round(stackHeight / 2)}px))` } : undefined),
             }}
             className={cx(
-              "absolute inset-x-3 bottom-4 mx-auto flex flex-col gap-2.5 sm:inset-x-12",
+              "absolute inset-x-3 bottom-4 mx-auto flex flex-col gap-2 sm:inset-x-12",
               // An empty thread's cards are a dashboard, not a lane: they take the wider measure
               // (up to 1100px) while the field and everything over it keep the chat's own.
               isNew ? "max-w-[1100px]" : "max-w-[var(--rc-chat-content-max-width)]",
             )}
           >
-            <div className="mx-auto flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-2.5">
+            <div className="mx-auto flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-2">
               {error && (
                 <LaneItem over>
                   <ErrorBanner
@@ -784,17 +799,34 @@ export function ChatView() {
                 />
               </LaneItem>
             </div>
-            {/* The cards under an empty thread's field: what this Mac recorded lately, the
-                project's recent threads and pull requests. They join the stack rather than float
-                beside it, so the whole group centres together and the cards keep the field's lane.
-                A short window leaves them out: the stack is bottom-anchored, and a column that
-                could not hold the cards would push the field's top off the pane. */}
-            {isNew && height >= NEW_THREAD_WIDGETS_MIN_HEIGHT && (
-              <LaneItem>
-                <NewThreadWidgets project={projectCwd} />
-              </LaneItem>
-            )}
           </div>
+          {isNew && height >= NEW_THREAD_WIDGETS_MIN_HEIGHT && (
+            <div
+              className="absolute inset-x-3 bottom-0 mx-auto flex max-w-[1100px] flex-col items-center gap-2 pt-2 sm:inset-x-12"
+              style={{ top: `calc(50% + ${Math.round(stackHeight / 2)}px)` }}
+            >
+              <button
+                type="button"
+                aria-expanded={overview}
+                aria-controls="new-thread-overview"
+                className="flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-caption text-fg-muted hover:bg-fill-subtle"
+                onClick={() => {
+                  setOverviewExpanded(!overview);
+                  setOverview(!overview);
+                }}
+              >
+                {overview ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                {overview ? "Hide overview" : "Show overview"}
+              </button>
+              <div
+                id="new-thread-overview"
+                hidden={!overview}
+                className="min-h-0 w-full overflow-y-auto pb-3"
+              >
+                {overview && <NewThreadWidgets project={projectCwd} />}
+              </div>
+            </div>
+          )}
         </div>
         <RightPanel />
       </div>

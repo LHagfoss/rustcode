@@ -28,7 +28,9 @@ use std::time::{Duration, Instant};
 
 use rusqlite::limits::Limit;
 use rusqlite::types::ValueRef;
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use rusqlite::{
+    Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
+};
 use serde_json::{Value, json};
 
 pub mod redact;
@@ -204,6 +206,22 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
     );
     CREATE INDEX command_receipts_created ON command_receipts(created_at);",
     ),
+    (
+        6,
+        "usage_cursors",
+        "CREATE TABLE usage_cursors (
+        thread_id TEXT NOT NULL,
+        harness TEXT NOT NULL,
+        series TEXT NOT NULL DEFAULT '',
+        input_tokens INTEGER,
+        output_tokens INTEGER,
+        cached_tokens INTEGER,
+        cache_write_tokens INTEGER,
+        cost_usd REAL,
+        updated_at TEXT,
+        PRIMARY KEY (thread_id, harness, series)
+    );",
+    ),
 ];
 
 /// One turn's token totals. Each is optional: a harness that reports no count
@@ -249,35 +267,6 @@ pub struct SessionUsage {
     pub cost_usd: Option<f64>,
     /// The last entry's timestamp, RFC 3339 UTC, when the source carries one.
     pub at: Option<String>,
-}
-
-impl SessionUsage {
-    /// The growth over `baseline`, which is what one turn spent. A counter
-    /// that went backwards means a new session log (a harness switch or a
-    /// restarted harness): its whole total is this turn's, not a negative
-    /// number. A counter that is absent stays absent.
-    pub fn growth(self, baseline: SessionUsage) -> SessionUsage {
-        let grow = |now: Option<i64>, base: Option<i64>| match (now, base) {
-            (None, _) => None,
-            (Some(now), Some(base)) if now >= base => Some(now - base),
-            (Some(now), _) => Some(now),
-        };
-        let cost = match (self.cost_usd, baseline.cost_usd) {
-            (None, _) => None,
-            (Some(now), Some(base)) if now >= base => Some(now - base),
-            (Some(now), _) => Some(now),
-        };
-        SessionUsage {
-            tokens: TokenTotals {
-                input: grow(self.tokens.input, baseline.tokens.input),
-                output: grow(self.tokens.output, baseline.tokens.output),
-                cached: grow(self.tokens.cached, baseline.tokens.cached),
-                cache_write: grow(self.tokens.cache_write, baseline.tokens.cache_write),
-            },
-            cost_usd: cost,
-            at: self.at,
-        }
-    }
 }
 
 /// The cumulative totals in a harness `usage` value, when it reports them.
@@ -1036,11 +1025,17 @@ pub fn record_turn(turn: &TurnRow) {
 }
 
 /// Records a turn whose harness reported *cumulative* session usage (its
-/// `usage_update`, or its own log): the row keeps the growth over what this
-/// thread already has for that harness, including a backfilled summary. Two
-/// opens of the same session therefore cannot double count, and a thread that
-/// switched harness starts its new harness at zero.
-pub fn record_cumulative_turn(turn: &TurnRow, cumulative: SessionUsage) {
+/// `usage_update`, or its own log): the row keeps the growth over the last
+/// total the same session series reported, not over the sum of what was
+/// already recorded. `series` names that series (the harness's native session
+/// id, with the account it ran as, see [`record_cumulative_turn`]'s caller): a
+/// different one is a restarted or switched harness whose whole total is this
+/// turn's.
+///
+/// A turn that reports the same total as the one before it records zero, and a
+/// counter that dipped alone records zero rather than a whole session. Only a
+/// new series, or every reported counter dropping together, is a restart.
+pub fn record_cumulative_turn(turn: &TurnRow, cumulative: SessionUsage, series: Option<&str>) {
     if turn.thread_id.trim().is_empty() || turn.started_at.trim().is_empty() {
         return;
     }
@@ -1048,8 +1043,8 @@ pub fn record_cumulative_turn(turn: &TurnRow, cumulative: SessionUsage) {
         return;
     }
     let Some(path) = data_path() else { return };
-    let written =
-        open(&path).and_then(|connection| write_cumulative_turn(&connection, turn, cumulative));
+    let written = open(&path)
+        .and_then(|connection| write_cumulative_turn(&connection, turn, cumulative, series));
     if let Err(error) = written {
         crate::dbg_log!(
             "data store: turn of {} not recorded: {error}",
@@ -1063,21 +1058,269 @@ fn write_cumulative_turn(
     connection: &Connection,
     turn: &TurnRow,
     cumulative: SessionUsage,
+    series: Option<&str>,
 ) -> Result<(), String> {
     let harness = turn.harness.clone().unwrap_or_default();
-    let baseline = recorded(connection, &turn.thread_id, &harness)?;
-    let spent = cumulative.growth(baseline);
+    let series = series.unwrap_or_default();
+    // IMMEDIATE, not the default DEFERRED: the cursor is read before the turn
+    // is written, and a read snapshot another writer commits past cannot be
+    // upgraded — SQLite answers `SQLITE_BUSY_SNAPSHOT` without retrying it, so
+    // a concurrent turn would be lost instead of waiting its turn.
+    let transaction = Transaction::new_unchecked(connection, TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    let baseline = baseline(&transaction, &turn.thread_id, &harness, series, &cumulative)?;
+    let (spent, next) = advance(&cumulative, baseline.as_ref());
     let mut row = turn.clone();
     row.input_tokens = spent.tokens.input;
     row.output_tokens = spent.tokens.output;
     row.cached_tokens = spent.tokens.cached;
     row.cache_write_tokens = spent.tokens.cache_write;
     row.cost_usd = spent.cost_usd;
-    write_turn(connection, &row)
+    write_turn_in(&transaction, &row)?;
+    move_cursor(&transaction, &turn.thread_id, &harness, series, &next, turn)?;
+    transaction.commit().map_err(|error| error.to_string())
 }
 
-/// What the store already holds for one thread on one harness: the baseline a
-/// cumulative session total is measured against.
+/// The total this turn's reading is measured against.
+///
+/// - The last total the same session series reported, when the store has it.
+/// - `None` when the store holds cursors for this thread and harness but not
+///   this series: a restarted or switched harness, whose own total is this
+///   turn's.
+/// - Otherwise the thread's rows predate cursors (an older release, or a
+///   backfill) and their sum is the baseline its last row was written against.
+///   That sum can already be inflated (#3169), so the lower of it and this
+///   reading is used: the first turn after the release counts nothing it had
+///   already counted, rather than adding one more whole total on top. The cost
+///   is that a restart that happened between those rows and this reading is not
+///   counted, which undercounts one turn instead of double counting a session.
+fn baseline(
+    connection: &Connection,
+    thread_id: &str,
+    harness: &str,
+    series: &str,
+    cumulative: &SessionUsage,
+) -> Result<Option<SessionUsage>, String> {
+    if let Some(stored) = stored_cursor(connection, thread_id, harness, series)? {
+        return Ok(Some(stored));
+    }
+    if has_cursor(connection, thread_id, harness)? {
+        return Ok(None);
+    }
+    let sum = recorded(connection, thread_id, harness)?;
+    Ok(Some(lower_of(sum, cumulative)))
+}
+
+/// The cursor row for one session series, when the store has it.
+fn stored_cursor(
+    connection: &Connection,
+    thread_id: &str,
+    harness: &str,
+    series: &str,
+) -> Result<Option<SessionUsage>, String> {
+    let stored: Option<(
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<f64>,
+    )> = connection
+        .query_row(
+            "SELECT input_tokens, output_tokens, cached_tokens, cache_write_tokens, cost_usd
+                 FROM usage_cursors WHERE thread_id = ?1 AND harness = ?2 AND series = ?3",
+            params![thread_id, harness, series],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    Ok(stored.map(
+        |(input, output, cached, cache_write, cost_usd)| SessionUsage {
+            tokens: TokenTotals {
+                input,
+                output,
+                cached,
+                cache_write,
+            },
+            cost_usd,
+            at: None,
+        },
+    ))
+}
+
+/// Whether any series of this thread and harness has a cursor.
+fn has_cursor(connection: &Connection, thread_id: &str, harness: &str) -> Result<bool, String> {
+    connection
+        .query_row(
+            "SELECT 1 FROM usage_cursors WHERE thread_id = ?1 AND harness = ?2 LIMIT 1",
+            params![thread_id, harness],
+            |_| Ok(()),
+        )
+        .optional()
+        .map(|found| found.is_some())
+        .map_err(|error| error.to_string())
+}
+
+/// Per counter, the lower of a thread's recorded sum and a reading of it.
+fn lower_of(sum: SessionUsage, cumulative: &SessionUsage) -> SessionUsage {
+    let lower = |sum: Option<i64>, now: Option<i64>| match (sum, now) {
+        (Some(sum), Some(now)) => Some(sum.min(now)),
+        (sum, _) => sum,
+    };
+    SessionUsage {
+        tokens: TokenTotals {
+            input: lower(sum.tokens.input, cumulative.tokens.input),
+            output: lower(sum.tokens.output, cumulative.tokens.output),
+            cached: lower(sum.tokens.cached, cumulative.tokens.cached),
+            cache_write: lower(sum.tokens.cache_write, cumulative.tokens.cache_write),
+        },
+        cost_usd: match (sum.cost_usd, cumulative.cost_usd) {
+            (Some(sum), Some(now)) => Some(sum.min(now)),
+            (sum, _) => sum,
+        },
+        at: None,
+    }
+}
+
+/// What one turn spent, and where its cursor goes next.
+///
+/// `None` is a series the store has not seen: it reports a whole session total,
+/// which is this turn's, and the cursor starts there. Within one series a
+/// counter that is gone stays gone, a counter that rose grew by the difference,
+/// and a counter that fell is a restart when every reported counter fell with
+/// it (a new session in the same log) — otherwise a log the harness rewrote
+/// (rotated, truncated, an account directory that went missing): that counter
+/// records nothing and keeps the higher cursor, so the next reading above it
+/// grows from there. Recording the whole total then would re-count a session
+/// whose other counters say it never restarted.
+fn advance(
+    cumulative: &SessionUsage,
+    baseline: Option<&SessionUsage>,
+) -> (SessionUsage, SessionUsage) {
+    let Some(baseline) = baseline else {
+        return (cumulative.clone(), cumulative.clone());
+    };
+    let restart = all_reported_dropped(cumulative, baseline);
+    let step = |now: Option<i64>, base: Option<i64>| match (now, base) {
+        (None, base) => (None, base),
+        (Some(now), None) => (Some(now), Some(now)),
+        (Some(now), Some(_)) if restart => (Some(now), Some(now)),
+        (Some(now), Some(base)) if now >= base => (Some(now - base), Some(now)),
+        (Some(_), Some(base)) => (Some(0), Some(base)),
+    };
+    let cost = match (cumulative.cost_usd, baseline.cost_usd) {
+        (None, base) => (None, base),
+        (Some(now), None) => (Some(now), Some(now)),
+        (Some(now), Some(_)) if restart => (Some(now), Some(now)),
+        (Some(now), Some(base)) if now >= base => (Some(now - base), Some(now)),
+        (Some(_), Some(base)) => (Some(0.0), Some(base)),
+    };
+    let (input, next_input) = step(cumulative.tokens.input, baseline.tokens.input);
+    let (output, next_output) = step(cumulative.tokens.output, baseline.tokens.output);
+    let (cached, next_cached) = step(cumulative.tokens.cached, baseline.tokens.cached);
+    let (cache_write, next_cache_write) =
+        step(cumulative.tokens.cache_write, baseline.tokens.cache_write);
+    (
+        SessionUsage {
+            tokens: TokenTotals {
+                input,
+                output,
+                cached,
+                cache_write,
+            },
+            cost_usd: cost.0,
+            at: cumulative.at.clone(),
+        },
+        SessionUsage {
+            tokens: TokenTotals {
+                input: next_input,
+                output: next_output,
+                cached: next_cached,
+                cache_write: next_cache_write,
+            },
+            cost_usd: cost.1,
+            at: cumulative.at.clone(),
+        },
+    )
+}
+
+/// Whether every counter both sides reported fell: a session that restarted
+/// inside the same log. A single counter that fell while another rose is a log
+/// the harness rewrote, not a restart.
+fn all_reported_dropped(cumulative: &SessionUsage, baseline: &SessionUsage) -> bool {
+    let pairs = [
+        (cumulative.tokens.input, baseline.tokens.input),
+        (cumulative.tokens.output, baseline.tokens.output),
+        (cumulative.tokens.cached, baseline.tokens.cached),
+        (cumulative.tokens.cache_write, baseline.tokens.cache_write),
+    ];
+    let (mut reported, mut dropped) = (0, 0);
+    for (now, base) in pairs {
+        if let (Some(now), Some(base)) = (now, base) {
+            reported += 1;
+            dropped += i64::from(now < base);
+        }
+    }
+    let (cost_reported, cost_dropped) = match (cumulative.cost_usd, baseline.cost_usd) {
+        (Some(now), Some(base)) => (1, i64::from(now < base)),
+        _ => (0, 0),
+    };
+    reported += cost_reported;
+    dropped += cost_dropped;
+    reported > 0 && dropped == reported
+}
+
+/// Writes the cursor this turn leaves behind, in the same transaction as the
+/// turn, so a failed write leaves it where it was.
+fn move_cursor(
+    connection: &Connection,
+    thread_id: &str,
+    harness: &str,
+    series: &str,
+    next: &SessionUsage,
+    turn: &TurnRow,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT INTO usage_cursors (thread_id, harness, series, input_tokens,
+                    output_tokens, cached_tokens, cache_write_tokens, cost_usd, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(thread_id, harness, series) DO UPDATE SET
+                input_tokens = excluded.input_tokens,
+                output_tokens = excluded.output_tokens,
+                cached_tokens = excluded.cached_tokens,
+                cache_write_tokens = excluded.cache_write_tokens,
+                cost_usd = excluded.cost_usd,
+                updated_at = excluded.updated_at",
+            params![
+                thread_id,
+                harness,
+                series,
+                next.tokens.input,
+                next.tokens.output,
+                next.tokens.cached,
+                next.tokens.cache_write,
+                next.cost_usd,
+                turn.finished_at
+                    .clone()
+                    .or_else(|| Some(turn.started_at.clone())),
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// What the store already holds for one thread on one harness: the sum of its
+/// recorded rows, which is the baseline a thread recorded before cursors
+/// existed was written against. [`baseline`] takes the lower of it and a live
+/// reading, because such a sum can already be inflated.
 pub fn recorded(
     connection: &Connection,
     thread_id: &str,
@@ -1119,8 +1362,15 @@ fn write_turn(connection: &Connection, turn: &TurnRow) -> Result<(), String> {
     let transaction = connection
         .unchecked_transaction()
         .map_err(|error| error.to_string())?;
+    write_turn_in(&transaction, turn)?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+/// [`write_turn`] inside a transaction the caller already opened, so a turn and
+/// its usage cursor move together.
+fn write_turn_in(transaction: &Connection, turn: &TurnRow) -> Result<(), String> {
     let thread = live_thread(turn);
-    upsert_thread(&transaction, &thread)?;
+    upsert_thread(transaction, &thread)?;
     transaction
         .execute(
             "INSERT INTO turns (thread_id, started_at, finished_at, harness, model,
@@ -1182,7 +1432,7 @@ fn write_turn(connection: &Connection, turn: &TurnRow) -> Result<(), String> {
             )
             .map_err(|error| error.to_string())?;
     }
-    transaction.commit().map_err(|error| error.to_string())
+    Ok(())
 }
 
 /// What is known about the thread outside the store: its title, where it
@@ -3494,16 +3744,16 @@ mod tests {
             cost_usd: Some(cost),
             at: None,
         };
-        assert_eq!(usage(0.75).growth(usage(0.5)).cost_usd, Some(0.25));
         assert_eq!(
-            usage(0.2).growth(usage(0.5)).cost_usd,
+            advance(&usage(0.75), Some(&usage(0.5))).0.cost_usd,
+            Some(0.25)
+        );
+        assert_eq!(
+            advance(&usage(0.2), Some(&usage(0.5))).0.cost_usd,
             Some(0.2),
             "a restarted session reports its whole cost again"
         );
-        assert_eq!(
-            usage(0.2).growth(SessionUsage::default()).cost_usd,
-            Some(0.2)
-        );
+        assert_eq!(advance(&usage(0.2), None).0.cost_usd, Some(0.2));
     }
 
     #[test]
@@ -3530,6 +3780,7 @@ mod tests {
                 },
                 ..SessionUsage::default()
             },
+            Some("session-a"),
         )
         .unwrap();
         let (turns, input, threads): (i64, i64, i64) = connection
@@ -3542,6 +3793,424 @@ mod tests {
             )
             .unwrap();
         assert_eq!((turns, input, threads), (1, 50, 1));
+    }
+
+    #[test]
+    fn a_restarted_harness_counts_each_turn_once() {
+        let config = tempfile::tempdir().unwrap();
+        let connection = open(&config.path().join(DATA_FILE)).unwrap();
+        let thread = "01a10000-0000-0000-0000-000000000010";
+        // Claude Code reports session totals: cost, and one token counter per
+        // kind, all of which restart together when its process does.
+        let cumulative = |cost: f64, input: i64| SessionUsage {
+            tokens: TokenTotals {
+                input: Some(input),
+                output: Some(input / 10),
+                cached: Some(input * 5),
+                cache_write: Some(input / 2),
+            },
+            cost_usd: Some(cost),
+            at: None,
+        };
+        let turn = |started: &str, status: &str| TurnRow {
+            thread_id: thread.to_owned(),
+            started_at: started.to_owned(),
+            finished_at: Some(started.to_owned()),
+            harness: Some("claude-code".to_owned()),
+            status: status.to_owned(),
+            ..TurnRow::default()
+        };
+        let record = |started: &str, status: &str, cost: f64, input: i64| {
+            write_cumulative_turn(
+                &connection,
+                &turn(started, status),
+                cumulative(cost, input),
+                Some("session-a"),
+            )
+            .unwrap();
+        };
+        record("2026-11-04T11:00:00.000Z", "completed", 10.0, 1000);
+        record("2026-11-04T11:05:00.000Z", "completed", 15.0, 1500);
+        // The harness restarted: its session counter starts again at 2.
+        record("2026-11-05T09:00:00.000Z", "completed", 2.0, 200);
+        record("2026-11-05T09:05:00.000Z", "completed", 4.0, 400);
+        // A failed turn reports the previous total again: no change, no row value.
+        record("2026-11-05T09:06:00.000Z", "failed", 4.0, 400);
+
+        let rows: Vec<(
+            String,
+            Option<f64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+        )> = {
+            let mut statement = connection
+                .prepare(
+                    "SELECT status, cost_usd, input_tokens, output_tokens,
+                                cached_tokens, cache_write_tokens
+                         FROM turns WHERE thread_id = ?1 ORDER BY started_at",
+                )
+                .unwrap();
+            statement
+                .query_map([thread], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                })
+                .unwrap()
+                .filter_map(Result::ok)
+                .collect()
+        };
+        let spent: Vec<(String, Option<f64>, Option<i64>)> = rows
+            .iter()
+            .map(|(status, cost, input, _, _, _)| (status.clone(), *cost, *input))
+            .collect();
+        assert_eq!(
+            spent,
+            [
+                ("completed".to_owned(), Some(10.0), Some(1000)),
+                ("completed".to_owned(), Some(5.0), Some(500)),
+                ("completed".to_owned(), Some(2.0), Some(200)),
+                ("completed".to_owned(), Some(2.0), Some(200)),
+                ("failed".to_owned(), Some(0.0), Some(0)),
+            ]
+        );
+        // Each token counter grows the same way, and the summed rows are what
+        // the harness actually spent: 19 dollars, 1900 input tokens.
+        let (output, cached, cache_write): (i64, i64, i64) = connection
+            .query_row(
+                "SELECT SUM(output_tokens), SUM(cached_tokens), SUM(cache_write_tokens)
+                 FROM turns WHERE thread_id = ?1",
+                [thread],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((output, cached, cache_write), (190, 9500, 950));
+        let total: f64 = connection
+            .query_row(
+                "SELECT SUM(cost_usd) FROM turns WHERE thread_id = ?1",
+                [thread],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!((total - 19.0).abs() < 1e-9, "{total} is 10+5+2+2+0");
+        // The cursor holds the last total, not the sum of the rows.
+        let cursor: (f64, i64) = connection
+            .query_row(
+                "SELECT cost_usd, input_tokens FROM usage_cursors
+                 WHERE thread_id = ?1 AND harness = 'claude-code' AND series = 'session-a'",
+                [thread],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!((cursor.0 - 4.0).abs() < 1e-9);
+        assert_eq!(cursor.1, 400);
+
+        // A thread that switches harness starts its new harness at zero.
+        write_cumulative_turn(
+            &connection,
+            &TurnRow {
+                harness: Some("codex".to_owned()),
+                ..turn("2026-11-05T10:00:00.000Z", "completed")
+            },
+            cumulative(3.0, 30),
+            Some("session-a"),
+        )
+        .unwrap();
+        let switched: (Option<f64>, Option<i64>) = connection
+            .query_row(
+                "SELECT cost_usd, input_tokens FROM turns
+                 WHERE thread_id = ?1 AND harness = 'codex'",
+                [thread],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(switched, (Some(3.0), Some(30)));
+    }
+
+    #[test]
+    fn returning_to_an_earlier_session_counts_only_its_own_growth() {
+        let config = tempfile::tempdir().unwrap();
+        let connection = open(&config.path().join(DATA_FILE)).unwrap();
+        let thread = "01a10000-0000-0000-0000-000000000012";
+        let cumulative = |cost: f64| SessionUsage {
+            tokens: TokenTotals {
+                input: Some(cost as i64 * 100),
+                ..TokenTotals::default()
+            },
+            cost_usd: Some(cost),
+            at: None,
+        };
+        let record = |started: &str, cost: f64, series: &str| {
+            write_cumulative_turn(
+                &connection,
+                &TurnRow {
+                    thread_id: thread.to_owned(),
+                    started_at: started.to_owned(),
+                    finished_at: Some(started.to_owned()),
+                    harness: Some("claude-code".to_owned()),
+                    status: "completed".to_owned(),
+                    ..TurnRow::default()
+                },
+                cumulative(cost),
+                Some(series),
+            )
+            .unwrap();
+        };
+        record("2026-11-04T11:00:00.000Z", 10.0, "session-a");
+        record("2026-11-04T11:05:00.000Z", 15.0, "session-a");
+        // Resume in another session: its own total, not 2 minus 15.
+        record("2026-11-04T12:00:00.000Z", 2.0, "session-b");
+        // Back in the first session: the difference against *its* last total,
+        // never against the other session's 16.
+        record("2026-11-04T13:00:00.000Z", 16.0, "session-a");
+
+        let rows: Vec<Option<f64>> = {
+            let mut statement = connection
+                .prepare("SELECT cost_usd FROM turns WHERE thread_id = ?1 ORDER BY started_at")
+                .unwrap();
+            statement
+                .query_map([thread], |row| row.get(0))
+                .unwrap()
+                .filter_map(Result::ok)
+                .collect()
+        };
+        assert_eq!(
+            rows,
+            [Some(10.0), Some(5.0), Some(2.0), Some(1.0)],
+            "each series is measured against its own last total"
+        );
+        let cursors: Vec<(String, f64)> = {
+            let mut statement = connection
+                .prepare(
+                    "SELECT series, cost_usd FROM usage_cursors
+                     WHERE thread_id = ?1 ORDER BY series",
+                )
+                .unwrap();
+            statement
+                .query_map([thread], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .filter_map(Result::ok)
+                .collect()
+        };
+        assert_eq!(
+            cursors,
+            [
+                ("session-a".to_owned(), 16.0),
+                ("session-b".to_owned(), 2.0)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_counter_that_dips_alone_records_no_growth() {
+        let config = tempfile::tempdir().unwrap();
+        let connection = open(&config.path().join(DATA_FILE)).unwrap();
+        let thread = "01a10000-0000-0000-0000-000000000013";
+        let record = |started: &str, cost: f64, input: i64, output: i64, cached: i64| {
+            write_cumulative_turn(
+                &connection,
+                &TurnRow {
+                    thread_id: thread.to_owned(),
+                    started_at: started.to_owned(),
+                    finished_at: Some(started.to_owned()),
+                    harness: Some("claude-code".to_owned()),
+                    status: "completed".to_owned(),
+                    ..TurnRow::default()
+                },
+                SessionUsage {
+                    tokens: TokenTotals {
+                        input: Some(input),
+                        output: Some(output),
+                        cached: Some(cached),
+                        cache_write: Some(input / 2),
+                    },
+                    cost_usd: Some(cost),
+                    at: None,
+                },
+                Some("session-a"),
+            )
+            .unwrap();
+        };
+        record("2026-11-04T11:00:00.000Z", 10.0, 1000, 100, 500);
+        // A rotated or truncated log, or an account directory that went
+        // missing: one counter goes back while the others keep rising. That is
+        // not a restart, so the dipped counter records nothing instead of a
+        // whole session, and its cursor keeps the higher total.
+        record("2026-11-04T11:05:00.000Z", 11.0, 400, 130, 600);
+        // Once the log is whole again, growth resumes from the kept total.
+        record("2026-11-04T11:10:00.000Z", 11.5, 1100, 150, 700);
+
+        let rows: Vec<(Option<f64>, Option<i64>, Option<i64>, Option<i64>)> = {
+            let mut statement = connection
+                .prepare(
+                    "SELECT cost_usd, input_tokens, output_tokens, cached_tokens
+                     FROM turns WHERE thread_id = ?1 ORDER BY started_at",
+                )
+                .unwrap();
+            statement
+                .query_map([thread], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                })
+                .unwrap()
+                .filter_map(Result::ok)
+                .collect()
+        };
+        assert_eq!(
+            rows,
+            [
+                (Some(10.0), Some(1000), Some(100), Some(500)),
+                (Some(1.0), Some(0), Some(30), Some(100)),
+                (Some(0.5), Some(100), Some(20), Some(100)),
+            ]
+        );
+        let cursor: (Option<i64>, Option<i64>) = connection
+            .query_row(
+                "SELECT input_tokens, cached_tokens FROM usage_cursors
+                 WHERE thread_id = ?1 AND series = 'session-a'",
+                [thread],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(cursor, (Some(1100), Some(700)));
+    }
+
+    #[test]
+    fn a_cumulative_turn_survives_a_commit_from_another_writer() {
+        let config = tempfile::tempdir().unwrap();
+        let path = config.path().join(DATA_FILE);
+        let connection = open(&path).unwrap();
+        // Another writer holds the write lock and commits while this turn is
+        // between its reads and its write. A DEFERRED transaction would answer
+        // SQLITE_BUSY_SNAPSHOT there and lose the turn; IMMEDIATE takes the
+        // lock first and waits for its turn.
+        let other_path = path.clone();
+        let (locked, ready) = std::sync::mpsc::channel();
+        let other = std::thread::spawn(move || {
+            let other = open(&other_path).unwrap();
+            other.execute_batch("BEGIN IMMEDIATE").unwrap();
+            other
+                .execute("INSERT INTO threads (id) VALUES ('another-writer')", [])
+                .unwrap();
+            locked.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+            other.execute_batch("COMMIT").unwrap();
+        });
+        ready.recv().unwrap();
+        let thread = "01a10000-0000-0000-0000-000000000014";
+        write_cumulative_turn(
+            &connection,
+            &TurnRow {
+                thread_id: thread.to_owned(),
+                started_at: "2026-11-04T11:00:00.000Z".to_owned(),
+                finished_at: Some("2026-11-04T11:00:01.000Z".to_owned()),
+                harness: Some("claude-code".to_owned()),
+                status: "completed".to_owned(),
+                ..TurnRow::default()
+            },
+            SessionUsage {
+                tokens: TokenTotals {
+                    input: Some(50),
+                    ..TokenTotals::default()
+                },
+                ..SessionUsage::default()
+            },
+            Some("session-a"),
+        )
+        .expect("the turn waits for the other writer instead of failing");
+        other.join().unwrap();
+        let (turns, input): (i64, i64) = connection
+            .query_row(
+                "SELECT COUNT(*), SUM(input_tokens) FROM turns WHERE thread_id = ?1",
+                [thread],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((turns, input), (1, 50));
+    }
+
+    #[test]
+    fn a_thread_recorded_before_cursors_does_not_add_an_inflated_total() {
+        let config = tempfile::tempdir().unwrap();
+        let connection = open(&config.path().join(DATA_FILE)).unwrap();
+        let thread = "01a10000-0000-0000-0000-000000000011";
+        // An older release recorded this thread's rows, and the sum it was
+        // measured against is inflated (830: 15 turns of a runaway total).
+        write_turn(
+            &connection,
+            &TurnRow {
+                thread_id: thread.to_owned(),
+                started_at: "2026-11-04T11:00:00.000Z".to_owned(),
+                harness: Some("claude-code".to_owned()),
+                input_tokens: Some(830),
+                cost_usd: Some(830.0),
+                status: "completed".to_owned(),
+                ..TurnRow::default()
+            },
+        )
+        .unwrap();
+        let cumulative = |cost: f64| SessionUsage {
+            tokens: TokenTotals {
+                input: Some(cost as i64),
+                ..TokenTotals::default()
+            },
+            cost_usd: Some(cost),
+            at: None,
+        };
+        let live = |started: &str| TurnRow {
+            thread_id: thread.to_owned(),
+            started_at: started.to_owned(),
+            finished_at: Some(started.to_owned()),
+            harness: Some("claude-code".to_owned()),
+            status: "completed".to_owned(),
+            ..TurnRow::default()
+        };
+        // The next total is below the sum, so the sum is the inflated side:
+        // the lower of the two is the baseline. This turn counts nothing — the
+        // rows already hold at least this total — and the cursor starts at the
+        // reading, so the turns after it are exact.
+        write_cumulative_turn(
+            &connection,
+            &live("2026-11-04T11:05:00.000Z"),
+            cumulative(10.0),
+            Some("session-a"),
+        )
+        .unwrap();
+        write_cumulative_turn(
+            &connection,
+            &live("2026-11-04T11:10:00.000Z"),
+            cumulative(12.0),
+            Some("session-a"),
+        )
+        .unwrap();
+        write_cumulative_turn(
+            &connection,
+            &live("2026-11-04T11:15:00.000Z"),
+            cumulative(15.0),
+            Some("session-a"),
+        )
+        .unwrap();
+        let rows: Vec<Option<f64>> = {
+            let mut statement = connection
+                .prepare("SELECT cost_usd FROM turns WHERE thread_id = ?1 ORDER BY started_at")
+                .unwrap();
+            statement
+                .query_map([thread], |row| row.get(0))
+                .unwrap()
+                .filter_map(Result::ok)
+                .collect()
+        };
+        assert_eq!(
+            rows,
+            [Some(830.0), Some(0.0), Some(2.0), Some(3.0)],
+            "the old rows stay, and no total already in them is added again"
+        );
     }
 
     #[test]
@@ -3578,12 +4247,14 @@ mod tests {
             &connection,
             &live("2026-11-04T11:00:00.000Z"),
             cumulative(700, 0.4),
+            Some("session-a"),
         )
         .unwrap();
         write_cumulative_turn(
             &connection,
             &live("2026-11-04T12:00:00.000Z"),
             cumulative(900, 0.6),
+            Some("session-a"),
         )
         .unwrap();
         let (turns, input, output, cost): (i64, i64, i64, f64) = connection
@@ -3885,6 +4556,7 @@ mod tests {
         assert_eq!(count_rows(&path, "turns"), 1, "the old rows survive");
         assert_eq!(count_rows(&path, "provider_requests"), 1);
         assert_eq!(count_rows(&path, "harness_rpc_messages"), 0);
+        assert_eq!(count_rows(&path, "usage_cursors"), 0);
         assert_eq!(count_rows(&path, "operational_events"), 0);
         let kept = one_row(&path, "SELECT status FROM turns");
         assert_eq!(kept["status"], "completed");

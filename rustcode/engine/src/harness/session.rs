@@ -1278,7 +1278,7 @@ impl ExternalSession {
     /// is logged there and never fails the turn.
     ///
     /// The harness reports cumulative session usage, so the row keeps the
-    /// growth over what this thread already has for the harness. When the
+    /// growth over the last total the same session series reported. When the
     /// `usage_update` carries no token totals (the context gauge is not one),
     /// the harness's own log is read for them, off the async runtime.
     async fn record_turn_in_data_store(
@@ -1317,6 +1317,18 @@ impl ExternalSession {
             (usage, calls)
         };
         let record = self.record();
+        // The totals below are one harness session's, so the series they belong
+        // to is that session (and the account it ran as): a restart, a switch
+        // or another account starts a series whose totals are not comparable
+        // with the previous one's.
+        let series = record
+            .native_session_id
+            .as_deref()
+            .filter(|native| !native.trim().is_empty())
+            .map(|native| match record.account.as_deref() {
+                Some(account) => format!("{account}@{native}"),
+                None => native.to_owned(),
+            });
         let mut cumulative = crate::data_store::SessionUsage {
             tokens: usage
                 .as_ref()
@@ -1374,6 +1386,7 @@ impl ExternalSession {
                 tool_calls,
             },
             cumulative,
+            series.as_deref(),
         );
     }
 

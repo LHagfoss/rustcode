@@ -43,7 +43,8 @@ Next, in rough order:
 3. Compaction follow-ups: the built-in harness's context bar marks its
    auto-compact point and the card compares the context before and after a
    compaction; a harness that reports no threshold keeps the total-only view.
-   Remaining: Claude's idle compaction before the prompt cache expires.
+   RustCode now also decides its own auto-compaction from the app: when a turn
+   ends above the size threshold, and shortly before a prompt cache expires.
 4. SQLite as the store, not only an index: pins and status first, then an
    event table with projections, the
    sidebar listed from the index, lazy transcript import.
@@ -259,15 +260,6 @@ composer's keys stay outside the table.
 
 ## Features
 
-- **Remote access.** Settings › Remote access switches remote access on for
-  this Mac and pairs a phone (`docs/remote.md` › In the desktop app). While it
-  is on, every thread the app has open is shared with the paired devices — on
-  any harness — and a prompt, cancel, question or approval from the phone acts
-  on the desktop thread, showing up in the app as if it were typed there.
-  **Pair a device…** shows the QR code, the address, the manual code and the
-  countdown; a thread's header carries a chip while it is shared and a count
-  while a device is attached. The page reads `_rustcode/remote`,
-  `/start`, `/pair` and `/stop` (`engine/src/acp/remote.rs`).
 - **Composer.** One glass card: the field, then a single footer row inside
   it, **+** (attaching and new threads), the project folder, *Worktree*
   (new threads) and the branch, the permissions mode, the plan meter, the
@@ -325,9 +317,10 @@ composer's keys stay outside the table.
   spend against the last. One `_rustcode/data/usage` read grouped by day feeds
   the three figures cards, so the screen asks the engine once. Every card keeps
   one height from the first frame and says what it has in a line when it has
-  nothing, so the field above never moves as the reads land; below `lg` the
+  nothing. A persisted toggle opens the overview below the centred composer,
+  without moving it; the remaining space scrolls. Below `lg` the
   cards are one sideways-scrolling row, and a window shorter than 700px leaves
-  them out rather than push the field off the pane.
+  toggle and cards out.
 - **Link chips.** A pasted URL becomes a chip in front of the field; bare
   links in replies and messages render as chips: favicon and title on a
   tint of the page's `theme-color`, else neutral. The prompt still carries
@@ -353,10 +346,16 @@ composer's keys stay outside the table.
   Claude Code's `Agent`/`Task` calls (their steps fold under them by
   `_meta.claudeCode.parentToolUseId`) and RustCode's `spawn_agent` (status
   from `_rustcode/agents`, polled every 2 s while a turn runs or a child
-  works; steps from the child's conversation). While one works the row says
-  the step it is on; once done, how many steps and how long. A subagent sent
-  to the background keeps its row running until the turn ends. A pill in the
-  composer row says how many work.
+  works; steps from the child's conversation). A Claude Code thread RustCode
+  starts with orchestration on has that tool disallowed
+  ([harnesses.md](harnesses.md#starting-a-thread-on-a-harness)),
+  so its calls only come from an older session or another harness. While one
+  works the row says the step it is on; once done, how many steps and how
+  long. A subagent sent to the background keeps its row running until the
+  turn ends. While it works it reads in the strip above the composer, beside
+  the threads this one delegated to (Stop lives there); once it settles its
+  row is the transcript's, so there is one delegation surface, never a pill
+  of its own over the composer.
 - **Background work.** Claude Code's background commands and the turns it
   starts on its own when one finishes reach the app as
   `_rustcode/session/activity` (the engine asks the adapter for its async
@@ -471,6 +470,19 @@ composer's keys stay outside the table.
   on, read when the thread first opens, never another login's. A new thread
   shows the limits the last thread learnt. The chat header no longer repeats
   them.
+- **Auto-compact.** Settings › General › Threads owns one mode and a size
+  threshold. RustCode sends the harness's own `/compact` after a turn when the
+  context is above the threshold, and on Claude Code and Codex again about
+  4.5 minutes after a turn ended, while the prompt cache is warm and the
+  context is above 60k. Codex uses only the second rule (it compacts inside a
+  turn itself); the built-in harness keeps its own pre-request compaction; any
+  other ACP agent is used only when it advertises `/compact`. The decision is
+  pure (`state/autoCompact.ts`): it never fires while a turn runs, a message
+  waits, an approval is open, the user is typing, the thread is settled, or a
+  delegate's orchestrator has stopped talking to it, and it runs at most once
+  per idle period. The thread menu turns it off for one thread. A compaction
+  it ran says *Compacted automatically*, and the context inspector compares
+  the context before and after it.
 - **Model picker.** After `ModelEffortPanel`: *Fast mode* (when the thread's
   model has the `fast` option) and the model with its effort on one line;
   the model's name drills into the list. Effort is a slider with a dot per
@@ -490,6 +502,25 @@ composer's keys stay outside the table.
   name), decoded once, and the text drawn once per size on an offscreen
   canvas (`src/lib/banner.ts`), so a resize scales the last drawing until
   the new one is ready. It fades in, and does not move under Reduce motion.
+- **Remote access.** Settings › Remote access ([remote.md](remote.md)) is the
+  machine's switch: turned on it starts the remote gateway and shares every
+  thread this app has open with the paired devices — on the built-in harness
+  and on Codex, Claude Code, Pi or any other external harness — and a prompt,
+  cancel, question or approval from the phone acts on the desktop thread. The
+  page shows the gateway's address, the pairing QR code and the eight-digit
+  code with the challenge's countdown and the wrong codes left, and the paired
+  devices. A new device appears as *Paired ‹name›* and the used code is taken
+  down, not left until it expires. It asks the engine's `_rustcode/remote`,
+  `_rustcode/remote/start`, `_rustcode/remote/pair` and
+  `_rustcode/remote/stop` over ACP, with no `sessionId` for the machine's own
+  switch and pairing; the engine owns the gateway, the shares and pairing
+  (`rustcode/engine/src/acp/remote.rs`). The QR code is the engine's own rows
+  (`qrRows`) when it sends them, else it is encoded in the app
+  (`src/lib/qr.ts`), so no pairing material leaves it. Its *Open threads*
+  group says which threads are shared, how many devices are attached to each,
+  and why a thread the host holds back (it shares at most 32 at once, most
+  recently used first) is not. A thread's header carries a chip while it is
+  shared, with its attached count.
 - **Terminal.** ⌘J: xterm.js on the shell's PTY in the thread's folder, one
   per folder, kept while hidden, following the app's colours.
 - **Window.** The window opens at the size it was last closed with
@@ -793,8 +824,8 @@ composer's keys stay outside the table.
   always reachable (another project only
   for `start_session`, one the user has opened, with approval), two levels of
   delegation (a top-level thread, its children and their children — no
-  deeper, and no message that would close a loop), 4 active links per thread,
-  8 per delegation tree, a 32-message mailbox, 8 KiB messages, 16 KiB reads,
+  deeper, and no message that would close a loop), 8 delegates per thread and
+  16 across this app instance, a 32-message mailbox, 8 KiB messages, 16 KiB reads,
   waits up to 1 h. Each needs the user's *Allow for This Thread*,
   *Allow Once* or *Don't Allow*; a grant is per calling thread and kind of
   change, not per harness, model or named login, so an already-granted start
@@ -1210,10 +1241,11 @@ off (`rustcode.haptics`).
 The app checks for an update 5 s after launch, every 30 seconds while its
 window is in front (every 30 minutes behind it), when its window comes back,
 and 30 s after a failed check, doubling to 5 minutes (`src/state/updates.ts`).
-A check is a HEAD request to the release page, not the GitHub API. A release
-counts as out only once its macOS app is uploaded and its `SHA256SUMS` lists
-it: the release goes public minutes before the other platforms and the sums
-land, and an install verifies against them. When a newer release is out, an *Update to X* row
+A check is a HEAD request to the release page on Stable, and the release feed
+on Beta: neither is the GitHub API, which a 30-second check would exhaust. A
+release counts as out only once its macOS app is uploaded and its
+`SHA256SUMS` lists it: the release goes public minutes before the other
+platforms and the sums land, and an install verifies against them. When a newer release is out, an *Update to X* row
 sits at the foot of the sidebar: it installs in place where the app can
 (below), else opens the release page; while it installs, the row shows a
 progress bar (`Downloading · 39% of 58.2 MB`, then Verifying and Installing)
@@ -1228,10 +1260,26 @@ it; Settings › Advanced opens it on demand and shows why the last background c
 shows both with sample data.
 
 `src-tauri/src/updater.rs` ports the SwiftUI app's `Updater.swift`; Settings ›
-Advanced shows the version with **Check for Updates**. It reads the tag that
-`github.com/LHagfoss/rustcode/releases/latest` redirects to (betas are
-prereleases, never latest) and offers the update when it is newer and its
-app zip is uploaded. On macOS **Update to X** downloads
+About shows the version with **Check for Updates**. **Update channel**
+(Stable, the default, or Beta) picks what a check looks for: Stable reads the
+tag that `github.com/LHagfoss/rustcode/releases/latest` redirects to, and Beta
+reads the release feed (`releases.atom`, which lists the prereleases
+`releases/latest` never points at) and offers the newest version of either
+kind, so `1.21.0-beta.3` is offered above `1.20.0` but `1.21.0` takes over
+when it ships. Both compare versions as semver does, prereleases included
+(`1.20.0-beta.2 < 1.20.0`) and with build metadata ignored, and only a release
+whose app zip and `SHA256SUMS` are uploaded is offered, so a tagged beta with
+nothing to install yet stays hidden. The picker asks the shell for the
+channels it offers (`update_channels`, no release check), so it is there
+before a check answers and when one fails offline; a change re-checks, and an
+answer for the previous channel is dropped rather than shown, which is why
+the row only draws an offer whose `channel` is the selected one. A beta ships
+the macOS app only, so the channel row is hidden on platforms without one,
+and switching back to Stable never offers a downgrade (a beta is already newer
+than the release before it). On Beta the row reads **Update to
+1.21.0-beta.3**, with **Skip this beta** under it: that version is kept out of
+the row across restarts (`rustcode.skippedBeta`) and the next beta is offered
+as usual. On macOS **Update to X** downloads
 `RustCode-<ver>-macos-<arch>.app.zip`, checks it against the release's
 `SHA256SUMS`, unpacks it with `ditto`, requires `codesign --verify --deep
 --strict` and this app's bundle id, then a detached shell waits for the app
@@ -1239,7 +1287,9 @@ to quit, swaps the bundle, re-registers it with Launch Services and opens
 it. It installs in place only from a release bundle in a folder it can write;
 otherwise, and on Windows and Linux, the button opens the release page and
 the installer does the update. A `tauri dev` build always sees an update
-but never installs it.
+but never installs it. The channel is the app's own: Homebrew and the CLI
+updater stay on stable (`scripts/release.sh --beta` publishes a GitHub
+prerelease both skip).
 
 It does not use `tauri-plugin-updater`: that plugin requires its own
 signing key pair, and a release without the private key in CI would fail.
