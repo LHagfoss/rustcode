@@ -1108,6 +1108,14 @@ impl AcpServer {
         // Most recently active first; a thread with no recorded activity goes
         // last. ISO 8601 strings sort by time as they are.
         candidates.sort_by(|left, right| right.last_active.cmp(&left.last_active));
+        // Past the host's bound the least recently active threads stay
+        // private, and their status says why.
+        for extra in candidates.iter().skip(room) {
+            self.remote.refuse(
+                &extra.session_id(),
+                "this host already shares 32 threads; close one to share this one".to_owned(),
+            );
+        }
         let mut failed = false;
         for candidate in candidates.into_iter().take(room) {
             let session_id = candidate.session_id();
