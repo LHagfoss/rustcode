@@ -709,12 +709,6 @@ impl Peer {
         self.connection
             .send_notification(snapshot(session_id, update))
     }
-
-    /// Tell this client to clear what it shows of `session_id`: the whole
-    /// transcript follows.
-    pub(crate) fn send_reset(&self, session_id: &str) -> Result<(), agent_client_protocol::Error> {
-        self.connection.send_notification(reset_marker(session_id))
-    }
 }
 
 /// The update that starts a reset: it changes nothing but carries the flag.
@@ -1220,6 +1214,83 @@ mod tests {
         assert!(notes.recv().await.expect("history").meta.is_none());
         let seen = cursors_until(&mut notes, queued + 1).await;
         assert_eq!(seen, [queued - 1, queued, queued + 1]);
+    }
+
+    /// A session no connection has open is loaded while another connection
+    /// keeps sending it updates (a prompt, a title). The loader gets its
+    /// reset marker and the whole transcript first, none of it carrying a
+    /// cursor, and only then the live updates, every one after the answer's
+    /// cursor and none missing. So a load cut off in the middle of the
+    /// transcript has no cursor to come back with, and an update is never
+    /// sent before the reset that would clear it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_load_racing_a_prompt_gets_the_transcript_before_any_live_update() {
+        const LIVE: u64 = 2_000;
+        const TRANSCRIPT: usize = 300;
+        for round in 0..20 {
+            let clients = Clients::default();
+            let session_id = format!("closed-{round}");
+            let (prompter, _prompter_notes, _prompter_close) = connected(&clients).await;
+            prompter.attach(&session_id);
+            let sent = Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let producer = {
+                let sender = clients.session(&session_id);
+                let sent = Arc::clone(&sent);
+                std::thread::spawn(move || {
+                    for n in 0..LIVE {
+                        sender.update(text(&format!("live {n}"))).expect("send");
+                        sent.store(n + 1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                })
+            };
+            while sent.load(std::sync::atomic::Ordering::SeqCst) < 20 {
+                tokio::task::yield_now().await;
+            }
+
+            // It had a cursor from before and asks to resume: reset.
+            let (loader, mut notes, close) = connected(&clients).await;
+            let transcript = (0..TRANSCRIPT)
+                .map(|n| text(&format!("message {n}")))
+                .collect::<Vec<_>>();
+            let position = loader
+                .attach_open(&session_id, None, transcript, true)
+                .unwrap()
+                .unwrap();
+            producer.join().expect("producer");
+            let head = clients.head(&session_id);
+
+            let mut prefix = Vec::new();
+            while prefix.len() < TRANSCRIPT + 1 {
+                prefix.push(notes.recv().await.expect("a note"));
+            }
+            // A client cut off anywhere in here holds no cursor.
+            assert!(
+                prefix[0]
+                    .meta
+                    .as_ref()
+                    .is_some_and(|meta| meta["rustcode"]["reset"] == true),
+                "round {round}: the reset marker comes first"
+            );
+            assert!(
+                prefix.iter().all(|note| note
+                    .meta
+                    .as_ref()
+                    .is_none_or(|meta| meta["rustcode"]["cursor"].is_null())),
+                "round {round}: no live update lands inside the transcript"
+            );
+            // After it, every live update, in order, from the answer's cursor.
+            let live = if position.cursor == head {
+                Vec::new()
+            } else {
+                cursors_until(&mut notes, head).await
+            };
+            assert_eq!(
+                live,
+                (position.cursor + 1..=head).collect::<Vec<_>>(),
+                "round {round}: nothing lost after the transcript"
+            );
+            let _ = close.send(());
+        }
     }
 
     /// A load cut off halfway has no cursor to resume from, so the next one

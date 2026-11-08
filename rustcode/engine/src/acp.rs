@@ -730,9 +730,10 @@ async fn acp_load_session(
             );
         }
         let mut state = build_loaded_app_state(&session_id, &cwd, history.clone());
-        // The loading client gets the session's updates; the replay below
-        // goes to it alone.
-        let session_clients = peer.attach(&session_id);
+        // Not attached yet: the replay below attaches the loading client in
+        // the same step that queues the transcript to it, so no live update
+        // can land between its chunks.
+        let session_clients = peer.clients().session(&session_id);
         apply_client_info(&mut state, peer.info(), &session_clients);
         let config_options = build_session_config_options(&state);
         let loaded_usage = usage::usage_update(&state);
@@ -788,32 +789,18 @@ async fn acp_load_session(
         // It asked to resume a session that is not open here (the engine
         // restarted, or it was closed): the transcript replaces what it has.
         let reset = cursor::requested_cursor(&request).is_some();
-        if reset && let Err(error) = peer.send_reset(&session_id) {
+        let mut snapshot = replay;
+        if !meta.title.trim().is_empty() {
+            snapshot.push(SessionUpdate::SessionInfoUpdate(
+                SessionInfoUpdate::new().title(meta.title.clone()),
+            ));
+        }
+        snapshot.push(commands::available_commands_update());
+        snapshot.push(loaded_usage);
+        // Queued and attached under one lock (see `Peer::attach_open`).
+        if let Err(error) = peer.attach_open(&session_id, None, snapshot, reset) {
             unregister_acp_session(server, &session_id).await;
             return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
-        }
-        for update in replay {
-            if let Err(error) = peer.send_snapshot(&session_id, update) {
-                unregister_acp_session(server, &session_id).await;
-                return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
-            }
-        }
-        if !meta.title.trim().is_empty() {
-            if let Err(error) = peer.send_snapshot(
-                &session_id,
-                SessionUpdate::SessionInfoUpdate(
-                    SessionInfoUpdate::new().title(meta.title.clone()),
-                ),
-            ) {
-                unregister_acp_session(server, &session_id).await;
-                return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
-            }
-        }
-        for update in [commands::available_commands_update(), loaded_usage] {
-            if let Err(error) = peer.send_snapshot(&session_id, update) {
-                unregister_acp_session(server, &session_id).await;
-                return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
-            }
         }
         return Ok(peer.position(&session_id, reset).finish(
             LoadSessionResponse::new()

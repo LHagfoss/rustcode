@@ -461,10 +461,11 @@ pub(crate) async fn load_session(
         if open.contains_key(&session_id) {
             return Err(failure("session is already active".to_owned()));
         }
-        // The loading client gets the thread's updates; the replay below goes
-        // to it alone.
+        // Not attached yet: the replay below attaches the loading client in
+        // the same step that queues the transcript to it, so no live update
+        // can land between its chunks.
         let sink = remote.wrap_sink(
-            Arc::new(AcpClientSink::new(peer.attach(&session_id))),
+            Arc::new(AcpClientSink::new(peer.clients().session(&session_id))),
             &session_id,
         );
         let session = ExternalSession::new(
@@ -479,13 +480,6 @@ pub(crate) async fn load_session(
         session
     };
     session.set_client_display(info.display());
-    let orchestrated = attach_orchestrator(
-        &session,
-        info.orchestration,
-        info.smart_ui,
-        &peer.clients().session(&session_id),
-    )
-    .await;
     super::mark_acp_session(&session_id);
     let mut updates = harness::transcript::replay(&history, Some(&cwd));
     updates.extend(usage);
@@ -497,18 +491,20 @@ pub(crate) async fn load_session(
     // It asked to resume a thread that is not open here (the engine
     // restarted, or it was closed): the transcript replaces what it has.
     let reset = super::cursor::requested_cursor(request).is_some();
-    if reset && let Err(error) = peer.send_reset(&session_id) {
+    // Queued and attached under one lock (see `Peer::attach_open`).
+    if let Err(error) = peer.attach_open(&session_id, None, updates, reset) {
         close(sessions, &session_id, remote).await;
         peer.clients().forget_session(&session_id);
         return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
     }
-    for update in updates {
-        if let Err(error) = peer.send_snapshot(&session_id, update) {
-            close(sessions, &session_id, remote).await;
-            peer.clients().forget_session(&session_id);
-            return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
-        }
-    }
+    // The orchestrator is hosted by the client that most recently attached.
+    let orchestrated = attach_orchestrator(
+        &session,
+        info.orchestration,
+        info.smart_ui,
+        &peer.clients().session(&session_id),
+    )
+    .await;
     Ok(peer.position(&session_id, reset).finish(
         LoadSessionResponse::new()
             .config_options(session.config_options().await)
