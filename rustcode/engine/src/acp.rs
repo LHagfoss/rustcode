@@ -875,7 +875,7 @@ async fn attach_open_builtin(
 }
 
 /// How often a replay is rebuilt when a turn starts or ends while it is
-/// built, before it is sent as it is.
+/// built. If it keeps changing, fail without attaching a stale transcript.
 const ATTACH_ATTEMPTS: usize = 4;
 
 /// Attach `peer` to the open session `session_id` and replay it: the
@@ -894,17 +894,17 @@ pub(crate) async fn attach_with_replay<F>(
 where
     F: std::future::Future<Output = rustcode_core::History>,
 {
-    for attempt in 1..=ATTACH_ATTEMPTS {
+    for _ in 0..ATTACH_ATTEMPTS {
         let (generation, base) = peer.clients().turn_marker(session_id);
         let transcript = history().await;
         let transcript = transcript.as_slice();
         let before_turn = &transcript[..base.unwrap_or(transcript.len()).min(transcript.len())];
-        let check = (attempt < ATTACH_ATTEMPTS).then_some(generation);
-        if peer.attach_open(session_id, check, replay(before_turn))? {
-            break;
+        if peer.attach_open(session_id, Some(generation), replay(before_turn))? {
+            return Ok(());
         }
     }
-    Ok(())
+    Err(agent_client_protocol::Error::internal_error()
+        .data("session changed repeatedly while loading; retry session/load"))
 }
 
 const ACP_TERMINAL_LEDGER_CAPACITY: usize = 1024;
@@ -6037,6 +6037,79 @@ mod tests {
             );
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
+    }
+
+    #[test]
+    fn a_load_does_not_attach_a_stale_replay_after_repeated_turn_changes() {
+        on_a_large_stack(without_mcp(replay_retries_until_stable()));
+    }
+
+    async fn replay_retries_until_stable() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let server = AcpServer::new(false).expect("server");
+        let (engine, transport) = agent_client_protocol::Channel::duplex();
+        let served = serve_on_thread(&server, engine);
+        let (updates_tx, _updates) = tokio::sync::mpsc::unbounded_channel();
+        let (ready_tx, ready) = tokio::sync::oneshot::channel();
+        let (close_tx, closed) = tokio::sync::oneshot::channel();
+        let client = tokio::spawn(recording_client(transport, updates_tx, ready_tx, closed));
+        let connection = ready.await.expect("client connects");
+        connection
+            .send_request(initialize_with(
+                serde_json::json!({ "rustcode": { "preview": 1 } }),
+            ))
+            .block_task()
+            .await
+            .expect("client initializes");
+        let peer = server
+            .clients
+            .newest_with(clients::Capability::Preview)
+            .expect("initialized peer");
+
+        let session_id = "replay-retry-test";
+        let session_clients = peer.clients().session(session_id);
+        let reads = Arc::new(AtomicUsize::new(0));
+        let result = attach_with_replay(
+            &peer,
+            session_id,
+            {
+                let reads = Arc::clone(&reads);
+                move || {
+                    let reads = Arc::clone(&reads);
+                    let session_clients = session_clients.clone();
+                    async move {
+                        if reads.fetch_add(1, Ordering::SeqCst) < ATTACH_ATTEMPTS {
+                            drop(session_clients.begin_turn(0, None));
+                        }
+                        rustcode_core::History::default()
+                    }
+                }
+            },
+            |_| Vec::new(),
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "unstable replay must be retried or refused"
+        );
+        assert_eq!(reads.load(Ordering::SeqCst), ATTACH_ATTEMPTS);
+        assert!(
+            peer.clients().session(session_id).requester(None).is_none(),
+            "a stale replay never attaches the client"
+        );
+
+        let _ = close_tx.send(());
+        client
+            .await
+            .expect("client task")
+            .expect("client disconnects cleanly");
+        served
+            .await
+            .expect("server connection")
+            .expect("connection closes cleanly");
+        server.shutdown().await;
     }
 
     #[test]

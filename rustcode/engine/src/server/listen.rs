@@ -31,6 +31,26 @@ mod unix {
         path: PathBuf,
     }
 
+    /// Unix has no bind-with-mode API. Apply a restrictive umask only while
+    /// the socket inode is created, then restore the process setting.
+    struct SocketUmask(libc::mode_t);
+
+    impl SocketUmask {
+        fn private() -> Self {
+            // SAFETY: umask has no preconditions; Drop restores the old mask.
+            Self(unsafe { libc::umask(0o177) })
+        }
+    }
+
+    impl Drop for SocketUmask {
+        fn drop(&mut self) {
+            // SAFETY: this restores the mask captured by `private`.
+            unsafe {
+                libc::umask(self.0);
+            }
+        }
+    }
+
     impl Listener {
         /// Listen on `endpoint`. The caller holds the server lock, so a
         /// socket already there is a dead server's and is replaced.
@@ -41,7 +61,10 @@ mod unix {
                 Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
                 _ => {}
             }
-            let listener = UnixListener::bind(&path)?;
+            let listener = {
+                let _umask = SocketUmask::private();
+                UnixListener::bind(&path)
+            }?;
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
             Ok(Self { listener, path })
         }
