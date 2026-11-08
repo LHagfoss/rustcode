@@ -3,15 +3,14 @@ use super::{
     hub::SessionHub,
     router::{DeviceContext, FrameRouter, FrameSink},
 };
-use crate::daemon::lifecycle::{
-    ensure_private_directory, is_lock_busy, lock_private_file, publish_private_json,
-    read_private_json, remove_if_exists,
+use crate::daemon::private_files::{
+    ensure_private_directory, is_lock_busy, lock_private_file, private_open_options,
+    publish_private_json, read_private_json, remove_if_exists,
 };
 use crate::remote::*;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::os::unix::{fs::OpenOptionsExt, process::CommandExt};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -117,11 +116,7 @@ pub(crate) fn live_owner_sessions(lifecycle: &super::lifecycle::RemoteLifecycle)
 /// The gateway's own line in an owner log, so a failed start never leaves it empty.
 fn note_in_log(log: &Path, text: &str) {
     use std::io::Write;
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .append(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(log)
-    {
+    if let Ok(mut file) = private_open_options().append(true).open(log) {
         let _ = writeln!(file, "gateway: {text}");
     }
 }
@@ -684,11 +679,9 @@ impl WorkspaceRouter {
         // waits for that one: a session never has two owner processes.
         let mut child = None;
         if hub.session_info(&session_id).is_none() && !owner_alive(&owners, &session_id) {
-            let log = std::fs::OpenOptions::new()
+            let log = private_open_options()
                 .create(true)
                 .append(true)
-                .mode(0o600)
-                .custom_flags(libc::O_NOFOLLOW)
                 .open(&start.log_path)?;
             let mut command = crate::platform::tokio_command(program);
             command
@@ -698,15 +691,7 @@ impl WorkspaceRouter {
                 .stdin(std::process::Stdio::null())
                 .stdout(log.try_clone()?)
                 .stderr(log);
-            // SAFETY: setsid is async-signal-safe; no shared state is touched.
-            unsafe {
-                command.as_std_mut().pre_exec(|| {
-                    if libc::setsid() == -1 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    Ok(())
-                });
-            }
+            crate::platform::detach(command.as_std_mut());
             child = Some(command.spawn().map_err(|error| {
                 start.failed(format!("the session owner could not be launched ({error})"))
             })?);
@@ -1186,7 +1171,8 @@ impl FrameRouter for WorkspaceRouter {
     }
 }
 
-#[cfg(test)]
+// Stand-in owners are shell scripts, stopped with signals.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     #[test]
@@ -2429,6 +2415,8 @@ fn note_owner_pid(lease: &std::fs::File) {
 }
 
 /// The pid recorded in a session lease, if any. Stale when the owner is gone.
+/// Only `/adopt` reads it, to signal the owner, which Windows does not do.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn owner_pid(owners: &Path, session_id: &str) -> Option<u32> {
     let content = std::fs::read_to_string(owners.join(format!("{session_id}.lock"))).ok()?;
     content.strip_prefix("pid=")?.trim().parse().ok()

@@ -3147,6 +3147,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-notification",
  "tokio",
+ "window-vibrancy",
 ]
 
 [[package]]

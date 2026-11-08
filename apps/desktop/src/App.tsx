@@ -1,6 +1,7 @@
 import { Tooltip } from "radix-ui";
 import { lazy, Suspense, useEffect } from "react";
 import { applyTheme, resolveTheme } from "./lib/themes";
+import { setUserReduceTransparency } from "./lib/transparency";
 import { restoreZoom } from "./lib/zoom";
 import { runShortcut } from "./state/shortcuts";
 import { closeConfirm, openSettings, setOnboarding, setView, shortcutFor, useApp } from "./state/store";
@@ -41,6 +42,7 @@ function useTheme() {
       document.documentElement.dataset.theme = mode;
       document.documentElement.dataset.font = s.roundedFont ? "rounded" : "standard";
       document.documentElement.dataset.chatWidth = s.chatWidth;
+      setUserReduceTransparency(s.reduceTransparency);
     };
     paint();
     media.addEventListener("change", paint);
@@ -50,6 +52,7 @@ function useTheme() {
         s.themeActive !== prev.themeActive ||
         s.themes !== prev.themes ||
         s.roundedFont !== prev.roundedFont ||
+        s.reduceTransparency !== prev.reduceTransparency ||
         s.chatWidth !== prev.chatWidth
       )
         paint();
@@ -160,7 +163,7 @@ export function App() {
         open rows) in one frame.
       */}
       <div className="relative h-full w-full overflow-hidden">
-        <div className="flex h-full w-full overflow-hidden bg-sidebar" inert={settings}>
+        <div className="flex h-full w-full overflow-hidden bg-sidebar-glass" inert={settings}>
           <Sidebar />
           <div className="relative flex min-w-0 flex-1 bg-bg">
             {/*

@@ -6,17 +6,11 @@ use super::{
     server::DaemonServer,
 };
 use anyhow::{Context, Result, bail, ensure};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize};
 use std::{
-    fs::{self, File, OpenOptions},
-    io::{Read, Seek, SeekFrom, Write},
-    os::{
-        fd::AsRawFd,
-        unix::{
-            fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
-            process::CommandExt,
-        },
-    },
+    fs::{File, OpenOptions},
+    io::{Read, Seek, SeekFrom},
+    os::unix::{fs::OpenOptionsExt, process::CommandExt},
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
@@ -60,147 +54,10 @@ impl DaemonRegistration {
     }
 }
 
-/// Random identity for one process lifetime, shared with the remote gateway.
-pub(crate) fn random_instance_id() -> Result<String> {
-    let mut random = [0u8; 16];
-    File::open("/dev/urandom")?.read_exact(&mut random)?;
-    Ok(random.iter().map(|b| format!("{b:02x}")).collect())
-}
-
-/// Read a bounded JSON file written by [`publish_private_json`].
-pub(crate) fn read_private_json<T: DeserializeOwned>(path: &Path, max_bytes: u64) -> Result<T> {
-    let mut bytes = Vec::new();
-    File::open(path)?
-        .take(max_bytes + 1)
-        .read_to_end(&mut bytes)?;
-    ensure!(bytes.len() as u64 <= max_bytes, "private file too large");
-    Ok(serde_json::from_slice(&bytes)?)
-}
-
-/// Replace `path` with complete owner-only JSON. The temporary file is created
-/// 0600 in the same directory, so the destination never exists with wider
-/// permissions or partial contents.
-pub(crate) fn publish_private_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    let parent = path
-        .parent()
-        .context("registration requires parent directory")?;
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(parent)?;
-    let mut file = tempfile::NamedTempFile::new_in(parent)?;
-    file.as_file()
-        .set_permissions(fs::Permissions::from_mode(0o600))?;
-    serde_json::to_writer(&mut file, value)?;
-    file.flush()?;
-    file.as_file().sync_all()?;
-    file.persist(path)?;
-    File::open(parent)?.sync_all()?;
-    Ok(())
-}
-
-/// Create `directory` 0700 if missing and refuse one that is not a private
-/// directory (a symlink, or readable by group/other).
-pub(crate) fn ensure_private_directory(directory: &Path, owner: &str) -> Result<()> {
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(directory)?;
-    let metadata = fs::symlink_metadata(directory)?;
-    ensure!(
-        metadata.is_dir() && metadata.permissions().mode() & 0o077 == 0,
-        "{owner} directory must be private (0700)"
-    );
-    Ok(())
-}
-
-/// Take a non-blocking exclusive advisory lock on `directory/name`, held until
-/// the returned file is dropped. A held lock reports `WouldBlock`.
-pub(crate) fn lock_private_file(directory: &Path, name: &str, owner: &str) -> Result<File> {
-    ensure_private_directory(directory, owner)?;
-    let lock_path = directory.join(name);
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&lock_path)?;
-    loop {
-        // SAFETY: file owns a valid descriptor; the lock is released on drop.
-        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-        if result == 0 {
-            break;
-        }
-
-        let error = std::io::Error::last_os_error();
-        if error.kind() == std::io::ErrorKind::Interrupted {
-            continue;
-        }
-        if error.kind() == std::io::ErrorKind::WouldBlock {
-            return Err(error)
-                .with_context(|| format!("{owner} lock {} is busy", lock_path.display()));
-        }
-        return Err(error)
-            .with_context(|| format!("failed to acquire {owner} lock {}", lock_path.display()));
-    }
-    Ok(file)
-}
-
-#[cfg(target_os = "macos")]
-pub(crate) fn process_start_time(pid: u32) -> Result<Option<u64>> {
-    if pid == 0 || pid > i32::MAX as u32 {
-        return Ok(None);
-    }
-    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
-    let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
-    // SAFETY: the kernel writes at most size bytes into a properly sized buffer.
-    let read = unsafe {
-        libc::proc_pidinfo(
-            pid as i32,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            info.as_mut_ptr().cast(),
-            size,
-        )
-    };
-    if read == size {
-        // SAFETY: proc_pidinfo initialized the entire structure on success.
-        let info = unsafe { info.assume_init() };
-        return Ok(Some(
-            info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec,
-        ));
-    }
-    let error = std::io::Error::last_os_error();
-    if error.raw_os_error() == Some(libc::ESRCH) {
-        return Ok(None);
-    }
-    Err(error.into())
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn process_start_time(pid: u32) -> Result<Option<u64>> {
-    let stat = match fs::read_to_string(format!("/proc/{pid}/stat")) {
-        Ok(stat) => stat,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-    // comm may contain spaces and parentheses; field 3 follows the final ')'.
-    let fields = stat.rsplit_once(')').context("invalid process stat")?.1;
-    Ok(Some(
-        fields
-            .split_whitespace()
-            .nth(19)
-            .context("missing process start time")?
-            .parse()?,
-    ))
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-pub(crate) fn process_start_time(_pid: u32) -> Result<Option<u64>> {
-    bail!("daemon process identity is supported on macOS and Linux")
-}
+pub(crate) use super::private_files::{
+    is_lock_busy, lock_private_file, process_start_time, publish_private_json, random_instance_id,
+    read_private_json, remove_if_exists,
+};
 
 #[derive(Clone)]
 pub struct DaemonLifecycle {
@@ -419,14 +276,6 @@ impl DaemonLifecycle {
     }
 }
 
-pub(crate) fn is_lock_busy(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        cause
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(|error| error.kind() == std::io::ErrorKind::WouldBlock)
-    })
-}
-
 struct StartingChild(Option<tokio::process::Child>);
 impl Drop for StartingChild {
     fn drop(&mut self) {
@@ -436,19 +285,14 @@ impl Drop for StartingChild {
     }
 }
 
-pub(crate) fn remove_if_exists(path: &Path) -> Result<()> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::daemon::{client::DaemonClient, protocol::DaemonRequest};
-    use std::os::{fd::RawFd, unix::fs::PermissionsExt};
+    use std::os::{
+        fd::{AsRawFd, RawFd},
+        unix::fs::PermissionsExt,
+    };
 
     fn fork_waiting_with_lock(lock_fd: RawFd) -> (libc::pid_t, libc::c_int) {
         let mut release_pipe = [0; 2];
