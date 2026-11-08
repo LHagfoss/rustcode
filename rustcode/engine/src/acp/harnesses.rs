@@ -509,7 +509,7 @@ pub(crate) async fn load_session(
             return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
         }
     }
-    Ok(peer.clients().position(&session_id, reset).finish(
+    Ok(peer.position(&session_id, reset).finish(
         LoadSessionResponse::new()
             .config_options(session.config_options().await)
             .meta(harness::session_meta_for(
@@ -570,7 +570,7 @@ pub(crate) async fn attach_open(
     for update in updates {
         let _ = peer.send_snapshot(&session_id, update);
     }
-    let position = peer.clients().position(&session_id, position.reset);
+    let position = peer.position(&session_id, position.reset);
     let account = harness::config::config_dir().ok().and_then(|dir| {
         harness::config::account_for_load(&harness::config::load_accounts_in(&dir), &record)
     });

@@ -112,13 +112,25 @@ pub(crate) enum Topic {
     PullWatches,
 }
 
+/// One session as one connection has it.
+#[derive(Clone, Copy)]
+struct Slot {
+    /// When it attached, on the registry's clock.
+    at: u64,
+    /// The cursor of the newest logged update queued to this connection (or,
+    /// for the sender of a prompt, that its view already shows). Every update
+    /// up to it was queued in order, so it is what the connection can be told
+    /// it has.
+    queued: u64,
+}
+
 struct Entry {
     connection: ConnectionTo<Client>,
     info: ClientInfo,
     /// When it initialized, on the registry's clock.
     since: u64,
-    /// The sessions it created or loaded, each with when it did.
-    sessions: HashMap<String, u64>,
+    /// The sessions it created or loaded.
+    sessions: HashMap<String, Slot>,
     topics: HashSet<Topic>,
 }
 
@@ -194,21 +206,19 @@ struct Registry {
     logs: HashMap<String, UpdateLog>,
 }
 
-/// `update` as a notification carrying `cursor` (and `reset`, on the update
-/// that tells the client to clear its view).
-fn notification(
-    session_id: &str,
-    update: SessionUpdate,
-    cursor: u64,
-    reset: bool,
-) -> SessionNotification {
-    let mut meta = rustcode_meta(None, "cursor", json!(cursor));
-    if reset {
-        meta = rustcode_meta(Some(meta), "reset", json!(true));
-    }
+/// `update` as a notification carrying `cursor`: a logged update, one a
+/// client can resume after.
+fn notification(session_id: &str, update: SessionUpdate, cursor: u64) -> SessionNotification {
     let mut notification = SessionNotification::new(session_id.to_owned(), update);
-    notification.meta = Some(meta);
+    notification.meta = Some(rustcode_meta(None, "cursor", json!(cursor)));
     notification
+}
+
+/// `update` sent to bring one client's view up to date (the transcript on a
+/// load): it is not in the log, so it has no cursor. A client that is cut off
+/// halfway through a load has no cursor to resume from, and loads again.
+fn snapshot(session_id: &str, update: SessionUpdate) -> SessionNotification {
+    SessionNotification::new(session_id.to_owned(), update)
 }
 
 impl Registry {
@@ -216,6 +226,42 @@ impl Registry {
         self.logs
             .entry(session_id.to_owned())
             .or_insert_with(UpdateLog::new)
+    }
+
+    /// Queue `notification`, the logged update `cursor`, to each connection
+    /// that has `session_id` (`except` already shows it). Called with the
+    /// update numbered under the same lock, so the order on the wire is the
+    /// order of the cursors; sending only queues the message. It fails only
+    /// when every connection it was sent to failed.
+    fn deliver(
+        &mut self,
+        session_id: &str,
+        cursor: u64,
+        except: Option<ClientId>,
+        notification: SessionNotification,
+    ) -> Result<(), agent_client_protocol::Error> {
+        let mut failure = None;
+        let mut delivered = false;
+        for (id, entry) in &mut self.entries {
+            let Some(slot) = entry.sessions.get_mut(session_id) else {
+                continue;
+            };
+            if Some(*id) == except {
+                slot.queued = cursor;
+                continue;
+            }
+            match entry.connection.send_notification(notification.clone()) {
+                Ok(()) => {
+                    slot.queued = cursor;
+                    delivered = true;
+                }
+                Err(error) => failure = Some(error),
+            }
+        }
+        match failure {
+            Some(error) if !delivered => Err(error),
+            _ => Ok(()),
+        }
     }
 
     fn tick(&mut self) -> u64 {
@@ -358,13 +404,10 @@ impl Clients {
         }
     }
 
-    /// Where a client that has everything `session_id` sent so far is.
-    pub(crate) fn position(&self, session_id: &str, reset: bool) -> Position {
-        Position {
-            cursor: self.registry().log(session_id).head(),
-            reset,
-            resumed: false,
-        }
+    /// The cursor of the newest update of `session_id` (tests).
+    #[cfg(test)]
+    pub(crate) fn head(&self, session_id: &str) -> u64 {
+        self.registry().log(session_id).head()
     }
 
     /// Where `session_id`'s turn is: a generation that changes whenever a
@@ -427,8 +470,11 @@ impl Clients {
     fn attach(&self, id: ClientId, session_id: &str) {
         let mut registry = self.registry();
         let at = registry.tick();
+        let queued = registry.log(session_id).head();
         if let Some(entry) = registry.entries.get_mut(&id) {
-            entry.sessions.insert(session_id.to_owned(), at);
+            entry
+                .sessions
+                .insert(session_id.to_owned(), Slot { at, queued });
         }
     }
 
@@ -447,8 +493,8 @@ impl Clients {
             .entries
             .values()
             .filter(|entry| need.is_none_or(|need| entry.info.has(need)))
-            .filter_map(|entry| Some((entry.sessions.get(session_id)?, entry)))
-            .max_by_key(|(at, _)| **at)
+            .filter_map(|entry| Some((entry.sessions.get(session_id)?.at, entry)))
+            .max_by_key(|(at, _)| *at)
             .map(|(_, entry)| entry.connection.clone())
     }
 }
@@ -537,11 +583,13 @@ impl Peer {
     /// history when none runs), built for `generation` of
     /// [`Clients::turn_marker`]. Sent first, then what the turn sent so far,
     /// then every update live, in that order. With `reset` the client is told
-    /// to clear its view before it (it asked to resume and could not).
+    /// to clear its view before it (it asked to resume and could not). None of
+    /// it carries a cursor: the client has one when the load is answered
+    /// ([`Peer::position`]), not before.
     ///
     /// `None`, with nothing sent, when a turn started or ended since
     /// `generation`: the replay is stale and has to be built again. `None`
-    /// for `generation` skips the check. Otherwise the client's position.
+    /// for `generation` skips the check.
     pub(crate) fn attach_open(
         &self,
         session_id: &str,
@@ -553,19 +601,20 @@ impl Peer {
         if generation.is_some_and(|generation| generation != registry.generation(session_id)) {
             return Ok(None);
         }
-        let cursor = registry.log(session_id).head();
+        let head = registry.log(session_id).head();
+        let position = Position {
+            cursor: head,
+            reset,
+            resumed: false,
+        };
         // A client that has gone is not brought back by a late load.
         if !registry.entries.contains_key(&self.id) {
-            return Ok(Some(Position {
-                cursor,
-                reset,
-                resumed: false,
-            }));
+            return Ok(Some(position));
         }
         // Sent under the registry's lock, which every session update takes
-        // to find its audience: nothing reaches this client between the
-        // replay and the live updates, and nothing is sent twice. Sending
-        // only queues the message. All of it is current as of `cursor`.
+        // to number and address itself: nothing reaches this client between
+        // the replay and the live updates, and nothing is sent twice.
+        // Sending only queues the message. All of it is current as of `head`.
         let running = registry
             .turns
             .get(session_id)
@@ -573,21 +622,19 @@ impl Peer {
             .unwrap_or_default();
         if reset {
             self.connection
-                .send_notification(reset_marker(session_id, cursor))?;
+                .send_notification(reset_marker(session_id))?;
         }
         for update in replay.into_iter().chain(running) {
             self.connection
-                .send_notification(notification(session_id, update, cursor, false))?;
+                .send_notification(snapshot(session_id, update))?;
         }
         let at = registry.tick();
         if let Some(entry) = registry.entries.get_mut(&self.id) {
-            entry.sessions.insert(session_id.to_owned(), at);
+            entry
+                .sessions
+                .insert(session_id.to_owned(), Slot { at, queued: head });
         }
-        Ok(Some(Position {
-            cursor,
-            reset,
-            resumed: false,
-        }))
+        Ok(Some(position))
     }
 
     /// This client loads `session_id`, which is already open, and has
@@ -605,14 +652,15 @@ impl Peer {
     ) -> Result<Option<Position>, agent_client_protocol::Error> {
         let mut registry = self.clients.registry();
         let head = registry.log(session_id).head();
+        let position = Position {
+            cursor: head,
+            reset: false,
+            resumed: true,
+        };
         // A client that has gone is not brought back by a late load.
         if !registry.entries.contains_key(&self.id) {
             let resumable = registry.log(session_id).since(cursor).is_some();
-            return Ok(resumable.then_some(Position {
-                cursor: head,
-                reset: false,
-                resumed: true,
-            }));
+            return Ok(resumable.then_some(position));
         }
         let Some(missed) = registry.log(session_id).since(cursor) else {
             return Ok(None);
@@ -622,49 +670,61 @@ impl Peer {
                 session_id,
                 logged.update.clone(),
                 logged.cursor,
-                false,
             ))?;
         }
         let at = registry.tick();
         if let Some(entry) = registry.entries.get_mut(&self.id) {
-            entry.sessions.insert(session_id.to_owned(), at);
+            entry
+                .sessions
+                .insert(session_id.to_owned(), Slot { at, queued: head });
         }
-        Ok(Some(Position {
-            cursor: head,
-            reset: false,
-            resumed: true,
-        }))
+        Ok(Some(position))
+    }
+
+    /// Where this client is in `session_id` now, for the answer to its
+    /// `session/load`: the cursor of the newest update queued to it, so
+    /// everything up to it is on its way, in order, ahead of the answer.
+    pub(crate) fn position(&self, session_id: &str, reset: bool) -> Position {
+        let mut registry = self.clients.registry();
+        let head = registry.log(session_id).head();
+        let cursor = registry
+            .entries
+            .get(&self.id)
+            .and_then(|entry| entry.sessions.get(session_id))
+            .map_or(head, |slot| slot.queued);
+        Position {
+            cursor,
+            reset,
+            resumed: false,
+        }
     }
 
     /// Send this client alone an `update` that brings its view up to date
-    /// (not a new event): it carries the cursor the session is at.
+    /// (not a new event). It has no cursor: it is not in the log.
     pub(crate) fn send_snapshot(
         &self,
         session_id: &str,
         update: SessionUpdate,
     ) -> Result<(), agent_client_protocol::Error> {
-        let cursor = self.clients.registry().log(session_id).head();
         self.connection
-            .send_notification(notification(session_id, update, cursor, false))
+            .send_notification(snapshot(session_id, update))
     }
 
     /// Tell this client to clear what it shows of `session_id`: the whole
     /// transcript follows.
     pub(crate) fn send_reset(&self, session_id: &str) -> Result<(), agent_client_protocol::Error> {
-        let cursor = self.clients.registry().log(session_id).head();
-        self.connection
-            .send_notification(reset_marker(session_id, cursor))
+        self.connection.send_notification(reset_marker(session_id))
     }
 }
 
 /// The update that starts a reset: it changes nothing but carries the flag.
-fn reset_marker(session_id: &str, cursor: u64) -> SessionNotification {
-    notification(
+fn reset_marker(session_id: &str) -> SessionNotification {
+    let mut marker = snapshot(
         session_id,
         SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new()),
-        cursor,
-        true,
-    )
+    );
+    marker.meta = Some(rustcode_meta(None, "reset", json!(true)));
+    marker
 }
 
 /// The clients that have one session: where its updates and its requests go.
@@ -694,51 +754,43 @@ impl SessionClients {
     /// A `session/update` of this session. A running turn keeps it for a
     /// client that loads the session later in the turn.
     pub(crate) fn update(&self, update: SessionUpdate) -> Result<(), agent_client_protocol::Error> {
-        let cursor;
-        let audience = {
-            // Numbered, recorded and addressed under one lock: a client attaching
-            // meanwhile gets the update either in its replay or live, never
-            // both and never neither.
-            let mut registry = self.clients.registry();
-            cursor = registry.log(&self.session_id).push(&update);
-            let mut overflow = false;
-            if let Some(turn) = registry.turns.get_mut(&self.session_id) {
-                turn.record(&update);
-                overflow = turn.updates.len() > LIVE_TURN_UPDATES;
-            }
-            if overflow {
-                registry.turns.remove(&self.session_id);
-                registry.bump(&self.session_id);
-            }
-            audience_of(&registry, &self.session_id)
-        };
-        send_all(
-            audience,
-            notification(&self.session_id, update, cursor, false),
+        // Numbered, recorded, addressed and queued under one lock. A client
+        // attaching meanwhile gets the update either in its replay or live,
+        // never both and never neither; and concurrent producers cannot put
+        // their cursors on the wire out of order, which would let a client
+        // that drops after the higher one skip the lower one on resume.
+        // Sending only queues the message.
+        let mut registry = self.clients.registry();
+        let cursor = registry.log(&self.session_id).push(&update);
+        let mut overflow = false;
+        if let Some(turn) = registry.turns.get_mut(&self.session_id) {
+            turn.record(&update);
+            overflow = turn.updates.len() > LIVE_TURN_UPDATES;
+        }
+        if overflow {
+            registry.turns.remove(&self.session_id);
+            registry.bump(&self.session_id);
+        }
+        registry.deliver(
+            &self.session_id,
+            cursor,
+            None,
+            notification(&self.session_id, update, cursor),
         )
     }
 
     /// A `session/update` for every connection with the session except
     /// `except`, which already shows it (the prompt it sent).
     pub(crate) fn update_others(&self, except: ClientId, update: SessionUpdate) {
-        // Kept for a client that resumes. The sender never gets it live, so
-        // its cursors skip this one.
-        let (cursor, audience) = {
-            let mut registry = self.clients.registry();
-            let cursor = registry.log(&self.session_id).push(&update);
-            let audience = registry
-                .entries
-                .iter()
-                .filter(|(id, entry)| {
-                    **id != except && entry.sessions.contains_key(&self.session_id)
-                })
-                .map(|(_, entry)| entry.connection.clone())
-                .collect::<Vec<_>>();
-            (cursor, audience)
-        };
-        let _ = send_all(
-            audience,
-            notification(&self.session_id, update, cursor, false),
+        // Kept for a client that resumes. The sender does not get it, but
+        // its view has it, so its position moves past it.
+        let mut registry = self.clients.registry();
+        let cursor = registry.log(&self.session_id).push(&update);
+        let _ = registry.deliver(
+            &self.session_id,
+            cursor,
+            Some(except),
+            notification(&self.session_id, update, cursor),
         );
     }
 
@@ -986,7 +1038,7 @@ mod tests {
                 sender.update(text(&format!("early {n}"))).expect("send");
             }
             // The client had seen up to here before it dropped off.
-            let seen = clients.position(&session_id, false).cursor - 5;
+            let seen = clients.head(&session_id) - 5;
             let (peer, mut notes, close) = connected(&clients).await;
 
             let producer = {
@@ -1010,7 +1062,7 @@ mod tests {
                 .expect("the cursor is recent");
             assert!(position.resumed && !position.reset);
             producer.await.expect("producer");
-            let last = clients.position(&session_id, false).cursor;
+            let last = clients.head(&session_id);
 
             let mut cursors = Vec::new();
             tokio::time::timeout(std::time::Duration::from_secs(20), async {
@@ -1060,14 +1112,14 @@ mod tests {
         let mut cursors = Vec::new();
         for n in 0..10 {
             sender.update(text(&format!("{n}"))).expect("send");
-            cursors.push(clients.position("shared", false).cursor);
+            cursors.push(clients.head("shared"));
         }
         let (early, mut early_notes, _early_close) = connected(&clients).await;
         let (late, mut late_notes, _late_close) = connected(&clients).await;
         early.resume_open("shared", cursors[2]).unwrap().unwrap();
         late.resume_open("shared", cursors[7]).unwrap().unwrap();
         sender.update(text("live")).expect("send");
-        let live = clients.position("shared", false).cursor;
+        let live = clients.head("shared");
         let early_got = cursors_until(&mut early_notes, live).await;
         let late_got = cursors_until(&mut late_notes, live).await;
         assert_eq!(early_got, [&cursors[3..], &[live]].concat());
@@ -1081,14 +1133,155 @@ mod tests {
         let clients = Clients::default();
         let sender = clients.session("cut");
         sender.update(text("a")).expect("send");
-        let seen = clients.position("cut", false).cursor;
+        let seen = clients.head("cut");
         clients.invalidate_cursors("cut");
         let (peer, ..) = connected(&clients).await;
         assert!(peer.resume_open("cut", seen).unwrap().is_none());
         assert!(
-            peer.resume_open("cut", clients.position("cut", false).cursor)
+            peer.resume_open("cut", clients.head("cut"))
                 .unwrap()
                 .is_some()
+        );
+    }
+
+    /// Producers on several threads (a turn streaming, a title being made,
+    /// a terminal finishing) send to one session at once: each client is
+    /// handed the cursors in order, with none missing, so the greatest one
+    /// it has seen never covers an update it was not sent.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_producers_put_cursors_on_the_wire_in_order() {
+        const PER_PRODUCER: u64 = 1_500;
+        const PRODUCERS: u64 = 4;
+        for round in 0..10 {
+            let clients = Clients::default();
+            let session_id = format!("order-{round}");
+            let (peer, mut notes, close) = connected(&clients).await;
+            peer.attach(&session_id);
+            let start = clients.head(&session_id);
+            let producers = (0..PRODUCERS)
+                .map(|producer| {
+                    let sender = clients.session(&session_id);
+                    std::thread::spawn(move || {
+                        for n in 0..PER_PRODUCER {
+                            let result = if producer == 0 && n % 3 == 0 {
+                                // The prompt shown to the others goes the same way.
+                                sender.update_others(u64::MAX, text("echo"));
+                                Ok(())
+                            } else {
+                                sender.update(text(&format!("{producer}/{n}")))
+                            };
+                            result.expect("send");
+                        }
+                    })
+                })
+                .collect::<Vec<_>>();
+            for producer in producers {
+                producer.join().expect("producer");
+            }
+            let last = clients.head(&session_id);
+            let cursors = cursors_until(&mut notes, last).await;
+            assert_eq!(
+                cursors,
+                (start + 1..=last).collect::<Vec<_>>(),
+                "round {round}: the wire order is the cursor order"
+            );
+            // What the load answer would name is what was queued, no more.
+            assert_eq!(peer.position(&session_id, false).cursor, last);
+            let _ = close.send(());
+        }
+    }
+
+    /// The load answer names the newest update queued to this connection,
+    /// not whatever the session has logged by the time it is built.
+    #[tokio::test]
+    async fn the_answer_names_what_was_queued_to_the_connection() {
+        let clients = Clients::default();
+        let sender = clients.session("answer");
+        sender.update(text("before")).expect("send");
+        let (peer, mut notes, _close) = connected(&clients).await;
+        let loaded_at = clients.head("answer");
+        let position = peer
+            .attach_open("answer", None, vec![text("history")], false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(position.cursor, loaded_at);
+        sender.update(text("live")).expect("send");
+        sender.update(text("more")).expect("send");
+        let queued = clients.head("answer");
+        assert_eq!(peer.position("answer", false).cursor, queued);
+        // A client that joins the session later is not named updates it
+        // was not sent.
+        let (other, ..) = connected(&clients).await;
+        other.attach("answer");
+        sender.update(text("after")).expect("send");
+        assert_eq!(peer.position("answer", false).cursor, queued + 1);
+        assert_eq!(other.position("answer", false).cursor, queued + 1);
+        // The history it was sent to rebuild its view has no cursor.
+        assert!(notes.recv().await.expect("history").meta.is_none());
+        let seen = cursors_until(&mut notes, queued + 1).await;
+        assert_eq!(seen, [queued - 1, queued, queued + 1]);
+    }
+
+    /// A load cut off halfway has no cursor to resume from, so the next one
+    /// rebuilds: nothing it sent to rebuild the view is resumable, and the
+    /// cursor the client came with is as stale as it was.
+    #[tokio::test]
+    async fn a_load_cut_off_halfway_is_rebuilt_not_resumed() {
+        use super::super::cursor::LOG_UPDATES;
+        let clients = Clients::default();
+        let sender = clients.session("cut-off");
+        sender.update(text("first")).expect("send");
+        let stale = clients.head("cut-off");
+        for n in 0..LOG_UPDATES + 5 {
+            sender.update(text(&format!("{n}"))).expect("send");
+        }
+        let transcript = (0..300)
+            .map(|n| text(&format!("message {n}")))
+            .collect::<Vec<_>>();
+
+        // The client asked to resume with a cursor that is too old; it is
+        // sent the reset and the transcript, and is cut off after 150.
+        let (first, mut notes, close) = connected(&clients).await;
+        assert!(first.resume_open("cut-off", stale).unwrap().is_none());
+        let position = first
+            .attach_open("cut-off", None, transcript.clone(), true)
+            .unwrap()
+            .unwrap();
+        assert!(position.reset);
+        let mut received = Vec::new();
+        while received.len() < 151 {
+            received.push(notes.recv().await.expect("a note"));
+        }
+        let _ = close.send(());
+        let reset = received[0].meta.as_ref().expect("meta")["rustcode"].clone();
+        assert_eq!(reset["reset"], true);
+        assert!(
+            received.iter().all(|note| note
+                .meta
+                .as_ref()
+                .is_none_or(|meta| meta["rustcode"]["cursor"].is_null())),
+            "nothing it sent to rebuild the view can be resumed from"
+        );
+
+        // It reconnects with the last cursor it saw: none, or the stale one
+        // it had. Either way the engine does not resume it.
+        let (second, mut notes, _close) = connected(&clients).await;
+        assert!(second.resume_open("cut-off", stale).unwrap().is_none());
+        let position = second
+            .attach_open("cut-off", None, transcript, true)
+            .unwrap()
+            .unwrap();
+        assert!(position.reset && !position.resumed);
+        let mut sent = Vec::new();
+        while sent.len() < 301 {
+            sent.push(notes.recv().await.expect("a note"));
+        }
+        assert!(
+            sent[0]
+                .meta
+                .as_ref()
+                .is_some_and(|meta| meta["rustcode"]["reset"] == true),
+            "the reset marker, then all 300 messages"
         );
     }
 }

@@ -1,12 +1,20 @@
 //! The replay cursor: where a client is in a session's stream of updates.
 //!
-//! Every `session/update` the engine sends for a session carries a cursor in
-//! `_meta.rustcode.cursor`. Live updates are numbered one after the other;
-//! the updates that rebuild a view on load (the transcript, the running
-//! turn, the title, commands and usage) carry the cursor the view is current
-//! as of, so a client that keeps the greatest cursor it saw knows where it is.
-//! The `session/load` answer repeats it in `_meta.rustcode.cursor`: that is
-//! the value to keep once the load has completed.
+//! Every update of a session's stream (what the session's turns, tools and
+//! title changes send, and a prompt shown to the other clients) is numbered
+//! and carries its cursor in `_meta.rustcode.cursor`. The numbering, the
+//! log and the queuing to every client happen under one lock, so each
+//! connection gets cursors in increasing order and an update it has been sent
+//! is never behind one it has not.
+//!
+//! The updates that rebuild a view on load (the transcript, the running turn,
+//! the title, commands and usage) are not in the log and carry no cursor. A
+//! load gives the client its cursor in the `session/load` answer
+//! (`_meta.rustcode.cursor`): the newest update queued to it before the
+//! answer. A client keeps the greatest cursor it has, but does not store one
+//! from a load until the answer has arrived, and drops the one it had when it
+//! clears its view for a `reset`: a load cut off halfway then leaves it with
+//! nothing to resume from, and it loads in full.
 //!
 //! A client that reconnects sends `_meta.rustcode.resume: { cursor }` in
 //! `session/load`. The engine keeps the most recent updates of each session
@@ -48,8 +56,11 @@ pub(crate) struct Logged {
 /// skips one). They start from the clock in microseconds when the log is
 /// made, so a log made after the engine restarted, or after the session was
 /// closed and opened again, begins above every cursor an earlier one handed
-/// out: an old cursor never looks like a recent one. Microseconds keep them
-/// below 2^53, which a JavaScript client reads exactly.
+/// out: an old cursor never looks like a recent one. This holds as long as
+/// the wall clock does not step back by more than the time between the two
+/// logs (a cursor from a log made just before a backwards step could then
+/// fall inside a newer one). Microseconds keep them below 2^53, which a
+/// JavaScript client reads exactly.
 pub(crate) struct UpdateLog {
     /// The cursor of the newest update, or the starting point when none.
     head: u64,

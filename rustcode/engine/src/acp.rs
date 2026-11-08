@@ -815,7 +815,7 @@ async fn acp_load_session(
                 return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
             }
         }
-        return Ok(peer.clients().position(&session_id, reset).finish(
+        return Ok(peer.position(&session_id, reset).finish(
             LoadSessionResponse::new()
                 .config_options(config_options)
                 .meta(crate::harness::builtin_session_meta()),
@@ -870,7 +870,7 @@ async fn attach_open_builtin(
             let _ = peer.send_snapshot(&session_id, update);
         }
     }
-    let position = peer.clients().position(&session_id, position.reset);
+    let position = peer.position(&session_id, position.reset);
     Ok(Some(crate::worktrees::finish_load(
         position.finish(
             LoadSessionResponse::new()
@@ -6499,10 +6499,14 @@ mod tests {
             .unwrap_or_default()
     }
 
+    /// The cursor of a logged update; none on what a load sends to rebuild
+    /// a view.
+    fn cursor_opt(note: &SessionNotification) -> Option<u64> {
+        rustcode_of(note.meta.as_ref())["cursor"].as_u64()
+    }
+
     fn cursor_of(note: &SessionNotification) -> u64 {
-        rustcode_of(note.meta.as_ref())["cursor"]
-            .as_u64()
-            .unwrap_or_else(|| panic!("an update without a cursor: {note:?}"))
+        cursor_opt(note).unwrap_or_else(|| panic!("an update without a cursor: {note:?}"))
     }
 
     fn is_reset(note: &SessionNotification) -> bool {
@@ -6518,10 +6522,10 @@ mod tests {
     }
 
     /// The chunks of text among `notes`, each with its cursor.
-    fn chunks(notes: &[SessionNotification]) -> Vec<(u64, &'static str, String)> {
+    fn chunks(notes: &[SessionNotification]) -> Vec<(Option<u64>, &'static str, String)> {
         notes
             .iter()
-            .filter_map(|note| said(&note.update).map(|(who, text)| (cursor_of(note), who, text)))
+            .filter_map(|note| said(&note.update).map(|(who, text)| (cursor_opt(note), who, text)))
             .collect()
     }
 
@@ -6583,7 +6587,10 @@ mod tests {
         assert!(notes.iter().all(|note| !is_reset(note)));
         assert!(!answered_reset(&response));
         let head = answered_cursor(&response).expect("the answer carries the cursor");
-        assert!(notes.iter().all(|note| cursor_of(note) <= head));
+        // What rebuilds the view is not in the log: no cursor to resume from
+        // until the answer.
+        assert!(notes.iter().all(|note| cursor_opt(note).is_none()));
+        assert!(head > 0);
         let said_plain: Vec<_> = chunks(&notes)
             .into_iter()
             .map(|(_, who, text)| (who, text))
@@ -6596,6 +6603,7 @@ mod tests {
             let mut resumed = Noting::connect(&server).await;
             let (notes, response) = resumed.load(&session_id, &cwd_path, Some(stale)).await;
             assert!(is_reset(&notes[0]), "the reset comes first: {:?}", notes[0]);
+            assert!(notes.iter().all(|note| cursor_opt(note).is_none()));
             assert!(matches!(
                 notes[0].update,
                 SessionUpdate::SessionInfoUpdate(_)
@@ -6641,7 +6649,11 @@ mod tests {
             vec![ContentBlock::Text(TextContent::new("do the thing"))],
         ));
         let seen = author.until_text("the first half").await;
-        let author_cursor = seen.iter().map(cursor_of).max().expect("A saw updates");
+        let author_cursor = seen
+            .iter()
+            .filter_map(cursor_opt)
+            .max()
+            .expect("A saw updates");
         author.leave().await;
 
         // O looks on for the whole turn: its live updates are the stream.
