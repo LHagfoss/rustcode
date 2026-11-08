@@ -692,3 +692,37 @@ access work as on the other systems. What differs:
   There are no per-session grants and no per-session opt-out.
 - Reachability from a real iPhone (local-network permission, NetBird routing)
   is verified with the app, not by this repository's tests.
+
+### Desktop ACP channel
+
+After authentication, a device paired with `device_kind: "desktop"` can send
+`{"type":"acp_open"}`. The gateway connects to the already-running RustCode
+server in the gateway's configuration directory and answers
+`{"type":"acp_opened"}`. Subsequent WebSocket text frames each contain one ACP
+JSON-RPC message, in either direction. These additive frames keep protocol
+version 1. Phones, CLI devices and unknown device kinds receive a gateway
+`error` with code `unauthorized_access` when opening ACP. A missing or unreachable
+local server closes the connection with `internal`.
+
+Client requests and notifications are restricted to these exact methods:
+
+- `initialize`
+- `_rustcode/settings/get`, `_rustcode/settings/set`, `_rustcode/settings/changed`
+- `_rustcode/threads/changes`
+- `_rustcode/harnesses`, `_rustcode/createOptions`, `_rustcode/pending`
+
+The only allowed prefixes are `session/`, `_rustcode/thread/`,
+`_rustcode/queue/` and `_rustcode/pulls`. Everything else is denied, including
+provider credentials and login, pairing and remote management, `_rustcode/server/*`,
+MCP server configuration and data-store SQL. Denied requests receive a JSON-RPC
+error with the same `id`, numeric code `-32601` and
+`data: {"code":"unauthorized_access"}`. Denied notifications are dropped.
+JSON-RPC responses to server requests pass through. Batch messages are refused.
+
+`session/load` resume metadata (`_meta.rustcode.resume: {cursor}`) passes through
+without modification. The gateway translates WebSocket messages to the local
+server's newline-delimited JSON; JSON is compacted without changing JSON string contents or resume metadata. Local-server frames retain the gateway's 1 MiB
+frame limit. ACP has its own bounded outbound queue of 1,024 frames. Overflow
+closes the device with `slow_consumer`; it never blocks other gateway clients.
+Revocation and gateway shutdown still close ACP connections, and closing either
+endpoint closes the other.
