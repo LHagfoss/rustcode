@@ -4473,6 +4473,34 @@ function mockMachineList(option: MockOptions["machines"]): JsonObject[] {
   }
 }
 
+/**
+ * Whether an address is on the public internet, by the same rule
+ * `rustcode-client` applies (`registry::classify_address`): a private, loopback
+ * or link-local address is LAN, CGNAT and `.ts.net` are an overlay, a bare name
+ * or `.local` is LAN, and anything else is public. The client refuses a public
+ * address because the gateway has no TLS.
+ */
+function mockIsPublic(address: string): boolean {
+  const withoutScheme = address.trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
+  const endpoint = withoutScheme.split("/")[0] ?? withoutScheme;
+  const host = (endpoint.split(":")[0] ?? endpoint).replace(/^\[|\]$/g, "").toLowerCase();
+  if (!host) return false;
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+    const [a, b] = host.split(".").map(Number) as [number, number];
+    if (a === 10 || a === 127) return false;
+    if (a === 192 && b === 168) return false;
+    if (a === 172 && b >= 16 && b <= 31) return false;
+    if (a === 169 && b === 254) return false;
+    // 100.64.0.0/10 is CGNAT, which Tailscale and other overlays hand out.
+    if (a === 100 && b >= 64 && b <= 127) return false;
+    return true;
+  }
+  // IPv6: loopback, unique-local and link-local are private; the rest are not.
+  if (host.includes(":")) return !(host === "::1" || host.startsWith("fd") || host.startsWith("fe80"));
+  if (host.endsWith(".local") || host.endsWith(".ts.net")) return false;
+  return host.includes(".");
+}
+
 /** The machines Bonjour finds in the mock, one of them already saved. */
 function mockDiscovered(saved: JsonObject[]): JsonObject[] {
   const known = saved.some((machine) => machine.id === MOCK_MACHINE.id);
@@ -4621,7 +4649,7 @@ export class MockTransport implements Transport {
     if (command === "machines_ask") {
       const address = String(args.address ?? "");
       if (!address) throw new Error("Enter a machine address first.");
-      if (address.includes("example.com"))
+      if (mockIsPublic(address))
         throw new Error(
           `refusing to dial ${address}: it is a public address and the gateway has no TLS listener, so the pairing code and the device token would travel in the clear. Dial a LAN, Tailscale or VPN address instead; encrypted transport is tracked in #2651`,
         );

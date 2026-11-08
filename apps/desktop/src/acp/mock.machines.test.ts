@@ -89,6 +89,14 @@ describe("mock machines", () => {
     );
   });
 
+  test("a LAN, overlay or tailnet address is not refused", async () => {
+    const transport = new MockTransport();
+    for (const address of ["192.168.1.20:17879", "10.0.0.4", "100.92.13.44:17879", "mac.tail1234.ts.net"]) {
+      const ask = (await call(transport, "machines_ask", { address })) as JsonObject;
+      expect(ask.codeLength).toBe(8);
+    }
+  });
+
   test("discovery offers a machine already saved and one that is not", async () => {
     const transport = new MockTransport();
     const found = (await call(transport, "machines_discover")) as JsonObject[];
