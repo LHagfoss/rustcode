@@ -10,6 +10,7 @@
 //! Every frame is one JSON object in one WebSocket text frame, tagged by
 //! `type`. Unknown fields are ignored, so fields can be added.
 
+#[cfg(unix)]
 use super::devices::DeviceProfile;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -151,6 +152,7 @@ impl HandshakeRequest {
     /// What a `connect_request` or `pair` frame says the device is, kept to
     /// what is usable. An `authenticate` frame says nothing: the device was
     /// recorded when it paired.
+    #[cfg(unix)]
     pub fn device_profile(&self) -> DeviceProfile {
         match self {
             Self::ConnectRequest {
@@ -337,6 +339,7 @@ pub enum ErrorCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::remote_gateway::devices::DeviceKind;
 
     #[test]
@@ -377,6 +380,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn device_fields_round_trip_and_older_frames_mean_a_phone() {
         let connect = r#"{"type":"connect_request","protocol_version":1,"device_name":"Lars's PC","platform":"windows","install_id":"install-12345678","device_kind":"desktop","host_id":"host-0123456789abcdef"}"#;
