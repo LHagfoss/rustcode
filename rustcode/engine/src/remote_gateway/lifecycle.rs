@@ -11,17 +11,15 @@ use super::control::{
     self, ConnectAnswer, ControlRequest, ControlResponse, GatewayStatus, OfferDetails,
 };
 use super::devices::{DeviceRecord, DeviceStore};
-use crate::daemon::lifecycle::{
-    ensure_private_directory, is_lock_busy, lock_private_file, process_start_time,
-    publish_private_json, random_instance_id, read_private_json, remove_if_exists,
+use super::local_socket::{CONTROL_ENDPOINT, OWNER_ENDPOINT};
+use crate::daemon::private_files::{
+    ensure_private_directory, is_lock_busy, lock_private_file, private_open_options,
+    process_start_time, publish_private_json, random_instance_id, read_private_json,
+    remove_if_exists,
 };
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::fs::{File, OpenOptions};
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-use std::os::unix::process::CommandExt as _;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -30,6 +28,7 @@ const OWNER: &str = "remote gateway";
 
 /// Longest socket path that fits `sockaddr_un` on every supported system
 /// (104 bytes on macOS, terminator included).
+#[cfg(unix)]
 const MAX_SOCKET_PATH_BYTES: usize = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,8 +130,20 @@ impl RemoteLifecycle {
     /// short directory under `/tmp` that belongs to this user and this
     /// configuration directory. It is created 0700 and verified to be ours
     /// before anything binds in it; the registration records the paths.
+    /// Windows endpoints are files of any path length, so they always stay
+    /// in the gateway directory.
     fn socket_directory(&self) -> PathBuf {
-        let longest = self.directory.join("control.sock");
+        #[cfg(not(unix))]
+        return self.directory.clone();
+        #[cfg(unix)]
+        self.unix_socket_directory()
+    }
+
+    #[cfg(unix)]
+    fn unix_socket_directory(&self) -> PathBuf {
+        use sha2::{Digest, Sha256};
+        use std::os::unix::ffi::OsStrExt;
+        let longest = self.directory.join(CONTROL_ENDPOINT);
         if longest.as_os_str().as_bytes().len() < MAX_SOCKET_PATH_BYTES {
             return self.directory.clone();
         }
@@ -149,13 +160,21 @@ impl RemoteLifecycle {
         if directory == self.directory {
             return Ok(());
         }
+        #[cfg(unix)]
+        self.prepare_unix_socket_directory(&directory)?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn prepare_unix_socket_directory(&self, directory: &Path) -> Result<()> {
+        use std::os::unix::fs::MetadataExt;
         // SAFETY: geteuid has no preconditions.
         let user = unsafe { libc::geteuid() };
         for path in [
             directory
                 .parent()
                 .context("socket directory has a parent")?,
-            &directory,
+            directory,
         ] {
             ensure_private_directory(path, OWNER)?;
             ensure!(
@@ -167,12 +186,14 @@ impl RemoteLifecycle {
         Ok(())
     }
 
+    /// The control endpoint: a Unix socket, or on Windows the private file
+    /// naming its loopback port ([`super::local_socket`]).
     pub fn socket_path(&self) -> PathBuf {
-        self.socket_directory().join("control.sock")
+        self.socket_directory().join(CONTROL_ENDPOINT)
     }
     /// The socket session owners register on; see [`super::owner_ipc`].
     pub fn owner_socket_path(&self) -> PathBuf {
-        self.socket_directory().join("owner.sock")
+        self.socket_directory().join(OWNER_ENDPOINT)
     }
     /// Output of a gateway that `/remote` started in the background.
     pub fn log_path(&self) -> PathBuf {
@@ -275,26 +296,15 @@ impl RemoteLifecycle {
             self.stop().await?;
         }
         ensure_private_directory(&self.directory, OWNER)?;
-        let log = OpenOptions::new()
+        let log = private_open_options()
             .append(true)
             .create(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
             .open(self.log_path())?;
         command
             .stdin(Stdio::null())
             .stdout(log.try_clone()?)
             .stderr(log);
-        // SAFETY: setsid is async-signal-safe and the callback accesses no shared state.
-        unsafe {
-            command.as_std_mut().pre_exec(|| {
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        rustcode_command::hide_console_window(command.as_std_mut());
+        crate::platform::detach(command.as_std_mut());
         let mut child = command.spawn().context("failed to start the gateway")?;
         let started = tokio::time::timeout(self.health_timeout, async {
             loop {
@@ -480,10 +490,11 @@ impl RemoteLifecycle {
     }
 }
 
-#[cfg(test)]
+// Unix sockets, modes and owners.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
     #[test]
     fn gateway_identity_is_created_once_and_private() {

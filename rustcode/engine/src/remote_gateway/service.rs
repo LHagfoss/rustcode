@@ -53,13 +53,13 @@ pub async fn start(
     // Serialize adoption and upgrades across terminals and detached owners.
     let _launch_lock = tokio::time::timeout(std::time::Duration::from_secs(20), async {
         loop {
-            match crate::daemon::lifecycle::lock_private_file(
+            match crate::daemon::private_files::lock_private_file(
                 launcher.config_directory.join("remote").as_path(),
                 "launch.lock",
                 "remote launcher",
             ) {
                 Ok(lock) => return Ok::<_, anyhow::Error>(lock),
-                Err(error) if crate::daemon::lifecycle::is_lock_busy(&error) => {
+                Err(error) if crate::daemon::private_files::is_lock_busy(&error) => {
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await
                 }
                 Err(error) => return Err(error),
@@ -151,7 +151,7 @@ pub async fn start(
             }
             // Adoption closes only the gateway, never its independent session owners.
             lifecycle.stop().await?;
-            crate::daemon::lifecycle::ensure_private_directory(
+            crate::daemon::private_files::ensure_private_directory(
                 lifecycle.log_path().parent().unwrap(),
                 "remote gateway",
             )?;
@@ -327,10 +327,17 @@ pub async fn resume_enabled() -> Result<()> {
 /// When the installed executable changes, launchd restarts it. Detached gateways
 /// hand off after their listeners and registration have been fully removed.
 pub async fn wait_for_upgrade(program: PathBuf) {
-    use std::os::unix::fs::MetadataExt;
+    #[cfg(unix)]
     fn identity(path: &Path) -> Option<(u64, u64, u64, i64, i64)> {
+        use std::os::unix::fs::MetadataExt;
         let m = std::fs::metadata(path).ok()?;
         Some((m.dev(), m.ino(), m.len(), m.mtime(), m.mtime_nsec()))
+    }
+    // An installer replaces the file: its size or write time changes.
+    #[cfg(not(unix))]
+    fn identity(path: &Path) -> Option<(u64, std::time::SystemTime)> {
+        let m = std::fs::metadata(path).ok()?;
+        Some((m.len(), m.modified().ok()?))
     }
     let original = identity(&program);
     loop {

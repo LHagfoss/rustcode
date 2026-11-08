@@ -1,8 +1,7 @@
 //! Private, authenticated image attachments. Uploading never submits a prompt.
 use std::{
-    fs::{self, OpenOptions},
+    fs,
     io::{Cursor, Read, Seek, SeekFrom, Write},
-    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -13,8 +12,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::protocol::RemoteResult;
-use crate::daemon::lifecycle::{
-    ensure_private_directory, lock_private_file, publish_private_json, read_private_json,
+use crate::daemon::private_files::{
+    ensure_private_directory, lock_private_file, private_open_options, publish_private_json,
+    read_private_json,
 };
 
 pub(super) const MAX_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
@@ -60,13 +60,11 @@ fn extension(mime: &str) -> Result<&'static str> {
 }
 
 fn private_file(path: &Path, write: bool) -> Result<std::fs::File> {
-    let file = OpenOptions::new()
+    let file = private_open_options()
         .read(true)
         .write(write)
         .create(write)
         .truncate(false)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
         .open(path)?;
     ensure!(
         file.metadata()?.is_file(),
@@ -494,6 +492,7 @@ mod tests {
         assert!(!root.exists());
     }
 
+    #[cfg(unix)]
     #[test]
     fn expired_partial_uploads_are_removed_but_complete_images_remain_private() {
         use std::os::unix::fs::PermissionsExt;

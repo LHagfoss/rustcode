@@ -308,23 +308,92 @@ fn eligible_candidates(candidates: &[Candidate]) -> Vec<&Candidate> {
                 && !address.is_multicast()
                 && !matches!(address, IpAddr::V4(ip) if ip.is_link_local() || ip.is_broadcast())
                 && !matches!(address, IpAddr::V6(ip) if ip.is_unicast_link_local())
-                && ![
-                    "br", "docker", "veth", "virbr", "vmnet", "vnic", "vboxnet", "awdl", "llw",
-                    "p2p",
-                ]
-                .iter()
-                .any(|prefix| interface.starts_with(prefix))
+                && is_auto_candidate_interface(interface)
         })
         .collect()
+}
+
+fn is_auto_candidate_interface(interface: &str) -> bool {
+    let name = interface.to_ascii_lowercase();
+    ![
+        "awdl",
+        "br",
+        "bridge",
+        "docker",
+        "hyper-v",
+        "llw",
+        "p2p",
+        "vbox",
+        "vethernet",
+        "veth",
+        "virbr",
+        "virtual",
+        "vmnet",
+        "vmware",
+        "vnic",
+        "wsl",
+    ]
+    .iter()
+    .any(|prefix| name.starts_with(prefix))
+}
+
+/// Exclude adapters that are normally tunnels, peer-to-peer links, or
+/// virtual/host-only networks from Bonjour. Windows adapter type is checked
+/// separately because `Candidate` intentionally keeps the interface name
+/// only, for `--prefer-interface` and the address planner.
+pub(super) fn is_local_network_interface(interface: &str) -> bool {
+    let name = interface.to_ascii_lowercase();
+    ![
+        "awdl",
+        "bluetooth",
+        "br",
+        "bridge",
+        "docker",
+        "hyper-v",
+        "llw",
+        "p2p",
+        "tap",
+        "tailscale",
+        "tun",
+        "utun",
+        "vbox",
+        "vethernet",
+        "veth",
+        "virbr",
+        "virtual",
+        "vmnet",
+        "vmware",
+        "vnic",
+        "wg",
+        "wireguard",
+        "wt",
+        "wsl",
+        "zt",
+        "zerotier",
+    ]
+    .iter()
+    .any(|prefix| name.starts_with(prefix))
+}
+
+fn is_lan_interface(interface: &str) -> bool {
+    let name = interface.to_ascii_lowercase();
+    [
+        "en",
+        "eth",
+        "wl",
+        "wi-fi",
+        "ethernet",
+        "wireless network connection",
+    ]
+    .iter()
+    .any(|prefix| name.starts_with(prefix))
 }
 
 fn automatic_address_with_route(candidates: &[Candidate], route: Option<IpAddr>) -> IpAddr {
     eligible_candidates(candidates)
         .into_iter()
         .min_by_key(|candidate| {
-            let physical = ["en", "eth", "wl"]
-                .iter()
-                .any(|prefix| candidate.interface.starts_with(prefix));
+            let physical = is_lan_interface(&candidate.interface);
             let rank = match (physical, candidate.address) {
                 (true, IpAddr::V4(ip)) if ip.is_private() => 0,
                 (true, IpAddr::V4(_)) => 1,
@@ -392,7 +461,60 @@ pub fn candidate_addresses() -> Vec<Candidate> {
     candidates
 }
 
-#[cfg(not(unix))]
+/// Windows: the adapters' friendly names ("Wi-Fi", "Ethernet"), so
+/// `--prefer-interface` takes what the user sees in Settings.
+#[cfg(windows)]
+pub fn candidate_addresses() -> Vec<Candidate> {
+    windows_interfaces()
+        .into_iter()
+        .filter_map(windows_candidate)
+        .collect()
+}
+
+#[cfg(windows)]
+pub(super) fn discovery_candidates() -> Vec<Candidate> {
+    windows_interfaces()
+        .into_iter()
+        .filter(|interface| !interface.is_p2p() && is_local_network_interface(&interface.name))
+        .filter_map(windows_candidate)
+        .collect()
+}
+
+#[cfg(windows)]
+fn windows_interfaces() -> Vec<if_addrs::Interface> {
+    if_addrs::get_if_addrs().unwrap_or_default()
+}
+
+#[cfg(windows)]
+fn windows_candidate(interface: if_addrs::Interface) -> Option<Candidate> {
+    if !interface.is_oper_up() || interface.is_loopback() {
+        return None;
+    }
+    let address = interface.ip();
+    let link_local = match address {
+        IpAddr::V4(v4) => v4.is_link_local(),
+        IpAddr::V6(v6) => v6.is_unicast_link_local(),
+    };
+    (!link_local && !address.is_loopback() && !address.is_unspecified()).then(|| Candidate {
+        interface: interface.name,
+        address,
+    })
+}
+
+#[cfg(unix)]
+pub(super) fn discovery_candidates() -> Vec<Candidate> {
+    candidate_addresses()
+        .into_iter()
+        .filter(|candidate| is_local_network_interface(&candidate.interface))
+        .collect()
+}
+
+#[cfg(not(any(unix, windows)))]
+pub(super) fn discovery_candidates() -> Vec<Candidate> {
+    Vec::new()
+}
+
+#[cfg(not(any(unix, windows)))]
 pub fn candidate_addresses() -> Vec<Candidate> {
     Vec::new()
 }
@@ -546,6 +668,21 @@ mod tests {
     }
 
     #[test]
+    fn windows_friendly_lan_names_beat_tunnel_and_virtual_adapters() {
+        let candidates = [
+            candidate("Wi-Fi", "192.168.1.20"),
+            candidate("Ethernet", "10.0.0.20"),
+            candidate("WireGuard Tunnel", "100.90.16.237"),
+            candidate("vEthernet (Default Switch)", "172.24.0.1"),
+        ];
+        let route = "100.90.16.237".parse().unwrap();
+        assert_eq!(
+            automatic_address_with_route(&candidates, Some(route)),
+            "10.0.0.20".parse::<IpAddr>().unwrap()
+        );
+    }
+
+    #[test]
     fn loopback_and_specific_binds_advertise_themselves() {
         let plan = plan_listen("127.0.0.1", None, &[]).unwrap();
         assert!(plan.bind.is_loopback());
@@ -663,7 +800,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn candidates_exclude_loopback_and_unspecified_addresses() {
         for candidate in candidate_addresses() {

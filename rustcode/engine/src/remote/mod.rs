@@ -13,7 +13,6 @@
 pub mod changes;
 pub mod contract;
 pub mod harness;
-#[cfg(unix)]
 mod images;
 pub mod ops;
 pub mod owner;

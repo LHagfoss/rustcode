@@ -236,7 +236,6 @@ async fn run_daemon_or_cron_command(
     }
     Ok(false)
 }
-#[cfg(unix)]
 async fn run_remote_command(
     command: &crate::cli::RemoteCommands,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -335,13 +334,6 @@ async fn run_remote_command(
         }
     }
     Ok(())
-}
-
-#[cfg(not(unix))]
-async fn run_remote_command(
-    _command: &crate::cli::RemoteCommands,
-) -> Result<(), Box<dyn std::error::Error>> {
-    Err("the remote gateway is supported on macOS and Linux".into())
 }
 
 /// Run `rustcode mcp …`. Edits go to the user config; the workspace's merged
@@ -922,7 +914,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // login shell once at startup so profiles, MCP servers, and tool shells
     // all see the same values the user's terminal sees.
     hydrate_shell_provider_keys();
-    #[cfg(unix)]
     if cli_args.command.is_none() && !cli_args.update && !cli_args.acp && cli_args.prompt.is_none()
     {
         tokio::spawn(async {
