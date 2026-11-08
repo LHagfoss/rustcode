@@ -126,23 +126,12 @@
     --rc-surface: #1d1d20;
     --rc-surface-2: #242428;
     --rc-surface-3: #2a2a2e;
-    /* A step lighter than the raised surface it is drawn from, so the glass reads as light over a
-       dark pane rather than as a darker slab over it. */
-    --rc-composer-bg: color-mix(
-      in srgb,
-      color-mix(in srgb, var(--rc-surface-2) 90%, var(--rc-text)) 58%,
-      transparent
-    );
-    --rc-composer-bg-focus: color-mix(
-      in srgb,
-      color-mix(in srgb, var(--rc-surface-2) 90%, var(--rc-text)) 70%,
-      transparent
-    );
-    --rc-composer-bg-over: color-mix(
-      in srgb,
-      color-mix(in srgb, var(--rc-surface-2) 90%, var(--rc-text)) 85%,
-      transparent
-    );
+    /* Glass mixed toward the resting surface rather than the raised one, so the card reads as a
+       darker pane than the transcript under it. Focus is the same colour with more of it (62% →
+       76%), so it still reads a step lighter than rest. */
+    --rc-composer-bg: color-mix(in srgb, var(--rc-surface) 62%, transparent);
+    --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface) 76%, transparent);
+    --rc-composer-bg-over: color-mix(in srgb, var(--rc-surface) 88%, transparent);
     --rc-composer-filter: saturate(1.18) blur(28px);
     --rc-composer-outline: #ffffff1f;
     --rc-composer-highlight: #ffffff12;
@@ -171,21 +160,9 @@
   --rc-surface: #1d1d20;
   --rc-surface-2: #242428;
   --rc-surface-3: #2a2a2e;
-  --rc-composer-bg: color-mix(
-    in srgb,
-    color-mix(in srgb, var(--rc-surface-2) 90%, var(--rc-text)) 58%,
-    transparent
-  );
-  --rc-composer-bg-focus: color-mix(
-    in srgb,
-    color-mix(in srgb, var(--rc-surface-2) 90%, var(--rc-text)) 70%,
-    transparent
-  );
-  --rc-composer-bg-over: color-mix(
-    in srgb,
-    color-mix(in srgb, var(--rc-surface-2) 90%, var(--rc-text)) 85%,
-    transparent
-  );
+  --rc-composer-bg: color-mix(in srgb, var(--rc-surface) 62%, transparent);
+  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-surface) 76%, transparent);
+  --rc-composer-bg-over: color-mix(in srgb, var(--rc-surface) 88%, transparent);
   --rc-composer-filter: saturate(1.18) blur(28px);
   --rc-composer-outline: #ffffff1f;
   --rc-composer-highlight: #ffffff12;
@@ -908,6 +885,31 @@
 }
 
 /*
+ * The new thread's overview (ui/ChatView.tsx) opens and closes as one motion: it fades and rises
+ * 8px into place, and goes back the same way before it unmounts, so closing reads as the card
+ * leaving rather than as the screen cutting it. Both collapse under reduced motion, where the box
+ * is removed at once instead.
+ */
+@keyframes rc-overview-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+@keyframes rc-overview-out {
+  to {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+.rc-overview-in {
+  animation: rc-overview-in 220ms var(--ease-snappy);
+}
+.rc-overview-out {
+  animation: rc-overview-out 160ms ease-out both;
+}
+
+/*
  * A native slider's thumb is the same knob (settingsKit.tsx `Slider`): the browser draws it in
  * the accent colour otherwise, which reads as a filled control rather than a knob. The range
  * keys, Home and End are the native ones' still; only the drawing changes.
@@ -1075,9 +1077,10 @@
 }
 
 /*
- * The composer floats over the transcript in glass: 66% at rest and 78% focused in light, 58% and
- * 70% of a surface-2 a step lighter in dark (theme blocks above), a 1px outline and, in dark, a 7%
- * inner highlight. There is no coloured ring. Its corner is its own step
+ * The composer floats over the transcript in glass: 66% at rest and 78% focused in light; in dark
+ * 62% and 76% of the resting surface, so it is the one darker pane over the transcript (theme
+ * blocks above), a 1px outline and, in dark, a 7% inner highlight. There is no coloured ring. Its
+ * corner is its own step
  * (`--rc-composer-radius`), and its drawer is the same glass, tucked behind that edge, so the two
  * read as one surface. The foot and the tray are rows inside the one card, not slabs beside it,
  * and the strip under the card takes the same pair (`.rc-composer-footer`).
@@ -1095,7 +1098,7 @@
 .rc-toast {
   background: var(--rc-glass-bg-strong);
 }
-/* The composer's own pair: lighter than the raised glass, with its own filter and edge. */
+/* The composer's own pair: its own glass and filter, and its own edge. */
 .rc-composer {
   background: var(--rc-composer-bg);
   backdrop-filter: var(--rc-composer-filter);
@@ -1183,7 +1186,7 @@
 }
 /*
  * A new thread draws its picture behind the whole screen, so the field there is a step more opaque
- * than its usual glass (`--rc-composer-bg-over`, 85%): it reads as the panel the screen is about,
+ * than its usual glass (`--rc-composer-bg-over`, 88%): it reads as the panel the screen is about,
  * while the cards under it stay see-through. Set on the shell (Composer.tsx `className`), the pair
  * the card and the strip read carries down to both, so neither needs a rule of its own. It does not
  * step on focus: it is already the solid thing on that screen, so the picture never shows through

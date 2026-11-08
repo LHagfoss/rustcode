@@ -1582,9 +1582,12 @@ export function selectThread(id: string | null) {
 
 export function startNewThread(cwd?: string) {
   const s = get();
-  // The thread you were in, else the default folder; picking one here does not change the default.
-  const projectCwd =
-    cwd ?? (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? (s.defaultCwd || s.projectCwd);
+  // Where it starts: a folder picked for this one wins, then the default folder (Settings › General,
+  // ⌘⇧O), so the sidebar's button, ⌘N and the command palette land where the reader said even while
+  // another thread is open; then the folder of the thread they were in, then the last one used.
+  // Picking a folder here does not change the default.
+  const preferred = s.defaultCwd || (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined);
+  const projectCwd = cwd ?? preferred ?? s.projectCwd;
   dismissOverlays();
   set({
     selectedId: null,
@@ -5038,6 +5041,7 @@ export function resetForTests() {
     threads: {},
     selectedId: null,
     projectCwd: "",
+    defaultCwd: "",
     newThread: null,
     harnesses: null,
     baseCommands: [],

@@ -5,7 +5,6 @@
 
 import {
   ChevronDown,
-  ChevronUp,
   CircleCheck,
   CircleDashed,
   CircleDot,
@@ -580,6 +579,24 @@ export function ChatView() {
   const stackRef = useRef<HTMLDivElement>(null);
   const [stackHeight, setStackHeight] = useState(140);
   const [overview, setOverview] = useState(overviewExpanded);
+  // The overview stays mounted for the length of its exit, so closing fades and drops it instead of
+  // cutting it; once hidden it unmounts and costs nothing. `leaving` picks the exit over the entry.
+  const [overviewMounted, setOverviewMounted] = useState(overviewExpanded);
+  const [overviewLeaving, setOverviewLeaving] = useState(false);
+  const toggleOverview = () => {
+    const next = !overview;
+    setOverviewExpanded(next);
+    setOverview(next);
+    if (next) {
+      setOverviewLeaving(false);
+      setOverviewMounted(true);
+    } else if (motionAllowed()) {
+      setOverviewLeaving(true);
+    } else {
+      // Nothing to play where motion is off: the overview is simply gone.
+      setOverviewMounted(false);
+    }
+  };
   const [dismissed, setDismissed] = useState<string | undefined>();
   const [width, setWidth] = useState(1000);
   const [height, setHeight] = useState(800);
@@ -807,21 +824,33 @@ export function ChatView() {
                 aria-expanded={overview}
                 aria-controls="new-thread-overview"
                 className="flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-caption text-fg-muted hover:bg-fill-subtle"
-                onClick={() => {
-                  setOverviewExpanded(!overview);
-                  setOverview(!overview);
-                }}
+                onClick={toggleOverview}
               >
-                {overview ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                <ChevronDown
+                  size={14}
+                  aria-hidden
+                  className={cx("transition-transform duration-200 ease-snappy", overview && "rotate-180")}
+                />
                 {overview ? "Hide overview" : "Show overview"}
               </button>
-              <div
-                id="new-thread-overview"
-                hidden={!overview}
-                className="min-h-0 w-full overflow-y-auto pb-3"
-              >
-                {overview && <NewThreadWidgets project={projectCwd} />}
-              </div>
+              {overviewMounted && (
+                <div
+                  id="new-thread-overview"
+                  aria-hidden={!overview}
+                  className={cx(
+                    "min-h-0 w-full overflow-y-auto pb-3",
+                    overviewLeaving ? "rc-overview-out" : "rc-overview-in",
+                  )}
+                  onAnimationEnd={(event) => {
+                    // A widget's own animation bubbles up here too; only this box's exit ends it.
+                    if (event.target !== event.currentTarget || !overviewLeaving) return;
+                    setOverviewLeaving(false);
+                    setOverviewMounted(false);
+                  }}
+                >
+                  <NewThreadWidgets project={projectCwd} />
+                </div>
+              )}
             </div>
           )}
         </div>
