@@ -28,6 +28,14 @@ describe("a link chip", () => {
     expect(drawn("https://example.com/a", "token")).toContain('draggable="false"');
   });
 
+  test("a link with no favicon shows a globe, not an empty gap", () => {
+    // The shell has no metadata in a test, and a favicon that will not decode takes the same path
+    // (ui/LinkChip.tsx): the icon follows the text's colour rather than a site's own image.
+    const out = drawn("https://example.com/a");
+    expect(out).toContain("lucide-globe");
+    expect(out).not.toContain("<img");
+  });
+
   test("it says the host until the shell has a title", () => {
     const out = drawn("https://www.example.com/a");
     // The words, not the URL: a selection across the chip copies "example.com".

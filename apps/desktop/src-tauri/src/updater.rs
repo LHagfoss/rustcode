@@ -417,13 +417,20 @@ pub fn update_channels() -> Vec<&'static str> {
     channel_names()
 }
 
-/// A release's notes (its GitHub body, Markdown), for What's New. `None` when
-/// the release does not exist or has no notes.
+/// A release's notes (Markdown), for What's New: the curated section of the
+/// repo's CHANGELOG.md at that release's tag when it has one, else the GitHub
+/// release body, which is generated from the pull request list. `None` when
+/// neither exists or the release has no notes.
 #[tauri::command]
 pub async fn release_notes(version: String) -> Result<Option<String>, String> {
     let version = version.trim().trim_start_matches('v');
     if parse_version(version).is_none() {
         return Err(format!("not a version: {version}"));
+    }
+    // What release.sh wrote: one line per change, in the user's words, with the
+    // pull request number. GitHub's body is the fallback, not the main course.
+    if let Some(notes) = changelog_notes(version).await {
+        return Ok(Some(notes));
     }
     let response = client()?
         .get(format!(
@@ -447,6 +454,63 @@ pub async fn release_notes(version: String) -> Result<Option<String>, String> {
         .map(str::trim)
         .filter(|body| !body.is_empty())
         .map(str::to_owned))
+}
+
+/// The curated notes for `version` from the repo's CHANGELOG.md at that tag.
+/// `None` when the tag has no CHANGELOG.md, it has no section for the version,
+/// or the request fails: the release body is what is left to say.
+async fn changelog_notes(version: &str) -> Option<String> {
+    let response = client()
+        .ok()?
+        .get(format!(
+            "https://raw.githubusercontent.com/{REPO}/v{version}/CHANGELOG.md"
+        ))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let text = response.text().await.ok()?;
+    changelog_section(&text, version)
+}
+
+/// One version's part of CHANGELOG.md: from its `## [v1.20.1](…)` heading to
+/// the next version's, without the heading itself (scripts/release.sh writes a
+/// `### Category` and its `- note (#N)` lines under it).
+fn changelog_section(changelog: &str, version: &str) -> Option<String> {
+    let wanted = format!("v{}", version.trim_start_matches('v'));
+    let mut lines: Vec<&str> = Vec::new();
+    let mut inside = false;
+    for line in changelog.lines() {
+        // A version heading ends the section it was reading.
+        let Some(rest) = line.strip_prefix("## ") else {
+            if inside {
+                lines.push(line);
+            }
+            continue;
+        };
+        if inside {
+            break;
+        }
+        inside = heading_names(rest.trim(), &wanted);
+    }
+    let notes = lines.join("\n");
+    let notes = notes.trim();
+    (!notes.is_empty()).then(|| notes.to_string())
+}
+
+/// Whether a `## …` heading names this version: `[v1.20.1](url) - 2026-11-08`,
+/// the form release.sh writes, or a bare `v1.20.1`.
+fn heading_names(rest: &str, wanted: &str) -> bool {
+    let name = match rest.strip_prefix('[') {
+        Some(linked) => match linked.split_once(']') {
+            Some((name, _)) => name,
+            None => return false,
+        },
+        None => rest.split_whitespace().next().unwrap_or_default(),
+    };
+    name == wanted || name == wanted.trim_start_matches('v')
 }
 
 #[tauri::command]
@@ -672,6 +736,30 @@ rm -rf "$4""#;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The top of the real CHANGELOG.md, three versions deep.
+    const CHANGELOG: &str = "## [v1.21.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.21.0) - 2026-11-09\n\n### Features\n- A newer thing. (#3200)\n## [v1.20.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.20.1) - 2026-11-08\n\n### Features\n- The desktop app uses the lavender accent by default. (#3192)\n## [v1.20.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.20.0) - 2026-11-07\n\n### Fixes\n- An older thing. (#3190)\n";
+
+    #[test]
+    fn reads_one_versions_changelog_section() {
+        assert_eq!(
+            changelog_section(CHANGELOG, "1.20.1").as_deref(),
+            Some("### Features\n- The desktop app uses the lavender accent by default. (#3192)")
+        );
+        // The tag may arrive with its `v`.
+        assert_eq!(
+            changelog_section(CHANGELOG, "v1.20.0").as_deref(),
+            Some("### Fixes\n- An older thing. (#3190)")
+        );
+    }
+
+    #[test]
+    fn a_version_the_changelog_does_not_have_is_no_section() {
+        // `v1.20.1` is not a prefix of `v1.20.10`, and an unknown version has nothing at all.
+        assert_eq!(changelog_section(CHANGELOG, "1.20.10"), None);
+        assert_eq!(changelog_section(CHANGELOG, "0.1.0"), None);
+        assert_eq!(changelog_section("", "1.20.1"), None);
+    }
 
     #[test]
     fn compares_versions() {

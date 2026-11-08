@@ -49,7 +49,17 @@ interface UpdatesState {
   /** The install's progress, for the sidebar row's bar. */
   progress: InstallProgress | null;
   /** The release notes to show once, after the app was updated. */
-  whatsNew: { version: string; notes: string | null } | null;
+  whatsNew: WhatsNew | null;
+}
+
+/**
+ * What's New's notes, and how far the shell got with them: the dialog opens on
+ * `loading`, so a slow answer shows its shape rather than nothing.
+ */
+export interface WhatsNew {
+  version: string;
+  notes: string | null;
+  state: "loading" | "ready" | "error";
 }
 
 export const useUpdates = create<UpdatesState>(() => ({
@@ -172,11 +182,23 @@ async function whatsNewOnLaunch() {
   write(SEEN_KEY, current);
   write(UPDATED_FROM_KEY, null);
   if (!shouldShowWhatsNew(current, seen, isDevBuild(), updatedFrom)) return;
-  useUpdates.setState({ whatsNew: { version: current, notes: null } });
-  // The notes follow when GitHub answers; offline the dialog links the release page.
-  const notes = await shellCall<string | null>("release_notes", { version: current }).catch(() => null);
-  if (useUpdates.getState().whatsNew?.version === current)
-    useUpdates.setState({ whatsNew: { version: current, notes } });
+  await showWhatsNew(current);
+}
+
+/**
+ * The notes follow when GitHub answers, over a dialog that is already on
+ * screen: offline it says so and links the release page.
+ */
+async function loadNotes(version: string) {
+  let whatsNew: WhatsNew;
+  try {
+    const notes = await shellCall<string | null>("release_notes", { version });
+    whatsNew = { version, notes, state: "ready" };
+  } catch {
+    whatsNew = { version, notes: null, state: "error" };
+  }
+  // Closed meanwhile, or another version's dialog opened: this answer is stale.
+  if (useUpdates.getState().whatsNew?.version === version) useUpdates.setState({ whatsNew });
 }
 
 /**
@@ -293,6 +315,7 @@ export function startUpdateChecks() {
       channels: ["stable", "beta"],
       whatsNew: {
         version: "0.116.0",
+        state: "ready",
         notes:
           "## Desktop\n- The sidebar shows a live clock for running threads and Pin/Settle on hover.\n- ⌘O changes the folder of a thread; ⌘⇧O the default.\n- Reports like `/status` open in a panel above the composer.\n\n## Engine\n- The agent edits in place and no longer branches or commits unless asked.",
       },
@@ -375,6 +398,6 @@ export function closeWhatsNew() {
 
 /** What's New for the running version on demand (Settings › Advanced). */
 export async function showWhatsNew(version: string) {
-  const notes = await shellCall<string | null>("release_notes", { version }).catch(() => null);
-  useUpdates.setState({ whatsNew: { version, notes } });
+  useUpdates.setState({ whatsNew: { version, notes: null, state: "loading" } });
+  await loadNotes(version);
 }

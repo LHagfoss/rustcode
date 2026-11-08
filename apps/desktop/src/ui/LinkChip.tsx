@@ -1,7 +1,8 @@
-// A link as a compact chip, like the composer's slash-command token: favicon
-// and title on a tint of the page's own colour. The metadata comes from the
-// shell (never fetched by the webview); until it arrives, or without it, the
-// chip shows the host on a neutral fill.
+// A link as a compact chip, like the composer's slash-command token: the
+// site's favicon, or a globe when it has none, and the title on a tint of the
+// page's own colour. The metadata comes from the shell (never fetched by the
+// webview); until it arrives, or without it, the chip shows the host on a
+// neutral fill.
 
 import { ArrowUpRight, Globe, X } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -42,6 +43,10 @@ export function LinkChip({
   const { title, host, showsHost } = linkChipLabel(url, meta);
   const tint = meta?.color;
   const inline = variant === "inline";
+  // A favicon that will not decode is the same as no favicon: a globe, never a gap. The URL is
+  // what is remembered, so a chip that later gets another icon tries that one.
+  const [brokenIcon, setBrokenIcon] = useState<string | null>(null);
+  const icon = meta?.icon === brokenIcon ? undefined : meta?.icon;
   return (
     <Tooltip label={<span className="break-all">{url}</span>}>
       <span
@@ -80,10 +85,21 @@ export function LinkChip({
           }}
           className="inline-flex min-w-0 cursor-pointer items-center gap-1.5 text-fg no-underline"
         >
-          {meta?.icon ? (
-            <img src={meta.icon} alt="" className="size-[14px] shrink-0 rounded-xs" draggable={false} />
+          {/* A favicon sits on its own light tile: sites draw them dark as often as light, and a
+              dark mark straight on the chip's grey disappears in the dark theme. `bg-knob` is the
+              one white in every theme, so both kinds read on it. */}
+          {icon ? (
+            <span className="flex size-[14px] shrink-0 items-center justify-center rounded-xs bg-knob p-px">
+              <img
+                src={icon}
+                alt=""
+                draggable={false}
+                onError={() => setBrokenIcon(icon)}
+                className="size-full rounded-xs object-contain"
+              />
+            </span>
           ) : (
-            <Globe size={12} className="ml-0.5 shrink-0 text-fg-muted" />
+            <Globe size={12} aria-hidden className="ml-0.5 shrink-0 text-fg-muted" />
           )}
           {/* One text run, so a selection across the chip copies "title host" and not
               "titlehost": the host is the faint tail of the same words, and the whole run
