@@ -8,6 +8,7 @@ mod engine;
 mod links;
 mod native;
 mod notify;
+mod process;
 mod pty;
 mod smartui;
 mod threads;

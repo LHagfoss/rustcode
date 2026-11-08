@@ -632,7 +632,7 @@ async fn fetch(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
 
 #[cfg(target_os = "macos")]
 fn run(tool: &str, args: &[&std::ffi::OsStr]) -> Result<String, String> {
-    let output = std::process::Command::new(tool)
+    let output = crate::process::command(tool)
         .args(args)
         .output()
         .map_err(|e| e.to_string())?;
@@ -716,7 +716,7 @@ xattr -dr com.apple.quarantine "$2" 2>/dev/null
 open "$2"
 rm -rf "$4""#;
     let work = new_app.parent().and_then(Path::parent).unwrap_or(new_app);
-    std::process::Command::new("/bin/sh")
+    crate::process::command("/bin/sh")
         .arg("-c")
         .arg(script)
         .arg("sh")
