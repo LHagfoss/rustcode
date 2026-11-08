@@ -22,7 +22,7 @@ pub async fn run(command: &ServerCommands) -> ! {
 
 async fn execute(command: &ServerCommands) -> anyhow::Result<i32> {
     match command {
-        ServerCommands::Install { force_dev } => install(*force_dev).await,
+        ServerCommands::Install { force_dev, yes } => install(*force_dev, *yes).await,
         ServerCommands::Status { json } => {
             let report = service::status().await?;
             if *json {
@@ -41,8 +41,8 @@ async fn execute(command: &ServerCommands) -> anyhow::Result<i32> {
     }
 }
 
-async fn install(force_dev: bool) -> anyhow::Result<i32> {
-    let report = service::install(force_dev).await?;
+async fn install(force_dev: bool, yes: bool) -> anyhow::Result<i32> {
+    let report = service::install(force_dev, yes).await?;
     println!(
         "{} ({}): {}",
         match report.outcome {

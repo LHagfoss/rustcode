@@ -7,7 +7,7 @@
 //! ([`wait_until_idle`]), so all of it is tested against fakes. Nothing here
 //! runs from a test.
 
-use super::{Definition, Installed, Manager, Problem, State};
+use super::{Definition, Installed, Manager, Problem, Process, State};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -176,6 +176,16 @@ pub struct Observed {
     pub log: PathBuf,
 }
 
+/// A server answers that the manager did not start: the manager runs no
+/// process of its own, or another one. `Unknown` says nothing.
+fn is_unmanaged(process: Process, live_pid: u32) -> bool {
+    match process {
+        Process::Unknown => false,
+        Process::Stopped => true,
+        Process::Running(managed) => managed != live_pid,
+    }
+}
+
 /// Turn what was observed into the report, and name what is wrong.
 pub fn build_report(observed: Observed, now_secs: u64) -> StatusReport {
     let Observed {
@@ -213,7 +223,7 @@ pub fn build_report(observed: Observed, now_secs: u64) -> StatusReport {
                 ),
             ));
         }
-        if state.installed && state.pid.is_some_and(|managed| managed != live.pid) {
+        if state.installed && is_unmanaged(state.process, live.pid) {
             problems.push(problem(
                 "unmanaged",
                 format!(
@@ -356,9 +366,28 @@ pub struct InstallReport {
 /// `rustcode server install`: write the definition, start the service and
 /// wait for the server to listen. A definition that is already as wanted
 /// changes nothing.
-pub async fn install(force_dev: bool) -> Result<InstallReport> {
+///
+/// A server that answers but is not the service's (an app's, or one run in
+/// a terminal) holds the server lock, so the service's own would find it,
+/// exit cleanly and never be started again. `install` stops it first, as
+/// `restart` does, and asks for `yes` when it has turns running.
+pub async fn install(force_dev: bool, yes: bool) -> Result<InstallReport> {
     let (manager, definition) = current_manager()?;
     super::refuse_dev_binary(&definition.program, force_dev)?;
+    let state = manager.state()?;
+    let before = live_status().await;
+    match plan_takeover(&state, before.as_ref(), yes) {
+        Takeover::Leave => {}
+        Takeover::Confirm { running } => anyhow::bail!(
+            "a server that is not the service's is running {running} {}, and installing stops it; \
+             wait for them to finish or pass --yes",
+            if running == 1 { "turn" } else { "turns" }
+        ),
+        Takeover::Stop { pid } => {
+            terminate(pid)?;
+            wait_until_gone(pid).await;
+        }
+    }
     let outcome = manager.install(&definition)?;
     let live = wait_for_server(None).await;
     let mut problems = manager.problems();
@@ -377,13 +406,13 @@ pub async fn install(force_dev: bool) -> Result<InstallReport> {
             "The service definition changed. The running server keeps the old one until `rustcode server restart --when-idle`.",
         ));
     }
-    if let (Some(live), Some(managed)) = (&live, manager.state()?.pid)
-        && live.pid != managed
+    if let Some(live) = &live
+        && is_unmanaged(manager.state()?.process, live.pid)
     {
         problems.push(problem(
             "unmanaged",
             format!(
-                "A server started by an app (pid {}) is already running and keeps running; `rustcode server restart` hands it to the service.",
+                "The server answering (pid {}) was not started by the service. `rustcode server restart` hands it over.",
                 live.pid
             ),
         ));
@@ -395,6 +424,38 @@ pub async fn install(force_dev: bool) -> Result<InstallReport> {
         live,
         problems,
     })
+}
+
+/// What `install` does about a server that already answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Takeover {
+    /// Nothing answers, or the service's own does.
+    Leave,
+    /// Stop the server (not the service's) so the service can start.
+    Stop { pid: u32 },
+    /// Turns are running on it: ask before ending them.
+    Confirm { running: usize },
+}
+
+/// Decide what `install` does about `live`, the server answering before it.
+pub fn plan_takeover(state: &State, live: Option<&LiveStatus>, yes: bool) -> Takeover {
+    let Some(live) = live else {
+        return Takeover::Leave;
+    };
+    // A manager that cannot say what it runs (Windows) is believed once the
+    // service is installed; before that nothing of its own can be running.
+    let stray = match state.process {
+        Process::Unknown => !state.installed,
+        Process::Stopped => true,
+        Process::Running(managed) => managed != live.pid,
+    };
+    match stray {
+        false => Takeover::Leave,
+        true if live.running_turns > 0 && !yes => Takeover::Confirm {
+            running: live.running_turns,
+        },
+        true => Takeover::Stop { pid: live.pid },
+    }
 }
 
 /// Wait for a server to answer, a different one than `not_pid` when given.
@@ -533,7 +594,7 @@ pub async fn restart() -> Result<Option<LiveStatus>> {
     // A server the service did not start (an app's) would make the service's
     // new one exit at once, finding it: end it first.
     if let Some(before) = &before
-        && state.pid != Some(before.pid)
+        && state.pid() != Some(before.pid)
     {
         terminate(before.pid)?;
         wait_until_gone(before.pid).await;
@@ -568,7 +629,10 @@ fn terminate(pid: u32) -> Result<()> {
     }
     #[cfg(not(unix))]
     {
-        let output = super::run_tool("taskkill", &["/PID", &pid.to_string(), "/F"])?;
+        let output = super::run_tool(
+            &super::windows_system_tool("taskkill.exe"),
+            &["/PID", &pid.to_string(), "/F"],
+        )?;
         anyhow::ensure!(
             output.status.success(),
             "could not stop the running server: {}",
@@ -628,7 +692,7 @@ mod tests {
         State {
             installed: true,
             active: true,
-            pid: Some(10),
+            process: Process::Running(10),
             path: Some("/home/ada/.config/systemd/user/rustcode-server.service".into()),
             program: Some("/usr/bin/rustcode".into()),
         }
@@ -729,6 +793,75 @@ mod tests {
         assert_eq!(
             codes(&build_report(waiting, 0)),
             ["linger-disabled", "restart-pending"]
+        );
+    }
+
+    #[test]
+    fn a_server_answering_while_the_manager_runs_nothing_is_unmanaged() {
+        // The stray holds the lock, so the service's own process exited.
+        let stopped = State {
+            process: Process::Stopped,
+            ..installed_state()
+        };
+        let report = build_report(observed(stopped, Some(live("1.23.0", 99))), 0);
+        assert_eq!(codes(&report), ["unmanaged"]);
+
+        // A manager that cannot say (Windows) is not accused.
+        let unknown = State {
+            process: Process::Unknown,
+            ..installed_state()
+        };
+        let report = build_report(observed(unknown, Some(live("1.23.0", 99))), 0);
+        assert!(codes(&report).is_empty(), "{:?}", codes(&report));
+    }
+
+    #[test]
+    fn install_takes_over_from_a_server_that_is_not_the_services() {
+        let idle = LiveStatus {
+            running_turns: 0,
+            ..live("1.23.0", 99)
+        };
+        let busy = live("1.23.0", 99);
+        let with = |process, installed| State {
+            installed,
+            process,
+            ..installed_state()
+        };
+        // Nothing answers: nothing to take over.
+        assert_eq!(
+            plan_takeover(&with(Process::Stopped, false), None, false),
+            Takeover::Leave
+        );
+        // The service's own server stays.
+        assert_eq!(
+            plan_takeover(&with(Process::Running(99), true), Some(&idle), false),
+            Takeover::Leave
+        );
+        // The manager runs nothing, or something else: the server answering
+        // is a stray.
+        for process in [Process::Stopped, Process::Running(5)] {
+            assert_eq!(
+                plan_takeover(&with(process, true), Some(&idle), false),
+                Takeover::Stop { pid: 99 }
+            );
+        }
+        // Turns are not ended without --yes.
+        assert_eq!(
+            plan_takeover(&with(Process::Stopped, false), Some(&busy), false),
+            Takeover::Confirm { running: 1 }
+        );
+        assert_eq!(
+            plan_takeover(&with(Process::Stopped, false), Some(&busy), true),
+            Takeover::Stop { pid: 99 }
+        );
+        // A manager that cannot say: a stray only before it is installed.
+        assert_eq!(
+            plan_takeover(&with(Process::Unknown, false), Some(&idle), false),
+            Takeover::Stop { pid: 99 }
+        );
+        assert_eq!(
+            plan_takeover(&with(Process::Unknown, true), Some(&idle), false),
+            Takeover::Leave
         );
     }
 

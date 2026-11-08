@@ -566,7 +566,37 @@ fn append_server_log_bounded(path: &Path, line: &str, limit_bytes: u64) {
         let _ = std::fs::remove_file(&rotated);
         let _ = std::fs::rename(path, &rotated);
     }
-    append_line_to_path(path, &line);
+    use std::io::Write;
+    if let Ok(mut file) = open_private_log(path) {
+        let _ = writeln!(file, "{line}");
+    }
+}
+
+/// Open the server's log for appending, readable by this user only: it holds
+/// prompts and tool output. A new file is created `0600`, and an older one
+/// (from before this, or made by a service manager under its own umask) is
+/// narrowed to `0600`. The directory is created if needed.
+pub(crate) fn open_private_log(path: &Path) -> std::io::Result<std::fs::File> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let permissions = file.metadata()?.permissions();
+        if permissions.mode() & 0o777 != 0o600 {
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
+    }
+    Ok(file)
 }
 
 /// The line that opens this process's writes to a session's log, naming the
@@ -1272,6 +1302,40 @@ mod tests {
         assert!(current.ends_with("line 09\n"));
         assert!(previous.contains("line 0"));
         assert!(!dir.path().join("logs/server.log.2").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_server_log_is_private_when_created_rotated_and_found_open() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |path: &Path| {
+            std::fs::metadata(path)
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        let dir = tempfile::tempdir().expect("dir");
+        let path = dir.path().join("logs/server.log");
+        let previous = dir.path().join("logs/server.log.1");
+
+        // Created private, whatever the process umask.
+        append_server_log_bounded(&path, "first", 40);
+        assert_eq!(mode(&path), 0o600);
+
+        // The file made after a rotation is private too, and so is the one
+        // rotated away.
+        for n in 0..6 {
+            append_server_log_bounded(&path, &format!("line {n:02}"), 40);
+        }
+        assert!(previous.exists());
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(mode(&previous), 0o600);
+
+        // A log a service manager created world-readable is narrowed.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+        append_server_log_bounded(&path, "again", 1 << 20);
+        assert_eq!(mode(&path), 0o600);
     }
 
     #[test]

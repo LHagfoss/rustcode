@@ -45,12 +45,35 @@ pub struct State {
     pub installed: bool,
     /// The manager has it started: loaded in launchd, active in systemd.
     pub active: bool,
-    /// The process the manager runs, when it says.
-    pub pid: Option<u32>,
+    /// The process the manager runs.
+    pub process: Process,
     /// Where the definition is (not set for a registry value).
     pub path: Option<PathBuf>,
     /// The program the installed definition runs.
     pub program: Option<PathBuf>,
+}
+
+/// Whether the manager runs a process of its own for the service.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Process {
+    /// The manager cannot say (a Scheduled Task or Run entry shows no pid, or
+    /// its tool failed): nothing follows from a server answering.
+    #[default]
+    Unknown,
+    /// The manager runs nothing for it now.
+    Stopped,
+    /// The manager runs this process.
+    Running(u32),
+}
+
+impl State {
+    /// The process the manager runs, when it says.
+    pub fn pid(&self) -> Option<u32> {
+        match self.process {
+            Process::Running(pid) => Some(pid),
+            Process::Unknown | Process::Stopped => None,
+        }
+    }
 }
 
 /// What [`Manager::install`] did.
@@ -256,6 +279,25 @@ pub(crate) fn run_tool(program: &str, args: &[&str]) -> Result<std::process::Out
         .with_context(|| format!("could not run {program}"))
 }
 
+/// The full path of a Windows system tool (`schtasks.exe`, `reg.exe`,
+/// `taskkill.exe`), so a service command never resolves it through the current
+/// directory or `PATH`, where another program could have put its own.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn windows_system_tool(exe: &str) -> String {
+    windows_system_tool_in(std::env::var_os("SystemRoot").as_deref(), exe)
+}
+
+/// [`windows_system_tool`] with `SystemRoot` given: `C:\Windows` when it is
+/// unset or empty.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_system_tool_in(system_root: Option<&std::ffi::OsStr>, exe: &str) -> String {
+    let root = system_root
+        .filter(|root| !root.is_empty())
+        .map(|root| root.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "C:\\Windows".to_owned());
+    format!("{}\\System32\\{exe}", root.trim_end_matches(['\\', '/']))
+}
+
 /// A tool's failure as one line: its error output, else its output.
 pub(crate) fn failure(output: &std::process::Output) -> String {
     let text = if output.stderr.iter().any(|byte| !byte.is_ascii_whitespace()) {
@@ -293,6 +335,25 @@ pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_tools_are_full_system32_paths() {
+        use std::ffi::OsStr;
+        assert_eq!(
+            windows_system_tool_in(Some(OsStr::new("D:\\WINNT")), "schtasks.exe"),
+            "D:\\WINNT\\System32\\schtasks.exe"
+        );
+        assert_eq!(
+            windows_system_tool_in(Some(OsStr::new("C:\\Windows\\")), "reg.exe"),
+            "C:\\Windows\\System32\\reg.exe"
+        );
+        for unset in [None, Some(OsStr::new(""))] {
+            assert_eq!(
+                windows_system_tool_in(unset, "taskkill.exe"),
+                "C:\\Windows\\System32\\taskkill.exe"
+            );
+        }
+    }
 
     #[test]
     fn cargo_build_output_is_a_dev_binary() {

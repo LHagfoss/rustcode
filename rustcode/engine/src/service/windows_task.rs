@@ -7,8 +7,8 @@
 //! (`logs/server.log`) is the only log here.
 
 use super::{
-    Definition, Installed, Manager, State, failure, run_tool, windows_argument, xml_escape,
-    xml_unescape,
+    Definition, Installed, Manager, State, failure, run_tool, windows_argument,
+    windows_system_tool, xml_escape, xml_unescape,
 };
 use anyhow::{Context, Result};
 use std::path::PathBuf;
@@ -158,7 +158,11 @@ impl WindowsTask {
     }
 
     fn task_xml(&self) -> Option<String> {
-        let output = run_tool("schtasks", &["/Query", "/TN", &self.task, "/XML"]).ok()?;
+        let output = run_tool(
+            &windows_system_tool("schtasks.exe"),
+            &["/Query", "/TN", &self.task, "/XML"],
+        )
+        .ok()?;
         output
             .status
             .success()
@@ -166,7 +170,11 @@ impl WindowsTask {
     }
 
     fn run_value(&self) -> Option<String> {
-        let output = run_tool("reg", &["query", RUN_KEY, "/v", &self.value]).ok()?;
+        let output = run_tool(
+            &windows_system_tool("reg.exe"),
+            &["query", RUN_KEY, "/v", &self.value],
+        )
+        .ok()?;
         output
             .status
             .success()
@@ -174,12 +182,18 @@ impl WindowsTask {
     }
 
     fn remove_run_value(&self) {
-        let _ = run_tool("reg", &["delete", RUN_KEY, "/v", &self.value, "/f"]);
+        let _ = run_tool(
+            &windows_system_tool("reg.exe"),
+            &["delete", RUN_KEY, "/v", &self.value, "/f"],
+        );
     }
 
     fn start(&self, program: &std::path::Path) -> Result<()> {
         if self.task_xml().is_some() {
-            let output = run_tool("schtasks", &["/Run", "/TN", &self.task])?;
+            let output = run_tool(
+                &windows_system_tool("schtasks.exe"),
+                &["/Run", "/TN", &self.task],
+            )?;
             anyhow::ensure!(
                 output.status.success(),
                 "could not start the task {}: {}",
@@ -231,7 +245,7 @@ impl Manager for WindowsTask {
             .tempfile()?;
         std::fs::write(file.path(), encode(&document))?;
         let created = run_tool(
-            "schtasks",
+            &windows_system_tool("schtasks.exe"),
             &[
                 "/Create",
                 "/TN",
@@ -245,7 +259,7 @@ impl Manager for WindowsTask {
             self.remove_run_value();
         } else {
             let registered = run_tool(
-                "reg",
+                &windows_system_tool("reg.exe"),
                 &[
                     "add",
                     RUN_KEY,
@@ -275,14 +289,23 @@ impl Manager for WindowsTask {
         let program = state
             .program
             .context("the server is not installed; run `rustcode server install`")?;
-        let _ = run_tool("schtasks", &["/End", "/TN", &self.task]);
+        let _ = run_tool(
+            &windows_system_tool("schtasks.exe"),
+            &["/End", "/TN", &self.task],
+        );
         self.start(&program)
     }
 
     fn uninstall(&self) -> Result<()> {
         // Each fails for what is not there, which is the aim.
-        let _ = run_tool("schtasks", &["/End", "/TN", &self.task]);
-        let _ = run_tool("schtasks", &["/Delete", "/TN", &self.task, "/F"]);
+        let _ = run_tool(
+            &windows_system_tool("schtasks.exe"),
+            &["/End", "/TN", &self.task],
+        );
+        let _ = run_tool(
+            &windows_system_tool("schtasks.exe"),
+            &["/Delete", "/TN", &self.task, "/F"],
+        );
         self.remove_run_value();
         Ok(())
     }

@@ -370,6 +370,9 @@ pub enum ServerCommands {
         /// Install a development build (inside a cargo target directory) anyway
         #[arg(long)]
         force_dev: bool,
+        /// Stop a server that is not the service's even if turns are running
+        #[arg(short, long)]
+        yes: bool,
     },
     /// Show whether the server is installed and running, its clients and
     /// running turns, and what is wrong
@@ -1286,11 +1289,17 @@ mod tests {
         assert!(matches!(server(&["connect"]), ServerCommands::Connect));
         assert!(matches!(
             server(&["install"]),
-            ServerCommands::Install { force_dev: false }
+            ServerCommands::Install {
+                force_dev: false,
+                yes: false
+            }
         ));
         assert!(matches!(
             server(&["install", "--force-dev"]),
-            ServerCommands::Install { force_dev: true }
+            ServerCommands::Install {
+                force_dev: true,
+                yes: false
+            }
         ));
         assert!(matches!(
             server(&["status", "--json"]),

@@ -4,8 +4,8 @@
 //! stays stopped until the next login or `server restart`.
 
 use super::{
-    Definition, Installed, Manager, State, failure, home_dir, run_tool, write_private, xml_escape,
-    xml_unescape,
+    Definition, Installed, Manager, Process, State, failure, home_dir, run_tool, write_private,
+    xml_escape, xml_unescape,
 };
 use anyhow::{Context, Result};
 use std::path::PathBuf;
@@ -158,7 +158,10 @@ impl Manager for Launchd {
         Ok(State {
             installed: document.is_some(),
             active: printed.is_some(),
-            pid: printed.as_deref().and_then(parse_print_pid),
+            process: match printed.as_deref().and_then(parse_print_pid) {
+                Some(pid) => Process::Running(pid),
+                None => Process::Stopped,
+            },
             path: document.is_some().then(|| self.path.clone()),
             program: document.as_deref().and_then(program_of),
         })
@@ -169,6 +172,10 @@ impl Manager for Launchd {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("could not create {}", parent.display()))?;
         }
+        // The manager would create the log under the user's umask (0644), and
+        // it holds prompts: make it first, private to this user.
+        crate::logger::open_private_log(&definition.log)
+            .with_context(|| format!("could not create {}", definition.log.display()))?;
         let document = render(definition);
         let existing = std::fs::read_to_string(&self.path).ok();
         let changed = existing.as_deref() != Some(document.as_str());

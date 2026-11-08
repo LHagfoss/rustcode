@@ -4,8 +4,8 @@
 //! at logout. Enabling it needs root, so it is printed, never run.
 
 use super::{
-    Definition, Installed, Manager, Problem, State, failure, home_dir, run_tool, systemd_word,
-    write_private,
+    Definition, Installed, Manager, Problem, Process, State, failure, home_dir, run_tool,
+    systemd_word, write_private,
 };
 use anyhow::{Context, Result};
 use std::path::PathBuf;
@@ -117,6 +117,18 @@ pub fn parse_show(output: &str) -> (bool, Option<u32>) {
     (active, pid)
 }
 
+/// The state and process from `systemctl --user show`, or `None` when it
+/// could not be asked. A unit that is starting has no process yet, and says
+/// nothing either way.
+fn process_of(shown: Option<(bool, Option<u32>)>) -> (bool, Process) {
+    match shown {
+        Some((_, Some(pid))) => (true, Process::Running(pid)),
+        Some((false, None)) => (false, Process::Stopped),
+        Some((true, None)) => (true, Process::Unknown),
+        None => (false, Process::Unknown),
+    }
+}
+
 /// What to tell a user whose server stops when they log out.
 pub fn linger_advice() -> &'static str {
     "The server stops when you log out. To keep it running, once: sudo loginctl enable-linger \"$(id -un)\""
@@ -187,15 +199,15 @@ impl Manager for Systemd {
 
     fn state(&self) -> Result<State> {
         let unit = std::fs::read_to_string(&self.path).ok();
-        let (active, pid) = if unit.is_some() {
-            self.show().unwrap_or_default()
+        let (active, process) = if unit.is_some() {
+            process_of(self.show().ok())
         } else {
-            (false, None)
+            (false, Process::Stopped)
         };
         Ok(State {
             installed: unit.is_some(),
             active,
-            pid,
+            process,
             path: unit.is_some().then(|| self.path.clone()),
             program: unit.as_deref().and_then(program_of),
         })
@@ -206,6 +218,10 @@ impl Manager for Systemd {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("could not create {}", parent.display()))?;
         }
+        // The manager would create the log under the user's umask (0644), and
+        // it holds prompts: make it first, private to this user.
+        crate::logger::open_private_log(&definition.log)
+            .with_context(|| format!("could not create {}", definition.log.display()))?;
         let unit = render(definition);
         let existing = std::fs::read_to_string(&self.path).ok();
         let changed = existing.as_deref() != Some(unit.as_str());
@@ -336,6 +352,17 @@ mod tests {
         assert_eq!(parse_linger("Linger=no\n"), Some(false));
         assert_eq!(parse_linger(""), None);
         assert!(linger_advice().contains("loginctl enable-linger"));
+    }
+
+    #[test]
+    fn a_unit_without_a_process_is_stopped_only_when_it_is_not_started() {
+        assert_eq!(
+            process_of(Some((true, Some(7)))),
+            (true, Process::Running(7))
+        );
+        assert_eq!(process_of(Some((false, None))), (false, Process::Stopped));
+        assert_eq!(process_of(Some((true, None))), (true, Process::Unknown));
+        assert_eq!(process_of(None), (false, Process::Unknown));
     }
 
     #[test]
