@@ -15,16 +15,19 @@ import { AGENT_WORD, type AgentState, LINK_AGENT_STATE } from "../state/delegate
 import { dismissLink, stateOf } from "../state/host";
 import {
   isActive,
-  LINK_LABEL,
   type Link,
+  type LinkEvent,
   type LinkState,
   linkCounts,
+  linkEventText,
   linkGroupStatus,
+  linkStatusText,
 } from "../state/orchestration";
 import { agentHistory, peekThread, selectThread, useApp } from "../state/store";
 import {
   agentStepLabel,
   formatDuration,
+  relativeAge,
   stepLabel,
   stripHarnessMarkup,
   subagentOf,
@@ -147,7 +150,8 @@ function firstLine(text: string | null | undefined): string | undefined {
 }
 
 /** What a hover on an agent row says: what it was asked, in full, what it is to
- * this thread, how it goes and for how long, and what runs it. */
+ * this thread, how it goes and for how long, and what runs it. A delegate's tip
+ * also lists what happened to the link, oldest first, each with its age. */
 export function AgentTip({
   title,
   meta,
@@ -156,6 +160,7 @@ export function AgentTip({
   status,
   elapsed,
   relationship,
+  events,
 }: {
   title: string;
   meta?: string;
@@ -168,8 +173,11 @@ export function AgentTip({
   elapsed?: string;
   /** What it is to the thread: `Subagent`, `Thread it started`, `Thread it messaged`. */
   relationship?: string;
+  /** A delegate's events, oldest first: the chip's own list, with how long ago each was. */
+  events?: readonly LinkEvent[];
 }) {
   const asked = task?.trim();
+  const now = Date.now();
   return (
     <div className="flex flex-col gap-0.5">
       <span className="font-medium">{title}</span>
@@ -195,6 +203,18 @@ export function AgentTip({
           )}
           {elapsed && <span className="ml-auto tabular">{elapsed}</span>}
         </span>
+      )}
+      {events && events.length > 0 && (
+        <div className="mt-1 flex flex-col gap-[3px] border-border/60 border-t pt-1">
+          {events.map((event, i) => (
+            <span key={`${event.kind}-${event.at}`} className="flex items-baseline gap-3">
+              <span className={i === events.length - 1 ? "font-medium text-fg-muted" : undefined}>
+                {linkEventText(event)}
+              </span>
+              <span className="ml-auto shrink-0 text-fg-faint tabular">{relativeAge(event.at, now)}</span>
+            </span>
+          ))}
+        </div>
       )}
       {asked && asked !== title.trim() && (
         <span className="mt-0.5 line-clamp-6 break-words whitespace-pre-wrap text-fg-muted">{asked}</span>
@@ -248,7 +268,9 @@ export function AgentRow({
   action?: ReactNode;
 }) {
   const word =
-    showWord && detail !== undefined && state !== "done" ? (status ?? AGENT_LABEL[state]) : undefined;
+    showWord && detail !== undefined && (state !== "done" || status !== undefined)
+      ? (status ?? AGENT_LABEL[state])
+      : undefined;
   const bottom = detail ?? status ?? AGENT_LABEL[state];
   // The row's own text starts where the composer's does: the card's 4px and the row's 12px.
   const rowClass = "flex w-full min-w-0 flex-1 items-center gap-2 rounded-lg py-1.5 pr-2 pl-3 text-left";
@@ -362,7 +384,10 @@ export function ThreadAgentRow({
   const end = active ? now : link.settledAt;
   const elapsedMs = end !== undefined && end - link.createdAt >= 1000 ? end - link.createdAt : undefined;
   const elapsed = elapsedMs === undefined ? undefined : formatDuration(elapsedMs);
-  const status = LINK_LABEL[state];
+  // The chip's status is the link's own last event: `Started`, `Message sent`, `Asked you`,
+  // `Answered`, `Merged`. A link saved before this build keeps its state word.
+  const status = linkStatusText(link, state);
+  const events = link.events ?? [];
   const title = session?.title || link.targetTitle;
   return (
     <AgentRow
@@ -389,6 +414,7 @@ export function ThreadAgentRow({
           status={status}
           elapsed={elapsed}
           task={link.message}
+          events={events}
         />
       }
       onClick={() => selectThread(link.target)}

@@ -35,9 +35,9 @@ import { dismissLink, linksOf, resolveGrant, stateOf, stopLink, verb } from "../
 import {
   doneLinks,
   isActive,
-  LINK_LABEL,
   type Link,
   type LinkState,
+  linkStatusText,
   stripLinks,
 } from "../state/orchestration";
 import { modeLabel } from "../state/permissions";
@@ -363,7 +363,7 @@ function WorkingFor({ link }: { link: Link }) {
     <div className="flex h-[32px] items-center gap-2 rounded-full bg-fill-subtle pr-1.5 pl-3 text-callout rc-in">
       <CornerDownRight size={13} className="shrink-0 text-accent" />
       <span className="min-w-0 truncate">Working for “{link.orchestratorTitle}”</span>
-      <span className="shrink-0 text-fg-muted">· {LINK_LABEL[state]}</span>
+      <span className="shrink-0 text-fg-muted">· {linkStatusText(link, state)}</span>
       <span className="flex-1" />
       <Pill onClick={() => selectThread(link.orchestrator)}>Open</Pill>
       <Tooltip label="Stop the work that thread gave this one; your own messages are not affected">
