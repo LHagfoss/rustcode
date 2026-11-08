@@ -461,6 +461,12 @@ export interface AppState {
   remote: RemoteStatus | null;
   /** Each open thread's own share, so its header can say a device is attached. */
   remoteByThread: Record<string, RemoteStatus>;
+  /**
+   * Why the last read of remote access failed, when it did. The last good
+   * answer stays in `remote`, so a dropped request does not make the switch
+   * look off.
+   */
+  remoteError: string | null;
   /** What the main column shows instead of the chat. */
   view:
     | { kind: "chat" }
@@ -660,6 +666,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   resolvedApprovals: {},
   remote: null,
   remoteByThread: {},
+  remoteError: null,
   view: { kind: "chat" },
   checkpoints: {},
   attempts: {},
@@ -4648,20 +4655,17 @@ export async function refreshRemote(sessionId?: string): Promise<RemoteStatus | 
   const params: JsonObject = sessionId ? { sessionId } : {};
   try {
     const status = parseRemoteStatus(await request(Method.remote, params, 10_000));
-    if (sessionId) set((s) => ({ remoteByThread: { ...s.remoteByThread, [sessionId]: status } }));
-    else set({ remote: status });
+    if (sessionId)
+      set((s) => ({
+        remoteByThread: { ...s.remoteByThread, [sessionId]: status },
+        remoteError: null,
+      }));
+    else set({ remote: status, remoteError: null });
     return status;
   } catch (error) {
-    const failed: RemoteStatus = {
-      available: false,
-      enabled: false,
-      shared: false,
-      pairedDevices: 0,
-      devices: [],
-      error: errorText(error),
-    };
-    if (sessionId) set((s) => ({ remoteByThread: { ...s.remoteByThread, [sessionId]: failed } }));
-    else set({ remote: failed });
+    // The engine answered nothing (a restart, a dropped request): say so and
+    // keep what was last true, rather than showing remote access as off.
+    set({ remoteError: errorText(error) });
     return null;
   }
 }

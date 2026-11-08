@@ -11,7 +11,7 @@
 
 import { Check, Copy, RefreshCw, Smartphone, Wifi, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { RemoteStatus } from "../acp/types";
+import type { RemoteOffer, RemoteStatus } from "../acp/types";
 import { errorText, pairRemoteDevice, refreshRemote, setRemoteAccess, useApp } from "../state/store";
 import { cx, Pill, Spinner, Switch, Tooltip } from "./primitives";
 import { Action, Group, Row } from "./settingsKit";
@@ -53,8 +53,12 @@ function stateOf(remote: RemoteStatus | null): {
 
 export function RemoteAccessPage() {
   const remote = useApp((s) => s.remote);
+  const remoteError = useApp((s) => s.remoteError);
   const [busy, setBusy] = useState(false);
-  const [pairing, setPairing] = useState<RemoteStatus | null>(null);
+  // The challenge on screen: its code and address come from the pairing
+  // answer; its countdown, wrong codes left and end come from the polled
+  // status, so a pairing, a lockout or an expiry shows up as it happens.
+  const [pairing, setPairing] = useState<{ offer: RemoteOffer | null; paired: number } | null>(null);
   const state = stateOf(remote);
 
   const load = useCallback(() => {
@@ -73,9 +77,13 @@ export function RemoteAccessPage() {
   const pair = () => {
     setBusy(true);
     void pairRemoteDevice()
-      .then((status) => setPairing(status))
+      .then((status) => {
+        if (!status) return;
+        setPairing({ offer: status.offer ?? null, paired: status.pairedDevices });
+      })
       .finally(() => setBusy(false));
   };
+  const notShared = typeof remote?.notShared === "number" ? remote.notShared : 0;
 
   const gateway = remote?.gateway;
   const address = gateway?.advertisedAddress;
@@ -150,9 +158,33 @@ export function RemoteAccessPage() {
           )}
         </Row>
         {remote?.error && <Row title="Last error" subtitle={remote.error} />}
+        {(remoteError || (remote && !remote.available)) && (
+          <Row
+            title="Unreachable"
+            subtitle={remoteError ?? "The engine does not answer for remote access."}
+          />
+        )}
+        {notShared > 0 && (
+          <Row
+            title="Not shared"
+            subtitle={
+              notShared === 1
+                ? "One open thread is held back — the host shares at most 32 at once, most recently used first. Its header says why."
+                : `${notShared} open threads are held back — the host shares at most 32 at once, most recently used first. Their headers say why.`
+            }
+            status={notShared === 1 ? "1 thread" : `${notShared} threads`}
+          />
+        )}
       </Group>
 
-      {pairing && <PairDialog status={pairing} onClose={() => setPairing(null)} />}
+      {pairing && (
+        <PairDialog
+          offer={pairing.offer}
+          pairedAtOpen={pairing.paired}
+          status={remote}
+          onClose={() => setPairing(null)}
+        />
+      )}
     </>
   );
 }
@@ -242,15 +274,35 @@ function clock(seconds: number): string {
   return `${minutes}:${rest.toString().padStart(2, "0")}`;
 }
 
-/** The pairing challenge: what to scan or type, and how long it lasts. */
-function PairDialog({ status, onClose }: { status: RemoteStatus; onClose: () => void }) {
-  const offer = status.offer;
-  const seconds = useCountdown(offer?.expiresInSecs ?? 0);
+/**
+ * The pairing challenge: what to scan or type, and how long it lasts. The code
+ * and address are the ones the pairing call returned; everything that moves —
+ * the countdown, the wrong codes left, a lockout, the end of the challenge and
+ * whether a device paired — comes from the status the page polls, so the
+ * dialog never shows a frozen answer.
+ */
+function PairDialog({
+  offer,
+  pairedAtOpen,
+  status,
+  onClose,
+}: {
+  offer: RemoteOffer | null;
+  pairedAtOpen: number;
+  status: RemoteStatus | null;
+  onClose: () => void;
+}) {
+  const pairing = status?.gateway?.pairing;
+  const seconds = useCountdown(pairing?.expiresInSecs ?? offer?.expiresInSecs ?? 0);
   const [error, setError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
-  const attempt = status.gateway?.pairing?.attemptsLeft;
-  const lockedFor = status.gateway?.pairing?.lockedForSecs ?? offer?.lockedForSecs ?? 0;
-  const expired = !offer || seconds <= 0;
+  const attempt = pairing?.attemptsLeft;
+  const lockedFor = pairing?.lockedForSecs ?? offer?.lockedForSecs ?? 0;
+  const pairedNow = (status?.pairedDevices ?? pairedAtOpen) > pairedAtOpen;
+  // The gateway reports the challenge closed; that is either a pairing, an
+  // expiry, a lockout or a newer challenge replacing this one.
+  const closed = status?.gateway?.pairingOpen === false || seconds <= 0;
+  const expired = closed && !pairedNow;
   const pairAgain = () => {
     setRetrying(true);
     setError(null);
@@ -291,7 +343,7 @@ function PairDialog({ status, onClose }: { status: RemoteStatus; onClose: () => 
             </Action>
           </div>
 
-          {offer && !expired ? (
+          {offer && !closed ? (
             <div className="flex flex-wrap items-start gap-4">
               {offer.qrRows?.length ? (
                 <RemoteQr rows={offer.qrRows} />
@@ -305,11 +357,11 @@ function PairDialog({ status, onClose }: { status: RemoteStatus; onClose: () => 
                   <div className="text-caption text-fg-faint">Address</div>
                   <div className="flex items-center gap-1.5">
                     <code className="min-w-0 flex-1 truncate font-mono text-body text-fg">
-                      {offer.address ?? status.gateway?.advertisedAddress ?? "unknown"}
+                      {offer.address ?? status?.gateway?.advertisedAddress ?? "unknown"}
                     </code>
-                    {(offer.address ?? status.gateway?.advertisedAddress) && (
+                    {(offer.address ?? status?.gateway?.advertisedAddress) && (
                       <CopyButton
-                        text={offer.address ?? status.gateway?.advertisedAddress ?? ""}
+                        text={offer.address ?? status?.gateway?.advertisedAddress ?? ""}
                         label="address"
                       />
                     )}
@@ -348,11 +400,13 @@ function PairDialog({ status, onClose }: { status: RemoteStatus; onClose: () => 
           ) : (
             <div className="flex flex-col gap-3 rounded-xl bg-fill-subtle p-4">
               <div className="text-body text-fg">
-                {status.pairingError
+                {status?.pairingError
                   ? status.pairingError
-                  : expired
-                    ? "This code has expired. A device pairs with a fresh one."
-                    : "Waiting for the gateway to issue a code…"}
+                  : pairedNow
+                    ? "Paired. The device sees this Mac's open threads now."
+                    : expired
+                      ? "This code has expired or was used up. A device pairs with a fresh one."
+                      : "Waiting for the gateway to issue a code…"}
               </div>
               <div>
                 <Action onClick={pairAgain} disabled={retrying}>
@@ -370,27 +424,40 @@ function PairDialog({ status, onClose }: { status: RemoteStatus; onClose: () => 
 }
 
 /**
- * A thread's own share, in its header: a small chip while remote access is on
- * and the gateway has accepted this thread, and a brighter one while a device
- * is attached to it.
+ * A thread's own share, in its header: a small chip while the thread is shared
+ * (with the number of devices attached to it), and a muted one saying the
+ * host cannot share this thread right now.
+ *
+ * It polls the thread's own status, so it does not depend on Settings being
+ * open to learn that remote access was switched on in a terminal.
  */
 export function RemoteThreadIndicator({ sessionId }: { sessionId?: string }) {
   const remote = useApp((s) => (sessionId ? s.remoteByThread[sessionId] : undefined));
-  const enabled = useApp((s) => s.remote?.enabled ?? false);
   const load = useCallback(() => {
     if (sessionId) void refreshRemote(sessionId);
   }, [sessionId]);
   useEffect(() => {
-    if (!sessionId || !enabled) return;
+    if (!sessionId) return;
     load();
     const timer = setInterval(load, REFRESH_MS);
     return () => clearInterval(timer);
-  }, [load, sessionId, enabled]);
-  if (!enabled || !sessionId) return null;
-  const attached = remote?.gateway?.attachedDevices ?? [];
-  const shared = remote?.shared && remote.gateway?.connected;
-  if (!shared) return null;
-  const count = attached.length;
+  }, [load, sessionId]);
+  if (!sessionId || !remote) return null;
+  if (!remote.shared) {
+    if (!remote.notShared) return null;
+    return (
+      <Tooltip label={`Not shared with paired devices: ${remote.notShared}`}>
+        <span
+          role="status"
+          aria-label={`Not shared: ${remote.notShared}`}
+          className="inline-flex shrink-0 items-center gap-1 rounded-md bg-fill-subtle px-1.5 py-0.5 text-caption text-fg-faint"
+        >
+          <WifiOff size={11} />
+        </span>
+      </Tooltip>
+    );
+  }
+  const count = (remote.gateway?.attachedDevices ?? []).length;
   return (
     <Tooltip
       label={

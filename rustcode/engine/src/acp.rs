@@ -1006,6 +1006,26 @@ fn unknown_session(session_id: &str) -> agent_client_protocol::Error {
         .data(format!("unknown ACP session: {session_id}"))
 }
 
+/// One open thread auto-share may share, with how recently it was used.
+struct Candidate {
+    last_active: String,
+    target: CandidateTarget,
+}
+
+enum CandidateTarget {
+    Builtin(Arc<remote::RemoteSession>),
+    Harness(String, Arc<crate::harness::session::ExternalSession>),
+}
+
+impl Candidate {
+    fn session_id(&self) -> String {
+        match &self.target {
+            CandidateTarget::Builtin(session) => session.session_id.clone(),
+            CandidateTarget::Harness(session_id, _) => session_id.clone(),
+        }
+    }
+}
+
 impl AcpServer {
     /// Share every open thread while remote access is switched on for this
     /// machine, and unshare them when it is switched off. A thread on the
@@ -1030,14 +1050,35 @@ impl AcpServer {
         {
             return;
         }
-        let mut failed = false;
-        let builtin = {
+        // The gateway shares at most this many threads per host, so a Mac
+        // with more threads open shares the ones used most recently.
+        let room = remote::MAX_SHARED_SESSIONS.saturating_sub(self.remote.shared_count());
+        let mut candidates: Vec<Candidate> = Vec::new();
+        {
             let sessions = self.sessions.lock().await;
-            sessions
-                .iter()
-                .filter(|(session_id, _)| !self.remote.is_shared(session_id))
-                .map(|(session_id, session)| {
-                    remote::RemoteSession::from_acp(
+            for (session_id, session) in sessions.iter() {
+                if self.remote.is_shared(session_id) || self.remote.refusal(session_id).is_some() {
+                    continue;
+                }
+                // Read without waiting: a busy thread's clock is its last
+                // message, and a lock held elsewhere only costs it its place
+                // in the order.
+                let last_active = session
+                    .state
+                    .try_lock()
+                    .ok()
+                    .and_then(|state| {
+                        state
+                            .history
+                            .iter()
+                            .rev()
+                            .map(|message| message.timestamp.clone())
+                            .find(|timestamp| !timestamp.is_empty())
+                    })
+                    .unwrap_or_default();
+                candidates.push(Candidate {
+                    last_active,
+                    target: CandidateTarget::Builtin(remote::RemoteSession::from_acp(
                         session_id.clone(),
                         session,
                         connection.clone(),
@@ -1045,34 +1086,84 @@ impl AcpServer {
                         self.auto_approve,
                         self.presence.clone(),
                         self.remote.clone(),
-                    )
-                })
-                .collect::<Vec<_>>()
-        };
-        for session in builtin {
-            if let Err(error) = self.remote.start(session, false).await {
-                crate::dbg_log!("could not share this thread with a device: {error:?}");
-                failed = true;
+                    )),
+                });
             }
         }
-        let external = {
+        {
             let sessions = self.external.lock().await;
-            sessions
-                .iter()
-                .filter(|(session_id, _)| !self.remote.is_shared(session_id))
-                .map(|(session_id, session)| (session_id.clone(), Arc::clone(session)))
-                .collect::<Vec<_>>()
-        };
-        for (session_id, session) in external {
-            if let Err(error) = self.remote.start_harness(session_id, session, false).await {
-                crate::dbg_log!("could not share this thread with a device: {error:?}");
-                failed = true;
+            for (session_id, session) in sessions.iter() {
+                if self.remote.is_shared(session_id)
+                    || self.remote.refusal(session_id).is_some()
+                    || session.is_closed()
+                {
+                    continue;
+                }
+                candidates.push(Candidate {
+                    last_active: session.record().updated_at,
+                    target: CandidateTarget::Harness(session_id.clone(), Arc::clone(session)),
+                });
+            }
+        }
+        // Most recently active first; a thread with no recorded activity goes
+        // last. ISO 8601 strings sort by time as they are.
+        candidates.sort_by(|left, right| right.last_active.cmp(&left.last_active));
+        let mut failed = false;
+        for candidate in candidates.into_iter().take(room) {
+            let session_id = candidate.session_id();
+            let started = match candidate.target {
+                CandidateTarget::Builtin(session) => self.remote.start(session, false).await,
+                CandidateTarget::Harness(id, session) => {
+                    self.remote
+                        .start_harness(id, session, Some(connection.clone()), false)
+                        .await
+                }
+            };
+            match started {
+                Ok(_) => {
+                    // A thread closed while this pass connected has nothing
+                    // to share: the close removed its session, so the share
+                    // that just registered would outlive it.
+                    if !self.thread_is_open(&session_id).await {
+                        self.remote
+                            .stop_session(
+                                &session_id,
+                                crate::remote::SessionCloseReason::SessionChanged,
+                            )
+                            .await;
+                    }
+                }
+                // The gateway itself could not be reached: back off for every
+                // thread, not just this one.
+                Err(remote::StartError::Link(message)) => {
+                    crate::dbg_log!("could not share this thread with a device: {message}");
+                    failed = true;
+                }
+                // This thread alone cannot be shared (it closed, or another
+                // process holds it): leave it, and try the others.
+                Err(remote::StartError::Refused(message)) => {
+                    crate::dbg_log!("thread {session_id} is not shared with a device: {message}");
+                    self.remote.refuse(&session_id, message);
+                }
             }
         }
         if let Ok(mut retry_at) = self.share_retry_at.lock() {
             *retry_at =
                 failed.then(|| std::time::Instant::now() + std::time::Duration::from_secs(30));
         }
+    }
+
+    /// Whether `session_id` is still open in this app, under the registry's
+    /// own lock: what a share started a moment ago must re-check.
+    async fn thread_is_open(&self, session_id: &str) -> bool {
+        if self.sessions.lock().await.contains_key(session_id) {
+            return true;
+        }
+        self.external
+            .lock()
+            .await
+            .get(session_id)
+            .is_some_and(|session| !session.is_closed())
     }
 
     /// An open session's state and working directory.
@@ -1947,7 +2038,13 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                         return Err(agent_client_protocol::Error::invalid_params()
                             .data(format!("unknown ACP session: {}", request.session_id)));
                     };
-                    responder.respond(server.remote.start(session, request.pair).await?)
+                    responder.respond(
+                        server
+                            .remote
+                            .start(session, request.pair)
+                            .await
+                            .map_err(remote::StartError::into_acp)?,
+                    )
                 }
             },
             agent_client_protocol::on_receive_request!(),

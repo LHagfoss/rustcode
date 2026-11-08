@@ -146,20 +146,30 @@ labels a Claude Code thread as such. The app and a terminal share one setting:
 `/remote on` in a terminal shares the app's open threads too, and the app's
 switch shows that it is on. While a
 thread runs on an external harness, a prompt sent from a device is run through
-the harness exactly as the app's own message is, so it shows in both places;
-cancelling, steering, answering a question and resolving an approval work the
-same way. One rough edge: an approval a device resolves leaves the app's
-approval card on screen until the turn ends, because ACP has no way to
-withdraw a request already sent to the client.
+the harness exactly as the app's own message is, and the engine echoes it to
+the app as a `user_message_chunk`, so the chat shows it live; cancelling,
+steering, answering a question and resolving an approval work the same way.
+One rough edge: an approval a device resolves leaves the app's approval card
+on screen until the turn ends, because ACP has no way to withdraw a request
+already sent to the client.
+
+A host shares at most 32 threads at once. When more are open, the ones used
+most recently are shared and the rest say why they are not (`notShared`), the
+same reason `rustcode remote status` gives for a session the gateway refused.
+Prompts a device queues on a thread are dropped when sharing ends, and a share
+the gateway turns down is retried no more than once a minute.
 
 The ACP methods behind the page (`_rustcode/remote`, `/start`, `/pair`,
 `/stop`, in `engine/src/acp/remote.rs`) take an optional `sessionId`: with it
 they describe and drive that thread's share, without it the machine's own
 switch, gateway and challenge. Their answers add `qrRows` (the QR code as rows
 of `0` and `1`, quiet zone included), `target` (the harness a shared thread
-runs on) and, for the machine, `gateway.pairing` and `gateway.devices` from the
-gateway's own status. The wire protocol to the gateway
-([remote-protocol](remote-protocol/README.md)) is unchanged.
+runs on), `notShared` (why this thread is held back, when it is) and, for the
+machine, `gateway.pairing` and `gateway.connectedDevices` from the gateway's
+own status. The wire protocol to the gateway
+([remote-protocol](remote-protocol/README.md)) changed only additively:
+session entries gained an optional `harness`, and every other field and frame
+works as before.
 
 ## In the terminal
 

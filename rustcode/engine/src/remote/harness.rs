@@ -45,6 +45,18 @@ use super::protocol::{
     SessionActivity,
 };
 
+/// Prompts a device may have queued on one thread. Past this the owner says
+/// so (`rate_limited`) instead of growing without bound.
+pub(crate) const MAX_QUEUED_PROMPTS: usize = 16;
+
+/// Which pending permission request a `bridge_permission` future owns, so
+/// answering one in the app does not clear another device's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PendingKey {
+    Approval(String),
+    Question(String),
+}
+
 /// Where one recorded tool call lives in the mirror's history.
 #[derive(Debug, Clone)]
 struct ToolSlot {
@@ -108,8 +120,12 @@ struct Mirror {
     turns: u64,
     last_turn: Option<RemoteTurnTiming>,
     queue: VecDeque<String>,
-    question: Option<PendingQuestion>,
-    approval: Option<PendingApproval>,
+    /// Pending permission requests, by the harness's own identities: two can
+    /// wait at once, and answering one must not drop the other.
+    approvals: Vec<PendingApproval>,
+    questions: Vec<PendingQuestion>,
+    /// Whether this harness takes a message mid-turn (`_meta.rustcode.steer`).
+    can_steer: bool,
     /// Bumped whenever a message is rewritten in place, so a client can tell
     /// that its history cursor no longer names the same messages.
     revision: u64,
@@ -155,8 +171,10 @@ impl Mirror {
         if self.turn.is_some() {
             return false;
         }
-        self.live.clear();
-        self.thought.clear();
+        // Text that arrived while no turn was live belongs to a turn whose
+        // start the mirror missed; keep it as a message rather than dropping
+        // it into this one.
+        self.flush_reply();
         self.tools.clear();
         self.turn = Some(LiveTurn {
             timing: RemoteTurnTiming {
@@ -432,6 +450,7 @@ impl HarnessMirror {
         model: String,
         title: String,
         history: Vec<ChatMessage>,
+        can_steer: bool,
     ) -> Self {
         let last_active_at = history
             .iter()
@@ -455,6 +474,7 @@ impl HarnessMirror {
                 history,
                 turns,
                 last_active_at,
+                can_steer,
                 ..Mirror::default()
             }),
             busy: AtomicUsize::new(0),
@@ -473,8 +493,19 @@ impl HarnessMirror {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Sharing ended: a prompt a device queued must not run afterwards, and a
+    /// harness waiting on a device's answer hears the cancellation.
     pub(crate) fn close(&self) {
         self.closed.store(true, Ordering::Release);
+        let mut state = self.lock();
+        if !state.queue.is_empty() || !state.approvals.is_empty() || !state.questions.is_empty() {
+            state.queue.clear();
+            // Dropping the senders is what tells each waiting harness (and
+            // `bridge_permission`) that no answer is coming.
+            state.approvals.clear();
+            state.questions.clear();
+            state.touch();
+        }
     }
 
     /// Note one update the harness sent, as the tee sink does before the app
@@ -567,31 +598,36 @@ impl HarnessMirror {
         self.lock().queue.pop_front()
     }
 
-    pub(crate) fn queue(&self, text: String) {
+    /// Queue a prompt for the end of the running turn. `false` when the
+    /// device already has as many queued as one thread takes.
+    pub(crate) fn queue(&self, text: String) -> bool {
         let mut state = self.lock();
+        if state.queue.len() >= MAX_QUEUED_PROMPTS || self.closed.load(Ordering::Acquire) {
+            return false;
+        }
         state.queue.push_back(text);
         state.touch();
+        true
     }
 
     /// Register the permission request the harness is waiting on, if sharing
     /// can answer it. The receiver completes when a device answers; the
-    /// caller races it with the app's own answer.
+    /// caller races it with the app's own answer. Several requests can wait
+    /// at once (a harness that asks two tools in a row), so each is kept
+    /// under its own identity and answered on its own.
     pub(crate) fn begin_permission(
         &self,
         request: &RequestPermissionRequest,
-    ) -> oneshot::Receiver<RequestPermissionResponse> {
+    ) -> (PendingKey, oneshot::Receiver<RequestPermissionResponse>) {
         let (sender, receiver) = oneshot::channel();
         let mut state = self.lock();
-        if let Some(prompt) = question_prompt(request) {
-            state.question = Some(PendingQuestion {
-                question_id: format!(
-                    "harness-question-{}",
-                    state
-                        .history
-                        .iter()
-                        .filter(|message| message.role == "tool")
-                        .count()
-                ),
+        let key = if let Some(prompt) = question_prompt(request) {
+            let question_id = format!("harness-question-{}", request.tool_call.tool_call_id.0);
+            state
+                .questions
+                .retain(|question| question.question_id != question_id);
+            state.questions.push(PendingQuestion {
+                question_id: question_id.clone(),
                 prompt,
                 options: request
                     .options
@@ -600,7 +636,9 @@ impl HarnessMirror {
                     .collect(),
                 reply: sender,
             });
+            PendingKey::Question(question_id)
         } else {
+            let batch_id = format!("harness-approval-{}", request.tool_call.tool_call_id.0);
             let title = request
                 .tool_call
                 .fields
@@ -614,8 +652,11 @@ impl HarnessMirror {
                 .as_ref()
                 .map(std::string::ToString::to_string)
                 .unwrap_or_default();
-            state.approval = Some(PendingApproval {
-                batch_id: format!("harness-approval-{}", request.tool_call.tool_call_id.0),
+            state
+                .approvals
+                .retain(|approval| approval.batch_id != batch_id);
+            state.approvals.push(PendingApproval {
+                batch_id: batch_id.clone(),
                 tool_name: request
                     .tool_call
                     .fields
@@ -631,16 +672,30 @@ impl HarnessMirror {
                     .collect(),
                 reply: sender,
             });
-        }
+            PendingKey::Approval(batch_id)
+        };
         state.touch();
-        receiver
+        (key, receiver)
     }
 
-    /// The app answered the request first: stop offering it to devices.
-    pub(crate) fn end_permission(&self) {
+    /// The app answered one request first: stop offering that one to devices
+    /// and leave any other request waiting.
+    pub(crate) fn end_permission(&self, key: &PendingKey) {
         let mut state = self.lock();
-        let had = state.question.take().is_some() || state.approval.take().is_some();
-        if had {
+        let before = state.approvals.len() + state.questions.len();
+        match key {
+            PendingKey::Approval(batch_id) => {
+                state
+                    .approvals
+                    .retain(|approval| approval.batch_id != *batch_id);
+            }
+            PendingKey::Question(question_id) => {
+                state
+                    .questions
+                    .retain(|question| question.question_id != *question_id);
+            }
+        }
+        if state.approvals.len() + state.questions.len() != before {
             state.touch();
         }
     }
@@ -652,28 +707,25 @@ impl HarnessMirror {
         choice: ApprovalChoice,
     ) -> Result<(), RemoteError> {
         let mut state = self.lock();
-        let Some(approval) = state.approval.take() else {
+        let Some(index) = state
+            .approvals
+            .iter()
+            .position(|approval| approval.batch_id == batch_id)
+        else {
             return Err(stale(
                 RemoteErrorCode::StaleApproval,
                 "the named approval batch is no longer pending",
             ));
         };
-        if approval.batch_id != batch_id {
-            state.approval = Some(approval);
-            return Err(stale(
-                RemoteErrorCode::StaleApproval,
-                "the named approval batch is no longer pending",
-            ));
-        }
-        state.touch();
-        let option = pick_option(&approval.options, choice);
-        let Some(option) = option else {
-            state.approval = Some(approval);
+        let approval = state.approvals.remove(index);
+        let Some(option) = pick_option(&approval.options, choice) else {
+            state.approvals.insert(index, approval);
             return Err(stale(
                 RemoteErrorCode::UnsupportedOperation,
                 "the harness offers no option for that answer",
             ));
         };
+        state.touch();
         let _ = approval
             .reply
             .send(RequestPermissionResponse::new(selected(option)));
@@ -687,19 +739,17 @@ impl HarnessMirror {
         answer: &RemoteAnswer,
     ) -> Result<(), RemoteError> {
         let mut state = self.lock();
-        let Some(question) = state.question.take() else {
+        let Some(index) = state
+            .questions
+            .iter()
+            .position(|question| question.question_id == question_id)
+        else {
             return Err(stale(
                 RemoteErrorCode::StaleQuestion,
                 "the named question is no longer pending",
             ));
         };
-        if question.question_id != question_id {
-            state.question = Some(question);
-            return Err(stale(
-                RemoteErrorCode::StaleQuestion,
-                "the named question is no longer pending",
-            ));
-        }
+        let question = &state.questions[index];
         let option = match answer {
             RemoteAnswer::Selected { options } => {
                 let label = options.first().cloned().unwrap_or_default();
@@ -712,12 +762,12 @@ impl HarnessMirror {
             RemoteAnswer::Custom { .. } => question.options.first().map(|(id, _)| id.clone()),
         };
         let Some(option) = option else {
-            state.question = Some(question);
             return Err(stale(
                 RemoteErrorCode::InvalidAnswer,
                 "the answer is not one of this question's options",
             ));
         };
+        let question = state.questions.remove(index);
         state.touch();
         let mut reply = RequestPermissionResponse::new(selected(option));
         if let RemoteAnswer::Custom { text } = answer {
@@ -730,19 +780,17 @@ impl HarnessMirror {
     /// Drop the pending question; the harness hears that the user cancelled.
     pub(crate) fn cancel_question(&self, question_id: &str) -> Result<(), RemoteError> {
         let mut state = self.lock();
-        let Some(question) = state.question.take() else {
+        let Some(index) = state
+            .questions
+            .iter()
+            .position(|question| question.question_id == question_id)
+        else {
             return Err(stale(
                 RemoteErrorCode::StaleQuestion,
                 "the named question is no longer pending",
             ));
         };
-        if question.question_id != question_id {
-            state.question = Some(question);
-            return Err(stale(
-                RemoteErrorCode::StaleQuestion,
-                "the named question is no longer pending",
-            ));
-        }
+        let question = state.questions.remove(index);
         state.touch();
         let _ = question.reply.send(RequestPermissionResponse::new(
             RequestPermissionOutcome::Cancelled,
@@ -751,8 +799,32 @@ impl HarnessMirror {
     }
 
     pub(crate) fn wants_prompt(&self) -> bool {
+        if self.closed.load(Ordering::Acquire) {
+            return false;
+        }
         let state = self.lock();
         !state.queue.is_empty() && state.turn.is_none()
+    }
+
+    /// Whether this harness takes a message mid-turn.
+    pub(crate) fn can_steer(&self) -> bool {
+        self.lock().can_steer
+    }
+
+    /// Whether sharing this thread ended.
+    pub(crate) fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
+    /// Ids of the approvals waiting on a device, oldest first (tests, and a
+    /// log line that names more than one).
+    #[cfg(test)]
+    pub(crate) fn pending_approval_ids(&self) -> Vec<String> {
+        self.lock()
+            .approvals
+            .iter()
+            .map(|approval| approval.batch_id.clone())
+            .collect()
     }
 
     /// The snapshot a device attaches to, at `sequence`.
@@ -764,35 +836,54 @@ impl HarnessMirror {
     ) -> RemoteSnapshot {
         let mut state = self.lock();
         state.dirty = false;
+        let mut omitted = RemoteOmitted::default();
         let revision = format!("h{}", state.revision);
-        let first = state.history.len().saturating_sub(limits.transcript_items);
-        let tools = state
-            .tools
-            .iter()
-            .filter(|(_, slot)| !slot.finished())
-            .map(|(id, slot)| RemoteTool {
-                id: id.clone(),
-                name: slot.title.clone(),
-                detail: (!slot.kind.is_empty()).then(|| slot.kind.clone()),
-                state: match slot.status {
-                    ToolCallStatus::Pending => RemoteToolState::Preparing,
-                    ToolCallStatus::Failed => RemoteToolState::Failed,
-                    ToolCallStatus::Completed => RemoteToolState::Succeeded,
-                    _ => RemoteToolState::Running,
-                },
-            })
-            .collect::<Vec<_>>();
+        let mut first = state.history.len().saturating_sub(limits.transcript_items);
+        let tools = super::projection::cap(
+            state
+                .tools
+                .iter()
+                .filter(|(_, slot)| !slot.finished())
+                .map(|(id, slot)| RemoteTool {
+                    id: id.clone(),
+                    name: slot.title.clone(),
+                    detail: (!slot.kind.is_empty()).then(|| slot.kind.clone()),
+                    state: match slot.status {
+                        ToolCallStatus::Pending => RemoteToolState::Preparing,
+                        ToolCallStatus::Failed => RemoteToolState::Failed,
+                        ToolCallStatus::Completed => RemoteToolState::Succeeded,
+                        _ => RemoteToolState::Running,
+                    },
+                })
+                .collect::<Vec<_>>(),
+            limits.list_items,
+            &mut omitted.tools,
+        );
         let turn = state.turn.clone().map(|turn| RemoteTurn {
             turn_id: turn.timing.turn_id.clone(),
             live_response: bound_text(&state.live, limits.live_response_bytes, None),
             tools,
-            can_steer: true,
+            can_steer: state.can_steer,
             timing: Some(turn.timing),
             thought_time_ms: None,
             thought_tokens: None,
             thought_tokens_estimated: None,
         });
-        RemoteSnapshot {
+        let pending_prompts = super::projection::cap(
+            state
+                .queue
+                .iter()
+                .map(|text| RemotePendingPrompt {
+                    kind: RemotePendingPromptKind::Queue,
+                    text: bound_text(text, limits.label_bytes, None),
+                })
+                .collect::<Vec<_>>(),
+            limits.list_items,
+            &mut omitted.pending_prompts,
+        );
+        let awaiting_approval = !state.approvals.is_empty();
+        let awaiting_question = !state.questions.is_empty();
+        let mut snapshot = RemoteSnapshot {
             commands: Vec::new(),
             capabilities: Vec::new(),
             settings: None,
@@ -805,9 +896,9 @@ impl HarnessMirror {
                 harness: Some(self.harness.clone()),
                 turn_count: Some(state.turns),
                 last_active_at: state.last_active_at.clone(),
-                activity: if state.approval.is_some() {
+                activity: if awaiting_approval {
                     SessionActivity::AwaitingApproval
-                } else if state.question.is_some() {
+                } else if awaiting_question {
                     SessionActivity::AwaitingQuestion
                 } else if state.turn.is_some() {
                     SessionActivity::Running
@@ -815,8 +906,8 @@ impl HarnessMirror {
                     SessionActivity::Idle
                 },
                 attention: RemoteAttention {
-                    approval: state.approval.is_some(),
-                    question: state.question.is_some(),
+                    approval: awaiting_approval,
+                    question: awaiting_question,
                 },
                 health: OwnerHealth::Live,
             },
@@ -833,7 +924,9 @@ impl HarnessMirror {
             ),
             history_revision: revision.clone(),
             history_cursor: (first > 0).then(|| format!("{first}@{revision}")),
-            pending_question: state.question.as_ref().map(|question| RemoteQuestion {
+            // The device answers the first of each; the rest stay pending and
+            // are offered by the next snapshot.
+            pending_question: state.questions.first().map(|question| RemoteQuestion {
                 question_id: question.question_id.clone(),
                 header: question.prompt.header.clone(),
                 text: question.prompt.text.clone(),
@@ -847,9 +940,9 @@ impl HarnessMirror {
                     .collect(),
                 multiple: question.prompt.multiple,
                 position: 1,
-                chain_length: 1,
+                chain_length: state.questions.len() as u32,
             }),
-            pending_approval: state.approval.as_ref().map(|approval| RemoteApprovalBatch {
+            pending_approval: state.approvals.first().map(|approval| RemoteApprovalBatch {
                 batch_id: approval.batch_id.clone(),
                 actions: vec![RemoteApprovalAction {
                     tool_name: approval.tool_name.clone(),
@@ -858,18 +951,43 @@ impl HarnessMirror {
                     details: bound_text(&approval.details, limits.approval_bytes, None),
                 }],
             }),
-            pending_prompts: state
-                .queue
-                .iter()
-                .map(|text| RemotePendingPrompt {
-                    kind: RemotePendingPromptKind::Queue,
-                    text: bound_text(text, limits.label_bytes, None),
-                })
-                .collect(),
+            pending_prompts,
             subagents: Vec::new(),
             background_tasks: Vec::new(),
-            omitted: RemoteOmitted::default(),
+            omitted,
+        };
+        // The per-field limits bound an ordinary thread; JSON escaping can
+        // still inflate text. Shed the least urgent content until the frame
+        // fits, exactly as `project_snapshot` does: older transcript first,
+        // then the live response, then the approval's arguments.
+        while super::projection::encoded_len(&snapshot) > limits.frame_bytes {
+            if !snapshot.transcript.is_empty() {
+                let drop = snapshot.transcript.len().div_ceil(2);
+                snapshot.transcript.drain(..drop);
+                first += drop;
+                snapshot.history_cursor = (first > 0).then(|| format!("{first}@{revision}"));
+            } else if snapshot
+                .turn
+                .as_mut()
+                .is_some_and(|turn| super::projection::halve(&mut turn.live_response, true))
+            {
+            } else if let Some(action) = snapshot
+                .pending_approval
+                .as_mut()
+                .and_then(|approval| {
+                    approval
+                        .actions
+                        .iter_mut()
+                        .max_by_key(|action| action.details.text.len())
+                })
+                .filter(|action| !action.details.text.is_empty())
+            {
+                super::projection::halve(&mut action.details, false);
+            } else {
+                break;
+            }
         }
+        snapshot
     }
 
     /// The turn a device may cancel now.
@@ -1158,6 +1276,7 @@ mod tests {
             "opus".to_owned(),
             "A thread".to_owned(),
             Vec::new(),
+            true,
         )
     }
 
@@ -1204,6 +1323,7 @@ mod tests {
             "opus".to_owned(),
             "A thread".to_owned(),
             Vec::new(),
+            true,
         );
         let snapshot = mirror.snapshot(&registration(), 1, &ProjectionLimits::default());
         assert_eq!(snapshot.session.harness.as_deref(), Some("claude-code"));
@@ -1229,7 +1349,7 @@ mod tests {
                 PermissionOption::new("deny", "Deny", PermissionOptionKind::RejectOnce),
             ],
         );
-        let mut reply = mirror.begin_permission(&request);
+        let (_, mut reply) = mirror.begin_permission(&request);
         let snapshot = mirror.snapshot(&registration(), 1, &ProjectionLimits::default());
         let approval = snapshot.pending_approval.expect("an approval is pending");
         assert_eq!(snapshot.session.attention.approval, true);
@@ -1261,7 +1381,7 @@ mod tests {
                 PermissionOption::new("deny", "Deny", PermissionOptionKind::RejectOnce),
             ],
         );
-        let _reply = mirror.begin_permission(&request);
+        let (_key, _reply) = mirror.begin_permission(&request);
         let error = mirror
             .resolve_approval("another-batch", ApprovalChoice::Deny)
             .expect_err("a different batch is refused");
@@ -1271,6 +1391,173 @@ mod tests {
                 .snapshot(&registration(), 1, &ProjectionLimits::default())
                 .pending_approval
                 .is_some()
+        );
+    }
+
+    /// Two harness requests can wait at once; answering one leaves the other
+    /// pending, and each reply reaches its own request.
+    #[test]
+    fn two_pending_approvals_are_answered_independently() {
+        use agent_client_protocol::schema::v1::{
+            PermissionOption, PermissionOptionKind, ToolCallUpdate, ToolCallUpdateFields,
+        };
+        let mirror = mirror();
+        let ask = |id: &'static str, title: &str| {
+            RequestPermissionRequest::new(
+                "session-1",
+                ToolCallUpdate::new(id, ToolCallUpdateFields::new().title(title)),
+                vec![
+                    PermissionOption::new("allow", "Allow", PermissionOptionKind::AllowOnce),
+                    PermissionOption::new("deny", "Deny", PermissionOptionKind::RejectOnce),
+                ],
+            )
+        };
+        let (first_key, mut first) = mirror.begin_permission(&ask("call-1", "Run the tests"));
+        let (second_key, mut second) = mirror.begin_permission(&ask("call-2", "Write the file"));
+        assert_eq!(
+            mirror.pending_approval_ids(),
+            vec![
+                "harness-approval-call-1".to_owned(),
+                "harness-approval-call-2".to_owned()
+            ]
+        );
+
+        // The app answers the first; the second is still offered to devices.
+        mirror.end_permission(&first_key);
+        assert_eq!(
+            mirror.pending_approval_ids(),
+            vec!["harness-approval-call-2".to_owned()],
+            "answering in the app must not clear another request"
+        );
+        assert!(
+            first.try_recv().is_err(),
+            "the app's answer is the harness's answer for that request"
+        );
+        assert!(
+            second.try_recv().is_err(),
+            "the untouched request is still waiting"
+        );
+
+        mirror
+            .resolve_approval("harness-approval-call-2", ApprovalChoice::Deny)
+            .expect("the second batch resolves");
+        let answered = second.blocking_recv().expect("the harness hears it");
+        assert!(matches!(
+            answered.outcome,
+            RequestPermissionOutcome::Selected(selected) if selected.option_id.0.as_ref() == "deny"
+        ));
+        assert!(second_key == PendingKey::Approval("harness-approval-call-2".to_owned()));
+    }
+
+    /// Text that arrived before the turn was known grew no turn: it is kept as
+    /// a message, not cleared when the turn begins.
+    #[test]
+    fn text_that_arrives_before_a_turn_is_kept() {
+        let mirror = mirror();
+        mirror.observe(&text_chunk("an early word"));
+        assert!(mirror.sync_turn(true));
+        let snapshot = mirror.snapshot(&registration(), 1, &ProjectionLimits::default());
+        assert!(
+            snapshot
+                .transcript
+                .iter()
+                .any(|message| message.role == "assistant"
+                    && message.content.text.contains("an early word")),
+            "the early text is a message of its own: {:?}",
+            snapshot.transcript
+        );
+    }
+
+    /// A device that queues more prompts than a thread takes is refused, and
+    /// a share that ends drops what was queued rather than running it later.
+    #[test]
+    fn the_queue_is_bounded_and_dropped_when_sharing_ends() {
+        let mirror = mirror();
+        for index in 0..MAX_QUEUED_PROMPTS {
+            assert!(mirror.queue(format!("queued {index}")));
+        }
+        assert!(!mirror.queue("one too many".to_owned()));
+        let snapshot = mirror.snapshot(&registration(), 1, &ProjectionLimits::default());
+        assert_eq!(snapshot.pending_prompts.len(), MAX_QUEUED_PROMPTS);
+        assert_eq!(snapshot.omitted.pending_prompts, 0);
+
+        mirror.close();
+        assert!(!mirror.wants_prompt(), "nothing runs after sharing ended");
+        assert!(mirror.take_queue().is_none());
+        let snapshot = mirror.snapshot(&registration(), 2, &ProjectionLimits::default());
+        assert!(snapshot.pending_prompts.is_empty());
+    }
+
+    /// The snapshot sheds content until it fits one frame, and caps the lists
+    /// it carries, exactly as the built-in harness projects.
+    #[test]
+    fn an_oversized_snapshot_sheds_until_it_fits() {
+        let mirror = mirror();
+        for index in 0..20 {
+            mirror.note_prompt(&format!("prompt {index} {}", "x".repeat(2_000)));
+        }
+        for index in 0..40 {
+            mirror.queue(format!("queued {index}"));
+        }
+        let limits = ProjectionLimits {
+            transcript_items: 40,
+            text_bytes: 4_000,
+            frame_bytes: 8_000,
+            list_items: 32,
+            ..ProjectionLimits::default()
+        };
+        let snapshot = mirror.snapshot(&registration(), 1, &limits);
+        let encoded = serde_json::to_vec(&snapshot).expect("a snapshot serializes");
+        assert!(
+            encoded.len() <= limits.frame_bytes,
+            "{} bytes is more than one frame",
+            encoded.len()
+        );
+        assert!(
+            snapshot.transcript.len() < 20,
+            "older transcript was shed first"
+        );
+        // A history cursor that points at the tail survives the shedding.
+        let RemoteResult::History(page) = mirror
+            .read(
+                &registration(),
+                &RemoteRequest {
+                    authenticated_device_id: None,
+                    protocol_version: REMOTE_PROTOCOL_VERSION,
+                    request_id: "r1".to_owned(),
+                    session_id: Some("session-1".to_owned()),
+                    registration_epoch: Some(3),
+                    operation: RemoteOperation::GetHistory {
+                        cursor: None,
+                        limit: 2,
+                    },
+                },
+                &limits,
+            )
+            .expect("the tail page is served")
+        else {
+            panic!("a history page");
+        };
+        assert_eq!(page.messages.len(), 2);
+    }
+
+    #[test]
+    fn a_snapshot_says_whether_the_harness_takes_a_steer() {
+        let mirror = HarnessMirror::new(
+            "session-1".to_owned(),
+            "codex".to_owned(),
+            PathBuf::from("/tmp/workspace"),
+            "gpt-5.5".to_owned(),
+            "A thread".to_owned(),
+            Vec::new(),
+            false,
+        );
+        assert!(mirror.sync_turn(true));
+        let snapshot = mirror.snapshot(&registration(), 1, &ProjectionLimits::default());
+        let turn = snapshot.turn.expect("a turn is running");
+        assert!(
+            !turn.can_steer,
+            "a harness that does not steer is not offered"
         );
     }
 

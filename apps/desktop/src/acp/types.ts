@@ -1147,7 +1147,10 @@ export interface RemoteGateway {
   loopbackOnly?: boolean;
   /** Devices attached to this thread, when the answer names one. */
   attachedDevices?: string[];
+  /** Devices connected to the gateway, attached to this thread or not. */
   connectedDevices?: string[];
+  /** A pairing challenge is open right now (the machine's answer says so). */
+  pairingOpen?: boolean;
   /** Devices connected to the gateway, attached to this thread or not. */
   pairedDevices?: number;
   /** Wrong codes the open challenge still tolerates, and how long it has. */
@@ -1175,6 +1178,11 @@ export interface RemoteStatus {
   pairingError?: string | null;
   /** Why sharing ended, when it did. */
   error?: string | null;
+  /**
+   * Why this thread is not shared with devices right now, on the machine's
+   * answer; a count on the machine's own answer (`status.notShared`).
+   */
+  notShared?: string | number | null;
   pairedDevices: number;
   devices: RemoteDevice[];
 }
@@ -1212,6 +1220,7 @@ function parseGateway(value: Json | undefined): RemoteGateway | undefined {
     attachedDevices: names(o.attachedDevices),
     connectedDevices: names(o.connectedDevices),
     pairedDevices: num(o.pairedDevices),
+    pairingOpen: bool(o.pairingOpen),
     pairing: pairing
       ? {
           expiresInSecs: num(pairing.expiresInSecs),
@@ -1236,6 +1245,7 @@ export function parseRemoteStatus(value: Json): RemoteStatus {
     pairingPending: bool(root?.pairingPending),
     pairingError: str(root?.pairingError),
     error: str(root?.error),
+    notShared: num(root?.notShared) ?? (str(root?.notShared) ? str(root?.notShared) : undefined),
     pairedDevices: num(root?.pairedDevices) ?? 0,
     devices:
       arr(root?.devices)

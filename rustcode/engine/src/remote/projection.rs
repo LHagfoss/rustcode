@@ -559,17 +559,17 @@ pub(super) fn project_ended_timing(state: &AppState, turn_id: &str) -> Option<Re
 }
 
 /// Keep at most `limit` entries, reporting how many were left out.
-fn cap<T>(mut items: Vec<T>, limit: usize, omitted: &mut u32) -> Vec<T> {
+pub(super) fn cap<T>(mut items: Vec<T>, limit: usize, omitted: &mut u32) -> Vec<T> {
     *omitted = items.len().saturating_sub(limit) as u32;
     items.truncate(limit);
     items
 }
 
-fn encoded_len<T: serde::Serialize>(value: &T) -> usize {
+pub(super) fn encoded_len<T: serde::Serialize>(value: &T) -> usize {
     serde_json::to_vec(value).map_or(usize::MAX, |bytes| bytes.len())
 }
 
-fn halve(text: &mut BoundedText, keep_tail: bool) -> bool {
+pub(super) fn halve(text: &mut BoundedText, keep_tail: bool) -> bool {
     if text.text.is_empty() {
         return false;
     }

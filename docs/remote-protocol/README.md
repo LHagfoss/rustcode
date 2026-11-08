@@ -316,7 +316,8 @@ is optional and absent from a host that predates harness threads; a client
 then shows no harness. It rides on every session entry — the `sessions`
 result, the snapshot's `session`, and `session_created`/`session_resumed` —
 and `model` is the model that harness runs the thread on (empty when the host
-does not know it).
+does not know it). Both are additive: a client that predates them decodes the
+same frames unchanged.
 
 The `sessions` result also carries `capabilities`, the optional host-wide
 operations the gateway implements. It is absent from gateways that implement

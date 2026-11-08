@@ -1522,6 +1522,12 @@ impl ExternalSession {
         }
     }
 
+    /// Whether this thread was closed: the app's registry dropped it, so a
+    /// share of it must end.
+    pub(crate) fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
     /// Stop the harness for good: `session/close`, connection close.
     pub(crate) async fn close(&self) {
         self.closed.store(true, Ordering::Release);
