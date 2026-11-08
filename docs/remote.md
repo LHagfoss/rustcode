@@ -385,15 +385,22 @@ fills in the same saved machines.
 
 | Command | Behavior |
 | --- | --- |
-| `rustcode machines add <address> [--name <name>] [--code <digits>]` | Ask the machine to let this one in. It shows *‹name› wants to connect* on that machine; accept it there, then type the eight-digit code it shows (or pass `--code`). Prints `Waiting for … to accept…` while the request is open. Pairs, stores the token and saves the machine. |
+| `rustcode machines add <address> [--name <name>] [--code <digits>]` | Ask the machine to let this one in; the code is exactly the eight digits it shows (spaces and dashes are ignored). It shows *‹name› wants to connect* on that machine; accept it there, then type the eight-digit code it shows (or pass `--code`). Prints `Waiting for … to accept…` while the request is open. Pairs, stores the token and saves the machine. |
 | `rustcode machines add --discover` | The same, choosing the machine from Bonjour when exactly one answers. |
 | `rustcode machines list [--threads] [--json]` | Name, platform, the route in use and whether the machine answers now. The platform is `unknown` until the gateway reports one, which it does not yet. With `--threads`, each connected machine's thread titles over ACP (`session/list`). `--json` for scripts. |
 | `rustcode machines remove <name-or-id>` | Forget a machine and delete its token. It still lists this computer until it is revoked there. |
 | `rustcode machines discover [--secs <n>] [--json]` | Machines on this network whose record lists `caps=desktops`: name, address and machine id. |
 
 An address is `host`, `host:port`, `[v6]:port` or `ws://host:port`; the port
-defaults to `17879`. `wss://` is refused: the gateway has no TLS listener, so
-use an overlay network (Tailscale, NetBird) to encrypt the traffic.
+defaults to `17879`. `wss://` is refused: the gateway has no TLS listener.
+
+**A machine token travels unencrypted on the LAN**, exactly like the phone
+app's: the gateway has no TLS, so anything on that network can read a prompt,
+a thread and — during pairing — the code. Use a network you trust, or put both
+machines on Tailscale or NetBird, whose tunnel encrypts the traffic. Because a
+*public* address has no trusted network around it, this client refuses to pair
+over one, or to send a saved machine's token to one, and says so instead; that
+holds until encrypted transport (#2651) lands.
 
 - The command line pairs as a **desktop** client, because that is the pairing
   the machine's owner grants ACP access to when accepting the request. A
@@ -403,11 +410,15 @@ use an overlay network (Tailscale, NetBird) to encrypt the traffic.
   (`0600` on Unix). Each is keyed by the machine's stable `host_id` — its
   gateway identifier — with an ordered list of routes (`lan`, `vpn`,
   `tailscale`, `public`), the device record and when it was added and last
-  connected. The first machine saved is the **main** one.
+  connected. The first machine saved is the **main** one. A change takes
+  `machines.lock` next to the file and re-reads it first, so two
+  `rustcode machines` runs cannot drop each other's machine.
 - Tokens are kept in the operating system credential store (Keychain,
   Credential Manager, Secret Service) under `rustcode-machines`, one entry per
-  machine. They are never written to `credentials.json` or
-  `provider-accounts.json`. On a machine without a credential store, set
+  machine *and profile*: the account names this configuration directory's
+  install id and the machine's `host_id`, so two `RUSTCODE_CONFIG_DIR`
+  profiles never overwrite each other's token. They are never written to
+  `credentials.json` or `provider-accounts.json`. On a machine without a credential store, set
   `RUSTCODE_MACHINE_TOKEN_STORE=file` to keep them in
   `machines/tokens.json` (`0600` in a `0700` directory) instead; without it,
   the command says so rather than writing a credential to disk silently.

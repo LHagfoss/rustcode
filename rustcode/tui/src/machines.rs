@@ -6,14 +6,19 @@
 //! and the machine goes into `machines.json`; see the `rustcode-client` crate.
 
 use crate::cli::MachineCommands;
-use anyhow::{Context, Result, bail};
-use rustcode_client::machine::{APPROVAL_TIMEOUT, platform};
+use anyhow::{Context, Result, bail, ensure};
+use rustcode_client::machine::{APPROVAL_TIMEOUT, normalize_code, platform};
 use rustcode_client::{
-    ClientKind, Connector, DiscoveredMachine, Machine, MachineRegistry, Route, Session, TokenStore,
-    browse_async,
+    ClientKind, Connector, DiscoveredMachine, Machine, MachineRegistry, PAIRING_CODE_DIGITS, Route,
+    Session, TokenStore, browse_async,
 };
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 use std::time::Duration;
+
+/// Longest code input read from standard input: eight digits plus the
+/// separators and stray whitespace a paste carries. Anything longer is not a
+/// code, and reading it all would be reading whatever the pipe holds.
+const MAX_CODE_INPUT_BYTES: u64 = 64;
 
 /// One saved machine and what asking it right now said.
 struct Row {
@@ -274,6 +279,12 @@ async fn add(
     };
     let connector = Connector::new(config_dir, ClientKind::Desktop)?;
     let tokens = TokenStore::open(config_dir)?;
+    // Refuse a mistyped `--code` before asking the machine: the code has
+    // eight digits, and the frame that reports its length arrives only after
+    // the owner has accepted.
+    let given = code
+        .map(|code| parse_code(&code, PAIRING_CODE_DIGITS))
+        .transpose()?;
     let label = name.clone().unwrap_or_else(|| address.clone());
     let ask = connector
         .ask(&address)
@@ -286,8 +297,9 @@ async fn add(
         bail!("{label} did not answer the connection request; ask again");
     };
     let digits = approved.code_length();
-    let code = match code {
-        Some(code) => code,
+    let code = match given {
+        Some(code) if code.len() == digits as usize => code,
+        Some(code) => parse_code(&code, digits)?,
         None => read_code(digits)?,
     };
     let paired = approved
@@ -306,6 +318,8 @@ async fn add(
         let _ = tokens.remove(&machine.host_id);
         return Err(error).context("the machine is paired but could not be saved");
     }
+    // Pairing is a successful connection; `list` shows when it happened.
+    registry.mark_connected(&machine.host_id, chrono::Utc::now())?;
     println!(
         "Paired with {} ({}). Saved as \"{}\"; `rustcode machines list` shows it.",
         welcome.machine_name(),
@@ -316,18 +330,35 @@ async fn add(
 }
 
 /// Read the eight-digit code the machine shows, for a person at a terminal.
+///
+/// The read is bounded, and the code must be exactly the digits the machine
+/// reported: a pasted line, a shorter code or a stray key is refused here
+/// rather than spent as a failed pairing attempt on the machine.
 fn read_code(digits: u32) -> Result<String> {
     print!("Enter the {digits}-digit code the machine shows: ");
     let _ = std::io::stdout().flush();
+    let mut reader = std::io::stdin().lock().take(MAX_CODE_INPUT_BYTES);
+    read_code_from(&mut reader, digits)
+}
+
+fn read_code_from(reader: &mut impl BufRead, digits: u32) -> Result<String> {
     let mut line = String::new();
-    std::io::stdin()
-        .lock()
+    reader
         .read_line(&mut line)
         .context("could not read the code from standard input")?;
-    let code = rustcode_client::machine::normalize_code(&line);
-    if code.is_empty() {
-        bail!("no code was entered; nothing changed");
-    }
+    parse_code(&line, digits)
+}
+
+/// The digits of `raw`, if they are exactly the ones the machine shows.
+/// Spaces and dashes are separators; anything else is not a code.
+fn parse_code(raw: &str, digits: u32) -> Result<String> {
+    let code = normalize_code(raw);
+    ensure!(
+        code.len() == digits as usize,
+        "a pairing code is exactly {digits} digits; got {} (spaces and dashes are ignored, \
+         letters and other characters are not)",
+        code.len()
+    );
     Ok(code)
 }
 
@@ -444,6 +475,36 @@ mod tests {
         for line in table.lines() {
             assert_eq!(line.trim_end(), line, "{line:?}");
         }
+    }
+
+    /// The code is exactly what the machine shows: separators are dropped,
+    /// anything else is refused before it can cost a pairing attempt.
+    #[test]
+    fn a_code_must_be_exactly_the_digits_the_machine_shows() {
+        assert_eq!(parse_code("4821-9034", 8).unwrap(), "48219034");
+        assert_eq!(parse_code(" 4821 9034 \n", 8).unwrap(), "48219034");
+        assert_eq!(parse_code("48219034", 8).unwrap(), "48219034");
+        for raw in ["", "4821", "482190341", "4821-903x"] {
+            let error = parse_code(raw, 8).unwrap_err().to_string();
+            assert!(error.contains("exactly 8 digits"), "{raw:?} gave {error}");
+        }
+    }
+
+    /// A pasted line longer than the bound is cut at it, so it can never be
+    /// read as the right code.
+    #[test]
+    fn a_long_input_is_bounded_and_refused() {
+        let long = "4".repeat(4096);
+        let mut reader = std::io::Cursor::new(long).take(MAX_CODE_INPUT_BYTES);
+        let error = read_code_from(&mut reader, 8).unwrap_err().to_string();
+        assert!(error.contains("exactly 8 digits"), "{error}");
+        // Eight digits behind a wall of spaces are cut away with the rest.
+        let padded = format!("{}48219034\n", " ".repeat(200));
+        let mut reader = std::io::Cursor::new(padded).take(MAX_CODE_INPUT_BYTES);
+        assert!(read_code_from(&mut reader, 8).is_err());
+        // A plain line still reads.
+        let mut reader = std::io::Cursor::new("4821 9034\n").take(MAX_CODE_INPUT_BYTES);
+        assert_eq!(read_code_from(&mut reader, 8).unwrap(), "48219034");
     }
 
     #[test]

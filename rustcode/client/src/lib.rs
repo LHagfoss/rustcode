@@ -33,7 +33,8 @@ pub use machine::{
     machine_from_pairing, platform,
 };
 pub use protocol::{
-    AcpClientFrame, AcpServerFrame, ErrorCode, HandshakeRequest, HandshakeResponse, Secret,
+    AcpClientFrame, AcpServerFrame, ErrorCode, HandshakeRequest, HandshakeResponse,
+    PAIRING_CODE_DIGITS, Secret,
 };
 pub use registry::{Machine, MachineRegistry, Route, RouteKind};
 pub use tokens::TokenStore;

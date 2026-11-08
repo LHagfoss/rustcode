@@ -17,7 +17,9 @@ use rustcode::remote_gateway::gateway::{Gateway, GatewayConfig, Limits};
 use rustcode::remote_gateway::hub::{HubLimits, SessionHub};
 use rustcode::remote_gateway::lifecycle::RemoteLifecycle;
 use rustcode_client::machine::machine_from_pairing;
-use rustcode_client::{ClientKind, Connector, MachineRegistry, Route, TokenStore, transport};
+use rustcode_client::{
+    ClientKind, Connector, MachineRegistry, Route, RouteKind, TokenStore, transport,
+};
 
 const WAIT: Duration = Duration::from_secs(15);
 
@@ -137,7 +139,7 @@ async fn a_machine_is_asked_paired_and_authenticated_then_speaks_acp() {
     let mut registry = MachineRegistry::load(config.path()).unwrap();
     let machine = machine_from_pairing(paired.session.welcome(), Route::new(host.address()), None);
     registry.insert(machine.clone()).unwrap();
-    let tokens = TokenStore::in_file(config.path());
+    let tokens = TokenStore::in_file(config.path()).unwrap();
     tokens.set(&machine.host_id, &paired.secret).unwrap();
     drop(paired);
 
@@ -264,7 +266,7 @@ async fn thread_titles_read_the_machines_threads() {
     let mut registry = MachineRegistry::load(config.path()).unwrap();
     let machine = machine_from_pairing(paired.session.welcome(), Route::new(host.address()), None);
     registry.insert(machine.clone()).unwrap();
-    let tokens = TokenStore::in_file(config.path());
+    let tokens = TokenStore::in_file(config.path()).unwrap();
     tokens.set(&machine.host_id, &paired.secret).unwrap();
     drop(paired);
     let server = acp_stub(host.config_dir()).await;
@@ -293,7 +295,7 @@ async fn another_machines_address_is_not_taken_for_this_one() {
         .unwrap();
     let mut machine =
         machine_from_pairing(paired.session.welcome(), Route::new(host.address()), None);
-    let tokens = TokenStore::in_file(config.path());
+    let tokens = TokenStore::in_file(config.path()).unwrap();
     tokens.set(&machine.host_id, &paired.secret).unwrap();
     // The same address saved under another machine's identity, with the
     // token this machine issued.
@@ -305,6 +307,48 @@ async fn another_machines_address_is_not_taken_for_this_one() {
         .await
         .expect_err("a mismatched machine is refused");
     assert!(format!("{error:#}").contains("answers as"), "{error:#}");
+    host.stop().await;
+}
+
+/// A route that would carry the token in the clear is skipped, not dialled:
+/// the LAN route behind it is used instead. `203.0.113.9` (TEST-NET-3) answers
+/// nothing, so trying it would cost that route's timeout.
+#[tokio::test]
+async fn a_public_route_is_skipped_for_a_lan_one() {
+    let host = Host::start().await;
+    let config = tempfile::tempdir_in("/tmp").unwrap();
+    let connector = Connector::new(config.path(), ClientKind::Desktop).unwrap();
+    let ask = connector.ask(&host.address()).await.unwrap();
+    let code = host.accept_connect_request().await;
+    let paired = ask
+        .wait(WAIT)
+        .await
+        .unwrap()
+        .unwrap()
+        .pair(&code)
+        .await
+        .unwrap();
+    let mut machine =
+        machine_from_pairing(paired.session.welcome(), Route::new(host.address()), None);
+    machine
+        .routes
+        .insert(0, Route::with_kind(RouteKind::Public, "203.0.113.9:17879"));
+    let tokens = TokenStore::in_file(config.path()).unwrap();
+    tokens.set(&machine.host_id, &paired.secret).unwrap();
+    drop(paired);
+    let started = std::time::Instant::now();
+    let (session, route) = connector
+        .connect(&machine, &tokens)
+        .await
+        .expect("the LAN route is used");
+    assert_eq!(route.address, host.address());
+    assert_eq!(route.kind, RouteKind::Lan);
+    assert_eq!(session.welcome().gateway_id, machine.host_id);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "the public route was dialled: {:?}",
+        started.elapsed()
+    );
     host.stop().await;
 }
 
@@ -323,7 +367,7 @@ async fn a_machine_without_a_token_asks_for_a_new_pairing() {
         chrono::Utc::now(),
     );
     let error = connector
-        .connect(&machine, &TokenStore::in_file(config.path()))
+        .connect(&machine, &TokenStore::in_file(config.path()).unwrap())
         .await
         .expect_err("no token, no connection");
     assert!(

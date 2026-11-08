@@ -218,6 +218,57 @@ fn machines_add_needs_an_address_or_discovery() {
     assert!(!sandbox.config_dir().join("machines.json").exists());
 }
 
+/// A public address is refused before anything is dialled: the pairing code
+/// and the token would cross it in the clear (#2651).
+#[test]
+fn machines_add_refuses_a_public_address() {
+    let sandbox = Sandbox::new("public");
+    let output = sandbox.run(&["machines", "add", "203.0.113.9:17879"]);
+    assert!(!output.status.success());
+    let text = stderr(&output);
+    assert!(text.contains("#2651"), "{text}");
+    assert!(text.contains("203.0.113.9"), "{text}");
+    assert!(text.contains("public address"), "{text}");
+    assert!(!sandbox.config_dir().join("machines.json").exists());
+    // A saved machine whose only route is public says the same instead of
+    // handing over its token.
+    write_machine(
+        &sandbox.config_dir(),
+        "Studio",
+        "gw-8e1f4b7a00112233",
+        "203.0.113.9:17879",
+    );
+    let output = sandbox.run(&["machines", "list"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("not paired"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+/// A `--code` that is not the eight digits the machine shows is refused
+/// before the request is even sent, so it costs no pairing attempt.
+#[test]
+fn machines_add_refuses_a_code_that_is_not_eight_digits() {
+    let sandbox = Sandbox::new("badcode");
+    for code in ["1234", "482190341", "4821-90x4"] {
+        let output = sandbox.run(&["machines", "add", "127.0.0.1:1", "--code", code]);
+        assert!(!output.status.success(), "{code} was accepted");
+        let text = stderr(&output);
+        assert!(text.contains("exactly 8 digits"), "{code}: {text}");
+        assert!(!text.contains("could not ask"), "{code}: {text}");
+    }
+    // The separators a person might type are ignored.
+    let output = sandbox.run(&["machines", "add", "127.0.0.1:1", "--code", "4821-9034"]);
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("could not ask"),
+        "a well-shaped code reaches the machine: {}",
+        stderr(&output)
+    );
+}
+
 /// A code typed on standard input, as a person would, is read when `--code`
 /// is absent. Nothing is listening, so the command stops at the request.
 #[test]

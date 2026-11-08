@@ -96,14 +96,16 @@ impl Connection {
     }
 
     /// Send one JSON-RPC request and wait for its answer, skipping
-    /// notifications and server-to-client requests that arrive first.
+    /// notifications and server-to-client requests that arrive first. The
+    /// whole wait runs against one deadline.
     pub async fn request(&mut self, id: u64, method: &str, params: Value) -> Result<Value> {
         let frame =
             serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
         self.send_json(&frame).await?;
+        let deadline = tokio::time::Instant::now() + CONNECT_TIMEOUT;
         loop {
             let frame = self
-                .next_json(CONNECT_TIMEOUT)
+                .next_json_by(deadline)
                 .await?
                 .context("the machine closed the connection before answering")?;
             if frame.get("id") == Some(&Value::from(id)) && frame.get("method").is_none() {
@@ -160,7 +162,15 @@ impl Connection {
 
     /// The next JSON frame, or `None` when the machine closed the socket.
     pub async fn next_json(&mut self, timeout: Duration) -> Result<Option<Value>> {
-        match self.next_text_or_close(Some(timeout)).await? {
+        self.next_json_by(tokio::time::Instant::now() + timeout)
+            .await
+    }
+
+    async fn next_json_by(&mut self, deadline: tokio::time::Instant) -> Result<Option<Value>> {
+        match self
+            .next_text_or_close(Some((deadline, CONNECT_TIMEOUT)))
+            .await?
+        {
             Some(text) => Ok(Some(
                 serde_json::from_str(&text).context("the machine sent a frame that is not JSON")?,
             )),
@@ -169,17 +179,24 @@ impl Connection {
     }
 
     async fn next_text(&mut self, timeout: Option<Duration>) -> Result<String> {
-        self.next_text_or_close(timeout)
+        let deadline = timeout.map(|timeout| (tokio::time::Instant::now() + timeout, timeout));
+        self.next_text_or_close(deadline)
             .await?
             .context("the machine closed the connection")
     }
 
     /// The next text frame; `None` when the socket closed. Pings are answered
     /// by tungstenite, and the gateway's pongs are read here.
-    async fn next_text_or_close(&mut self, timeout: Option<Duration>) -> Result<Option<String>> {
+    ///
+    /// `deadline` is absolute for the whole read: a ping every 30 s must not
+    /// restart the wait, or a peer that only pings is never timed out.
+    async fn next_text_or_close(
+        &mut self,
+        deadline: Option<(tokio::time::Instant, Duration)>,
+    ) -> Result<Option<String>> {
         loop {
-            let next = match timeout {
-                Some(timeout) => tokio::time::timeout(timeout, self.socket.next())
+            let next = match deadline {
+                Some((deadline, timeout)) => tokio::time::timeout_at(deadline, self.socket.next())
                     .await
                     .with_context(|| format!("no frame from the machine within {timeout:?}"))?,
                 None => self.socket.next().await,
@@ -230,11 +247,18 @@ impl AcpChannel {
 
     /// The next ACP frame, or `None` when the machine closed the channel.
     pub async fn recv(&mut self) -> Result<Option<Value>> {
+        self.recv_by(tokio::time::Instant::now() + CONNECT_TIMEOUT)
+            .await
+    }
+
+    /// The next frame before `deadline`; pings do not restart the wait.
+    async fn recv_by(&mut self, deadline: tokio::time::Instant) -> Result<Option<Value>> {
         loop {
-            match tokio::time::timeout(CONNECT_TIMEOUT, self.socket.next())
+            match tokio::time::timeout_at(deadline, self.socket.next())
                 .await
-                .context("the machine stopped sending ACP frames")?
-            {
+                .with_context(|| {
+                    format!("the machine stopped sending ACP frames for {CONNECT_TIMEOUT:?}")
+                })? {
                 Some(Ok(Message::Text(text))) => {
                     return Ok(Some(
                         serde_json::from_str(&text)
@@ -252,15 +276,18 @@ impl AcpChannel {
     }
 
     /// Send a request and return its answer, skipping notifications and
-    /// server-to-client requests that arrive first.
+    /// server-to-client requests that arrive first. The whole wait runs
+    /// against one deadline, so a stream of notifications cannot keep a
+    /// missing answer alive.
     pub async fn request(&mut self, id: u64, method: &str, params: Value) -> Result<Value> {
         self.send(
             serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}),
         )
         .await?;
+        let deadline = tokio::time::Instant::now() + CONNECT_TIMEOUT;
         loop {
             let frame = self
-                .recv()
+                .recv_by(deadline)
                 .await?
                 .context("the machine closed the ACP channel before answering")?;
             if frame.get("id") == Some(&Value::from(id)) && frame.get("method").is_none() {
@@ -348,9 +375,12 @@ pub fn port_or_default(address: &str) -> u16 {
         .unwrap_or(DEFAULT_PORT)
 }
 
-/// The host of `[v6]:port`, `host:port`, `[v6]` or `host`, without brackets.
+/// The host of `[v6]:port`, `host:port`, `[v6]` or `host`, without brackets,
+/// scheme or path (`ws://studio.local:17879/` is `studio.local`).
 pub fn host_part(address: &str) -> &str {
     let address = address.trim();
+    let address = address.split_once("://").map_or(address, |(_, rest)| rest);
+    let address = address.split('/').next().unwrap_or(address);
     if let Some(rest) = address.strip_prefix('[') {
         return rest.split(']').next().unwrap_or(rest);
     }
@@ -405,6 +435,59 @@ mod tests {
         }
         assert!(websocket_url("ftp://studio").is_err());
         assert!(websocket_url("  ").is_err());
+    }
+
+    /// The wait for one frame is one deadline, not one per frame: a peer that
+    /// sends only pings must still be timed out.
+    #[tokio::test]
+    async fn a_pinging_peer_does_not_extend_a_read_deadline() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let until = tokio::time::Instant::now() + Duration::from_secs(4);
+            while tokio::time::Instant::now() < until {
+                if socket
+                    .send(Message::Ping(Default::default()))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        });
+        let mut connection = Connection::open(&addr.to_string()).await.unwrap();
+        let started = std::time::Instant::now();
+        let error = connection
+            .next_handshake(Duration::from_millis(150))
+            .await
+            .unwrap_err();
+        let elapsed = started.elapsed();
+        assert!(
+            format!("{error:#}").contains("no frame from the machine"),
+            "{error:#}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(900),
+            "the pings restarted the deadline: waited {elapsed:?}"
+        );
+        server.abort();
+    }
+
+    #[test]
+    fn a_host_is_read_without_its_scheme_or_path() {
+        for (address, host) in [
+            ("studio.local", "studio.local"),
+            ("studio.local:17879", "studio.local"),
+            ("ws://studio.local:17879/", "studio.local"),
+            ("http://studio.local", "studio.local"),
+            ("[fd00::1]:17879", "fd00::1"),
+            ("ws://[fd00::1]:17879", "fd00::1"),
+        ] {
+            assert_eq!(host_part(address), host, "{address}");
+        }
     }
 
     #[test]

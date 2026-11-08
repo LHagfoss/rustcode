@@ -21,6 +21,10 @@ pub const HANDSHAKE_PROTOCOL_VERSION: u32 = 1;
 /// Largest handshake frame either side sends, matching the gateway's limit.
 pub const MAX_HANDSHAKE_FRAME_BYTES: usize = 8 * 1024;
 
+/// Digits in the pairing code a machine shows and the owner types, as the
+/// gateway issues it. A `connect_approved` frame reports the same number.
+pub const PAIRING_CODE_DIGITS: u32 = 8;
+
 /// `device_kind` of the desktop app's machine client.
 pub const DEVICE_KIND_DESKTOP: &str = "desktop";
 /// `device_kind` of the command line's machine client.

@@ -8,11 +8,16 @@
 //! The registry is one private JSON file in the configuration directory,
 //! `machines.json` (`0600` on Unix, in a `0700` directory). Device tokens are
 //! not in it; see [`crate::tokens`].
+//!
+//! Every change happens under an exclusive lock on `machines.lock` and
+//! re-reads the file first, so two `rustcode machines` processes (or the app
+//! and the command line) cannot drop each other's machine.
 
 use anyhow::{Context, Result, bail, ensure};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::fs::File;
 use std::io::{Read, Write};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -135,6 +140,27 @@ pub fn classify_address(address: &str) -> RouteKind {
     }
 }
 
+/// Whether a credential may travel to `address` on the plain `ws` transport
+/// this client speaks.
+///
+/// The gateway has no TLS listener, so a token sent to a public address is a
+/// token handed to the network. A LAN or overlay route is the same risk the
+/// phone app already accepts; a public one is not, and waits for encrypted
+/// transport (#2651).
+pub fn may_send_secrets(address: &str) -> bool {
+    classify_address(address) != RouteKind::Public
+}
+
+/// The error for a route that may not carry a credential, naming the reason
+/// and the issue that removes the restriction.
+pub fn plain_ws_refusal(address: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "refusing to dial {address}: it is a public address and the gateway has no TLS listener, \
+         so the pairing code and the device token would travel in the clear. Dial a LAN, \
+         Tailscale or VPN address instead; encrypted transport is tracked in #2651"
+    )
+}
+
 /// A computer this client has paired with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Machine {
@@ -254,26 +280,7 @@ impl MachineRegistry {
 
     pub fn load_file(path: impl Into<PathBuf>) -> Result<Self> {
         let path = path.into();
-        let stored = match read_bounded(&path) {
-            Ok(Some(bytes)) => {
-                let stored: Stored = serde_json::from_slice(&bytes)
-                    .with_context(|| format!("{} is not a machine registry", path.display()))?;
-                ensure!(
-                    stored.version <= STORE_VERSION,
-                    "{} was written by a newer RustCode (format {}); update this one",
-                    path.display(),
-                    stored.version
-                );
-                stored
-            }
-            Ok(None) => Stored {
-                version: STORE_VERSION,
-                machines: Vec::new(),
-            },
-            Err(error) => {
-                return Err(error).with_context(|| format!("read {}", path.display()));
-            }
-        };
+        let stored = read_stored(&path)?;
         Ok(Self {
             path,
             machines: stored.machines,
@@ -339,86 +346,91 @@ impl MachineRegistry {
     /// about a saved one: the name, platform, device record and routes,
     /// keeping when it was first added and whether it is the main machine.
     pub fn insert(&mut self, machine: Machine) -> Result<()> {
-        match self
-            .machines
-            .iter_mut()
-            .find(|existing| existing.host_id == machine.host_id)
-        {
-            Some(existing) => {
-                existing.name = machine.name;
-                existing.platform = machine.platform;
-                existing.device_id = machine.device_id;
-                for route in machine.routes {
-                    existing.learn_route(route);
+        self.mutate(|machines| {
+            match machines
+                .iter_mut()
+                .find(|existing| existing.host_id == machine.host_id)
+            {
+                Some(existing) => {
+                    existing.name = machine.name;
+                    existing.platform = machine.platform;
+                    existing.device_id = machine.device_id;
+                    for route in machine.routes {
+                        existing.learn_route(route);
+                    }
+                }
+                None => {
+                    let main = machines.is_empty();
+                    let mut machine = machine;
+                    machine.main = main;
+                    machines.push(machine);
                 }
             }
-            None => {
-                let main = self.machines.is_empty();
-                let mut machine = machine;
-                machine.main = main;
-                self.machines.push(machine);
-            }
-        }
-        self.save()
+            Ok(())
+        })
     }
 
     /// Forget a machine. Returns the record that was removed, so the caller
     /// can drop its token too.
     pub fn remove(&mut self, selector: &str) -> Result<Machine> {
         let host_id = self.select(selector)?.host_id.clone();
-        let index = self
-            .machines
-            .iter()
-            .position(|machine| machine.host_id == host_id)
-            .expect("select returned a saved machine");
-        let removed = self.machines.remove(index);
-        if removed.main
-            && let Some(next) = self.machines.first_mut()
-        {
-            next.main = true;
-        }
-        self.save()?;
-        Ok(removed)
+        self.mutate(|machines| {
+            let Some(index) = machines
+                .iter()
+                .position(|machine| machine.host_id == host_id)
+            else {
+                bail!("no saved machine has host id {host_id}");
+            };
+            let removed = machines.remove(index);
+            if removed.main
+                && let Some(next) = machines.first_mut()
+            {
+                next.main = true;
+            }
+            Ok(removed)
+        })
     }
 
     /// Record a successful connection.
     pub fn mark_connected(&mut self, host_id: &str, now: DateTime<Utc>) -> Result<()> {
-        let Some(machine) = self
-            .machines
-            .iter_mut()
-            .find(|machine| machine.host_id == host_id)
-        else {
-            return Ok(());
-        };
-        machine.last_connected_at = Some(now);
-        self.save()
+        self.mutate(|machines| {
+            if let Some(machine) = machines
+                .iter_mut()
+                .find(|machine| machine.host_id == host_id)
+            {
+                machine.last_connected_at = Some(now);
+            }
+            Ok(())
+        })
     }
 
     /// Add a route learned from a machine or a discovery record (the seam the
     /// route racing in step 1.8 fills with more).
     pub fn add_route(&mut self, host_id: &str, route: Route) -> Result<bool> {
-        let Some(machine) = self
-            .machines
-            .iter_mut()
-            .find(|machine| machine.host_id == host_id)
-        else {
-            bail!("no saved machine has host id {host_id}");
-        };
-        let learned = machine.learn_route(route);
-        if learned {
-            self.save()?;
-        }
-        Ok(learned)
+        self.mutate(|machines| {
+            let Some(machine) = machines
+                .iter_mut()
+                .find(|machine| machine.host_id == host_id)
+            else {
+                bail!("no saved machine has host id {host_id}");
+            };
+            Ok(machine.learn_route(route))
+        })
     }
 
     /// Make `host_id` the main machine, so it is listed first and is the
     /// default **Run on**.
     pub fn set_main(&mut self, host_id: &str) -> Result<()> {
-        ensure!(self.get(host_id).is_some(), "no saved machine has that id");
-        for machine in &mut self.machines {
-            machine.main = machine.host_id == host_id;
-        }
-        self.save()
+        self.mutate(|machines| {
+            ensure!(
+                machines.iter().any(|machine| machine.host_id == host_id),
+                "no saved machine has that id"
+            );
+            for machine in machines.iter_mut() {
+                machine.main = machine.host_id == host_id;
+            }
+            Ok(())
+        })
     }
 
     pub fn main_machine(&self) -> Option<&Machine> {
@@ -437,13 +449,52 @@ impl MachineRegistry {
         machines
     }
 
+    /// Change the registry under its write lock, re-reading the file first so
+    /// a change made by another process since this copy was loaded is kept.
+    fn mutate<T>(&mut self, change: impl FnOnce(&mut Vec<Machine>) -> Result<T>) -> Result<T> {
+        let _lock = self.write_lock()?;
+        self.machines = read_stored(&self.path)?.machines;
+        let changed = change(&mut self.machines)?;
+        self.save_unlocked()?;
+        Ok(changed)
+    }
+
     /// Write the registry atomically and privately.
     pub fn save(&self) -> Result<()> {
+        let _lock = self.write_lock()?;
+        self.save_unlocked()
+    }
+
+    fn save_unlocked(&self) -> Result<()> {
         let stored = Stored {
             version: STORE_VERSION,
             machines: self.machines.clone(),
         };
         write_private_json(&self.path, &stored)
+    }
+
+    /// The exclusive lock around load→change→save, held until the returned
+    /// file is dropped. `machines.lock`, next to the registry.
+    fn write_lock(&self) -> Result<File> {
+        let directory = self
+            .path
+            .parent()
+            .context("the machine registry needs a parent directory")?;
+        create_private_directory(directory)?;
+        let path = self.path.with_extension("lock");
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = options
+            .open(&path)
+            .with_context(|| format!("open {}", path.display()))?;
+        file.lock()
+            .with_context(|| format!("lock {}", path.display()))?;
+        Ok(file)
     }
 }
 
@@ -459,6 +510,26 @@ fn known_names(registry: &MachineRegistry) -> String {
                 .join(", ")
         ),
     }
+}
+
+/// The registry as stored: no file is no machines, and a file that cannot be
+/// read is an error rather than an empty list a write would overwrite.
+fn read_stored(path: &Path) -> Result<Stored> {
+    let Some(bytes) = read_bounded(path)? else {
+        return Ok(Stored {
+            version: STORE_VERSION,
+            machines: Vec::new(),
+        });
+    };
+    let stored: Stored = serde_json::from_slice(&bytes)
+        .with_context(|| format!("{} is not a machine registry", path.display()))?;
+    ensure!(
+        stored.version <= STORE_VERSION,
+        "{} was written by a newer RustCode (format {}); update this one",
+        path.display(),
+        stored.version
+    );
+    Ok(stored)
 }
 
 /// Read at most [`MAX_MACHINES_BYTES`]; `None` when the file does not exist.
@@ -697,6 +768,85 @@ mod tests {
         assert!(format!("{error:#}").contains("newer RustCode"), "{error:#}");
     }
 
+    /// Two copies loaded before either writes must not drop each other's
+    /// machine: each change re-reads the file under the lock.
+    #[test]
+    fn concurrent_changes_keep_every_machine() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let mut first = load(dir.path());
+        let mut second = load(dir.path());
+        assert!(first.machines().is_empty() && second.machines().is_empty());
+        first
+            .insert(machine("gw-a", "A", "10.0.0.2:17879"))
+            .unwrap();
+        second
+            .insert(machine("gw-b", "B", "10.0.0.3:17879"))
+            .unwrap();
+        // The second writer's copy now holds both, and so does the file.
+        assert_eq!(second.machines().len(), 2);
+        let stored = load(dir.path());
+        let mut names: Vec<&str> = stored
+            .machines()
+            .iter()
+            .map(|machine| machine.name.as_str())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["A", "B"]);
+        // A removal from a stale copy of the same file keeps the other one.
+        let mut third = load(dir.path());
+        assert!(third.machines().len() == 2);
+        first.remove("A").unwrap();
+        third.remove("B").unwrap();
+        assert!(load(dir.path()).machines().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_registry_lock_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let mut store = load(dir.path());
+        store
+            .insert(machine("gw-a", "A", "10.0.0.2:17879"))
+            .unwrap();
+        let lock = store.path().with_extension("lock");
+        assert_eq!(lock.file_name().unwrap(), "machines.lock");
+        let mode = std::fs::metadata(lock).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    /// A credential may not travel to a public address on plain `ws`; a LAN,
+    /// Tailscale or VPN route is the risk the phone app already accepts.
+    #[test]
+    fn only_non_public_routes_may_carry_a_credential() {
+        for address in [
+            "192.168.1.20:17879",
+            "10.0.0.2",
+            "127.0.0.1:17879",
+            "[fd00::1]:17879",
+            "100.92.13.44:17879",
+            "mac.tail1234.ts.net",
+            "studio.local",
+        ] {
+            assert!(may_send_secrets(address), "{address}");
+        }
+        for address in ["203.0.113.9:17879", "example.com", "studio.example.com"] {
+            assert!(!may_send_secrets(address), "{address}");
+            let refusal = plain_ws_refusal(address).to_string();
+            assert!(refusal.contains(address), "{refusal}");
+            assert!(refusal.contains("#2651"), "{refusal}");
+            assert!(refusal.contains("no TLS listener"), "{refusal}");
+        }
+    }
+
+    #[test]
+    fn a_saved_public_route_is_described_as_public() {
+        let public = machine("gw-a", "A", "203.0.113.9:17879");
+        assert_eq!(public.routes[0].kind, RouteKind::Public);
+        let overlay = machine("gw-b", "B", "100.92.13.44:17879");
+        assert_eq!(overlay.routes[0].kind, RouteKind::Vpn);
+    }
+
     #[test]
     fn routes_are_classified_by_address() {
         for (address, kind) in [
@@ -719,6 +869,10 @@ mod tests {
             ("studio.local", RouteKind::Lan),
             ("studio", RouteKind::Lan),
             ("example.com", RouteKind::Public),
+            // The address a person types may still carry its scheme.
+            ("ws://192.168.1.20:17879", RouteKind::Lan),
+            ("ws://studio.local:17879/", RouteKind::Lan),
+            ("wss://studio.example.com", RouteKind::Public),
         ] {
             assert_eq!(classify_address(address), kind, "{address}");
         }

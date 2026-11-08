@@ -19,7 +19,7 @@ use crate::protocol::{
     DEVICE_KIND_CLI, DEVICE_KIND_DESKTOP, HANDSHAKE_PROTOCOL_VERSION, HandshakeRequest,
     HandshakeResponse, PairingMethod, Secret,
 };
-use crate::registry::{Machine, Route, write_private_json};
+use crate::registry::{Machine, Route, may_send_secrets, plain_ws_refusal, write_private_json};
 use crate::tokens::TokenStore;
 use crate::transport::{AcpChannel, Connection};
 use anyhow::{Context, Result, bail, ensure};
@@ -98,7 +98,7 @@ impl Identity {
         Ok(Self {
             device_name: default_device_name(),
             host_id: host_id_from_gateway(config_dir).unwrap_or(host_id_from_file(config_dir)?),
-            install_id: read_or_create_id(&install_id_path(config_dir))?,
+            install_id: install_id(config_dir)?,
         })
     }
 }
@@ -126,6 +126,15 @@ struct StoredId {
 
 fn install_id_path(config_dir: &Path) -> PathBuf {
     crate::config::machines_dir(config_dir).join(INSTALL_ID_FILE)
+}
+
+/// This profile's install identifier, created on first use.
+///
+/// It is what keeps one `RUSTCODE_CONFIG_DIR` profile's keychain entries (see
+/// [`crate::tokens`]) and its device records on other machines apart from
+/// another profile's: the token store names every entry by it.
+pub fn install_id(config_dir: &Path) -> Result<String> {
+    read_or_create_id(&install_id_path(config_dir))
 }
 
 /// Read a stored identifier, or create one and keep it.
@@ -192,7 +201,14 @@ impl Connector {
 
     /// Ask `address` to let this client pair: send `connect_request` and wait
     /// for the machine to put it in front of its owner.
+    ///
+    /// A public address is refused before anything is dialled: the same socket
+    /// carries the code and then the token, and plain `ws` would put both on
+    /// the network in the clear (#2651).
     pub async fn ask(&self, address: &str) -> Result<Ask> {
+        if !may_send_secrets(address) {
+            return Err(plain_ws_refusal(address));
+        }
         let mut connection = Connection::open_with_timeout(address, self.route_timeout).await?;
         let request = HandshakeRequest::ConnectRequest {
             protocol_version: HANDSHAKE_PROTOCOL_VERSION,
@@ -219,12 +235,24 @@ impl Connector {
     }
 
     /// Authenticate with a saved machine's token on `address`.
+    ///
+    /// The token is never sent to a public address on plain `ws`: that would
+    /// hand it to the network before the machine could prove who it is. See
+    /// [`crate::registry::may_send_secrets`] and #2651.
+    ///
+    /// When rotating refresh tokens land (#3237) this frame carries the
+    /// refresh token, and the new pair the machine answers with must be
+    /// written before the rotation is acknowledged. [`TokenStore::set`] is
+    /// the only place a token is written, so that ordering has one home.
     pub async fn authenticate(
         &self,
         address: &str,
         machine: &Machine,
         token: &Secret,
     ) -> Result<Session> {
+        if !may_send_secrets(address) {
+            return Err(plain_ws_refusal(address));
+        }
         let mut connection = Connection::open_with_timeout(address, self.route_timeout).await?;
         connection
             .send_handshake(&HandshakeRequest::Authenticate {
@@ -279,9 +307,19 @@ impl Connector {
             "{} has no route to try; add one",
             machine.name
         );
+        // A public route would carry the token in the clear; it is not tried
+        // at all, and a machine reachable only that way says why (#2651).
+        let routes: Vec<&Route> = machine
+            .routes
+            .iter()
+            .filter(|route| may_send_secrets(&route.address))
+            .collect();
+        if routes.is_empty() {
+            return Err(plain_ws_refusal(&machine.routes[0].address));
+        }
         let mut attempts = Vec::new();
         let mut refused = None;
-        for route in &machine.routes {
+        for route in routes {
             let result = match self.authenticate(&route.address, machine, &token).await {
                 Ok(session) => session.check(machine).map(|()| session),
                 Err(error) => Err(error),
@@ -327,6 +365,16 @@ pub struct Ask {
     expires_in: Duration,
 }
 
+impl std::fmt::Debug for Ask {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Ask")
+            .field("request_id", &self.request_id)
+            .field("expires_in", &self.expires_in)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Ask {
     pub fn request_id(&self) -> &str {
         &self.request_id
@@ -370,6 +418,16 @@ pub struct Approved {
     connect: HandshakeRequest,
     code_length: u32,
     expires_in: Duration,
+}
+
+impl std::fmt::Debug for Approved {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Approved")
+            .field("code_length", &self.code_length)
+            .field("expires_in", &self.expires_in)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Approved {
@@ -657,6 +715,67 @@ mod tests {
 
     fn config_dir() -> tempfile::TempDir {
         tempfile::tempdir_in("/tmp").unwrap()
+    }
+
+    /// A public address never receives the code or the token: the guard runs
+    /// before a socket is opened, so a black-holed address fails at once
+    /// instead of after a connect timeout.
+    #[tokio::test]
+    async fn a_public_address_is_refused_before_any_socket_is_opened() {
+        let dir = config_dir();
+        let connector = Connector::new(dir.path(), ClientKind::Cli).unwrap();
+        let public = "203.0.113.9:17879";
+        let error = connector.ask(public).await.unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("#2651"), "{message}");
+        assert!(message.contains(public), "{message}");
+
+        let machine = Machine::new(
+            "gw-a",
+            "A",
+            "macos",
+            "device-1",
+            Route::with_kind(crate::registry::RouteKind::Public, public),
+            chrono::Utc::now(),
+        );
+        let token = Secret::new("token");
+        let error = connector
+            .authenticate(public, &machine, &token)
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("#2651"), "{error:#}");
+
+        let tokens = TokenStore::in_file(dir.path()).unwrap();
+        tokens.set(&machine.host_id, &token).unwrap();
+        let error = connector.connect(&machine, &tokens).await.unwrap_err();
+        assert!(
+            format!("{error:#}").contains("#2651"),
+            "a machine reachable only over a public plain-ws route says why: {error:#}"
+        );
+    }
+
+    /// The guard is about the address, not the saved label: a route saved as
+    /// `public` but pointing at a LAN address is still dialled.
+    #[tokio::test]
+    async fn a_lan_address_is_not_refused_for_a_public_label() {
+        let dir = config_dir();
+        let connector = Connector::new(dir.path(), ClientKind::Cli).unwrap();
+        let machine = Machine::new(
+            "gw-a",
+            "A",
+            "macos",
+            "device-1",
+            Route::with_kind(crate::registry::RouteKind::Public, "127.0.0.1:1"),
+            chrono::Utc::now(),
+        );
+        let error = connector
+            .authenticate("127.0.0.1:1", &machine, &Secret::new("token"))
+            .await
+            .unwrap_err();
+        assert!(
+            !format!("{error:#}").contains("#2651"),
+            "a loopback address is not a public one: {error:#}"
+        );
     }
 
     #[test]
