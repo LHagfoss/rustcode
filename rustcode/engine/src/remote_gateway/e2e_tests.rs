@@ -1405,15 +1405,28 @@ async fn remote_acp_deny_and_revoke_close_open_relays() {
 #[tokio::test]
 async fn remote_acp_grant_survives_gateway_restart() {
     let mut host = Host::start().await;
-    let mut device = acp_device(&host, "desktop", true).await;
+    let offer = host.lifecycle.pair().await.unwrap();
+    let (mut device, paired) = Phone::connect(
+        host.addr(),
+        json!({
+            "type":"pair", "protocol_version":1, "method":"code", "secret":offer.code.expose(),
+            "device_name":"reconnecting desktop", "device_kind":"desktop"
+        }),
+    )
+    .await;
+    assert_eq!(paired["type"], "paired");
+    host.lifecycle
+        .set_acp(paired["device_id"].as_str().unwrap(), true)
+        .await
+        .unwrap();
     bounded(device.socket.close(None)).await.unwrap();
     host.stop_gateway().await;
-    let record = host.lifecycle.devices().unwrap().remove(0);
-    assert!(record.acp);
     host.start_gateway().await;
+    let (mut device, authenticated) = Phone::authenticate(&host, &paired).await;
+    assert_eq!(authenticated["type"], "authenticated");
     // Authorization passes after reloading the store; no local server exists.
     // A missing grant would yield unauthorized_access instead of internal.
-    let offer = host.lifecycle.devices().unwrap();
-    assert!(offer[0].acp);
+    device.send(json!({"type":"acp_open"})).await;
+    assert_eq!(device.read().await.unwrap()["code"], "internal");
     host.stop_gateway().await;
 }

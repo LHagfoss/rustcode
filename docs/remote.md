@@ -246,7 +246,8 @@ remote access on is the short moment before it has registered.
 | `rustcode remote on` | Enable the persistent background gateway (alias of `start`). |
 | `rustcode remote off` | Stop the running gateway (alias of `stop`). |
 | `rustcode remote pair` | Ask the running gateway for a pairing challenge and show it: QR code, address, code and expiry time. In a terminal it then counts the challenge down until a device pairs or it ends (Ctrl-C leaves earlier); otherwise it prints and exits. |
-| `rustcode remote devices [--json]` | List paired devices: identifier, kind (phone, desktop or cli), platform, how long ago each was last seen, pairing time, expiry and name. Never a token. |
+| `rustcode remote devices allow <id>` / `deny <id>` | Grant full ACP control, or deny it and immediately disconnect the device. |
+| `rustcode remote devices [--json]` | List paired devices: identifier, kind (phone, desktop or cli), platform, how long ago each was last seen, pairing time, expiry and name. JSON includes the host-controlled `acp` grant. Never a token. |
 | `rustcode remote revoke <device>` | Revoke by identifier, identifier prefix (four characters or more) or unique name. |
 | `rustcode remote status` | The running gateway: listen and advertised address (and whether each follows address changes), the machine's current addresses with a recovery command when the gateway's address is gone, paired devices and which are connected, the state of pairing (time and wrong codes left, or the lockout), shared sessions and who is attached to each, session owners that run without being shared, and the paths of the gateway log and the session logs. |
 | `rustcode remote stop` | Stop the running gateway. |
