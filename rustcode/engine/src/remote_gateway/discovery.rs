@@ -16,8 +16,9 @@ pub const SERVICE_TYPE: &str = "_rustcode._tcp.local.";
 pub const TXT_PROTOCOL: &str = "1";
 /// The TXT record's `caps` value: comma-separated optional handshakes.
 /// `connect_requests` means a device may send `connect_request` and have the
-/// host's owner accept it ([`super::connect`]).
-pub const TXT_CAPS: &str = "connect_requests";
+/// host's owner accept it ([`super::connect`]); `desktops` that a desktop app
+/// may pair as a device ([`crate::remote::host_capability::DESKTOPS`]).
+pub const TXT_CAPS: &str = "connect_requests,desktops";
 /// The instance name when the machine has no usable name.
 const FALLBACK_NAME: &str = "RustCode";
 /// How long a clean stop waits for the goodbye to go out.
@@ -316,7 +317,7 @@ mod tests {
             [
                 ("protocol", "1".to_owned()),
                 ("gateway", "8e1f4b7a".to_owned()),
-                ("caps", "connect_requests".to_owned()),
+                ("caps", "connect_requests,desktops".to_owned()),
             ]
         );
         let info = service_info(
@@ -331,7 +332,10 @@ mod tests {
         assert_eq!(info.get_port(), 17879);
         assert_eq!(info.get_property_val_str("protocol"), Some("1"));
         assert_eq!(info.get_property_val_str("gateway"), Some("8e1f4b7a"));
-        assert_eq!(info.get_property_val_str("caps"), Some("connect_requests"));
+        assert_eq!(
+            info.get_property_val_str("caps"),
+            Some("connect_requests,desktops")
+        );
         assert_eq!(info.get_properties().len(), 3);
         assert!(info.is_addr_auto());
         // Nothing that could pair a device is in the record.
@@ -487,7 +491,7 @@ mod tests {
         assert_eq!(gateway.port, 17881);
         assert_eq!(gateway.gateway_id.as_deref(), Some(gateway_id.as_str()));
         assert_eq!(gateway.protocol.as_deref(), Some("1"));
-        assert_eq!(gateway.caps, ["connect_requests"]);
+        assert_eq!(gateway.caps, ["connect_requests", "desktops"]);
         assert!(
             !gateway.addresses.is_empty() && gateway.addresses.iter().all(IpAddr::is_loopback),
             "{gateway:?}"

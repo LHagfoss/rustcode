@@ -443,25 +443,30 @@ pub async fn watch_pairing_in_terminal(
 
 /// Table of paired devices. Carries identifiers and labels, never a token.
 pub fn format_devices(devices: &[DeviceRecord]) -> String {
+    format_devices_at(devices, chrono::Utc::now())
+}
+
+fn format_devices_at(devices: &[DeviceRecord], now: chrono::DateTime<chrono::Utc>) -> String {
     if devices.is_empty() {
         return "No paired devices.".to_string();
     }
-    let now = chrono::Utc::now();
     let mut lines = vec![format!(
-        "{:<16}  {:<20}  {:<20}  {:<20}  NAME",
-        "DEVICE", "PAIRED (UTC)", "LAST SEEN (UTC)", "EXPIRES (UTC)"
+        "{:<16}  {:<8}  {:<10}  {:<14}  {:<16}  {:<16}  NAME",
+        "DEVICE", "KIND", "PLATFORM", "LAST SEEN", "PAIRED (UTC)", "EXPIRES (UTC)"
     )];
     for device in devices {
         let expires = if device.is_expired(now) {
             "expired".to_owned()
         } else {
-            device.expires_at().format("%Y-%m-%d %H:%M:%S").to_string()
+            device.expires_at().format("%Y-%m-%d %H:%M").to_string()
         };
         lines.push(format!(
-            "{:<16}  {:<20}  {:<20}  {:<20}  {}",
+            "{:<16}  {:<8}  {:<10}  {:<14}  {:<16}  {:<16}  {}",
             device.id,
-            device.paired_at.format("%Y-%m-%d %H:%M:%S"),
-            last_seen(device.last_seen_at),
+            device.kind,
+            device.platform,
+            last_seen(device.last_seen_at, now),
+            device.paired_at.format("%Y-%m-%d %H:%M"),
             expires,
             device.name
         ));
@@ -469,12 +474,22 @@ pub fn format_devices(devices: &[DeviceRecord]) -> String {
     lines.join("\n")
 }
 
-/// A last-seen time for a listing; records stored before it was kept have none.
-fn last_seen(at: Option<chrono::DateTime<chrono::Utc>>) -> String {
-    at.map_or_else(
-        || "unknown".to_owned(),
-        |at| at.format("%Y-%m-%d %H:%M:%S").to_string(),
-    )
+/// How long ago a device was last seen, for a listing; records stored before
+/// it was kept have none.
+fn last_seen(
+    at: Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> String {
+    let Some(at) = at else {
+        return "unknown".to_owned();
+    };
+    let minutes = (now - at).num_minutes();
+    match minutes {
+        ..1 => "just now".to_owned(),
+        1..60 => format!("{minutes} min ago"),
+        60..2880 => format!("{} h ago", minutes / 60),
+        _ => format!("{} days ago", minutes / 1440),
+    }
 }
 
 /// JSON view of the paired devices, without the stored token digests.
@@ -488,6 +503,9 @@ pub fn devices_json(devices: &[DeviceRecord]) -> serde_json::Value {
                 "paired_at": device.paired_at,
                 "last_seen_at": device.last_seen_at,
                 "expires_at": device.expires_at(),
+                "kind": device.kind,
+                "platform": device.platform,
+                "host_id": device.host_id,
             })
         })
         .collect()
@@ -574,14 +592,17 @@ pub fn format_status_for(status: Option<&GatewayStatus>, this_session: Option<&s
             .iter()
             .any(|connection| connection.device_id == device.id);
         let seen = if connected {
-            "  (connected)".to_owned()
+            ", connected".to_owned()
         } else {
             device
                 .last_seen_at
-                .map(|at| format!("  (last seen {} UTC)", at.format("%Y-%m-%d %H:%M")))
+                .map(|at| format!(", last seen {} UTC", at.format("%Y-%m-%d %H:%M")))
                 .unwrap_or_default()
         };
-        lines.push(format!("    {}  {}{seen}", device.id, device.name));
+        lines.push(format!(
+            "    {}  {}  ({} on {}{seen})",
+            device.id, device.name, device.kind, device.platform
+        ));
     }
     lines.push(format!("  pairing        {pairing}"));
     if !status.connect_requests.is_empty() {
@@ -595,9 +616,10 @@ pub fn format_status_for(status: Option<&GatewayStatus>, this_session: Option<&s
                 super::connect::RequestState::Approved => "accepted, code shown",
             };
             lines.push(format!(
-                "    {}  {}  ({}, {}, {state}, {} s left)",
+                "    {}  {}  ({} on {}, {}, {state}, {} s left)",
                 request.id,
                 request.device_name,
+                request.device_kind,
                 request.platform,
                 request.remote_addr,
                 request.expires_in_secs
@@ -787,6 +809,52 @@ mod tests {
     }
 
     #[test]
+    fn device_listings_show_kind_platform_and_how_long_ago_each_was_seen() {
+        use crate::remote_gateway::devices::DeviceProfile;
+        let mut devices = Devices::default();
+        devices.enroll("Lars's iPhone").unwrap();
+        let profile = DeviceProfile::from_wire(
+            Some("desktop"),
+            Some("windows"),
+            Some("host-0123456789abcdef"),
+        );
+        let pc = devices.enroll_as("Lars's PC", None, &profile).unwrap();
+        let now = pc.record.last_seen_at.unwrap() + chrono::Duration::minutes(12);
+
+        let table = format_devices_at(devices.list(), now);
+        let lines: Vec<&str> = table.lines().collect();
+        assert!(
+            lines[0].contains("KIND") && lines[0].contains("PLATFORM"),
+            "{table}"
+        );
+        assert!(lines[0].contains("LAST SEEN"), "{table}");
+        assert!(lines[1].contains("phone     unknown"), "{table}");
+        assert!(lines[2].contains("desktop   windows"), "{table}");
+        assert!(lines[2].contains("12 min ago"), "{table}");
+        assert!(lines[2].ends_with("Lars's PC"), "{table}");
+
+        let json = devices_json(devices.list());
+        assert_eq!(json[0]["kind"], "phone");
+        assert_eq!(json[0]["platform"], "unknown");
+        assert_eq!(json[1]["kind"], "desktop");
+        assert_eq!(json[1]["platform"], "windows");
+        assert_eq!(json[1]["host_id"], "host-0123456789abcdef");
+
+        let seen = Some(now);
+        assert_eq!(last_seen(None, now), "unknown");
+        assert_eq!(last_seen(seen, now), "just now");
+        assert_eq!(
+            last_seen(seen, now + chrono::Duration::minutes(59)),
+            "59 min ago"
+        );
+        assert_eq!(last_seen(seen, now + chrono::Duration::hours(5)), "5 h ago");
+        assert_eq!(
+            last_seen(seen, now + chrono::Duration::days(40)),
+            "40 days ago"
+        );
+    }
+
+    #[test]
     fn an_offer_draws_the_code_and_explains_a_loopback_gateway() {
         use crate::remote_gateway::address::AdvertisedAddress;
         use crate::remote_gateway::handshake::Secret;
@@ -832,6 +900,7 @@ mod tests {
     #[test]
     fn status_shows_addresses_devices_pairing_and_logs() {
         use crate::remote_gateway::control::{ConnectionSummary, DeviceSummary, PairingStatus};
+        use crate::remote_gateway::devices::DeviceKind;
         let mut status = GatewayStatus {
             version: "1.0.0".into(),
             pid: 7,
@@ -855,11 +924,17 @@ mod tests {
                     id: "aa".into(),
                     name: "phone".into(),
                     last_seen_at: None,
+                    kind: DeviceKind::Phone,
+                    platform: "ios".into(),
+                    host_id: None,
                 },
                 DeviceSummary {
                     id: "bb".into(),
-                    name: "tablet".into(),
+                    name: "pc".into(),
                     last_seen_at: Some("2026-10-20T08:15:00Z".parse().unwrap()),
+                    kind: DeviceKind::Desktop,
+                    platform: "windows".into(),
+                    host_id: Some("host-0123456789abcdef".into()),
                 },
             ],
             pairing: Some(PairingStatus {
@@ -883,8 +958,8 @@ mod tests {
             "recover        `rustcode remote stop && rustcode remote serve --bind auto`",
             "or `--bind 192.168.31.185` for the address it has now",
             "listening on   192.168.31.237:17879  (fixed bind)",
-            "aa  phone  (connected)",
-            "bb  tablet  (last seen 2026-10-20 08:15 UTC)",
+            "aa  phone  (phone on ios, connected)",
+            "bb  pc  (desktop on windows, last seen 2026-10-20 08:15 UTC)",
             "challenge open (87 s left, 4 wrong codes allowed)",
             "idle owners    1",
             "gateway log    /config/remote/gateway.log",
@@ -892,7 +967,10 @@ mod tests {
         ] {
             assert!(text.contains(expected), "{expected}\n{text}");
         }
-        assert!(!text.contains("bb  tablet  (connected)"), "{text}");
+        assert!(
+            !text.contains("bb  pc  (desktop on windows, connected)"),
+            "{text}"
+        );
 
         status.listen_address = "192.168.31.185:17879".into();
         status.pairing.as_mut().unwrap().locked_for_secs = Some(240);

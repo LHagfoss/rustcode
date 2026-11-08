@@ -3,7 +3,13 @@
 // phone needs until the phone pairs or the code runs out. What to show is decided here, from the
 // machine's `_rustcode/remote` answers, so it is testable without the UI.
 
-import type { ConnectRequestEnd, RemoteConnectRequest, RemoteStatus } from "../acp/remote";
+import type {
+  ConnectRequestEnd,
+  DeviceKind,
+  RemoteConnectRequest,
+  RemoteDevice,
+  RemoteStatus,
+} from "../acp/remote";
 
 /** While the gateway runs, a request should reach the user within a few seconds. */
 export const CONNECT_POLL_MS = 2500;
@@ -83,23 +89,64 @@ export function endedMessage(end: ConnectRequestEnd | "stopped", deviceName: str
   }
 }
 
-/** A platform as people say it. */
-export function platformLabel(platform: string): string {
+/** An operating system as people say it, or `undefined` when the device did not say. */
+function systemName(platform: string): string | undefined {
   switch (platform.toLowerCase()) {
-    case "ios":
-      return "iPhone or iPad";
-    case "ipados":
-      return "iPad";
-    case "android":
-      return "Android";
     case "macos":
+    case "darwin":
       return "Mac";
+    case "windows":
+      return "Windows";
+    case "linux":
+      return "Linux";
     case "unknown":
     case "":
-      return "Device";
+      return undefined;
     default:
-      return platform;
+      return platform.charAt(0).toUpperCase() + platform.slice(1);
   }
+}
+
+/** What a device is, as people say it: "iPhone", "Android phone", "Windows desktop", "Linux command line". */
+export function deviceLabel(kind: DeviceKind, platform: string): string {
+  switch (kind) {
+    case "phone":
+      switch (platform.toLowerCase()) {
+        case "ios":
+          return "iPhone";
+        case "ipados":
+          return "iPad";
+        case "android":
+          return "Android phone";
+        default:
+          return "Phone";
+      }
+    case "desktop": {
+      const system = systemName(platform);
+      return system ? `${system} desktop` : "Desktop app";
+    }
+    case "cli": {
+      const system = systemName(platform);
+      return system ? `${system} command line` : "Command line";
+    }
+    case "unknown":
+      return "Unknown device";
+  }
+}
+
+/** When a paired device was last there: "Connected now", "Last seen 3 h ago", or unknown for an old pairing. */
+export function lastSeenLabel(device: Pick<RemoteDevice, "lastSeenAt" | "connected">, now: number): string {
+  if (device.connected) return "Connected now";
+  const at = device.lastSeenAt;
+  if (at === undefined) return "Last seen: unknown";
+  const minutes = Math.floor(Math.max(0, now - at) / 60_000);
+  if (minutes < 1) return "Last seen just now";
+  if (minutes < 60) return `Last seen ${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `Last seen ${hours} h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `Last seen ${days} ${days === 1 ? "day" : "days"} ago`;
+  return `Last seen ${new Date(at).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}`;
 }
 
 /** `m:ss` of the seconds left, never negative. */

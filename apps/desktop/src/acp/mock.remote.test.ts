@@ -59,7 +59,10 @@ describe("mock remote access", () => {
       expect(status.enabled).toBe(false);
       expect(status.shared).toBe(false);
       expect(status.gateway).toBeUndefined();
-      expect(status.devices).toEqual([{ id: "7c1f3a2b", name: "Lars's iPhone" }]);
+      expect(status.devices).toMatchObject([
+        { id: "7c1f3a2b", name: "Lars's iPhone", kind: "phone", platform: "ios", connected: false },
+      ]);
+      expect(status.devices[0]?.lastSeenAt).toBeLessThan(Date.now());
     } finally {
       await engine.done();
     }
@@ -219,6 +222,31 @@ describe("mock connection requests", () => {
     }
   });
 
+  test("a desktop app asks, pairs, and is listed as a desktop", async () => {
+    const engine = mockEngine({ remote: "connect" });
+    try {
+      const { id } = (await engine.request("_mock/remote/askToConnect", {
+        deviceName: "Lars's PC",
+        platform: "windows",
+        deviceKind: "desktop",
+        remoteAddr: "192.168.1.40",
+      })) as { id: string };
+      let status = parseRemoteStatus(await engine.request("_rustcode/remote", {}));
+      const request = status.connectRequests.find((r) => r.id === id);
+      expect(request && [request.deviceKind, request.platform]).toEqual(["desktop", "windows"]);
+      await engine.request("_rustcode/remote/answer", { id, accept: true });
+      expect(await engine.request("_mock/remote/enterCode", {})).toEqual({ paired: true });
+      status = parseRemoteStatus(await engine.request("_rustcode/remote", {}));
+      expect(status.devices.find((d) => d.name === "Lars's PC")).toMatchObject({
+        kind: "desktop",
+        platform: "windows",
+        connected: true,
+      });
+    } finally {
+      await engine.done();
+    }
+  });
+
   test("a denied request ends, and cannot be answered again", async () => {
     const engine = mockEngine({ remote: "connect" });
     try {
@@ -243,7 +271,7 @@ describe("mock connection requests", () => {
       const device = status.devices[0];
       if (!device) throw new Error("the mock starts with a paired phone");
       status = parseRemoteStatus(await engine.request("_rustcode/remote/revoke", { deviceId: device.id }));
-      expect(status.revoked).toEqual(device);
+      expect(status.revoked).toEqual({ id: device.id, name: device.name });
       expect(status.devices).toEqual([]);
       status = parseRemoteStatus(await engine.request("_rustcode/remote/revoke", { deviceId: device.id }));
       expect(status.revokeError).toBeDefined();

@@ -37,8 +37,111 @@ pub const LAST_SEEN_RESOLUTION: chrono::Duration = chrono::Duration::minutes(5);
 /// one and the device pairs again, which bounds what a copied token is worth.
 pub const DEVICE_LIFETIME: chrono::Duration = chrono::Duration::days(30);
 
+/// Longest platform label kept.
+pub const MAX_PLATFORM_CHARS: usize = 32;
+
+/// Platform of a record stored before devices said theirs, or of a device
+/// that sent none.
+pub const UNKNOWN_PLATFORM: &str = "unknown";
+
 const STORE_VERSION: u32 = 1;
 const MAX_STORE_BYTES: u64 = 256 * 1024;
+
+/// What a paired device is, as it says. A label for the owner, never a
+/// permission: every kind gets the same access today.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceKind {
+    /// The phone app. Records stored before devices said their kind are phones.
+    #[default]
+    Phone,
+    /// The desktop app on another machine.
+    Desktop,
+    /// The `rustcode` command line on another machine.
+    Cli,
+    /// A kind written by a newer gateway. Kept loadable and display-only.
+    Unknown,
+}
+
+impl<'de> Deserialize<'de> for DeviceKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            "phone" => Self::Phone,
+            "desktop" => Self::Desktop,
+            "cli" => Self::Cli,
+            _ => Self::Unknown,
+        })
+    }
+}
+
+impl DeviceKind {
+    /// The kind a device names on the wire. Anything unknown, including a
+    /// kind a newer client invents, is a phone, as before devices said it.
+    pub fn parse(kind: Option<&str>) -> Self {
+        match kind.map(str::trim) {
+            Some(kind) if kind.eq_ignore_ascii_case("desktop") => Self::Desktop,
+            Some(kind) if kind.eq_ignore_ascii_case("cli") => Self::Cli,
+            _ => Self::Phone,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Phone => "phone",
+            Self::Desktop => "desktop",
+            Self::Cli => "cli",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl fmt::Display for DeviceKind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.pad(self.as_str())
+    }
+}
+
+/// What a device says about itself when it asks to connect or pairs: its
+/// kind, its platform and the stable identifier of the machine it runs on.
+/// Labels for the owner, sanitized; none of it is an identity or a secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceProfile {
+    pub kind: DeviceKind,
+    /// `ios`, `android`, `macos`, `windows`, `linux`, … lowercase, bounded.
+    pub platform: String,
+    /// The connecting machine's own stable identifier, for a desktop or a
+    /// command line. `None` when the device sent none or an unusable one.
+    pub host_id: Option<String>,
+}
+
+impl Default for DeviceProfile {
+    fn default() -> Self {
+        Self {
+            kind: DeviceKind::Phone,
+            platform: UNKNOWN_PLATFORM.to_owned(),
+            host_id: None,
+        }
+    }
+}
+
+impl DeviceProfile {
+    /// Build a profile from what a device sent, keeping what is usable.
+    pub fn from_wire(kind: Option<&str>, platform: Option<&str>, host_id: Option<&str>) -> Self {
+        Self {
+            kind: DeviceKind::parse(kind),
+            platform: sanitize_platform(platform.unwrap_or_default()),
+            host_id: host_id.and_then(sanitize_host_id),
+        }
+    }
+}
+
+fn unknown_platform() -> String {
+    UNKNOWN_PLATFORM.to_owned()
+}
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceRecord {
@@ -57,6 +160,15 @@ pub struct DeviceRecord {
     /// [`LAST_SEEN_RESOLUTION`]. `None` for records stored before it was kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_seen_at: Option<DateTime<Utc>>,
+    /// What the device is. Records stored before it was kept are phones.
+    #[serde(default)]
+    pub kind: DeviceKind,
+    /// The platform the device said it runs on, as in [`DeviceProfile`].
+    #[serde(default = "unknown_platform")]
+    pub platform: String,
+    /// The connecting machine's stable identifier, when it sent one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<String>,
 }
 
 impl DeviceRecord {
@@ -79,6 +191,9 @@ impl fmt::Debug for DeviceRecord {
             .field("name", &self.name)
             .field("paired_at", &self.paired_at)
             .field("last_seen_at", &self.last_seen_at)
+            .field("kind", &self.kind)
+            .field("platform", &self.platform)
+            .field("host_id", &self.host_id)
             .finish_non_exhaustive()
     }
 }
@@ -161,6 +276,16 @@ impl Devices {
         name: &str,
         install_id: Option<&str>,
     ) -> Result<Enrollment, DeviceError> {
+        self.enroll_as(name, install_id, &DeviceProfile::default())
+    }
+
+    /// [`Self::enroll_install`] for a device that said what it is.
+    pub fn enroll_as(
+        &mut self,
+        name: &str,
+        install_id: Option<&str>,
+        profile: &DeviceProfile,
+    ) -> Result<Enrollment, DeviceError> {
         let now = Utc::now();
         self.devices.retain(|record| !record.is_expired(now));
         let install_sha256 = install_id.and_then(install_digest);
@@ -184,6 +309,9 @@ impl Devices {
             paired_at: now,
             install_sha256,
             last_seen_at: Some(now),
+            kind: profile.kind,
+            platform: profile.platform.clone(),
+            host_id: profile.host_id.clone(),
         };
         let replaced = replaced.map(|index| self.devices.remove(index).id);
         self.devices.push(record.clone());
@@ -277,6 +405,32 @@ pub(super) fn sanitize_name(name: &str) -> String {
     } else {
         cleaned
     }
+}
+
+/// Keep a device-supplied platform a short lowercase token: it is shown in
+/// a terminal and matched by the apps. Empty becomes [`UNKNOWN_PLATFORM`].
+pub(super) fn sanitize_platform(platform: &str) -> String {
+    let cleaned: String = platform
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        .take(MAX_PLATFORM_CHARS)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if cleaned.is_empty() {
+        UNKNOWN_PLATFORM.to_owned()
+    } else {
+        cleaned
+    }
+}
+
+/// A host identifier the device sent, or `None` when it is out of the same
+/// bounds as an install identifier. Kept as sent: it names a machine the
+/// owner may pair with in turn, not the user.
+fn sanitize_host_id(host_id: &str) -> Option<String> {
+    let length = host_id.chars().count();
+    let valid = (MIN_INSTALL_ID_CHARS..=MAX_INSTALL_ID_CHARS).contains(&length)
+        && host_id.chars().all(|c| c.is_ascii_graphic());
+    valid.then(|| host_id.to_owned())
 }
 
 /// Digest of an install identifier the device sent, or `None` when it is out
@@ -649,7 +803,122 @@ mod tests {
         let stored = r#"{"version":1,"devices":[{"id":"0011223344556677","name":"iPhone","token_sha256":"00","paired_at":"2026-10-01T10:00:00Z"}]}"#;
         let old: Devices = serde_json::from_str(stored).unwrap();
         assert_eq!(old.list()[0].last_seen_at, None);
-        assert_eq!(serde_json::to_string(&old).unwrap(), stored);
+    }
+
+    #[test]
+    fn records_stored_before_devices_said_their_kind_load_as_phones() {
+        let stored = r#"{"version":1,"devices":[{"id":"0011223344556677","name":"iPhone","token_sha256":"00","paired_at":"2026-10-01T10:00:00Z","last_seen_at":"2026-10-02T08:00:00Z"}]}"#;
+        let old: Devices = serde_json::from_str(stored).unwrap();
+        let record = &old.list()[0];
+        assert_eq!(record.kind, DeviceKind::Phone);
+        assert_eq!(record.platform, UNKNOWN_PLATFORM);
+        assert_eq!(record.host_id, None);
+        assert_eq!(
+            record.last_seen_at,
+            Some("2026-10-02T08:00:00Z".parse().unwrap())
+        );
+        // Written back, the defaults are explicit and nothing else changes.
+        let written = serde_json::to_value(&old).unwrap();
+        assert_eq!(written["devices"][0]["kind"], "phone");
+        assert_eq!(written["devices"][0]["platform"], "unknown");
+        assert!(written["devices"][0].get("host_id").is_none());
+        let again: Devices = serde_json::from_value(written).unwrap();
+        assert_eq!(again, old);
+    }
+
+    #[test]
+    fn a_kind_written_by_a_newer_gateway_does_not_break_store_loading() {
+        let (_dir, store) = store();
+        let mut devices = store.load().unwrap();
+        devices.enroll("Lars's desktop").unwrap();
+        store.save(&devices).unwrap();
+
+        let stored = std::fs::read_to_string(store.path()).unwrap();
+        let future_kind = stored.replace(r#""kind":"phone""#, r#""kind":"tablet""#);
+        assert_ne!(stored, future_kind, "test fixture must replace the kind");
+        std::fs::write(store.path(), future_kind).unwrap();
+
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded.list()[0].kind, DeviceKind::Unknown);
+        assert_eq!(loaded.list()[0].kind.to_string(), "unknown");
+        // Rewriting the store gives the catch-all a stable, known spelling.
+        store.save(&loaded).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(store.path()).unwrap()).unwrap();
+        assert_eq!(written["devices"][0]["kind"], "unknown");
+    }
+
+    #[test]
+    fn a_desktop_pairs_with_its_kind_platform_and_host_and_keeps_them() {
+        let (_dir, store) = store();
+        let mut devices = store.load().unwrap();
+        let profile = DeviceProfile::from_wire(
+            Some("desktop"),
+            Some("Windows"),
+            Some("host-0123456789abcdef"),
+        );
+        let enrolled = devices
+            .enroll_as("Lars's PC", Some("install-identifier-0002"), &profile)
+            .unwrap();
+        store.save(&devices).unwrap();
+        let loaded = store.load().unwrap();
+        let record = &loaded.list()[0];
+        assert_eq!(record.id, enrolled.record.id);
+        assert_eq!(record.kind, DeviceKind::Desktop);
+        assert_eq!(record.platform, "windows");
+        assert_eq!(record.host_id.as_deref(), Some("host-0123456789abcdef"));
+        // Pairing again from the same install takes the new profile.
+        let cli = DeviceProfile::from_wire(Some("cli"), Some("linux"), None);
+        let again = devices
+            .enroll_as("Lars's PC", Some("install-identifier-0002"), &cli)
+            .unwrap();
+        assert_eq!(again.replaced.as_deref(), Some(record.id.as_str()));
+        assert_eq!(devices.list().len(), 1);
+        assert_eq!(devices.list()[0].kind, DeviceKind::Cli);
+        assert_eq!(devices.list()[0].host_id, None);
+    }
+
+    #[test]
+    fn device_profiles_keep_only_usable_values() {
+        assert_eq!(
+            DeviceProfile::from_wire(None, None, None),
+            DeviceProfile::default()
+        );
+        assert_eq!(DeviceKind::parse(Some(" Desktop ")), DeviceKind::Desktop);
+        assert_eq!(DeviceKind::parse(Some("CLI")), DeviceKind::Cli);
+        // A kind from a newer client is a phone, as before devices said it.
+        assert_eq!(DeviceKind::parse(Some("toaster")), DeviceKind::Phone);
+        let profile =
+            DeviceProfile::from_wire(Some("desktop"), Some("mac\u{1b}[31mOS!"), Some("short"));
+        assert_eq!(profile.platform, "mac31mos");
+        assert_eq!(profile.host_id, None);
+        let long = DeviceProfile::from_wire(None, Some(&"x".repeat(100)), Some(&"h".repeat(200)));
+        assert_eq!(long.platform.len(), MAX_PLATFORM_CHARS);
+        assert_eq!(long.host_id, None);
+        assert_eq!(
+            DeviceProfile::from_wire(None, Some(""), None).platform,
+            "unknown"
+        );
+        assert_eq!(
+            DeviceProfile::from_wire(None, None, Some("has spaces in the host id")).host_id,
+            None
+        );
+    }
+
+    #[test]
+    fn last_seen_moves_with_every_connection_past_the_resolution() {
+        let mut devices = Devices::default();
+        let (record, _) = devices.enroll("phone").unwrap();
+        let mut at = record.last_seen_at.unwrap();
+        for _ in 0..3 {
+            at += LAST_SEEN_RESOLUTION + chrono::Duration::seconds(1);
+            assert!(devices.mark_seen(&record.id, at));
+            assert_eq!(devices.list()[0].last_seen_at, Some(at));
+        }
+        // A record stored without it is filled on the first connection.
+        devices.devices[0].last_seen_at = None;
+        assert!(devices.mark_seen(&record.id, at));
+        assert_eq!(devices.list()[0].last_seen_at, Some(at));
     }
 
     #[test]

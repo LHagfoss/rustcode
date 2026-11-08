@@ -4,7 +4,7 @@
 
 import { useState } from "react";
 import type { RemoteDevice } from "../acp/remote";
-import { platformLabel, promptedRequests } from "../state/connectRequests";
+import { deviceLabel, promptedRequests } from "../state/connectRequests";
 import { answerConnectRequest, askConfirm, revokeRemoteDevice, useApp } from "../state/store";
 import { Spinner } from "./primitives";
 import { Action, Group, Row } from "./settingsKit";
@@ -23,13 +23,13 @@ export function ConnectRequestsGroup() {
   return (
     <Group
       title="Asking to connect"
-      footer="A phone on this network tapped Connect. Accept shows a code to enter on it; only that phone can use it."
+      footer="A device on this network asked to connect. Accept shows a code to enter on it; only that device can use it."
     >
       {requests.map((request) => (
         <Row
           key={request.id}
           title={request.deviceName}
-          subtitle={`${platformLabel(request.platform)}${request.remoteAddr ? ` at ${request.remoteAddr}` : ""}`}
+          subtitle={`${deviceLabel(request.deviceKind, request.platform)}${request.remoteAddr ? ` at ${request.remoteAddr}` : ""}`}
         >
           <Action disabled={answering === request.id} onClick={() => void answer(request.id, false)}>
             Deny

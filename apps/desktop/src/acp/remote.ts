@@ -24,6 +24,22 @@ export const RemoteMethod = {
 } as const;
 
 /**
+ * What a paired device is, as it said when it paired: the phone app, the desktop app on another
+ * machine, or the `rustcode` command line there. A label, not a permission. Devices paired
+ * before the engine kept it are phones; a kind from a newer engine stays unknown.
+ */
+export type DeviceKind = "phone" | "desktop" | "cli" | "unknown";
+
+const DEVICE_KINDS: readonly DeviceKind[] = ["phone", "desktop", "cli"];
+
+/** A kind as the engine sends it; an older engine's missing kind is a phone. */
+export function parseDeviceKind(value: Json | undefined): DeviceKind {
+  const received = str(value);
+  if (received === undefined) return "phone";
+  return DEVICE_KINDS.find((kind) => kind === received) ?? "unknown";
+}
+
+/**
  * A device on the network asking to pair (the machine's answer, `connectRequests`). It carries no
  * secret: accepting it makes the host show a code that only this device's connection can use.
  */
@@ -31,7 +47,9 @@ export interface RemoteConnectRequest {
   id: string;
   /** The label the device sent. Not an identity. */
   deviceName: string;
-  /** `ios`, `android`, … as the device says. */
+  /** What the device says it is: a phone, desktop app or command line. */
+  deviceKind: DeviceKind;
+  /** `ios`, `android`, `macos`, `windows`, `linux`, … as the device says. */
   platform: string;
   /** The network address the request came from. */
   remoteAddr: string;
@@ -68,10 +86,19 @@ export interface RemoteConnectAnswer {
   lockedForSecs?: number;
 }
 
-/** A phone or tablet paired with this Mac, as `_rustcode/remote` names it. */
+/** A device paired with this Mac (a phone, desktop app or command line), as `_rustcode/remote` names it. */
 export interface RemoteDevice {
   id: string;
   name: string;
+  kind: DeviceKind;
+  /** `ios`, `windows`, …; `unknown` for a device paired before the engine kept it. */
+  platform: string;
+  /** The paired machine's own identifier, for a desktop app or command line. */
+  hostId?: string;
+  /** Epoch milliseconds the device last paired or was connected, to within minutes; absent when unknown. */
+  lastSeenAt?: number;
+  /** Connected right now (the machine's answer only). */
+  connected?: boolean;
 }
 
 /** The pairing challenge the gateway is counting down, as the machine's answer reports it. */
@@ -173,7 +200,7 @@ export interface RemoteStatus {
   /** Why `_rustcode/remote/answer` did nothing (the request ended meanwhile). */
   connectError?: string;
   /** The device `_rustcode/remote/revoke` forgot. */
-  revoked?: RemoteDevice;
+  revoked?: Pick<RemoteDevice, "id" | "name">;
   revokeError?: string;
 }
 
@@ -194,6 +221,7 @@ function parseConnectRequest(value: Json | undefined): RemoteConnectRequest[] {
     {
       id,
       deviceName: str(entry.deviceName) ?? "A device",
+      deviceKind: parseDeviceKind(entry.deviceKind),
       platform: str(entry.platform) ?? "unknown",
       remoteAddr: str(entry.remoteAddr) ?? "",
       ageSecs: num(entry.ageSecs) ?? 0,
@@ -201,6 +229,25 @@ function parseConnectRequest(value: Json | undefined): RemoteConnectRequest[] {
       state: str(entry.state) === "approved" ? "approved" : "pending",
     },
   ];
+}
+
+function parseDevice(value: Json | undefined): RemoteDevice[] {
+  const entry = obj(value);
+  const id = str(entry?.id);
+  if (!entry || !id) return [];
+  const device: RemoteDevice = {
+    id,
+    name: str(entry.name) ?? id,
+    kind: parseDeviceKind(entry.kind),
+    platform: str(entry.platform) ?? "unknown",
+  };
+  const hostId = str(entry.hostId);
+  if (hostId) device.hostId = hostId;
+  const seen = Date.parse(str(entry.lastSeenAt) ?? "");
+  if (Number.isFinite(seen)) device.lastSeenAt = seen;
+  const connected = bool(entry.connected);
+  if (connected !== undefined) device.connected = connected;
+  return [device];
 }
 
 function parseEndedConnectRequest(value: Json | undefined): RemoteEndedConnectRequest[] {
@@ -318,12 +365,7 @@ export function parseRemoteStatus(value: Json | undefined): RemoteStatus {
     error: str(root.error),
     notShared: heldBack,
     pairedDevices: num(root.pairedDevices) ?? 0,
-    devices: arr(root.devices).flatMap((device): RemoteDevice[] => {
-      const entry = obj(device);
-      const id = str(entry?.id);
-      if (!id) return [];
-      return [{ id, name: str(entry?.name) ?? id }];
-    }),
+    devices: arr(root.devices).flatMap(parseDevice),
     connectRequests: arr(root.connectRequests).flatMap(parseConnectRequest),
     endedConnectRequests: arr(root.endedConnectRequests).flatMap(parseEndedConnectRequest),
     connectAnswer: parseConnectAnswer(root.connectAnswer),

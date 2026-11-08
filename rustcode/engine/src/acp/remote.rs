@@ -46,7 +46,7 @@ use crate::remote::{
     RemoteOperation, RemoteRequest, RemoteResponse, RemoteResult, RemoteSnapshot, SessionPublisher,
     SessionRegistration, apply_session_mutation, read_session,
 };
-use crate::remote_gateway::control::OfferDetails;
+use crate::remote_gateway::control::{DeviceSummary, OfferDetails};
 use crate::remote_gateway::lifecycle::RemoteLifecycle;
 use crate::remote_gateway::service;
 use std::time::{Duration, Instant};
@@ -1172,21 +1172,23 @@ async fn host_status() -> Value {
     let status = lifecycle.status().await.ok().flatten();
     let devices = status
         .as_ref()
-        .map(|status| {
-            status
-                .devices
-                .iter()
-                .map(|device| (device.id.clone(), device.name.clone()))
-                .collect::<Vec<_>>()
-        })
+        .map(|status| status.devices.clone())
         .unwrap_or_else(|| {
             lifecycle
                 .devices()
                 .unwrap_or_default()
                 .iter()
-                .map(|device| (device.id.clone(), device.name.clone()))
+                .map(DeviceSummary::from)
                 .collect()
         });
+    let connected = |id: &str| {
+        status.as_ref().is_some_and(|status| {
+            status
+                .connections
+                .iter()
+                .any(|connection| connection.device_id == id)
+        })
+    };
     let gateway = status.as_ref().map(|status| {
         json!({
             "connected": true,
@@ -1220,6 +1222,7 @@ async fn host_status() -> Value {
                     json!({
                         "id": request.id,
                         "deviceName": request.device_name,
+                        "deviceKind": request.device_kind,
                         "platform": request.platform,
                         "remoteAddr": request.remote_addr,
                         "ageSecs": request.age_secs,
@@ -1256,10 +1259,25 @@ async fn host_status() -> Value {
         "connectRequests": connect_requests,
         "endedConnectRequests": ended_connect_requests,
         "pairedDevices": devices.len(),
-        "devices": devices.iter().map(|(id, name)| json!({
-            "id": id,
-            "name": name,
-        })).collect::<Vec<_>>(),
+        "devices": devices
+            .iter()
+            .map(|device| device_json(device, Some(connected(&device.id))))
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// A paired device as the apps read it: what it is, where it runs and when
+/// it was last connected. Never a token or its digest. `connected` is
+/// `None` where the answer cannot tell.
+fn device_json(device: &DeviceSummary, connected: Option<bool>) -> Value {
+    json!({
+        "id": device.id,
+        "name": device.name,
+        "kind": device.kind,
+        "platform": device.platform,
+        "hostId": device.host_id,
+        "lastSeenAt": device.last_seen_at,
+        "connected": connected,
     })
 }
 
@@ -1542,10 +1560,10 @@ impl Share {
             "pairingError": state.pairing_error,
             "error": state.closed,
             "pairedDevices": devices.len(),
-            "devices": devices.iter().map(|device| json!({
-                "id": device.id,
-                "name": device.name,
-            })).collect::<Vec<_>>(),
+            "devices": devices
+                .iter()
+                .map(|device| device_json(&DeviceSummary::from(device), None))
+                .collect::<Vec<_>>(),
         })
     }
 
@@ -2148,6 +2166,41 @@ pub(crate) fn bridge_permission(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paired_devices_reach_the_apps_with_kind_platform_and_last_seen() {
+        use crate::remote_gateway::devices::{DeviceKind, Devices};
+        let summary = DeviceSummary {
+            id: "0011223344556677".into(),
+            name: "Lars's PC".into(),
+            last_seen_at: Some("2026-11-08T09:30:00Z".parse().unwrap()),
+            kind: DeviceKind::Desktop,
+            platform: "windows".into(),
+            host_id: Some("host-0123456789abcdef".into()),
+        };
+        assert_eq!(
+            device_json(&summary, Some(true)),
+            json!({
+                "id": "0011223344556677",
+                "name": "Lars's PC",
+                "kind": "desktop",
+                "platform": "windows",
+                "hostId": "host-0123456789abcdef",
+                "lastSeenAt": "2026-11-08T09:30:00Z",
+                "connected": true,
+            })
+        );
+        // A record from before devices said what they are reads as a phone.
+        let old: Devices = serde_json::from_str(
+            r#"{"version":1,"devices":[{"id":"aa","name":"iPhone","token_sha256":"00","paired_at":"2026-10-01T10:00:00Z"}]}"#,
+        )
+        .unwrap();
+        let value = device_json(&DeviceSummary::from(&old.list()[0]), None);
+        assert_eq!(value["kind"], "phone");
+        assert_eq!(value["platform"], "unknown");
+        assert!(value["lastSeenAt"].is_null() && value["connected"].is_null());
+        assert!(value.get("token_sha256").is_none());
+    }
 
     #[test]
     fn requests_use_the_camel_case_acp_wire_shape() {

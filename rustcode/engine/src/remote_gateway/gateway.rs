@@ -13,7 +13,7 @@ use super::control::{
     ControlResponse, DeviceSummary, EndedChallenge, EndedConnectRequest, GatewayStatus,
     OfferDetails, PairingStatus,
 };
-use super::devices::{DeviceError, DeviceRecord, DeviceStore, Devices};
+use super::devices::{DeviceError, DeviceProfile, DeviceRecord, DeviceStore, Devices};
 use super::handshake::{
     ErrorCode, HANDSHAKE_PROTOCOL_VERSION, HandshakeRequest, HandshakeResponse, PairingMethod,
 };
@@ -232,12 +232,16 @@ pub(super) struct LiveConnection {
 
 impl Drop for LiveConnection {
     fn drop(&mut self) {
-        self.shared
+        let mut state = self
+            .shared
             .state
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .live
-            .remove(&self.context.connection_id);
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.live.remove(&self.context.connection_id);
+        // Last seen is when the device was last connected, not when it
+        // connected: a phone attached all afternoon was seen at its end.
+        self.shared
+            .mark_seen(&mut state, &self.context.device_id, chrono::Utc::now());
     }
 }
 
@@ -306,7 +310,9 @@ impl Shared {
         self: &Arc<Self>,
         text: &str,
     ) -> Result<Admitted, HandshakeResponse> {
-        match HandshakeRequest::parse(text)? {
+        let request = HandshakeRequest::parse(text)?;
+        let profile = request.device_profile();
+        match request {
             // The transport keeps a socket that asks to connect open
             // ([`Self::open_connect_request`]); it never reaches here.
             HandshakeRequest::ConnectRequest { .. } => Err(HandshakeResponse::error(
@@ -325,6 +331,7 @@ impl Shared {
                 secret.expose(),
                 &device_name,
                 install_id.as_deref(),
+                profile,
             ),
             HandshakeRequest::Authenticate {
                 device_id, token, ..
@@ -339,13 +346,15 @@ impl Shared {
         request: &str,
         text: &str,
     ) -> Result<Admitted, HandshakeResponse> {
+        let parsed = HandshakeRequest::parse(text)?;
+        let profile = parsed.device_profile();
         let HandshakeRequest::Pair {
             method,
             secret,
             device_name,
             install_id,
             ..
-        } = HandshakeRequest::parse(text)?
+        } = parsed
         else {
             return Err(HandshakeResponse::error(
                 ErrorCode::InvalidFrame,
@@ -358,6 +367,7 @@ impl Shared {
             secret.expose(),
             &device_name,
             install_id.as_deref(),
+            profile,
         );
         let mut state = self.state();
         let now = Instant::now();
@@ -383,7 +393,7 @@ impl Shared {
         self: &Arc<Self>,
         ip: IpAddr,
         device_name: &str,
-        platform: &str,
+        profile: DeviceProfile,
         install_id: Option<&str>,
     ) -> Result<ConnectTicket, HandshakeResponse> {
         let now = Instant::now();
@@ -402,7 +412,7 @@ impl Shared {
                 self.limits.connect_request_lifetime,
                 ip,
                 device_name,
-                platform,
+                profile,
                 install_id,
             )
             .map_err(|error| match error {
@@ -495,7 +505,9 @@ impl Shared {
     }
 
     /// Redeem the outstanding challenge and enroll the device. `request`
-    /// names the connection request whose socket presents it, if any.
+    /// names the connection request whose socket presents it, if any; the
+    /// device is then recorded as that request described it, which is what
+    /// the owner accepted, rather than as its `pair` frame says.
     fn pair(
         self: &Arc<Self>,
         request: Option<&str>,
@@ -503,8 +515,12 @@ impl Shared {
         secret: &str,
         device_name: &str,
         install_id: Option<&str>,
+        profile: DeviceProfile,
     ) -> Result<Admitted, HandshakeResponse> {
         let mut state = self.state();
+        let profile = request
+            .and_then(|id| state.connect.get(id))
+            .map_or(profile, |request| request.profile.clone());
         state
             .pairing
             .redeem_as(Instant::now(), request, method, secret)
@@ -525,7 +541,7 @@ impl Shared {
         }
         let mut devices = state.devices.clone();
         let enrolled = devices
-            .enroll_install(device_name, install_id)
+            .enroll_as(device_name, install_id, &profile)
             .map_err(|error| busy(error.to_string()))?;
         if let Err(error) = self.store.save(&devices) {
             crate::dbg_log!("remote gateway: device store write failed: {error:#}");
@@ -575,17 +591,7 @@ impl Shared {
         if state.live.len() >= self.limits.max_authenticated {
             return Err(busy("the gateway is at its connection limit"));
         }
-        // Last seen is for the owner's device list; failing to store it
-        // never keeps a device out.
-        let mut devices = state.devices.clone();
-        if devices.mark_seen(&record.id, now) {
-            match self.store.save(&devices) {
-                Ok(()) => state.devices = devices,
-                Err(error) => {
-                    crate::dbg_log!("remote gateway: device store write failed: {error:#}");
-                }
-            }
-        }
+        self.mark_seen(&mut state, &record.id, now);
         let welcome = HandshakeResponse::Authenticated {
             protocol_version: HANDSHAKE_PROTOCOL_VERSION,
             gateway_id: self.gateway_id.clone(),
@@ -601,6 +607,21 @@ impl Shared {
             wire_names: None,
         };
         Ok(self.register(&mut state, &record, welcome))
+    }
+
+    /// Record that `device_id` was connected at `now`, within
+    /// [`super::devices::LAST_SEEN_RESOLUTION`]. Last seen is for the
+    /// owner's device list; failing to store it never keeps a device out.
+    fn mark_seen(&self, state: &mut State, device_id: &str, now: chrono::DateTime<chrono::Utc>) {
+        let mut devices = state.devices.clone();
+        if devices.mark_seen(device_id, now) {
+            match self.store.save(&devices) {
+                Ok(()) => state.devices = devices,
+                Err(error) => {
+                    crate::dbg_log!("remote gateway: device store write failed: {error:#}");
+                }
+            }
+        }
     }
 
     fn register(
@@ -832,7 +853,10 @@ impl Gateway {
             )
         })?;
         if let Some(sessions) = &config.sessions {
-            sessions.advertise_capabilities(&[host_capability::CONNECT_REQUESTS]);
+            sessions.advertise_capabilities(&[
+                host_capability::CONNECT_REQUESTS,
+                host_capability::DESKTOPS,
+            ]);
             sessions.bind_identity(HubIdentity {
                 gateway_id: gateway_id.clone(),
                 instance_id: instance_id.clone(),
@@ -1078,7 +1102,8 @@ fn status(shared: &Shared, started: Instant) -> GatewayStatus {
         .map(|request| ConnectRequestSummary {
             id: request.id.clone(),
             device_name: request.device_name.clone(),
-            platform: request.platform.clone(),
+            device_kind: request.profile.kind,
+            platform: request.profile.platform.clone(),
             remote_addr: request.remote_addr.to_string(),
             age_secs: now.saturating_duration_since(request.created).as_secs(),
             expires_in_secs: request.expires_at.saturating_duration_since(now).as_secs(),
@@ -1133,11 +1158,7 @@ fn status(shared: &Shared, started: Instant) -> GatewayStatus {
             .devices
             .list()
             .iter()
-            .map(|device| DeviceSummary {
-                id: device.id.clone(),
-                name: device.name.clone(),
-                last_seen_at: device.last_seen_at,
-            })
+            .map(DeviceSummary::from)
             .collect(),
         pairing: Some(PairingStatus {
             expires_in_secs: expires_in.map(|left| left.as_secs()),

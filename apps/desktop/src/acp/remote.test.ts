@@ -51,7 +51,58 @@ describe("remote access", () => {
     expect(status.offer?.code).toBe("1234-5678");
     expect(status.offer?.expiresInSecs).toBe(87);
     expect(status.offer?.lockedForSecs).toBe(240);
-    expect(status.devices).toEqual([{ id: "device-1", name: "Lars's iPhone" }]);
+    // An engine from before devices said what they are: a phone on an unknown platform.
+    expect(status.devices).toEqual([
+      { id: "device-1", name: "Lars's iPhone", kind: "phone", platform: "unknown" },
+    ]);
+  });
+
+  test("paired devices carry their kind, platform, host and last seen, as acp/remote.rs sends them", () => {
+    const status = parseRemoteStatus({
+      available: true,
+      enabled: true,
+      shared: false,
+      pairedDevices: 3,
+      devices: [
+        {
+          id: "device-1",
+          name: "Lars's PC",
+          kind: "desktop",
+          platform: "windows",
+          hostId: "host-0123456789abcdef",
+          lastSeenAt: "2026-11-08T09:30:00Z",
+          connected: false,
+        },
+        { id: "device-2", name: "box", kind: "cli", platform: "linux", lastSeenAt: null, connected: true },
+        { id: "device-3", name: "?", kind: "toaster", platform: "ios", hostId: null, lastSeenAt: "garbage" },
+      ],
+      connectRequests: [
+        {
+          id: "r1",
+          deviceName: "Lars's PC",
+          deviceKind: "desktop",
+          platform: "windows",
+          remoteAddr: "192.168.1.40",
+          ageSecs: 1,
+          expiresInSecs: 119,
+          state: "pending",
+        },
+      ],
+    });
+    expect(status.devices).toEqual([
+      {
+        id: "device-1",
+        name: "Lars's PC",
+        kind: "desktop",
+        platform: "windows",
+        hostId: "host-0123456789abcdef",
+        lastSeenAt: Date.parse("2026-11-08T09:30:00Z"),
+        connected: false,
+      },
+      { id: "device-2", name: "box", kind: "cli", platform: "linux", connected: true },
+      { id: "device-3", name: "?", kind: "unknown", platform: "ios" },
+    ]);
+    expect(status.connectRequests[0]?.deviceKind).toBe("desktop");
   });
 
   test("an idle answer has no gateway or offer, and still lists the devices", () => {
