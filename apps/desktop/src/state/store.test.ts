@@ -7,6 +7,7 @@ import { Method } from "../acp/types";
 import { V2Method } from "../acp/v2";
 import { type ComposeExtras, emptyExtras } from "./compose";
 import { preferredDefault, rememberedEffort } from "./harness";
+import type { AgentUsage } from "./harnessUsage";
 import {
   answerOrchestration,
   linkFinished,
@@ -97,6 +98,7 @@ import {
   sendQueuedNow,
   setActiveTheme,
   setArchived,
+  setClaudeUsageAllowed,
   setConfigOption,
   setDefaultCwd,
   setDefaultHarness,
@@ -897,6 +899,76 @@ describe("engine controller with the mock engine", () => {
     });
     // A harness with no named logins says nothing rather than an empty list.
     expect(listed.find((h) => h.id === "rustcode")?.accounts).toBeUndefined();
+  });
+
+  test("list_harnesses carries each login's usage windows from the plan cache", async () => {
+    const storage = testStorage();
+    try {
+      await connect(new MockTransport({ delayMs: 0 }));
+      await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+      const caller = useApp.getState().sessions[0]!.id;
+      type Listed = {
+        id: string;
+        usage?: AgentUsage;
+        accounts?: { id: string; usage?: AgentUsage }[];
+      };
+      const listed = async () =>
+        (await answerOrchestration({ sessionId: caller, tool: "list_harnesses", args: {} }))
+          .harnesses as Listed[];
+      useApp.setState({ planCache: {} });
+      // Reading Claude's sign-in is the user's to allow: off, its logins say
+      // so instead of looking like accounts with nothing used.
+      let harnesses = await listed();
+      expect(harnesses.find((h) => h.id === "claude-code")?.usage).toEqual({
+        status: "not_enabled",
+        windows: [],
+      });
+      expect(harnesses.find((h) => h.id === "claude-code")?.accounts?.[0]?.usage).toEqual({
+        status: "not_enabled",
+        windows: [],
+      });
+      // A login nothing was read for yet carries no usage at all.
+      expect(harnesses.find((h) => h.id === "rustcode")?.usage).toBeUndefined();
+
+      // Allowed, the numbers the cache holds come out as an agent reads them.
+      setClaudeUsageAllowed(true);
+      const fetchedAt = Date.now();
+      const resetsAt = fetchedAt + 4 * 3_600_000;
+      const entry = (usedPercent: number, account: string | null): CachedPlan => ({
+        source: "claude-code",
+        harness: "claude-code",
+        account,
+        name: account ?? "Claude",
+        plan: "max",
+        windows: [{ label: "5-hour", usedPercent, minutes: 300, resetsAt }],
+        fetchedAt,
+      });
+      useApp.setState({
+        planCache: { "claude-code": entry(48, null), "claude-code#paral-2": entry(71, "paral-2") },
+      });
+      harnesses = await listed();
+      const claude = harnesses.find((h) => h.id === "claude-code");
+      expect(claude?.usage).toEqual({
+        status: "ok",
+        as_of: new Date(fetchedAt).toISOString(),
+        windows: [
+          {
+            label: "5-hour",
+            used_percent: 48,
+            window_minutes: 300,
+            resets_at: new Date(resetsAt).toISOString(),
+          },
+        ],
+      });
+      expect(claude?.accounts?.find((a) => a.id === "paral-2")?.usage).toMatchObject({
+        status: "ok",
+        as_of: new Date(fetchedAt).toISOString(),
+        windows: [{ label: "5-hour", used_percent: 71 }],
+      });
+    } finally {
+      setClaudeUsageAllowed(false);
+      storage.done();
+    }
   });
 
   test("read_session says why a thread could not be opened instead of reporting no turns", async () => {
@@ -3428,9 +3500,11 @@ describe("plan usage cache", () => {
       5000,
     );
     expect(Object.keys(cache)).toEqual(["claude-code"]);
+    // The window keeps the name the provider gave it, so `list_harnesses` can
+    // report it to an agent (state/harnessUsage.ts).
     expect(cache["claude-code"]).toEqual({
       source: "claude-code",
-      windows: [{ usedPercent: 18, minutes: 300, resetsAt: 1_000_000 }],
+      windows: [{ label: "5-hour", usedPercent: 18, minutes: 300, resetsAt: 1_000_000 }],
       fetchedAt: 5000,
       name: "Claude",
       plan: "max",

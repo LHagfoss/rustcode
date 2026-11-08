@@ -1,6 +1,7 @@
-// What Settings › Usage draws, and whether opening it reads again. The whole
-// answer is kept in the page cache (`state/pageCache.ts`); this decides what of
-// it to show, with Claude's numbers dropped the moment consent is off.
+// What Settings › Usage draws, whether opening it reads again, and its own
+// refresh loop. The whole answer is kept in the page cache
+// (`state/pageCache.ts`); this decides what of it to show, with Claude's
+// numbers dropped the moment consent is off, and when it reads on its own.
 
 import { planKey, planOf, type UsagePlan } from "../acp/rustcode";
 import { type PageAnswer, pageIsFresh } from "./pageCache";
@@ -74,6 +75,81 @@ function retryable(plan: UsagePlan): boolean {
     plan.status === "unavailable" &&
     (plan.reason === "expired" || plan.reason === "refused")
   );
+}
+
+/**
+ * Whether Settings › Usage reads on its own now. Its interval (`everyMs` in
+ * [`watchUsageRefresh`], the app's one plan-poll length) reads on every tick
+ * while the window is visible; coming back to the window reads only when what
+ * is drawn is older than that interval, so switching away and back costs
+ * nothing. A read already in flight is never doubled.
+ */
+export function usageAutoRead(input: {
+  /** When the drawn numbers were read, or null with nothing drawn yet. */
+  readAt: number | null;
+  now?: number;
+  /** `document.visibilityState === "visible"`. */
+  visible: boolean;
+  /** A read is in flight. */
+  reading: boolean;
+  /** The interval fired, or the window came back. */
+  trigger: "tick" | "resumed";
+  /** The interval's length; the app's `PLAN_CACHE_POLL_MS`. */
+  everyMs: number;
+}): boolean {
+  const { readAt, now = Date.now(), visible, reading, trigger, everyMs } = input;
+  if (!visible || reading) return false;
+  if (trigger === "tick") return true;
+  return readAt === null || now - readAt >= everyMs;
+}
+
+/**
+ * Wires the page's own refresh: an interval that reads while the window is
+ * visible, and a read when the window comes back after being hidden longer
+ * than that. Returns the stop function. A tick of a hidden window does
+ * nothing, so coming back is caught by the staleness check rather than by the
+ * timer restarting.
+ */
+export function watchUsageRefresh(loop: {
+  /** Reads now; the page's own read of `_rustcode/usage/plans`. */
+  read: () => void;
+  /** Whether a read is in flight. */
+  reading: () => boolean;
+  /** `document.visibilityState === "visible"`. */
+  visible: () => boolean;
+  /** When the drawn numbers were read, or null with nothing drawn yet. */
+  readAt: () => number | null;
+  /** The interval's length in milliseconds (state/store.ts `PLAN_CACHE_POLL_MS`). */
+  everyMs: number;
+  /** Where `visibilitychange` is heard; the document, unless a test wires its own. */
+  onChange?: (handler: () => void) => () => void;
+}): () => void {
+  const tick = (trigger: "tick" | "resumed") => {
+    if (
+      usageAutoRead({
+        readAt: loop.readAt(),
+        visible: loop.visible(),
+        reading: loop.reading(),
+        trigger,
+        everyMs: loop.everyMs,
+      })
+    ) {
+      loop.read();
+    }
+  };
+  const timer = setInterval(() => tick("tick"), loop.everyMs);
+  const off = (loop.onChange ?? listenOnDocument)(() => tick("resumed"));
+  return () => {
+    clearInterval(timer);
+    off();
+  };
+}
+
+/** The default `visibilitychange` source: the page's document, when there is one. */
+function listenOnDocument(handler: () => void): () => void {
+  if (typeof document === "undefined") return () => {};
+  document.addEventListener("visibilitychange", handler);
+  return () => document.removeEventListener("visibilitychange", handler);
 }
 
 /**

@@ -490,7 +490,7 @@ validated like the others; the client carries them out (`state/host.ts`).
 
 | Tool | Args | Answer | Approval |
 | --- | --- | --- | --- |
-| `list_harnesses` | none | `{ current, harnesses: [{ id, name, available, reason?, accounts? (v5), models?, omitted_models? }] }`, at most 25 models each; `accounts` is `[{ id, name, auth, signed_out? }]` for a harness with named logins, where `signed_out` is what the plan read found (and what makes naming it fail), and `current` names the harness, account, model and effort this thread runs on | None |
+| `list_harnesses` | none | `{ current, harnesses: [{ id, name, available, reason?, usage?, accounts? (v5), models?, omitted_models? }] }`, at most 25 models each; `accounts` is `[{ id, name, auth, signed_out?, usage? }]` for a harness with named logins, where `signed_out` is what the plan read found (and what makes naming it fail), `usage` is a login's plan windows (below), and `current` names the harness, account, model and effort this thread runs on | None |
 | `search_sessions` | `{ query, all_projects? }` | `{ sessions: [{ session_id, title, status, project?, snippet? }] }`: this project, or every project with `all_projects`, title and full text, at most 30 | None |
 | `list_worktrees` | `{ all_projects? }` | `{ worktrees: [{ session_id, title, project?, branch, path }] }`: this project, or every project with `all_projects` | None |
 | `update_session` | `{ session_id?, title?, pinned?, unread?, status?, snoozed_until? }` (`active`, `review`, `settled`; `1h`, `evening`, `tomorrow`, `next_week`, an ISO 8601 time, or `null` to wake) | `{ session_id, title, pinned, status, snoozed_until }` | Own thread none. Another: asked, allowed by Auto-edit and Full access |
@@ -523,6 +523,21 @@ names and counts. `list_pull_requests` uses the same
 `_rustcode/pulls` request as the panel and answers its failures (`gh_missing`,
 `not_connected`, `not_a_repository`, `timed_out`) as an error with that
 reason, so the agent can say what to fix.
+
+A login's `usage` is `{ status, as_of?, windows: [{ label, used_percent,
+window_minutes?, resets_at? }] }`: how much of each plan window is used, so an
+agent can pick an account with room left before it delegates or fans out. It
+sits on the harness entry for its own login (what a thread runs on with no
+`account`) and on each named account for that account's own numbers — two
+logins never share them. `as_of` and `resets_at` are ISO 8601 UTC times, and
+`as_of` is when the numbers were read (for numbers RustCode recorded before a
+login's access token lapsed, when that read was). `status` is `ok`, or
+`not_enabled` while the user keeps Claude usage reading off in Settings › Usage;
+a login nothing was read for yet carries no `usage` at all. The app answers it
+from the cache Settings › Usage and the composer's meter fill
+(`apps/desktop/src/state/harnessUsage.ts`): a tool call never starts a Keychain
+read or an Anthropic request of its own, so a stale cache is refreshed in the
+background for the next call, and `as_of` says how old an answer is.
 
 ## Orchestration tools v4
 

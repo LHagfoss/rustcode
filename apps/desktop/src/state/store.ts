@@ -292,6 +292,13 @@ export interface CachedPlan extends PlanUsage {
   account?: string | null;
   /** Its tier ("max"), when the provider named one. */
   plan?: string;
+  /**
+   * When the numbers were read (ms) when they are the last ones RustCode
+   * recorded for the login rather than a read made now: its access token
+   * lapsed, so `fetchedAt` is when the app heard them and this is when they
+   * were true (`list_harnesses` reports it as `as_of`).
+   */
+  asOf?: number;
 }
 
 export interface AppState {
@@ -4761,7 +4768,7 @@ export function forgetPlans(
  * used, and the stale reset time dropped, until the next read says otherwise.
  */
 export function windowNow(w: UsageWindow, now = Date.now()): UsageWindow {
-  return w.resetsAt && w.resetsAt <= now ? { usedPercent: 0, minutes: w.minutes } : w;
+  return w.resetsAt && w.resetsAt <= now ? { ...w, usedPercent: 0, resetsAt: undefined } : w;
 }
 
 /** The plan with every passed reset folded in; undefined when it has no windows. */
@@ -4803,12 +4810,14 @@ export function plansToCache(plans: UsagePlan[], fetchedAt = Date.now()): Record
         usedPercent: w.usedPercent,
         minutes: w.minutes,
         resetsAt: w.resetsAt,
+        label: w.label,
       })),
       fetchedAt,
       name: p.name,
       plan: p.plan,
       harness,
       account: p.account ?? null,
+      ...(p.asOf !== undefined ? { asOf: p.asOf } : {}),
     };
   }
   return out;
@@ -5047,12 +5056,14 @@ function schedulePlanReset(cache: Record<string, CachedPlan>) {
 /**
  * One poller for the app, not one per thread: every three minutes while the
  * window is visible, and at once when it comes back after being hidden for
- * longer than that. A hidden window asks for nothing.
+ * longer than that. A hidden window asks for nothing, and a cache another read
+ * just filled (Settings › Usage reads the same subscriptions) is left alone.
  */
 export function startPlanPolling() {
   if (planTimer) return;
   planTimer = setInterval(() => {
     if (typeof document !== "undefined" && document.hidden) return;
+    if (!planCacheStale(get().planCache)) return;
     void refreshPlanCache();
   }, PLAN_CACHE_POLL_MS);
   if (typeof document === "undefined") return;

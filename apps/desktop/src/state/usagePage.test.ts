@@ -1,7 +1,15 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, test } from "bun:test";
 import type { UsagePlan } from "../acp/rustcode";
 import { PAGE_FRESH_MS, type PageAnswer } from "./pageCache";
-import { answeredPlans, failureText, type UsageAnswer, usagePressTarget, usageView } from "./usagePage";
+import {
+  answeredPlans,
+  failureText,
+  type UsageAnswer,
+  usageAutoRead,
+  usagePressTarget,
+  usageView,
+  watchUsageRefresh,
+} from "./usagePage";
 
 const NOW = 10_000_000;
 
@@ -221,5 +229,111 @@ describe("a press on the composer's usage meter", () => {
 
   test("closes the page it is already on", () => {
     expect(usagePressTarget(true)).toBe(null);
+  });
+});
+
+/** The app's one plan-poll length (state/store.ts `PLAN_CACHE_POLL_MS`). */
+const EVERY = 180_000;
+
+describe("the page keeps itself current", () => {
+  test("a tick reads while the window is visible, and a read in flight is never doubled", () => {
+    const tick = (over: Partial<Parameters<typeof usageAutoRead>[0]> = {}) =>
+      usageAutoRead({
+        readAt: NOW,
+        now: NOW,
+        visible: true,
+        reading: false,
+        trigger: "tick",
+        everyMs: EVERY,
+        ...over,
+      });
+    expect(tick()).toBe(true);
+    // A hidden window asks for nothing.
+    expect(tick({ visible: false })).toBe(false);
+    // Neither does one that is already reading.
+    expect(tick({ reading: true })).toBe(false);
+  });
+
+  test("coming back reads only when what is drawn is older than the interval", () => {
+    const back = (readAt: number | null) =>
+      usageAutoRead({
+        readAt,
+        now: NOW,
+        visible: true,
+        reading: false,
+        trigger: "resumed",
+        everyMs: EVERY,
+      });
+    expect(back(NOW - EVERY + 1)).toBe(false);
+    expect(back(NOW - EVERY)).toBe(true);
+    // Nothing drawn yet: the first answer is always wanted.
+    expect(back(null)).toBe(true);
+  });
+
+  test("the loop ticks every interval, catches up on coming back when stale, and stops", () => {
+    jest.useFakeTimers();
+    let visible = true;
+    let reading = false;
+    let readAt = Date.now();
+    let reads = 0;
+    let changes: (() => void)[] = [];
+    const stop = watchUsageRefresh({
+      read: () => {
+        reads += 1;
+        readAt = Date.now();
+      },
+      reading: () => reading,
+      visible: () => visible,
+      readAt: () => readAt,
+      everyMs: EVERY,
+      onChange: (handler) => {
+        changes.push(handler);
+        return () => {
+          changes = changes.filter((h) => h !== handler);
+        };
+      },
+    });
+    const resume = () => {
+      for (const handler of changes) handler();
+    };
+
+    jest.advanceTimersByTime(EVERY);
+    expect(reads).toBe(1);
+    jest.advanceTimersByTime(EVERY);
+    expect(reads).toBe(2);
+
+    // A read in flight is not doubled, and the next tick reads once it is done.
+    reading = true;
+    jest.advanceTimersByTime(EVERY);
+    expect(reads).toBe(2);
+    reading = false;
+    jest.advanceTimersByTime(EVERY);
+    expect(reads).toBe(3);
+
+    // Hidden: no read, and coming back within the interval costs nothing.
+    visible = false;
+    jest.advanceTimersByTime(EVERY / 2);
+    expect(reads).toBe(3);
+    visible = true;
+    resume();
+    expect(reads).toBe(3);
+
+    // Hidden for longer than the interval: coming back catches up at once.
+    visible = false;
+    jest.advanceTimersByTime(EVERY * 2);
+    expect(reads).toBe(3);
+    visible = true;
+    resume();
+    expect(reads).toBe(4);
+
+    // Stopped, the loop reads nothing more and hears no visibility change.
+    stop();
+    expect(changes).toHaveLength(0);
+    jest.advanceTimersByTime(EVERY * 2);
+    expect(reads).toBe(4);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
   });
 });

@@ -439,7 +439,7 @@ pub const FAN_OUT: Tool = Tool {
 /// clients that advertise `_meta.rustcode.orchestration >= 3`.
 pub const LIST_HARNESSES: Tool = Tool {
     name: crate::orchestration::LIST_HARNESSES,
-    description: "List the harnesses that can run a thread, each with its models, efforts and named accounts or why it cannot run, and what this thread runs on (harness, account, model, effort). Ask it when the user asks which harnesses, models, accounts or efforts are available. Use the ids in start_session, fan_out and configure_session.",
+    description: "List the harnesses that can run a thread, each with its models, efforts and named accounts or why it cannot run, and what this thread runs on (harness, account, model, effort). Every login RustCode has read a plan for carries `usage`: `{ status, as_of, windows: [{ label, used_percent, window_minutes, resets_at }] }`, where `as_of` and `resets_at` are ISO 8601 times and `status: \"not_enabled\"` means the user keeps Claude usage reading off in Settings › Usage — read it before choosing an account, so a delegate does not start on a window that is nearly used up. Ask it when the user asks which harnesses, models, accounts, efforts or usage windows are available. Use the ids in start_session, fan_out and configure_session.",
     arguments: r#"{}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,

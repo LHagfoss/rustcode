@@ -387,7 +387,14 @@ composer's keys stay outside the table.
   presses **Show** once (`rustcode.claudeUsage`), since macOS may ask to
   allow Keychain access. Each source is cached a minute. Showing the page
   reads every Claude login; the background reads one at a time, the account
-  of the thread on screen (`claudeAccount`).
+  of the thread on screen (`claudeAccount`). While the page is open it reads
+  again every three minutes (`PLAN_CACHE_POLL_MS`, the meter poll's interval,
+  `watchUsageRefresh` in `state/usagePage.ts`), and once on coming back to the
+  window when what it draws is older than that; a read in flight is never
+  doubled, and Refresh still reads at once, past the engine's minute of cache.
+  What it reads fills the same cache `list_harnesses` reports to an agent
+  (`state/harnessUsage.ts`, `docs/orchestrator.md`), which answers without a
+  Keychain read or a request of its own.
   A Claude access token lives hours and is renewed only when Claude Code runs,
   so a login nobody ran a thread on since reads as lapsed. The row then draws
   the numbers RustCode last read for that login, from `claude-usage.json` in
