@@ -78,6 +78,8 @@ html, body { margin: 0; background: transparent; }
 body { position: relative; color: var(--rc-text); font: 13px/20px var(--rc-font); padding: 1px 0 2px; overflow-wrap: anywhere;
   -webkit-font-smoothing: antialiased; }
 * { box-sizing: border-box; }
+:focus { outline: none; }
+:root[data-keyboard-nav] :focus-visible { outline: 2px solid color-mix(in srgb, var(--rc-accent) 60%, transparent); outline-offset: 1px; }
 h1, h2, h3, h4 { margin: 0 0 6px; font-weight: 600; line-height: 1.3; }
 h1 { font-size: 17px; } h2 { font-size: 15px; } h3, h4 { font-size: 13px; }
 p { margin: 0 0 8px; } p:last-child { margin-bottom: 0; }
@@ -90,14 +92,13 @@ td { padding: 5px 8px; border-bottom: 1px solid var(--rc-separator); vertical-al
 tr:last-child td { border-bottom: 0; }
 input, select, textarea { font: inherit; color: inherit; background: var(--rc-surface);
   border: 1px solid var(--rc-separator); border-radius: 8px; padding: 4px 8px; outline: none; }
-input:focus, select:focus, textarea:focus { border-color: var(--rc-accent);
+:root[data-keyboard-nav] :is(input, select, textarea):focus-visible { border-color: var(--rc-accent); outline: none;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--rc-accent) 22%, transparent); }
 input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(--rc-accent); }
 button { font: inherit; font-weight: 500; color: var(--rc-text); background: var(--rc-surface);
   border: 1px solid var(--rc-separator); border-radius: 999px; padding: 3px 12px; cursor: pointer; }
 button:hover { background: color-mix(in srgb, var(--rc-text) 9%, transparent); }
 button:active { opacity: 0.75; }
-button:focus-visible { outline: 2px solid color-mix(in srgb, var(--rc-accent) 60%, transparent); outline-offset: 1px; }
 button.primary, button[data-primary] { background: var(--rc-accent); color: var(--rc-accent-text); border-color: transparent; }
 button:disabled { opacity: 0.45; cursor: default; }
 code, kbd, pre { font-family: var(--rc-mono); font-size: 12px; }
@@ -168,7 +169,7 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 .rc-table tbody tr:hover > td { background: color-mix(in srgb, var(--rc-text) 4.5%, transparent); }
 .rc-table[data-rc-sort] th { cursor: pointer; user-select: none; }
 .rc-table[data-rc-sort] th:hover { color: var(--rc-text); }
-.rc-table[data-rc-sort] th:focus-visible { outline: 2px solid color-mix(in srgb, var(--rc-accent) 60%, transparent); outline-offset: -2px; }
+:root[data-keyboard-nav] .rc-table[data-rc-sort] th:focus-visible { outline-offset: -2px; }
 .rc-table th[aria-sort] { color: var(--rc-text); }
 .rc-table th[aria-sort=ascending]::after { content: "\u2191"; margin-left: 3px; color: var(--rc-muted); }
 .rc-table th[aria-sort=descending]::after { content: "\u2193"; margin-left: 3px; color: var(--rc-muted); }
@@ -251,8 +252,6 @@ pre.rc-term { white-space: pre-wrap; }
   margin: 18px auto 0; padding: 6px 10px; font-size: 12px; line-height: 16px; font-weight: 400; color: var(--rc-text);
   background: var(--rc-surface); border: 1px solid var(--rc-separator); border-radius: 8px; }
 .rc-tip:hover > span, .rc-tip:focus > span { display: inline-block; }
-.rc-tip:focus-visible, .rc-details > summary:focus-visible { outline: 2px solid color-mix(in srgb, var(--rc-accent) 60%, transparent); outline-offset: 1px; }
-
 @media (prefers-reduced-motion: reduce) { .rc-details > summary::before, .rc-bar[data-rc-tip]::after { transition: none; } }
 `;
 
@@ -299,13 +298,26 @@ export function runtimeScript(token: string, theme: PageTheme): string {
   Object.defineProperty(window, "rustcode", { value: Object.freeze(rustcode) });
   window.addEventListener("message", (event) => {
     const data = event.data;
-    if (event.source !== parent || !data || data.rc !== token || data.type !== "theme") return;
+    if (event.source !== parent || !data || data.rc !== token) return;
+    if (data.type === "focus-modality") {
+      document.documentElement.toggleAttribute("data-keyboard-nav", data.keyboard === true);
+      return;
+    }
+    if (data.type !== "theme") return;
     const style = document.getElementById("rc-vars");
     if (style) style.textContent = String(data.css || "");
     theme = data.mode === "dark" ? "dark" : "light";
     if (window.__rcThemeCharts) window.__rcThemeCharts();
     for (const callback of listeners) { try { callback(theme); } catch (e) { console.error(e); } }
   });
+  const setKeyboardNav = (active) => {
+    document.documentElement.toggleAttribute("data-keyboard-nav", active);
+    post({ type: "focus-modality", keyboard: active });
+  };
+  window.addEventListener("keydown", (event) => { if (event.key === "Tab") setKeyboardNav(true); }, true);
+  const pointer = () => setKeyboardNav(false);
+  window.addEventListener("pointerdown", pointer, true);
+  window.addEventListener("mousedown", pointer, true);
   // The content, not the document: the root's scrollHeight is never below the frame's own height,
   // so a frame could only grow. The body is positioned (BASE_CSS), so its scrollHeight also counts
   // what is absolutely placed in it.

@@ -21,9 +21,13 @@ export function installFocusModality(
   target.addEventListener("keydown", keyboard, true);
   target.addEventListener("pointerdown", pointer, true);
   target.addEventListener("mousedown", pointer, true);
+  // Listen on the window itself. Capturing blur also sees ordinary focus moves between elements
+  // (including into and out of an iframe), which would turn keyboard mode off during Tab navigation.
+  target.addEventListener("blur", pointer);
   return () => {
     target.removeEventListener("keydown", keyboard, true);
     target.removeEventListener("pointerdown", pointer, true);
     target.removeEventListener("mousedown", pointer, true);
+    target.removeEventListener("blur", pointer);
   };
 }

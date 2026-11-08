@@ -1012,6 +1012,8 @@
   --rc-glass-bg-strong: color-mix(in srgb, var(--rc-surface-2) 93%, transparent);
   --rc-glass-faint-bg: color-mix(in srgb, var(--rc-surface-2) 34%, transparent);
   --rc-glass-filter: saturate(1.2) blur(13px);
+  --rc-scrim-bg: color-mix(in srgb, var(--rc-bg) 60%, transparent);
+  --rc-lightbox-scrim-bg: color-mix(in oklab, var(--rc-bg) 70%, transparent);
 }
 
 .rc-glass {
@@ -1048,9 +1050,12 @@
  * the pane's recipe, not a third one: Reduce transparency takes the filter away with the rest.
  */
 .rc-scrim {
-  background: color-mix(in srgb, var(--rc-bg) 60%, transparent);
+  background: var(--rc-scrim-bg);
   backdrop-filter: var(--rc-glass-filter);
   -webkit-backdrop-filter: var(--rc-glass-filter);
+}
+.rc-lightbox-scrim {
+  background-color: var(--rc-lightbox-scrim-bg);
 }
 
 /*
@@ -1360,6 +1365,8 @@
     --rc-glass-bg-strong: var(--rc-surface-2);
     --rc-glass-faint-bg: var(--rc-surface-2);
     --rc-glass-filter: none;
+    --rc-scrim-bg: var(--rc-bg);
+    --rc-lightbox-scrim-bg: var(--rc-bg);
     --rc-composer-bg: var(--rc-surface-2);
     --rc-composer-bg-focus: var(--rc-surface-2);
     --rc-composer-bg-over: var(--rc-surface-2);
@@ -1379,6 +1386,8 @@
   --rc-glass-bg-strong: var(--rc-surface-2);
   --rc-glass-faint-bg: var(--rc-surface-2);
   --rc-glass-filter: none;
+  --rc-scrim-bg: var(--rc-bg);
+  --rc-lightbox-scrim-bg: var(--rc-bg);
   --rc-composer-bg: var(--rc-surface-2);
   --rc-composer-bg-focus: var(--rc-surface-2);
   --rc-composer-bg-over: var(--rc-surface-2);

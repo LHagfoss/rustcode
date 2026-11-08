@@ -231,7 +231,7 @@ export function Lightbox() {
       role="dialog"
       aria-modal="true"
       aria-label={image.alt || "Picture"}
-      className="rc-overlay fixed inset-0 z-[60] bg-bg/70 [-webkit-backdrop-filter:var(--rc-glass-filter)] [backdrop-filter:var(--rc-glass-filter)]"
+      className="rc-overlay rc-lightbox-scrim fixed inset-0 z-[60] [-webkit-backdrop-filter:var(--rc-glass-filter)] [backdrop-filter:var(--rc-glass-filter)]"
       data-state="open"
     >
       <div

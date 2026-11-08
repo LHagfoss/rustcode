@@ -6,6 +6,7 @@
 import { Check, Code, Copy, Play, Square } from "lucide-react";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { isTauri } from "../acp/transport";
+import { KEYBOARD_NAV } from "../lib/focusModality";
 import { shellCall } from "../lib/shell";
 import { cssVar, isDark, onAppThemeChange } from "../lib/theme";
 import { chartSource } from "../smartui/chart";
@@ -117,6 +118,30 @@ export function SmartUIView({
   const [, haltChanged] = useReducer((n: number) => n + 1, 0);
   const frame = useRef<HTMLIFrameElement>(null);
   const box = useRef<HTMLDivElement>(null);
+
+  const syncFrameFocusModality = useCallback(() => {
+    if (!page) return;
+    frame.current?.contentWindow?.postMessage(
+      {
+        rc: page.token,
+        type: "focus-modality",
+        keyboard: document.documentElement.hasAttribute(KEYBOARD_NAV),
+      },
+      "*",
+    );
+  }, [page]);
+
+  useEffect(() => {
+    if (!page) return;
+    // The iframe is a separate document: mirror parent modality changes across the boundary.
+    const observer = new MutationObserver(syncFrameFocusModality);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: [KEYBOARD_NAV],
+    });
+    syncFrameFocusModality();
+    return () => observer.disconnect();
+  }, [page, syncFrameFocusModality]);
   const autoRun = useRef(new AutoRun());
   // Each start or stop outdates a start still waiting on Chart.js or the shell.
   const attempt = useRef(0);
@@ -352,6 +377,9 @@ export function SmartUIView({
             void copyText(data.text);
           }
           break;
+        case "focus-modality":
+          document.documentElement.toggleAttribute(KEYBOARD_NAV, data.keyboard === true);
+          break;
         case "error": {
           // A page that threw used to be left on screen, blank where its content should be.
           const reason =
@@ -410,6 +438,8 @@ export function SmartUIView({
             title={title}
             sandbox="allow-scripts"
             referrerPolicy="no-referrer"
+            onFocus={syncFrameFocusModality}
+            onLoad={syncFrameFocusModality}
             src={page.src}
             srcDoc={page.srcdoc}
             className="block w-full border-0 bg-transparent"
@@ -445,6 +475,8 @@ export function SmartUIView({
           title={title}
           sandbox="allow-scripts"
           referrerPolicy="no-referrer"
+          onFocus={syncFrameFocusModality}
+          onLoad={syncFrameFocusModality}
           src={page.src}
           srcDoc={page.srcdoc}
           className="block w-full border-0 bg-transparent"
