@@ -1117,7 +1117,7 @@ function AttachmentStrip({
   return (
     // Its own band above the field, inset from the box's rounder corner and never shrinking, so the
     // thumbnails clear the curve and only the field below scrolls.
-    <div className="flex shrink-0 gap-2 overflow-x-auto px-5 pt-3 pb-1">
+    <div className="flex shrink-0 gap-2 overflow-x-auto px-5 pt-5 pb-1">
       {shown.map((a) =>
         a.kind === "image" ? (
           <div key={a.id} className="group relative shrink-0 rc-in">

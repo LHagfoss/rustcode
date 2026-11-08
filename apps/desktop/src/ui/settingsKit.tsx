@@ -185,6 +185,7 @@ export function Row({
   children,
   className,
   reset,
+  stacked = false,
 }: {
   title: ReactNode;
   subtitle?: ReactNode;
@@ -194,6 +195,7 @@ export function Row({
   className?: string;
   /** Puts the row back to its default; pass it only while the value differs. */
   reset?: () => void;
+  stacked?: boolean;
 }) {
   // Register with the page so its header can restore every changed row at once. The
   // run goes through a ref: the registry is keyed on presence, not on the closure.
@@ -212,11 +214,12 @@ export function Row({
     >
       <div
         className={cx(
-          "flex min-h-12 flex-col gap-3 @min-[34rem]:flex-row @min-[34rem]:items-center @min-[34rem]:gap-6",
+          "flex min-h-12 flex-col gap-3",
+          !stacked && "@min-[34rem]:flex-row @min-[34rem]:items-center @min-[34rem]:gap-6",
           rowInset,
         )}
       >
-        <div className={cx("min-w-0 flex-1", reset && "@max-[34rem]:pr-7")}>
+        <div className={cx("min-w-0 flex-1", reset && (stacked ? "pr-7" : "@max-[34rem]:pr-7"))}>
           <div className="flex min-h-5 items-center gap-1.5 font-medium text-body text-fg">{title}</div>
           {subtitle && (
             <div className="max-w-[70ch] pt-1 text-balance text-callout text-fg-muted leading-normal">
@@ -233,7 +236,11 @@ export function Row({
               <ResetButton
                 title={title}
                 onClick={reset}
-                className="@max-[34rem]:absolute @max-[34rem]:top-2 @max-[34rem]:right-2"
+                className={
+                  stacked
+                    ? "absolute top-2 right-2"
+                    : "@max-[34rem]:absolute @max-[34rem]:top-2 @max-[34rem]:right-2"
+                }
               />
             )}
             {children}
@@ -276,7 +283,7 @@ export function Action({
     <button
       type="button"
       className={cx(
-        "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg font-medium whitespace-nowrap text-callout disabled:opacity-40",
+        "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full font-medium whitespace-nowrap text-callout disabled:opacity-40",
         size === "sm" ? "h-6 px-2" : "h-8 px-3",
         prominent
           ? "bg-fg text-bg enabled:hover:bg-fg/90 enabled:active:bg-fg/80"
@@ -405,12 +412,12 @@ export function Choice<T extends string>({
       ref={group}
       role="radiogroup"
       aria-label={label}
-      className="relative inline-flex shrink-0 rounded-lg bg-fill p-1"
+      className="relative inline-flex shrink-0 rounded-full bg-fill p-1"
     >
       {thumb && (
         <span
           aria-hidden
-          className="absolute top-0 left-0 h-6 rounded-sm bg-knob shadow-knob transition-[transform,width] duration-200 ease-snappy"
+          className="absolute top-0 left-0 h-6 rounded-full bg-knob shadow-knob transition-[transform,width] duration-200 ease-snappy"
           style={{ transform: `translate(${thumb.left}px, 4px)`, width: thumb.width }}
         />
       )}
@@ -423,7 +430,7 @@ export function Choice<T extends string>({
           disabled={o.disabled}
           onClick={() => onChange(o.value)}
           className={cx(
-            "relative h-6 rounded-sm px-2 font-medium text-caption whitespace-nowrap disabled:opacity-40",
+            "relative h-6 rounded-full px-2 font-medium text-caption whitespace-nowrap disabled:opacity-40",
             o.value === value ? selected : "text-fg-muted hover:text-fg",
           )}
         >
@@ -499,6 +506,7 @@ export function Slider({
           value={value}
           onChange={(e) => onChange(Number(e.target.value))}
           className="rc-range h-5 w-36 cursor-pointer"
+          style={{ "--rc-range-progress": `${((value - min) / (max - min)) * 100}%` } as React.CSSProperties}
         />
         <span className="min-w-14 text-right font-medium text-callout text-fg tabular">
           {value} {unit}
