@@ -63,7 +63,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import type { PullRequest, SubagentInfo } from "../acp/rustcode";
-import { displayPath, modelName, projectName, type SessionSummary } from "../acp/types";
+import { modelName, projectName, type SessionSummary } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
 import { formatBinding, listCommandFor } from "../lib/keys";
 import { openTerminalAt, openThreadLog, pickFolder, revealPath } from "../lib/native";
@@ -80,6 +80,7 @@ import {
   subscribePulls,
 } from "../state/pulls";
 import { type PendingSetup, pendingSummary } from "../state/setup";
+import { applyOrder, moveBy, reorder, sectionOrderKey } from "../state/sidebarOrder";
 import {
   contextRow,
   keepListed,
@@ -113,6 +114,7 @@ import {
   setAutoCompactForThread,
   setPanel,
   setPinned,
+  setSectionOrder,
   setThreadStatus,
   settleThread,
   settleThreads,
@@ -159,6 +161,8 @@ import {
   Tooltip,
 } from "./primitives";
 import { RollingNumber } from "./RollingNumber";
+import { useThreadDrag } from "./sidebarDrag";
+import { ThreadHoverCard } from "./ThreadHoverCard";
 import { LIGHTS_INSET, TitlebarRow } from "./Titlebar";
 import { UpdateRow } from "./Updates";
 
@@ -166,13 +170,15 @@ import { UpdateRow } from "./Updates";
 // that row: four 32 px buttons, the cluster's 6 px padding and its 10 px trailing gap.
 const MIN = LIGHTS_INSET + 144;
 const MAX = 460;
+/** What the sidebar is wide before it is dragged, and what a double-click on its edge puts back. */
+const DEFAULT_WIDTH = 256;
 
 function useSidebarWidth() {
   const [width, setWidth] = useState(() => {
     try {
-      return Math.max(MIN, Number(localStorage.getItem("rustcode.sidebarWidth")) || 256);
+      return Math.max(MIN, Number(localStorage.getItem("rustcode.sidebarWidth")) || DEFAULT_WIDTH);
     } catch {
-      return 256;
+      return DEFAULT_WIDTH;
     }
   });
   useEffect(() => {
@@ -626,6 +632,7 @@ const ThreadRow = memo(function ThreadRow({
   navActive,
   picked,
   bulk,
+  dragging,
   pinKey,
   settleKey,
   onClearSelection,
@@ -634,6 +641,8 @@ const ThreadRow = memo(function ThreadRow({
   selected: boolean;
   /** The open thread is one this row started: the row is kept lit as its context, not opened. */
   context?: boolean;
+  /** Being dragged to another place in its section: no hover card, and no pointer of its own. */
+  dragging?: boolean;
   /** Under its project's heading: the row leaves out the mark and the name it would repeat. */
   grouped: boolean;
   now: number;
@@ -698,12 +707,8 @@ const ThreadRow = memo(function ThreadRow({
   const harness = external ? harnesses?.harnesses.find((h) => h.id === session.harness) : undefined;
   // Where the row runs: the worktree's repository, else the thread's own folder.
   const project = projectName(worktree?.repo || session.cwd || "");
-  // The path, the harness and the model the row no longer spells out, on its tooltip.
-  const details = [
-    session.cwd ? displayPath(session.cwd) : undefined,
-    harness?.name ?? (external ? session.harness : undefined),
-    modelName(session.model),
-  ].filter(Boolean);
+  // What the row cannot spell out, on its hover card (ui/ThreadHoverCard.tsx).
+  const harnessName = harness?.name ?? (external ? session.harness : undefined);
   const startRename = () => {
     setTitle(session.title ?? "");
     // After the menu closes and gives focus back.
@@ -746,128 +751,148 @@ const ThreadRow = memo(function ThreadRow({
       }}
     >
       <ContextMenu.Trigger asChild>
-        <div className="group relative">
-          <button
-            type="button"
-            data-row-id={session.id}
-            tabIndex={navActive ? 0 : -1}
-            onClick={() => selectThread(session.id)}
-            onDoubleClick={startRename}
-            onKeyDown={(e) => {
-              if (e.key === "F2") {
-                e.preventDefault();
-                startRename();
-                return;
-              }
-              // Shift+F10 and the ContextMenu key open the menu the row's right-click opens,
-              // anchored on the row itself rather than wherever the pointer last was.
-              if (!opensRowMenu(e)) return;
-              e.preventDefault();
-              menuFromKeys.current = true;
-              const rect = e.currentTarget.getBoundingClientRect();
-              e.currentTarget.dispatchEvent(
-                new MouseEvent("contextmenu", {
-                  bubbles: true,
-                  cancelable: true,
-                  clientX: rect.left + 16,
-                  clientY: rect.top + Math.min(rect.height / 2, 24),
-                }),
-              );
-            }}
-            aria-current={selected ? "page" : undefined}
-            aria-pressed={picked || undefined}
-            title={details.join(" · ")}
-            className="relative flex w-full flex-col justify-center gap-0.5 rounded-xl py-2 pr-2 pl-2 text-left"
+        <div className={cx("group relative", dragging && "cursor-grabbing")}>
+          {/* A moment's hover says what the row has no room for: its project, harness and model,
+              what it is doing, its branch and folder, and the last thing said in it. */}
+          <ThreadHoverCard
+            session={session}
+            project={project}
+            harness={harnessName}
+            model={modelName(session.model)}
+            status={chip?.label ?? (done ? "Settled" : "Idle")}
+            now={now}
+            items={items}
+            disabled={dragging}
           >
-            <RowFill selected={lit} picked={picked} radius="rounded-xl" />
-            {/* Where it runs, what its branch carries, and what it is doing. The hovered row's
+            <button
+              type="button"
+              data-row-id={session.id}
+              tabIndex={navActive ? 0 : -1}
+              onClick={() => selectThread(session.id)}
+              onDoubleClick={startRename}
+              onKeyDown={(e) => {
+                if (e.key === "F2") {
+                  e.preventDefault();
+                  startRename();
+                  return;
+                }
+                // Shift+F10 and the ContextMenu key open the menu the row's right-click opens,
+                // anchored on the row itself rather than wherever the pointer last was.
+                if (!opensRowMenu(e)) return;
+                e.preventDefault();
+                menuFromKeys.current = true;
+                const rect = e.currentTarget.getBoundingClientRect();
+                e.currentTarget.dispatchEvent(
+                  new MouseEvent("contextmenu", {
+                    bubbles: true,
+                    cancelable: true,
+                    clientX: rect.left + 16,
+                    clientY: rect.top + Math.min(rect.height / 2, 24),
+                  }),
+                );
+              }}
+              aria-current={selected ? "page" : undefined}
+              aria-pressed={picked || undefined}
+              className="relative flex w-full flex-col justify-center gap-0.5 rounded-xl py-2 pr-2 pl-2 text-left"
+            >
+              <RowFill selected={lit} picked={picked} radius="rounded-xl" />
+              {/* Where it runs, what its branch carries, and what it is doing. The hovered row's
                 actions take the right slot's place, so this line keeps exactly their room clear:
                 Pin, Settle or Unsettle and the menu, 26px each plus the 6px they sit in from
                 the row's edge. */}
-            <span className={cx("relative flex h-[17px] w-full min-w-0 items-center gap-1", ACTIONS_CLEAR)}>
-              {!grouped && (
-                <>
-                  <ProjectMark name={project} />
-                  {/* The name keeps its room; the branch, the counts and the pull request give way. */}
-                  <span className="min-w-0 max-w-[50%] shrink-0 truncate text-fg-muted text-sub">
-                    {project}
-                  </span>
-                </>
-              )}
-              {worktree && (
-                <span className="flex min-w-0 shrink items-center gap-0.5 rounded-xs bg-fill-subtle px-1 font-mono text-[10px] text-fg-muted">
-                  <GitBranch size={9} className="shrink-0" />
-                  <span className="truncate">{worktree.branch}</span>
-                </span>
-              )}
-              {diff && (
-                <span className="shrink-0 font-mono text-[10px] tabular">
-                  {diff.added > 0 && <span className="text-success">+{diff.added}</span>}
-                  {diff.added > 0 && diff.removed > 0 && " "}
-                  {diff.removed > 0 && <span className="text-danger">−{diff.removed}</span>}
-                </span>
-              )}
-              {pull && <PullMark pull={pull} />}
-              <span className="ml-auto flex shrink-0 items-center gap-1 text-sub tabular group-hover:invisible group-has-[:focus-visible]:invisible group-has-[[data-state=open]]:invisible">
-                {chip ? (
-                  <RowStatusChip status={chip} startedAt={startedAt} />
-                ) : (
-                  <span className="text-fg-muted">
-                    {wake ? wakeLabel(wake, now) : shortAge(session.updatedAt, now)}
+              <span className={cx("relative flex h-[17px] w-full min-w-0 items-center gap-1", ACTIONS_CLEAR)}>
+                {!grouped && (
+                  <>
+                    <ProjectMark name={project} />
+                    {/* The name keeps its room; the branch, the counts and the pull request give way. */}
+                    <span className="min-w-0 max-w-[50%] shrink-0 truncate text-fg-muted text-sub">
+                      {project}
+                    </span>
+                  </>
+                )}
+                {worktree && (
+                  <span className="flex min-w-0 shrink items-center gap-0.5 rounded-xs bg-fill-subtle px-1 font-mono text-[10px] text-fg-muted">
+                    <GitBranch size={9} className="shrink-0" />
+                    <span className="truncate">{worktree.branch}</span>
                   </span>
                 )}
-              </span>
-            </span>
-            {/* Its title, and the harness that runs it. */}
-            <span className="relative flex w-full min-w-0 items-center gap-1.5">
-              {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
-              <span
-                className={cx(
-                  "min-w-0 flex-1 truncate text-body",
-                  // What wants you reads strong; what works, waits or has been read recedes.
-                  lit || picked || request || fresh || failed
-                    ? "font-medium text-fg"
-                    : done || running || wait
-                      ? "font-normal text-fg/75 group-hover:text-fg"
-                      : "font-medium text-fg",
+                {diff && (
+                  <span className="shrink-0 font-mono text-[10px] tabular">
+                    {diff.added > 0 && <span className="text-success">+{diff.added}</span>}
+                    {diff.added > 0 && diff.removed > 0 && " "}
+                    {diff.removed > 0 && <span className="text-danger">−{diff.removed}</span>}
+                  </span>
                 )}
-              >
-                {session.title || "New thread"}
+                {pull && <PullMark pull={pull} />}
+                <span className="ml-auto flex shrink-0 items-center gap-1 text-sub tabular group-hover:invisible group-has-[:focus-visible]:invisible group-has-[[data-state=open]]:invisible">
+                  {chip ? (
+                    <RowStatusChip status={chip} startedAt={startedAt} />
+                  ) : (
+                    <span className="text-fg-muted">
+                      {wake ? wakeLabel(wake, now) : shortAge(session.updatedAt, now)}
+                    </span>
+                  )}
+                </span>
               </span>
-              {/* Who else it is working with, and where: one cluster, ending on the same right
+              {/* Its title, and the harness that runs it. */}
+              <span className="relative flex w-full min-w-0 items-center gap-1.5">
+                {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
+                <span
+                  className={cx(
+                    "min-w-0 flex-1 truncate text-body",
+                    // What wants you reads strong; what works, waits or has been read recedes.
+                    lit || picked || request || fresh || failed
+                      ? "font-medium text-fg"
+                      : done || running || wait
+                        ? "font-normal text-fg/75 group-hover:text-fg"
+                        : "font-medium text-fg",
+                  )}
+                >
+                  {session.title || "New thread"}
+                </span>
+                {/* Who else it is working with, and where: one cluster, ending on the same right
                   edge as the chip above. The ↳ (it works for another thread) leads it, and a row
                   with no delegates keeps its harness mark alone instead. */}
-              <span className="flex min-w-0 shrink-0 items-center gap-1">
-                <LinkBadge threadId={session.id} />
-                {stack?.length ? (
-                  <AgentStack agents={stack} />
-                ) : (
-                  external && (
-                    <HarnessIcon
-                      id={session.harness!}
-                      name={harness?.name}
-                      size={13}
-                      className="shrink-0 text-fg-muted"
-                    />
-                  )
-                )}
+                <span className="flex min-w-0 shrink-0 items-center gap-1">
+                  <LinkBadge threadId={session.id} />
+                  {stack?.length ? (
+                    <AgentStack agents={stack} />
+                  ) : (
+                    external && (
+                      <HarnessIcon
+                        id={session.harness!}
+                        name={harness?.name}
+                        size={13}
+                        className="shrink-0 text-fg-muted"
+                      />
+                    )
+                  )}
+                </span>
               </span>
-            </span>
-            {/* What it asks of you; while searching, the words around the match; or which thread a
+              {/* What it asks of you; while searching, the words around the match; or which thread a
                 delegated one without a parent row above it belongs under. */}
-            {(snippet || request || hint) && (
-              <span className="relative truncate text-fg-muted text-sub">
-                {snippet
-                  ? `“${snippet}”`
-                  : request
-                    ? request.question
-                      ? request.question.text
-                      : request.title
-                    : hint}
-              </span>
+              {(snippet || request || hint) && (
+                <span className="relative truncate text-fg-muted text-sub">
+                  {snippet
+                    ? `“${snippet}”`
+                    : request
+                      ? request.question
+                        ? request.question.text
+                        : request.title
+                      : hint}
+                </span>
+              )}
+            </button>
+          </ThreadHoverCard>
+          <div
+            data-row-actions
+            // Hidden while the row is dragged: the actions sit beside the row, not on it.
+            className={cx(
+              "absolute top-0.5 right-1.5 hidden items-center",
+              !dragging &&
+                "group-hover:flex group-has-[:focus-visible]:flex group-has-[[data-state=open]]:flex",
             )}
-          </button>
-          <div className="absolute top-0.5 right-1.5 hidden items-center group-hover:flex group-has-[:focus-visible]:flex group-has-[[data-state=open]]:flex">
+          >
             <RowAction label={pinned ? "Unpin" : "Pin"} hint={pinKey} onClick={() => togglePin(session.id)}>
               {pinned ? <PinOff size={13} /> : <Pin size={13} />}
             </RowAction>
@@ -1409,6 +1434,8 @@ export function Sidebar() {
   const pinKey = useShortcutHint("pin-thread");
   const settleKey = useShortcutHint("settle-thread");
   const pinned = useApp((s) => s.pinned);
+  // The order each section draws its rows in, as the user arranged it (state/sidebarOrder.ts).
+  const layout = useApp((s) => s.sidebarOrder);
   const [query, setQuery] = useState("");
   // The search row is a label until it is used: ⌘F while the sidebar has the keyboard opens it.
   const [searchOpen, setSearchOpen] = useState(false);
@@ -1615,6 +1642,11 @@ export function Sidebar() {
     }
     pins.sort((a, b) => pinned.indexOf(a.id) - pinned.indexOf(b.id));
     if (pendingRow) active.unshift(pendingRow);
+    // The order the user arranged, per section (state/sidebarOrder.ts): a row that was dragged or
+    // ⌥↑/↓'d is drawn where it was put, and a section never arranges itself as turns stream. What
+    // the user never arranged keeps the order the section gave it.
+    const arranged = (id: SectionId, items: SessionSummary[], project?: string) =>
+      applyOrder(items, layout[sectionOrderKey(id, project)]);
     // The active threads by project: a worktree thread belongs to its repository.
     const byKey = new Map<string, SessionSummary[]>();
     for (const s of active) {
@@ -1629,13 +1661,17 @@ export function Sidebar() {
             items,
           }))
         : undefined;
+    // Each project's own rows are arranged on their own: two projects never share one order.
+    for (const project of projects ?? []) {
+      project.items = arranged("threads", project.items, project.key);
+    }
     sleeping.sort((a, b) => (snoozed[a.id] ?? 0) - (snoozed[b.id] ?? 0));
     const all: Section[] = [
-      { id: "working", label: "Working", items: working },
-      { id: "pinned", label: "Pinned", items: pins },
-      { id: "threads", label: "Threads", items: active, projects },
-      { id: "snoozed", label: "Snoozed", items: sleeping },
-      { id: "settled", label: "Settled", items: settled },
+      { id: "working", label: "Working", items: arranged("working", working) },
+      { id: "pinned", label: "Pinned", items: arranged("pinned", pins) },
+      { id: "threads", label: "Threads", items: arranged("threads", active), projects },
+      { id: "snoozed", label: "Snoozed", items: arranged("snoozed", sleeping) },
+      { id: "settled", label: "Settled", items: arranged("settled", settled) },
     ];
     for (const g of all) {
       g.hidden = g.items.some((x) => flagged.has(`${x.id}:n`))
@@ -1664,6 +1700,7 @@ export function Sidebar() {
     projectCwd,
     searching,
     orphanOpen,
+    layout,
   ]);
 
   const footShelf = sections.some((g) => g.id === "snoozed") ? "snoozed" : "settled";
@@ -1690,6 +1727,38 @@ export function Sidebar() {
       : setFolded((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]));
   const settledLimit = Math.max(settledShown, settledAt + 1);
 
+  // Which list each drawn row arranges, and the rows drawn in it: a drag and ⌥↑/↓ both move a row
+  // inside the one list it was drawn in — a section, or one project's run of rows under its heading
+  // — and nowhere else (state/sidebarOrder.ts `reorder`).
+  const homes = useMemo(() => {
+    const homes = new Map<string, { key: string; ids: string[] }>();
+    // Only threads with a session: the row a message shows before the engine has it is not one to
+    // arrange, and it leaves the list as soon as the session exists.
+    const add = (key: string, items: SessionSummary[]) => {
+      const ids = items.map((s) => s.id).filter((id) => byId.has(id));
+      for (const id of ids) homes.set(id, { key, ids });
+    };
+    for (const section of sections) {
+      // Settled draws a slice of its rows, and a folded section draws none: the rows on screen are
+      // the ones a drag can move.
+      const items =
+        section.id === "settled" && !query.trim() ? section.items.slice(0, settledLimit) : section.items;
+      if (section.projects) {
+        for (const p of section.projects) add(sectionOrderKey(section.id, p.key), p.items);
+      } else add(section.id, items);
+    }
+    return homes;
+  }, [byId, query, sections, settledLimit]);
+
+  // ⌥↑/↓ on a focused row takes it one place up or down the list it is drawn in, and keeps the
+  // keyboard on it: the row is the same element, moved (ui/Sidebar.tsx `onListKey`).
+  const moveRow = (id: string, delta: number) => {
+    const home = homes.get(id);
+    if (!home) return;
+    const next = moveBy(layout[home.key] ?? [], home.ids, id, delta);
+    if (next) setSectionOrder(home.key, next);
+  };
+
   // ---------------------------------------------------------------- the list's rows, selection and keys
   // What is picked, and which row the keyboard is on, belong to the sidebar while it is drawn:
   // nothing outside it reads them, and a thread that leaves the list leaves the selection.
@@ -1697,6 +1766,15 @@ export function Sidebar() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const anchor = useRef<string | null>(null);
   const list = useRef<HTMLElement>(null);
+  // Dragging a row rearranges the list it was drawn in and nothing else; a search narrows the rows,
+  // so a drag is off while one is on and ⌥↑/↓ still arranges (ui/sidebarDrag.tsx).
+  const drag = useThreadDrag({
+    list,
+    homeOf: (id) => homes.get(id),
+    enabled: !query.trim(),
+    drop: (home, id, index) =>
+      setSectionOrder(home.key, reorder(layout[home.key] ?? [], home.ids, id, index)),
+  });
   // Every delegated thread's state, as its parent's stack reads it: one string, so a streamed
   // chunk that changes nothing about them does not redraw the list.
   const childStates = useApp((s) => {
@@ -1881,6 +1959,15 @@ export function Sidebar() {
   const onListKey = (e: React.KeyboardEvent) => {
     const target = e.target as HTMLElement | null;
     const editable = !!target?.closest("input, textarea, [contenteditable]");
+    // ⌥↑/↓ arranges the row the keyboard is on in the list it is drawn in — the settings list's own
+    // gesture (ui/HeaderButtonsSetting.tsx) — so the order is reachable without a pointer. A field
+    // inside the list keeps every key.
+    if (!editable && e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      if (!target?.closest("[data-row-id]") || !currentId) return;
+      e.preventDefault();
+      moveRow(currentId, e.key === "ArrowUp" ? -1 : 1);
+      return;
+    }
     const action = rowKeyAction({
       key: e.key,
       metaKey: e.metaKey,
@@ -1959,6 +2046,8 @@ export function Sidebar() {
     });
   };
 
+  // The width is dragged from the sidebar's edge and kept in app storage as it goes
+  // (`useSidebarWidth`); a double-click on that edge puts the default back.
   const onResize = (e: React.PointerEvent) => {
     dragging.current = true;
     const startX = e.clientX;
@@ -1985,6 +2074,8 @@ export function Sidebar() {
       session={s}
       selected={s.id === selectedId}
       context={s.id === contextSelected && s.id !== selectedId}
+      // A row being dragged shows no hover card and takes no pointer.
+      dragging={drag.draggedId === s.id}
       grouped={grouped}
       pull={pullOf(s)}
       now={now}
@@ -2115,8 +2206,10 @@ export function Sidebar() {
           onKeyDown={onListKey}
           onFocus={onListFocus}
           onClickCapture={onListClick}
+          // A press on a row is a drag if the pointer moves (ui/sidebarDrag.tsx), and a click if not.
+          onPointerDown={drag.start}
           aria-label="Thread list"
-          className="min-h-0 flex-1 overflow-y-auto px-2 pb-2"
+          className="relative min-h-0 flex-1 overflow-y-auto px-2 pb-2"
           style={{ maskImage: fade, WebkitMaskImage: fade }}
         >
           {!sessionsLoaded && <ThreadRowsSkeleton />}
@@ -2198,6 +2291,14 @@ export function Sidebar() {
               );
             })}
           </div>
+          {/* Where a dragged row would land: one rule, over the rows, never in the layout. */}
+          {drag.line && (
+            <div
+              aria-hidden
+              className="pointer-events-none absolute z-30 h-0.5 rounded-full bg-accent"
+              style={{ top: drag.line.top - 1, left: drag.line.left, width: drag.line.width }}
+            />
+          )}
         </nav>
         {pickedSessions.length > 1 && (
           <div className="flex shrink-0 items-center gap-1 px-2 pb-1">
@@ -2265,7 +2366,10 @@ export function Sidebar() {
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize sidebar"
+          title="Drag to resize · Double-click to reset"
           onPointerDown={onResize}
+          // Back to the width a fresh window has, kept like any other width.
+          onDoubleClick={() => setWidth(DEFAULT_WIDTH)}
           className="group absolute top-0 right-[-3px] bottom-0 z-10 w-[7px] cursor-col-resize"
         >
           <div className="mx-auto h-full w-px bg-transparent group-hover:bg-fill" />

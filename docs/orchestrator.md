@@ -361,6 +361,37 @@ the first session list, from the first message's `From thread “…” (agent):
 heading, with a surviving `thread_links` row for the parent's id when there is
 one (`rustcode/engine/src/thread_parent.rs`).
 
+### A link's events
+
+Each link keeps a short list of what happened to it (`LinkEvent` in
+`apps/desktop/src/state/orchestration.ts`): the thread started on a harness and
+model, the message sent, the turn it began, the question it asked the user, the
+answer with the time it worked, the failure, a stop or a restart's interruption,
+and a merge or a cleanup of its branch. The list is written where the link's
+state changes — `addLink`, `updateLink`, `waitStarted` / `waitEnded`,
+`linksFinished`, `interruptActive`, `failQueuedLinks`, and `noteLinkEvent` after
+`merge_when_green` / `cleanup_worktree` — so a link settled by one path reads
+the same as one settled by another. It is saved with the book (the data store
+and the local copy), merged between two windows by `kind@at`, and bounded to
+the last 12 (`MAX_LINK_EVENTS`), so a long-lived link does not grow its saved
+row.
+
+The strip above the composer — and the same row in the details tree and the
+Agents panel — shows the last event as its status word instead of the state's
+(`linkStatusText`): `Started`, `Message sent`, `Asked you`, `Answered`,
+`Failed`, `Stopped`, `Merged`. Its hover tip lists the events oldest first,
+each with how long ago it happened (`relativeAge`); a link saved before the
+list existed keeps its state word. A wait reads `Asked you` while its child
+waits on the user, whatever the link's own state says. Clicking the row still
+opens the child.
+
+A delegation that starts or answers is also a row in the parent's transcript,
+not only a chip: the threads a turn started read as one row (or a group card)
+once they settle (`StartedThreadsRow`), and a finish or a question the app woke
+the parent for is a divider row (`WakeRow`), both derived from the history, so
+they survive a reload. The strip is the live place until then and does not draw
+the same thread twice.
+
 ## Waking a parent thread
 
 Built in the app (`apps/desktop/src/state/host.ts`, rules in
