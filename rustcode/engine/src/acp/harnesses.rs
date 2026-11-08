@@ -351,7 +351,10 @@ pub(crate) async fn new_session(
         sink,
         true,
     );
-    let orchestrated = attach_orchestrator(&session, peer.info().orchestration, &clients).await;
+    let info = peer.info();
+    session.set_client_display(info.display());
+    let orchestrated =
+        attach_orchestrator(&session, info.orchestration, info.smart_ui, &clients).await;
     if let Err(message) = session.ensure_started().await {
         crate::orchestration::hub::release(&session_id);
         peer.clients().forget_session(&session_id);
@@ -379,6 +382,7 @@ pub(crate) async fn new_session(
 async fn attach_orchestrator(
     session: &ExternalSession,
     orchestration: u8,
+    smart_ui: crate::app::SmartUi,
     clients: &SessionClients,
 ) -> bool {
     if orchestration < 2 || !harness::capabilities(&session.harness).orchestration {
@@ -387,7 +391,8 @@ async fn attach_orchestrator(
     let Some(client) = super::preview::orchestration_client_for(true, clients) else {
         return false;
     };
-    let launch = crate::orchestration::hub::launch_for(&session.id, client, orchestration).await;
+    let launch =
+        crate::orchestration::hub::launch_for(&session.id, client, orchestration, smart_ui).await;
     let attached = launch.is_some();
     session.set_orchestrator(launch);
     attached
@@ -428,6 +433,7 @@ pub(crate) async fn load_session(
         .map(|(_, history)| history)
         .unwrap_or_default();
     let title = record.title.clone();
+    let info = peer.info();
     let usage = record
         .usage
         .clone()
@@ -456,9 +462,11 @@ pub(crate) async fn load_session(
         open.insert(session_id.clone(), Arc::clone(&session));
         session
     };
+    session.set_client_display(info.display());
     let orchestrated = attach_orchestrator(
         &session,
-        peer.info().orchestration,
+        info.orchestration,
+        info.smart_ui,
         &peer.clients().session(&session_id),
     )
     .await;
@@ -640,8 +648,11 @@ pub(crate) async fn switch(
         sink,
         true,
     );
+    let info = peer.info();
+    session.set_client_display(info.display());
     session.save_now();
-    let orchestrated = attach_orchestrator(&session, peer.info().orchestration, &clients).await;
+    let orchestrated =
+        attach_orchestrator(&session, info.orchestration, info.smart_ui, &clients).await;
     super::mark_acp_session(&session_id);
     sessions
         .lock()
