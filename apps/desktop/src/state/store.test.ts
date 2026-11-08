@@ -118,6 +118,7 @@ import {
   steerOrSubmit,
   submit,
   switchNewThreadHarness,
+  threadCreated,
   toast,
   togglePin,
   toggleRightPanel,
@@ -980,6 +981,28 @@ describe("engine controller with the mock engine", () => {
     await setActiveTheme("graphite");
     await until(() => useApp.getState().themes?.active === "graphite");
     expect(useApp.getState().theme).toBe("dark");
+  });
+
+  test("a thread the engine started for a paired device joins the list once", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().sessions.length > 0);
+    // `_rustcode/threads/created`: Remote access started it while a phone asked for a thread.
+    threadCreated({
+      sessionId: "phone-thread",
+      cwd: "/tmp/project",
+      harness: "claude-code",
+      model: "sonnet",
+    });
+    const row = useApp.getState().sessions.find((x) => x.id === "phone-thread");
+    expect(row?.cwd).toBe("/tmp/project");
+    expect(row?.harness).toBe("claude-code");
+    expect(row?.model).toBe("sonnet");
+    // A second notice, or a notice without a folder, changes nothing.
+    threadCreated({ sessionId: "phone-thread", cwd: "/tmp/project" });
+    threadCreated({ sessionId: "no-folder" });
+    const rows = useApp.getState().sessions.filter((x) => x.id === "phone-thread");
+    expect(rows).toHaveLength(1);
+    expect(useApp.getState().sessions.some((x) => x.id === "no-folder")).toBe(false);
   });
 
   test("pins live in the engine when it has them; Settled is threads marked Done", async () => {

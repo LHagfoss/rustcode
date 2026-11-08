@@ -82,6 +82,20 @@
         },
         {
           "properties": {
+            "harness": {
+              "description": "The harness to start the thread on (`claude-code`, `codex`, `pi`,\n…); absent is the host's default. Requires\n[`host_capability::THREAD_CREATE_OPTIONS`].",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "model": {
+              "description": "The model on that harness; absent is its own choice. Requires\n[`host_capability::THREAD_CREATE_OPTIONS`].",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "path": {
               "type": [
                 "string",

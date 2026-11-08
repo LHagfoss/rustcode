@@ -17,6 +17,8 @@ export const Method = {
   sessionMove: "_rustcode/session/move",
   sessionRepair: "_rustcode/session/repair",
   sessionActivity: "_rustcode/session/activity",
+  /** A thread the engine started because a paired device asked for one. */
+  threadCreated: "_rustcode/threads/created",
   sessionPrompt: "session/prompt",
   sessionCancel: "session/cancel",
   sessionSetConfigOption: "session/set_config_option",
@@ -140,6 +142,8 @@ export function initializeParams(
     orchestration?: number;
     visualizations?: number;
     presence?: number;
+    /** 1 when the client lists threads the engine starts for a paired device. */
+    threads?: number;
   } = {},
 ): JsonObject {
   const rustcode: JsonObject = { smartUi: options.smartUi ? 1 : 0 };
@@ -149,6 +153,9 @@ export function initializeParams(
   // Threads that start and message other threads (docs/orchestrator.md): only while the setting is on.
   if (options.orchestration) rustcode.orchestration = options.orchestration;
   if (options.visualizations) rustcode.visualizations = options.visualizations;
+  // Remote access: a thread a paired device starts is created in the engine and named here, so
+  // only a client that shows thread rows this way may host them (docs/remote.md).
+  if (options.threads) rustcode.threads = options.threads;
   return {
     protocolVersion: ACP_PROTOCOL_VERSION,
     clientCapabilities: {

@@ -27,7 +27,8 @@
     "subscribed": false,
     "capabilities": [
       "saved_sessions",
-      "session_changes"
+      "session_changes",
+      "thread_create_options"
     ]
   }
 }

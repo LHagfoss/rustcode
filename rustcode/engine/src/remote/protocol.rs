@@ -22,6 +22,19 @@ pub mod host_capability {
     pub const SAVED_SESSIONS: &str = "saved_sessions";
     /// `get_changes`: a session's uncommitted changes, read-only.
     pub const SESSION_CHANGES: &str = "session_changes";
+    /// `create_session` takes `harness` and `model`: the thread starts in the
+    /// desktop app on the harness the device names. Advertised while a share
+    /// that advertises [`session_capability::HOST_THREADS`] is live.
+    pub const THREAD_CREATE_OPTIONS: &str = "thread_create_options";
+}
+
+/// Optional operations one session owner implements, in
+/// [`RemoteSnapshot::capabilities`].
+pub mod session_capability {
+    /// This owner starts threads a device asks for (`create_session`), on the
+    /// harness and model the device names. The desktop app's shares advertise
+    /// it; a terminal's and a session owner's do not.
+    pub const HOST_THREADS: &str = "host_threads";
 }
 
 /// Default and largest page of `list_saved_sessions`.
@@ -69,6 +82,15 @@ pub enum RemoteOperation {
     CreateSession {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<String>,
+        /// The harness to start the thread on (`claude-code`, `codex`, `pi`,
+        /// …); absent is the host's default. Requires
+        /// [`host_capability::THREAD_CREATE_OPTIONS`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        harness: Option<String>,
+        /// The model on that harness; absent is its own choice. Requires
+        /// [`host_capability::THREAD_CREATE_OPTIONS`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
     },
     /// As `list_sessions`, then a `sessions` frame on every change.
     SubscribeSessions,
@@ -1317,7 +1339,11 @@ mod tests {
         let operations = [
             RemoteOperation::ListSessions,
             RemoteOperation::ListDirectories { path: None },
-            RemoteOperation::CreateSession { path: None },
+            RemoteOperation::CreateSession {
+                path: None,
+                harness: None,
+                model: None,
+            },
             RemoteOperation::SubscribeSessions,
             RemoteOperation::AttachSession { resume: None },
             RemoteOperation::DetachSession,
