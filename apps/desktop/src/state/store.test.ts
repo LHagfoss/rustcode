@@ -3,7 +3,7 @@ import { type JsonObject, RpcError } from "../acp/jsonrpc";
 import { MockTransport } from "../acp/mock";
 import { harnessPlanKey, parsePlans, type UsagePlan } from "../acp/rustcode";
 import type { Transport, TransportEvent } from "../acp/transport";
-import { Method } from "../acp/types";
+import { type HarnessModel, type HarnessSnapshot, Method } from "../acp/types";
 import { V2Method } from "../acp/v2";
 import { type ComposeExtras, emptyExtras } from "./compose";
 import { preferredDefault, rememberedEffort } from "./harness";
@@ -2521,6 +2521,162 @@ describe("engine controller with the mock engine", () => {
     await until(() => !!selected());
     // A thread never seen opens closed: nothing opens the panel on its own.
     expect(useApp.getState().panel).toBeNull();
+  });
+});
+
+describe("list_harnesses on a harness with hundreds of models", () => {
+  type Listed = {
+    id: string;
+    efforts?: string[];
+    omitted_models?: number;
+    filter?: string;
+    models?: { id: string; name: string; efforts?: string[] }[];
+  };
+
+  /** `count` models named `vendor/m00`, `Model 00`, … as an 800-model harness has. */
+  const many = (count: number, efforts = ["low", "medium"]): HarnessModel[] =>
+    Array.from({ length: count }, (_, i) => {
+      const n = String(i).padStart(2, "0");
+      return { id: `vendor/m${n}`, name: `Model ${n}`, efforts, default_effort: efforts[0] };
+    });
+
+  /** The mock snapshot with `codex` listing `models`, its new-thread choice `configured`. */
+  const withModels = (models: HarnessModel[], configured: string | null = null) => {
+    const snapshot = useApp.getState().harnesses as HarnessSnapshot;
+    useApp.setState({
+      harnesses: {
+        ...snapshot,
+        // No harness is left empty: a listing would otherwise be asked for, and
+        // its answer replaces the snapshot under this test.
+        harnesses: snapshot.harnesses.map((h) =>
+          h.id === "codex"
+            ? { ...h, models, last: configured ? { model: configured, effort: null } : null }
+            : h.models.length
+              ? h
+              : { ...h, models: [{ id: "only", name: "Only", efforts: [] }] },
+        ),
+      },
+    });
+  };
+
+  /** This project's threads: `caller` and one thread per model it lists as recently used. */
+  const usedModels = (caller: string, used: { model: string; at: number }[]) => {
+    const first = useApp.getState().sessions.find((t) => t.id === caller)!;
+    useApp.setState({
+      sessions: [
+        first,
+        ...used.map((u) => ({
+          ...first,
+          id: `used-${u.model}`,
+          harness: "codex",
+          model: u.model,
+          updatedAt: u.at,
+        })),
+      ],
+    });
+  };
+
+  /** The `codex` entry of one `list_harnesses` answer, by the args it was asked with. */
+  const listed = async (caller: string, args: JsonObject = {}) => {
+    const answer = await answerOrchestration({ sessionId: caller, tool: "list_harnesses", args });
+    return answer.harnesses as Listed[];
+  };
+
+  const ready = async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+    return useApp.getState().sessions[0]!.id;
+  };
+
+  test("leads with the model a new thread starts on and the ones in use, and caps the rest", async () => {
+    const caller = await ready();
+    withModels(many(20), "vendor/m09");
+    // m03 is newer than m05, so it comes first among the ones in use.
+    usedModels(caller, [
+      { model: "vendor/m03", at: 3_000 },
+      { model: "vendor/m05", at: 2_000 },
+    ]);
+    const codex = (await listed(caller)).find((h) => h.id === "codex")!;
+    expect(codex.models!.map((m) => m.id).slice(0, 5)).toEqual([
+      "vendor/m09",
+      "vendor/m03",
+      "vendor/m05",
+      "vendor/m00",
+      "vendor/m01",
+    ]);
+    // Twelve is what an agent's context pays for; the rest is a count and a way in.
+    expect(codex.models).toHaveLength(12);
+    expect(codex.omitted_models).toBe(8);
+    expect(codex.filter).toBe("pass model to search the omitted ones");
+  });
+
+  test("hoists efforts every listed model shares onto the harness, once", async () => {
+    const caller = await ready();
+    withModels(many(5));
+    const codex = (await listed(caller)).find((h) => h.id === "codex")!;
+    expect(codex.efforts).toEqual(["low", "medium"]);
+    expect(codex.models!.every((m) => m.efforts === undefined)).toBe(true);
+    // A model list that differs keeps its efforts per model, and says nothing on the harness.
+    withModels([
+      { id: "vendor/a", name: "A", efforts: ["low"] },
+      { id: "vendor/b", name: "B", efforts: ["high"] },
+    ]);
+    const mixed = (await listed(caller)).find((h) => h.id === "codex")!;
+    expect(mixed.efforts).toBeUndefined();
+    expect(mixed.models).toEqual([
+      { id: "vendor/a", name: "A", efforts: ["low"] },
+      { id: "vendor/b", name: "B", efforts: ["high"] },
+    ]);
+  });
+
+  test("a model filter matches an id or a name, ignores case, and lists every match", async () => {
+    const caller = await ready();
+    withModels(many(120));
+    const byId = (await listed(caller, { harness: "codex", model: "m11" })).find((h) => h.id === "codex")!;
+    expect(byId.models!.map((m) => m.id)).toEqual([
+      "vendor/m11",
+      "vendor/m110",
+      "vendor/m111",
+      "vendor/m112",
+      "vendor/m113",
+      "vendor/m114",
+      "vendor/m115",
+      "vendor/m116",
+      "vendor/m117",
+      "vendor/m118",
+      "vendor/m119",
+    ]);
+    // Case-insensitive, and a name match counts too.
+    const byName = (await listed(caller, { harness: "codex", model: "MODEL 07" })).find(
+      (h) => h.id === "codex",
+    )!;
+    expect(byName.models!.map((m) => m.id)).toEqual(["vendor/m07"]);
+    // Every match, still bounded, and the rest is a count a second pass can reach.
+    const broad = (await listed(caller, { harness: "codex", model: "m" })).find((h) => h.id === "codex")!;
+    expect(broad.models).toHaveLength(50);
+    expect(broad.omitted_models).toBe(70);
+    expect(broad.filter).toBe("pass model to search the omitted ones");
+    // A filter that matches nothing says so, rather than answering an empty list.
+    const none = (await listed(caller, { harness: "codex", model: "nope" })).find((h) => h.id === "codex")!;
+    expect(none.models).toEqual([]);
+    expect(none.omitted_models).toBeUndefined();
+    expect(none.filter).toBe("no model matches; pass a shorter substring");
+  });
+
+  test("a harness filter answers that harness alone, and a wrong one names the ones there are", async () => {
+    const caller = await ready();
+    withModels(many(3));
+    expect((await listed(caller, { harness: "codex" })).map((h) => h.id)).toEqual(["codex"]);
+    // A display name is as good as an id.
+    expect((await listed(caller, { harness: "Codex" })).map((h) => h.id)).toEqual(["codex"]);
+    const refused = await answerOrchestration({
+      sessionId: caller,
+      tool: "list_harnesses",
+      args: { harness: "nope" },
+    });
+    const said = (refused.error as { message?: string } | undefined)?.message ?? "";
+    expect(said).toContain("no harness “nope”");
+    expect(said).toContain("codex");
   });
 });
 

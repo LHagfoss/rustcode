@@ -439,14 +439,17 @@ pub const FAN_OUT: Tool = Tool {
 /// clients that advertise `_meta.rustcode.orchestration >= 3`.
 pub const LIST_HARNESSES: Tool = Tool {
     name: crate::orchestration::LIST_HARNESSES,
-    description: "List the harnesses that can run a thread, each with its models, efforts and named accounts or why it cannot run, and what this thread runs on (harness, account, model, effort). Every login RustCode has read a plan for carries `usage`: `{ status, as_of, windows: [{ label, used_percent, window_minutes, resets_at }] }`, where `as_of` and `resets_at` are ISO 8601 times and `status: \"not_enabled\"` means the user keeps Claude usage reading off in Settings › Usage — read it before choosing an account, so a delegate does not start on a window that is nearly used up. Ask it when the user asks which harnesses, models, accounts, efforts or usage windows are available. Use the ids in start_session, fan_out and configure_session.",
-    arguments: r#"{}"#,
+    description: "List the harnesses that can run a thread, each with its models, efforts and named accounts or why it cannot run, and what this thread runs on (harness, account, model, effort). Each harness leads with the model a new thread on it starts with and the models this project used recently, then caps the list: `omitted_models` counts the rest, and `model` searches them. `harness` (id or name) keeps one harness; `model` is a case-insensitive part of a model id or name and lists every match, up to 50. Every login RustCode has read a plan for carries `usage`: `{ status, as_of, windows: [{ label, used_percent, window_minutes, resets_at }] }`, where `as_of` and `resets_at` are ISO 8601 times and `status: \"not_enabled\"` means the user keeps Claude usage reading off in Settings › Usage — read it before choosing an account, so a delegate does not start on a window that is nearly used up. Ask it when the user asks which harnesses, models, accounts, efforts or usage windows are available. Use the ids in start_session, fan_out and configure_session.",
+    arguments: r#"{"harness": "codex", "model": "opus"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
     schema: || {
         serde_json::json!({
             "type": "object",
-            "properties": {},
+            "properties": {
+                "harness": {"type": "string", "minLength": 1, "maxLength": 200, "description": "Only this harness (id or name); omitted lists all"},
+                "model": {"type": "string", "minLength": 1, "maxLength": 200, "description": "A case-insensitive part of a model id or name; lists every match, up to 50"}
+            },
             "required": [],
             "additionalProperties": false
         })

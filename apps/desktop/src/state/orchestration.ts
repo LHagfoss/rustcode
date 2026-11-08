@@ -280,7 +280,8 @@ export type Call =
       project?: string;
     }
   | { tool: "fan_out"; prompt: string; title?: string; harnesses: HarnessChoice[] }
-  | { tool: "list_harnesses" }
+  /** `harness` narrows to one harness, `model` to the models whose id or name matches. */
+  | { tool: "list_harnesses"; harness?: string; model?: string }
   | { tool: "search_sessions"; query: string; allProjects: boolean }
   | { tool: "list_worktrees"; allProjects: boolean }
   | {
@@ -361,8 +362,11 @@ export function parseCall(params: JsonObject): Call | Failure {
   switch (s(params.tool)) {
     case "list_sessions":
       return { tool: "list_sessions", query: s(args.query) ?? "", allProjects: allProjects(args) };
-    case "list_harnesses":
-      return { tool: "list_harnesses" };
+    case "list_harnesses": {
+      const harness = s(args.harness)?.trim() || undefined;
+      const model = s(args.model)?.trim() || undefined;
+      return { tool: "list_harnesses", ...(harness ? { harness } : {}), ...(model ? { model } : {}) };
+    }
     case "list_worktrees":
       return { tool: "list_worktrees", allProjects: allProjects(args) };
     case "list_projects":
