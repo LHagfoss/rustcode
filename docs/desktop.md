@@ -322,8 +322,10 @@ composer's keys stay outside the table.
   cards are one sideways-scrolling row, and a window shorter than 700px leaves
   toggle and cards out.
 - **Link chips.** A pasted URL becomes a chip in front of the field; bare
-  links in replies and messages render as chips: favicon and title on a
-  tint of the page's `theme-color`, else neutral. The prompt still carries
+  links in replies and messages render as chips: a globe icon and the title on a
+  tint of the page's `theme-color`, else neutral. The icon is the app's own
+  rather than the site's favicon, whose contrast against the chip no theme
+  knows. The prompt still carries
   the plain URL. Settings › Chat › Link previews turns fetching off.
 - **Thread actions.** A row's ⋯ menu or right-click: Mark for Review,
   Settle, Pin, Rename, Move to Trash. Settle is **Unsettle** once the thread
@@ -1249,9 +1251,15 @@ fed by the `update_install` command's progress channel. The first launch of a
 new version shows *What's New* with that release's notes. It decides from the
 app's own version (`getVersion`, no network) against the version seen last
 launch and the `rustcode.updatedFrom` marker an in-app install writes, so it
-shows even offline or after a failed check; the notes are  the GitHub release body that
-`scripts/release-notes.sh` writes from each PR's Changelog line, fetched by
-the shell's `release_notes` command. A first install and a dev build skip
+shows even offline or after a failed check; the notes are that version's
+section of the repo's `CHANGELOG.md` at the release's tag — what
+`scripts/release.sh` writes from each PR's `## Changelog` line — fetched by the
+shell's `release_notes` command, which falls back to the GitHub release body
+when the tag has no section. The dialog opens at once with the notes' shape as
+a skeleton, and reads either form through `src/lib/releaseNotes.ts`: one badge
+per category, GitHub's `by @user in <pull url>` tail as a compact `#N` link,
+and the release commit and full-changelog line out of the way. A first install
+and a dev build skip
 it; Settings › Advanced opens it on demand and shows why the last background check failed. `?updatePreview` in the dev browser
 shows both with sample data.
 

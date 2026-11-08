@@ -1,5 +1,5 @@
-// A link as a compact chip, like the composer's slash-command token: favicon
-// and title on a tint of the page's own colour. The metadata comes from the
+// A link as a compact chip, like the composer's slash-command token: a globe
+// and the title on a tint of the page's own colour. The metadata comes from the
 // shell (never fetched by the webview); until it arrives, or without it, the
 // chip shows the host on a neutral fill.
 
@@ -80,11 +80,10 @@ export function LinkChip({
           }}
           className="inline-flex min-w-0 cursor-pointer items-center gap-1.5 text-fg no-underline"
         >
-          {meta?.icon ? (
-            <img src={meta.icon} alt="" className="size-[14px] shrink-0 rounded-xs" draggable={false} />
-          ) : (
-            <Globe size={12} className="ml-0.5 shrink-0 text-fg-muted" />
-          )}
+          {/* One icon that follows the text, not the site's own 14px favicon: that image's
+              contrast is unknown, so GitHub's dark mark vanished on the chip's grey in the dark
+              theme and a light one does the same in the light theme. */}
+          <Globe size={12} aria-hidden className="ml-0.5 shrink-0 text-fg-muted" />
           {/* One text run, so a selection across the chip copies "title host" and not
               "titlehost": the host is the faint tail of the same words, and the whole run
               truncates to the chip's cap. */}

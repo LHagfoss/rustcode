@@ -835,6 +835,35 @@
   animation: rc-out 120ms ease-in forwards;
 }
 
+/*
+ * What's New (ui/Updates.tsx): the one dialog that is its own card rather than a
+ * panel, so it scales from 96% into place over 200ms and leaves the way it came.
+ * `scale` and `opacity` only, and `scale` rather than `transform`, because the
+ * card is centred with `translate`: the two properties do not fight. The closed
+ * rule is what holds the dialog on screen until the exit has played.
+ */
+@keyframes rc-whatsnew-in {
+  from {
+    opacity: 0;
+    scale: 0.96;
+  }
+}
+
+@keyframes rc-whatsnew-out {
+  to {
+    opacity: 0;
+    scale: 0.96;
+  }
+}
+
+[role="dialog"].rc-whatsnew[data-state="open"] {
+  animation: rc-whatsnew-in 200ms var(--ease-snappy);
+}
+
+[role="dialog"].rc-whatsnew[data-state="closed"] {
+  animation: rc-whatsnew-out 140ms ease-in forwards;
+}
+
 /* Dialog overlays fade. */
 .rc-overlay[data-state="open"] {
   animation: rc-fade 160ms ease-out;
