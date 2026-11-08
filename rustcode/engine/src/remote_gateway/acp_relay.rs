@@ -16,13 +16,27 @@ type Socket = WebSocketStream<TcpStream>;
 const OUTBOUND_FRAMES: usize = 1024;
 
 const EXACT_METHODS: &[&str] = &[
-    "initialize", "_rustcode/settings/get", "_rustcode/settings/set", "_rustcode/settings/changed",
-    "_rustcode/threads/changes", "_rustcode/harnesses", "_rustcode/createOptions", "_rustcode/pending",
+    "initialize",
+    "_rustcode/settings/get",
+    "_rustcode/settings/set",
+    "_rustcode/settings/changed",
+    "_rustcode/threads/changes",
+    "_rustcode/harnesses",
+    "_rustcode/createOptions",
+    "_rustcode/pending",
 ];
-const METHOD_PREFIXES: &[&str] = &["session/", "_rustcode/thread/", "_rustcode/queue/", "_rustcode/pulls"];
+const METHOD_PREFIXES: &[&str] = &[
+    "session/",
+    "_rustcode/thread/",
+    "_rustcode/queue/",
+    "_rustcode/pulls",
+];
 
 fn allowed(method: &str) -> bool {
-    EXACT_METHODS.contains(&method) || METHOD_PREFIXES.iter().any(|prefix| method.starts_with(prefix))
+    EXACT_METHODS.contains(&method)
+        || METHOD_PREFIXES
+            .iter()
+            .any(|prefix| method.starts_with(prefix))
 }
 
 /// Connect only to an already running server. The caller keeps revocation and
@@ -102,9 +116,9 @@ pub(super) async fn relay(
                         } else if value.get("id").is_none() || (value.get("result").is_none() && value.get("error").is_none()) {
                             return Some(ErrorCode::InvalidFrame);
                         }
-                        // Remove only JSON whitespace line breaks; escaped newlines in
-                        // strings and the resume cursor payload remain untouched.
-                        let line = text.replace(['\r', '\n'], "") + "\n";
+                        // Forward the same parsed object that was authorized, avoiding
+                        // duplicate-key parser differences. Resume metadata is opaque.
+                        let line = value.to_string() + "\n";
                         if !matches!(tokio::time::timeout(write_timeout, server_write.write_all(line.as_bytes())).await, Ok(Ok(()))) { return None; }
                     }
                     Some(Ok(Message::Ping(payload))) => {
@@ -125,10 +139,28 @@ mod tests {
     use super::*;
     #[test]
     fn desktop_allowlist_contract() {
-        assert_eq!(EXACT_METHODS, &["initialize", "_rustcode/settings/get", "_rustcode/settings/set",
-            "_rustcode/settings/changed", "_rustcode/threads/changes", "_rustcode/harnesses",
-            "_rustcode/createOptions", "_rustcode/pending"]);
-        assert_eq!(METHOD_PREFIXES, &["session/", "_rustcode/thread/", "_rustcode/queue/", "_rustcode/pulls"]);
+        assert_eq!(
+            EXACT_METHODS,
+            &[
+                "initialize",
+                "_rustcode/settings/get",
+                "_rustcode/settings/set",
+                "_rustcode/settings/changed",
+                "_rustcode/threads/changes",
+                "_rustcode/harnesses",
+                "_rustcode/createOptions",
+                "_rustcode/pending"
+            ]
+        );
+        assert_eq!(
+            METHOD_PREFIXES,
+            &[
+                "session/",
+                "_rustcode/thread/",
+                "_rustcode/queue/",
+                "_rustcode/pulls"
+            ]
+        );
         for method in [
             "initialize",
             "session/load",

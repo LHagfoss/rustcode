@@ -1186,3 +1186,120 @@ async fn large_output_stays_within_frame_limits_and_rebuilds_completely() {
     assert_eq!(listed["result"]["sessions"].as_array().unwrap().len(), 1);
     terminal.off().await;
 }
+
+/// The gateway uses the same per-config server description as local apps.
+async fn acp_device(host: &Host, kind: &str) -> Phone {
+    let offer = bounded(host.lifecycle.pair()).await.unwrap();
+    let (mut paired_socket, paired) = Phone::connect(
+        host.addr(),
+        json!({
+            "type":"pair","protocol_version":1,"method":"code","secret":offer.code.expose(),
+            "device_name":"ACP test","device_kind":kind,"platform":"linux"
+        }),
+    )
+    .await;
+    assert_eq!(paired["type"], "paired");
+    bounded(paired_socket.socket.close(None)).await.unwrap();
+    Phone::authenticate(host, &paired).await.0
+}
+
+#[tokio::test]
+async fn remote_acp_desktop_round_trip_resume_denial_and_server_close() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let mut host = Host::start().await;
+    let run = host.dir.path().join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    let endpoint = run.join("acp-test.sock");
+    let listener = tokio::net::UnixListener::bind(&endpoint).unwrap();
+    std::fs::write(
+        run.join("server.json"),
+        serde_json::to_vec(&crate::server::ServerInfo::now(
+            endpoint.to_string_lossy().into(),
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let (read, mut write) = stream.into_split();
+        let mut lines = BufReader::new(read).lines();
+        let init: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(init["method"], "initialize");
+        write
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":1}}\n")
+            .await
+            .unwrap();
+        let load: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(load["method"], "session/load");
+        assert_eq!(
+            load["params"]["_meta"]["rustcode"]["resume"]["cursor"],
+            "cursor-unchanged"
+        );
+        write
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{}}\n")
+            .await
+            .unwrap();
+        // Wait until the client explicitly closes, proving denied requests
+        // and notifications never reached the server in the meantime.
+        assert!(lines.next_line().await.unwrap().is_none());
+    });
+    let mut device = acp_device(&host, "desktop").await;
+    device.send(json!({"type":"acp_open"})).await;
+    assert_eq!(device.read().await.unwrap(), json!({"type":"acp_opened"}));
+    device
+        .send(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}))
+        .await;
+    assert_eq!(device.read().await.unwrap()["result"]["protocolVersion"], 1);
+    device
+        .send(json!({"jsonrpc":"2.0","id":"denied","method":"_rustcode/server/stop"}))
+        .await;
+    let denied = device.read().await.unwrap();
+    assert_eq!(denied["id"], "denied");
+    assert_eq!(denied["error"]["data"]["code"], "unauthorized_access");
+    device
+        .send(json!({"jsonrpc":"2.0","method":"_rustcode/data/query"}))
+        .await;
+    device.send(json!({"jsonrpc":"2.0","id":3,"method":"session/load","params":{"sessionId":"test","_meta":{"rustcode":{"resume":{"cursor":"cursor-unchanged"}}}}})).await;
+    assert_eq!(device.read().await.unwrap()["id"], 3);
+    bounded(device.socket.close(None)).await.unwrap();
+    bounded(server).await.unwrap();
+    host.stop_gateway().await;
+}
+
+#[tokio::test]
+async fn remote_acp_phone_and_cli_are_refused() {
+    let mut host = Host::start().await;
+    for kind in ["phone", "cli"] {
+        let mut device = acp_device(&host, kind).await;
+        device.send(json!({"type":"acp_open"})).await;
+        assert_eq!(device.read().await.unwrap()["code"], "unauthorized_access");
+    }
+    host.stop_gateway().await;
+}
+
+#[tokio::test]
+async fn remote_acp_server_close_closes_websocket() {
+    let mut host = Host::start().await;
+    let run = host.dir.path().join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    let endpoint = run.join("acp-close.sock");
+    let listener = tokio::net::UnixListener::bind(&endpoint).unwrap();
+    std::fs::write(
+        run.join("server.json"),
+        serde_json::to_vec(&crate::server::ServerInfo::now(
+            endpoint.to_string_lossy().into(),
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        drop(stream);
+    });
+    let mut device = acp_device(&host, "desktop").await;
+    device.send(json!({"type":"acp_open"})).await;
+    assert_eq!(device.read().await.unwrap()["type"], "acp_opened");
+    assert!(device.read().await.is_none());
+    bounded(server).await.unwrap();
+    host.stop_gateway().await;
+}
