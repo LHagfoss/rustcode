@@ -2500,11 +2500,11 @@ describe("toasts", () => {
     for (let i = 0; i < 50; i++) toast(`Failed ${i}`, "error");
     expect(useApp.getState().toasts.length).toBe(3);
     expect(useApp.getState().toasts.map((t) => t.text)).toEqual(["Failed 49", "Failed 48", "Failed 47"]);
-    toast("Starting engine…", "info", { id: "engine", persist: true, progress: 0.2 });
-    toast("The engine stopped.", "error", { id: "engine", action: { label: "Restart", run: () => {} } });
+    toast("Starting the server…", "info", { id: "engine", persist: true, progress: 0.2 });
+    toast("The server stopped.", "error", { id: "engine", action: { label: "Restart", run: () => {} } });
     const engine = useApp.getState().toasts.filter((t) => t.id === "engine");
     expect(engine.length).toBe(1);
-    expect(engine[0]!.text).toBe("The engine stopped.");
+    expect(engine[0]!.text).toBe("The server stopped.");
     expect(engine[0]!.action?.label).toBe("Restart");
     // Replacing a toast that is fading out keeps the new one.
     dismissToast("engine");

@@ -103,10 +103,11 @@ export interface AgentInfo {
 export function parseAgentInfo(result: Json): AgentInfo {
   const root = obj(result);
   const version = num(root?.protocolVersion);
-  if (version === undefined) throw new Error("The engine sent an unexpected response: no protocolVersion");
+  if (version === undefined)
+    throw new Error("The RustCode server sent an unexpected response: no protocolVersion");
   if (version !== ACP_PROTOCOL_VERSION) {
     throw new Error(
-      `The engine speaks ACP version ${version}; this app requires version ${ACP_PROTOCOL_VERSION}. Update RustCode so the app and engine match.`,
+      `The RustCode server speaks ACP version ${version}; this app requires version ${ACP_PROTOCOL_VERSION}. Update RustCode so the app and server match.`,
     );
   }
   const caps = obj(root?.agentCapabilities);

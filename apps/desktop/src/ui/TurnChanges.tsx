@@ -108,7 +108,7 @@ export function rewindNote(rewind: boolean, keep: boolean, turn: number): string
   if (!rewind)
     return `Put the files back to before turn ${turn}; this harness cannot rewind the conversation`;
   if (!keep)
-    return `Put the files and the conversation back to before turn ${turn}; this engine cannot keep the state it leaves, so there is no way back to it`;
+    return `Put the files and the conversation back to before turn ${turn}; this server cannot keep the state it leaves, so there is no way back to it`;
   return `Put the files and the conversation back to before turn ${turn}; it and the turns after it stay below as an earlier attempt`;
 }
 

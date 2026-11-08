@@ -1,7 +1,12 @@
 //! The engine sidecar: runs `rustcode --acp`, relays its newline-delimited
 //! JSON-RPC to the webview over a Tauri Channel, and restarts it with backoff
 //! when it exits. The webview only ever sees what the engine prints; nothing
-//! here reads or forwards credentials.
+//! here reads or forwards credentials. Users know this process as the
+//! "RustCode server" (docs/terminology.md), so the text they read says server.
+//!
+//! What it knows about the running process (pid, start, the last exit, how
+//! often it came back after a crash) is kept for Settings › Diagnostics
+//! (`diagnostics.rs`).
 
 use serde::Serialize;
 use std::io::{BufRead, BufReader, Write};
@@ -10,7 +15,7 @@ use std::process::{Child, ChildStdin, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::ipc::Channel;
 
 /// What the webview receives; matches `TransportEvent` in `src/acp/transport.ts`.
@@ -84,6 +89,83 @@ pub struct Engine {
     prestarted: AtomicBool,
     /// What the engine said before the webview attached (its `open`, early logs).
     early: Mutex<Vec<EngineEvent>>,
+    /// The current run and the last exit, for Diagnostics.
+    run: Mutex<RunState>,
+}
+
+/// How the last engine process ended.
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LastExit {
+    pub code: Option<i32>,
+    /// The signal that ended it (Unix only).
+    pub signal: Option<i32>,
+    /// Milliseconds since the Unix epoch.
+    pub at_ms: u64,
+    pub reason: String,
+    /// The app asked for it (a restart, quitting); otherwise it crashed or failed to start.
+    pub expected: bool,
+}
+
+#[derive(Default)]
+struct RunState {
+    pid: Option<u32>,
+    path: Option<PathBuf>,
+    started_at_ms: Option<u64>,
+    /// Times the supervisor started the engine again after an exit nobody asked for.
+    crash_restarts: u32,
+    last_exit: Option<LastExit>,
+}
+
+/// The engine as Diagnostics shows it.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunStatus {
+    pub running: bool,
+    pub pid: Option<u32>,
+    pub path: Option<String>,
+    pub started_at_ms: Option<u64>,
+    pub crash_restarts: u32,
+    pub last_exit: Option<LastExit>,
+}
+
+/// How one engine process ended: its exit code, or the signal that stopped it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Exit {
+    pub code: Option<i32>,
+    pub signal: Option<i32>,
+}
+
+impl Exit {
+    fn of(status: Option<std::process::ExitStatus>) -> Self {
+        let Some(status) = status else {
+            return Self::default();
+        };
+        #[cfg(unix)]
+        let signal = std::os::unix::process::ExitStatusExt::signal(&status);
+        #[cfg(not(unix))]
+        let signal = None;
+        Self {
+            code: status.code(),
+            signal,
+        }
+    }
+
+    /// What the user reads when the server ends.
+    pub fn reason(self) -> String {
+        match (self.code, self.signal) {
+            (Some(code), _) => format!("The server exited (code {code})."),
+            (None, Some(signal)) => format!("The server was stopped by signal {signal}."),
+            (None, None) => "The server stopped.".to_string(),
+        }
+    }
+}
+
+pub fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
 }
 
 /// Events kept for a webview that has not attached yet.
@@ -168,12 +250,26 @@ impl Engine {
 
     pub fn send(&self, line: &str) -> Result<(), String> {
         let mut guard = self.stdin.lock().unwrap();
-        let stdin = guard.as_mut().ok_or("The engine is not running.")?;
+        let stdin = guard.as_mut().ok_or("The server is not running.")?;
         stdin
             .write_all(line.as_bytes())
             .and_then(|_| stdin.write_all(b"\n"))
             .and_then(|_| stdin.flush())
-            .map_err(|e| format!("Could not write to the engine: {e}"))
+            .map_err(|e| format!("Could not write to the server: {e}"))
+    }
+
+    /// The current process and the last exit, for Settings › Diagnostics.
+    pub fn status(&self) -> RunStatus {
+        let run = self.run.lock().unwrap();
+        let running = self.child.lock().unwrap().is_some();
+        RunStatus {
+            running,
+            pid: running.then_some(run.pid).flatten(),
+            path: run.path.as_ref().map(|p| p.display().to_string()),
+            started_at_ms: running.then_some(run.started_at_ms).flatten(),
+            crash_restarts: run.crash_restarts,
+            last_exit: run.last_exit.clone(),
+        }
     }
 
     /// Stop the current engine; the supervisor starts a fresh one at once.
@@ -213,10 +309,13 @@ impl Engine {
         while !self.stopping.load(Ordering::SeqCst) {
             let path = resolve_engine();
             let started = Instant::now();
-            let reason = match self.run_once(&path) {
-                Ok(reason) => reason,
-                Err(error) => error,
+            let (reason, exit) = match self.run_once(&path) {
+                Ok(exit) => (exit.reason(), exit),
+                Err(error) => (error, Exit::default()),
             };
+            let expected =
+                self.stopping.load(Ordering::SeqCst) || self.restart_now.load(Ordering::SeqCst);
+            self.record_exit(exit, &reason, expected);
             self.emit(EngineEvent::Closed {
                 reason: reason.clone(),
             });
@@ -227,6 +326,7 @@ impl Engine {
                 backoff = BACKOFF_START;
                 continue;
             }
+            self.run.lock().unwrap().crash_restarts += 1;
             if started.elapsed() > STABLE_AFTER {
                 backoff = BACKOFF_START;
             }
@@ -250,20 +350,40 @@ impl Engine {
         self.supervising.store(false, Ordering::SeqCst);
     }
 
-    /// Run one engine process until it exits; returns why it ended.
-    fn run_once(self: &Arc<Self>, path: &PathBuf) -> Result<String, String> {
+    fn record_exit(&self, exit: Exit, reason: &str, expected: bool) {
+        let mut run = self.run.lock().unwrap();
+        run.pid = None;
+        run.started_at_ms = None;
+        run.last_exit = Some(LastExit {
+            code: exit.code,
+            signal: exit.signal,
+            at_ms: now_ms(),
+            reason: reason.to_string(),
+            expected,
+        });
+    }
+
+    /// Run one engine process until it exits; returns how it ended.
+    fn run_once(self: &Arc<Self>, path: &PathBuf) -> Result<Exit, String> {
+        // Recorded before the spawn, so a binary that will not start is still named.
+        self.run.lock().unwrap().path = Some(path.clone());
         let mut child = crate::process::command(path)
             .arg("--acp")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| format!("Could not start {}: {e}.", path.display()))?;
+            .map_err(|e| format!("Could not start the server ({}): {e}.", path.display()))?;
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let stdout = child.stdout.take().expect("piped stdout");
         let stderr = child.stderr.take().expect("piped stderr");
         *self.stdin.lock().unwrap() = child.stdin.take();
         let pid = child.id();
+        {
+            let mut run = self.run.lock().unwrap();
+            run.pid = Some(pid);
+            run.started_at_ms = Some(now_ms());
+        }
         *self.child.lock().unwrap() = Some(child);
         self.emit(EngineEvent::Log {
             line: format!("desktop: started {} --acp (pid {pid})", path.display()),
@@ -318,10 +438,7 @@ impl Engine {
         if self.generation.load(Ordering::SeqCst) == generation {
             self.stdin.lock().unwrap().take();
         }
-        Ok(match status.and_then(|s| s.code()) {
-            Some(code) => format!("The engine exited (code {code})."),
-            None => "The engine stopped.".to_string(),
-        })
+        Ok(Exit::of(status))
     }
 }
 
@@ -355,6 +472,50 @@ mod tests {
         let mut reader = BufReader::with_capacity(1 << 20, Cursor::new(text.into_bytes()));
         assert_eq!(read_batch(&mut reader).unwrap().unwrap().len(), BATCH_LINES);
         assert_eq!(read_batch(&mut reader).unwrap().unwrap().len(), 5);
+    }
+
+    #[test]
+    fn an_exit_says_its_code_or_its_signal() {
+        let code = Exit {
+            code: Some(101),
+            signal: None,
+        };
+        assert_eq!(code.reason(), "The server exited (code 101).");
+        let signal = Exit {
+            code: None,
+            signal: Some(9),
+        };
+        assert_eq!(signal.reason(), "The server was stopped by signal 9.");
+        assert_eq!(Exit::default().reason(), "The server stopped.");
+    }
+
+    #[test]
+    fn a_fresh_engine_reports_nothing_running() {
+        let status = Engine::default().status();
+        assert!(!status.running);
+        assert_eq!(status.pid, None);
+        assert_eq!(status.crash_restarts, 0);
+        assert!(status.last_exit.is_none());
+    }
+
+    #[test]
+    fn a_recorded_exit_is_reported_and_clears_the_run() {
+        let engine = Engine::default();
+        engine.run.lock().unwrap().pid = Some(42);
+        engine.record_exit(
+            Exit {
+                code: Some(1),
+                signal: None,
+            },
+            "The server exited (code 1).",
+            false,
+        );
+        let status = engine.status();
+        let last = status.last_exit.unwrap();
+        assert_eq!(last.code, Some(1));
+        assert!(!last.expected);
+        assert!(last.at_ms > 0);
+        assert_eq!(engine.run.lock().unwrap().pid, None);
     }
 
     #[test]

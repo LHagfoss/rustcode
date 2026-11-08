@@ -3,8 +3,9 @@
 // A grouped nav on the left searches every row's title and keywords
 // (settingsIndex.ts) and shows one page at a time beside it; picking a result
 // opens its page and lights the row. After SettingsView.swift.
-// Engine-backed pages (Agents, Connections, Capabilities, Appearance's
+// Server-backed pages (Agents, Connections, Capabilities, Appearance's
 // themes, Usage, Statistics) read and write through `_rustcode/*` requests.
+// Diagnostics (DiagnosticsPage.tsx) asks the shell about the server itself.
 
 import {
   Blocks,
@@ -24,6 +25,7 @@ import {
   RotateCcw,
   Search,
   Smartphone,
+  Stethoscope,
   TerminalSquare,
   X,
 } from "lucide-react";
@@ -107,6 +109,7 @@ import {
   useUpdates,
 } from "../state/updates";
 import { CapabilitiesPage } from "./Capabilities";
+import { DiagnosticsPage } from "./DiagnosticsPage";
 import { DefaultsForm, HarnessList } from "./Harnesses";
 import { HeaderButtonsSetting } from "./HeaderButtonsSetting";
 import { NewThreadBanner } from "./NewThreadBanner";
@@ -171,6 +174,7 @@ const NAV: { heading?: string; pages: Page[] }[] = [
     heading: "System",
     pages: [
       { id: "advanced", label: "Advanced", icon: TerminalSquare },
+      { id: "diagnostics", label: "Diagnostics", icon: Stethoscope },
       { id: "about", label: "About", icon: Info },
     ],
   },
@@ -289,7 +293,7 @@ function GeneralPage() {
         <Row
           title="Continue threads after a restart"
           reset={resume ? undefined : () => setResumeAfterRestart(SETTINGS_DEFAULTS.resumeAfterRestart)}
-          subtitle="A thread whose turn was cut short by quitting, an update or an engine restart is sent “Continue where you left off” when the app is back."
+          subtitle="A thread whose turn was cut short by quitting, an update or a server restart is sent “Continue where you left off” when the app is back."
         >
           <Switch
             label="Continue threads after a restart"
@@ -462,11 +466,11 @@ function ChatPage() {
       </Row>
       {smartUiPending && (
         <Row
-          title="Restart the engine to apply"
-          subtitle="The engine learns the Smart UI setting when it starts."
+          title="Restart the server to apply"
+          subtitle="The RustCode server learns the Smart UI setting when it starts."
         >
           <Action prominent disabled={anyRunning} onClick={() => void restartEngine()}>
-            Restart Engine
+            Restart Server
           </Action>
         </Row>
       )}
@@ -528,9 +532,9 @@ function AgentsPage() {
     <>
       {snapshot.unsupported && (
         <p className="mb-4 rounded-lg bg-warning/10 px-3 py-2 text-callout">
-          This engine does not run other harnesses yet (no{" "}
-          <code className="font-mono">_rustcode/harnesses</code>). Threads use RustCode's local engine. Update
-          RustCode to add Claude Code, Codex, Gemini and others.
+          This server does not run other harnesses yet (no{" "}
+          <code className="font-mono">_rustcode/harnesses</code>). Threads use RustCode's built-in harness.
+          Update RustCode to add Claude Code, Codex, Gemini and others.
         </p>
       )}
       {!snapshot.unsupported && (
@@ -605,9 +609,12 @@ function OrchestrationGroup() {
           />
         </Row>
         {pending && (
-          <Row title="Restart the engine to apply" subtitle="The engine learns this setting when it starts.">
+          <Row
+            title="Restart the server to apply"
+            subtitle="The RustCode server learns this setting when it starts."
+          >
             <Action prominent disabled={anyRunning} onClick={() => void restartEngine()}>
-              Restart Engine
+              Restart Server
             </Action>
           </Row>
         )}
@@ -873,7 +880,7 @@ function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
         </p>
       ) : cli ? (
         <p className="m-0 text-caption text-fg-muted">
-          This engine cannot create themes from the app. In a terminal:{" "}
+          This server cannot create themes from the app. In a terminal:{" "}
           <code className="selectable rounded-xs bg-fill px-1 py-px font-mono text-fg">{cli}</code>
         </p>
       ) : (
@@ -945,7 +952,7 @@ function AppearancePage() {
         }
         footer={
           supported === false
-            ? "This engine has no themes yet, so only the built-in ones show. Update RustCode for theme files."
+            ? "This server has no themes yet, so only the built-in ones show. Update RustCode for theme files."
             : `Theme files live in ${userDir} and a project's .rustcode/themes; edits apply live. See docs/themes.md.`
         }
       >
@@ -1219,7 +1226,7 @@ function RecordRequestBodiesGroup() {
       </Row>
       {error && <Row title="Could not save" subtitle={error} />}
       {pending && (
-        <Row title="Restart the engine to apply" subtitle="The engine reads these when it starts.">
+        <Row title="Restart the server to apply" subtitle="The RustCode server reads these when it starts.">
           <Action
             prominent
             disabled={anyRunning}
@@ -1228,7 +1235,7 @@ function RecordRequestBodiesGroup() {
               void restartEngine();
             }}
           >
-            Restart Engine
+            Restart Server
           </Action>
         </Row>
       )}
@@ -1237,33 +1244,16 @@ function RecordRequestBodiesGroup() {
 }
 
 function AdvancedPage() {
-  const status = useApp((s) => s.status);
-  const detail = useApp((s) => s.statusDetail);
-  const transport = useApp((s) => s.transport);
-  const log = useApp((s) => s.engineLog);
   return (
     <>
-      <Group title="Engine">
-        <Row
-          title={status === "ready" ? "Running" : status === "connecting" ? "Starting…" : "Stopped"}
-          subtitle="rustcode --acp is the engine every thread runs on."
-          status={
-            detail ??
-            (transport === "tauri"
-              ? "Run by the app"
-              : transport === "websocket"
-                ? "Through the dev bridge"
-                : "Mock engine (no real turns)")
-          }
-        >
-          <Action onClick={() => void restartEngine()}>Restart</Action>
-        </Row>
-      </Group>
       <RecordRequestBodiesGroup />
-      <Group title="Engine log" footer="The engine's stderr; turns log to each thread's logs/debug.log.">
-        <pre className="selectable m-0 max-h-[320px] overflow-auto p-3 font-mono text-caption leading-[15px] whitespace-pre-wrap text-fg-muted">
-          {log.length ? log.slice(-200).join("\n") : "Nothing yet."}
-        </pre>
+      <Group
+        title="Server status and logs"
+        footer="The server's process, its live log, the system and a debug report for issues."
+      >
+        <Row title="Diagnostics" subtitle="Moved to its own page.">
+          <Action onClick={() => openSettings("diagnostics")}>Open Diagnostics</Action>
+        </Row>
       </Group>
       <Group title="Setup" footer="Each agent signs in on its own; RustCode never stores its credentials.">
         <Row
@@ -1540,6 +1530,7 @@ export function Settings() {
                   {section === "usage" && <UsagePage />}
                   {section === "statistics" && <StatisticsPage />}
                   {section === "advanced" && <AdvancedPage />}
+                  {section === "diagnostics" && <DiagnosticsPage />}
                   {section === "about" && <AboutPage />}
                 </div>
               </main>

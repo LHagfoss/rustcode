@@ -75,7 +75,8 @@ const SETTINGS: [SettingsSection, string][] = [
   ["keyboard", "Keyboard"],
   ["usage", "Usage"],
   ["statistics", "Statistics: recorded tokens and reported cost"],
-  ["advanced", "Advanced: engine, updates and setup"],
+  ["advanced", "Advanced: request bodies and setup"],
+  ["diagnostics", "Diagnostics: server status, logs and debug report"],
 ];
 
 /** Actions other views add (board, review, …), so the palette lists them without knowing them. */
@@ -234,8 +235,9 @@ function baseActions(): PaletteAction[] {
     { id: "theme-dark", label: "Appearance: Dark", icon: Moon, words: "theme", run: () => setTheme("dark") },
     {
       id: "restart",
-      label: "Restart engine",
+      label: "Restart server",
       icon: RefreshCw,
+      words: "engine",
       disabled: Object.values(s.threads).some((t) => t.running) ? "A turn is running" : undefined,
       run: () => void restartEngine(),
     },

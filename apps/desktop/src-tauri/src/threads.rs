@@ -2,7 +2,8 @@
 //! does them (`RustCodeApp.swift`, `rename` and `trash`): the thread's
 //! folder comes from `rustcode threads path <id>` and is accepted only when
 //! it is that thread's folder inside the thread store. Rename writes the
-//! folder's `title.txt`; Trash moves the folder to the user's Trash.
+//! folder's `title.txt`; Trash moves the folder to the user's Trash; Open
+//! thread log opens its `logs/debug.log`.
 
 use std::path::{Path, PathBuf};
 
@@ -16,7 +17,8 @@ fn valid_id(id: &str) -> bool {
 
 /// Whether `dir` is thread `id`'s folder in the store.
 pub fn is_thread_dir(dir: &Path, id: &str) -> bool {
-    let text = dir.to_string_lossy();
+    // Windows paths separate with `\`; the store's folder names are the same.
+    let text = dir.to_string_lossy().replace('\\', "/");
     dir.is_absolute()
         && dir.file_name().is_some_and(|n| n == id)
         && (text.contains("/rustcode/threads/") || text.contains("/rustcode/sessions/"))
@@ -32,7 +34,7 @@ fn thread_dir(id: &str) -> Result<PathBuf, String> {
     let output = crate::process::command(crate::engine::resolve_engine())
         .args(["threads", "path", id])
         .output()
-        .map_err(|e| format!("Could not run the engine: {e}"))?;
+        .map_err(|e| format!("Could not run the RustCode server: {e}"))?;
     if !output.status.success() {
         return Err("Could not find this thread's folder.".into());
     }
@@ -58,6 +60,20 @@ pub fn thread_rename(id: String, title: String) -> Result<String, String> {
     let dir = thread_dir(&id)?;
     std::fs::write(dir.join("title.txt"), &title).map_err(|e| e.to_string())?;
     Ok(title)
+}
+
+/// Opens the thread's `logs/debug.log` in the text editor, or its folder when
+/// the thread has not logged anything yet.
+#[tauri::command(async)]
+pub fn thread_log_open(id: String) -> Result<String, String> {
+    let dir = thread_dir(&id)?;
+    let log = dir.join("logs").join("debug.log");
+    if log.is_file() {
+        crate::native::open_checked(&log, false)?;
+        return Ok(log.display().to_string());
+    }
+    crate::native::open_checked(&dir, true)?;
+    Ok(dir.display().to_string())
 }
 
 /// A name in `trash` that is not taken: `id`, `id 2`, `id 3`, …
@@ -100,6 +116,13 @@ mod tests {
         assert!(!valid_id("../x"));
         assert!(!valid_id(""));
         assert!(valid_id("019a2b-cd_3"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn accepts_a_windows_thread_folder() {
+        let ok = Path::new(r"C:\Users\a\AppData\Roaming\rustcode\threads\2026\11\02\abc-1");
+        assert!(is_thread_dir(ok, "abc-1"));
     }
 
     #[test]
