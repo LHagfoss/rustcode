@@ -4928,6 +4928,8 @@ export function setClaudeUsageAllowed(on: boolean): void {
   store(CLAUDE_USAGE_KEY, on ? "1" : "0");
   planPauses = NO_PAUSES;
   if (on) return;
+  // Nothing waiting may read a login after the switch went off.
+  plansQueued = [];
   // Every Claude login, the default one and each account's own row.
   setPlanCache(
     Object.fromEntries(Object.entries(get().planCache).filter(([key]) => !key.startsWith("claude-code"))),
@@ -5025,6 +5027,55 @@ export async function refreshPlanCache(again = false): Promise<void> {
   }
 }
 
+/**
+ * What a background read asks for, for a caller that sends its own request
+ * (Settings › Usage's own interval): the default login and the account of the
+ * thread on screen, each only with consent and while the last read did not
+ * pause it (`state/plans.ts`). Settings' explicit look asks for every login
+ * instead, which is what `_rustcode/usage/plans`'s `claudeAccounts` does.
+ */
+export function backgroundPlansAsk(): PlansAsk {
+  return currentPlansAsk(false);
+}
+
+/** The harness whose plans come from named logins (`acp/rustcode.ts` `harnessPlanKey`). */
+const CLAUDE_CODE = "claude-code";
+
+/** When the named logins were last asked for, so that it happens once per poll. */
+let planLoginsAskedAt = 0;
+
+/**
+ * Asks in the background for the named logins that were read before and are
+ * stale now, for a caller that can only report what the cache holds
+ * (`list_harnesses`): without this only the default login and the account of
+ * the thread on screen are ever read (`currentPlansAsk`), so the accounts an
+ * agent is choosing between never get numbers.
+ *
+ * A login nothing was read for is never asked for: reading an unseen Keychain
+ * item can prompt macOS, and the user never asked for that. Neither is one a
+ * failed read paused (`failurePauses` in `state/plans.ts`). The whole thing
+ * runs at most once per poll interval however often it is called, and the
+ * requests queue behind the one in flight, so one Keychain item is read at a
+ * time. The caller's answer stays cache-only: this never awaits.
+ */
+export function refreshReadPlanLogins(now = Date.now()): void {
+  if (!connection || get().status !== "ready" || !claudeUsageAllowed()) return;
+  if (now - planLoginsAskedAt < PLAN_CACHE_POLL_MS) return;
+  const cache = get().planCache;
+  const prefix = `${CLAUDE_CODE}#`;
+  const stale = Object.keys(cache)
+    .filter((key) => key.startsWith(prefix))
+    .map((key) => key.slice(prefix.length))
+    .filter((id) => planIsStale(cache[harnessPlanKey(CLAUDE_CODE, id)], now))
+    .filter((id) => !planPauses.accounts.has(id));
+  if (!stale.length) return;
+  planLoginsAskedAt = now;
+  for (const account of stale) plansQueued = queueAsks(plansQueued, { claude: false, account });
+  // One request at a time: with one in flight its loop drains these asks, and
+  // otherwise the app's own ask goes first and they follow it.
+  if (!plansInFlight) void refreshPlanCache();
+}
+
 let planTimer: ReturnType<typeof setInterval> | null = null;
 let planResetTimer: ReturnType<typeof setTimeout> | null = null;
 let planResetDue = 0;
@@ -5086,6 +5137,7 @@ function stopPlanPolling() {
   plansOnVisible = null;
   plansInFlight = null;
   plansQueued = [];
+  planLoginsAskedAt = 0;
 }
 
 // ---------------------------------------------------------------- UI

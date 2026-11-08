@@ -7,9 +7,11 @@
 // request of its own: the poll (`state/store.ts` `startPlanPolling`) keeps the
 // cache current, and `as_of` says how old the answer is. Claude's logins are
 // reported `not_enabled` while the user keeps usage reading off, since nothing
-// is cached for them then (`claudeUsageAllowed`).
+// is cached for them then (`claudeUsageAllowed`). A window whose reset passed
+// since the read is folded in the way the composer draws it, so an agent is
+// never told an account is busy on a window that has already started over.
 
-import type { CachedPlan } from "./store";
+import { type CachedPlan, shownPlan } from "./store";
 
 /**
  * One plan window as an agent reads it. A type alias, not an interface, so the
@@ -63,16 +65,25 @@ const iso = (ms: number | undefined): string | undefined =>
  * may be read at all). `readable` is the user's consent for a Claude login, and
  * always true for a harness whose plan RustCode reads without one.
  */
-export function usageOf(plan: CachedPlan | undefined, readable = true): AgentUsage | undefined {
+export function usageOf(
+  plan: CachedPlan | undefined,
+  readable = true,
+  now = Date.now(),
+): AgentUsage | undefined {
   if (!readable) return { status: "not_enabled", windows: [] };
-  if (!plan?.windows.length) return undefined;
+  // A window whose reset passed is nothing used and no reset time, the way the
+  // composer's meter draws it (`shownPlan`, then `planNow` in `state/store.ts`):
+  // the numbers were read before the window started over.
+  const live = shownPlan(undefined, plan, now).plan;
+  if (!live?.windows.length) return undefined;
   // Numbers recorded before the login's access token lapsed carry when they
-  // were read; a read made now carries when the app got it.
-  const as_of = iso(plan.asOf ?? plan.fetchedAt);
+  // were read; a read made now carries when the app got it. Folding a reset
+  // changes no window's times, so the entry's own are still right.
+  const as_of = iso(plan?.asOf ?? plan?.fetchedAt);
   return {
     status: "ok",
     ...(as_of ? { as_of } : {}),
-    windows: plan.windows.map((w) => ({
+    windows: live.windows.map((w) => ({
       label: w.label ?? agentWindowLabel(w.minutes),
       used_percent: w.usedPercent,
       ...(w.minutes !== undefined ? { window_minutes: w.minutes } : {}),

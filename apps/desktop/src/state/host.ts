@@ -129,6 +129,7 @@ import {
   permissionModeOf,
   planCacheStale,
   refreshPlanCache,
+  refreshReadPlanLogins,
   removeQueued,
   renameThread,
   request,
@@ -741,11 +742,18 @@ async function listHarnesses(caller: RuleThread): Promise<JsonObject> {
   // Each login's plan windows come from the cache Settings › Usage and the
   // composer's meter fill, never from a read this call starts: a model's tool
   // call must not raise a Keychain prompt or an Anthropic request of its own.
-  // A stale cache is refreshed in the background, so the next call has newer
-  // numbers (state/store.ts `refreshPlanCache`, which honours the pauses the
-  // plan read keeps).
+  // A stale cache is refreshed in the background so that the next call has
+  // newer numbers — the default login and the account of the thread on screen
+  // (`refreshPlanCache`), and every named login that was read before
+  // (`refreshReadPlanLogins`), since those are the accounts an agent is
+  // choosing between and the poll alone would only ever read one of them. Both
+  // honour the pauses and the rate limit the plan read keeps, and neither is
+  // awaited: this answer is what the cache holds now.
   const cache = useApp.getState().planCache;
-  if (planCacheStale(cache)) void refreshPlanCache();
+  if (planCacheStale(cache)) {
+    void refreshPlanCache();
+    refreshReadPlanLogins();
+  }
   const claudeReadable = claudeUsageAllowed();
   // Claude's plan comes from its own sign-in, which the user opts into reading.
   const usage = (harness: string, account?: string | null) =>

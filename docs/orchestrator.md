@@ -533,11 +533,20 @@ logins never share them. `as_of` and `resets_at` are ISO 8601 UTC times, and
 `as_of` is when the numbers were read (for numbers RustCode recorded before a
 login's access token lapsed, when that read was). `status` is `ok`, or
 `not_enabled` while the user keeps Claude usage reading off in Settings › Usage;
-a login nothing was read for yet carries no `usage` at all. The app answers it
-from the cache Settings › Usage and the composer's meter fill
-(`apps/desktop/src/state/harnessUsage.ts`): a tool call never starts a Keychain
-read or an Anthropic request of its own, so a stale cache is refreshed in the
-background for the next call, and `as_of` says how old an answer is.
+a login nothing was read for yet carries no `usage` at all, and a window whose
+reset passed since the read is reported as nothing used with no reset time, the
+way the composer's meter draws it (a read can be older than the window it
+describes). The app answers it from the cache Settings › Usage and the
+composer's meter fill (`apps/desktop/src/state/harnessUsage.ts`): a tool call
+never starts a Keychain read or an Anthropic request of its own, so a stale
+cache is refreshed in the background for the next call, and `as_of` says how old
+an answer is. That background refresh reads the default login and the account of
+the thread on screen (the app's own poll), plus every named login that was read
+before and has since gone stale — the accounts an agent is choosing between.
+A login nothing was read for is never asked for (reading an unseen Keychain item
+can prompt macOS), nor is one a failed read paused (`denied`, `forbidden`,
+signed out). It happens at most once per 180 seconds however often the tool is
+called, one login at a time, and the answer itself is never waited on.
 
 ## Orchestration tools v4
 

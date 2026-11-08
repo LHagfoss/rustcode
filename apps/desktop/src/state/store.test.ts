@@ -34,6 +34,7 @@ import {
   answerConnectRequest,
   answerPermission,
   answerQuestionOptions,
+  backgroundPlansAsk,
   type CachedPlan,
   cancel,
   cancelQueuedEdit,
@@ -79,6 +80,7 @@ import {
   RESUME_TEXT,
   refreshAgents,
   refreshHarnesses,
+  refreshReadPlanLogins,
   refreshRemote,
   refreshSessions,
   refreshSessionsOnFocus,
@@ -965,6 +967,128 @@ describe("engine controller with the mock engine", () => {
         as_of: new Date(fetchedAt).toISOString(),
         windows: [{ label: "5-hour", used_percent: 71 }],
       });
+    } finally {
+      setClaudeUsageAllowed(false);
+      storage.done();
+    }
+  });
+
+  test("list_harnesses refreshes the logins it read before, never one it did not, and once per interval", async () => {
+    const storage = testStorage();
+    try {
+      const transport = new MockTransport({ delayMs: 0 });
+      type Ask = { claude?: boolean; claudeAccounts?: boolean; claudeAccount?: string; force?: boolean };
+      const asked: Ask[] = [];
+      const send = transport.send.bind(transport);
+      transport.send = (line: string) => {
+        if (line.includes("_rustcode/usage/plans")) {
+          asked.push(((JSON.parse(line) as { params?: Ask }).params ?? {}) as Ask);
+        }
+        return send(line);
+      };
+      await connect(transport);
+      await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+      setClaudeUsageAllowed(true);
+      const stale = Date.now() - PLAN_CACHE_POLL_MS - 1_000;
+      const entry = (account: string | null, fetchedAt: number, usedPercent: number): CachedPlan => ({
+        source: "claude-code",
+        harness: "claude-code",
+        account,
+        name: account ?? "Claude",
+        windows: [{ label: "5-hour", usedPercent, minutes: 300 }],
+        fetchedAt,
+      });
+      // The default login was just read, one named login is old, and one is old
+      // but a denied Keychain read paused it. A login nothing was read for has
+      // no entry at all — reading an unseen item may prompt macOS, so it is
+      // never asked for.
+      useApp.setState({
+        planCache: {
+          "claude-code": entry(null, Date.now(), 18),
+          "claude-code#paral-2": entry("paral-2", stale, 71),
+          "claude-code#paused": entry("paused", stale, 5),
+        },
+      });
+      commitPlansAnswer([
+        {
+          id: "claude",
+          name: "Claude",
+          via: "Claude Code",
+          harness: "claude-code",
+          account: "paused",
+          status: "unavailable",
+          reason: "denied",
+          windows: [],
+        },
+      ]);
+      asked.length = 0;
+      const at = Date.now();
+      refreshReadPlanLogins(at);
+      await until(() => asked.some((p) => p.claudeAccount === "paral-2"));
+      // One login at a time, and never every account at once (that is the
+      // page's own explicit look, which can read an unseen item).
+      expect(asked.filter((p) => p.claudeAccounts)).toEqual([]);
+      expect(asked.filter((p) => p.force)).toEqual([]);
+      expect(asked.map((p) => p.claudeAccount).filter(Boolean)).toEqual(["paral-2"]);
+      // Its numbers land in the cache the answer is drawn from.
+      await until(() => useApp.getState().planCache["claude-code#paral-2"]?.windows[0]?.usedPercent === 4);
+      // The same call again reads nothing: at most once per poll interval,
+      // however often an agent asks.
+      const sent = asked.length;
+      refreshReadPlanLogins();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(asked.length).toBe(sent);
+      // Past the interval, with every login it read fresh again, it asks for no
+      // account at all: only what has gone stale is read.
+      const cache = useApp.getState().planCache;
+      useApp.setState({
+        planCache: {
+          ...cache,
+          "claude-code#paral-2": { ...cache["claude-code#paral-2"]!, fetchedAt: Date.now() },
+        },
+      });
+      refreshReadPlanLogins(at + PLAN_CACHE_POLL_MS + 1);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(
+        asked
+          .slice(sent)
+          .map((p) => p.claudeAccount)
+          .filter(Boolean),
+      ).toEqual([]);
+      // The paused login was never asked for.
+      expect(asked.some((p) => p.claudeAccount === "paused")).toBe(false);
+    } finally {
+      setClaudeUsageAllowed(false);
+      storage.done();
+    }
+  });
+
+  test("the page's own interval asks what a background read asks, never every login", async () => {
+    const storage = testStorage();
+    try {
+      await connect(new MockTransport({ delayMs: 0 }));
+      await until(() => useApp.getState().status === "ready");
+      // Consent off: the page's tick reads no Keychain item at all.
+      expect(backgroundPlansAsk()).toEqual({ claude: false });
+      setClaudeUsageAllowed(true);
+      // Consent on, nothing paused: the default login and whatever account the
+      // thread on screen runs on — never `claudeAccounts`, which is the page's
+      // explicit look and can read a login nobody asked about.
+      expect(backgroundPlansAsk()).toMatchObject({ claude: true });
+      expect(backgroundPlansAsk().force).toBeUndefined();
+      // A denied Keychain read pauses that login, and the tick follows it.
+      commitPlansAnswer([
+        {
+          id: "claude",
+          name: "Claude",
+          via: "Claude Code",
+          harness: "claude-code",
+          status: "unavailable",
+          reason: "denied",
+          windows: [],
+        },
+      ]);
+      expect(backgroundPlansAsk()).toEqual({ claude: false });
     } finally {
       setClaudeUsageAllowed(false);
       storage.done();

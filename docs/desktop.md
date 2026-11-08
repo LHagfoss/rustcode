@@ -385,16 +385,24 @@ composer's keys stay outside the table.
   read-only and never refreshed (`provider_auth/claude_usage.rs`). Claude is
   read only after the user
   presses **Show** once (`rustcode.claudeUsage`), since macOS may ask to
-  allow Keychain access. Each source is cached a minute. Showing the page
-  reads every Claude login; the background reads one at a time, the account
-  of the thread on screen (`claudeAccount`). While the page is open it reads
-  again every three minutes (`PLAN_CACHE_POLL_MS`, the meter poll's interval,
-  `watchUsageRefresh` in `state/usagePage.ts`), and once on coming back to the
-  window when what it draws is older than that; a read in flight is never
-  doubled, and Refresh still reads at once, past the engine's minute of cache.
-  What it reads fills the same cache `list_harnesses` reports to an agent
-  (`state/harnessUsage.ts`, `docs/orchestrator.md`), which answers without a
-  Keychain read or a request of its own.
+  allow Keychain access. Each source is cached a minute. Showing the page is an
+  explicit look and reads every Claude login; the background reads one at a
+  time, the default login and the account of the thread on screen
+  (`claudeAccount`). While the page is open it reads again every three minutes
+  (`PLAN_CACHE_POLL_MS`, the meter poll's interval, `watchUsageRefresh` in
+  `state/usagePage.ts`), and once on coming back to the window when what it
+  draws is older than that. That tick is a background read: it asks for the same
+  logins the app's poll asks for (`backgroundPlansAsk`, through
+  `state/plans.ts`), so it never reads a login nothing was read for or one a
+  failed read paused, and it keeps the rows it did not ask rather than dropping
+  them; when the plan cache is fresh (the poll read the same logins) it waits,
+  so one Keychain item is not read twice per cycle. A read that fails doubles
+  the wait, up to fifteen minutes, and a read that answers puts it back on the
+  interval; a read in flight is never doubled, and Refresh still reads at once,
+  past the engine's minute of cache. What the page reads fills the same cache
+  `list_harnesses` reports to an agent (`state/harnessUsage.ts`,
+  `docs/orchestrator.md`), which answers without a Keychain read or a request of
+  its own and refreshes the stale named logins in the background.
   A Claude access token lives hours and is renewed only when Claude Code runs,
   so a login nobody ran a thread on since reads as lapsed. The row then draws
   the numbers RustCode last read for that login, from `claude-usage.json` in

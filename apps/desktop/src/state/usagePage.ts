@@ -9,10 +9,15 @@ import { type PageAnswer, pageIsFresh } from "./pageCache";
 /** The cache key of the page's own answer: every subscription, every login. */
 export const USAGE_PLANS_KEY = "settings/usage/plans";
 
-/** The page's last answer: the plans it drew, and whether it asked for Claude. */
+/** The page's last answer: the plans it drew, and whether it was the whole look. */
 export interface UsageAnswer {
   plans: UsagePlan[];
-  /** Whether the read asked for Claude's logins, so it is fresh for that switch only. */
+  /**
+   * Whether the read asked for every Claude login, which is the page's explicit
+   * look (opening it, Refresh) with consent on. A background read answers part
+   * of that, so the next open reads the logins again, and a read made with the
+   * switch off is not fresh for it either.
+   */
   asked: boolean;
 }
 
@@ -80,9 +85,12 @@ function retryable(plan: UsagePlan): boolean {
 /**
  * Whether Settings › Usage reads on its own now. Its interval (`everyMs` in
  * [`watchUsageRefresh`], the app's one plan-poll length) reads on every tick
- * while the window is visible; coming back to the window reads only when what
- * is drawn is older than that interval, so switching away and back costs
- * nothing. A read already in flight is never doubled.
+ * while the window is visible, unless the app's plan cache was read within
+ * that interval: the app's own poll (`state/store.ts` `startPlanPolling`)
+ * reads the same logins, so reading them again here would read one Keychain
+ * item twice per cycle. Coming back to the window reads only when what is drawn
+ * is older than that interval, so switching away and back costs nothing. A read
+ * already in flight is never doubled.
  */
 export function usageAutoRead(input: {
   /** When the drawn numbers were read, or null with nothing drawn yet. */
@@ -92,31 +100,53 @@ export function usageAutoRead(input: {
   visible: boolean;
   /** A read is in flight. */
   reading: boolean;
+  /** Nothing in the plan cache wants a read (`!planCacheStale` in `state/store.ts`). */
+  cacheFresh: boolean;
   /** The interval fired, or the window came back. */
   trigger: "tick" | "resumed";
   /** The interval's length; the app's `PLAN_CACHE_POLL_MS`. */
   everyMs: number;
 }): boolean {
-  const { readAt, now = Date.now(), visible, reading, trigger, everyMs } = input;
+  const { readAt, now = Date.now(), visible, reading, cacheFresh, trigger, everyMs } = input;
   if (!visible || reading) return false;
-  if (trigger === "tick") return true;
+  if (trigger === "tick") return !cacheFresh;
   return readAt === null || now - readAt >= everyMs;
 }
 
+/** The page's longest wait after failed reads: fifteen minutes. */
+export const PLAN_REFRESH_MAX_BACKOFF_MS = 900_000;
+
 /**
- * Wires the page's own refresh: an interval that reads while the window is
- * visible, and a read when the window comes back after being hidden longer
- * than that. Returns the stop function. A tick of a hidden window does
- * nothing, so coming back is caught by the staleness check rather than by the
- * timer restarting.
+ * How long the page waits before reading again: its interval, doubled for each
+ * read that failed in a row, up to fifteen minutes, and back to the interval as
+ * soon as one answers. A page whose engine went away then asks every fifteen
+ * minutes instead of every three, and shows the numbers at once when it comes
+ * back.
+ */
+export function refreshBackoff(everyMs: number, failures: number): number {
+  if (failures <= 0) return everyMs;
+  return Math.min(everyMs * 2 ** failures, PLAN_REFRESH_MAX_BACKOFF_MS);
+}
+
+/**
+ * Wires the page's own refresh: a timer that reads while the window is visible,
+ * a read when the window comes back after being hidden longer than the
+ * interval, and a longer wait after a read that failed ([`refreshBackoff`]).
+ * Returns the stop function. A tick of a hidden window does nothing, so coming
+ * back is caught by the staleness check rather than by the timer restarting.
  */
 export function watchUsageRefresh(loop: {
-  /** Reads now; the page's own read of `_rustcode/usage/plans`. */
-  read: () => void;
+  /**
+   * Reads now; true when it answered, false when it failed, which backs the
+   * timer off.
+   */
+  read: () => Promise<boolean> | boolean;
   /** Whether a read is in flight. */
   reading: () => boolean;
   /** `document.visibilityState === "visible"`. */
   visible: () => boolean;
+  /** Nothing in the plan cache wants a read (`!planCacheStale` in `state/store.ts`). */
+  cacheFresh: () => boolean;
   /** When the drawn numbers were read, or null with nothing drawn yet. */
   readAt: () => number | null;
   /** The interval's length in milliseconds (state/store.ts `PLAN_CACHE_POLL_MS`). */
@@ -124,23 +154,42 @@ export function watchUsageRefresh(loop: {
   /** Where `visibilitychange` is heard; the document, unless a test wires its own. */
   onChange?: (handler: () => void) => () => void;
 }): () => void {
-  const tick = (trigger: "tick" | "resumed") => {
-    if (
-      usageAutoRead({
-        readAt: loop.readAt(),
-        visible: loop.visible(),
-        reading: loop.reading(),
-        trigger,
-        everyMs: loop.everyMs,
-      })
-    ) {
-      loop.read();
-    }
+  let failures = 0;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let stopped = false;
+  const arm = () => {
+    if (stopped) return;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => void run("tick"), refreshBackoff(loop.everyMs, failures));
   };
-  const timer = setInterval(() => tick("tick"), loop.everyMs);
-  const off = (loop.onChange ?? listenOnDocument)(() => tick("resumed"));
+  const run = async (trigger: "tick" | "resumed") => {
+    const read = usageAutoRead({
+      readAt: loop.readAt(),
+      visible: loop.visible(),
+      reading: loop.reading(),
+      cacheFresh: loop.cacheFresh(),
+      trigger,
+      everyMs: loop.everyMs,
+    });
+    if (!read) {
+      arm();
+      return;
+    }
+    let ok = false;
+    try {
+      ok = await loop.read();
+    } catch {
+      ok = false;
+    }
+    failures = ok ? 0 : failures + 1;
+    arm();
+  };
+  arm();
+  const off = (loop.onChange ?? listenOnDocument)(() => void run("resumed"));
   return () => {
-    clearInterval(timer);
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    timer = null;
     off();
   };
 }

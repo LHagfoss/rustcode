@@ -4,6 +4,8 @@ import { PAGE_FRESH_MS, type PageAnswer } from "./pageCache";
 import {
   answeredPlans,
   failureText,
+  PLAN_REFRESH_MAX_BACKOFF_MS,
+  refreshBackoff,
   type UsageAnswer,
   usageAutoRead,
   usagePressTarget,
@@ -236,13 +238,24 @@ describe("a press on the composer's usage meter", () => {
 const EVERY = 180_000;
 
 describe("the page keeps itself current", () => {
-  test("a tick reads while the window is visible, and a read in flight is never doubled", () => {
+  /** Lets the loop's `await` and its re-arm run before the test looks at it. */
+  const settle = async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+  const advance = async (ms: number) => {
+    jest.advanceTimersByTime(ms);
+    await settle();
+  };
+
+  test("a tick reads while the window is visible, unless a read is in flight or the cache is fresh", () => {
     const tick = (over: Partial<Parameters<typeof usageAutoRead>[0]> = {}) =>
       usageAutoRead({
         readAt: NOW,
         now: NOW,
         visible: true,
         reading: false,
+        cacheFresh: false,
         trigger: "tick",
         everyMs: EVERY,
         ...over,
@@ -252,6 +265,9 @@ describe("the page keeps itself current", () => {
     expect(tick({ visible: false })).toBe(false);
     // Neither does one that is already reading.
     expect(tick({ reading: true })).toBe(false);
+    // Nor one whose logins the app's own poll just read: the same login would
+    // otherwise be read twice per cycle.
+    expect(tick({ cacheFresh: true })).toBe(false);
   });
 
   test("coming back reads only when what is drawn is older than the interval", () => {
@@ -261,6 +277,7 @@ describe("the page keeps itself current", () => {
         now: NOW,
         visible: true,
         reading: false,
+        cacheFresh: false,
         trigger: "resumed",
         everyMs: EVERY,
       });
@@ -270,7 +287,16 @@ describe("the page keeps itself current", () => {
     expect(back(null)).toBe(true);
   });
 
-  test("the loop ticks every interval, catches up on coming back when stale, and stops", () => {
+  test("a failed read doubles the wait, up to fifteen minutes", () => {
+    expect(refreshBackoff(EVERY, 0)).toBe(EVERY);
+    expect(refreshBackoff(EVERY, 1)).toBe(EVERY * 2);
+    expect(refreshBackoff(EVERY, 2)).toBe(EVERY * 4);
+    expect(refreshBackoff(EVERY, 3)).toBe(PLAN_REFRESH_MAX_BACKOFF_MS);
+    expect(refreshBackoff(EVERY, 40)).toBe(PLAN_REFRESH_MAX_BACKOFF_MS);
+    expect(PLAN_REFRESH_MAX_BACKOFF_MS).toBe(15 * 60_000);
+  });
+
+  test("the loop ticks every interval, catches up on coming back when stale, and stops", async () => {
     jest.useFakeTimers();
     let visible = true;
     let reading = false;
@@ -281,9 +307,11 @@ describe("the page keeps itself current", () => {
       read: () => {
         reads += 1;
         readAt = Date.now();
+        return true;
       },
       reading: () => reading,
       visible: () => visible,
+      cacheFresh: () => false,
       readAt: () => readAt,
       everyMs: EVERY,
       onChange: (handler) => {
@@ -293,44 +321,121 @@ describe("the page keeps itself current", () => {
         };
       },
     });
-    const resume = () => {
+    const resume = async () => {
       for (const handler of changes) handler();
+      await settle();
     };
 
-    jest.advanceTimersByTime(EVERY);
+    await advance(EVERY);
     expect(reads).toBe(1);
-    jest.advanceTimersByTime(EVERY);
+    await advance(EVERY);
     expect(reads).toBe(2);
 
     // A read in flight is not doubled, and the next tick reads once it is done.
     reading = true;
-    jest.advanceTimersByTime(EVERY);
+    await advance(EVERY);
     expect(reads).toBe(2);
     reading = false;
-    jest.advanceTimersByTime(EVERY);
+    await advance(EVERY);
     expect(reads).toBe(3);
 
     // Hidden: no read, and coming back within the interval costs nothing.
     visible = false;
-    jest.advanceTimersByTime(EVERY / 2);
+    await advance(EVERY / 2);
     expect(reads).toBe(3);
     visible = true;
-    resume();
+    readAt = Date.now();
+    await resume();
     expect(reads).toBe(3);
 
     // Hidden for longer than the interval: coming back catches up at once.
     visible = false;
-    jest.advanceTimersByTime(EVERY * 2);
+    await advance(EVERY * 2);
     expect(reads).toBe(3);
     visible = true;
-    resume();
+    await resume();
     expect(reads).toBe(4);
 
     // Stopped, the loop reads nothing more and hears no visibility change.
     stop();
     expect(changes).toHaveLength(0);
-    jest.advanceTimersByTime(EVERY * 2);
+    await advance(EVERY * 2);
     expect(reads).toBe(4);
+  });
+
+  test("the loop waits longer after a read that failed, and back to the interval after one that works", async () => {
+    jest.useFakeTimers();
+    const STEP = 60_000;
+    let failing = true;
+    let reads = 0;
+    const stop = watchUsageRefresh({
+      read: () => {
+        reads += 1;
+        return !failing;
+      },
+      reading: () => false,
+      visible: () => true,
+      cacheFresh: () => false,
+      readAt: () => Date.now(),
+      everyMs: STEP,
+      onChange: () => () => {},
+    });
+
+    // One failed read: the next one is two steps away, not one.
+    await advance(STEP);
+    expect(reads).toBe(1);
+    await advance(STEP);
+    expect(reads).toBe(1);
+    await advance(STEP);
+    expect(reads).toBe(2);
+    // Two in a row: four steps.
+    await advance(STEP * 3);
+    expect(reads).toBe(2);
+    await advance(STEP);
+    expect(reads).toBe(3);
+    // Three: eight steps.
+    await advance(STEP * 7);
+    expect(reads).toBe(3);
+    await advance(STEP);
+    expect(reads).toBe(4);
+    // Four: sixteen steps asked for, fifteen allowed.
+    expect(refreshBackoff(STEP, 4)).toBe(PLAN_REFRESH_MAX_BACKOFF_MS);
+    failing = false;
+    await advance(STEP * 14);
+    expect(reads).toBe(4);
+    await advance(STEP);
+    expect(reads).toBe(5);
+    // A read that answers puts it back on the interval.
+    await advance(STEP);
+    expect(reads).toBe(6);
+    await advance(STEP);
+    expect(reads).toBe(7);
+    stop();
+  });
+
+  test("a read that throws counts as a failure and never stops the loop", async () => {
+    jest.useFakeTimers();
+    let reads = 0;
+    const stop = watchUsageRefresh({
+      read: () => {
+        reads += 1;
+        throw new Error("engine went away");
+      },
+      reading: () => false,
+      visible: () => true,
+      cacheFresh: () => false,
+      readAt: () => Date.now(),
+      everyMs: EVERY,
+      onChange: () => () => {},
+    });
+    await advance(EVERY);
+    expect(reads).toBe(1);
+    // Backed off to two intervals.
+    await advance(EVERY);
+    expect(reads).toBe(1);
+    await advance(EVERY);
+    expect(reads).toBe(2);
+    stop();
   });
 
   afterEach(() => {
