@@ -239,11 +239,34 @@ pub(crate) async fn complete_onboarding() -> Result<Value, agent_client_protocol
 /// clients that have it, under the thread's own session id.
 struct AcpClientSink {
     clients: SessionClients,
+    /// The turn running, kept for a client that opens the thread mid-turn.
+    turn: std::sync::Mutex<Option<super::clients::LiveTurn>>,
+}
+
+impl AcpClientSink {
+    fn new(clients: SessionClients) -> Self {
+        Self {
+            clients,
+            turn: std::sync::Mutex::new(None),
+        }
+    }
 }
 
 impl ClientSink for AcpClientSink {
     fn update(&self, update: SessionUpdate) {
         let _ = self.clients.update(update);
+    }
+
+    fn turn_started(&self, history: usize, prompt: String) {
+        let turn = self.clients.begin_turn(history, Some(prompt));
+        *self.turn.lock().unwrap_or_else(|error| error.into_inner()) = Some(turn);
+    }
+
+    fn turn_ended(&self) {
+        self.turn
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
     }
 
     fn activity(&self, activity: harness::background::Activity) {
@@ -337,12 +360,7 @@ pub(crate) async fn new_session(
         &super::session_workspace(cwd, request.additional_directories.clone()),
     );
     let clients = peer.attach(&session_id);
-    let sink = remote.wrap_sink(
-        Arc::new(AcpClientSink {
-            clients: clients.clone(),
-        }),
-        &session_id,
-    );
+    let sink = remote.wrap_sink(Arc::new(AcpClientSink::new(clients.clone())), &session_id);
     let session = ExternalSession::new(
         session_id.clone(),
         resolved.clone(),
@@ -446,9 +464,7 @@ pub(crate) async fn load_session(
         // The loading client gets the thread's updates; the replay below goes
         // to it alone.
         let sink = remote.wrap_sink(
-            Arc::new(AcpClientSink {
-                clients: peer.attach(&session_id),
-            }),
+            Arc::new(AcpClientSink::new(peer.attach(&session_id))),
             &session_id,
         );
         let session = ExternalSession::new(
@@ -494,6 +510,66 @@ pub(crate) async fn load_session(
             &resolved,
             account.as_ref(),
             orchestrated,
+        )))
+}
+
+/// `session/load` of a thread already open in this engine, perhaps mid-turn:
+/// `peer` joins the clients that have it. It is sent the transcript from
+/// before the running turn, what the turn sent so far, then the rest live.
+pub(crate) async fn attach_open(
+    session: &Arc<ExternalSession>,
+    request: &LoadSessionRequest,
+    peer: &Peer,
+) -> Result<LoadSessionResponse, agent_client_protocol::Error> {
+    let session_id = session.id.clone();
+    let cwd = super::canonical_acp_cwd(&request.cwd, "session/load")?;
+    if std::fs::canonicalize(&session.cwd).ok().as_ref() != Some(&cwd) {
+        return Err(failure(
+            "session/load cwd does not match the open thread".to_owned(),
+        ));
+    }
+    super::attach_with_replay(
+        peer,
+        &session_id,
+        || {
+            let history = rustcode_core::History::from(session.recorded_history());
+            async move { history }
+        },
+        |history| harness::transcript::replay(history, Some(&cwd)),
+    )
+    .await?;
+    let record = session.record();
+    let mut updates = Vec::new();
+    if let Some(usage) = record
+        .usage
+        .clone()
+        .and_then(|usage| serde_json::from_value::<SessionUpdate>(usage).ok())
+    {
+        updates.push(usage);
+    }
+    if let Some(title) = record
+        .title
+        .clone()
+        .filter(|title| !title.trim().is_empty())
+    {
+        updates.push(SessionUpdate::SessionInfoUpdate(
+            SessionInfoUpdate::new().title(title),
+        ));
+    }
+    for update in updates {
+        let _ = peer
+            .connection()
+            .send_notification(SessionNotification::new(session_id.clone(), update));
+    }
+    let account = harness::config::config_dir().ok().and_then(|dir| {
+        harness::config::account_for_load(&harness::config::load_accounts_in(&dir), &record)
+    });
+    Ok(LoadSessionResponse::new()
+        .config_options(session.config_options().await)
+        .meta(harness::session_meta_for(
+            &session.harness,
+            account.as_ref(),
+            session.orchestrated(),
         )))
 }
 
@@ -634,12 +710,7 @@ pub(crate) async fn switch(
     history.push(marker);
 
     let clients = peer.attach(&session_id);
-    let sink = remote.wrap_sink(
-        Arc::new(AcpClientSink {
-            clients: clients.clone(),
-        }),
-        &session_id,
-    );
+    let sink = remote.wrap_sink(Arc::new(AcpClientSink::new(clients.clone())), &session_id);
     let session = ExternalSession::new(
         session_id.clone(),
         resolved.clone(),

@@ -13,6 +13,10 @@
 //!
 //! What runs (sessions, turns, harness processes) belongs to the engine, not
 //! to a connection: closing one only forgets it here.
+//!
+//! While a turn runs, what it sent is kept here too ([`LiveTurn`]): a client
+//! that loads the session mid-turn gets the transcript from before the turn,
+//! then what the turn sent so far, then the rest live ([`Peer::attach_open`]).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -108,18 +112,91 @@ struct Entry {
     topics: HashSet<Topic>,
 }
 
+/// Most updates a running turn keeps for a client that loads it mid-turn.
+/// Text streams as many small chunks; consecutive ones are joined, so this is
+/// reached only by a turn of thousands of tool calls. Past it the turn is
+/// replayed from the history instead.
+const LIVE_TURN_UPDATES: usize = 20_000;
+
+/// The turn running in a session, for a client that loads it mid-turn.
+struct Turn {
+    /// How many history messages the session had when the turn began.
+    base: usize,
+    /// What the turn sent since, its prompt first.
+    updates: Vec<SessionUpdate>,
+}
+
+impl Turn {
+    fn record(&mut self, update: &SessionUpdate) {
+        if let Some(last) = self.updates.last_mut()
+            && join_text(last, update)
+        {
+            return;
+        }
+        self.updates.push(update.clone());
+    }
+}
+
+/// Append `next` to `last` when both are text of the same message.
+fn join_text(last: &mut SessionUpdate, next: &SessionUpdate) -> bool {
+    use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk};
+    fn text_of(chunk: &ContentChunk) -> Option<&str> {
+        match &chunk.content {
+            ContentBlock::Text(text)
+                if chunk.meta.is_none() && text.meta.is_none() && text.annotations.is_none() =>
+            {
+                Some(&text.text)
+            }
+            _ => None,
+        }
+    }
+    let (last, next) = match (last, next) {
+        (SessionUpdate::AgentMessageChunk(last), SessionUpdate::AgentMessageChunk(next))
+        | (SessionUpdate::AgentThoughtChunk(last), SessionUpdate::AgentThoughtChunk(next)) => {
+            (last, next)
+        }
+        _ => return false,
+    };
+    if last.message_id != next.message_id || text_of(last).is_none() {
+        return false;
+    }
+    let Some(more) = text_of(next) else {
+        return false;
+    };
+    if let ContentBlock::Text(text) = &mut last.content {
+        text.text.push_str(more);
+    }
+    true
+}
+
 #[derive(Default)]
 struct Registry {
     next_id: ClientId,
     /// Orders attaches and connects: the newest one answers a request.
     clock: u64,
     entries: HashMap<ClientId, Entry>,
+    /// The turn each session runs, if any.
+    turns: HashMap<String, Turn>,
+    /// Bumped whenever a session's turn starts, ends or stops being kept:
+    /// a replay built from the history checks nothing moved under it.
+    generations: HashMap<String, u64>,
 }
 
 impl Registry {
     fn tick(&mut self) -> u64 {
         self.clock += 1;
         self.clock
+    }
+
+    fn bump(&mut self, session_id: &str) {
+        *self.generations.entry(session_id.to_owned()).or_default() += 1;
+    }
+
+    fn generation(&self, session_id: &str) -> u64 {
+        self.generations
+            .get(session_id)
+            .copied()
+            .unwrap_or_default()
     }
 
     fn entry(&mut self, id: ClientId, connection: &ConnectionTo<Client>) -> &mut Entry {
@@ -198,8 +275,7 @@ impl Clients {
     }
 
     /// How many clients are connected.
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
+    pub(crate) fn count(&self) -> usize {
         self.registry().entries.len()
     }
 
@@ -229,9 +305,30 @@ impl Clients {
 
     /// The session closed: no connection has it any more.
     pub(crate) fn forget_session(&self, session_id: &str) {
-        for entry in self.registry().entries.values_mut() {
+        let mut registry = self.registry();
+        for entry in registry.entries.values_mut() {
             entry.sessions.remove(session_id);
         }
+        registry.turns.remove(session_id);
+        registry.generations.remove(session_id);
+    }
+
+    /// Where `session_id`'s turn is: a generation that changes whenever a
+    /// turn starts or ends, and while one runs, how many history messages
+    /// came before it. A replay built from those is current for as long as
+    /// the generation is.
+    pub(crate) fn turn_marker(&self, session_id: &str) -> (u64, Option<usize>) {
+        let registry = self.registry();
+        (
+            registry.generation(session_id),
+            registry.turns.get(session_id).map(|turn| turn.base),
+        )
+    }
+
+    /// Whether a turn runs in `session_id` (tests).
+    #[cfg(test)]
+    pub(crate) fn turn_running(&self, session_id: &str) -> bool {
+        self.registry().turns.contains_key(session_id)
     }
 
     /// `id` also gets the notifications of `topic`.
@@ -283,12 +380,7 @@ impl Clients {
 
     /// The connections that have `session_id`.
     fn audience(&self, session_id: &str) -> Vec<ConnectionTo<Client>> {
-        self.registry()
-            .entries
-            .values()
-            .filter(|entry| entry.sessions.contains_key(session_id))
-            .map(|entry| entry.connection.clone())
-            .collect()
+        audience_of(&self.registry(), session_id)
     }
 
     /// The connection that most recently attached `session_id` and has `need`.
@@ -304,6 +396,51 @@ impl Clients {
             .filter_map(|entry| Some((entry.sessions.get(session_id)?, entry)))
             .max_by_key(|(at, _)| **at)
             .map(|(_, entry)| entry.connection.clone())
+    }
+}
+
+fn audience_of(registry: &Registry, session_id: &str) -> Vec<ConnectionTo<Client>> {
+    registry
+        .entries
+        .values()
+        .filter(|entry| entry.sessions.contains_key(session_id))
+        .map(|entry| entry.connection.clone())
+        .collect()
+}
+
+/// Send `notification` to each of `connections`. It fails only when every
+/// connection it was sent to failed; with none it goes nowhere.
+fn send_all<N: JsonRpcNotification>(
+    connections: Vec<ConnectionTo<Client>>,
+    notification: N,
+) -> Result<(), agent_client_protocol::Error> {
+    let mut failure = None;
+    let mut delivered = false;
+    for connection in connections {
+        match connection.send_notification(notification.clone()) {
+            Ok(()) => delivered = true,
+            Err(error) => failure = Some(error),
+        }
+    }
+    match failure {
+        Some(error) if !delivered => Err(error),
+        _ => Ok(()),
+    }
+}
+
+/// A turn running in one session; dropping it ends the turn's record.
+#[must_use = "the turn is recorded until this drops"]
+pub(crate) struct LiveTurn {
+    clients: Clients,
+    session_id: String,
+}
+
+impl Drop for LiveTurn {
+    fn drop(&mut self) {
+        let mut registry = self.clients.registry();
+        if registry.turns.remove(&self.session_id).is_some() {
+            registry.bump(&self.session_id);
+        }
     }
 }
 
@@ -340,6 +477,49 @@ impl Peer {
         self.clients.attach(self.id, session_id);
         self.clients.session(session_id)
     }
+
+    /// This client loads `session_id`, which is already open, possibly
+    /// mid-turn. `replay` is the transcript up to the running turn (the whole
+    /// history when none runs), built for `generation` of
+    /// [`Clients::turn_marker`]. Sent first, then what the turn sent so far,
+    /// then every update live, in that order.
+    ///
+    /// `false`, with nothing sent, when a turn started or ended since
+    /// `generation`: the replay is stale and has to be built again. `None`
+    /// skips the check.
+    pub(crate) fn attach_open(
+        &self,
+        session_id: &str,
+        generation: Option<u64>,
+        replay: Vec<SessionUpdate>,
+    ) -> Result<bool, agent_client_protocol::Error> {
+        let mut registry = self.clients.registry();
+        if generation.is_some_and(|generation| generation != registry.generation(session_id)) {
+            return Ok(false);
+        }
+        // A client that has gone is not brought back by a late load.
+        if !registry.entries.contains_key(&self.id) {
+            return Ok(true);
+        }
+        // Sent under the registry's lock, which every session update takes
+        // to find its audience: nothing reaches this client between the
+        // replay and the live updates, and nothing is sent twice. Sending
+        // only queues the message.
+        let running = registry
+            .turns
+            .get(session_id)
+            .map(|turn| turn.updates.clone())
+            .unwrap_or_default();
+        for update in replay.into_iter().chain(running) {
+            self.connection
+                .send_notification(SessionNotification::new(session_id.to_owned(), update))?;
+        }
+        let at = registry.tick();
+        if let Some(entry) = registry.entries.get_mut(&self.id) {
+            entry.sessions.insert(session_id.to_owned(), at);
+        }
+        Ok(true)
+    }
 }
 
 /// The clients that have one session: where its updates and its requests go.
@@ -363,23 +543,73 @@ impl SessionClients {
         &self,
         notification: N,
     ) -> Result<(), agent_client_protocol::Error> {
-        let mut failure = None;
-        let mut delivered = false;
-        for connection in self.clients.audience(&self.session_id) {
-            match connection.send_notification(notification.clone()) {
-                Ok(()) => delivered = true,
-                Err(error) => failure = Some(error),
-            }
-        }
-        match failure {
-            Some(error) if !delivered => Err(error),
-            _ => Ok(()),
-        }
+        send_all(self.clients.audience(&self.session_id), notification)
     }
 
-    /// A `session/update` of this session.
+    /// A `session/update` of this session. A running turn keeps it for a
+    /// client that loads the session later in the turn.
     pub(crate) fn update(&self, update: SessionUpdate) -> Result<(), agent_client_protocol::Error> {
-        self.notify(SessionNotification::new(self.session_id.clone(), update))
+        let audience = {
+            // Recorded and addressed under one lock: a client attaching
+            // meanwhile gets the update either in its replay or live, never
+            // both and never neither.
+            let mut registry = self.clients.registry();
+            let mut overflow = false;
+            if let Some(turn) = registry.turns.get_mut(&self.session_id) {
+                turn.record(&update);
+                overflow = turn.updates.len() > LIVE_TURN_UPDATES;
+            }
+            if overflow {
+                registry.turns.remove(&self.session_id);
+                registry.bump(&self.session_id);
+            }
+            audience_of(&registry, &self.session_id)
+        };
+        send_all(
+            audience,
+            SessionNotification::new(self.session_id.clone(), update),
+        )
+    }
+
+    /// A `session/update` for every connection with the session except
+    /// `except`, which already shows it (the prompt it sent).
+    pub(crate) fn update_others(&self, except: ClientId, update: SessionUpdate) {
+        let audience = self
+            .clients
+            .registry()
+            .entries
+            .iter()
+            .filter(|(id, entry)| **id != except && entry.sessions.contains_key(&self.session_id))
+            .map(|(_, entry)| entry.connection.clone())
+            .collect::<Vec<_>>();
+        let _ = send_all(
+            audience,
+            SessionNotification::new(self.session_id.clone(), update),
+        );
+    }
+
+    /// A turn starts: `base` history messages came before it. What it sends
+    /// is kept, `prompt` first, until the returned guard drops.
+    pub(crate) fn begin_turn(&self, base: usize, prompt: Option<String>) -> LiveTurn {
+        use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, TextContent};
+        let updates = prompt
+            .filter(|prompt| !prompt.is_empty())
+            .map(|prompt| {
+                SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(
+                    TextContent::new(prompt),
+                )))
+            })
+            .into_iter()
+            .collect();
+        let mut registry = self.clients.registry();
+        registry
+            .turns
+            .insert(self.session_id.clone(), Turn { base, updates });
+        registry.bump(&self.session_id);
+        LiveTurn {
+            clients: self.clients.clone(),
+            session_id: self.session_id.clone(),
+        }
     }
 
     /// The connection a request about this session goes to.
@@ -492,7 +722,7 @@ mod tests {
         peer.clients().subscribe(peer.id(), Topic::Themes);
         let session = peer.attach("closed-session");
         assert_eq!(
-            clients.len(),
+            clients.count(),
             0,
             "late operations do not recreate the entry"
         );
