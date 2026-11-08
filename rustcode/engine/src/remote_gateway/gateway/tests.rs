@@ -1238,12 +1238,18 @@ async fn a_wrong_code_ends_the_request_and_counts_against_the_host() {
         let frame = Client::pair(harness.addr, "code", "0000-0000").await;
         assert_eq!(frame["code"], "pairing_failed", "{frame}");
     }
-    let (mut phone, id) = Client::ask_to_connect(harness.addr, None).await;
-    let answer = harness.answer(&id, true).await;
-    assert!(answer.locked_for_secs.is_some());
-    assert_eq!(phone.next_json().await["type"], "connect_approved");
-    phone.send_code(answer.code.unwrap().expose()).await;
-    phone.expect_error("rate_limited").await;
+    let (phone, id) = Client::ask_to_connect(harness.addr, None).await;
+    let answer = bounded(harness.lifecycle.answer_connect_request(&id, true)).await;
+    assert!(answer.is_err());
+    assert!(answer.unwrap_err().to_string().contains("pairing is locked"));
+    let status = harness.status().await;
+    assert_eq!(status.connect_requests.len(), 1);
+    assert_eq!(
+        status.connect_requests[0].state,
+        crate::remote_gateway::connect::RequestState::Pending
+    );
+    assert!(!status.pairing_open);
+    drop(phone);
     harness.stop().await;
 }
 

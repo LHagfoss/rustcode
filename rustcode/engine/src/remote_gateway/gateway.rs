@@ -465,6 +465,12 @@ impl Shared {
         if request.state != RequestState::Pending {
             return Err("that connection request was already accepted".into());
         }
+        if let Some(retry_after) = state.pairing.lockout(now) {
+            return Err(format!(
+                "pairing is locked for {} seconds after too many failed codes",
+                retry_after.as_secs().max(1)
+            ));
+        }
         replace_approved(&mut state, now);
         let offer = state.pairing.issue_bound(now, Some(id.to_owned()));
         state.connect.approve(now, id, now + offer.lifetime);
