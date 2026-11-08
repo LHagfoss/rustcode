@@ -2678,6 +2678,42 @@ describe("list_harnesses on a harness with hundreds of models", () => {
     expect(said).toContain("no harness “nope”");
     expect(said).toContain("codex");
   });
+
+  test("a display name two harnesses share is refused, and an id decides", async () => {
+    const caller = await ready();
+    withModels(many(3));
+    // Two harnesses the user wrote by hand, with one display name between them.
+    const snapshot = useApp.getState().harnesses as HarnessSnapshot;
+    const codex = snapshot.harnesses.find((h) => h.id === "codex")!;
+    useApp.setState({
+      harnesses: {
+        ...snapshot,
+        harnesses: [
+          ...snapshot.harnesses,
+          { ...codex, id: "twin-a", name: "Twin", known: false },
+          { ...codex, id: "twin-b", name: "Twin", known: false },
+        ],
+      },
+    });
+    const refused = await answerOrchestration({
+      sessionId: caller,
+      tool: "list_harnesses",
+      args: { harness: "Twin" },
+    });
+    const said = (refused.error as { message?: string } | undefined)?.message ?? "";
+    expect(said).toContain("names 2 harnesses");
+    expect(said).toContain("twin-a, twin-b");
+    // The id is exact, so it answers that one alone.
+    expect((await listed(caller, { harness: "twin-b" })).map((h) => h.id)).toEqual(["twin-b"]);
+  });
+
+  test("never leads with a model the harness does not list", async () => {
+    const caller = await ready();
+    // Remembered from an engine that listed it, but this listing no longer has it.
+    withModels(many(4), "vendor/gone");
+    const codex = (await listed(caller)).find((h) => h.id === "codex")!;
+    expect(codex.models!.map((m) => m.id)).toEqual(["vendor/m00", "vendor/m01", "vendor/m02", "vendor/m03"]);
+  });
 });
 
 describe("model picker", () => {

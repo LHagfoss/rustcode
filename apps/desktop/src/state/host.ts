@@ -19,7 +19,7 @@ import {
   parsePullState,
   pullErrorTitle,
 } from "../acp/rustcode";
-import { type Harness, type HarnessModel, Method, projectName } from "../acp/types";
+import { type Harness, type HarnessModel, type HarnessSnapshot, Method, projectName } from "../acp/types";
 import { V2Method } from "../acp/v2";
 import { hasShell, shellCall } from "../lib/shell";
 import { childTitle, titleFrom } from "../lib/title";
@@ -775,7 +775,10 @@ function orderedModels(
   used: string[],
   filter: string | undefined,
 ): HarnessModel[] {
-  const lead = [configured, ...used].filter((id): id is string => !!id);
+  // Only the models it lists lead: a remembered one this listing no longer has
+  // is not offered.
+  const ids = new Set(h.models.map((m) => m.id));
+  const lead = [configured, ...used].filter((id): id is string => !!id && ids.has(id));
   const rank = new Map<string, number>();
   for (const id of lead) if (!rank.has(id)) rank.set(id, rank.size);
   const models = filter ? h.models.filter((m) => matchesModel(m, filter)) : [...h.models];
@@ -802,11 +805,16 @@ async function listHarnesses(
   const signedOut = useApp.getState().signedOutLogins;
   await Promise.all(harnesses.filter((h) => !unavailableReason(h)).map((h) => ensureHarnessModels(h.id)));
   const fresh = useApp.getState().harnesses?.harnesses ?? harnesses;
+  // The models a listing just brought in are the ones on record now, so the
+  // choice a new thread starts on is restored against those, not the snapshot
+  // taken before the ask.
+  const current: HarnessSnapshot | undefined = snapshot ? { ...snapshot, harnesses: fresh } : undefined;
   const wanted = asked.harness?.toLowerCase();
-  const listed = wanted
-    ? fresh.filter((h) => h.id.toLowerCase() === wanted || h.name.toLowerCase() === wanted)
-    : fresh;
-  if (wanted && !listed.length) {
+  // An id is exact and wins; a display name may be shared by a harness the user
+  // added, so several matches are refused rather than one picked silently.
+  const byId = wanted ? fresh.filter((h) => h.id.toLowerCase() === wanted) : fresh;
+  const named = wanted && !byId.length ? fresh.filter((h) => h.name.toLowerCase() === wanted) : byId;
+  if (wanted && !named.length) {
     return failureJson(
       failure(
         "invalid",
@@ -814,13 +822,22 @@ async function listHarnesses(
       ),
     );
   }
+  if (wanted && named.length > 1) {
+    return failureJson(
+      failure(
+        "invalid",
+        `“${asked.harness}” names ${named.length} harnesses; pass the id: ${named.map((h) => h.id).join(", ")}`,
+      ),
+    );
+  }
+  const listed = named;
   const filter = asked.model?.toLowerCase();
   const used = usedModels(caller);
   // What a new thread on each harness starts with: the same rule the composer uses.
   const remembered = localChoices();
   const efforts = effortMemory();
-  const configuredModels = snapshot
-    ? new Map(fresh.map((h) => [h.id, restoreChoice(snapshot, h.id, remembered, efforts).model]))
+  const configuredModels = current
+    ? new Map(fresh.map((h) => [h.id, restoreChoice(current, h.id, remembered, efforts).model]))
     : undefined;
   // Each login's plan windows come from the cache Settings › Usage and the
   // composer's meter fill, never from a read this call starts: a model's tool
