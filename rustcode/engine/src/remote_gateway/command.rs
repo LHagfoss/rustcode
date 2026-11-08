@@ -107,33 +107,40 @@ pub async fn serve(
     )
     .await?;
     let port = gateway.local_addr().port();
+    let initial_bind = gateway.local_addr().ip();
+    let initial_loopback = plan.advertise.is_loopback();
     let gateway_id = gateway.gateway_id().to_owned();
     // Bonjour is announced only while a phone could reach the address. The
-    // announcement is shared so shutdown can withdraw it and wait for the
-    // goodbye before the process exits.
-    let discovery = Arc::new(std::sync::Mutex::new(Advertisement::start(
-        port,
-        plan.advertise.is_loopback(),
-        &gateway_id,
-    )));
+    // listener interface scopes both the announcement and its resolved IPs.
+    // The task owns the responder and awaits its goodbye on every exit path.
     let mut advertised = gateway.advertised_changes();
+    let mut listen_address = gateway.listen_address_changes();
+    let discovery_shutdown = gateway.shutdown_token();
     let announce = {
-        let discovery = Arc::clone(&discovery);
         async move {
-            let mut loopback = plan.advertise.is_loopback();
-            while advertised.changed().await.is_ok() {
-                let now = advertised.borrow_and_update().host().is_loopback();
-                if now != loopback {
-                    loopback = now;
-                    let next = Advertisement::start(port, loopback, &gateway_id);
-                    // The one replaced withdraws itself as it drops.
-                    *discovery
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = next;
+            let mut bind = initial_bind;
+            let mut loopback = initial_loopback;
+            let mut advertisement = Advertisement::start(port, bind, loopback, &gateway_id);
+            loop {
+                tokio::select! {
+                    changed = advertised.changed() => if changed.is_err() { break; },
+                    changed = listen_address.changed() => if changed.is_err() { break; },
+                    _ = discovery_shutdown.cancelled() => break,
+                }
+                let next_loopback = advertised.borrow_and_update().host().is_loopback();
+                let next_bind = *listen_address.borrow_and_update();
+                if next_bind != bind || next_loopback != loopback {
+                    if let Some(current) = advertisement.take() {
+                        current.stop().await;
+                    }
+                    bind = next_bind;
+                    loopback = next_loopback;
+                    advertisement = Advertisement::start(port, bind, loopback, &gateway_id);
                 }
             }
-            // The announcement stays up when the address can no longer change.
-            std::future::pending::<()>().await
+            if let Some(advertisement) = advertisement {
+                advertisement.stop().await;
+            }
         }
     };
     let plan = ListenPlanSummary {
@@ -165,26 +172,23 @@ pub async fn serve(
     let run = gateway.run();
     tokio::pin!(run);
     tokio::pin!(announce);
-    let restart = tokio::select! {
-        result = &mut run => return result,
-        _ = &mut announce => false,
-        _ = tokio::signal::ctrl_c() => false,
-        _ = &mut terminate => false,
-        _ = &mut upgraded => true,
+    let (restart, run_result, announcement_finished) = tokio::select! {
+        result = &mut run => (false, Some(result), false),
+        _ = &mut announce => (false, None, true),
+        _ = tokio::signal::ctrl_c() => (false, None, false),
+        _ = &mut terminate => (false, None, false),
+        _ = &mut upgraded => (true, None, false),
     };
-    // Let the gateway close its connections and remove its registration,
-    // and phones drop it from their nearby list at once.
+    // Let the gateway close its connections and the responder send its
+    // goodbye, including when `remote stop` made `run` finish first.
     shutdown.cancel();
-    let advertisement = discovery
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .take();
-    let withdraw = async move {
-        if let Some(advertisement) = advertisement {
-            advertisement.stop().await;
-        }
+    if !announcement_finished {
+        announce.await;
+    }
+    let result = match run_result {
+        Some(result) => result,
+        None => run.await,
     };
-    let (result, ()) = tokio::join!(&mut run, withdraw);
     result?;
     if restart && std::env::var_os("RUSTCODE_REMOTE_MANAGED").is_none() {
         let launcher = super::owner_client::Launcher {

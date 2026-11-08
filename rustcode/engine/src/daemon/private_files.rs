@@ -2,9 +2,8 @@
 //! scheduler daemon and the remote gateway.
 //!
 //! On Unix every file is created 0600 in a 0700 directory and opened without
-//! following a final symlink. Windows has no mode bits: the files live in the
-//! user's profile, whose inherited ACL already admits only that user (and the
-//! system and administrators), the same protection `credentials.json` has.
+//! following a final symlink. Windows has no mode bits, so private directories
+//! get a protected owner-only DACL that their files inherit.
 use anyhow::{Context, Result, ensure};
 use serde::{Serialize, de::DeserializeOwned};
 use std::fs::{self, File, OpenOptions};
@@ -37,6 +36,9 @@ pub(crate) fn publish_private_json<T: Serialize>(path: &Path, value: &T) -> Resu
     let parent = path
         .parent()
         .context("registration requires parent directory")?;
+    #[cfg(windows)]
+    ensure_private_directory(parent, "private file")?;
+    #[cfg(not(windows))]
     create_private_directory(parent)?;
     let mut file = tempfile::NamedTempFile::new_in(parent)?;
     #[cfg(unix)]
@@ -70,12 +72,13 @@ pub(crate) fn ensure_private_directory(directory: &Path, owner: &str) -> Result<
         metadata.is_dir() && owner_only(&metadata),
         "{owner} directory must be private (0700)"
     );
+    #[cfg(windows)]
+    set_private_windows_dacl(directory)?;
     Ok(())
 }
 
 /// Whether neither group nor others have any access (Unix mode bits). On
-/// Windows the profile's inherited ACL is what keeps others out, so there is
-/// nothing to check here.
+/// Windows `ensure_private_directory` applies the protected DACL separately.
 pub(crate) fn owner_only(metadata: &fs::Metadata) -> bool {
     #[cfg(unix)]
     return metadata.permissions().mode() & 0o077 == 0;
@@ -178,6 +181,55 @@ pub(crate) fn process_start_time(pid: u32) -> Result<Option<u64>> {
     Err(error.into())
 }
 
+/// Use the process creation FILETIME on Windows. `sysinfo::Process::start_time`
+/// has only second precision, which can mistake a quickly reused PID for a
+/// stale gateway's process.
+#[cfg(target_os = "windows")]
+pub(crate) fn process_start_time(pid: u32) -> Result<Option<u64>> {
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, ERROR_INVALID_PARAMETER, FILETIME, GetLastError,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    if pid == 0 {
+        return Ok(None);
+    }
+    // SAFETY: OpenProcess has no pointer arguments; the PID is supplied by the
+    // private registration and may simply no longer exist.
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if process.is_null() {
+        // SAFETY: GetLastError has no preconditions.
+        let error = unsafe { GetLastError() };
+        if error == ERROR_INVALID_PARAMETER {
+            return Ok(None);
+        }
+        return Err(std::io::Error::from_raw_os_error(error as i32).into());
+    }
+
+    let mut creation = FILETIME::default();
+    let mut exit = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    // SAFETY: all output pointers refer to initialized FILETIME storage and the
+    // process handle is valid until it is closed below.
+    let succeeded =
+        unsafe { GetProcessTimes(process, &mut creation, &mut exit, &mut kernel, &mut user) };
+    if succeeded == 0 {
+        // SAFETY: GetLastError has no preconditions.
+        let error = unsafe { GetLastError() };
+        // SAFETY: process is the valid handle returned by OpenProcess.
+        unsafe { CloseHandle(process) };
+        return Err(std::io::Error::from_raw_os_error(error as i32).into());
+    }
+    // SAFETY: process is the valid handle returned by OpenProcess.
+    unsafe { CloseHandle(process) };
+    Ok(Some(
+        (u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime),
+    ))
+}
+
 #[cfg(target_os = "linux")]
 pub(crate) fn process_start_time(pid: u32) -> Result<Option<u64>> {
     let stat = match fs::read_to_string(format!("/proc/{pid}/stat")) {
@@ -196,8 +248,68 @@ pub(crate) fn process_start_time(pid: u32) -> Result<Option<u64>> {
     ))
 }
 
+#[cfg(windows)]
+fn set_private_windows_dacl(directory: &Path) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{GetLastError, LocalFree};
+    use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
+    use windows_sys::Win32::Security::{
+        DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+        SetFileSecurityW,
+    };
+
+    let path: Vec<u16> = directory
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // Protect the DACL from parent inheritance and grant full control only to
+    // the owner of each object. OI/CI carry that rule to endpoint files.
+    let sddl: Vec<u16> = "D:P(A;OICI;FA;;;OW)"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    // SAFETY: both UTF-16 inputs are NUL-terminated and descriptor is a valid
+    // output pointer. The returned descriptor is freed with LocalFree below.
+    if unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(),
+            1,
+            &mut descriptor,
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
+        // SAFETY: GetLastError has no preconditions.
+        return Err(std::io::Error::from_raw_os_error(unsafe { GetLastError() } as i32).into());
+    }
+
+    // SAFETY: path and descriptor are valid for this call. This replaces the
+    // existing directory DACL instead of relying on the profile's inheritance.
+    let succeeded = unsafe {
+        SetFileSecurityW(
+            path.as_ptr(),
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            descriptor,
+        )
+    };
+    let error = if succeeded == 0 {
+        // SAFETY: GetLastError has no preconditions.
+        Some(std::io::Error::from_raw_os_error(
+            unsafe { GetLastError() } as i32
+        ))
+    } else {
+        None
+    };
+    // SAFETY: ConvertStringSecurityDescriptorToSecurityDescriptorW allocated
+    // this descriptor with LocalAlloc.
+    unsafe { LocalFree(descriptor.cast()) };
+    error.map_or(Ok(()), |error| Err(error.into()))
+}
+
 /// Seconds since the epoch, from the process's creation time.
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 pub(crate) fn process_start_time(pid: u32) -> Result<Option<u64>> {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
     let pid = Pid::from_u32(pid);

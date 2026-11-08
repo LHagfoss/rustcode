@@ -116,10 +116,12 @@ impl Incoming {
 /// file. Built on every platform so its tests run wherever the suite does.
 #[cfg_attr(unix, allow(dead_code))]
 pub(crate) mod loopback {
+    use crate::daemon::private_files::process_start_time;
     use crate::daemon::private_files::{publish_private_json, read_private_json};
+    use anyhow::Context;
     use serde::{Deserialize, Serialize};
     use std::net::Ipv4Addr;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -135,11 +137,14 @@ pub(crate) mod loopback {
     struct Endpoint {
         port: u16,
         token: String,
+        pid: u32,
+        process_start_time: u64,
     }
 
     pub(crate) struct Listener {
         listener: TcpListener,
         token: Arc<str>,
+        path: PathBuf,
     }
 
     impl Listener {
@@ -150,16 +155,21 @@ pub(crate) mod loopback {
             listener.set_nonblocking(true)?;
             let listener = TcpListener::from_std(listener)?;
             let token = hex::encode(rand::random::<[u8; TOKEN_DIGITS / 2]>());
+            let pid = std::process::id();
+            let process_start_time = process_start_time(pid)?.context("current process missing")?;
             publish_private_json(
                 path,
                 &Endpoint {
                     port: listener.local_addr()?.port(),
                     token: token.clone(),
+                    pid,
+                    process_start_time,
                 },
             )?;
             Ok(Self {
                 listener,
                 token: token.into(),
+                path: path.to_path_buf(),
             })
         }
 
@@ -167,6 +177,14 @@ pub(crate) mod loopback {
             let (stream, _) = self.listener.accept().await?;
             let _ = stream.set_nodelay(true);
             Ok((stream, Arc::clone(&self.token)))
+        }
+    }
+
+    impl Drop for Listener {
+        fn drop(&mut self) {
+            // Remove the discoverable endpoint before the listener field is
+            // dropped and its port can be reused by another process.
+            let _ = std::fs::remove_file(&self.path);
         }
     }
 
@@ -198,6 +216,13 @@ pub(crate) mod loopback {
                 Err(error) => std::io::Error::new(std::io::ErrorKind::InvalidData, error),
             }
         })?;
+        let process_start_time = process_start_time(endpoint.pid).map_err(std::io::Error::other)?;
+        if process_start_time != Some(endpoint.process_start_time) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                "the gateway endpoint belongs to a process that is no longer running",
+            ));
+        }
         let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, endpoint.port)).await?;
         let _ = stream.set_nodelay(true);
         stream
@@ -284,12 +309,59 @@ pub(crate) mod loopback {
             let path = directory.path().join("control.endpoint");
             let error = connect(&path).await.unwrap_err();
             assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
-            let first = Listener::bind(&path).unwrap().token;
+            let first = Listener::bind(&path).unwrap().token.clone();
             let second = Listener::bind(&directory.path().join("other"))
                 .unwrap()
-                .token;
+                .token
+                .clone();
             assert_eq!(first.len(), TOKEN_DIGITS);
             assert_ne!(first, second);
+        }
+
+        #[tokio::test]
+        async fn a_stale_endpoint_is_rejected_before_dialing_a_reused_port() {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("control.endpoint");
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            publish_private_json(
+                &path,
+                &Endpoint {
+                    port,
+                    token: "0".repeat(TOKEN_DIGITS),
+                    pid: u32::MAX,
+                    process_start_time: 1,
+                },
+            )
+            .unwrap();
+
+            let error = connect(&path).await.unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::ConnectionRefused);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(10), listener.accept())
+                    .await
+                    .is_err()
+            );
+        }
+
+        #[tokio::test]
+        async fn dropping_a_listener_removes_its_endpoint_before_port_reuse() {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("control.endpoint");
+            let listener = Listener::bind(&path).unwrap();
+            let port = listener.listener.local_addr().unwrap().port();
+
+            drop(listener);
+
+            assert!(!path.exists());
+            let replacement = TcpListener::bind((Ipv4Addr::LOCALHOST, port))
+                .await
+                .unwrap();
+            assert_eq!(
+                connect(&path).await.unwrap_err().kind(),
+                std::io::ErrorKind::NotFound
+            );
+            drop(replacement);
         }
     }
 }

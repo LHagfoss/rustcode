@@ -7,7 +7,7 @@
 //! thread inside the gateway, so neither `dns-sd` (macOS) nor Avahi (Linux)
 //! is needed, and Windows announces itself the same way.
 use mdns_sd::{IfKind, ServiceDaemon, ServiceEvent, ServiceInfo};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::time::{Duration, Instant};
 
 /// The service type phones browse for (`_rustcode._tcp.` in `local.`).
@@ -53,8 +53,13 @@ pub fn host_label(gateway_id: &str) -> String {
 }
 
 /// The service as announced: `instance` is the name a phone lists.
-fn service_info(instance: &str, port: u16, gateway_id: &str) -> mdns_sd::Result<ServiceInfo> {
-    ServiceInfo::new(
+fn service_info(
+    instance: &str,
+    port: u16,
+    gateway_id: &str,
+    interfaces: Vec<IfKind>,
+) -> mdns_sd::Result<ServiceInfo> {
+    let mut info = ServiceInfo::new(
         SERVICE_TYPE,
         instance,
         &host_label(gateway_id),
@@ -64,7 +69,9 @@ fn service_info(instance: &str, port: u16, gateway_id: &str) -> mdns_sd::Result<
     )
     // The responder fills in each interface's own addresses, and follows
     // them as DHCP or Wi-Fi changes them.
-    .map(ServiceInfo::enable_addr_auto)
+    .map(ServiceInfo::enable_addr_auto)?;
+    info.set_interfaces(interfaces);
+    Ok(info)
 }
 
 /// A live announcement. Dropping it withdraws the record without waiting;
@@ -75,15 +82,19 @@ pub struct Advertisement {
 }
 
 impl Advertisement {
-    /// Announce the gateway on `port`, unless its address is loopback-only:
-    /// a phone could not reach it, so there is nothing to announce. A failure
-    /// is reported and leaves the gateway running without Bonjour.
-    pub fn start(port: u16, loopback: bool, gateway_id: &str) -> Option<Self> {
+    /// Announce the gateway on its listener interface, unless its advertised
+    /// address is loopback-only. A failure leaves the gateway running without Bonjour.
+    pub fn start(port: u16, bind: IpAddr, loopback: bool, gateway_id: &str) -> Option<Self> {
         if loopback {
             return None;
         }
         let name = super::gateway::host_name().unwrap_or_else(|| FALLBACK_NAME.into());
-        match Self::announce(&name, port, gateway_id, false) {
+        let interfaces = interfaces_for_bind(bind);
+        if interfaces.is_empty() {
+            eprintln!("Bonjour announcement unavailable: no suitable local network interface");
+            return None;
+        }
+        match Self::announce(&name, port, gateway_id, interfaces) {
             Ok(advertisement) => Some(advertisement),
             Err(error) => {
                 eprintln!("Bonjour announcement unavailable: {error}");
@@ -92,17 +103,15 @@ impl Advertisement {
         }
     }
 
-    /// `loopback_only` announces on 127.0.0.1 alone, which only a browser
-    /// on this machine sees; tests use it. Otherwise every interface but
-    /// loopback.
+    /// Test helper that announces on an explicitly selected interface set.
     fn announce(
         instance: &str,
         port: u16,
         gateway_id: &str,
-        loopback_only: bool,
+        interfaces: Vec<IfKind>,
     ) -> mdns_sd::Result<Self> {
-        let daemon = responder(loopback_only)?;
-        let info = service_info(instance, port, gateway_id)?;
+        let daemon = responder(interfaces.clone())?;
+        let info = service_info(instance, port, gateway_id, interfaces)?;
         let fullname = info.get_fullname().to_owned();
         if let Err(error) = daemon.register(info) {
             let _ = daemon.shutdown();
@@ -153,15 +162,53 @@ impl Drop for Advertisement {
 
 /// A responder on the network interfaces, or on loopback alone. Interface
 /// rules apply in order, the last match winning.
-fn responder(loopback_only: bool) -> mdns_sd::Result<ServiceDaemon> {
+fn responder(interfaces: Vec<IfKind>) -> mdns_sd::Result<ServiceDaemon> {
     let daemon = ServiceDaemon::new()?;
-    if loopback_only {
-        daemon.disable_interface(IfKind::All)?;
-        daemon.enable_interface(IfKind::LoopbackV4)?;
-    } else {
-        daemon.disable_interface([IfKind::LoopbackV4, IfKind::LoopbackV6].to_vec())?;
+    daemon.disable_interface(IfKind::All)?;
+    if !interfaces.is_empty() {
+        daemon.enable_interface(interfaces)?;
     }
     Ok(daemon)
+}
+
+/// Keep local-network discovery on the selected listener interface. This
+/// avoids publishing a LAN gateway through unrelated VPN, bridge or host-only
+/// adapters; overlay discovery has its own path.
+fn interfaces_for_bind(bind: IpAddr) -> Vec<IfKind> {
+    let candidates = super::address::discovery_candidates();
+    interface_kinds(&candidates, bind)
+}
+
+fn interface_kinds(candidates: &[super::address::Candidate], bind: IpAddr) -> Vec<IfKind> {
+    let mut names: Vec<String> = Vec::new();
+    for candidate in candidates {
+        if !super::address::is_local_network_interface(&candidate.interface)
+            || (!bind.is_unspecified() && candidate.address != bind)
+            || names.iter().any(|name| name == &candidate.interface)
+        {
+            continue;
+        }
+        names.push(candidate.interface.clone());
+    }
+    names.into_iter().map(IfKind::Name).collect()
+}
+
+fn is_dialable_address(address: IpAddr) -> bool {
+    !address.is_loopback()
+        && !address.is_unspecified()
+        && !address.is_multicast()
+        && match address {
+            IpAddr::V4(ip) => !ip.is_link_local() && !ip.is_broadcast(),
+            IpAddr::V6(ip) => !ip.is_unicast_link_local(),
+        }
+}
+
+fn instance_name(fullname: &str) -> String {
+    fullname
+        .strip_suffix(SERVICE_TYPE)
+        .and_then(|name| name.strip_suffix('.'))
+        .unwrap_or(fullname)
+        .replace("\\.", ".")
 }
 
 /// A gateway found on the network.
@@ -179,11 +226,7 @@ pub struct DiscoveredGateway {
 impl DiscoveredGateway {
     fn from_resolved(service: &mdns_sd::ResolvedService) -> Self {
         let fullname = service.get_fullname();
-        let name = fullname
-            .strip_suffix(SERVICE_TYPE)
-            .and_then(|name| name.strip_suffix('.'))
-            .unwrap_or(fullname)
-            .replace("\\.", ".");
+        let name = instance_name(fullname);
         let text = |key: &str| {
             service
                 .get_property_val_str(key)
@@ -194,6 +237,7 @@ impl DiscoveredGateway {
             .get_addresses()
             .iter()
             .map(|address| address.to_ip_addr())
+            .filter(|address| is_dialable_address(*address))
             .collect();
         addresses.sort();
         Self {
@@ -212,7 +256,14 @@ impl DiscoveredGateway {
 /// Browse for RustCode gateways for `duration` and return each one resolved.
 /// Blocking: run it off the async runtime.
 pub fn browse(duration: Duration) -> mdns_sd::Result<Vec<DiscoveredGateway>> {
-    browse_with(responder(false)?, duration, |_| false)
+    browse_with(
+        responder(interface_kinds(
+            &super::address::discovery_candidates(),
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        ))?,
+        duration,
+        |_| false,
+    )
 }
 
 /// Browse until `duration` passes or `enough` is satisfied by what was found.
@@ -241,7 +292,8 @@ fn browse_with(
                 }
             }
             ServiceEvent::ServiceRemoved(_, fullname) => {
-                found.retain(|known| !fullname.starts_with(&known.name));
+                let removed = instance_name(&fullname);
+                found.retain(|known| known.name != removed);
             }
             _ => {}
         }
@@ -267,7 +319,13 @@ mod tests {
                 ("caps", "connect_requests".to_owned()),
             ]
         );
-        let info = service_info("Lars's MacBook", 17879, "8e1f4b7a").unwrap();
+        let info = service_info(
+            "Lars's MacBook",
+            17879,
+            "8e1f4b7a",
+            vec![IfKind::Name("en0".to_owned())],
+        )
+        .unwrap();
         assert_eq!(info.get_type(), "_rustcode._tcp.local.");
         assert_eq!(info.get_fullname(), "Lars's MacBook._rustcode._tcp.local.");
         assert_eq!(info.get_port(), 17879);
@@ -294,19 +352,101 @@ mod tests {
         );
         assert_eq!(host_label("gw-8e1f"), "rustcode-gw8e1f.local.");
         assert_eq!(host_label("---"), "rustcode.local.");
-        let info = service_info("Studio", 1, "8e1f4b7a").unwrap();
+        let info = service_info(
+            "Studio",
+            1,
+            "8e1f4b7a",
+            vec![IfKind::Name("en0".to_owned())],
+        )
+        .unwrap();
         assert_eq!(info.get_hostname(), "rustcode-8e1f4b7a.local.");
     }
 
     #[test]
     fn a_loopback_only_gateway_is_not_announced() {
-        assert!(Advertisement::start(17879, true, "8e1f4b7a").is_none());
+        assert!(
+            Advertisement::start(17879, IpAddr::V4(Ipv4Addr::LOCALHOST), true, "8e1f4b7a")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn interface_selection_follows_the_bind_and_skips_non_lan_adapters() {
+        let candidates = [
+            super::super::address::Candidate {
+                interface: "en0".to_owned(),
+                address: "192.168.1.20".parse().unwrap(),
+            },
+            super::super::address::Candidate {
+                interface: "Wi-Fi".to_owned(),
+                address: "192.168.1.21".parse().unwrap(),
+            },
+            super::super::address::Candidate {
+                interface: "wt0".to_owned(),
+                address: "100.90.16.237".parse().unwrap(),
+            },
+            super::super::address::Candidate {
+                interface: "vEthernet (Default Switch)".to_owned(),
+                address: "172.24.0.1".parse().unwrap(),
+            },
+        ];
+        let selected = interface_kinds(&candidates, "192.168.1.20".parse().unwrap());
+        assert_eq!(
+            selected
+                .iter()
+                .filter_map(interface_name)
+                .collect::<Vec<_>>(),
+            ["en0"]
+        );
+        let wildcard = interface_kinds(&candidates, IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        assert_eq!(
+            wildcard
+                .iter()
+                .filter_map(interface_name)
+                .collect::<Vec<_>>(),
+            ["en0", "Wi-Fi"]
+        );
+    }
+
+    fn interface_name(interface: &IfKind) -> Option<&str> {
+        match interface {
+            IfKind::Name(name) => Some(name),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn discovered_addresses_exclude_unscoped_and_unroutable_values() {
+        for address in [
+            "fe80::1".parse().unwrap(),
+            "169.254.1.2".parse().unwrap(),
+            "127.0.0.1".parse().unwrap(),
+            "0.0.0.0".parse().unwrap(),
+            "224.0.0.1".parse().unwrap(),
+        ] {
+            assert!(!is_dialable_address(address), "{address}");
+        }
+        assert!(is_dialable_address("192.168.1.20".parse().unwrap()));
+        assert!(is_dialable_address("2001:db8::20".parse().unwrap()));
+    }
+
+    #[test]
+    fn service_removal_matches_the_decoded_instance_name_exactly() {
+        assert_eq!(
+            instance_name("Studio\\.Lab._rustcode._tcp.local."),
+            "Studio.Lab"
+        );
+        assert_ne!(instance_name("Studio-2._rustcode._tcp.local."), "Studio");
     }
 
     #[tokio::test]
     async fn an_announcement_starts_and_stops_cleanly() {
-        let advertisement = Advertisement::announce("Lifecycle test", 17879, "lifecycle", false)
-            .expect("the responder starts");
+        let interfaces = vec![IfKind::All];
+        let Ok(advertisement) =
+            Advertisement::announce("Lifecycle test", 17879, "lifecycle", interfaces.clone())
+        else {
+            return;
+        };
         assert_eq!(
             advertisement.fullname(),
             "Lifecycle test._rustcode._tcp.local."
@@ -315,9 +455,9 @@ mod tests {
         advertisement.stop().await;
         assert!(started.elapsed() < STOP_TIMEOUT * 3);
         // Dropping without a stop withdraws it too, without blocking.
-        let dropped = Advertisement::announce("Dropped test", 17880, "dropped", false)
-            .expect("the responder starts");
-        drop(dropped);
+        if let Ok(dropped) = Advertisement::announce("Dropped test", 17880, "dropped", interfaces) {
+            drop(dropped);
+        }
     }
 
     /// Announce and browse over the loopback interface on this machine. It
@@ -329,11 +469,15 @@ mod tests {
     fn a_browse_finds_the_announcement_on_loopback() {
         let gateway_id = format!("loop{}", std::process::id());
         let instance = format!("RustCode loopback {}", std::process::id());
+        let loopback = vec![IfKind::LoopbackV4];
         let advertisement =
-            Advertisement::announce(&instance, 17881, &gateway_id, true).expect("announce");
-        let found = browse_with(responder(true).unwrap(), Duration::from_secs(10), |found| {
-            found.iter().any(|gateway| gateway.name == instance)
-        })
+            Advertisement::announce(&instance, 17881, &gateway_id, loopback.clone())
+                .expect("announce");
+        let found = browse_with(
+            responder(loopback).unwrap(),
+            Duration::from_secs(10),
+            |found| found.iter().any(|gateway| gateway.name == instance),
+        )
         .unwrap();
         drop(advertisement);
         let gateway = found

@@ -175,6 +175,8 @@ pub(super) struct Shared {
     pub(super) instance_id: String,
     /// The address pairing details name. Replaced when the listener moves.
     advertised: tokio::sync::watch::Sender<AdvertisedAddress>,
+    /// The local address the listener is bound to, for interface-scoped Bonjour.
+    bind: tokio::sync::watch::Sender<IpAddr>,
     registration: Arc<Mutex<GatewayRegistration>>,
     lifecycle: RemoteLifecycle,
     pub(super) limits: Limits,
@@ -719,6 +721,7 @@ impl Shared {
         }
         println!("address changed: listening on {local}, advertised as {advertised}");
         self.advertised.send_replace(advertised);
+        self.bind.send_replace(next.bind);
         Ok(moved)
     }
 }
@@ -845,6 +848,7 @@ impl Gateway {
             gateway_id,
             instance_id,
             advertised: tokio::sync::watch::Sender::new(advertised),
+            bind: tokio::sync::watch::Sender::new(config.plan.bind),
             registration,
             lifecycle: lifecycle.clone(),
             limits: config.limits,
@@ -891,6 +895,11 @@ impl Gateway {
     /// Follows the advertised address as the listener moves.
     pub fn advertised_changes(&self) -> tokio::sync::watch::Receiver<AdvertisedAddress> {
         self.shared.advertised.subscribe()
+    }
+
+    /// Follows the listener when it moves between network interfaces.
+    pub fn listen_address_changes(&self) -> tokio::sync::watch::Receiver<IpAddr> {
+        self.shared.bind.subscribe()
     }
 
     pub fn gateway_id(&self) -> &str {

@@ -101,6 +101,12 @@ tokio-tungstenite = { version = "0.30.0", default-features = false, features = [
 # Interface addresses for the remote gateway's listen plan; mdns-sd already
 # builds it, with the same features.
 if-addrs = { version = "0.15", features = ["link-local"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Threading",
+] }
 
 # Optimize dependencies even in debug builds — syntect, pulldown-cmark,
 # unicode-width, and tui-markdown are 5-10x slower at opt-level=0 and
