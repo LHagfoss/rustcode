@@ -224,11 +224,15 @@ reconnect <15m  → authenticate {device_id, access_token: A2}
   the whole pairing. The host closes the device's connections with `revoked`,
   answers this attempt with `token_replayed`, and removes the record as if
   revoked. The revocation is written before anything is closed; when the device
-  store cannot be written, it is noted next to it for the next start and
-  retried, and the device is refused in memory either way. The owner sees
-  `remote.token_replayed` in the gateway log. Pair again. A token this host
-  never issued is only `unauthorized`: a guessed `device_id` cannot revoke a
-  device.
+  store cannot be written, it is noted in `remote/revocations.json` for the
+  next start and retried, and the device is refused in memory either way. The
+  owner sees `remote.token_replayed` in the gateway log. Pair again. A token
+  this host never issued is only `unauthorized`: a guessed `device_id` cannot
+  revoke a device. Notes left by a failed write are read and applied before the
+  gateway serves anyone; if that file cannot be read the gateway refuses to
+  start and names it, and never overwrites it, so a revoked family cannot come
+  back. The owner repairs it, or deletes it after revoking the device with
+  `rustcode remote revoke`.
 - Two connections racing with the same refresh token (a client trying several
   routes at once) are not a replay: the first rotates, the second gets the same
   answer, and both are accepted. Keep the answer from the route that stays up;

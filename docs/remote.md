@@ -335,8 +335,12 @@ refresh. Presenting a refresh token the host has already replaced revokes the
 whole pairing: the device's connections close as revoked with
 `token_replayed`, the record is removed as if revoked, and the gateway logs
 `remote.token_replayed` for the owner. The removal is written before anything
-closes; if the device store cannot be written, the revocation is noted next to
-it, retried, and the device is refused meanwhile. Pair again if that was you.
+closes; if the device store cannot be written, the revocation is noted in
+`remote/revocations.json`, retried, and the device is refused meanwhile. That
+note is applied before the gateway serves anyone: if it cannot be read the
+gateway refuses to start and names it, rather than let a revoked family back
+in; repair it, or delete it after `rustcode remote revoke`. Pair again if that
+was you.
 Until the device acknowledges the new token, presenting the previous one again
 is a retry that gets the same tokens back, so a lost acknowledgement never
 locks it out and a copy of the previous token cannot rotate the device's token

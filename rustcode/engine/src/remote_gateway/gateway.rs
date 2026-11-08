@@ -1152,7 +1152,9 @@ impl Gateway {
         let gateway_id = lifecycle.gateway_id(&lock)?;
         let store = lifecycle.device_store();
         let notes = lifecycle.revocation_notes();
-        let devices = apply_revocation_notes(&store, &notes, store.load()?);
+        // Notes a failed revocation write left must be read and applied before
+        // anything is served; an unreadable one stops the gateway instead.
+        let devices = apply_revocation_notes(&store, &notes, store.load()?)?;
         let listener = TcpListener::bind(SocketAddr::new(config.plan.bind, config.port)).await?;
         let local = listener.local_addr()?;
         let advertised = config.plan.advertise.clone().with_port(local.port());

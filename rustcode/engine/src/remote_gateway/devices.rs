@@ -1016,11 +1016,18 @@ impl RevocationNotes {
     }
 
     /// Note `device_id`, replacing the file atomically. A note already there is
-    /// left as it is.
+    /// left as it is. A file that cannot be read fails this and is never
+    /// overwritten: its notes are revocations, and losing one would bring a
+    /// revoked family back.
     pub fn add(&self, device_id: &str) -> Result<()> {
         let mut notes = Notes {
             version: NOTES_VERSION,
-            families: self.load().unwrap_or_default(),
+            families: self.load().with_context(|| {
+                format!(
+                    "refusing to overwrite the unreadable {}",
+                    self.path.display()
+                )
+            })?,
         };
         if notes.families.iter().any(|known| known == device_id) {
             return Ok(());
@@ -1052,20 +1059,23 @@ impl RevocationNotes {
 /// gone from `devices` before the gateway serves anyone, and the store is
 /// rewritten. A store that cannot be rewritten keeps the notes for the next
 /// start, and the families stay refused in memory.
+///
+/// Notes that cannot be read are an error, not something to skip: a family
+/// revoked only in an unreadable note would authenticate again, so the caller
+/// must refuse to serve until the file is dealt with.
 pub fn apply_revocation_notes(
     store: &DeviceStore,
     notes: &RevocationNotes,
     mut devices: Devices,
-) -> Devices {
-    let noted = match notes.load() {
-        Ok(noted) => noted,
-        Err(error) => {
-            crate::dbg_log!("remote gateway: ERROR: cannot read revocation notes: {error:#}");
-            return devices;
-        }
-    };
+) -> Result<Devices> {
+    let noted = notes.load().with_context(|| {
+        format!(
+            "cannot read {}; a family whose revocation could not be written to the device store is recorded there, so the gateway refuses to start rather than let it authenticate again. Repair or delete that file after revoking the affected devices with `rustcode remote revoke`",
+            notes.path().display()
+        )
+    })?;
     if noted.is_empty() {
-        return devices;
+        return Ok(devices);
     }
     let mut removed = false;
     for device_id in &noted {
@@ -1076,7 +1086,7 @@ pub fn apply_revocation_notes(
             "remote gateway: ERROR: could not write the store while applying {} revocation note(s); they stay refused and the notes are kept: {error:#}",
             noted.len()
         );
-        return devices;
+        return Ok(devices);
     }
     if removed {
         crate::dbg_log!(
@@ -1087,7 +1097,7 @@ pub fn apply_revocation_notes(
     if let Err(error) = notes.clear() {
         crate::dbg_log!("remote gateway: could not clear the revocation notes: {error:#}");
     }
-    devices
+    Ok(devices)
 }
 
 /// The owner-only file behind [`Devices`].
@@ -2228,7 +2238,7 @@ mod revocation_note_tests {
 
         // The store is there and the note is there: the family is withdrawn
         // before anything is served, and the store is rewritten.
-        let applied = apply_revocation_notes(&store, &notes, store.load().unwrap());
+        let applied = apply_revocation_notes(&store, &notes, store.load().unwrap()).unwrap();
         assert!(applied.list().is_empty());
         assert!(store.load().unwrap().list().is_empty());
         assert!(notes.load().unwrap().is_empty());
@@ -2247,7 +2257,7 @@ mod revocation_note_tests {
             use std::os::unix::fs::PermissionsExt;
             let remote = store.path().parent().unwrap().to_path_buf();
             std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o500)).unwrap();
-            let applied = apply_revocation_notes(&store, &notes, store.load().unwrap());
+            let applied = apply_revocation_notes(&store, &notes, store.load().unwrap()).unwrap();
             assert!(applied.list().is_empty(), "refused in memory");
             assert!(
                 !store.load().unwrap().list().is_empty(),
@@ -2256,11 +2266,57 @@ mod revocation_note_tests {
             assert_eq!(notes.load().unwrap(), [second_id.clone()]);
             std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o700)).unwrap();
             // Once the directory is writable again, the next start finishes.
-            let applied = apply_revocation_notes(&store, &notes, store.load().unwrap());
+            let applied = apply_revocation_notes(&store, &notes, store.load().unwrap()).unwrap();
             assert!(applied.list().is_empty());
             assert!(store.load().unwrap().list().is_empty());
             assert!(notes.load().unwrap().is_empty());
         }
         let _ = dir;
+    }
+
+    #[test]
+    fn an_unreadable_note_is_never_overwritten_by_a_later_one() {
+        let (_dir, _store, notes) = paths();
+        notes.add("0011223344556677").unwrap();
+        let earlier = std::fs::read_to_string(notes.path()).unwrap();
+        // Damage the file the way a half-written or hand-edited one looks.
+        std::fs::write(notes.path(), "{not json").unwrap();
+        let error = notes.add("8899aabbccddeeff").unwrap_err();
+        assert!(
+            format!("{error:#}").contains("refusing to overwrite"),
+            "{error:#}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(notes.path()).unwrap(),
+            "{not json",
+            "the earlier note must survive"
+        );
+        let _ = earlier;
+        // A note anyone else can read is refused the same way.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(notes.path(), std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(notes.add("8899aabbccddeeff").is_err());
+        }
+    }
+
+    #[test]
+    fn an_unreadable_note_stops_the_notes_from_being_applied() {
+        let (_dir, store, notes) = paths();
+        let mut devices = store.load().unwrap();
+        let enrolled = devices
+            .enroll_rotating("desktop", None, &DeviceProfile::default())
+            .unwrap();
+        store.save(&devices).unwrap();
+        std::fs::write(notes.path(), "not json at all").unwrap();
+
+        let error = apply_revocation_notes(&store, &notes, store.load().unwrap()).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("revocations.json"), "{message}");
+        assert!(message.contains("rustcode remote revoke"), "{message}");
+        // The store is untouched: nothing was applied half-way.
+        assert_eq!(store.load().unwrap().list().len(), 1);
+        assert_eq!(devices.list()[0].id, enrolled.record.id);
     }
 }

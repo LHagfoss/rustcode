@@ -98,6 +98,38 @@ impl Host {
         });
     }
 
+    /// Try to start the gateway and return why it refused, without leaving one
+    /// running. Retries only the ownership lock the stopped gateway may still
+    /// hold for a moment.
+    async fn bind_error(&self) -> anyhow::Error {
+        let config = || {
+            let hub = SessionHub::start(HubLimits::default());
+            GatewayConfig {
+                replan: None,
+                plan: plan_listen("127.0.0.1", None, &[]).unwrap(),
+                port: 0,
+                router: hub.clone(),
+                sessions: Some(hub.clone()),
+                limits: Limits::default(),
+            }
+        };
+        bounded(async {
+            let mut attempts = 0;
+            loop {
+                match Gateway::bind(&self.lifecycle, config()).await {
+                    Ok(_) => panic!("the gateway started when it must refuse"),
+                    Err(error) if error.to_string().contains("revocations.json") => break error,
+                    Err(_) if attempts < 50 => {
+                        attempts += 1;
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                    Err(error) => break error,
+                }
+            }
+        })
+        .await
+    }
+
     async fn stop_gateway(&mut self) {
         let running = self.running.take().expect("a gateway is running");
         running.shutdown.cancel();
@@ -1845,5 +1877,44 @@ async fn a_replay_revokes_in_memory_when_the_store_cannot_be_written() {
     let (_, refused) =
         authenticate_with(&host, &paired, ("refresh_token", &welcome["refresh_token"])).await;
     assert_eq!(refused["code"], "unauthorized", "{refused}");
+    drop(host.dir);
+}
+
+/// Notes left by a failed revocation write must be readable before the gateway
+/// serves anyone: an unreadable note could hide a revoked family, so the
+/// gateway refuses to start and says what to do about it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_gateway_refuses_to_start_on_unreadable_revocation_notes() {
+    let mut host = Host::start().await;
+    let (_phone, paired) = pair_rotating(&host).await;
+    let device_id = paired["device_id"].as_str().unwrap().to_owned();
+    host.stop_gateway().await;
+
+    std::fs::write(host.lifecycle.revocations_path(), "not json at all").unwrap();
+    let error = host.bind_error().await;
+    let message = format!("{error:#}");
+    assert!(message.contains("revocations.json"), "{message}");
+    assert!(message.contains("rustcode remote revoke"), "{message}");
+    // Nothing ran and nothing was changed: the store still lists the device.
+    assert!(
+        host.lifecycle
+            .devices()
+            .unwrap()
+            .iter()
+            .any(|device| device.id == device_id)
+    );
+    assert_eq!(
+        std::fs::read_to_string(host.lifecycle.revocations_path()).unwrap(),
+        "not json at all"
+    );
+
+    // Following the error: delete the note (the owner revokes from the device
+    // list instead when a family must go), and the gateway starts again.
+    std::fs::remove_file(host.lifecycle.revocations_path()).unwrap();
+    host.start_gateway().await;
+    let (mut phone, welcome) =
+        authenticate_with(&host, &paired, ("refresh_token", &paired["refresh_token"])).await;
+    assert_eq!(welcome["type"], "authenticated", "{welcome}");
+    acknowledge(&mut phone, &welcome).await;
     drop(host.dir);
 }
