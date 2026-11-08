@@ -9,6 +9,9 @@
  */
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+/* While the keyboard moves focus (lib/focusModality.ts): a component's own focus mark goes under
+   it, e.g. `keyboard:focus-visible:ring-2`, so a click never draws one. */
+@custom-variant keyboard (&:where([data-keyboard-nav] *));
 
 @theme {
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
@@ -375,20 +378,20 @@
     -webkit-user-select: text;
   }
 
-  /* Keyboard focus only: a 2px ring at 40%, never on a click. */
+  /* Keyboard focus only: a 2px ring at 40%, never on a click. `:focus-visible` alone also matches
+     a text field, and a control focused from script after a click, so the ring waits for
+     `data-keyboard-nav` (lib/focusModality.ts): on from a Tab, off at the next pointer press. */
   :focus {
     outline: none;
   }
 
-  :focus-visible {
+  :root[data-keyboard-nav] :focus-visible {
     outline: 2px solid color-mix(in srgb, var(--rc-focus) 40%, transparent);
     outline-offset: 2px;
   }
 
   /* Fields whose container shows focus draw no ring of their own. */
-  input:focus-visible,
-  textarea:focus-visible,
-  [data-no-ring]:focus-visible {
+  :root[data-keyboard-nav] :is(input, textarea, [data-no-ring]):focus-visible {
     outline: none;
   }
 
@@ -921,7 +924,7 @@
  * A range is an `input`, and the base layer takes the ring off every field whose container shows
  * focus. This one has no container of its own, so it draws the ring like any other control does.
  */
-.rc-range:focus-visible {
+:root[data-keyboard-nav] .rc-range:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--rc-focus) 40%, transparent);
   outline-offset: 2px;
 }
@@ -1188,8 +1191,12 @@
       0 0 0 1px var(--rc-composer-outline);
   }
 }
+/* Focus inside the card changes its fill only. Its ring is the keyboard's: clicking into the field
+   never draws one, tabbing into the card does (lib/focusModality.ts). */
 .rc-composer:focus-within {
   background: var(--rc-composer-bg-focus);
+}
+:root[data-keyboard-nav] .rc-composer:focus-within {
   outline: 2px solid color-mix(in srgb, var(--rc-focus) 40%, transparent);
   outline-offset: 1px;
 }

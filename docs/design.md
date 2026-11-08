@@ -156,7 +156,15 @@ The model picker's effort slider takes the same knob.
 
 - Controls normally use `:focus-visible` for a ring: 2px `focus` at 40%, offset 2px. It is
   global in `index.css`; components do not add their own focus colours.
-- The composer uses a quiet focus ring on its containing card while any control inside has focus; its text field has no separate outline.
+- Rings follow the keyboard: `lib/focusModality.ts` sets `data-keyboard-nav` on `<html>` on a
+  Tab and removes it on the next pointer press, and every ring is drawn under it. `:focus-visible`
+  alone also matches a text field and a control focused from script after a click (Radix handing
+  focus back to a menu's trigger, a `.focus()` after Enter or Escape), so a click, a hover or a
+  press never draws a ring or a border. Tab itself is never taken over. A component's own focus
+  mark uses the `keyboard:` variant (`keyboard:focus-visible:ring-2`); fills and reveals on
+  `focus-visible` (a menu row's `bg-fill`, a row's hidden button) need no gate.
+- Clicking into the composer changes its fill only (`--rc-composer-bg-focus`); tabbing into it
+  draws the ring on its card. Its text field has no separate outline.
 - `outline-none` is allowed only on a text field whose container already
   shows focus (the composer, a search capsule).
 
