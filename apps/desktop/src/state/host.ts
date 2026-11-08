@@ -898,13 +898,18 @@ async function delegatePull(
 ): Promise<{ branch?: string; pull?: DelegatePull; error?: Failure }> {
   const cwd = projectOf(target);
   if (!cwd) return { error: failure("failed", "this thread has no project folder") };
+  const worktree = target.worktree;
   try {
-    const result = await request(
-      Method.pullState,
-      { cwd, ...(target.worktree?.branch ? { branch: target.worktree.branch } : {}) },
-      60_000,
-    );
-    const answer = parsePullState(result);
+    // Ask for the branch the worktree is on now, not the recorded one: a
+    // delegate may have renamed it, and the engine echoes the branch it was
+    // asked for, so naming the recorded one would hide the rename (and its
+    // pull request) from status, merge and cleanup.
+    let answer = parsePullState(await request(Method.pullState, { cwd: worktree?.path ?? cwd }, 60_000));
+    // A detached HEAD has no branch to look up, so fall back to the recorded
+    // one rather than reporting no pull request at all.
+    if (answer.error && worktree?.branch) {
+      answer = parsePullState(await request(Method.pullState, { cwd, branch: worktree.branch }, 60_000));
+    }
     if (answer.error) return { error: pullFailure(answer.error) };
     return { branch: answer.branch, pull: answer.pull };
   } catch (error) {
@@ -1037,7 +1042,7 @@ async function mergeWhenGreen(
       {
         cwd: projectOf(target),
         number: pull.number,
-        ...(target.worktree?.branch ? { branch: target.worktree.branch } : {}),
+        ...(state.branch ? { branch: state.branch } : {}),
         timeoutMs: call.timeoutMs,
       },
       call.timeoutMs + 120_000,
@@ -1068,8 +1073,9 @@ async function mergeWhenGreen(
 /**
  * `cleanup_worktree`: removes a merged delegate's worktree and branch, then
  * settles it, after the engine confirms nothing unique is lost (git cherry,
- * allowing a squash merge's content). Refuses a dirty worktree or one still
- * running. The user approves it.
+ * allowing a squash merge's content). A branch the delegate renamed after this
+ * read is accepted by the engine when that branch's pull request merged. Refuses
+ * a dirty worktree or one still running. The user approves it.
  */
 async function cleanupWorktree(
   caller: RuleThread,
@@ -1138,6 +1144,13 @@ async function cleanupWorktree(
     branch: str(obj(cleanup)?.branch) ?? branch,
     branch_removed: bool(obj(cleanup)?.branch_removed) ?? false,
   };
+  // A branch the delegate renamed: the engine removes the recorded one too
+  // when it holds nothing unique, and says so.
+  const recorded = str(obj(cleanup)?.recorded_branch);
+  if (recorded) {
+    answer.recorded_branch = recorded;
+    answer.recorded_branch_removed = bool(obj(cleanup)?.recorded_branch_removed) ?? false;
+  }
   setBook((b) => noteLinkEvent(b, caller.id, target.id, "cleaned"));
   if (call.settle) {
     await setThreadStatus(target.id, "done");
