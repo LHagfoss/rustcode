@@ -246,7 +246,8 @@ remote access on is the short moment before it has registered.
 | `rustcode remote on` | Enable the persistent background gateway (alias of `start`). |
 | `rustcode remote off` | Stop the running gateway (alias of `stop`). |
 | `rustcode remote pair` | Ask the running gateway for a pairing challenge and show it: QR code, address, code and expiry time. In a terminal it then counts the challenge down until a device pairs or it ends (Ctrl-C leaves earlier); otherwise it prints and exits. |
-| `rustcode remote devices [--json]` | List paired devices: identifier, kind (phone, desktop or cli), platform, how long ago each was last seen, pairing time, expiry and name. Never a token. |
+| `rustcode remote devices allow <id>` / `deny <id>` | Grant full ACP control, or deny it and immediately disconnect the device. |
+| `rustcode remote devices [--json]` | List paired devices: identifier, kind (phone, desktop or cli), platform, how long ago each was last seen, pairing time, expiry and name. JSON includes the host-controlled `acp` grant. Never a token. |
 | `rustcode remote revoke <device>` | Revoke by identifier, identifier prefix (four characters or more) or unique name. |
 | `rustcode remote status` | The running gateway: listen and advertised address (and whether each follows address changes), the machine's current addresses with a recovery command when the gateway's address is gone, paired devices and which are connected, the state of pairing (time and wrong codes left, or the lockout), shared sessions and who is attached to each, session owners that run without being shared, and the paths of the gateway log and the session logs. |
 | `rustcode remote stop` | Stop the running gateway. |
@@ -692,3 +693,44 @@ access work as on the other systems. What differs:
   There are no per-session grants and no per-session opt-out.
 - Reachability from a real iPhone (local-network permission, NetBird routing)
   is verified with the app, not by this repository's tests.
+
+### Desktop ACP channel
+
+After authentication, a device with the host-controlled `acp` grant can send
+`{"type":"acp_open"}`. The gateway connects to the already-running RustCode
+server in the gateway's configuration directory and answers
+`{"type":"acp_opened"}`. Subsequent WebSocket text frames each contain one ACP
+JSON-RPC message, in either direction. These additive frames keep protocol
+version 1. The grant defaults to false, including for existing device records.
+Self-reported device kind never grants access. Accepting a desktop's ask-to-connect
+request grants ACP after it enters the request-bound code; the approval says
+"Can see and run all threads on this machine". Pairing with a standalone short
+code never grants ACP. The owner can run `rustcode remote devices allow <id>`
+or `rustcode remote devices deny <id>`; deny immediately disconnects the device.
+Devices without the grant receive a gateway
+`error` with code `unauthorized_access` when opening ACP. A missing or unreachable
+local server closes the connection with `internal`.
+
+Client requests and notifications are restricted to these exact methods:
+
+- `initialize`
+- `_rustcode/harnesses`
+
+The only allowed prefixes are `session/` and `_rustcode/pulls`. Everything else is denied, including
+provider credentials and login, pairing and remote management, `_rustcode/server/*`,
+MCP server configuration and data-store SQL. Denied requests receive a JSON-RPC
+error with the same `id`, numeric code `-32601` and
+`data: {"code":"unauthorized_access"}`. Denied notifications are dropped.
+JSON-RPC responses pass through only for an outstanding server request ID,
+once per request. Unknown or repeated answers are dropped. At most 1,024 server
+requests may be outstanding; exceeding this closes with `slow_consumer`.
+Batch messages are refused.
+
+`session/load` resume metadata (`_meta.rustcode.resume: {cursor}`) passes through
+without modification. The gateway translates WebSocket messages to the local
+server's newline-delimited JSON; JSON is compacted without changing JSON string contents or resume metadata. Local-server frames retain the gateway's 1 MiB
+frame limit. ACP has its own outbound queue capped at 1,024 frames and 16 MiB, including
+the frame being written. Overflow
+closes the device with `slow_consumer`; it never blocks other gateway clients.
+Revocation and gateway shutdown still close ACP connections, and closing either
+endpoint closes the other.

@@ -11,7 +11,7 @@
 //! the server, starting one in the background first if none runs, so
 //! anything that spoke ACP to `rustcode --acp` can speak it to the server.
 
-mod listen;
+pub(crate) mod listen;
 mod lock;
 mod peer;
 

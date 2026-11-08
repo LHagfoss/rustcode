@@ -77,7 +77,7 @@
       "description": "Exchange a pairing challenge for a device token.",
       "properties": {
         "device_kind": {
-          "description": "What the device is: `phone`, `desktop` (the desktop app on\nanother machine) or `cli`. Absent, or a kind this gateway does\nnot know, is a phone. A label for the owner, not a permission.\nGateways that list `desktops` in their capabilities record it.",
+          "description": "What the device is: `phone`, `desktop` (the desktop app on\nanother machine) or `cli`. Absent, or a kind this gateway does\nnot know, is a phone. A label for the owner, not a permission.\nGateways that list `desktops` record it; it never grants ACP access.",
           "type": [
             "string",
             "null"

@@ -429,6 +429,9 @@ async fn session(
     // Leave the live registry before the goodbye so status never lists a
     // connection that is only being told why it was closed.
     drop(connection);
+    if ended.is_none() {
+        let _ = tokio::time::timeout(GOODBYE_TIMEOUT, writer.close()).await;
+    }
     if let Some(code) = ended {
         let error = HandshakeResponse::error(code, close_message(code));
         let _ = tokio::time::timeout(GOODBYE_TIMEOUT, async {
@@ -470,6 +473,19 @@ async fn pump(
             inbound = reader.next() => match inbound {
                 Some(Ok(Message::Text(text))) => {
                     last_heard = Instant::now();
+                    if serde_json::from_str::<crate::remote::protocol::AcpClientFrame>(&text).is_ok() {
+                        if !shared.acp_allowed(&connection.context.device_id) {
+                            let error = HandshakeResponse::error(ErrorCode::UnauthorizedAccess, "ACP access requires approval from the host owner");
+                            write(writer, Message::text(error.to_text()), limits.write_timeout).await?;
+                            continue;
+                        }
+                        // Stop hub pushes before switching to raw ACP frames.
+                        shared.router.disconnected(&connection.context);
+                        let Some(endpoint) = crate::server::listen::running_endpoint(&shared.lifecycle.config_directory()) else {
+                            return Some(ErrorCode::Internal);
+                        };
+                        return super::acp_relay::relay(&endpoint, writer, reader, Arc::clone(&connection.control), limits.write_timeout, limits.ping_interval, limits.idle_timeout).await;
+                    }
                     if thread_names {
                         let text = wire_names::to_session_names(text.as_str());
                         shared.router.frame(&connection.context, &text, sink);

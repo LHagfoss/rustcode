@@ -1493,6 +1493,7 @@ async fn a_desktop_asks_to_connect_and_is_recorded_as_the_owner_saw_it() {
     assert!(device.last_seen_at.is_some());
     let stored = harness.lifecycle.devices().unwrap();
     assert_eq!(stored[0].kind, DeviceKind::Desktop);
+    assert!(stored[0].acp);
     harness.stop().await;
 }
 

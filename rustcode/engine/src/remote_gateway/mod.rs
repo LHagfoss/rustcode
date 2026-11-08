@@ -14,6 +14,7 @@
 //! The existing `rustcode serve` transport (`crate::serve`) is unrelated and
 //! unchanged.
 
+mod acp_relay;
 pub mod address;
 pub mod command;
 pub mod connect;

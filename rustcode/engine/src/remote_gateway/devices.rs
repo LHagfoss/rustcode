@@ -48,7 +48,7 @@ const STORE_VERSION: u32 = 1;
 const MAX_STORE_BYTES: u64 = 256 * 1024;
 
 /// What a paired device is, as it says. A label for the owner, never a
-/// permission: every kind gets the same access today.
+/// permission: ACP access requires a separate host-controlled grant.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeviceKind {
@@ -145,6 +145,9 @@ fn unknown_platform() -> String {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceRecord {
+    /// Full ACP access explicitly granted by the host owner.
+    #[serde(default)]
+    pub acp: bool,
     /// Random identifier assigned by the gateway. The only identity.
     pub id: String,
     /// Label supplied by the device. Not unique, not trusted.
@@ -303,6 +306,7 @@ impl Devices {
         rand::rng().fill(&mut token_bytes);
         let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(token_bytes);
         let record = DeviceRecord {
+            acp: false,
             id: hex::encode(id_bytes),
             name: sanitize_name(name),
             token_sha256: hex::encode(digest(token.as_bytes())),
@@ -379,6 +383,18 @@ impl Devices {
                 ids: several.iter().map(|record| record.id.clone()).collect(),
             }),
         }
+    }
+
+    /// Change only the host-controlled grant, never client-supplied metadata.
+    pub fn set_acp(&mut self, selector: &str, allow: bool) -> Result<DeviceRecord, DeviceError> {
+        let id = self.select(selector)?.id.clone();
+        let record = self
+            .devices
+            .iter_mut()
+            .find(|record| record.id == id)
+            .unwrap();
+        record.acp = allow;
+        Ok(record.clone())
     }
 
     pub fn remove(&mut self, device_id: &str) -> Option<DeviceRecord> {
@@ -928,5 +944,35 @@ mod tests {
         let debug = format!("{devices:?} {record:?}");
         assert!(!debug.contains(&record.token_sha256));
         assert!(!debug.contains(token.expose()));
+    }
+}
+
+#[cfg(test)]
+mod acp_grant_tests {
+    use super::*;
+    #[test]
+    fn grants_default_off_and_persist_without_client_control() {
+        let mut devices = Devices::default();
+        let enrolled = devices
+            .enroll_as(
+                "desktop",
+                None,
+                &DeviceProfile::from_wire(Some("desktop"), None, None),
+            )
+            .unwrap();
+        assert!(!enrolled.record.acp);
+        let mut old = serde_json::to_value(&devices).unwrap();
+        old["devices"][0].as_object_mut().unwrap().remove("acp");
+        let old: Devices = serde_json::from_value(old).unwrap();
+        assert!(!old.list()[0].acp);
+        devices.set_acp(&enrolled.record.id, true).unwrap();
+        let loaded: Devices =
+            serde_json::from_slice(&serde_json::to_vec(&devices).unwrap()).unwrap();
+        assert!(
+            loaded
+                .verify(&enrolled.record.id, enrolled.token.expose(), Utc::now())
+                .unwrap()
+                .acp
+        );
     }
 }

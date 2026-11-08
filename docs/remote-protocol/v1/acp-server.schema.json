@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Confirmation that subsequent text frames carry ACP JSON-RPC.",
+  "oneOf": [
+    {
+      "properties": {
+        "type": {
+          "const": "acp_opened",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "AcpServerFrame"
+}

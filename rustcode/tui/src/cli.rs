@@ -438,6 +438,8 @@ pub enum RemoteCommands {
     Pair,
     /// List paired devices
     Devices {
+        #[command(subcommand)]
+        command: Option<RemoteDeviceCommands>,
         #[arg(long)]
         json: bool,
     },
@@ -451,6 +453,14 @@ pub enum RemoteCommands {
     /// Stop the running gateway
     #[command(alias = "off")]
     Stop,
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum RemoteDeviceCommands {
+    /// Allow full ACP access: can see and run all threads on this machine
+    Allow { device: String },
+    /// Deny ACP access and disconnect the device immediately
+    Deny { device: String },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -1591,5 +1601,17 @@ mod tests {
             mcp_server_summary(&stdio),
             "files  stdio  npx -y m  (env: API_KEY)"
         );
+    }
+}
+
+#[cfg(test)]
+mod remote_device_grant_tests {
+    use super::*;
+    use clap::Parser;
+    #[test]
+    fn parses_device_grant_commands() {
+        for action in ["allow", "deny"] {
+            assert!(Cli::try_parse_from(["rustcode", "remote", "devices", action, "abcd"]).is_ok());
+        }
     }
 }

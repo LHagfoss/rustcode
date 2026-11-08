@@ -1441,3 +1441,17 @@ pub struct RemoteCommandInfo {
     pub insertion: String,
     pub action: String,
 }
+
+/// Switch an authenticated desktop WebSocket to raw ACP JSON-RPC frames.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AcpClientFrame {
+    AcpOpen,
+}
+
+/// Confirmation that subsequent text frames carry ACP JSON-RPC.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AcpServerFrame {
+    AcpOpened,
+}

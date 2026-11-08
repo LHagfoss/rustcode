@@ -37,6 +37,11 @@
           "type": "string"
         },
         {
+          "const": "unauthorized_access",
+          "description": "The authenticated device cannot perform this operation.",
+          "type": "string"
+        },
+        {
           "const": "busy",
           "description": "The gateway is at its connection or device limit.",
           "type": "string"

@@ -499,6 +499,7 @@ pub fn devices_json(devices: &[DeviceRecord]) -> serde_json::Value {
         .map(|device| {
             serde_json::json!({
                 "id": device.id,
+                "acp": device.acp,
                 "name": device.name,
                 "paired_at": device.paired_at,
                 "last_seen_at": device.last_seen_at,
