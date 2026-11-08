@@ -1,0 +1,5 @@
+{
+  "type": "error",
+  "code": "connect_busy",
+  "message": "why the connection is being closed"
+}

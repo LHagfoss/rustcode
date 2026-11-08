@@ -66,11 +66,22 @@ pub enum PairingMethod {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HandshakeRequest {
-    /// Ask the host to approve a connection before presenting a code.
+    /// Ask the host's owner to let this device pair. Carries no secret. The
+    /// socket stays open for the answer (`connect_pending`, then
+    /// `connect_approved`, `connect_denied` or `connect_expired`); after
+    /// `connect_approved` it sends one `pair` frame with `method: "code"` and
+    /// the code the owner reads off the host. Only gateways that list
+    /// `connect_requests` in their Bonjour `caps` take it.
     ConnectRequest {
         protocol_version: u32,
+        /// A label chosen by the device, shown to the owner. Never an identity.
         device_name: String,
+        /// What the device is, for the owner: `ios`, `android`, ….
         platform: String,
+        /// As in `pair`. A new request from the same address and install
+        /// replaces the one still open, so a reconnecting app does not wait
+        /// for its old request to expire.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         install_id: Option<String>,
     },
     /// Exchange a pairing challenge for a device token.
@@ -147,16 +158,26 @@ impl HandshakeRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HandshakeResponse {
+    /// The connection request is in front of the host's owner. Wait on the
+    /// same socket, sending nothing but pings, for the answer.
     ConnectPending {
         request_id: String,
+        /// Time the owner has to answer.
         expires_in_secs: u64,
     },
+    /// The owner accepted and the host shows a code. Send one `pair` frame
+    /// with `method: "code"` and that code within `expires_in_secs`. Only
+    /// this socket can redeem it.
     ConnectApproved {
         request_id: String,
-        code_length: u8,
+        /// Digits in the code, without its separator.
+        code_length: u32,
         expires_in_secs: u64,
     },
+    /// The owner denied the request. The connection closes.
     ConnectDenied,
+    /// Nobody answered in time, the code was not sent in time, or a newer
+    /// code on the host replaced it. The connection closes; ask again.
     ConnectExpired,
     /// Pairing succeeded. `token` is shown exactly once; the connection is
     /// authenticated as this device from here on.
@@ -231,8 +252,6 @@ impl HandshakeResponse {
 pub enum ErrorCode {
     /// The frame is not JSON, not text, or not a known handshake request.
     InvalidFrame,
-    ConnectBusy,
-    ConnectRateLimited,
     FrameTooLarge,
     UnsupportedVersion,
     /// No frame arrived within the handshake deadline.
@@ -246,6 +265,11 @@ pub enum ErrorCode {
     Unauthorized,
     /// The gateway is at its connection or device limit.
     Busy,
+    /// The host holds as many connection requests as it takes, or this
+    /// address already has one open. Retry later.
+    ConnectBusy,
+    /// This address was denied a moment ago; see `retry_after_secs`.
+    ConnectRateLimited,
     /// The device was revoked while connected. Do not reconnect.
     Revoked,
     /// The device did not read fast enough and its queue overflowed.
@@ -286,6 +310,11 @@ mod tests {
             .to_text(),
             r#"{"type":"connect_approved","request_id":"r1","code_length":8,"expires_in_secs":120}"#
         );
+        // `install_id` is optional both ways.
+        let bare = r#"{"type":"connect_request","protocol_version":1,"device_name":"phone","platform":"android"}"#;
+        let parsed = HandshakeRequest::parse(bare).unwrap();
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), bare);
+        assert!(!parsed.wants_thread_names());
         assert_eq!(
             HandshakeResponse::ConnectDenied.to_text(),
             r#"{"type":"connect_denied"}"#

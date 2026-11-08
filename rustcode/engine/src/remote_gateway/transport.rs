@@ -262,7 +262,7 @@ async fn connect_request(
     };
     let approved = HandshakeResponse::ConnectApproved {
         request_id: ticket.id.clone(),
-        code_length: CODE_DIGITS as u8,
+        code_length: CODE_DIGITS as u32,
         expires_in_secs: expires_in.as_secs(),
     };
     if send_frame(shared, socket, &approved).await.is_none() {
