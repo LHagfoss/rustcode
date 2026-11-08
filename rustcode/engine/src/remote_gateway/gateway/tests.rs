@@ -1105,6 +1105,7 @@ async fn an_accepted_request_pairs_with_the_code_shown_on_the_host() {
 
     let answer = harness.answer(&id, true).await;
     assert!(answer.accepted);
+    assert_eq!(answer.instance_id, harness.status().await.instance_id);
     assert_eq!(answer.expires_in_secs, Some(120));
     let code = answer.code.unwrap();
     let approved = phone.next_json().await;
@@ -1138,6 +1139,21 @@ async fn an_accepted_request_pairs_with_the_code_shown_on_the_host() {
     );
     assert_eq!(ended.device_id.as_deref(), Some(device_id.as_str()));
     assert_eq!(status.devices.len(), 1);
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn an_accepted_request_cannot_be_denied_after_approval() {
+    let harness = Harness::start().await;
+    let (mut phone, id) = Client::ask_to_connect(harness.addr, None).await;
+    let code = harness.answer(&id, true).await.code.unwrap();
+    assert_eq!(phone.next_json().await["type"], "connect_approved");
+
+    let denied = bounded(harness.lifecycle.answer_connect_request(&id, false)).await;
+    assert!(denied.is_err());
+
+    phone.send_code(code.expose()).await;
+    assert_eq!(phone.next_json().await["type"], "paired");
     harness.stop().await;
 }
 
@@ -1241,7 +1257,12 @@ async fn a_wrong_code_ends_the_request_and_counts_against_the_host() {
     let (phone, id) = Client::ask_to_connect(harness.addr, None).await;
     let answer = bounded(harness.lifecycle.answer_connect_request(&id, true)).await;
     assert!(answer.is_err());
-    assert!(answer.unwrap_err().to_string().contains("pairing is locked"));
+    assert!(
+        answer
+            .unwrap_err()
+            .to_string()
+            .contains("pairing is locked")
+    );
     let status = harness.status().await;
     assert_eq!(status.connect_requests.len(), 1);
     assert_eq!(

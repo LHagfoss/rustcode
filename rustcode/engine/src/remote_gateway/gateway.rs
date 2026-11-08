@@ -449,6 +449,9 @@ impl Shared {
         let Some(request) = state.connect.get(id) else {
             return Err("that connection request is no longer open".into());
         };
+        if request.state != RequestState::Pending {
+            return Err("that connection request was already answered".into());
+        }
         let device_name = request.device_name.clone();
         if !accept {
             state.pairing.withdraw_bound(id);
@@ -456,14 +459,12 @@ impl Shared {
             return Ok(ConnectAnswer {
                 id: id.to_owned(),
                 device_name,
+                instance_id: self.instance_id.clone(),
                 accepted: false,
                 code: None,
                 expires_in_secs: None,
                 locked_for_secs: None,
             });
-        }
-        if request.state != RequestState::Pending {
-            return Err("that connection request was already accepted".into());
         }
         if let Some(retry_after) = state.pairing.lockout(now) {
             return Err(format!(
@@ -477,6 +478,7 @@ impl Shared {
         Ok(ConnectAnswer {
             id: id.to_owned(),
             device_name,
+            instance_id: self.instance_id.clone(),
             accepted: true,
             code: Some(offer.code),
             expires_in_secs: Some(offer.lifetime.as_secs()),

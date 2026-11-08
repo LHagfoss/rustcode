@@ -1370,6 +1370,7 @@ async fn host_status() -> Value {
     let gateway = status.as_ref().map(|status| {
         json!({
             "connected": true,
+            "instanceId": status.instance_id,
             "advertisedAddress": status.advertised_address,
             "listenAddress": status.listen_address,
             "loopbackOnly": status.loopback_only,
@@ -1511,6 +1512,7 @@ async fn answer_connect_host(id: &str, accept: bool) -> Value {
                     json!({
                         "id": answer.id,
                         "deviceName": answer.device_name,
+                        "instanceId": answer.instance_id,
                         "accepted": answer.accepted,
                         "code": answer.code.as_ref().map(|code| code.expose()),
                         "expiresInSecs": answer.expires_in_secs,

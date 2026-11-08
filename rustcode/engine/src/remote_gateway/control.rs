@@ -195,6 +195,8 @@ pub struct EndedConnectRequest {
 pub struct ConnectAnswer {
     pub id: String,
     pub device_name: String,
+    /// Gateway process that issued this answer and its code.
+    pub instance_id: String,
     pub accepted: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<Secret>,
