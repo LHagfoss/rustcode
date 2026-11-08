@@ -910,6 +910,10 @@ function rpcReason(data: Json | undefined): string | null {
 
 let connection: AcpConnection | null = null;
 let transport: Transport | null = null;
+/** Ignore machine-status reads that started before a newer answer changed remote state. */
+let remoteStatusRevision = 0;
+let remoteStatusReadId = 0;
+let latestRemoteStatusReadId = 0;
 /** Sessions whose `session/load` replay is arriving. */
 const loading = new Set<string>();
 
@@ -5072,6 +5076,16 @@ export async function request<T = Json>(
 
 // ---------------------------------------------------------------- remote access
 
+function invalidateRemoteStatusReads() {
+  remoteStatusRevision += 1;
+  latestRemoteStatusReadId = remoteStatusReadId;
+}
+
+function commitRemoteStatus(status: RemoteStatus) {
+  invalidateRemoteStatusReads();
+  set({ remote: status, remoteError: null });
+}
+
 /**
  * Re-read the machine's remote access state. `sessionId` reads one thread's
  * share instead, for its header indicator. Never throws: Settings shows the
@@ -5079,6 +5093,8 @@ export async function request<T = Json>(
  */
 export async function refreshRemote(sessionId?: string): Promise<RemoteStatus | null> {
   const params: JsonObject = sessionId ? { sessionId } : {};
+  const revision = remoteStatusRevision;
+  const readId = sessionId ? 0 : ++remoteStatusReadId;
   try {
     const status = parseRemoteStatus(await request(RemoteMethod.status, params, 10_000));
     if (sessionId)
@@ -5086,12 +5102,20 @@ export async function refreshRemote(sessionId?: string): Promise<RemoteStatus | 
         remoteByThread: { ...s.remoteByThread, [sessionId]: status },
         remoteError: null,
       }));
-    else set({ remote: status, remoteError: null });
-    return status;
+    else if (revision === remoteStatusRevision && readId > latestRemoteStatusReadId) {
+      latestRemoteStatusReadId = readId;
+      set({ remote: status, remoteError: null });
+    }
+    return sessionId || (revision === remoteStatusRevision && readId === latestRemoteStatusReadId)
+      ? status
+      : get().remote;
   } catch (error) {
     // The engine answered nothing (a restart, a dropped request): say so and
     // keep what was last true, rather than showing remote access as off.
-    set({ remoteError: errorText(error) });
+    if (sessionId || (revision === remoteStatusRevision && readId > latestRemoteStatusReadId)) {
+      if (!sessionId) latestRemoteStatusReadId = readId;
+      set({ remoteError: errorText(error) });
+    }
     return null;
   }
 }
@@ -5102,7 +5126,8 @@ export async function refreshRemote(sessionId?: string): Promise<RemoteStatus | 
  * sees anything until it is switched on again. Pairings are kept.
  */
 export async function setRemoteAccess(on: boolean): Promise<void> {
-  if (on)
+  invalidateRemoteStatusReads();
+  if (on) {
     set({
       remote: {
         ...(get().remote ?? {}),
@@ -5113,9 +5138,10 @@ export async function setRemoteAccess(on: boolean): Promise<void> {
         devices: [],
       } as RemoteStatus,
     });
+  }
   try {
     const status = parseRemoteStatus(await request(on ? RemoteMethod.start : RemoteMethod.stop, {}, 20_000));
-    set({ remote: status });
+    commitRemoteStatus(status);
     if (status.error) toast(status.error, "error");
     else {
       toast(
@@ -5138,9 +5164,10 @@ export async function setRemoteAccess(on: boolean): Promise<void> {
  * if it was off, as `/remote` does in a terminal.
  */
 export async function pairRemoteDevice(): Promise<RemoteStatus | null> {
+  invalidateRemoteStatusReads();
   try {
     const status = parseRemoteStatus(await request(RemoteMethod.pair, {}, 20_000));
-    set({ remote: status });
+    commitRemoteStatus(status);
     if (status.pairingError) toast(status.pairingError, "error");
     return status;
   } catch (error) {
@@ -5154,9 +5181,10 @@ export async function pairRemoteDevice(): Promise<RemoteStatus | null> {
  * (`connectCode`); the request's own prompt goes with the next status either way.
  */
 export async function answerConnectRequest(id: string, accept: boolean): Promise<boolean> {
+  invalidateRemoteStatusReads();
   try {
     const status = parseRemoteStatus(await request(RemoteMethod.answer, { id, accept }, 15_000));
-    set({ remote: status, remoteError: null });
+    commitRemoteStatus(status);
     if (status.connectError) {
       toast(status.connectError, "error");
       return false;
@@ -5168,6 +5196,7 @@ export async function answerConnectRequest(id: string, accept: boolean): Promise
           requestId: answer.id,
           deviceName: answer.deviceName,
           code: answer.code,
+          instanceId: answer.instanceId ?? status.gateway?.instanceId,
           expiresAt: Date.now() + (answer.expiresInSecs ?? 120) * 1000,
           lockedForSecs: answer.lockedForSecs,
         },
@@ -5187,9 +5216,10 @@ export function closeConnectCode() {
 
 /** Forget a paired device: its token stops working and its connections close. */
 export async function revokeRemoteDevice(id: string): Promise<void> {
+  invalidateRemoteStatusReads();
   try {
     const status = parseRemoteStatus(await request(RemoteMethod.revoke, { deviceId: id }, 15_000));
-    set({ remote: status, remoteError: null });
+    commitRemoteStatus(status);
     if (status.revokeError) toast(status.revokeError, "error");
     else if (status.revoked) toast(`${status.revoked.name} can no longer connect.`, "success");
   } catch (error) {
@@ -5200,6 +5230,9 @@ export async function revokeRemoteDevice(id: string): Promise<void> {
 /** Test hook: reset to a clean slate. */
 export function resetForTests() {
   lastFocusListAt = 0;
+  remoteStatusRevision += 1;
+  remoteStatusReadId = 0;
+  latestRemoteStatusReadId = 0;
   clearTimeout(slowTimer);
   if (limitTimer) clearInterval(limitTimer);
   limitTimer = null;

@@ -41,7 +41,8 @@ export type CodeSettlement =
 /**
  * Where the code on screen stands, from the latest status: still for the phone to enter, used
  * (the phone paired), or over for another reason. A status that no longer knows the request at
- * all (it was read before the answer, or the gateway restarted) keeps the code until it runs out.
+ * all (for example, a read that raced the answer) keeps the code until it runs out. A different
+ * gateway instance ends it immediately.
  */
 export function settleCode(
   code: ConnectCode,
