@@ -102,8 +102,8 @@ export class WebSocketTransport implements Transport {
         onEvent(event);
       };
       socket.onclose = () => {
-        onEvent({ type: "closed", reason: "The engine bridge disconnected." });
-        if (!opened) reject(new Error(`No engine bridge at ${this.url}. Run \`bun run dev:web\`.`));
+        onEvent({ type: "closed", reason: "The server bridge disconnected." });
+        if (!opened) reject(new Error(`No server bridge at ${this.url}. Run \`bun run dev:web\`.`));
       };
     });
   }

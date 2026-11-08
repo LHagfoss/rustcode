@@ -502,6 +502,12 @@ fn open_target(path: &str) -> Result<(PathBuf, bool), String> {
 #[tauri::command(async)]
 pub fn open_path(path: String) -> Result<(), String> {
     let (path, dir) = open_target(&path)?;
+    open_checked(&path, dir)
+}
+
+/// Opens a path the caller already checked: a folder in the file manager, a
+/// text file in its editor (Markdown in its own app on macOS).
+pub(crate) fn open_checked(path: &Path, dir: bool) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         let markdown = path
@@ -513,7 +519,7 @@ pub fn open_path(path: String) -> Result<(), String> {
             command.arg("-t");
         }
         command
-            .arg(&path)
+            .arg(path)
             .spawn()
             .map(|_| ())
             .map_err(|e| e.to_string())
@@ -547,12 +553,7 @@ fn skill_root(scope: &str, cwd: &str, config: &Path) -> Result<PathBuf, String> 
 }
 
 fn config_dir() -> Result<PathBuf, String> {
-    if let Some(dir) = std::env::var_os("RUSTCODE_CONFIG_DIR") {
-        return Ok(PathBuf::from(dir));
-    }
-    std::env::var_os("HOME")
-        .map(|home| PathBuf::from(home).join(".config/rustcode"))
-        .ok_or_else(|| "No home folder.".into())
+    crate::diagnostics::config_dir().ok_or_else(|| "No home folder.".into())
 }
 
 fn write_skill(root: &Path, name: &str) -> Result<PathBuf, String> {

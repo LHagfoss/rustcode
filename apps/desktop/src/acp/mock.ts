@@ -2631,6 +2631,33 @@ export class MockEngine {
         return mockUsage(this.threads, ask?.groupBy ?? "harness", ask?.since);
       }
       case "_rustcode/data/query":
+        if (String(obj(params)?.sql ?? "").includes("operational_events")) {
+          const at = (ago: number) => new Date(Date.now() - ago).toISOString();
+          return {
+            columns: ["at", "event_type", "thread_id", "fields_json"],
+            rows: [
+              {
+                at: at(40_000),
+                event_type: "turn.summary",
+                thread_id: "t-login",
+                fields_json: '{"rounds":6,"tool_calls":11}',
+              },
+              {
+                at: at(95_000),
+                event_type: "tools.batch.finish",
+                thread_id: "t-login",
+                fields_json: '{"calls":3,"failed":1}',
+              },
+              {
+                at: at(120_000),
+                event_type: "turn.start",
+                thread_id: "t-login",
+                fields_json: '{"wakeup":false}',
+              },
+            ],
+            truncated: false,
+          };
+        }
         return {
           columns: ["tool_name", "failures", "calls"],
           rows: [
@@ -4336,24 +4363,49 @@ export class MockTransport implements Transport {
       this.options,
     );
     if (this.options.bootMs) await new Promise((r) => setTimeout(r, this.options.bootMs));
-    onEvent({ type: "log", line: "mock engine started" });
+    this.startedAt = Date.now();
+    for (const line of MOCK_SERVER_LOG) onEvent({ type: "log", line });
     onEvent({ type: "open", engine: "mock" });
     const crash = this.options.crashAfterMs;
     if (crash && !this.crashed) {
       this.crashed = true;
       setTimeout(() => {
-        onEvent({ type: "closed", reason: "The engine exited unexpectedly (signal 9)." });
+        const reason = "The server was stopped by signal 9.";
+        this.lastExit = { code: null, signal: 9, atMs: Date.now(), reason, expected: false };
+        this.crashRestarts += 1;
+        onEvent({ type: "closed", reason });
         void this.start(onEvent);
       }, crash);
     }
   }
   private crashed = false;
+  /** What Settings › Diagnostics reads of the process (`server_status`). */
+  private startedAt = Date.now();
+  private crashRestarts = 0;
+  private lastExit: JsonObject | null = null;
 
   async restart(): Promise<void> {
     const onEvent = this.onEvent;
     if (!onEvent) return;
-    onEvent({ type: "closed", reason: "Restarting the engine." });
+    const reason = "The server exited (code 0).";
+    this.lastExit = { code: 0, signal: null, atMs: Date.now(), reason, expected: true };
+    onEvent({ type: "closed", reason });
     await this.start(onEvent);
+  }
+
+  /** `server_status`, as src-tauri/src/diagnostics.rs answers it. */
+  private serverStatus(): JsonObject {
+    return {
+      running: this.engine !== null,
+      pid: this.engine ? 48213 : null,
+      path: "/Applications/RustCode.app/Contents/MacOS/rustcode",
+      startedAtMs: this.engine ? this.startedAt : null,
+      crashRestarts: this.crashRestarts,
+      lastExit: this.lastExit,
+      version: "1.21.0",
+      configDir: "/Users/lars/.config/rustcode",
+      logFile: "/Users/lars/.config/rustcode/debug.log",
+    };
   }
 
   send(line: string): void {
@@ -4362,6 +4414,21 @@ export class MockTransport implements Transport {
 
   async call(command: string, args: Record<string, unknown>): Promise<unknown> {
     if (command === "link_meta") return mockLinkMeta(String(args.url));
+    if (command === "server_status") return this.serverStatus();
+    if (command === "system_info") return MOCK_SYSTEM_INFO;
+    if (command === "resolve_binaries")
+      return (args.names as string[]).map((name) =>
+        ["codex", "claude-agent-acp", "gemini", "opencode"].includes(name)
+          ? `/opt/homebrew/bin/${name}`
+          : null,
+      );
+    if (command === "logs_folder_open") return null;
+    if (command === "diagnostics_save") return `/Users/lars/Downloads/${String(args.name)}`;
+    if (command === "thread_log_open") {
+      const id = String(args.id);
+      if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error("Not a thread id.");
+      return `/Users/lars/.config/rustcode/threads/2026/11/08/${id}/logs/debug.log`;
+    }
     if (command === "thread_rename") return this.engine?.renameThread(String(args.id), String(args.title));
     if (command === "thread_trash") return this.engine?.trashThread(String(args.id));
     if (command === "project_files") return MOCK_PROJECT_FILES;
@@ -4390,6 +4457,31 @@ export class MockTransport implements Transport {
     this.engine = null;
   }
 }
+
+/** The server's stderr at start, a few levels of it, for Settings › Diagnostics. */
+const MOCK_SERVER_LOG = [
+  "desktop: started /Applications/RustCode.app/Contents/MacOS/rustcode --acp (pid 48213)",
+  "2026-11-08T09:12:01.114Z  INFO rustcode::acp: listening on stdio (protocol 1)",
+  "2026-11-08T09:12:01.120Z DEBUG rustcode::config: read /Users/lars/.config/rustcode/config.toml",
+  "2026-11-08T09:12:01.402Z  INFO rustcode::harness: found codex 0.50.0, claude-agent-acp 0.9.1",
+  "2026-11-08T09:12:01.733Z  WARN rustcode::harness: gemini: not signed in (gemini auth login)",
+  '2026-11-08T09:12:02.010Z ERROR rustcode::mcp: server "linear" exited during initialize: token=lin_api_abcdef123456',
+  "2026-11-08T09:12:02.011Z  INFO rustcode::store: data.sqlite ready (migrations 14)",
+];
+
+/** `system_info`, as the shell answers it on a Mac. */
+const MOCK_SYSTEM_INFO: JsonObject = {
+  os: "macos",
+  osVersion: "15.2 (24C101)",
+  kernel: null,
+  arch: "aarch64",
+  appVersion: "1.21.0",
+  tauriVersion: "2.12.5",
+  webview: "WKWebView",
+  webviewVersion: "20620.1.16.11.8",
+  home: "/Users/lars",
+  graphicsEnv: [],
+};
 
 const MOCK_PROJECT_FILES = [
   "README.md",

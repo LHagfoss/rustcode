@@ -14,7 +14,7 @@ apps, the CLI and on disk. Only the Agent Client Protocol keeps its own name,
 | **TUI** | The terminal front end in `rustcode/tui`, opened by `rustcode` in a terminal. Today it starts every thread on the built-in harness. |
 | **Harness** | What runs a thread's turns: an external coding agent (Codex, Claude Code, Gemini CLI, OpenCode, Pi, any ACP agent) or RustCode's built-in harness. Chosen per thread. |
 | **Built-in harness** | RustCode's own turn loop in `rustcode/engine/src/network/turn`, used by the TUI, local models and testing. It is what the harness id `rustcode` means. |
-| **Engine** | The host process and library in `rustcode/engine`, run as `rustcode --acp` behind the app: threads, tools, configuration, ACP, background jobs. It keeps the name for now, because no crate or binary is called engine and "server" is already taken by `rustcode serve` and the remote gateway; it becomes "server" when orchestration moves into it instead of the app. |
+| **RustCode server** (Engine in code) | The host process and library in `rustcode/engine`, run as `rustcode --acp` behind the app: threads, tools, configuration, ACP, background jobs. The app calls it the **RustCode server** ("server" in short UI text: *Restart server*, *Server log*, Settings › Diagnostics). Code keeps `engine` (`engine.rs`, `restartEngine`, the `rustcode/engine` crate, `engine_*` commands): no crate or binary is called server, and `rustcode serve` and the remote gateway are separate processes. |
 
 RustCode is the only product here. The older separate repositories
 `rustcode-app` and `rustcode_app` are not this product, and nothing in this
