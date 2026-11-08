@@ -50,7 +50,7 @@ futures-util = "0.3.32"
 fs2 = "0.4.3"
 globset = "0.4"
 ignore = "0.4"
-jsonwebtoken = { version = "9", default-features = false, features = ["use_pem"] }
+jsonwebtoken = { version = "10", default-features = false, features = ["use_pem"] }
 keyring = { version = "3.6", default-features = false, features = ["apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust"] }
 qrcode = { version = "0.14.1", default-features = false }
 rand = "0.10.2"
