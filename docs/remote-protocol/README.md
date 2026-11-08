@@ -118,30 +118,41 @@ the gateway's pings, stays connected.
 Client → host, the first frame:
 
 ```json
-{"type": "pair", "protocol_version": 1, "method": "credential", "secret": "<credential from the QR code>", "device_name": "Lars's iPhone", "install_id": "6F9619FF-8B86-D011-B42D-00C04FC964FF"}
+{"type": "pair", "protocol_version": 1, "method": "credential", "secret": "<credential from the QR code>", "device_name": "Lars's iPhone", "install_id": "6F9619FF-8B86-D011-B42D-00C04FC964FF", "capabilities": ["token_rotation"]}
 {"type": "pair", "protocol_version": 1, "method": "code", "secret": "4821-9034", "device_name": "Lars's iPhone"}
-{"type": "authenticate", "protocol_version": 1, "device_id": "0011223344556677", "token": "<device token>"}
+{"type": "authenticate", "protocol_version": 1, "device_id": "0011223344556677", "refresh_token": "<refresh token>", "capabilities": ["token_rotation"]}
+{"type": "authenticate", "protocol_version": 1, "device_id": "0011223344556677", "access_token": "<access token>"}
+{"type": "authenticate", "protocol_version": 1, "device_id": "0011223344556677", "token": "<static device token>"}
 ```
 
 Host → client:
 
 ```json
 {"type": "paired", "protocol_version": 1, "gateway_id": "…", "instance_id": "…", "device_id": "0011223344556677", "device_name": "Lars's iPhone", "token": "<device token>", "host_name": "studio", "expires_at": "2026-08-22T09:15:00Z"}
+{"type": "paired", "protocol_version": 1, "gateway_id": "…", "instance_id": "…", "device_id": "0011223344556677", "device_name": "Lars's Windows PC", "refresh_token": "<R1>", "access_token": "<A1>", "access_expires_at": "2026-08-22T09:15:00Z", "host_name": "studio"}
 {"type": "authenticated", "protocol_version": 1, "gateway_id": "…", "instance_id": "…", "device_id": "0011223344556677", "device_name": "Lars's iPhone", "host_name": "studio", "expires_at": "2026-08-22T09:15:00Z"}
+{"type": "authenticated", "protocol_version": 1, "gateway_id": "…", "instance_id": "…", "device_id": "0011223344556677", "device_name": "Lars's Windows PC", "refresh_token": "<R2>", "access_token": "<A2>", "access_expires_at": "2026-08-22T09:15:00Z", "rotation_id": "5be1c4a07d2e9f63"}
 {"type": "error", "code": "pairing_failed", "message": "…"}
 {"type": "error", "code": "rate_limited", "message": "…", "retry_after_secs": 240}
 ```
 
-- `token` appears once, in `paired`. Store it in the Keychain; the host keeps
-  only its digest. After `paired` the same connection is already
-  authenticated.
+- `token` appears once, in `paired`, for a device that does not rotate its
+  tokens. Store it in the Keychain; the host keeps only its digest. After
+  `paired` the same connection is already authenticated.
+- `capabilities` in `pair` and `authenticate` lists what the device
+  understands; a gateway ignores a capability it does not know. A device that
+  names `token_rotation` gets the rotating tokens below instead of a static
+  `token`, and must name it on `pair` too. See
+  [Rotating tokens](#rotating-tokens-no-expiry).
 - `gateway_id` is stable for the host and is what a client keys its stored
   token and host data by. `instance_id` changes every time the gateway
   starts.
 - `expires_at` is optional: when the pairing stops being accepted, RFC 3339 in
   UTC, 30 days after pairing. From then on `authenticate` answers
   `unauthorized` and the device pairs again. A gateway that predates it sends
-  none, and its pairings do not expire.
+  none, and its pairings do not expire. A device that rotates its tokens never
+  gets one: its pairing lasts until it is revoked, so `expires_at` is absent
+  and keeping the pairing alive never means pairing again.
 - `host_name` is optional: the machine's own name, for display. It is a
   label, not an identity.
 - `device_name` in the answer is the name as the host stored it (trimmed and
@@ -164,6 +175,61 @@ Host → client:
   is ignored). They are labels, not permissions: every kind gets the same
   access. A gateway that records them lists `desktops` in its Bonjour `caps`
   and in the `sessions` result's `capabilities`; an older one ignores them.
+
+### Rotating tokens, no expiry
+
+A device that names `"capabilities": ["token_rotation"]` in `pair` gets no
+static token and no `expires_at`: its pairing lasts until it is revoked. The
+host hands it a **refresh token**, which every reconnect replaces, and a
+short-lived **access token**, which reconnects inside its 15 minutes without
+replacing anything. A client that does not name the capability keeps the
+static `token` and its 30 days exactly as before. A gateway that takes the
+capability lists `token_rotation` in the `sessions` result's `capabilities`.
+
+```text
+pair            → paired {refresh_token R1, access_token A1, access_expires_at}
+connect         → authenticate {device_id, refresh_token: R1}
+                ← authenticated {refresh_token R2, access_token A2, access_expires_at, rotation_id}
+                → token_ack {rotation_id}                      (R2 stored durably)
+reconnect <15m  → authenticate {device_id, access_token: A2}
+                ← authenticated {access_expires_at}             (nothing rotated)
+```
+
+- `refresh_token` and `access_token` appear exactly once, in the `paired` or
+  `authenticated` frame that issued them. Store the refresh token durably
+  (Keychain) before anything else; the host keeps only digests.
+- `access_expires_at` is RFC 3339 in UTC, 15 minutes after the access token was
+  minted. Until then `authenticate` with `access_token` reconnects without
+  rotating. After it the host answers `access_expired`: authenticate with the
+  refresh token, which never expires. `access_token` itself is never sent
+  again, so a client keeps the one it has.
+- Every accepted refresh token rotates: the answer carries a new
+  `refresh_token` and the `rotation_id` of that rotation. Replace the stored
+  one and send `{"type": "token_ack", "rotation_id": "5be1c4a07d2e9f63"}` on
+  the same connection. It is a session-path frame the gateway itself consumes;
+  it is never routed to a session, and one that names an older rotation is
+  ignored. Until the acknowledgement arrives, the token before the new one is
+  still accepted, so a lost `authenticated` frame cannot lock a device out:
+  retry with what you have, and the answer rotates again.
+- **Replay**: presenting a refresh token the host has retired for good revokes
+  the whole pairing. The host closes the device's connections with `revoked`,
+  answers this attempt with `token_replayed`, removes the record as if revoked,
+  and logs `remote.token_replayed` for its owner. Pair again. A token this host
+  never issued is only `unauthorized`: a guessed `device_id` cannot revoke a
+  device.
+- Two connections racing with the same refresh token (a client trying several
+  routes at once) are not a replay: the first answer's token becomes
+  `previous`, the second rotates again, and both are accepted. Keep the answer
+  from the route that stays up; the token an earlier answer carried is then
+  superseded, and presenting it later is `unauthorized`, not a revocation.
+- The host stores digests only: the current refresh token, the previous one
+  until it is acknowledged or used, the retired ones, and the access token's
+  digest, which stays in memory and never reaches disk. After a gateway restart
+  an access token answers `access_expired` and the refresh token reconnects as
+  usual, so the pairing survives.
+- `rotation_id` is absent when nothing rotated: an access token reconnected, or
+  the device does not rotate. `refresh_token` and `access_token` are absent on
+  an access-token reconnect.
 
 The pairing QR code encodes this JSON, as one line:
 
@@ -191,6 +257,9 @@ authenticated connection; those are always `response` frames (below).
 | Handshake (`pair`) | `pairing_failed` | Wrong, expired, used or exhausted secret; indistinguishable on purpose. Ask for a new code. |
 | Handshake (`pair`) | `rate_limited` | Too many failed pairings on the host; `retry_after_secs` says when to try again. |
 | Handshake (`authenticate`) | `unauthorized` | Unknown or revoked device, or wrong token. Stop reconnecting; pair again. |
+| Handshake (`authenticate`) | `access_expired` | The access token has expired or was replaced. The pairing is still valid: authenticate with the refresh token. |
+| Handshake (`authenticate`) | `token_replayed` | A retired refresh token was presented; the pairing was revoked. Stop, drop the tokens, pair again. |
+| After authentication | `invalid_frame` | A frame tagged `token_ack` without a `rotation_id`. A bug. |
 | Handshake | `busy` | Connection or device limit reached. Retry later. |
 | Handshake (`connect_request`) | `connect_busy` | The host holds four requests already, or this address has one open. Retry later. |
 | Handshake (`connect_request`) | `connect_rate_limited` | This address was denied less than 30 seconds ago; `retry_after_secs` says when to ask again. |

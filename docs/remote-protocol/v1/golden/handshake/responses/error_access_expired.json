@@ -1,0 +1,5 @@
+{
+  "type": "error",
+  "code": "access_expired",
+  "message": "why the connection is being closed"
+}

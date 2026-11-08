@@ -14,8 +14,8 @@
 use crate::controller::ApprovalChoice;
 
 use crate::remote_gateway::handshake::{
-    ErrorCode, HANDSHAKE_PROTOCOL_VERSION, HandshakeRequest, HandshakeResponse, PairingMethod,
-    Secret, WIRE_NAMES_THREAD,
+    CAPABILITY_TOKEN_ROTATION, ErrorCode, HANDSHAKE_PROTOCOL_VERSION, HandshakeRequest,
+    HandshakeResponse, PairingMethod, Secret, TokenAck, WIRE_NAMES_THREAD,
 };
 use crate::remote_gateway::pairing::QrPayload;
 
@@ -119,6 +119,7 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
                 device_kind: Some("phone".to_owned()),
                 platform: Some("ios".to_owned()),
                 host_id: None,
+                capabilities: None,
             },
         ),
         (
@@ -133,6 +134,7 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
                 device_kind: None,
                 platform: None,
                 host_id: None,
+                capabilities: None,
             },
         ),
         (
@@ -162,8 +164,11 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
             HandshakeRequest::Authenticate {
                 protocol_version: HANDSHAKE_PROTOCOL_VERSION,
                 device_id: "0011223344556677".to_owned(),
-                token: Secret::new("ZXhhbXBsZS1kZXZpY2UtdG9rZW4tbm90LXJlYWw"),
+                token: Some(Secret::new("ZXhhbXBsZS1kZXZpY2UtdG9rZW4tbm90LXJlYWw")),
+                refresh_token: None,
+                access_token: None,
                 wire_names: None,
+                capabilities: None,
             },
         ),
         (
@@ -171,9 +176,42 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
             HandshakeRequest::Authenticate {
                 protocol_version: HANDSHAKE_PROTOCOL_VERSION,
                 device_id: "0011223344556677".to_owned(),
-                token: Secret::new("ZXhhbXBsZS1kZXZpY2UtdG9rZW4tbm90LXJlYWw"),
+                token: Some(Secret::new("ZXhhbXBsZS1kZXZpY2UtdG9rZW4tbm90LXJlYWw")),
+                refresh_token: None,
+                access_token: None,
                 wire_names: Some(WIRE_NAMES_THREAD.to_owned()),
+                capabilities: None,
             },
+        ),
+        (
+            "authenticate_refresh",
+            HandshakeRequest::Authenticate {
+                protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+                device_id: "0011223344556677".to_owned(),
+                token: None,
+                refresh_token: Some(Secret::new("ZXhhbXBsZS1yZWZyZXNoLXRva2VuLW5vdC1yZWFs")),
+                access_token: None,
+                wire_names: None,
+                capabilities: Some(vec![CAPABILITY_TOKEN_ROTATION.to_owned()]),
+            },
+        ),
+        (
+            "authenticate_access",
+            HandshakeRequest::Authenticate {
+                protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+                device_id: "0011223344556677".to_owned(),
+                token: None,
+                refresh_token: None,
+                access_token: Some(Secret::new("ZXhhbXBsZS1hY2Nlc3MtdG9rZW4tbm90LXJlYWw")),
+                wire_names: None,
+                capabilities: None,
+            },
+        ),
+        (
+            "token_ack",
+            HandshakeRequest::TokenAck(TokenAck {
+                rotation_id: "5be1c4a07d2e9f63".to_owned(),
+            }),
         ),
     ]
 }
@@ -212,9 +250,31 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 instance_id: INSTANCE.to_owned(),
                 device_id: "0011223344556677".to_owned(),
                 device_name: "Lars's iPhone".to_owned(),
-                token: Secret::new("ZXhhbXBsZS1kZXZpY2UtdG9rZW4tbm90LXJlYWw"),
+                token: Some(Secret::new("ZXhhbXBsZS1kZXZpY2UtdG9rZW4tbm90LXJlYWw")),
                 host_name: Some("studio".to_owned()),
                 expires_at: Some("2026-08-22T09:15:00Z".to_owned()),
+                refresh_token: None,
+                access_token: None,
+                access_expires_at: None,
+                wire_names: None,
+            },
+        ),
+        (
+            // A device that asked for `token_rotation`: no static token, no
+            // expiry, and a refresh token with its access token.
+            "paired_rotating".to_owned(),
+            HandshakeResponse::Paired {
+                protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+                gateway_id: GATEWAY.to_owned(),
+                instance_id: INSTANCE.to_owned(),
+                device_id: "0011223344556677".to_owned(),
+                device_name: "Lars's Windows PC".to_owned(),
+                token: None,
+                host_name: Some("studio".to_owned()),
+                expires_at: None,
+                refresh_token: Some(Secret::new("ZXhhbXBsZS1yZWZyZXNoLXRva2VuLW5vdC1yZWFs")),
+                access_token: Some(Secret::new("ZXhhbXBsZS1hY2Nlc3MtdG9rZW4tbm90LXJlYWw")),
+                access_expires_at: Some("2026-08-22T09:15:00Z".to_owned()),
                 wire_names: None,
             },
         ),
@@ -228,6 +288,10 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 device_name: "Lars's iPhone".to_owned(),
                 host_name: Some("studio".to_owned()),
                 expires_at: Some("2026-08-22T09:15:00Z".to_owned()),
+                refresh_token: None,
+                access_token: None,
+                access_expires_at: None,
+                rotation_id: None,
                 wire_names: None,
             },
         ),
@@ -241,7 +305,49 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 device_name: "Lars's iPhone".to_owned(),
                 host_name: Some("studio".to_owned()),
                 expires_at: Some("2026-08-22T09:15:00Z".to_owned()),
+                refresh_token: None,
+                access_token: None,
+                access_expires_at: None,
+                rotation_id: None,
                 wire_names: Some(WIRE_NAMES_THREAD.to_owned()),
+            },
+        ),
+        (
+            // The answer to a refresh token: a new pair of tokens, no expiry,
+            // and the rotation the device acknowledges.
+            "authenticated_rotating".to_owned(),
+            HandshakeResponse::Authenticated {
+                protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+                gateway_id: GATEWAY.to_owned(),
+                instance_id: INSTANCE.to_owned(),
+                device_id: "0011223344556677".to_owned(),
+                device_name: "Lars's Windows PC".to_owned(),
+                host_name: Some("studio".to_owned()),
+                expires_at: None,
+                refresh_token: Some(Secret::new("ZXhhbXBsZS1uZXh0LXJlZnJlc2gtdG9rZW4")),
+                access_token: Some(Secret::new("ZXhhbXBsZS1hY2Nlc3MtdG9rZW4tbm90LXJlYWw")),
+                access_expires_at: Some("2026-08-22T09:15:00Z".to_owned()),
+                rotation_id: Some("5be1c4a07d2e9f63".to_owned()),
+                wire_names: None,
+            },
+        ),
+        (
+            // An access token reconnected inside its 15 minutes: nothing
+            // rotated, so no refresh token and no acknowledgement.
+            "authenticated_access".to_owned(),
+            HandshakeResponse::Authenticated {
+                protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+                gateway_id: GATEWAY.to_owned(),
+                instance_id: INSTANCE.to_owned(),
+                device_id: "0011223344556677".to_owned(),
+                device_name: "Lars's Windows PC".to_owned(),
+                host_name: Some("studio".to_owned()),
+                expires_at: None,
+                refresh_token: None,
+                access_token: None,
+                access_expires_at: Some("2026-08-22T09:15:00Z".to_owned()),
+                rotation_id: None,
+                wire_names: None,
             },
         ),
     ];
@@ -253,6 +359,8 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
         ErrorCode::PairingFailed,
         ErrorCode::RateLimited,
         ErrorCode::Unauthorized,
+        ErrorCode::TokenReplayed,
+        ErrorCode::AccessExpired,
         ErrorCode::UnauthorizedAccess,
         ErrorCode::Busy,
         ErrorCode::ConnectBusy,

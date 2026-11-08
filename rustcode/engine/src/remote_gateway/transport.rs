@@ -17,7 +17,10 @@ use super::devices::DeviceProfile;
 use super::gateway::{
     Admitted, ConnectTicket, LiveConnection, MAX_FRAME_BYTES, Shared, UnauthenticatedSlot,
 };
-use super::handshake::{ErrorCode, HandshakeRequest, HandshakeResponse, MAX_HANDSHAKE_FRAME_BYTES};
+use super::handshake::{
+    ErrorCode, HandshakeRequest, HandshakeResponse, MAX_HANDSHAKE_FRAME_BYTES, SessionControl,
+    session_control,
+};
 use super::pairing::CODE_DIGITS;
 use super::router::{FrameQueue, FrameSink};
 use super::wire_names;
@@ -473,6 +476,19 @@ async fn pump(
             inbound = reader.next() => match inbound {
                 Some(Ok(Message::Text(text))) => {
                     last_heard = Instant::now();
+                    // A token acknowledgement is the gateway's own frame: it
+                    // retires the previous refresh token and is never routed.
+                    match session_control(text.as_str()) {
+                        SessionControl::NotAControl => {}
+                        SessionControl::TokenAck(ack) => {
+                            shared.acknowledge_rotation(
+                                &connection.context.device_id,
+                                &ack.rotation_id,
+                            );
+                            continue;
+                        }
+                        SessionControl::Malformed => return Some(ErrorCode::InvalidFrame),
+                    }
                     if serde_json::from_str::<crate::remote::protocol::AcpClientFrame>(&text).is_ok() {
                         if !shared.acp_allowed(&connection.context.device_id) {
                             let error = HandshakeResponse::error(ErrorCode::UnauthorizedAccess, "ACP access requires approval from the host owner");

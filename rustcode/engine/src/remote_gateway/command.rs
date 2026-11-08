@@ -455,10 +455,11 @@ fn format_devices_at(devices: &[DeviceRecord], now: chrono::DateTime<chrono::Utc
         "DEVICE", "KIND", "PLATFORM", "LAST SEEN", "PAIRED (UTC)", "EXPIRES (UTC)"
     )];
     for device in devices {
-        let expires = if device.is_expired(now) {
-            "expired".to_owned()
-        } else {
-            device.expires_at().format("%Y-%m-%d %H:%M").to_string()
+        let expires = match device.expires_at() {
+            // A device that rotates its tokens lasts until it is revoked.
+            None => "until revoked".to_owned(),
+            Some(at) if now >= at => "expired".to_owned(),
+            Some(at) => at.format("%Y-%m-%d %H:%M").to_string(),
         };
         lines.push(format!(
             "{:<16}  {:<8}  {:<10}  {:<14}  {:<16}  {:<16}  {}",
@@ -504,6 +505,7 @@ pub fn devices_json(devices: &[DeviceRecord]) -> serde_json::Value {
                 "paired_at": device.paired_at,
                 "last_seen_at": device.last_seen_at,
                 "expires_at": device.expires_at(),
+                "rotates": device.rotates(),
                 "kind": device.kind,
                 "platform": device.platform,
                 "host_id": device.host_id,
@@ -853,6 +855,27 @@ mod tests {
             last_seen(seen, now + chrono::Duration::days(40)),
             "40 days ago"
         );
+    }
+
+    #[test]
+    fn a_rotating_device_is_listed_as_expiring_only_when_revoked() {
+        use crate::remote_gateway::devices::DeviceProfile;
+        let mut devices = Devices::default();
+        let enrolled = devices
+            .enroll_rotating("Lars's PC", None, &DeviceProfile::default())
+            .unwrap();
+        let now = enrolled.record.paired_at + chrono::Duration::days(40);
+        let table = format_devices_at(devices.list(), now);
+        assert!(table.contains("until revoked"), "{table}");
+        let json = devices_json(devices.list());
+        assert_eq!(json[0]["expires_at"], serde_json::Value::Null);
+        assert_eq!(json[0]["rotates"], true);
+        // The tokens it holds never reach either output.
+        let issued = enrolled.issued.expect("a rotating pairing issues tokens");
+        for output in [table, json.to_string()] {
+            assert!(!output.contains(issued.refresh_token.expose()));
+            assert!(!output.contains(issued.access_token.expose()));
+        }
     }
 
     #[test]

@@ -35,6 +35,10 @@ pub mod host_capability {
     /// and `host_id`, and the host lists the device by kind. Also in the
     /// Bonjour record as `caps=connect_requests,desktops`.
     pub const DESKTOPS: &str = "desktops";
+    /// A pairing may ask for `token_rotation` in `pair` and `authenticate`: it
+    /// then gets a rotating refresh token and a short-lived access token, and
+    /// no expiry. A gateway without it keeps the static token and its 30 days.
+    pub const TOKEN_ROTATION: &str = "token_rotation";
 }
 
 /// Optional operations one session owner implements, in

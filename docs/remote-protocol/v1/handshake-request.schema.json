@@ -18,6 +18,19 @@
     "Secret": {
       "description": "A pairing credential, manual code or device token. Serializes as a plain\nstring; `Debug` never prints the value, so it cannot reach logs or error\nstrings through a derived impl.",
       "type": "string"
+    },
+    "TokenAck": {
+      "description": "The body of a `token_ack` frame: which rotation the device stored.",
+      "properties": {
+        "rotation_id": {
+          "description": "The `rotation_id` of the `authenticated` frame whose refresh token the\ndevice has stored. An identifier of an older rotation is ignored.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rotation_id"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -76,6 +89,16 @@
     {
       "description": "Exchange a pairing challenge for a device token.",
       "properties": {
+        "capabilities": {
+          "description": "Optional features the device understands, as in `authenticate`.\nA gateway ignores a capability it does not know.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "device_kind": {
           "description": "What the device is: `phone`, `desktop` (the desktop app on\nanother machine) or `cli`. Absent, or a kind this gateway does\nnot know, is a phone. A label for the owner, not a permission.\nGateways that list `desktops` record it; it never grants ACP access.",
           "type": [
@@ -143,6 +166,27 @@
     {
       "description": "Present a device token obtained from an earlier `paired` frame.",
       "properties": {
+        "access_token": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Secret"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A short-lived access token from an earlier `paired` or\n`authenticated` frame: reconnect without rotating the refresh\ntoken."
+        },
+        "capabilities": {
+          "description": "Optional features the device understands. Naming\n[`CAPABILITY_TOKEN_ROTATION`] asks for rotating tokens; it must be\nnamed on `pair` too, or the pairing keeps its static token.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "device_id": {
           "type": "string"
         },
@@ -151,8 +195,27 @@
           "minimum": 0,
           "type": "integer"
         },
+        "refresh_token": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Secret"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The refresh token of a device that rotates its tokens: the same\nslot as `token`, under the name such a device uses."
+        },
         "token": {
-          "$ref": "#/$defs/Secret"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Secret"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The static device token, or the refresh token of a device that\nrotates its tokens. `None` when the device sends `refresh_token`\nor `access_token` instead."
         },
         "type": {
           "const": "authenticate",
@@ -169,8 +232,21 @@
       "required": [
         "type",
         "protocol_version",
-        "device_id",
-        "token"
+        "device_id"
+      ],
+      "type": "object"
+    },
+    {
+      "$ref": "#/$defs/TokenAck",
+      "description": "The device stored the refresh token from the `authenticated` frame it\njust received, so the host may retire the token before it. Only valid\non an authenticated connection, never as a first frame.",
+      "properties": {
+        "type": {
+          "const": "token_ack",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
       ],
       "type": "object"
     }

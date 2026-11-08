@@ -4,6 +4,12 @@
 //! keeps only its SHA-256 digest, in an owner-only file replaced atomically.
 //! The token is high-entropy, so a fast digest is enough: there is nothing to
 //! brute-force that a slow hash would protect.
+//!
+//! A device that asks for `token_rotation` never gets a static token: it holds
+//! a refresh token, which every successful `authenticate` replaces, and a
+//! short-lived access token that reconnects without rotating. Only digests are
+//! stored, and the access token's digest lives in memory alone, so a restart
+//! needs a refresh rather than an access token.
 
 use super::handshake::Secret;
 use super::pairing::{constant_time_eq, digest};
@@ -33,9 +39,20 @@ const MIN_INSTALL_ID_CHARS: usize = 16;
 /// a device that reconnects in a loop does not rewrite the store each time.
 pub const LAST_SEEN_RESOLUTION: chrono::Duration = chrono::Duration::minutes(5);
 
-/// How long a pairing lasts. After it the token is refused like an unknown
-/// one and the device pairs again, which bounds what a copied token is worth.
+/// How long a static pairing lasts. After it the token is refused like an
+/// unknown one and the device pairs again, which bounds what a copied token is
+/// worth. A device that rotates its tokens has no expiry: it lasts until it is
+/// revoked or a retired token is replayed.
 pub const DEVICE_LIFETIME: chrono::Duration = chrono::Duration::days(30);
+
+/// How long an access token is accepted after it was minted. It lets a device
+/// reconnect on a flapping network without rotating its refresh token.
+pub const ACCESS_TOKEN_LIFETIME: chrono::Duration = chrono::Duration::minutes(15);
+
+/// Retired refresh-token digests kept per device, so a retired token is
+/// recognized as a replay and an unrelated wrong token is not mistaken for
+/// one: only a token this host really issued can revoke a family.
+const MAX_RETIRED_TOKENS: usize = 8;
 
 /// Longest platform label kept.
 pub const MAX_PLATFORM_CHARS: usize = 32;
@@ -152,8 +169,10 @@ pub struct DeviceRecord {
     pub id: String,
     /// Label supplied by the device. Not unique, not trusted.
     pub name: String,
-    /// Hex SHA-256 of the device token. The token itself is never stored.
-    token_sha256: String,
+    /// Hex SHA-256 of the static device token, for a record that pairs
+    /// without `token_rotation`. The token itself is never stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    token_sha256: Option<String>,
     pub paired_at: DateTime<Utc>,
     /// Hex SHA-256 of the app install's identifier, when the device sent one.
     /// Pairing again from the same install replaces this record.
@@ -172,16 +191,173 @@ pub struct DeviceRecord {
     /// The connecting machine's stable identifier, when it sent one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_id: Option<String>,
+    /// The rotating credentials of a device that paired with
+    /// `token_rotation`. `None` for the static token of an older client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rotation: Option<TokenFamily>,
+}
+
+/// One device's rotating credentials: digests only.
+///
+/// `current` is the newest refresh token; `previous` is the one it replaced and
+/// is still accepted until the device acknowledges `current` or uses it, so a
+/// dropped `authenticated` frame never locks the device out. Anything in
+/// `retired` was replaced for good: presenting one is a replay.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct TokenFamily {
+    /// Groups the tokens of one pairing, for the owner's log.
+    family_id: String,
+    /// Hex SHA-256 of the newest refresh token.
+    current: String,
+    /// Hex SHA-256 of the token `current` replaced, still accepted until the
+    /// device acknowledges `current` or uses it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    previous: Option<String>,
+    /// Hex digests of refresh tokens replaced for good.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    retired: Vec<String>,
+    /// The rotation whose answer the device has not acknowledged yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rotation_id: Option<String>,
+    /// The access token minted with `current` and when it stops being
+    /// accepted. Memory only: an access token never touches disk, so after a
+    /// restart a device authenticates with its refresh token.
+    #[serde(skip)]
+    access: Option<AccessToken>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AccessToken {
+    sha256: String,
+    expires_at: DateTime<Utc>,
+}
+
+impl TokenFamily {
+    /// Whether `stored` (hex) is the digest of `presented`. A damaged digest
+    /// never matches the zero digest a failed decode would leave behind.
+    fn digest_matches(stored: &str, presented: &[u8; 32]) -> bool {
+        let mut expected = [0u8; 32];
+        if hex::decode_to_slice(stored, &mut expected).is_err() {
+            return false;
+        }
+        constant_time_eq(presented, &expected)
+    }
+
+    /// A fresh family: its first refresh token and the access token that goes
+    /// with it. Nothing is retired yet, so there is nothing to acknowledge.
+    fn new(now: DateTime<Utc>) -> (Self, Issued) {
+        let (refresh, access, access_expires_at) = mint(now);
+        let family = Self {
+            family_id: random_id(),
+            current: hex::encode(digest(refresh.expose().as_bytes())),
+            previous: None,
+            retired: Vec::new(),
+            rotation_id: None,
+            access: Some(AccessToken {
+                sha256: hex::encode(digest(access.expose().as_bytes())),
+                expires_at: access_expires_at,
+            }),
+        };
+        let issued = Issued {
+            refresh_token: refresh,
+            access_token: access,
+            access_expires_at,
+            rotation_id: None,
+        };
+        (family, issued)
+    }
+
+    /// Replace the tokens after an accepted refresh token. `from_current` says
+    /// the newest token was presented, which retires the one before it;
+    /// otherwise the presented token stays `previous`, so a retry with it keeps
+    /// working and the superseded token is not a replay.
+    fn rotate(&mut self, from_current: bool, now: DateTime<Utc>) -> Issued {
+        let (refresh, access, access_expires_at) = mint(now);
+        let current = hex::encode(digest(refresh.expose().as_bytes()));
+        if from_current {
+            // The token before `current` is replaced for good; `current` takes
+            // its place as the one a retry may still present.
+            if let Some(retired) = self.previous.take() {
+                self.retire(retired);
+            }
+            self.previous = Some(std::mem::replace(&mut self.current, current));
+        } else {
+            // The presented token stays `previous`, so the device that never
+            // stored `current` can keep using it; `current` is superseded.
+            self.current = current;
+        }
+        let rotation_id = random_id();
+        self.rotation_id = Some(rotation_id.clone());
+        self.access = Some(AccessToken {
+            sha256: hex::encode(digest(access.expose().as_bytes())),
+            expires_at: access_expires_at,
+        });
+        Issued {
+            refresh_token: refresh,
+            access_token: access,
+            access_expires_at,
+            rotation_id: Some(rotation_id),
+        }
+    }
+
+    /// Whether `presented` is a refresh token this family retired.
+    fn is_retired(&self, presented: &[u8; 32]) -> bool {
+        self.retired
+            .iter()
+            .any(|digest| Self::digest_matches(digest, presented))
+    }
+
+    /// Forget a token for good, keeping the newest retirements.
+    fn retire(&mut self, digest: String) {
+        self.retired.push(digest);
+        if self.retired.len() > MAX_RETIRED_TOKENS {
+            self.retired.remove(0);
+        }
+    }
+}
+
+/// A new refresh token, access token and the access token's expiry.
+fn mint(now: DateTime<Utc>) -> (Secret, Secret, DateTime<Utc>) {
+    (random_token(), random_token(), now + ACCESS_TOKEN_LIFETIME)
+}
+
+/// 256 random bits, base64url. The only copy of a token.
+fn random_token() -> Secret {
+    let mut bytes = [0u8; 32];
+    rand::rng().fill(&mut bytes);
+    Secret::new(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+}
+
+/// Sixteen hex characters naming a device, a token family or a rotation.
+fn random_id() -> String {
+    let mut bytes = [0u8; 8];
+    rand::rng().fill(&mut bytes);
+    hex::encode(bytes)
 }
 
 impl DeviceRecord {
-    /// When the token stops being accepted: [`DEVICE_LIFETIME`] after pairing.
-    pub fn expires_at(&self) -> DateTime<Utc> {
-        self.paired_at + DEVICE_LIFETIME
+    /// Whether the device exchanges a rotating refresh token for a new one.
+    pub fn rotates(&self) -> bool {
+        self.rotation.is_some()
+    }
+
+    /// The identifier grouping one pairing's tokens, for the owner's log.
+    pub fn family_id(&self) -> Option<&str> {
+        self.rotation
+            .as_ref()
+            .map(|family| family.family_id.as_str())
+    }
+
+    /// When the pairing stops being accepted: [`DEVICE_LIFETIME`] after
+    /// pairing, or never for a device that rotates its tokens.
+    pub fn expires_at(&self) -> Option<DateTime<Utc>> {
+        self.rotation
+            .is_none()
+            .then(|| self.paired_at + DEVICE_LIFETIME)
     }
 
     pub fn is_expired(&self, now: DateTime<Utc>) -> bool {
-        now >= self.expires_at()
+        self.expires_at().is_some_and(|expires| now >= expires)
     }
 }
 
@@ -197,6 +373,7 @@ impl fmt::Debug for DeviceRecord {
             .field("kind", &self.kind)
             .field("platform", &self.platform)
             .field("host_id", &self.host_id)
+            .field("rotates", &self.rotates())
             .finish_non_exhaustive()
     }
 }
@@ -236,10 +413,60 @@ impl std::error::Error for DeviceError {}
 #[derive(Debug)]
 pub struct Enrollment {
     pub record: DeviceRecord,
-    /// The only copy of the new token.
-    pub token: Secret,
+    /// The only copy of the new static token; `None` for a rotating device.
+    pub token: Option<Secret>,
+    /// The first tokens of a rotating device: a refresh token and its access
+    /// token. `None` for a static device.
+    pub issued: Option<Issued>,
     /// Identifier of the earlier record from the same install, now gone.
     pub replaced: Option<String>,
+}
+
+/// Tokens handed to a device: the first pair of a pairing, or a rotation.
+#[derive(Debug)]
+pub struct Issued {
+    /// The only copy of the new refresh token.
+    pub refresh_token: Secret,
+    /// The only copy of the new access token.
+    pub access_token: Secret,
+    pub access_expires_at: DateTime<Utc>,
+    /// The rotation the device acknowledges with `token_ack`; `None` for the
+    /// first tokens of a pairing, which retire nothing.
+    pub rotation_id: Option<String>,
+}
+
+/// How a device presented a credential to `authenticate`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Credential<'a> {
+    /// A long-lived token: the static token of a device that cannot rotate, or
+    /// the refresh token of one that can.
+    Refresh(&'a str),
+    /// A short-lived access token, for reconnecting without rotating.
+    Access(&'a str),
+}
+
+/// An accepted `authenticate`.
+#[derive(Debug)]
+pub struct Accepted {
+    pub record: DeviceRecord,
+    /// New tokens to hand back, when the record rotated.
+    pub issued: Option<Issued>,
+    /// When the access token this connection holds stops being accepted.
+    pub access_expires_at: Option<DateTime<Utc>>,
+}
+
+/// Why an `authenticate` was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthenticateError {
+    /// Unknown device, wrong token, expired static pairing, or an access
+    /// token this host never issued. All indistinguishable, as before.
+    Unauthorized,
+    /// The access token this record issued has expired: authenticate with the
+    /// refresh token instead of pairing again.
+    AccessExpired,
+    /// A refresh token this family retired for good: the whole family was
+    /// revoked by this call.
+    Replayed,
 }
 
 /// The set of paired devices, as held in memory and written to disk.
@@ -266,8 +493,11 @@ impl Devices {
     /// Add a device and mint its token. The returned token is the only copy.
     /// Expired devices are forgotten first, so they never hold a place.
     pub fn enroll(&mut self, name: &str) -> Result<(DeviceRecord, Secret), DeviceError> {
-        self.enroll_install(name, None)
-            .map(|enrolled| (enrolled.record, enrolled.token))
+        let Enrollment { record, token, .. } = self.enroll_install(name, None)?;
+        Ok((
+            record,
+            token.expect("a pairing without rotation mints a static token"),
+        ))
     }
 
     /// [`Self::enroll`] for a device that names its app install. A record
@@ -289,6 +519,27 @@ impl Devices {
         install_id: Option<&str>,
         profile: &DeviceProfile,
     ) -> Result<Enrollment, DeviceError> {
+        self.enroll_device(name, install_id, profile, false)
+    }
+
+    /// [`Self::enroll_install`] for a device that asked for `token_rotation`:
+    /// it gets a refresh token and an access token, and no expiry.
+    pub fn enroll_rotating(
+        &mut self,
+        name: &str,
+        install_id: Option<&str>,
+        profile: &DeviceProfile,
+    ) -> Result<Enrollment, DeviceError> {
+        self.enroll_device(name, install_id, profile, true)
+    }
+
+    fn enroll_device(
+        &mut self,
+        name: &str,
+        install_id: Option<&str>,
+        profile: &DeviceProfile,
+        rotate: bool,
+    ) -> Result<Enrollment, DeviceError> {
         let now = Utc::now();
         self.devices.retain(|record| !record.is_expired(now));
         let install_sha256 = install_id.and_then(install_digest);
@@ -300,28 +551,33 @@ impl Devices {
         if replaced.is_none() && self.devices.len() >= MAX_DEVICES {
             return Err(DeviceError::Full);
         }
-        let mut id_bytes = [0u8; 8];
-        let mut token_bytes = [0u8; 32];
-        rand::rng().fill(&mut id_bytes);
-        rand::rng().fill(&mut token_bytes);
-        let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(token_bytes);
+        let (token_sha256, token, rotation, issued) = if rotate {
+            let (family, issued) = TokenFamily::new(now);
+            (None, None, Some(family), Some(issued))
+        } else {
+            let token = random_token();
+            let digest_hex = hex::encode(digest(token.expose().as_bytes()));
+            (Some(digest_hex), Some(token), None, None)
+        };
         let record = DeviceRecord {
             acp: false,
-            id: hex::encode(id_bytes),
+            id: random_id(),
             name: sanitize_name(name),
-            token_sha256: hex::encode(digest(token.as_bytes())),
+            token_sha256,
             paired_at: now,
             install_sha256,
             last_seen_at: Some(now),
             kind: profile.kind,
             platform: profile.platform.clone(),
             host_id: profile.host_id.clone(),
+            rotation,
         };
         let replaced = replaced.map(|index| self.devices.remove(index).id);
         self.devices.push(record.clone());
         Ok(Enrollment {
             record,
-            token: Secret::new(token),
+            token,
+            issued,
             replaced,
         })
     }
@@ -343,9 +599,9 @@ impl Devices {
         true
     }
 
-    /// The device `token` belongs to, if `device_id` is paired, the token is
-    /// its own and the pairing has not expired at `now`. An unknown device
-    /// costs the same comparison as a known one.
+    /// The device `token` belongs to, if `device_id` is paired with a static
+    /// token, the token is its own and the pairing has not expired at `now`.
+    /// An unknown device costs the same comparison as a known one.
     pub fn verify(
         &self,
         device_id: &str,
@@ -356,10 +612,131 @@ impl Devices {
         let record = self.devices.iter().find(|record| record.id == device_id);
         let mut expected = [0u8; 32];
         let known = record.is_some_and(|record| {
-            hex::decode_to_slice(&record.token_sha256, &mut expected).is_ok()
+            record
+                .token_sha256
+                .as_deref()
+                .is_some_and(|stored| hex::decode_to_slice(stored, &mut expected).is_ok())
         });
         let matches = constant_time_eq(&presented, &expected);
         record.filter(|record| known && matches && !record.is_expired(now))
+    }
+
+    /// Accept an `authenticate`. An access token confirms the record as it is;
+    /// a refresh token (or the static token of a device that cannot rotate)
+    /// rotates the record, and this set must then be saved.
+    ///
+    /// The rotation rules a client relies on:
+    /// - The newest refresh token and, until it is acknowledged or used, the
+    ///   one it replaced are both accepted.
+    /// - Using the newest token retires the one before it, so a copy of it
+    ///   presented later is a replay; acknowledging the newest retires it too.
+    /// - Presenting the previous token (a lost `authenticated` frame, or two
+    ///   routes racing with one credential) is accepted and rotates again: the
+    ///   presented token stays `previous`, so it keeps working, and the token
+    ///   the other connection was handed is superseded without a replay.
+    /// - Any other token this family retired is a replay, and removes the
+    ///   whole record. A token this host never issued is only refused, so a
+    ///   guessed device identifier cannot revoke a device.
+    pub fn accept(
+        &mut self,
+        device_id: &str,
+        credential: Credential<'_>,
+        now: DateTime<Utc>,
+    ) -> Result<Accepted, AuthenticateError> {
+        let Some(index) = self
+            .devices
+            .iter()
+            .position(|record| record.id == device_id)
+        else {
+            return Err(AuthenticateError::Unauthorized);
+        };
+        let record = &self.devices[index];
+        if record.is_expired(now) {
+            return Err(AuthenticateError::Unauthorized);
+        }
+        let presented = match credential {
+            Credential::Refresh(token) => digest(token.as_bytes()),
+            Credential::Access(token) => digest(token.as_bytes()),
+        };
+        let Some(family) = record.rotation.clone() else {
+            // A record that cannot rotate takes only its static token.
+            if matches!(credential, Credential::Access(_)) {
+                return Err(AuthenticateError::Unauthorized);
+            }
+            let matches = record
+                .token_sha256
+                .as_deref()
+                .is_some_and(|stored| TokenFamily::digest_matches(stored, &presented));
+            return if matches {
+                Ok(Accepted {
+                    record: record.clone(),
+                    issued: None,
+                    access_expires_at: None,
+                })
+            } else {
+                Err(AuthenticateError::Unauthorized)
+            };
+        };
+        if matches!(credential, Credential::Access(_)) {
+            let Some(access) = family.access.as_ref() else {
+                return Err(AuthenticateError::AccessExpired);
+            };
+            if !TokenFamily::digest_matches(&access.sha256, &presented) {
+                return Err(AuthenticateError::Unauthorized);
+            }
+            if now >= access.expires_at {
+                return Err(AuthenticateError::AccessExpired);
+            }
+            return Ok(Accepted {
+                record: record.clone(),
+                issued: None,
+                access_expires_at: Some(access.expires_at),
+            });
+        }
+        let from_current = TokenFamily::digest_matches(&family.current, &presented);
+        let from_previous = family
+            .previous
+            .as_deref()
+            .is_some_and(|previous| TokenFamily::digest_matches(previous, &presented));
+        if !from_current && !from_previous {
+            if family.is_retired(&presented) {
+                // A copy of a retired token: the family is worth nothing now.
+                self.devices.remove(index);
+                return Err(AuthenticateError::Replayed);
+            }
+            return Err(AuthenticateError::Unauthorized);
+        }
+        let mut family = family;
+        let issued = family.rotate(from_current, now);
+        let mut record = record.clone();
+        record.rotation = Some(family);
+        self.devices[index] = record.clone();
+        Ok(Accepted {
+            record,
+            access_expires_at: Some(issued.access_expires_at),
+            issued: Some(issued),
+        })
+    }
+
+    /// Retire the previous refresh token after the device acknowledged the
+    /// rotation that issued the current one. False when nothing changed: the
+    /// record is gone, does not rotate, or the acknowledgement names a rotation
+    /// another connection has replaced, which is not an error.
+    pub fn acknowledge(&mut self, device_id: &str, rotation_id: &str) -> bool {
+        let Some(record) = self.devices.iter_mut().find(|r| r.id == device_id) else {
+            return false;
+        };
+        let Some(family) = record.rotation.as_mut() else {
+            return false;
+        };
+        if family.rotation_id.as_deref() != Some(rotation_id) {
+            return false;
+        }
+        if let Some(previous) = family.previous.take() {
+            family.retire(previous);
+        }
+        family.rotation_id = None;
+        true
     }
 
     /// Resolve what a user typed: a full identifier, a unique identifier
@@ -573,7 +950,11 @@ mod tests {
         // The stored digest is not itself a credential.
         assert!(
             devices
-                .verify(&first.id, &first.token_sha256, Utc::now())
+                .verify(
+                    &first.id,
+                    first.token_sha256.as_deref().expect("a static token"),
+                    Utc::now()
+                )
                 .is_none()
         );
         assert!(
@@ -587,7 +968,7 @@ mod tests {
     fn a_corrupt_digest_never_matches_the_zero_digest_fallback() {
         let mut devices = Devices::default();
         let (record, _token) = devices.enroll("phone").unwrap();
-        devices.devices[0].token_sha256 = "not-hex".into();
+        devices.devices[0].token_sha256 = Some("not-hex".into());
         assert!(devices.verify(&record.id, "anything", Utc::now()).is_none());
     }
 
@@ -595,8 +976,9 @@ mod tests {
     fn a_pairing_expires_after_its_lifetime_and_frees_its_place() {
         let mut devices = Devices::default();
         let (record, token) = devices.enroll("phone").unwrap();
-        assert_eq!(record.expires_at(), record.paired_at + DEVICE_LIFETIME);
-        let just_before = record.expires_at() - chrono::Duration::seconds(1);
+        let expires_at = record.expires_at().expect("a static pairing expires");
+        assert_eq!(expires_at, record.paired_at + DEVICE_LIFETIME);
+        let just_before = expires_at - chrono::Duration::seconds(1);
         assert!(
             devices
                 .verify(&record.id, token.expose(), just_before)
@@ -604,7 +986,7 @@ mod tests {
         );
         assert!(
             devices
-                .verify(&record.id, token.expose(), record.expires_at())
+                .verify(&record.id, token.expose(), expires_at)
                 .is_none()
         );
 
@@ -760,12 +1142,20 @@ mod tests {
         let now = Utc::now();
         assert!(
             loaded
-                .verify(&first.record.id, first.token.expose(), now)
+                .verify(
+                    &first.record.id,
+                    first.token.as_ref().expect("a static token").expose(),
+                    now
+                )
                 .is_none()
         );
         assert!(
             loaded
-                .verify(&again.record.id, again.token.expose(), now)
+                .verify(
+                    &again.record.id,
+                    again.token.as_ref().expect("a static token").expose(),
+                    now
+                )
                 .is_some()
         );
         // Only a digest of the install identifier is stored.
@@ -942,7 +1332,7 @@ mod tests {
         let mut devices = Devices::default();
         let (record, token) = devices.enroll("phone").unwrap();
         let debug = format!("{devices:?} {record:?}");
-        assert!(!debug.contains(&record.token_sha256));
+        assert!(!debug.contains(record.token_sha256.as_deref().expect("a static token")));
         assert!(!debug.contains(token.expose()));
     }
 }
@@ -970,9 +1360,382 @@ mod acp_grant_tests {
             serde_json::from_slice(&serde_json::to_vec(&devices).unwrap()).unwrap();
         assert!(
             loaded
-                .verify(&enrolled.record.id, enrolled.token.expose(), Utc::now())
+                .verify(
+                    &enrolled.record.id,
+                    enrolled.token.as_ref().expect("a static token").expose(),
+                    Utc::now()
+                )
                 .unwrap()
                 .acp
         );
+    }
+}
+
+#[cfg(test)]
+mod rotation_tests {
+    use super::*;
+
+    fn store() -> (tempfile::TempDir, DeviceStore) {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let store = DeviceStore::new(dir.path().join("remote").join("devices.json"));
+        (dir, store)
+    }
+
+    /// A rotating device, the tokens it paired with, and the set holding it.
+    fn rotating() -> (Devices, DeviceRecord, Secret, Secret) {
+        let mut devices = Devices::default();
+        let enrolled = devices
+            .enroll_rotating("desktop", None, &DeviceProfile::default())
+            .unwrap();
+        let issued = enrolled.issued.expect("a rotating pairing issues tokens");
+        (
+            devices,
+            enrolled.record,
+            issued.refresh_token,
+            issued.access_token,
+        )
+    }
+
+    #[test]
+    fn a_rotating_pairing_has_no_static_token_and_never_expires() {
+        let mut devices = Devices::default();
+        let enrolled = devices
+            .enroll_rotating("Lars's PC", None, &DeviceProfile::default())
+            .unwrap();
+        assert!(enrolled.token.is_none());
+        let issued = enrolled.issued.expect("a rotating pairing issues tokens");
+        assert!(issued.rotation_id.is_none());
+        assert_eq!(issued.refresh_token.expose().len(), 43);
+        assert_eq!(issued.access_token.expose().len(), 43);
+        assert_eq!(
+            issued.access_expires_at,
+            enrolled.record.paired_at + ACCESS_TOKEN_LIFETIME
+        );
+        assert!(enrolled.record.rotates());
+        assert_eq!(enrolled.record.expires_at(), None);
+        // Long past the 30 days a static pairing would have lasted.
+        let later = enrolled.record.paired_at + chrono::Duration::days(400);
+        assert!(
+            devices
+                .accept(
+                    &enrolled.record.id,
+                    Credential::Refresh(issued.refresh_token.expose()),
+                    later
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn the_access_token_reconnects_without_rotating_until_it_expires() {
+        let (mut devices, record, _refresh, access) = rotating();
+        let at = record.paired_at + chrono::Duration::minutes(14);
+        let accepted = devices
+            .accept(&record.id, Credential::Access(access.expose()), at)
+            .unwrap();
+        assert!(accepted.issued.is_none());
+        assert_eq!(
+            accepted.record.id, record.id,
+            "an access token leaves the record as it is"
+        );
+
+        let at = record.paired_at + ACCESS_TOKEN_LIFETIME;
+        assert_eq!(
+            devices
+                .accept(&record.id, Credential::Access(access.expose()), at)
+                .unwrap_err(),
+            AuthenticateError::AccessExpired
+        );
+        // A wrong access token revokes nothing.
+        assert_eq!(
+            devices
+                .accept(&record.id, Credential::Access("not-a-token"), at)
+                .unwrap_err(),
+            AuthenticateError::Unauthorized
+        );
+        assert_eq!(devices.list().len(), 1);
+    }
+
+    #[test]
+    fn a_refresh_token_rotates_and_the_acknowledgement_retires_the_old_one() {
+        let (mut devices, record, refresh, _access) = rotating();
+        let at = record.paired_at + chrono::Duration::minutes(16);
+        let rotated = devices
+            .accept(&record.id, Credential::Refresh(refresh.expose()), at)
+            .unwrap();
+        let next = rotated.issued.expect("a refresh token rotates");
+        let rotation_id = next.rotation_id.expect("a rotation has an id");
+        assert_eq!(next.access_expires_at, at + ACCESS_TOKEN_LIFETIME);
+        // The acknowledgement retires the token before the new one; from then
+        // on presenting it is a replay.
+        assert!(devices.acknowledge(&record.id, &rotation_id));
+        assert!(!devices.acknowledge(&record.id, &rotation_id));
+        assert_eq!(
+            devices
+                .accept(&record.id, Credential::Refresh(refresh.expose()), at)
+                .unwrap_err(),
+            AuthenticateError::Replayed
+        );
+        assert!(devices.list().is_empty(), "the whole family is gone");
+    }
+
+    #[test]
+    fn a_dropped_authenticated_frame_never_locks_a_device_out() {
+        let (mut devices, record, refresh, _access) = rotating();
+        let at = record.paired_at + chrono::Duration::minutes(20);
+        // The answer was dropped, so the device still holds R1, twice.
+        let second = devices
+            .accept(&record.id, Credential::Refresh(refresh.expose()), at)
+            .unwrap()
+            .issued
+            .unwrap();
+        let third = devices
+            .accept(&record.id, Credential::Refresh(refresh.expose()), at)
+            .unwrap()
+            .issued
+            .unwrap();
+        assert_ne!(second.refresh_token.expose(), third.refresh_token.expose());
+        assert_eq!(devices.list().len(), 1, "no revocation on a retry");
+        // The newest answer keeps working, and using it retires R1 for good.
+        assert!(
+            devices
+                .accept(
+                    &record.id,
+                    Credential::Refresh(third.refresh_token.expose()),
+                    at
+                )
+                .is_ok()
+        );
+        // The answer a retry superseded is refused, but that is not a replay:
+        // the pairing stays.
+        assert_eq!(
+            devices
+                .accept(
+                    &record.id,
+                    Credential::Refresh(second.refresh_token.expose()),
+                    at
+                )
+                .unwrap_err(),
+            AuthenticateError::Unauthorized
+        );
+        assert_eq!(devices.list().len(), 1);
+        assert_eq!(
+            devices
+                .accept(&record.id, Credential::Refresh(refresh.expose()), at)
+                .unwrap_err(),
+            AuthenticateError::Replayed
+        );
+    }
+
+    #[test]
+    fn using_the_new_token_retires_the_one_before_it() {
+        let (mut devices, record, refresh, _access) = rotating();
+        let at = record.paired_at + chrono::Duration::minutes(20);
+        let second = devices
+            .accept(&record.id, Credential::Refresh(refresh.expose()), at)
+            .unwrap()
+            .issued
+            .unwrap();
+        // The first use of R2 retires R1, without any acknowledgement.
+        assert!(
+            devices
+                .accept(
+                    &record.id,
+                    Credential::Refresh(second.refresh_token.expose()),
+                    at
+                )
+                .is_ok()
+        );
+        assert_eq!(
+            devices
+                .accept(&record.id, Credential::Refresh(refresh.expose()), at)
+                .unwrap_err(),
+            AuthenticateError::Replayed
+        );
+    }
+
+    #[test]
+    fn two_connections_racing_on_one_refresh_token_are_not_a_replay() {
+        let (mut devices, record, refresh, _access) = rotating();
+        let at = record.paired_at + chrono::Duration::minutes(20);
+        // Two routes race with the same R1: both are answered, neither is a
+        // replay, and the device stays paired.
+        let first = devices
+            .accept(&record.id, Credential::Refresh(refresh.expose()), at)
+            .unwrap()
+            .issued
+            .unwrap();
+        let second = devices
+            .accept(&record.id, Credential::Refresh(refresh.expose()), at)
+            .unwrap()
+            .issued
+            .unwrap();
+        assert_ne!(first.refresh_token.expose(), second.refresh_token.expose());
+        assert_eq!(devices.list().len(), 1);
+        // The last answer is the current token, and it works.
+        assert!(
+            devices
+                .accept(
+                    &record.id,
+                    Credential::Refresh(second.refresh_token.expose()),
+                    at
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_wrong_token_is_refused_without_revoking_the_device() {
+        let (mut devices, record, refresh, _access) = rotating();
+        let at = record.paired_at + chrono::Duration::minutes(20);
+        for wrong in ["", "not-a-token", &"a".repeat(43)] {
+            assert_eq!(
+                devices
+                    .accept(&record.id, Credential::Refresh(wrong), at)
+                    .unwrap_err(),
+                AuthenticateError::Unauthorized,
+                "{wrong}"
+            );
+        }
+        // A guessed device identifier cannot revoke a device either.
+        assert_eq!(
+            devices
+                .accept(
+                    "ffffffffffffffff",
+                    Credential::Refresh(refresh.expose()),
+                    at
+                )
+                .unwrap_err(),
+            AuthenticateError::Unauthorized
+        );
+        assert_eq!(devices.list().len(), 1);
+        assert!(
+            devices
+                .accept(&record.id, Credential::Refresh(refresh.expose()), at)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn only_digests_are_stored_and_the_access_token_never_reaches_disk() {
+        let (_dir, store) = store();
+        let mut devices = store.load().unwrap();
+        let enrolled = devices
+            .enroll_rotating("desktop", None, &DeviceProfile::default())
+            .unwrap();
+        let issued = enrolled.issued.expect("a rotating pairing issues tokens");
+        store.save(&devices).unwrap();
+        let on_disk = std::fs::read_to_string(store.path()).unwrap();
+        assert!(!on_disk.contains(issued.refresh_token.expose()));
+        assert!(!on_disk.contains(issued.access_token.expose()));
+        assert!(!on_disk.contains("access"));
+        assert!(!on_disk.contains("token_sha256"));
+
+        // A restart keeps the rotated state and forgets the access token.
+        let mut loaded = store.load().unwrap();
+        assert!(loaded.list()[0].rotates());
+        assert!(loaded.list()[0].rotation.as_ref().unwrap().access.is_none());
+        let at = enrolled.record.paired_at + chrono::Duration::minutes(1);
+        assert_eq!(
+            loaded
+                .accept(
+                    &enrolled.record.id,
+                    Credential::Access(issued.access_token.expose()),
+                    at
+                )
+                .unwrap_err(),
+            AuthenticateError::AccessExpired
+        );
+        let rotated = loaded
+            .accept(
+                &enrolled.record.id,
+                Credential::Refresh(issued.refresh_token.expose()),
+                at,
+            )
+            .unwrap()
+            .issued
+            .expect("a refresh token rotates");
+        store.save(&loaded).unwrap();
+
+        // Reloaded, the token it stored is current and the one before it is
+        // still the previous token, so the pairing survived the restart.
+        let mut reloaded = store.load().unwrap();
+        assert!(
+            reloaded
+                .accept(
+                    &enrolled.record.id,
+                    Credential::Refresh(rotated.refresh_token.expose()),
+                    at
+                )
+                .is_ok()
+        );
+        let mut reloaded = store.load().unwrap();
+        assert!(
+            reloaded
+                .accept(
+                    &enrolled.record.id,
+                    Credential::Refresh(issued.refresh_token.expose()),
+                    at
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_static_device_is_unaffected_by_the_rotating_path() {
+        let mut devices = Devices::default();
+        let (record, token) = devices.enroll("phone").unwrap();
+        assert!(!record.rotates());
+        assert_eq!(
+            record.expires_at(),
+            Some(record.paired_at + DEVICE_LIFETIME)
+        );
+        let at = record.paired_at + chrono::Duration::days(29);
+        assert!(
+            devices
+                .accept(&record.id, Credential::Refresh(token.expose()), at)
+                .is_ok()
+        );
+        assert_eq!(
+            devices
+                .accept(&record.id, Credential::Access(token.expose()), at)
+                .unwrap_err(),
+            AuthenticateError::Unauthorized
+        );
+        let after = record.paired_at + DEVICE_LIFETIME;
+        assert_eq!(
+            devices
+                .accept(&record.id, Credential::Refresh(token.expose()), after)
+                .unwrap_err(),
+            AuthenticateError::Unauthorized
+        );
+        assert_eq!(devices.list().len(), 1);
+    }
+
+    #[test]
+    fn a_record_stored_without_rotation_fields_loads_as_a_static_device() {
+        let stored = r#"{"version":1,"devices":[{"id":"0011223344556677","name":"iPhone","token_sha256":"00","paired_at":"2026-10-01T10:00:00Z"}]}"#;
+        let old: Devices = serde_json::from_str(stored).unwrap();
+        assert!(!old.list()[0].rotates());
+        assert!(old.list()[0].expires_at().is_some());
+    }
+
+    #[test]
+    fn retired_digests_are_bounded() {
+        let (mut devices, record, mut refresh, _access) = rotating();
+        let mut at = record.paired_at;
+        for _ in 0..MAX_RETIRED_TOKENS + 3 {
+            at += chrono::Duration::minutes(1);
+            let rotated = devices
+                .accept(&record.id, Credential::Refresh(refresh.expose()), at)
+                .unwrap()
+                .issued
+                .expect("a refresh token rotates");
+            let rotation_id = rotated.rotation_id.expect("a rotation has an id");
+            assert!(devices.acknowledge(&record.id, &rotation_id));
+            refresh = rotated.refresh_token;
+        }
+        let family = devices.list()[0].rotation.as_ref().unwrap();
+        assert_eq!(family.retired.len(), MAX_RETIRED_TOKENS);
     }
 }
