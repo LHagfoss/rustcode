@@ -29,6 +29,11 @@ pub const WIRE_NAMES_THREAD: &str = "thread";
 /// Largest handshake frame accepted from an unauthenticated socket.
 pub const MAX_HANDSHAKE_FRAME_BYTES: usize = 8 * 1024;
 
+/// The capability a device names in `pair` or `authenticate` to exchange a
+/// rotating refresh token for a new one. A device that does not name it keeps
+/// the static token and its 30-day expiry, exactly as before.
+pub const CAPABILITY_TOKEN_ROTATION: &str = "token_rotation";
+
 /// A pairing credential, manual code or device token. Serializes as a plain
 /// string; `Debug` never prints the value, so it cannot reach logs or error
 /// strings through a derived impl.
@@ -125,16 +130,82 @@ pub enum HandshakeRequest {
         /// unless it is 16 to 128 printable ASCII characters.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         host_id: Option<String>,
+        /// Optional features the device understands, as in `authenticate`.
+        /// A gateway ignores a capability it does not know.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        capabilities: Option<Vec<String>>,
     },
     /// Present a device token obtained from an earlier `paired` frame.
     Authenticate {
         protocol_version: u32,
         device_id: String,
-        token: Secret,
+        /// The static device token, or the refresh token of a device that
+        /// rotates its tokens. `None` when the device sends `refresh_token`
+        /// or `access_token` instead.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token: Option<Secret>,
+        /// The refresh token of a device that rotates its tokens: the same
+        /// slot as `token`, under the name such a device uses.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refresh_token: Option<Secret>,
+        /// A short-lived access token from an earlier `paired` or
+        /// `authenticated` frame: reconnect without rotating the refresh
+        /// token.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        access_token: Option<Secret>,
         /// `"thread"` asks for the thread names on the wire; see [`WIRE_NAMES_THREAD`].
         #[serde(default, skip_serializing_if = "Option::is_none")]
         wire_names: Option<String>,
+        /// Optional features the device understands. Naming
+        /// [`CAPABILITY_TOKEN_ROTATION`] asks for rotating tokens; it must be
+        /// named on `pair` too, or the pairing keeps its static token.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        capabilities: Option<Vec<String>>,
     },
+    /// The device stored the refresh token from the `authenticated` frame it
+    /// just received, so the host may retire the token before it. Only valid
+    /// on an authenticated connection, never as a first frame.
+    TokenAck(TokenAck),
+}
+
+/// The body of a `token_ack` frame: which rotation the device stored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TokenAck {
+    /// The `rotation_id` of the `authenticated` frame whose refresh token the
+    /// device has stored. An identifier of an older rotation is ignored.
+    pub rotation_id: String,
+}
+
+/// What an `authenticate` presents, as the credential the host checks.
+#[derive(Debug, Clone, Copy)]
+pub enum Presented<'a> {
+    /// A short-lived access token: reconnect without rotating.
+    Access(&'a Secret),
+    /// The long-lived token: the static device token or the refresh token.
+    Refresh(&'a Secret),
+}
+
+/// A frame that belongs to the gateway rather than to the session router.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionControl {
+    /// An ordinary session frame; hand it to the router.
+    NotAControl,
+    /// The device acknowledged a rotation.
+    TokenAck(TokenAck),
+    /// A frame tagged `token_ack` that does not carry what one must.
+    Malformed,
+}
+
+/// Read a frame that may be a `token_ack`. Only a frame whose tag says so is
+/// parsed, so the session path stays a pass-through.
+pub fn session_control(text: &str) -> SessionControl {
+    if !text.contains("\"token_ack\"") {
+        return SessionControl::NotAControl;
+    }
+    match serde_json::from_str::<HandshakeRequest>(text) {
+        Ok(HandshakeRequest::TokenAck(ack)) => SessionControl::TokenAck(ack),
+        _ => SessionControl::Malformed,
+    }
 }
 
 impl HandshakeRequest {
@@ -144,8 +215,46 @@ impl HandshakeRequest {
             Self::Pair { wire_names, .. } | Self::Authenticate { wire_names, .. } => {
                 wire_names.as_deref() == Some(WIRE_NAMES_THREAD)
             }
-            Self::ConnectRequest { .. } => false,
+            Self::ConnectRequest { .. } | Self::TokenAck(_) => false,
         }
+    }
+
+    /// Whether the device named `capability` in `pair` or `authenticate`.
+    pub fn offers(&self, capability: &str) -> bool {
+        let capabilities = match self {
+            Self::Pair { capabilities, .. } | Self::Authenticate { capabilities, .. } => {
+                capabilities
+            }
+            Self::ConnectRequest { .. } | Self::TokenAck(_) => return false,
+        };
+        capabilities
+            .as_deref()
+            .is_some_and(|list| list.iter().any(|named| named == capability))
+    }
+
+    /// Whether the device asked to exchange a rotating refresh token for a new
+    /// one; see [`CAPABILITY_TOKEN_ROTATION`].
+    pub fn wants_token_rotation(&self) -> bool {
+        self.offers(CAPABILITY_TOKEN_ROTATION)
+    }
+
+    /// The credential an `authenticate` presents, if it presents one.
+    pub fn presented(&self) -> Option<Presented<'_>> {
+        let Self::Authenticate {
+            token,
+            refresh_token,
+            access_token,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        access_token.as_ref().map(Presented::Access).or_else(|| {
+            refresh_token
+                .as_ref()
+                .or(token.as_ref())
+                .map(Presented::Refresh)
+        })
     }
 
     /// What a `connect_request` or `pair` frame says the device is, kept to
@@ -171,7 +280,9 @@ impl HandshakeRequest {
                 platform.as_deref(),
                 host_id.as_deref(),
             ),
-            Self::Authenticate { .. } => DeviceProfile::default(),
+            // Neither says what the device is: an authenticated device was
+            // recorded when it paired, and an acknowledgement says nothing.
+            Self::Authenticate { .. } | Self::TokenAck(_) => DeviceProfile::default(),
         }
     }
 
@@ -199,7 +310,12 @@ impl HandshakeRequest {
             ));
         }
         // serde_json errors can quote input; never forward them to the peer or a log.
-        serde_json::from_value(value).map_err(|_| invalid())
+        let request: Self = serde_json::from_value(value).map_err(|_| invalid())?;
+        // An `authenticate` without a credential is a bug, not a request.
+        if request.presented().is_none() && matches!(request, Self::Authenticate { .. }) {
+            return Err(invalid());
+        }
+        Ok(request)
     }
 }
 
@@ -230,28 +346,45 @@ pub enum HandshakeResponse {
     /// Nobody answered in time, the code was not sent in time, or a newer
     /// code on the host replaced it. The connection closes; ask again.
     ConnectExpired,
-    /// Pairing succeeded. `token` is shown exactly once; the connection is
-    /// authenticated as this device from here on.
+    /// Pairing succeeded. `token` is shown exactly once, or, for a device that
+    /// asked for `token_rotation`, `refresh_token` and `access_token` are; the
+    /// connection is authenticated as this device from here on.
     Paired {
         protocol_version: u32,
         gateway_id: String,
         instance_id: String,
         device_id: String,
         device_name: String,
-        token: Secret,
+        /// The static device token of a device that does not rotate; shown
+        /// exactly once. Absent for a device that rotates its tokens.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token: Option<Secret>,
         /// The host's own name, for display. A label, not an identity.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         host_name: Option<String>,
         /// When this pairing stops being accepted, RFC 3339 in UTC. The device
-        /// pairs again after it.
+        /// pairs again after it. Absent for a device that rotates its tokens:
+        /// its pairing lasts until it is revoked.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expires_at: Option<String>,
+        /// The rotating device's first refresh token; shown exactly once and
+        /// stored durably.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refresh_token: Option<Secret>,
+        /// The access token to reconnect with, until `access_expires_at`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        access_token: Option<Secret>,
+        /// When `access_token` stops being accepted, RFC 3339 in UTC; the
+        /// device then authenticates with its refresh token.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        access_expires_at: Option<String>,
         /// `"thread"` when the gateway accepted the device's request for the
         /// thread names; absent means the v1 names.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         wire_names: Option<String>,
     },
-    /// The device token was accepted.
+    /// The device token was accepted, or, for a rotating device, the access
+    /// token or refresh token it presented was.
     Authenticated {
         protocol_version: u32,
         gateway_id: String,
@@ -261,9 +394,23 @@ pub enum HandshakeResponse {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         host_name: Option<String>,
         /// When this pairing stops being accepted, RFC 3339 in UTC. The device
-        /// pairs again after it.
+        /// pairs again after it. Absent for a device that rotates its tokens.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expires_at: Option<String>,
+        /// The new refresh token, when the device presented a refresh token.
+        /// Replace the stored one and answer with `token_ack`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refresh_token: Option<Secret>,
+        /// The access token for this connection, until `access_expires_at`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        access_token: Option<Secret>,
+        /// When the access token stops being accepted, RFC 3339 in UTC.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        access_expires_at: Option<String>,
+        /// Identifies this rotation, to acknowledge with `token_ack`. Absent
+        /// when nothing rotated: an access token reconnected.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rotation_id: Option<String>,
         /// `"thread"` when the gateway accepted the device's request for the
         /// thread names; absent means the v1 names.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -314,6 +461,12 @@ pub enum ErrorCode {
     RateLimited,
     /// Unknown device, revoked device or wrong token; indistinguishable.
     Unauthorized,
+    /// A retired refresh token was presented: a copy of the device's key was
+    /// used, and the whole pairing was revoked. Pair again if this was you.
+    TokenReplayed,
+    /// The access token has expired or was replaced. The pairing is still
+    /// valid: authenticate with the refresh token instead.
+    AccessExpired,
     /// The authenticated device cannot perform this operation.
     UnauthorizedAccess,
     /// The gateway is at its connection or device limit.
@@ -428,6 +581,7 @@ mod tests {
             device_kind: None,
             platform: None,
             host_id: None,
+            capabilities: None,
         };
         assert_eq!(
             serde_json::to_string(&pair).unwrap(),
@@ -436,8 +590,11 @@ mod tests {
         let authenticate = HandshakeRequest::Authenticate {
             protocol_version: 1,
             device_id: "0011223344556677".into(),
-            token: Secret::new("tok"),
+            token: Some(Secret::new("tok")),
+            refresh_token: None,
+            access_token: None,
             wire_names: None,
+            capabilities: None,
         };
         assert_eq!(
             serde_json::to_string(&authenticate).unwrap(),
@@ -450,6 +607,73 @@ mod tests {
     }
 
     #[test]
+    fn a_rotating_device_names_its_capability_and_presents_either_token() {
+        let pair = r#"{"type":"pair","protocol_version":1,"method":"code","secret":"1234-5678","device_name":"phone","install_id":"install-12345678","capabilities":["token_rotation"]}"#;
+        let parsed = HandshakeRequest::parse(pair).unwrap();
+        assert!(parsed.wants_token_rotation());
+        assert!(!parsed.offers("acp"));
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), pair);
+        // An old client names nothing and keeps the static token.
+        let old = HandshakeRequest::parse(
+            r#"{"type":"pair","protocol_version":1,"method":"code","secret":"1234-5678","device_name":"phone"}"#,
+        )
+        .unwrap();
+        assert!(!old.wants_token_rotation());
+
+        let refresh = r#"{"type":"authenticate","protocol_version":1,"device_id":"0011223344556677","refresh_token":"R2","capabilities":["token_rotation"]}"#;
+        let parsed = HandshakeRequest::parse(refresh).unwrap();
+        assert!(parsed.wants_token_rotation());
+        assert!(
+            matches!(parsed.presented(), Some(Presented::Refresh(secret)) if secret.expose() == "R2")
+        );
+        let access = r#"{"type":"authenticate","protocol_version":1,"device_id":"0011223344556677","access_token":"A2"}"#;
+        let parsed = HandshakeRequest::parse(access).unwrap();
+        assert!(
+            matches!(parsed.presented(), Some(Presented::Access(secret)) if secret.expose() == "A2")
+        );
+        // The legacy field still carries the long-lived token.
+        let legacy = HandshakeRequest::parse(
+            r#"{"type":"authenticate","protocol_version":1,"device_id":"0011223344556677","token":"R1"}"#,
+        )
+        .unwrap();
+        assert!(matches!(legacy.presented(), Some(Presented::Refresh(_))));
+    }
+
+    #[test]
+    fn a_token_ack_is_only_a_session_control_frame() {
+        let ack = r#"{"type":"token_ack","rotation_id":"5be1c4a07d2e9f63"}"#;
+        assert_eq!(
+            session_control(ack),
+            SessionControl::TokenAck(TokenAck {
+                rotation_id: "5be1c4a07d2e9f63".into()
+            })
+        );
+        assert_eq!(
+            session_control(r#"{"type":"list_sessions"}"#),
+            SessionControl::NotAControl
+        );
+        assert_eq!(
+            session_control(r#"{"type":"token_ack"}"#),
+            SessionControl::Malformed
+        );
+        assert_eq!(
+            session_control(r#"{"type":"token_ack","rotation_id":2}"#),
+            SessionControl::Malformed
+        );
+        // Parsing keeps the shape; only an authenticated connection may use
+        // it, which the gateway enforces when it decides a first frame.
+        assert_eq!(
+            HandshakeRequest::parse(
+                r#"{"type":"token_ack","rotation_id":"x","protocol_version":1}"#
+            )
+            .unwrap(),
+            HandshakeRequest::TokenAck(TokenAck {
+                rotation_id: "x".into()
+            })
+        );
+    }
+
+    #[test]
     fn response_wire_shapes_are_stable() {
         let paired = HandshakeResponse::Paired {
             protocol_version: 1,
@@ -457,14 +681,35 @@ mod tests {
             instance_id: "inst".into(),
             device_id: "dev".into(),
             device_name: "phone".into(),
-            token: Secret::new("tok"),
+            token: Some(Secret::new("tok")),
             host_name: None,
             expires_at: None,
+            refresh_token: None,
+            access_token: None,
+            access_expires_at: None,
             wire_names: None,
         };
         assert_eq!(
             paired.to_text(),
             r#"{"type":"paired","protocol_version":1,"gateway_id":"gw","instance_id":"inst","device_id":"dev","device_name":"phone","token":"tok"}"#
+        );
+        let rotating = HandshakeResponse::Paired {
+            protocol_version: 1,
+            gateway_id: "gw".into(),
+            instance_id: "inst".into(),
+            device_id: "dev".into(),
+            device_name: "phone".into(),
+            token: None,
+            host_name: None,
+            expires_at: None,
+            refresh_token: Some(Secret::new("R1")),
+            access_token: Some(Secret::new("A1")),
+            access_expires_at: Some("2026-01-01T00:15:00Z".into()),
+            wire_names: None,
+        };
+        assert_eq!(
+            rotating.to_text(),
+            r#"{"type":"paired","protocol_version":1,"gateway_id":"gw","instance_id":"inst","device_id":"dev","device_name":"phone","refresh_token":"R1","access_token":"A1","access_expires_at":"2026-01-01T00:15:00Z"}"#
         );
         let authenticated = HandshakeResponse::Authenticated {
             protocol_version: 1,
@@ -474,11 +719,42 @@ mod tests {
             device_name: "phone".into(),
             host_name: None,
             expires_at: None,
+            refresh_token: None,
+            access_token: None,
+            access_expires_at: None,
+            rotation_id: None,
             wire_names: None,
         };
         assert_eq!(
             authenticated.to_text(),
             r#"{"type":"authenticated","protocol_version":1,"gateway_id":"gw","instance_id":"inst","device_id":"dev","device_name":"phone"}"#
+        );
+        let rotated = HandshakeResponse::Authenticated {
+            protocol_version: 1,
+            gateway_id: "gw".into(),
+            instance_id: "inst".into(),
+            device_id: "dev".into(),
+            device_name: "phone".into(),
+            host_name: None,
+            expires_at: None,
+            refresh_token: Some(Secret::new("R2")),
+            access_token: Some(Secret::new("A2")),
+            access_expires_at: Some("2026-01-01T00:15:00Z".into()),
+            rotation_id: Some("5be1c4a07d2e9f63".into()),
+            wire_names: None,
+        };
+        assert_eq!(
+            rotated.to_text(),
+            r#"{"type":"authenticated","protocol_version":1,"gateway_id":"gw","instance_id":"inst","device_id":"dev","device_name":"phone","refresh_token":"R2","access_token":"A2","access_expires_at":"2026-01-01T00:15:00Z","rotation_id":"5be1c4a07d2e9f63"}"#
+        );
+        // A stale access token is a reconnect, not a revocation.
+        assert_eq!(
+            HandshakeResponse::error(ErrorCode::TokenReplayed, "no").to_text(),
+            r#"{"type":"error","code":"token_replayed","message":"no"}"#
+        );
+        assert_eq!(
+            HandshakeResponse::error(ErrorCode::AccessExpired, "no").to_text(),
+            r#"{"type":"error","code":"access_expired","message":"no"}"#
         );
         assert_eq!(
             HandshakeResponse::error(ErrorCode::PairingFailed, "no").to_text(),
@@ -523,6 +799,7 @@ mod tests {
             "[]",
             r#"{"type":"list_sessions","protocol_version":1}"#,
             r#"{"type":"authenticate","device_id":"d","token":"t"}"#,
+            r#"{"type":"authenticate","protocol_version":1,"device_id":"d"}"#,
             r#"{"type":"pair","protocol_version":1,"method":"guess","secret":"s","device_name":"n"}"#,
         ] {
             assert_eq!(
@@ -563,6 +840,7 @@ mod tests {
             device_kind: None,
             platform: None,
             host_id: None,
+            capabilities: None,
         };
         let paired = HandshakeResponse::Paired {
             protocol_version: 1,
@@ -570,9 +848,12 @@ mod tests {
             instance_id: "inst".into(),
             device_id: "dev".into(),
             device_name: "phone".into(),
-            token: Secret::new(needle),
+            token: Some(Secret::new(needle)),
             host_name: Some("studio".into()),
             expires_at: None,
+            refresh_token: Some(Secret::new(needle)),
+            access_token: Some(Secret::new(needle)),
+            access_expires_at: None,
             wire_names: None,
         };
         assert!(!format!("{pair:?}").contains(needle));

@@ -1809,9 +1809,11 @@ pub(crate) struct PullMergeRequest {
     pub timeout_ms: Option<u64>,
 }
 
-/// Remove a merged delegate's worktree and branch (#3153). `merged` is what
-/// the app read for its pull request; the engine still checks the worktree is
-/// clean and its commits are not lost. Answers `{cleanup}` or `{error}`.
+/// Remove a merged delegate's worktree and branch (#3153). `merged`, `head_sha`
+/// and `branch` are what the app read for its pull request; the engine still
+/// reads the branch the worktree is on now and checks it is provably that pull
+/// request's head before accepting a rename, and that the worktree is clean and
+/// its commits are not lost. Answers `{cleanup}` or `{error}`.
 #[derive(
     Debug,
     Clone,
@@ -1824,7 +1826,8 @@ pub(crate) struct PullMergeRequest {
 #[request(method = "_rustcode/worktrees/cleanup", response = serde_json::Value)]
 pub(crate) struct WorktreeCleanupRequest {
     pub path: std::path::PathBuf,
-    /// The branch the caller read the pull request for, checked against HEAD.
+    /// The branch recorded for the worktree, checked against HEAD: when the
+    /// worktree is on another, cleanup reads that branch's pull request itself.
     #[serde(default)]
     pub branch: Option<String>,
     /// The commit the pull request was merged at.
@@ -3133,12 +3136,46 @@ async fn serve_connection(
         .on_receive_request(
             async move |request: WorktreeCleanupRequest, responder, connection| {
                 connection.spawn(async move {
+                    // A delegate may have renamed its branch after the caller read
+                    // its pull request, leaving the recorded name stale. The
+                    // worktree's branch now is the one cleanup compares against,
+                    // so its pull request is read here, as `thread_status`
+                    // reads it, and cleanup then accepts the rename only when
+                    // that pull request merged and nothing would be lost.
+                    let path = request.path.clone();
+                    let renamed = match tokio::task::spawn_blocking(move || {
+                        crate::pull_requests::current_branch(&path)
+                    })
+                    .await
+                    {
+                        Ok(Some(branch))
+                            if request
+                                .branch
+                                .as_deref()
+                                .is_some_and(|asked| !asked.trim().is_empty() && asked != branch) =>
+                        {
+                            match crate::pull_requests::for_branch(&request.path, &branch).await {
+                                Ok(Some(pull)) => Some(crate::worktrees::RenamedPull {
+                                    branch,
+                                    number: Some(pull.number),
+                                    head_sha: pull.head_sha,
+                                    merged: pull.merged,
+                                }),
+                                // No pull request on it, or gh could not answer:
+                                // cleanup refuses the changed branch instead of
+                                // guessing what the branch is.
+                                Ok(None) | Err(_) => None,
+                            }
+                        }
+                        _ => None,
+                    };
                     let cleaned = tokio::task::spawn_blocking(move || {
                         crate::worktrees::cleanup(
                             &request.path,
                             request.branch.as_deref(),
                             request.head_sha.as_deref(),
                             request.merged,
+                            renamed.as_ref(),
                         )
                     })
                     .await;

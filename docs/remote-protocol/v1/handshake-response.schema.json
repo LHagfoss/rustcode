@@ -37,6 +37,16 @@
           "type": "string"
         },
         {
+          "const": "token_replayed",
+          "description": "A retired refresh token was presented: a copy of the device's key was\nused, and the whole pairing was revoked. Pair again if this was you.",
+          "type": "string"
+        },
+        {
+          "const": "access_expired",
+          "description": "The access token has expired or was replaced. The pairing is still\nvalid: authenticate with the refresh token instead.",
+          "type": "string"
+        },
+        {
           "const": "unauthorized_access",
           "description": "The authenticated device cannot perform this operation.",
           "type": "string"
@@ -167,8 +177,26 @@
       "type": "object"
     },
     {
-      "description": "Pairing succeeded. `token` is shown exactly once; the connection is\nauthenticated as this device from here on.",
+      "description": "Pairing succeeded. `token` is shown exactly once, or, for a device that\nasked for `token_rotation`, `refresh_token` and `access_token` are; the\nconnection is authenticated as this device from here on.",
       "properties": {
+        "access_expires_at": {
+          "description": "When `access_token` stops being accepted, RFC 3339 in UTC; the\ndevice then authenticates with its refresh token.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "access_token": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Secret"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The access token to reconnect with, until `access_expires_at`."
+        },
         "device_id": {
           "type": "string"
         },
@@ -176,7 +204,7 @@
           "type": "string"
         },
         "expires_at": {
-          "description": "When this pairing stops being accepted, RFC 3339 in UTC. The device\npairs again after it.",
+          "description": "When this pairing stops being accepted, RFC 3339 in UTC. The device\npairs again after it. Absent for a device that rotates its tokens:\nits pairing lasts until it is revoked.",
           "type": [
             "string",
             "null"
@@ -200,8 +228,27 @@
           "minimum": 0,
           "type": "integer"
         },
+        "refresh_token": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Secret"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The rotating device's first refresh token; shown exactly once and\nstored durably."
+        },
         "token": {
-          "$ref": "#/$defs/Secret"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Secret"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The static device token of a device that does not rotate; shown\nexactly once. Absent for a device that rotates its tokens."
         },
         "type": {
           "const": "paired",
@@ -221,14 +268,31 @@
         "gateway_id",
         "instance_id",
         "device_id",
-        "device_name",
-        "token"
+        "device_name"
       ],
       "type": "object"
     },
     {
-      "description": "The device token was accepted.",
+      "description": "The device token was accepted, or, for a rotating device, the access\ntoken or refresh token it presented was.",
       "properties": {
+        "access_expires_at": {
+          "description": "When the access token stops being accepted, RFC 3339 in UTC.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "access_token": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Secret"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The access token for this connection, until `access_expires_at`."
+        },
         "device_id": {
           "type": "string"
         },
@@ -236,7 +300,7 @@
           "type": "string"
         },
         "expires_at": {
-          "description": "When this pairing stops being accepted, RFC 3339 in UTC. The device\npairs again after it.",
+          "description": "When this pairing stops being accepted, RFC 3339 in UTC. The device\npairs again after it. Absent for a device that rotates its tokens.",
           "type": [
             "string",
             "null"
@@ -258,6 +322,24 @@
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
+        },
+        "refresh_token": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Secret"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The new refresh token, when the device presented a refresh token.\nReplace the stored one and answer with `token_ack`."
+        },
+        "rotation_id": {
+          "description": "Identifies this rotation, to acknowledge with `token_ack`. Absent\nwhen nothing rotated: an access token reconnected.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "type": {
           "const": "authenticated",

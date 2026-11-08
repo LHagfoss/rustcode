@@ -325,13 +325,39 @@ labels chosen by the device, not identities. Pairing gives a device access to
 every session this host shares, now and later, until it is revoked or the
 pairing expires.
 
-A pairing lasts 30 days. Within them the device reconnects on its own, with
-no code. After them its token is refused like an unknown one and the device
+A device that asks for `token_rotation` in its `pair` frame has no expiry: the
+pairing lasts until it is revoked. (The gateway takes the capability today;
+the phone app's client change belongs to its own repository.) It holds a refresh
+token, which every reconnect replaces, and a 15-minute access token that
+reconnects without replacing anything. Only digests are stored, and the
+access token's digest stays in memory, so a gateway restart asks for a
+refresh. Presenting a refresh token the host has already replaced revokes the
+whole pairing: the device's connections close as revoked with
+`token_replayed`, the record is removed as if revoked, and the gateway logs
+`remote.token_replayed` for the owner. The removal is written before anything
+closes; if the device store cannot be written, the revocation is noted in
+`remote/revocations.json`, retried, and the device is refused meanwhile. That
+note is applied before the gateway serves anyone: if it cannot be read the
+gateway refuses to start and names it, rather than let a revoked family back
+in; repair it, or delete it after `rustcode remote revoke`. Pair again if that
+was you.
+Until the device acknowledges the new token, presenting the previous one again
+is a retry that gets the same tokens back, so a lost acknowledgement never
+locks it out and a copy of the previous token cannot rotate the device's token
+away; after a gateway restart such a retry is a replay. A client acknowledges a
+rotation once it has stored the new token; the phone app's client change
+belongs to its repository. A family that has rotated more tokens than the host
+keeps history for (1024) is revoked rather than letting an old token be
+answered as a wrong one.
+
+A device that does not ask for rotation keeps the static token, and its
+pairing lasts 30 days. Within them the device reconnects on its own, with no
+code. After them its token is refused like an unknown one and the device
 pairs again; a connection that is open at that moment stays open until it
-drops. `rustcode remote devices` shows when each pairing expires. An expired
-device is forgotten when the next one pairs and does not count against the
-device limit. Pairings made before this limit existed are counted from the
-day they were made.
+drops. `rustcode remote devices` shows when each pairing expires, or `until
+revoked` for a device that rotates its tokens. An expired device is forgotten
+when the next one pairs and does not count against the device limit. Pairings
+made before this limit existed are counted from the day they were made.
 
 Pairing the same app install again replaces its device record instead of
 adding one: the app sends a random install identifier that it keeps, and the

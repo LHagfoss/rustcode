@@ -521,7 +521,7 @@ validated like the others; the client carries them out (`state/host.ts`).
 
 | Tool | Args | Answer | Approval |
 | --- | --- | --- | --- |
-| `list_harnesses` | none | `{ current, harnesses: [{ id, name, available, reason?, usage?, accounts? (v5), models?, omitted_models? }] }`, at most 25 models each; `accounts` is `[{ id, name, auth, signed_out?, usage? }]` for a harness with named logins, where `signed_out` is what the plan read found (and what makes naming it fail), `usage` is a login's plan windows (below), and `current` names the harness, account, model and effort this thread runs on | None |
+| `list_harnesses` | `{ harness?, model? }` | `{ current, harnesses: [{ id, name, available, reason?, usage?, accounts? (v5), efforts?, models?, omitted_models?, filter? }] }`, at most 12 models each (50 with `model`): each harness leads with the model a new thread on it starts with, then the models this project's threads used recently, then its own order, and `omitted_models` counts the rest (`filter` says to pass `model` for them, or that nothing matched); `efforts` sits once on the harness when every listed model shares them, else on each model. `harness` (an id, else a display name; a name several harnesses share is refused, naming their ids) narrows to one harness, `model` a case-insensitive substring of a model id or name and lists every match. `accounts` is `[{ id, name, auth, signed_out?, usage? }]` for a harness with named logins, where `signed_out` is what the plan read found (and what makes naming it fail), `usage` is a login's plan windows (below), and `current` names the harness, account, model and effort this thread runs on | None |
 | `search_sessions` | `{ query, all_projects? }` | `{ sessions: [{ session_id, title, status, project?, snippet? }] }`: this project, or every project with `all_projects`, title and full text, at most 30 | None |
 | `list_worktrees` | `{ all_projects? }` | `{ worktrees: [{ session_id, title, project?, branch, path }] }`: this project, or every project with `all_projects` | None |
 | `update_session` | `{ session_id?, title?, pinned?, unread?, status?, snoozed_until? }` (`active`, `review`, `settled`; `1h`, `evening`, `tomorrow`, `next_week`, an ISO 8601 time, or `null` to wake) | `{ session_id, title, pinned, status, snoozed_until }` | Own thread none. Another: asked, allowed by Auto-edit and Full access |
@@ -737,13 +737,20 @@ out, and a v8 app has neither the code nor the engine methods.
 | --- | --- | --- | --- |
 | `thread_status` | `{ session_id? }` — omit for every delegate this thread started or messaged; at most 12 are reported (`omitted_delegates` says how many more) | `{ delegates: [{ session_id, title, status, project, worktree? { path, branch }, branch?, pull, error? }], omitted_delegates?, note? }`, newest first. `pull` is `{ number, title, state, merged, draft, url?, branch, head_sha, ci, failing, pending, passed }`: `state` is `open`, `closed` or `merged`, `ci` is `none`, `passing`, `pending` or `failing` (advisory portability jobs excluded, like the merge), and `failing` names the checks that failed. `pull: null` means no pull request for the thread's branch; an unreadable one carries `error: { code, message }` on that delegate and not on the others, and all delegates are read concurrently | None: it asks nothing; a read of this project's threads, like `read_session` |
 | `merge_when_green` | `{ session_id, timeout_ms? }` — the wait defaults to and is at most 55 minutes, 165 rounds of 20 s | `{ session_id, number, state, merged, url?, failing?, waited_secs, detail }`; `state` is `merged`, `failing` (with the names), `closed`, `no_checks` (there is nothing to wait for, returned after two empty rounds) or `pending` (still waiting when the time ran out) | Asked, allowed by Full access, grant `merge:<session id>:<PR number>` (a new PR asks again) |
-| `cleanup_worktree` | `{ session_id, settle? }` — `settle` is true by default | `{ session_id, removed: true, branch, branch_removed, settled? }`. A refusal is `conflict`, with the reason (`dirty`, `unmerged`, `ignored_files`, `branch_changed`, `protected_branch`, `no_base` or `not_managed`) and, for unmerged commits, their subjects; `unknown` means git could not answer and is an `unavailable` failure | Asked, allowed by Full access, grant `cleanup:<session id>` |
+| `cleanup_worktree` | `{ session_id, settle? }` — `settle` is true by default | `{ session_id, removed: true, branch, branch_removed, recorded_branch?, recorded_branch_removed?, settled? }`. A refusal is `conflict`, with the reason (`dirty`, `unmerged`, `ignored_files`, `branch_changed`, `protected_branch`, `no_base` or `not_managed`) and, for unmerged commits, their subjects; `branch_changed` also names the merged-pull-request check that failed (no pull request for the branch, one that is not merged, a dirty tree, or commits not in its head). `unknown` means git could not answer and is an `unavailable` failure | Asked, allowed by Full access, grant `cleanup:<session id>` |
 
 `thread_status` asks the engine `_rustcode/pulls/state` `{ cwd, branch? }`
-(`engine/src/pull_requests.rs` `for_branch`): the worktree's branch when there is
-one, else the folder's, matched against the host's pull requests, an open one
-first and then a merged one, and its `statusCheckRollup` mapped to
-`pending`/`passing`/`failing`/`none`. `merge_when_green` asks
+(`engine/src/pull_requests.rs` `for_branch`) for the branch the worktree is on
+now (`cwd` is the worktree, so the engine resolves its `HEAD`): a delegate that
+renamed its branch still shows its pull request, and `merge_when_green` and
+`cleanup_worktree` use that same branch. The match keeps only a pull request
+whose head is this repository (`headRepository`, `headRepositoryOwner`,
+`isCrossRepository`): `gh pr list --head` also matches a same-named branch on a
+fork, which is refused rather than reported as the delegate's, and an entry gh
+cannot place in a repository fails the read instead of guessing. The chosen
+pull request is an open one first and then a merged one, and its
+`statusCheckRollup` is mapped to `pending`/`passing`/`failing`/`none`.
+`merge_when_green` asks
 `_rustcode/pulls/merge` and reuses the same rollup: its wait is also how an
 orchestrator learns that CI finished without a shell poll loop, and a failing
 check ends it with the names. It ignores the advisory `portability coverage`
@@ -753,10 +760,19 @@ before anything merges on a failing check, and then runs
 `gh pr merge <n> --squash --delete-branch`. Nothing is forced and no other
 repository is touched. `cleanup_worktree` asks `_rustcode/worktrees/cleanup`
 (`engine/src/worktrees.rs` `cleanup`), on a blocking thread like
-`_rustcode/worktrees/remove`. It sends the branch it read the pull request for
-and the pull request's `head_sha`; the engine refuses if the worktree's `HEAD`
-is on another branch, so a delegate that switched branches cannot take the new
-one down. It also refuses a worktree that is not under the config directory, one
+`_rustcode/worktrees/remove`. It sends the recorded branch and the pull
+request's `head_sha`; the engine refuses if the worktree's `HEAD` is on another
+branch, unless that branch is the head of a merged pull request. A delegate may
+rename its branch to the name its task asked for, so the engine reads the
+branch the worktree is on now with `for_branch`, as `thread_status` does, and
+accepts the change only when the tree is clean, the pull request merged, and
+the branch is provably its head: `HEAD` is the pull request's `headRefOid`, or
+every local commit is already in it (an ancestor, or the same patch per `git
+cherry <headRefOid> <branch>`). An empty `git cherry <base> <branch>` alone is
+no proof, and a head this repository does not have refuses instead of assuming.
+The branch it was recorded on is deleted too when it still exists and holds
+nothing unique, so a rename leaves neither branch behind. It also refuses a worktree that is not under the
+config directory, one
 on the base or default branch (the branch delete would otherwise remove it), a
 dirty one, ignored files that are not known build output (`target/`,
 `node_modules/`, `dist/`, `.turbo/`, …; `.env.local` or notes are refused and

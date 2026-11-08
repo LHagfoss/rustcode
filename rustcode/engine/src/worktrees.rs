@@ -1015,6 +1015,38 @@ fn worktree_branch(path: &Path) -> Result<String, WorktreeError> {
     }
 }
 
+/// The pull request that heads the branch a worktree is on now, when that is
+/// not the branch the caller named. A delegate may rename its branch (`git
+/// branch -m`) to the name its task asked for, which leaves the caller's
+/// recorded branch stale; the caller looks the pull request up for the branch
+/// on the worktree, as `thread_status` does, and passes it here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RenamedPull {
+    /// The branch the worktree is on now, which this pull request heads.
+    pub branch: String,
+    pub number: Option<u64>,
+    /// The commit the pull request is at; empty when gh answered without one.
+    pub head_sha: String,
+    pub merged: bool,
+}
+
+/// Whether `branch` holds nothing of its own: `git cherry` finds no commit, or
+/// every one it finds is part of `head` (the merged pull request, whose commits
+/// a renamed branch keeps). A branch git cannot read is kept.
+fn branch_is_covered(repo: &Path, base: &str, branch: &str, head: Option<&str>) -> bool {
+    let Ok(unique) = cherry_commits(repo, base, branch) else {
+        return false;
+    };
+    unique.is_empty()
+        || head
+            .filter(|head| !head.trim().is_empty())
+            .is_some_and(|head| {
+                unique
+                    .iter()
+                    .all(|commit| commit_reachable(repo, &commit.sha, head))
+            })
+}
+
 /// Remove a merged delegate's worktree and branch (#3153), refusing when the
 /// worktree is dirty, its commits are not on the base branch, it is on a
 /// different branch than the caller named, or it holds ignored files that are
@@ -1022,11 +1054,18 @@ fn worktree_branch(path: &Path) -> Result<String, WorktreeError> {
 /// work: the pull request's merged state (read by the caller) counts only for
 /// the commits that are part of its head. The branch is deleted with `-D`,
 /// which the decision above makes safe.
+///
+/// A branch the delegate renamed after the caller read its pull request is
+/// accepted when `renamed` names the branch the worktree is on now, its pull
+/// request merged, and the worktree is clean with every commit part of that
+/// pull request's head. The branch it was recorded on goes too when it still
+/// exists and holds nothing unique.
 pub(crate) fn cleanup(
     path: &Path,
     expected_branch: Option<&str>,
     pr_head: Option<&str>,
     pr_merged: bool,
+    renamed: Option<&RenamedPull>,
 ) -> Result<Value, WorktreeError> {
     let path = std::fs::canonicalize(path)
         .map_err(|error| WorktreeError::failed(format!("invalid path: {error}")))?;
@@ -1046,16 +1085,6 @@ pub(crate) fn cleanup(
         message: format!("{} is not a git worktree", path.display()),
     })?;
     let branch = worktree_branch(&path)?;
-    // The caller cleaned up the worktree it read the pull request for. A
-    // delegate that switched branches must not take the new one down with it.
-    if let Some(expected) = expected_branch.filter(|branch| !branch.trim().is_empty())
-        && expected != branch
-    {
-        return Err(WorktreeError {
-            reason: "branch_changed",
-            message: format!("the worktree is on {branch}, not {expected}; nothing was removed"),
-        });
-    }
     let Some(base) = cleanup_base(&repo, record.as_ref()) else {
         return Err(WorktreeError {
             reason: "no_base",
@@ -1076,15 +1105,84 @@ pub(crate) fn cleanup(
     let (dirty, _, _) = status_counts(&path, &base).map_err(unknown)?;
     let unique = cherry_commits(&repo, &base, &branch).map_err(unknown)?;
     let same_content = same_tree(&repo, &base, &branch).map_err(unknown)?;
+    // The caller cleaned up the worktree it read the pull request for. A
+    // delegate that renamed or switched its branch must not take the new one
+    // down with it, unless the branch it is on now is the head of a merged pull
+    // request and nothing here would be lost.
+    let recorded_branch = match expected_branch.filter(|expected| !expected.trim().is_empty()) {
+        Some(expected) if expected != branch => {
+            let refusal = |hint: String| WorktreeError {
+                reason: "branch_changed",
+                message: format!(
+                    "the worktree is on {branch}, not {expected}; nothing was removed ({hint})"
+                ),
+            };
+            let Some(pull) = renamed.filter(|pull| pull.branch == branch) else {
+                return Err(refusal(format!(
+                    "no pull request was found for {branch}, so it is not known to be merged"
+                )));
+            };
+            if !pull.merged {
+                return Err(refusal(match pull.number {
+                    Some(number) => format!("pull request #{number} for {branch} is not merged"),
+                    None => format!("the pull request for {branch} is not merged"),
+                }));
+            }
+            if dirty {
+                return Err(refusal(
+                    "the worktree has uncommitted changes; commit or discard them first".to_owned(),
+                ));
+            }
+            // The branch↔pull request proof: HEAD is the merged head, or every
+            // local commit is already in it (an ancestor, or the same patch,
+            // which `git cherry <head> <branch>` reports as absent). An empty
+            // `git cherry <base> <branch>` alone is no proof: it says nothing
+            // about the pull request, and a head that cannot be read is no
+            // proof either, so both fail closed.
+            let pr_head = pull.head_sha.trim();
+            let head_matches = !pr_head.is_empty()
+                && git_line(&path, &["rev-parse", "HEAD"]).is_ok_and(|head| head == pr_head);
+            let missing = if pr_head.is_empty() {
+                None
+            } else {
+                Some(cherry_commits(&repo, pr_head, &branch).map_err(unknown)?)
+            };
+            let covered =
+                head_matches || missing.as_ref().is_some_and(|missing| missing.is_empty());
+            if !covered {
+                let hint = match missing.as_deref() {
+                    Some(commits) if !commits.is_empty() => format!(
+                        "{} commit(s) are not part of it: {}",
+                        commits.len(),
+                        commits
+                            .iter()
+                            .map(|commit| commit.subject.as_str())
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    ),
+                    _ => "no merged head is known for it".to_owned(),
+                };
+                return Err(refusal(format!(
+                    "{branch} is not provably its merged pull request's branch: {hint}"
+                )));
+            }
+            Some(expected.to_owned())
+        }
+        _ => None,
+    };
     // The PR merged proves its content is on the base, not that a commit made
     // after its head is. Without a head to check against, only the other proofs count.
-    let merged_safe = pr_merged
-        && match pr_head.filter(|head| !head.trim().is_empty()) {
-            Some(head) => unique
-                .iter()
-                .all(|commit| commit_reachable(&repo, &commit.sha, head)),
-            None => unique.is_empty(),
-        };
+    let merged_safe = if recorded_branch.is_some() {
+        true
+    } else {
+        pr_merged
+            && match pr_head.filter(|head| !head.trim().is_empty()) {
+                Some(head) => unique
+                    .iter()
+                    .all(|commit| commit_reachable(&repo, &commit.sha, head)),
+                None => unique.is_empty(),
+            }
+    };
     let decision = cleanup_decision(dirty, unique, same_content, merged_safe);
     if !decision.safe {
         let message = match decision.reason {
@@ -1129,16 +1227,44 @@ pub(crate) fn cleanup(
         move_threads_to_repo(&record.session_ids, &repo);
     }
     let branch_removed = git(&repo, &["branch", "-D", &branch]).is_ok();
+    // The branch the worktree was recorded on can still point at the same
+    // commits after a rename. Remove it too when it holds nothing unique, so a
+    // delegate that renamed leaves neither branch behind.
+    let recorded_branch_removed = recorded_branch.as_deref().is_some_and(|expected| {
+        !protected_branch(expected, &base, default_branch.as_deref())
+            && git(
+                &repo,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("refs/heads/{expected}"),
+                ],
+            )
+            .is_ok()
+            && branch_is_covered(
+                &repo,
+                &base,
+                expected,
+                renamed.map(|pull| pull.head_sha.as_str()),
+            )
+            && git(&repo, &["branch", "-D", expected]).is_ok()
+    });
     if let Some(record) = record_path(&path) {
         let _ = std::fs::remove_file(record);
     }
-    Ok(json!({
+    let mut answer = json!({
         "removed": true,
         "branch": branch,
         "branch_removed": branch_removed,
         "base": base,
         "commit_count": decision.unique.len(),
-    }))
+    });
+    if let Some(expected) = recorded_branch {
+        answer["recorded_branch"] = json!(expected);
+        answer["recorded_branch_removed"] = json!(recorded_branch_removed);
+    }
+    Ok(answer)
 }
 
 // ------------------------------------------------------------ threads ----
@@ -1454,8 +1580,14 @@ pub(crate) mod tests {
             ..Default::default()
         })
         .unwrap();
-        let refused =
-            cleanup(&worktree.path, Some("feat/somewhere-else"), None, false).unwrap_err();
+        let refused = cleanup(
+            &worktree.path,
+            Some("feat/somewhere-else"),
+            None,
+            false,
+            None,
+        )
+        .unwrap_err();
         assert_eq!(refused.reason, "branch_changed");
         assert!(worktree.path.exists());
         // The branch it is on is fine.
@@ -1464,8 +1596,241 @@ pub(crate) mod tests {
             Some(&worktree.branch),
             Some(&tip_of(&repo, &worktree.branch)),
             false,
+            None,
         )
         .unwrap();
+    }
+
+    /// A pull request for the branch a worktree is on now, as the app reads it
+    /// with `gh` before cleanup.
+    fn renamed(branch: &str, head: &str, merged: bool) -> RenamedPull {
+        RenamedPull {
+            branch: branch.to_owned(),
+            number: Some(42),
+            head_sha: head.to_owned(),
+            merged,
+        }
+    }
+
+    #[test]
+    fn a_cleanup_accepts_a_renamed_branch_whose_pull_request_merged() {
+        let (_dir, repo) = repo();
+        let worktree = create(&CreateRequest {
+            repo: repo.clone(),
+            title: Some("Add the login form".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        // A delegate asked for a branch name renames the worktree's branch
+        // (`git branch -m` or `checkout -b`), so the recorded one is stale. It
+        // still exists here, at the commit the new branch started from.
+        git(
+            &worktree.path,
+            &["checkout", "-q", "-b", "feat/asked-for-name"],
+        )
+        .unwrap();
+        std::fs::write(worktree.path.join("login.txt"), "login\n").unwrap();
+        git(&worktree.path, &["add", "-A"]).unwrap();
+        git(&worktree.path, &["commit", "-q", "-m", "add login"]).unwrap();
+        let head = tip_of(&repo, "feat/asked-for-name");
+        let answer = cleanup(
+            &worktree.path,
+            Some(&worktree.branch),
+            None,
+            false,
+            Some(&renamed("feat/asked-for-name", &head, true)),
+        )
+        .unwrap();
+        assert_eq!(answer["removed"], true);
+        assert_eq!(answer["branch"], json!("feat/asked-for-name"));
+        assert_eq!(answer["branch_removed"], true);
+        assert_eq!(answer["recorded_branch"], json!(worktree.branch));
+        assert_eq!(answer["recorded_branch_removed"], true);
+        assert!(!worktree.path.exists());
+        // Neither branch is left behind.
+        for branch in [worktree.branch.as_str(), "feat/asked-for-name"] {
+            assert!(
+                git(
+                    &repo,
+                    &[
+                        "rev-parse",
+                        "--verify",
+                        "--quiet",
+                        &format!("refs/heads/{branch}")
+                    ]
+                )
+                .is_err(),
+                "{branch} is still there"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cleanup_refuses_a_renamed_branch_that_is_not_provably_merged() {
+        let (_dir, repo) = repo();
+        let worktree = create(&CreateRequest {
+            repo: repo.clone(),
+            title: Some("Add the login form".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        git(
+            &worktree.path,
+            &["checkout", "-q", "-b", "feat/asked-for-name"],
+        )
+        .unwrap();
+        std::fs::write(worktree.path.join("login.txt"), "login\n").unwrap();
+        git(&worktree.path, &["add", "-A"]).unwrap();
+        git(&worktree.path, &["commit", "-q", "-m", "add login"]).unwrap();
+        let head = tip_of(&repo, "feat/asked-for-name");
+        // Its pull request is still open.
+        let refused = cleanup(
+            &worktree.path,
+            Some(&worktree.branch),
+            None,
+            false,
+            Some(&renamed("feat/asked-for-name", &head, false)),
+        )
+        .unwrap_err();
+        assert_eq!(refused.reason, "branch_changed");
+        assert!(
+            refused.message.contains("not merged"),
+            "{}",
+            refused.message
+        );
+        // No pull request was found for the branch it is on now.
+        let refused =
+            cleanup(&worktree.path, Some(&worktree.branch), None, false, None).unwrap_err();
+        assert_eq!(refused.reason, "branch_changed");
+        assert!(
+            refused.message.contains("no pull request"),
+            "{}",
+            refused.message
+        );
+        // It merged, but a commit was made after its head.
+        std::fs::write(worktree.path.join("after.txt"), "after\n").unwrap();
+        git(&worktree.path, &["add", "-A"]).unwrap();
+        git(&worktree.path, &["commit", "-q", "-m", "after the merge"]).unwrap();
+        let refused = cleanup(
+            &worktree.path,
+            Some(&worktree.branch),
+            None,
+            false,
+            Some(&renamed("feat/asked-for-name", &head, true)),
+        )
+        .unwrap_err();
+        assert_eq!(refused.reason, "branch_changed");
+        assert!(
+            refused.message.contains("after the merge"),
+            "{}",
+            refused.message
+        );
+        // A dirty worktree never goes, even when its merged head is HEAD.
+        std::fs::write(worktree.path.join("notes.txt"), "wip\n").unwrap();
+        let tip = tip_of(&repo, "feat/asked-for-name");
+        let refused = cleanup(
+            &worktree.path,
+            Some(&worktree.branch),
+            None,
+            false,
+            Some(&renamed("feat/asked-for-name", &tip, true)),
+        )
+        .unwrap_err();
+        assert_eq!(refused.reason, "branch_changed");
+        assert!(
+            refused.message.contains("uncommitted"),
+            "{}",
+            refused.message
+        );
+        // Nothing was removed: the worktree and both branches are still there.
+        assert!(worktree.path.exists());
+        for branch in [worktree.branch.as_str(), "feat/asked-for-name"] {
+            assert!(
+                git(
+                    &repo,
+                    &[
+                        "rev-parse",
+                        "--verify",
+                        "--quiet",
+                        &format!("refs/heads/{branch}")
+                    ]
+                )
+                .is_ok(),
+                "{branch} was deleted"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cleanup_needs_the_pull_request_head_not_an_empty_cherry_against_the_base() {
+        let (_dir, repo) = repo();
+        let worktree = create(&CreateRequest {
+            repo: repo.clone(),
+            title: Some("Add the login form".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        git(
+            &worktree.path,
+            &["checkout", "-q", "-b", "feat/asked-for-name"],
+        )
+        .unwrap();
+        // The branch has nothing of its own against main, but the merged pull
+        // request is another history entirely: an empty `git cherry main
+        // <branch>` says nothing about it, so it is not proof.
+        git(&repo, &["checkout", "-q", "--orphan", "elsewhere"]).unwrap();
+        std::fs::write(repo.join("other.txt"), "other\n").unwrap();
+        git(&repo, &["add", "-A"]).unwrap();
+        git(&repo, &["commit", "-q", "-m", "an unrelated pull request"]).unwrap();
+        let pr_head = tip_of(&repo, "elsewhere");
+        git(&repo, &["checkout", "-q", "main"]).unwrap();
+        let refused = cleanup(
+            &worktree.path,
+            Some(&worktree.branch),
+            None,
+            false,
+            Some(&renamed("feat/asked-for-name", &pr_head, true)),
+        )
+        .unwrap_err();
+        assert_eq!(refused.reason, "branch_changed");
+        assert!(
+            refused.message.contains("not provably"),
+            "{}",
+            refused.message
+        );
+        assert!(worktree.path.exists());
+    }
+
+    #[test]
+    fn a_cleanup_refuses_a_pull_request_head_it_cannot_read() {
+        let (_dir, repo) = repo();
+        let worktree = create(&CreateRequest {
+            repo: repo.clone(),
+            title: Some("Add the login form".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        git(
+            &worktree.path,
+            &["checkout", "-q", "-b", "feat/asked-for-name"],
+        )
+        .unwrap();
+        // gh reported a head this repository does not have: no proof, and a git
+        // that cannot read it is `unknown` rather than "nothing unique".
+        let refused = cleanup(
+            &worktree.path,
+            Some(&worktree.branch),
+            None,
+            false,
+            Some(&renamed(
+                "feat/asked-for-name",
+                "0123456789abcdef0123456789abcdef01234567",
+                true,
+            )),
+        )
+        .unwrap_err();
+        assert_eq!(refused.reason, "unknown");
+        assert!(worktree.path.exists());
     }
 
     #[test]
@@ -1483,7 +1848,14 @@ pub(crate) mod tests {
         let head = tip_of(&repo, &worktree.branch);
         // The PR merged at this head, and its commit is part of it: the squash
         // merge GitHub did is enough, even with a stale local main.
-        let answer = cleanup(&worktree.path, Some(&worktree.branch), Some(&head), true).unwrap();
+        let answer = cleanup(
+            &worktree.path,
+            Some(&worktree.branch),
+            Some(&head),
+            true,
+            None,
+        )
+        .unwrap();
         assert_eq!(answer["removed"], true);
         assert_eq!(answer["branch_removed"], true);
         assert_eq!(answer["commit_count"], 1);
@@ -1519,8 +1891,14 @@ pub(crate) mod tests {
         git(&worktree.path, &["add", "-A"]).unwrap();
         git(&worktree.path, &["commit", "-q", "-m", "after the merge"]).unwrap();
         // The PR merged at `head`; the newer commit is not part of it.
-        let refused =
-            cleanup(&worktree.path, Some(&worktree.branch), Some(&head), true).unwrap_err();
+        let refused = cleanup(
+            &worktree.path,
+            Some(&worktree.branch),
+            Some(&head),
+            true,
+            None,
+        )
+        .unwrap_err();
         assert_eq!(refused.reason, "unmerged");
         assert!(
             refused.message.contains("after the merge"),
@@ -1550,7 +1928,8 @@ pub(crate) mod tests {
         .unwrap();
         // A local secret is not build output and would be deleted silently.
         std::fs::write(worktree.path.join("ignored.txt"), "secret\n").unwrap();
-        let refused = cleanup(&worktree.path, Some(&worktree.branch), None, false).unwrap_err();
+        let refused =
+            cleanup(&worktree.path, Some(&worktree.branch), None, false, None).unwrap_err();
         assert_eq!(refused.reason, "ignored_files");
         assert!(
             refused.message.contains("ignored.txt"),
@@ -1574,6 +1953,7 @@ pub(crate) mod tests {
             Some(&worktree.branch),
             Some(&tip_of(&repo, &worktree.branch)),
             false,
+            None,
         )
         .unwrap();
         assert_eq!(answer["removed"], true);
@@ -1612,7 +1992,8 @@ pub(crate) mod tests {
         })
         .unwrap();
         git(&worktree.path, &["checkout", "--detach", "-q"]).unwrap();
-        let refused = cleanup(&worktree.path, Some(&worktree.branch), None, false).unwrap_err();
+        let refused =
+            cleanup(&worktree.path, Some(&worktree.branch), None, false, None).unwrap_err();
         assert_eq!(refused.reason, "detached");
         // A folder git cannot read is an unknown state, not a detached HEAD.
         let other = tempfile::tempdir().unwrap();
@@ -1631,7 +2012,8 @@ pub(crate) mod tests {
         std::fs::write(worktree.path.join("logout.txt"), "logout\n").unwrap();
         git(&worktree.path, &["add", "-A"]).unwrap();
         git(&worktree.path, &["commit", "-q", "-m", "add logout"]).unwrap();
-        let refused = cleanup(&worktree.path, Some(&worktree.branch), None, false).unwrap_err();
+        let refused =
+            cleanup(&worktree.path, Some(&worktree.branch), None, false, None).unwrap_err();
         assert_eq!(refused.reason, "unmerged");
         assert!(
             refused.message.contains("add logout"),
@@ -1645,6 +2027,7 @@ pub(crate) mod tests {
             Some(&worktree.branch),
             Some(&tip_of(&repo, &worktree.branch)),
             true,
+            None,
         )
         .unwrap_err();
         assert_eq!(refused.reason, "dirty");

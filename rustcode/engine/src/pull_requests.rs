@@ -114,7 +114,7 @@ pub struct PullError {
     pub message: String,
 }
 
-const LIST_FIELDS: &str = "number,title,author,state,isDraft,reviewDecision,statusCheckRollup,headRefName,baseRefName,headRefOid,updatedAt,url,additions,deletions,changedFiles";
+const LIST_FIELDS: &str = "number,title,author,state,isDraft,reviewDecision,statusCheckRollup,headRefName,baseRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,updatedAt,url,additions,deletions,changedFiles";
 const VIEW_FIELDS: &str = "number,title,author,state,isDraft,reviewDecision,statusCheckRollup,headRefName,baseRefName,headRefOid,updatedAt,url,additions,deletions,changedFiles,body,files,reviews,comments";
 
 /// The project's pull requests in `state` (`open`, `closed`, `merged` or
@@ -507,6 +507,56 @@ pub fn current_branch(cwd: &Path) -> Option<String> {
         .filter(|branch| !branch.is_empty() && branch != "HEAD")
 }
 
+/// Whether a `gh pr list` entry's head is this repository, not a same-named
+/// branch on someone's fork: `gh pr list --head` matches both. `None` means gh
+/// did not say enough to tell, which is never taken as "ours". The pull
+/// request's URL names the repository it is open against, so the head's
+/// `nameWithOwner` has to equal it; on a host whose URL is not GitHub's,
+/// `isCrossRepository` alone says the head is that repository.
+fn head_is_this_repository(value: &Value) -> Option<bool> {
+    let cross = value.get("isCrossRepository")?.as_bool()?;
+    let head = value
+        .get("headRepository")?
+        .get("nameWithOwner")?
+        .as_str()?;
+    let owner = value.get("headRepositoryOwner")?.get("login")?.as_str()?;
+    let (head_owner, _) = head.split_once('/')?;
+    if head_owner != owner || cross {
+        return Some(false);
+    }
+    Some(repository_of(&text(value, "url")).is_none_or(|base| base == head))
+}
+
+/// The pull request to report for one branch: only one whose head is this
+/// repository (a fork's same-named branch is not the delegate's), an open one
+/// first (a branch reused after its old pull request merged), then a merged one,
+/// then closed. An entry gh could not place in a repository refuses the whole
+/// answer instead of a guess, so a fork's pull request is never reported as
+/// this repository's.
+fn choose_for_branch(pulls: &[Value]) -> Result<Option<DelegatePull>, PullError> {
+    let rank = |value: &Value| match text(value, "state").to_uppercase().as_str() {
+        "OPEN" => 0,
+        "MERGED" => 1,
+        _ => 2,
+    };
+    let mut candidates: Vec<(u8, usize, &Value)> = Vec::new();
+    for (index, value) in pulls.iter().enumerate() {
+        let ours = head_is_this_repository(value).ok_or_else(|| PullError {
+            code: "failed",
+            message: "gh did not say which repository a matching pull request's head is in; \
+                      refusing to guess between this repository and a fork"
+                .to_owned(),
+        })?;
+        if ours {
+            candidates.push((rank(value), index, value));
+        }
+    }
+    Ok(candidates
+        .into_iter()
+        .min_by_key(|(rank, index, _)| (*rank, *index))
+        .and_then(|(_, _, value)| delegate_pull(value)))
+}
+
 /// The newest pull request whose head is `branch`: an open one first (a branch
 /// reused after its old pull request merged), then a merged one, then closed.
 pub async fn for_branch(cwd: &Path, branch: &str) -> Result<Option<DelegatePull>, PullError> {
@@ -527,17 +577,7 @@ pub async fn for_branch(cwd: &Path, branch: &str) -> Result<Option<DelegatePull>
     )
     .await?;
     let pulls: Vec<Value> = value.as_array().cloned().unwrap_or_default();
-    let rank = |value: &Value| match text(value, "state").to_uppercase().as_str() {
-        "OPEN" => 0,
-        "MERGED" => 1,
-        _ => 2,
-    };
-    let chosen = pulls
-        .iter()
-        .enumerate()
-        .min_by_key(|(index, value)| (rank(value), *index))
-        .map(|(_, value)| value.clone());
-    Ok(chosen.and_then(|value| delegate_pull(&value)))
+    choose_for_branch(&pulls)
 }
 
 /// How often a merge re-reads the checks, and how long it waits for them. The
@@ -1179,6 +1219,43 @@ mod tests {
         assert!(advisory_check("portability coverage (windows)"));
         assert!(!advisory_check("cargo test --workspace"));
         assert!(!advisory_check("clippy"));
+    }
+
+    #[test]
+    fn a_branch_lookup_ignores_a_same_named_branch_on_a_fork() {
+        let mut ours = pull();
+        ours["state"] = json!("MERGED");
+        ours["url"] = json!("https://github.com/LHagfoss/rustcode/pull/2701");
+        ours["headRepository"] = json!({"name": "rustcode", "nameWithOwner": "LHagfoss/rustcode"});
+        ours["headRepositoryOwner"] = json!({"login": "LHagfoss"});
+        ours["isCrossRepository"] = json!(false);
+        // An open fork pull request on a branch with the same name comes first
+        // in gh's answer, but it is not this repository's branch.
+        let mut fork = ours.clone();
+        fork["number"] = json!(99);
+        fork["state"] = json!("OPEN");
+        fork["url"] = json!("https://github.com/LHagfoss/rustcode/pull/99");
+        fork["headRepository"] = json!({"name": "rustcode", "nameWithOwner": "someone/rustcode"});
+        fork["headRepositoryOwner"] = json!({"login": "someone"});
+        fork["isCrossRepository"] = json!(true);
+        let chosen = choose_for_branch(&[fork.clone(), ours]).unwrap().unwrap();
+        assert_eq!(chosen.number, 2701);
+        assert!(chosen.merged);
+        // A fork-only match is no pull request for this repository's branch.
+        assert!(choose_for_branch(&[fork]).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_branch_lookup_refuses_a_pull_request_it_cannot_place_in_a_repository() {
+        // Without gh's repository fields a fork's same-named branch cannot be
+        // told from this repository's, so it fails closed instead of guessing.
+        let error = choose_for_branch(&[pull()]).unwrap_err();
+        assert_eq!(error.code, "failed");
+        assert!(
+            error.message.contains("refusing to guess"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]
