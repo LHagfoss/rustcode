@@ -109,7 +109,7 @@ pub(crate) fn spawn(
         .first()
         .ok_or_else(|| format!("{harness_id} has no command configured"))?;
     let path = super::detect::resolve_program(program).ok_or_else(|| not_found_message(program))?;
-    let mut builder = tokio::process::Command::new(path);
+    let mut builder = crate::platform::tokio_command(path);
     builder
         .args(&command[1..])
         .current_dir(cwd)

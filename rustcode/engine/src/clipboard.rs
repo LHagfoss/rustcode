@@ -20,7 +20,7 @@ pub fn paste_image_from_clipboard() -> Option<String> {
         file_path_str
     );
 
-    let output = std::process::Command::new("osascript")
+    let output = crate::platform::command("osascript")
         .args(["-e", &script])
         .output()
         .ok()?;
@@ -110,7 +110,7 @@ pub fn warm_image_paste() {
 }
 
 pub fn read_text_from_clipboard() -> Option<String> {
-    let output = std::process::Command::new("pbpaste")
+    let output = crate::platform::command("pbpaste")
         .env("LANG", "en_US.UTF-8")
         .env("LC_CTYPE", "en_US.UTF-8")
         .output()
@@ -149,7 +149,7 @@ pub fn copy_to_clipboard(text: &str) -> ClipboardCopyStatus {
             stdout.write_all(osc52.as_bytes()).is_ok() && stdout.flush().is_ok()
         },
         |clean| {
-            let Ok(mut child) = std::process::Command::new("pbcopy")
+            let Ok(mut child) = crate::platform::command("pbcopy")
                 .env("LANG", "en_US.UTF-8")
                 .env("LC_CTYPE", "en_US.UTF-8")
                 .stdin(std::process::Stdio::piped())

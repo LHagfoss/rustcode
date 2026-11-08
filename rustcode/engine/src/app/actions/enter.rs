@@ -1722,7 +1722,7 @@ mod workspace_cleanup_tests {
     use std::path::Path;
 
     fn git(cwd: &Path, args: &[&str]) -> String {
-        let output = std::process::Command::new("git")
+        let output = crate::platform::command("git")
             .args(args)
             .current_dir(cwd)
             .output()
@@ -1887,7 +1887,7 @@ mod workspace_cleanup_tests {
                 .collect::<Vec<_>>()
         );
         // Exactly one worktree checkout exists for the branch.
-        let worktrees = std::process::Command::new("git")
+        let worktrees = crate::platform::command("git")
             .args(["worktree", "list", "--porcelain"])
             .current_dir(source.path())
             .output()

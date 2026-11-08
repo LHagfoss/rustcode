@@ -6,7 +6,7 @@
 use serde::Serialize;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -252,7 +252,7 @@ impl Engine {
 
     /// Run one engine process until it exits; returns why it ended.
     fn run_once(self: &Arc<Self>, path: &PathBuf) -> Result<String, String> {
-        let mut child = Command::new(path)
+        let mut child = crate::process::command(path)
             .arg("--acp")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

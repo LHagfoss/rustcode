@@ -761,7 +761,7 @@ async fn controller_routes_background_completion_to_the_session_and_restarts_its
 /// cannot run instead of failing the gate.
 #[cfg(target_os = "linux")]
 fn bubblewrap_can_run() -> bool {
-    std::process::Command::new("bwrap")
+    crate::platform::command("bwrap")
         .args(["--ro-bind", "/", "/", "--", "/bin/true"])
         .output()
         .is_ok_and(|output| output.status.success())

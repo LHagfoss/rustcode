@@ -294,6 +294,7 @@ impl RemoteLifecycle {
                 Ok(())
             });
         }
+        rustcode_command::hide_console_window(command.as_std_mut());
         let mut child = command.spawn().context("failed to start the gateway")?;
         let started = tokio::time::timeout(self.health_timeout, async {
             loop {

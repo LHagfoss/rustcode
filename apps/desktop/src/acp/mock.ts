@@ -2253,6 +2253,7 @@ export class MockEngine {
       expiresInSecs: Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000)),
       loopbackOnly: stored.loopbackOnly === true,
       gatewayId: str(stored.gatewayId) ?? "",
+      instanceId: str(stored.instanceId) ?? "mock-instance",
       challenge: num(stored.challenge) ?? 0,
     };
     const lockedFor = num(stored.lockedForSecs);
@@ -2280,6 +2281,7 @@ export class MockEngine {
     if (this.remote.gateway) {
       const gateway: JsonObject = {
         ...this.remote.gateway,
+        instanceId: "mock-instance",
         pairedDevices: this.remote.devices.length,
         pairingOpen: offer !== null,
         sessions: this.remote.shared.size,
@@ -2293,7 +2295,6 @@ export class MockEngine {
       }
       host.gateway = gateway;
     }
-    if (offer) host.offer = offer;
     return host;
   }
 
@@ -2964,7 +2965,7 @@ export class MockEngine {
         this.remote.enabled = true;
         if (!this.remote.gateway) this.remote.gateway = this.remoteGateway();
         this.issueRemoteOffer();
-        return this.remoteStatus(sessionId);
+        return { ...obj(this.remoteStatus(sessionId)), offer: this.remoteOffer() } as Json;
       }
       case "_rustcode/remote/answer": {
         const id = str(params.id) ?? "";
@@ -4219,6 +4220,7 @@ export const MOCK_KIT = [
   '    <li class="rc-item"><span>Engine</span><span class="rc-badge rc-ok">Ready</span></li>\n',
   '    <li class="rc-item"><span>Desktop</span><span class="rc-badge rc-ok">Ready</span></li>\n',
   '    <li class="rc-item"><span>Auth</span><span class="rc-badge rc-warn">Waiting</span></li>\n',
+  '    <li class="rc-item"><span class="rc-badge">Worth reviewing</span><strong>docs/superpowers/</strong><div>Ignored by the repo. It contains 26 design specs and plans, including provider login and remote turn timing.</div></li>\n',
   "  </ul></details>\n",
   '  <details class="rc-details rc-tree"><summary>Changed files <span class="rc-label">4</span></summary><div>\n',
   '    <details class="rc-details" open><summary>tests/auth</summary><div>\n',

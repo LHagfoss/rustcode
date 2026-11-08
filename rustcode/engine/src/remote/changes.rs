@@ -236,7 +236,7 @@ async fn git_any(cwd: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 async fn run(cwd: &Path, args: &[&str]) -> Result<std::process::Output, String> {
-    tokio::process::Command::new("git")
+    crate::platform::tokio_command("git")
         .args(args)
         .current_dir(cwd)
         .env("GIT_OPTIONAL_LOCKS", "0")
@@ -292,7 +292,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let run = |args: &[&str]| {
-            std::process::Command::new("git")
+            crate::platform::command("git")
                 .args(args)
                 .current_dir(root)
                 .output()

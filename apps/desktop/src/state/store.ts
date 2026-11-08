@@ -176,6 +176,7 @@ import {
   type TurnState,
 } from "./queue";
 import { parseRecapHours, RECAP_HOURS_DEFAULT } from "./recap";
+import { challengeIsValid, makeChallenge, newPairedDevice, type PairingChallenge } from "./remotePairing";
 import { beginSetup, dismissSetup, type PendingSetup, setupFailed, setupSucceeded } from "./setup";
 import { dueSnoozes } from "./snooze";
 import {
@@ -482,6 +483,8 @@ export interface AppState {
    * is on screen. Read from `_rustcode/remote`.
    */
   remote: RemoteStatus | null;
+  remoteChallenge: PairingChallenge | null;
+  remotePaired: { name: string } | null;
   /** Each open thread's own share, so its header can say a device is attached. */
   remoteByThread: Record<string, RemoteStatus>;
   /**
@@ -741,6 +744,8 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   grants: [],
   resolvedApprovals: {},
   remote: null,
+  remoteChallenge: null,
+  remotePaired: null,
   remoteByThread: {},
   remoteError: null,
   connectCode: null,
@@ -5076,6 +5081,11 @@ export async function request<T = Json>(
 
 // ---------------------------------------------------------------- remote access
 
+// Every read of the machine's remote state runs on one clock. A change made here (pair, answer,
+// revoke, the switch) or a dismissed QR code bumps the revision, so a read that started before it
+// cannot put back what it changed; among the reads that started after, only the newest lands. All
+// of them, and every mutation's answer, land through `applyRemoteStatus`, which keeps or clears the
+// QR challenge and notices a device that just paired.
 function invalidateRemoteStatusReads() {
   remoteStatusRevision += 1;
   latestRemoteStatusReadId = remoteStatusReadId;
@@ -5083,7 +5093,25 @@ function invalidateRemoteStatusReads() {
 
 function commitRemoteStatus(status: RemoteStatus) {
   invalidateRemoteStatusReads();
-  set({ remote: status, remoteError: null });
+  applyRemoteStatus(status);
+}
+
+export function dismissRemoteChallenge() {
+  invalidateRemoteStatusReads();
+  set({ remoteChallenge: null });
+}
+
+export function applyRemoteStatus(status: RemoteStatus, now = Date.now()) {
+  set((s) => {
+    const challenge = s.remoteChallenge;
+    const fresh = challenge && newPairedDevice(challenge.baselineIds, status.devices);
+    return {
+      remote: status,
+      remoteError: null,
+      remotePaired: fresh ? { name: fresh.name } : status.enabled ? s.remotePaired : null,
+      remoteChallenge: challenge && !fresh && challengeIsValid(challenge, status, now) ? challenge : null,
+    };
+  });
 }
 
 /**
@@ -5104,7 +5132,7 @@ export async function refreshRemote(sessionId?: string): Promise<RemoteStatus | 
       }));
     else if (revision === remoteStatusRevision && readId > latestRemoteStatusReadId) {
       latestRemoteStatusReadId = readId;
-      set({ remote: status, remoteError: null });
+      applyRemoteStatus(status);
     }
     return sessionId || (revision === remoteStatusRevision && readId === latestRemoteStatusReadId)
       ? status
@@ -5127,6 +5155,7 @@ export async function refreshRemote(sessionId?: string): Promise<RemoteStatus | 
  */
 export async function setRemoteAccess(on: boolean): Promise<void> {
   invalidateRemoteStatusReads();
+  if (!on) set({ remoteChallenge: null, remotePaired: null });
   if (on) {
     set({
       remote: {
@@ -5164,10 +5193,31 @@ export async function setRemoteAccess(on: boolean): Promise<void> {
  * if it was off, as `/remote` does in a terminal.
  */
 export async function pairRemoteDevice(): Promise<RemoteStatus | null> {
+  const baselineIds = (get().remote?.devices ?? []).map((device) => device.id);
   invalidateRemoteStatusReads();
+  const revision = remoteStatusRevision;
+  set({ remoteChallenge: null, remotePaired: null });
   try {
     const status = parseRemoteStatus(await request(RemoteMethod.pair, {}, 20_000));
-    commitRemoteStatus(status);
+    if (revision === remoteStatusRevision) {
+      const fresh = newPairedDevice(baselineIds, status.devices);
+      const instanceChanged =
+        status.offer?.instanceId &&
+        status.gateway?.instanceId &&
+        status.offer.instanceId !== status.gateway.instanceId;
+      set({
+        remotePaired: fresh ? { name: fresh.name } : null,
+        remoteChallenge:
+          status.offer && !fresh && !instanceChanged
+            ? makeChallenge(status.offer, Date.now(), baselineIds)
+            : null,
+      });
+      commitRemoteStatus(status);
+    } else {
+      // Dismissed, switched off or answered meanwhile: the code is not shown, but the machine's
+      // state did change, so read it again.
+      void refreshRemote();
+    }
     if (status.pairingError) toast(status.pairingError, "error");
     return status;
   } catch (error) {
@@ -5250,6 +5300,11 @@ export function resetForTests() {
   loading.clear();
   set({
     status: "connecting",
+    remote: null,
+    remoteChallenge: null,
+    remotePaired: null,
+    remoteByThread: {},
+    remoteError: null,
     engineLog: [],
     sessions: [],
     sessionsLoaded: false,

@@ -272,7 +272,7 @@ fn valid_user_code(code: &str) -> bool {
 }
 
 async fn gh_token(program: &std::ffi::OsStr, cancel: &CancellationToken) -> Result<Option<String>> {
-    let mut command = tokio::process::Command::new(program);
+    let mut command = crate::platform::tokio_command(program);
     command
         .args(["auth", "token", "--hostname", "github.com"])
         .stdin(std::process::Stdio::null())
@@ -322,7 +322,7 @@ async fn gh_login_using(
         sender,
         "GitHub Copilot sign-in\nStarting GitHub CLI authorization… Press Esc to cancel.".into(),
     );
-    let mut command = tokio::process::Command::new(program);
+    let mut command = crate::platform::tokio_command(program);
     // Whether a browser opens is RustCode's decision, made once the code is
     // known, so gh is given a browser that does nothing.
     #[cfg(unix)]

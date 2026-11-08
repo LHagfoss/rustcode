@@ -3577,6 +3577,7 @@ name = "rustcode-session"
 version = "1.21.0"
 dependencies = [
  "chrono",
+ "rustcode-command",
  "rustcode-core",
  "serde",
  "serde_json",

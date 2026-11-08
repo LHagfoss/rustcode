@@ -144,7 +144,7 @@ fn run(root: &Path, case: &Case) -> Outcome {
 }
 
 fn git(cwd: &Path, args: &[&str]) {
-    let status = Command::new("git")
+    let status = crate::platform::command("git")
         .args(args)
         .current_dir(cwd)
         .status()

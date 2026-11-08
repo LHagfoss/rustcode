@@ -44,7 +44,7 @@ files and the engine snapshot the names use underscores (`surface_2`,
 | `surface` | Resting cards: composer, settings groups, error cards | `#1d1d20` | `#eaeaea` |
 | `surface-2` | Raised: popovers, menus, dialogs, tooltips, toasts | `#242428` | `#ffffff` |
 | `surface-3` | Raised over raised: kbd, a hover label or a tooltip drawn on a popover | `#2a2a2e` | `#e4e4e6` |
-| `border` | Hairlines and the edge ring of raised surfaces | `#ffffff0f` | `#0000000f` |
+| `border` | Hairlines and the edge ring of raised surfaces | `#ffffff0a` | `#0000000a` |
 | `border-strong` | A line that must read: a chart marker, a dashed outline, the knob's ring | `#ffffff1c` | `#0000001f` |
 | `text` | Primary text and icons | `#ededed` | `#171717` |
 | `text-muted` | Secondary text, idle icons | `#a1a1a1` | `#5c5c5c` |
@@ -102,14 +102,14 @@ the accent marks state (on, selected, linked), it does not shout.
 | Step | px | Tailwind | Used by |
 |---|---|---|---|
 | xs | 6 | `rounded-xs` | kbd, inline code (on `bg-fill`), tiny badges, checkboxes |
-| sm | 8 | `rounded-sm` | 22px icon buttons inside rows, branch chips, small inputs, a segment inside its track |
+| sm | 8 | `rounded-sm` | 22px icon buttons inside rows, branch chips, small inputs |
 | md | 10 | `rounded-md` | Icon buttons, list rows, inputs |
 | lg | 12 | `rounded-lg` | Cards (tool output, error card), settings rows and groups, menu items, tooltips, pictures in replies |
 | xl | 16 | `rounded-xl` | Settings group cards, menus, popovers, dialogs, the command palette, large panels |
 | 2xl | 20 | `rounded-2xl` | The settings panel, toasts |
 | composer | 20 | `--rc-composer-radius` | The composer's box: one floating card a step rounder than menus and popovers, so its corners read soft over the text sliding under it |
 | 3xl | 26 | `rounded-3xl` | The largest floating surface (nothing uses it yet) |
-| full | — | `rounded-full` | Switches, avatars, dots, trackbars; never a labelled button |
+| full | — | `rounded-full` | Switches, avatars, dots, trackbars and labelled buttons |
 
 A theme's `radius` (`sharp`, `default`, `round`) scales the steps
 (`sharp`: 2/3/4/6/8/10/12, `round`: 8/10/12/16/20/26/32); components only ever
@@ -154,10 +154,9 @@ The model picker's effort slider takes the same knob.
 
 ## Focus
 
-- Only `:focus-visible` shows a ring: 2px `focus` at 40%, offset 2px. It is
+- Controls normally use `:focus-visible` for a ring: 2px `focus` at 40%, offset 2px. It is
   global in `index.css`; components do not add their own focus colours.
-- Never on mouse click, never on the composer's text field. The composer
-  shows focus by its glass stepping from 80% to 88% (see Component recipes).
+- The composer uses a quiet focus ring on its containing card while any control inside has focus; its text field has no separate outline.
 - `outline-none` is allowed only on a text field whose container already
   shows focus (the composer, a search capsule).
 
@@ -214,30 +213,12 @@ edge. Everything in the card starts on one left edge: the field, the chips, the 
 hint rows at 20px (`px-5`); the tray at 12px (`px-3`), because its round controls carry 8px of their
 own, which puts their icons on that same edge.
 
-The composer is its own pair, because it is the one surface text
-scrolls under all day: `surface-2` at **66%** (78% focused) in light, and in
-dark the resting `surface` at **62%** (76% focused), so it is the screen's
-one darker pane over the transcript while still reading as glass. Its own
-`--rc-composer-filter` (`saturate(1.12) blur(22px)`;
-`saturate(1.18) blur(28px)` in dark) does the frosting, and a 1px
-`--rc-composer-outline` (`black` at 7% in light, `white` at 12% in dark) draws
-the hairline, with a 7% `white` inner highlight in dark. It keeps a radius token
-of its own, at the `2xl` step. The strip under it takes the same glass with a
-4% lift of the text colour (`--rc-composer-footer-bg`), so field and strip read
-as one frosted unit.
-
-Frosted rather than near-solid on purpose: the blur keeps text scrolling under the field a hint
-rather than a smear, and the glass stays see-through enough to read as a card over the
-transcript rather than a slab on it. One filter per surface, two recipes in all
-(the shared glass and the composer's): no larger radius, no second blur
-stacked on the first, no blur on a pane or a scrolling row.
-
-A new thread draws its chosen picture behind the whole pane, so the field there takes a third
-value of its own: 88% (`--rc-composer-bg-over`, `.rc-composer-over`, ui/ChatView.tsx), which
-reads as a panel rather than as another window on the picture. The cards under it are the
-screen's one see-through surface, `.rc-glass-faint`: a third of `surface-2` and the shared
-filter, no edge ring, so the picture runs on behind them. Both go solid under Reduce
-transparency with the rest.
+The composer uses solid `surface-2` in both themes, including over a new thread's
+picture, with no backdrop blur. Its edge uses `--rc-composer-outline` and its
+focus-within ring uses `focus` at 40%. The strip under it uses the same solid
+surface with a 4% lift of the text colour (`--rc-composer-footer-bg`). The
+new thread's picture cards remain translucent (`.rc-glass-faint`) and become
+solid under Reduce transparency.
 
 ## Spacing
 
@@ -465,12 +446,12 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   option. `Segments` when two to four short options should all show: a
   `bg-fill` track with the picked segment on a white pill that slides to it
   (`bg-knob`, `text-knob-fg`), the others muted; `Choice` (settingsKit) is the
-  same at the `sm` radius inside Settings' cards.
+  same pill track and selected pill inside Settings' cards.
 - **Switch:** the track is `bg-accent` on and `bg-fill-strong` off, its thumb
   the white knob: `bg-knob shadow-knob`.
 - **Slider:** `Slider` (settingsKit) for a whole number in a short range, such
   as the delegates one thread may run at once: the native range (so arrows, Home
-  and End work), the value beside it and the ends of the range under the rail.
+  and End work), a thin track filled with accent up to the white thumb, the value vertically centred beside it and the ends of the range under the rail.
   The native thumb is the knob too (`.rc-range` in index.css): the browser would
   draw it in the accent colour. Its focus ring is the global one, drawn by the
   `.rc-range` rule because the base layer takes the outline off every field.
@@ -494,8 +475,7 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   destructive rows add `menuItemDanger`; `menuSeparator` and `menuLabel`
   between them. **Popover:** `popoverSurface` (`elevated p-3`).
 - **Dialog:** `elevated rounded-xl p-5` over a `bg-bg/60` scrim.
-- **Toast:** `.rc-toast rounded-2xl` (the composer's glass, denser, and its
-  slight shadow), 380px wide, `py-1.5 pl-3 pr-1.5 text-callout`: an icon
+- **Toast:** `.rc-toast rounded-2xl` (strong glass and a slight shadow), 380px wide, `py-1.5 pl-3 pr-1.5 text-callout`: an icon
   (info `text-fg-muted`, success `text-success`, error `text-danger`, a
   spinner while it has progress), the text in `text-fg` (up to 3 lines), at
   most one action as a secondary pill (`h-6 bg-fill`), and a close button.
@@ -650,8 +630,9 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   `border` hairline. A row is `rowInset` (`px-4 py-3`): its title `text-sm font-medium`,
   its description `text-callout leading-normal text-fg-muted`, its control at
   the right, and the control stacks under the text when the row's own
-  container is narrow. Controls in a row — buttons, selects, the segmented
-  control — are `h-8 rounded-lg` on `bg-fill` over the card (hover and focus
+  container is narrow; wide controls can be stacked below the description at any width.
+  Buttons and segmented tracks and items are pill-rounded; controls use `h-8`
+  and `bg-fill` over the card (hover and focus
   `bg-fill-strong`), with no edge, so the same control reads at every nesting
   depth; switches keep their own shape.
 - **Settings row, reset:** rows show their description in full and keep the
@@ -659,19 +640,16 @@ a raw element. `?catalog` in a dev build shows them all on one page.
 - **Tooltip:** `bg-surface-3 rounded-lg px-2 py-1 text-callout shadow-2`
   (see Tooltips).
 - **Composer:** one card, `.rc-composer` (radius `--rc-composer-radius`,
-  16px, the `xl` step), with no padding of its own: every text row in it
+  20px, the `2xl` step), with no padding of its own: every text row in it
   is inset `px-5` (20px) and each keeps its own air. The message row is
   `px-5 pt-4`, and `px-5 pt-1.5` while pictures sit above it: their band
-  carries `px-5 pt-3 pb-1`, so the field stays close under the thumbnails
+  carries `px-5 pt-5 pb-1`, so the field stays close under the thumbnails
   instead of doubling the gap, and a field with nothing above it keeps the
   card's own 16px. The field itself carries 6px (`py-1.5`) above and below
   its text inside the scroller. The control row at the bottom of the card
   is `px-3 pt-1 pb-3`, its round controls carrying a few px of their own,
-  which puts their icons on the same 20px edge. Glass at
-  `--rc-composer-bg` (66%, 78% focused in light; 62%, 76% in dark; see Glass) with
-  `--rc-composer-filter`
-  and a 1px `--rc-composer-outline`; no ring or colour on focus, the glass step
-  is the focus. The card clips to its own corner. The editor reads at
+  which puts their icons on the same 20px edge. The solid `surface-2` fill
+  has a 1px `--rc-composer-outline` and a quiet focus-within ring. The card clips to its own corner. The editor reads at
   `text-body leading-relaxed` (22.75px), two lines at rest above the control
   row and 217px (nine lines) at most, then it scrolls; its text carries 6px
   above and below inside the scroller, so the padding scrolls with it and
@@ -732,10 +710,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   hang off the card's bottom edge instead of sitting in its glass: a 36px strip
   (`.rc-composer-footer`) inset 12px each side, its top edge tucked 8px behind
   the card so the two read as one stack, its own corners round only at the
-  bottom, a hairline edge and `--rc-composer-footer-bg` (the card's own glass
-  with a 4% lift of the text colour, so the strip frosts what passes under it
-  instead of sitting on it as a slab), through the same
-  `--rc-composer-filter`; `text-callout` in `fg-muted`, 14px icons, `gap-4`
+  bottom, a hairline edge and `--rc-composer-footer-bg` (the card's solid surface
+  with a 4% lift of the text colour); `text-callout` in `fg-muted`, 14px icons, `gap-4`
   between the groups. The thread's folder, its worktree toggle and its branch chip are on
   the left, the permissions mode and the usage meter on the right; every one of
   them is a pill whose panel opens off the pill itself, 8px away from it,

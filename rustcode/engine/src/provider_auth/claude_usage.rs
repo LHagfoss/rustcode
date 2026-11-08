@@ -469,7 +469,7 @@ pub(crate) fn default_keychain_item_exists() -> bool {
 fn keychain_item_named(item: &str) -> bool {
     #[cfg(target_os = "macos")]
     {
-        return std::process::Command::new("/usr/bin/security")
+        return crate::platform::command("/usr/bin/security")
             .args(["find-generic-password", "-s", item])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -568,7 +568,7 @@ async fn credentials(
                 || DEFAULT_KEYCHAIN_ITEM.to_owned(),
                 |dir| keychain_item_name(dir),
             );
-            let output = tokio::process::Command::new("/usr/bin/security")
+            let output = crate::platform::tokio_command("/usr/bin/security")
                 .args(["find-generic-password", "-s", &item, "-w"])
                 .stdin(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())

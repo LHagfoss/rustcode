@@ -1353,3 +1353,7 @@ From the SwiftUI app, still missing or partial:
   notarization run only once the secrets exist (#2034). The
   Smart UI `rcui://` path was checked by unit test and the page itself in
   Chrome; a click in a view inside the native window was not exercised.
+
+### Windows child processes
+
+New non-interactive engine process launches must use `platform::command` or `platform::tokio_command`; shared core code uses `rustcode_command::hidden_command`, and the desktop shell uses `process::command`. These helpers prevent console windows when the engine runs under the desktop app. PTY-backed interactive terminals retain their own console handling.

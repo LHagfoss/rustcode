@@ -57,10 +57,7 @@ fn which_binary(name: &str) -> Option<PathBuf> {
 }
 
 fn binary_version(binary: &str, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new(binary)
-        .args(args)
-        .output()
-        .ok()?;
+    let output = crate::platform::command(binary).args(args).output().ok()?;
     if !output.status.success() {
         return None;
     }

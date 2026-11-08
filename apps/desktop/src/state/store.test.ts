@@ -60,6 +60,7 @@ import {
   openThread,
   PLAN_CACHE_MAX_AGE_MS,
   PLAN_CACHE_POLL_MS,
+  pairRemoteDevice,
   parsePanels,
   peekThread,
   permissionModeOf,
@@ -249,6 +250,25 @@ describe("engine controller with the mock engine", () => {
       transport.releaseStatus();
       await staleRead;
       expect(useApp.getState().remote?.connectRequests[0]?.state).toBe("approved");
+    } finally {
+      await transport.stop();
+    }
+  });
+
+  test("accepting a phone's request takes down the QR code it replaced", async () => {
+    const transport = new MockTransport({ delayMs: 0, remote: "connect" });
+    await connect(transport);
+    await until(() => useApp.getState().status === "ready");
+    try {
+      const initial = await refreshRemote();
+      const id = initial?.connectRequests[0]?.id;
+      if (!id) throw new Error("the mock must seed a connection request");
+      await pairRemoteDevice();
+      expect(useApp.getState().remoteChallenge).not.toBeNull();
+
+      expect(await answerConnectRequest(id, true)).toBe(true);
+      expect(useApp.getState().remoteChallenge).toBeNull();
+      expect(useApp.getState().connectCode?.requestId).toBe(id);
     } finally {
       await transport.stop();
     }

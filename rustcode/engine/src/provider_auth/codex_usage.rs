@@ -108,7 +108,7 @@ pub(crate) async fn read_cached(home: Option<&Path>) -> Read {
 async fn read(home: Option<&Path>) -> Read {
     let unavailable = |what: &str| CodexUsageError::Unavailable(what.to_string());
     let program = program().ok_or(CodexUsageError::NotInstalled)?;
-    let mut command = tokio::process::Command::new(&program);
+    let mut command = crate::platform::tokio_command(&program);
     command
         .arg("app-server")
         .env("PATH", crate::harness::detect::search_path())

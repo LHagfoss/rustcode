@@ -5,7 +5,6 @@
 //! folder's `title.txt`; Trash moves the folder to the user's Trash.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 fn valid_id(id: &str) -> bool {
     !id.is_empty()
@@ -30,7 +29,7 @@ fn thread_dir(id: &str) -> Result<PathBuf, String> {
     if !valid_id(id) {
         return Err("Not a thread id.".into());
     }
-    let output = Command::new(crate::engine::resolve_engine())
+    let output = crate::process::command(crate::engine::resolve_engine())
         .args(["threads", "path", id])
         .output()
         .map_err(|e| format!("Could not run the engine: {e}"))?;

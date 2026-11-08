@@ -127,6 +127,7 @@ export interface RemoteOffer {
   expiresInSecs: number;
   loopbackOnly: boolean;
   gatewayId: string;
+  instanceId?: string;
   challenge?: number;
   /** Seconds pairing stays locked after too many wrong codes, when it is. */
   lockedForSecs?: number;
@@ -265,6 +266,7 @@ function parseOffer(value: Json | undefined): RemoteOffer | undefined {
     expiresInSecs: num(offer.expiresInSecs) ?? 0,
     loopbackOnly: bool(offer.loopbackOnly) ?? false,
     gatewayId: str(offer.gatewayId) ?? "",
+    instanceId: str(offer.instanceId),
     challenge: num(offer.challenge),
     lockedForSecs: num(offer.lockedForSecs),
   };
