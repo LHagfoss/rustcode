@@ -688,7 +688,7 @@ pub const MERGE_WHEN_GREEN: Tool = Tool {
 
 pub const CLEANUP_WORKTREE: Tool = Tool {
     name: crate::orchestration::CLEANUP_WORKTREE,
-    description: "Remove a merged delegate's worktree and its branch, then settle the thread when settle is not false. It refuses a worktree that is on another branch than the caller read, on the base or default branch, dirtied, holding ignored files that are not build output, or with commits `git cherry <base> <branch>` shows are not on the base and not part of the merged pull request's head; the refusal says which commits or files those are. Only worktrees under RustCode's worktrees folder are touched, never the main checkout, and a git that cannot answer refuses instead of guessing. The user approves it.",
+    description: "Remove a merged delegate's worktree and its branch, then settle the thread when settle is not false. It refuses a worktree on the base or default branch, dirtied, holding ignored files that are not build output, or with commits `git cherry <base> <branch>` shows are not on the base and not part of the merged pull request's head; the refusal says which commits or files those are. A branch the delegate renamed after the caller read its pull request is accepted when that branch's pull request merged and nothing there would be lost, and the branch it was recorded on is removed too; otherwise the refusal names the merged-pull-request check that failed. Only worktrees under RustCode's worktrees folder are touched, never the main checkout, and a git that cannot answer refuses instead of guessing. The user approves it.",
     arguments: r#"{"session_id": "the merged delegate", "settle": true}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,

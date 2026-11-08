@@ -19,6 +19,8 @@ rustcode/
 │   ├── rustcode-lifecycle/    turn lifecycle and stop-state types
 │   ├── rustcode-tasks/        background task state and event delivery
 │   └── rustcode-loop-detect/  semantic loop and progress guards
+├── client/     `rustcode-client`, the machine client: saved machines, pairing
+│               and the WebSocket to another machine's gateway.
 ├── engine/     Sources of the root `rustcode` crate (library only): agent
 │               loop (the built-in harness), tools, config, session state, ACP,
 │               daemon, controller.
@@ -51,6 +53,7 @@ Nothing under `rustcode/core` or `rustcode/engine` may reference it;
 | `rustcode-lifecycle` | Turn lifecycle and stop-state types |
 | `rustcode-tasks` | Session-aware background task state and event delivery |
 | `rustcode-loop-detect` | Semantic loop, failure, progress, and reasoning guards |
+| `rustcode-client` | The machine client: saved machines and routes, ask-to-connect pairing, the device-token store, the WebSocket transport and ACP over another machine's gateway. Used by `rustcode machines` and, later, the desktop app's Rust shell |
 
 The root `rustcode` crate owns integration concerns: model/network turns,
 ACP, configuration, the terminal UI state, and adapters

@@ -364,8 +364,11 @@ fn extract_from_zip(bytes: &[u8], target: &std::path::Path) -> Result<(), String
         let mut file = archive
             .by_index(i)
             .map_err(|e| format!("invalid zip entry: {e}"))?;
-        let name = file.name();
-        let filename = std::path::Path::new(name)
+        let name = file
+            .name()
+            .map_err(|e| format!("invalid zip entry name: {e}"))?
+            .into_owned();
+        let filename = std::path::Path::new(&name)
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("");

@@ -92,6 +92,124 @@ export const LINK_LABEL: Record<LinkState, string> = {
 export const isActive = (state: LinkState) =>
   state === "queued" || state === "working" || state === "needs_user";
 
+/**
+ * One thing that happened to a link, and when: the thread started, the message
+ * sent, the turn that began, the question it asked, the answer or the failure,
+ * and a merge or a cleanup of its branch. The chip shows the last one as its
+ * status and lists them all under its hover tip (`ui/AgentViews.tsx`).
+ */
+export type LinkEventKind =
+  | "started"
+  | "message"
+  | "queued"
+  | "working"
+  | "asking"
+  | "answered"
+  | "failed"
+  | "stopped"
+  | "interrupted"
+  | "merged"
+  | "cleaned";
+
+export type LinkEvent = {
+  kind: LinkEventKind;
+  at: number;
+  /** What the word gains: the harness and model it runs on, or the time it worked. */
+  detail?: string;
+};
+
+/** The events one link keeps: enough for a branch's whole life, bounded for the saved book. */
+export const MAX_LINK_EVENTS = 12;
+
+/** The chip's word for each event; the link's state words are {@link LINK_LABEL}. */
+export const LINK_EVENT_LABEL: Record<LinkEventKind, string> = {
+  started: "Started",
+  message: "Message sent",
+  queued: "Queued",
+  working: "Working",
+  asking: "Asked you",
+  answered: "Answered",
+  failed: "Failed",
+  stopped: "Stopped",
+  interrupted: "Interrupted",
+  merged: "Merged",
+  cleaned: "Cleaned up",
+};
+
+/** The event a link reaches when it newly takes a state. */
+const EVENT_OF_STATE: Partial<Record<LinkState, LinkEventKind>> = {
+  queued: "queued",
+  working: "working",
+  needs_user: "asking",
+  done: "answered",
+  failed: "failed",
+  cancelled: "stopped",
+  interrupted: "interrupted",
+};
+
+/** One event's identity: its kind at one moment. Two of them are the same event. */
+const eventKey = (kind: LinkEventKind, at: number) => `${kind}@${at}`;
+
+/** `link` with one more event, keeping the last {@link MAX_LINK_EVENTS}. */
+export function noteEvent(link: Link, kind: LinkEventKind, at: number, detail?: string): Link {
+  const events = link.events ?? [];
+  // A moment already in the list is one event, wherever it sits: a state set again is not news, and
+  // a repeat must not push a real event out of the bounded list (`working, asking, working` at one
+  // moment is two rows, not three).
+  const key = eventKey(kind, at);
+  if (events.some((event) => eventKey(event.kind, event.at) === key)) return link;
+  const next = [...events, { kind, at, ...(detail ? { detail } : {}) }];
+  return { ...link, events: next.slice(-MAX_LINK_EVENTS) };
+}
+
+/**
+ * The link after `change`, with an event for a state it newly reaches. Every
+ * place that settles or resumes a link goes through this, so the chip's list
+ * says the same thing whichever turn wrote the change.
+ */
+export function advanceLink(link: Link, change: Partial<Link>, at: number): Link {
+  const next = { ...link, ...change };
+  if (change.state === undefined || change.state === link.state) return next;
+  const kind = EVENT_OF_STATE[change.state];
+  if (!kind) return next;
+  const worked = kind === "answered" ? workedTime(next, at) : undefined;
+  const detail = worked ? `worked ${formatDuration(worked)}` : undefined;
+  return noteEvent(next, kind, at, detail);
+}
+
+/**
+ * How long a link actually worked: the turn's span less the time it spent
+ * waiting on the user, which the app tracks apart (`waitedMs`, plus a wait
+ * still open in `waitingSince`) so a five-minute approval is not five minutes
+ * of work in the event that reports the answer.
+ */
+export function workedTime(link: Link, at: number): number | undefined {
+  if (link.workedMs === undefined) return undefined;
+  const waited =
+    (link.waitedMs ?? 0) + (link.waitingSince === undefined ? 0 : Math.max(0, at - link.waitingSince));
+  return Math.max(0, link.workedMs - waited);
+}
+
+/** An event's word with what it adds: `Answered · worked 2m 10s`. */
+export const linkEventText = (event: LinkEvent): string =>
+  event.detail ? `${LINK_EVENT_LABEL[event.kind]} · ${event.detail}` : LINK_EVENT_LABEL[event.kind];
+
+/**
+ * The chip's status word: the latest event's, or its state's for a link made
+ * before the app kept events. `state` is the link as it shows now, which is
+ * `needs_user` while its child waits on an approval even though the link itself
+ * still says `working`.
+ */
+export function linkStatusText(link: Link, state: LinkState = link.state): string {
+  const last = link.events?.at(-1);
+  // A wait reads as the question it asked, whether or not the book kept that event.
+  if (state === "needs_user")
+    return last?.kind === "asking" ? LINK_EVENT_LABEL.asking : LINK_LABEL.needs_user;
+  // The wait ended without its own event (a book from before the list): the state's word stands.
+  if (last?.kind === "asking") return LINK_LABEL[state];
+  return last ? LINK_EVENT_LABEL[last.kind] : LINK_LABEL[state];
+}
+
 /** How a group of links is doing, for the card that holds them. */
 export interface LinkCounts {
   working: number;
@@ -171,6 +289,10 @@ export interface Link {
   harnessName?: string;
   /** The named login the thread runs on, when it is not the harness's default. */
   account?: string;
+  /** The model it runs on, for the first event's `harness · model`. */
+  model?: string;
+  /** What happened to this link, oldest first: the chip shows the last as its status. */
+  events?: LinkEvent[];
   fanOut?: string;
   answer?: string;
   truncated?: boolean;
@@ -881,13 +1003,39 @@ export function grant(book: LinkBook, caller: string, key: string): LinkBook {
   return { ...book, grants: { ...book.grants, [caller]: [...(book.grants[caller] ?? []), key] } };
 }
 
-export function updateLink(book: LinkBook, id: string, change: Partial<Link>): LinkBook {
-  return { ...book, links: book.links.map((l) => (l.id === id ? { ...l, ...change } : l)) };
+export function updateLink(book: LinkBook, id: string, change: Partial<Link>, at = Date.now()): LinkBook {
+  return { ...book, links: book.links.map((l) => (l.id === id ? advanceLink(l, change, at) : l)) };
+}
+
+/**
+ * The newest link between two threads with one more event: a merge or a
+ * cleanup happens to the branch, not to a turn, so it lands on the link that
+ * points at that thread when the tool call itself made no new one.
+ */
+export function noteLinkEvent(
+  book: LinkBook,
+  orchestrator: string,
+  target: string,
+  kind: LinkEventKind,
+  at = Date.now(),
+): LinkBook {
+  let newest: Link | undefined;
+  for (const link of book.links) {
+    if (link.orchestrator !== orchestrator || link.target !== target) continue;
+    if (!newest || link.createdAt >= newest.createdAt) newest = link;
+  }
+  if (!newest) return book;
+  const noted = noteEvent(newest, kind, at);
+  if (noted === newest) return book;
+  return { ...book, links: book.links.map((l) => (l.id === newest.id ? noted : l)) };
 }
 
 /** After a restart: work that was queued or running did not finish here, and nothing restarts by itself. */
-export function interruptActive(book: LinkBook): LinkBook {
-  return { ...book, links: book.links.map((l) => (isActive(l.state) ? { ...l, state: "interrupted" } : l)) };
+export function interruptActive(book: LinkBook, at = Date.now()): LinkBook {
+  return {
+    ...book,
+    links: book.links.map((l) => (isActive(l.state) ? advanceLink(l, { state: "interrupted" }, at) : l)),
+  };
 }
 
 /** Links kept: every active one, and the latest 50 finished; fan-outs whose links are all gone go too. */
@@ -922,9 +1070,11 @@ export function parseBook(raw: Json | undefined): LinkBook | null {
     if (typeof link.target !== "string" || typeof link.state !== "string") continue;
     if (!LINK_STATES.includes(link.state as LinkState)) continue;
     // The rest travels as it was written, so a field this build does not know survives.
+    const events = parseLinkEvents(link.events);
     links.push({
       ...(link as unknown as Link),
       createdAt: typeof link.createdAt === "number" ? link.createdAt : Date.now(),
+      ...(events ? { events } : {}),
     });
   }
   const record = (value: Json | undefined) =>
@@ -947,6 +1097,21 @@ export function parseBook(raw: Json | undefined): LinkBook | null {
   return { links, grants, counters, fanOuts };
 }
 
+/** What a stored event list is read as: known kinds only, bounded, oldest first. */
+function parseLinkEvents(raw: Json | undefined): LinkEvent[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const events = raw.flatMap((entry): LinkEvent[] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const event = entry as Record<string, Json | undefined>;
+    const kind = event.kind;
+    if (typeof kind !== "string" || !Object.hasOwn(LINK_EVENT_LABEL, kind)) return [];
+    if (typeof event.at !== "number" || !Number.isFinite(event.at)) return [];
+    const detail = typeof event.detail === "string" && event.detail ? { detail: event.detail } : {};
+    return [{ kind: kind as LinkEventKind, at: event.at, ...detail }];
+  });
+  return events.slice(-MAX_LINK_EVENTS);
+}
+
 /** When a link settled, or -1 while it has not: the later record of one link knows more. */
 const settledAtOf = (link: Link) => (typeof link.settledAt === "number" ? link.settledAt : -1);
 
@@ -958,9 +1123,11 @@ const settledAtOf = (link: Link) => (typeof link.settledAt === "number" ? link.s
  */
 function mergedLink(shared: Link, mine: Link): Link {
   const [base, other] = settledAtOf(mine) > settledAtOf(shared) ? [mine, shared] : [shared, mine];
+  const events = mergeEvents(base.events, other.events);
   return {
     ...other,
     ...base,
+    ...(events ? { events } : {}),
     ...(base.notifiedAt === undefined && other.notifiedAt !== undefined
       ? { notifiedAt: other.notifiedAt }
       : {}),
@@ -1190,7 +1357,7 @@ export function waitStarted(links: readonly Link[], thread: string, at: number):
   const next = links.map((link) => {
     if (link.target !== thread || !isActive(link.state) || link.waitingSince !== undefined) return link;
     changed = true;
-    return { ...link, waitingSince: at };
+    return noteEvent({ ...link, waitingSince: at }, "asking", at);
   });
   return changed ? next : (links as Link[]);
 }
@@ -1206,12 +1373,14 @@ export function waitEnded(links: readonly Link[], thread: string, at: number): L
     if (link.target !== thread || link.waitingSince === undefined) return link;
     changed = true;
     const { waitingSince, ...rest } = link;
-    return { ...rest, waitedMs: (link.waitedMs ?? 0) + Math.max(0, at - waitingSince) };
+    // Answered: the turn it was waited on runs again, which is the event after "Asked you".
+    const resumed = noteEvent(rest, "working", at);
+    return { ...resumed, waitedMs: (link.waitedMs ?? 0) + Math.max(0, at - waitingSince) };
   });
   return changed ? next : (links as Link[]);
 }
 
-export function forget(book: LinkBook, thread: string): LinkBook {
+export function forget(book: LinkBook, thread: string, at = Date.now()): LinkBook {
   const grants = Object.fromEntries(
     Object.entries(book.grants)
       .filter(([k]) => k !== thread)
@@ -1224,7 +1393,7 @@ export function forget(book: LinkBook, thread: string): LinkBook {
       .filter((l) => l.orchestrator !== thread)
       .map((l) =>
         l.target === thread && isActive(l.state)
-          ? { ...l, state: "failed", answer: "That thread was deleted." }
+          ? advanceLink(l, { state: "failed", answer: "That thread was deleted." }, at)
           : l,
       ),
     fanOuts: book.fanOuts.filter((f) => f.orchestrator !== thread),
@@ -1484,6 +1653,29 @@ export function undeliveredReason(title: string, failure: string | undefined): s
 }
 
 /**
+ * Two copies of one link's events as one list: the same moment written in both
+ * copies is one event, and a copy that knows newer ones keeps them.
+ */
+function mergeEvents(
+  one: readonly LinkEvent[] | undefined,
+  other: readonly LinkEvent[] | undefined,
+): LinkEvent[] | undefined {
+  const all = [...(one ?? []), ...(other ?? [])];
+  if (!all.length) return undefined;
+  // One row per moment across both copies, including a moment one copy repeats itself: the first
+  // copy of it wins, and its duplicate does not survive the merge.
+  const seen = new Set<string>();
+  const merged: LinkEvent[] = [];
+  for (const event of all) {
+    const key = eventKey(event.kind, event.at);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(event);
+  }
+  return merged.sort((a, b) => a.at - b.at).slice(-MAX_LINK_EVENTS);
+}
+
+/**
  * The book after a turn of `target` failed: every message still queued on it is failed with
  * {@link undeliveredReason}, so no row says Queued for a message that will never start on its own
  * (a failed turn holds the queue, `thread.ts` `holdsQueue`). Answers the links it failed, whose
@@ -1499,13 +1691,16 @@ export function failQueuedLinks(
   const links = book.links.map((link) => {
     if (link.target !== target || link.state !== "queued") return link;
     failed.push(link.id);
-    return {
-      ...link,
-      state: "failed" as const,
-      answer: undeliveredReason(link.targetTitle || "the thread", failure),
-      truncated: false,
-      settledAt: now,
-    };
+    return advanceLink(
+      link,
+      {
+        state: "failed" as const,
+        answer: undeliveredReason(link.targetTitle || "the thread", failure),
+        truncated: false,
+        settledAt: now,
+      },
+      now,
+    );
   });
   return failed.length ? { book: { ...book, links }, failed } : { book, failed };
 }

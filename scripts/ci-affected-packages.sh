@@ -6,6 +6,7 @@ set -euo pipefail
 all=false
 engine=false
 tui=false
+client=false
 core=()
 
 while IFS= read -r path; do
@@ -19,6 +20,8 @@ while IFS= read -r path; do
             engine=true ;;
         rustcode/tui/Cargo.toml|rustcode/tui/build.rs|rustcode/tui/src/*|rustcode/tui/tests/*|rustcode/tui/benches/*|rustcode/tui/examples/*)
             tui=true ;;
+        rustcode/client/Cargo.toml|rustcode/client/build.rs|rustcode/client/src/*|rustcode/client/tests/*|rustcode/client/benches/*|rustcode/client/examples/*)
+            client=true ;;
         rustcode/core/*/Cargo.toml|rustcode/core/*/build.rs|rustcode/core/*/src/*|rustcode/core/*/tests/*|rustcode/core/*/benches/*|rustcode/core/*/examples/*)
             crate="${path#rustcode/core/}"
             crate="${crate%%/*}"
@@ -36,6 +39,7 @@ fi
 args=()
 if "$engine"; then args+=(-p rustcode); fi
 if "$tui"; then args+=(-p rustcode-tui); fi
+if "$client"; then args+=(-p rustcode-client); fi
 if ((${#core[@]})); then
     while IFS= read -r crate; do args+=(-p "$crate"); done < <(printf '%s\n' "${core[@]}" | LC_ALL=C sort -u)
 fi

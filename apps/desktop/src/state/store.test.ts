@@ -115,6 +115,7 @@ import {
   setPermissionMode,
   setProjectCwd,
   setReduceTransparency,
+  setSectionOrder,
   setThreadLimit,
   setThreadStatus,
   setTotalLimit,
@@ -2713,6 +2714,55 @@ describe("list_harnesses on a harness with hundreds of models", () => {
     withModels(many(4), "vendor/gone");
     const codex = (await listed(caller)).find((h) => h.id === "codex")!;
     expect(codex.models!.map((m) => m.id)).toEqual(["vendor/m00", "vendor/m01", "vendor/m02", "vendor/m03"]);
+  });
+});
+
+describe("the sidebar's arrangement", () => {
+  const stored = (storage: { data: Map<string, string> }) =>
+    JSON.parse(storage.data.get("rustcode.sidebarOrder") ?? "null");
+
+  test("trashing a thread drops it from every section, in memory and in storage", async () => {
+    const storage = testStorage();
+    try {
+      await connect(new MockTransport({ delayMs: 0 }));
+      await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+      const [a, b] = useApp.getState().sessions;
+      setSectionOrder("pinned", [a!.id, b!.id]);
+      setSectionOrder("threads", [b!.id, a!.id]);
+      expect(stored(storage)).toEqual({ pinned: [a!.id, b!.id], threads: [b!.id, a!.id] });
+
+      expect(await trashThread(a!.id)).toBe(true);
+      const kept = { pinned: [b!.id], threads: [b!.id] };
+      expect(useApp.getState().sidebarOrder).toEqual(kept);
+      expect(stored(storage)).toEqual(kept);
+    } finally {
+      storage.done();
+    }
+  });
+
+  test("the engine's list forgets the threads it no longer carries, and keeps the rest", async () => {
+    const storage = testStorage();
+    try {
+      await connect(new MockTransport({ delayMs: 0 }));
+      await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+      const [a, b] = useApp.getState().sessions;
+      // One thread the engine lists, one it does not (trashed from another app, or before this
+      // field existed): the listed one keeps its place and the other stops taking one up.
+      setSectionOrder("threads", [a!.id, "mock-thread-gone"]);
+      setSectionOrder("pinned", ["mock-thread-gone", b!.id]);
+
+      await refreshSessions();
+      const kept = { threads: [a!.id], pinned: [b!.id] };
+      expect(useApp.getState().sidebarOrder).toEqual(kept);
+      expect(stored(storage)).toEqual(kept);
+
+      // Nothing to forget: the stored value is left exactly as it was.
+      const written = storage.data.get("rustcode.sidebarOrder");
+      await refreshSessions();
+      expect(storage.data.get("rustcode.sidebarOrder")).toBe(written);
+    } finally {
+      storage.done();
+    }
   });
 });
 

@@ -35,6 +35,7 @@ import {
 import {
   activeDescendants,
   activityOf,
+  advanceLink,
   askingIds,
   capped,
   checkManage,
@@ -75,6 +76,8 @@ import {
   mergeBooks,
   nextId,
   nextWakeAt,
+  noteEvent,
+  noteLinkEvent,
   orphanedLinks,
   type PullStateChoice,
   pageOf,
@@ -259,12 +262,13 @@ export async function syncLinkBook(): Promise<void> {
     return;
   }
   // Both copies are from before this connect: nothing left active resumes.
-  const merged = interruptActive(mergeBooks(interruptActive(shared), book()));
+  const now = Date.now();
+  const merged = interruptActive(mergeBooks(interruptActive(shared, now), book()), now);
   useApp.setState({ links: prune(merged) });
   keepLocally(prune(merged));
-  savedText = text(interruptActive(shared));
+  savedText = text(interruptActive(shared, now));
   // A link this window started while the store was answering is new to it.
-  if (text(prune(merged)) !== text(prune(interruptActive(shared)))) scheduleSave();
+  if (text(prune(merged)) !== text(prune(interruptActive(shared, now)))) scheduleSave();
 }
 
 function setBook(fn: (book: LinkBook) => LinkBook) {
@@ -1004,13 +1008,18 @@ async function delegatePull(
 ): Promise<{ branch?: string; pull?: DelegatePull; error?: Failure }> {
   const cwd = projectOf(target);
   if (!cwd) return { error: failure("failed", "this thread has no project folder") };
+  const worktree = target.worktree;
   try {
-    const result = await request(
-      Method.pullState,
-      { cwd, ...(target.worktree?.branch ? { branch: target.worktree.branch } : {}) },
-      60_000,
-    );
-    const answer = parsePullState(result);
+    // Ask for the branch the worktree is on now, not the recorded one: a
+    // delegate may have renamed it, and the engine echoes the branch it was
+    // asked for, so naming the recorded one would hide the rename (and its
+    // pull request) from status, merge and cleanup.
+    let answer = parsePullState(await request(Method.pullState, { cwd: worktree?.path ?? cwd }, 60_000));
+    // A detached HEAD has no branch to look up, so fall back to the recorded
+    // one rather than reporting no pull request at all.
+    if (answer.error && worktree?.branch) {
+      answer = parsePullState(await request(Method.pullState, { cwd, branch: worktree.branch }, 60_000));
+    }
     if (answer.error) return { error: pullFailure(answer.error) };
     return { branch: answer.branch, pull: answer.pull };
   } catch (error) {
@@ -1143,7 +1152,7 @@ async function mergeWhenGreen(
       {
         cwd: projectOf(target),
         number: pull.number,
-        ...(target.worktree?.branch ? { branch: target.worktree.branch } : {}),
+        ...(state.branch ? { branch: state.branch } : {}),
         timeoutMs: call.timeoutMs,
       },
       call.timeoutMs + 120_000,
@@ -1155,6 +1164,10 @@ async function mergeWhenGreen(
   if (error) return failureJson(pullFailure(error));
   const outcome = parseMergeOutcome(result);
   if (!outcome) return failureJson(failure("failed", "the engine answered without a merge result"));
+  if (outcome.merged) {
+    // The branch's story is part of the link's: the chip's list says it merged.
+    setBook((b) => noteLinkEvent(b, caller.id, target.id, "merged"));
+  }
   return {
     session_id: target.id,
     number: outcome.number,
@@ -1170,8 +1183,9 @@ async function mergeWhenGreen(
 /**
  * `cleanup_worktree`: removes a merged delegate's worktree and branch, then
  * settles it, after the engine confirms nothing unique is lost (git cherry,
- * allowing a squash merge's content). Refuses a dirty worktree or one still
- * running. The user approves it.
+ * allowing a squash merge's content). A branch the delegate renamed after this
+ * read is accepted by the engine when that branch's pull request merged. Refuses
+ * a dirty worktree or one still running. The user approves it.
  */
 async function cleanupWorktree(
   caller: RuleThread,
@@ -1240,6 +1254,14 @@ async function cleanupWorktree(
     branch: str(obj(cleanup)?.branch) ?? branch,
     branch_removed: bool(obj(cleanup)?.branch_removed) ?? false,
   };
+  // A branch the delegate renamed: the engine removes the recorded one too
+  // when it holds nothing unique, and says so.
+  const recorded = str(obj(cleanup)?.recorded_branch);
+  if (recorded) {
+    answer.recorded_branch = recorded;
+    answer.recorded_branch_removed = bool(obj(cleanup)?.recorded_branch_removed) ?? false;
+  }
+  setBook((b) => noteLinkEvent(b, caller.id, target.id, "cleaned"));
   if (call.settle) {
     await setThreadStatus(target.id, "done");
     answer.settled = true;
@@ -1545,6 +1567,10 @@ async function messageNow(caller: RuleThread, targetId: string, text: string): P
     return failureJson(failure("target_unavailable", openError ?? "that thread could not be opened"));
   }
   const busy = thread.running;
+  const session = afterOpen.sessions.find((x) => x.id === target.id);
+  const harnessName = session?.harness
+    ? afterOpen.harnesses?.harnesses.find((h) => h.id === session.harness)?.name
+    : undefined;
   const id = addLink({
     orchestrator: caller.id,
     target: target.id,
@@ -1552,17 +1578,31 @@ async function messageNow(caller: RuleThread, targetId: string, text: string): P
     targetTitle: target.title,
     message: text,
     state: busy ? "queued" : "working",
+    harness: session?.harness,
+    harnessName,
+    model: session?.model,
   });
   deliver(target.id, delivered(text, caller.title), id, caller.id);
   return { link_id: id, receipt: busy ? "queued" : "started", session_id: target.id, title: target.title };
 }
 
-function addLink(link: Omit<Link, "id" | "createdAt">): string {
+function addLink(link: Omit<Link, "id" | "createdAt" | "events">): string {
   let id = "";
   setBook((b) => {
     const next = nextId(b, link.orchestrator);
     id = next.id;
-    return { ...next.book, links: [...next.book.links, { ...link, id, createdAt: Date.now() }] };
+    const at = Date.now();
+    // The first event is what made the link: a thread started on a harness and model, or a message
+    // sent into one, which is the line the chip's tip opens with.
+    const meta = [link.harnessName ?? link.harness, link.model].filter(Boolean).join(" · ");
+    const first = noteEvent({ ...link, id, createdAt: at }, link.started ? "started" : "message", at, meta);
+    // Then the state it is in from this moment: a queued message reads `Queued`, a turn that starts
+    // at once reads `Working`, without waiting for the next transition to write it.
+    const seeded =
+      link.state === "queued" || link.state === "working"
+        ? noteEvent(first, link.state === "queued" ? "queued" : "working", at)
+        : first;
+    return { ...next.book, links: [...next.book.links, seeded] };
   });
   return id;
 }
@@ -1993,6 +2033,8 @@ async function startNow(caller: RuleThread, call: StartCall): Promise<JsonObject
     state: "working",
     started: true,
     harness: harness.id,
+    harnessName: harness.name,
+    model,
     account: account ?? undefined,
   });
   deliver(id, delivered(call.prompt, caller.title), link, caller.id);
@@ -2083,6 +2125,8 @@ async function fanOutNow(caller: RuleThread, call: FanOutCall): Promise<JsonObje
         state: "working",
         started: true,
         harness: h.harness.id,
+        harnessName: h.harness.name,
+        model: h.model,
         account: h.account ?? undefined,
         fanOut: fanId,
       });
@@ -2780,14 +2824,17 @@ export function linksResumed(ids: readonly string[]): void {
     ...b,
     links: b.links.map((link) =>
       ids.includes(link.id) && link.state === "interrupted"
-        ? {
-            ...link,
-            state: "working" as const,
-            startedAt: now,
-            resumedAt: now,
-            waitingSince: undefined,
-            waitedMs: undefined,
-          }
+        ? advanceLink(
+            link,
+            {
+              state: "working" as const,
+              startedAt: now,
+              resumedAt: now,
+              waitingSince: undefined,
+              waitedMs: undefined,
+            },
+            now,
+          )
         : link,
     ),
   }));
@@ -2859,16 +2906,19 @@ export function linksFinished(
       if (link.state === "done" || link.state === "failed" || link.state === "cancelled") return link;
       settled = true;
       const workedMs = link.startedAt === undefined ? undefined : Math.max(0, now - link.startedAt);
-      return {
-        ...link,
-        state,
-        answer: says.text,
-        truncated: says.truncated,
-        filesChanged: says.filesChanged,
-        settledAt: now,
-        ...harness,
-        ...(workedMs ? { workedMs } : {}),
-      };
+      return advanceLink(
+        link,
+        {
+          state,
+          answer: says.text,
+          truncated: says.truncated,
+          filesChanged: says.filesChanged,
+          settledAt: now,
+          ...harness,
+          ...(workedMs ? { workedMs } : {}),
+        },
+        now,
+      );
     }),
   }));
   if (settled) wakeTick();
