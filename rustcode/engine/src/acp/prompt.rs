@@ -1,7 +1,6 @@
 use agent_client_protocol::schema::v1::{
-    ContentBlock, SessionInfoUpdate, SessionNotification, SessionUpdate, StopReason,
+    ContentBlock, SessionInfoUpdate, SessionUpdate, StopReason,
 };
-use agent_client_protocol::{Client, ConnectionTo};
 use rustcode_tasks::{TaskEvent, TaskManager};
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -11,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use tokio::sync::Mutex;
 
+use super::clients::SessionClients;
 use super::permissions::AcpPolicy;
 use super::session::{KnownTaskIds, ScheduledSessionTurn};
 use super::streaming::{AcpEventStream, acp_stop_reason};
@@ -72,11 +72,11 @@ impl SessionTitleTracker {
 fn spawn_session_title(
     state: &Arc<Mutex<crate::app::AppState>>,
     client: &Arc<reqwest::Client>,
-    connection: &ConnectionTo<Client>,
+    clients: &SessionClients,
     session_id: &str,
     prompt: &str,
 ) {
-    let (state, client, connection) = (Arc::clone(state), Arc::clone(client), connection.clone());
+    let (state, client, clients) = (Arc::clone(state), Arc::clone(client), clients.clone());
     let (session_id, prompt) = (session_id.to_owned(), prompt.to_owned());
     tokio::spawn(async move {
         let title =
@@ -84,7 +84,7 @@ fn spawn_session_title(
                 .await;
         if let Some(title) = title {
             let update = SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(title));
-            let _ = send_updates(&connection, &session_id, vec![update]);
+            let _ = send_updates(&clients, &session_id, vec![update]);
         }
     });
 }
@@ -266,9 +266,9 @@ pub(crate) async fn run_report(
     state: &Mutex<crate::app::AppState>,
     session_id: &str,
     text: &str,
-    connection: &ConnectionTo<Client>,
+    clients: &SessionClients,
 ) -> Result<StopReason, agent_client_protocol::Error> {
-    send_updates(connection, session_id, report_updates(state, text).await)?;
+    send_updates(clients, session_id, report_updates(state, text).await)?;
     Ok(StopReason::EndTurn)
 }
 
@@ -282,7 +282,7 @@ pub(crate) async fn run_prompt(
     terminal_backlog: Arc<std::sync::Mutex<VecDeque<TaskEvent>>>,
     terminal_overflow: Arc<AtomicBool>,
     text: String,
-    connection: ConnectionTo<Client>,
+    clients: SessionClients,
     client: Arc<reqwest::Client>,
     auto_approve: bool,
     remote: Option<super::remote::RemoteManager>,
@@ -292,6 +292,9 @@ pub(crate) async fn run_prompt(
     // Running from here; the checkpoint is taken once the turn holds the
     // session, so a queued prompt never snapshots a turn still editing.
     let _status = crate::thread_status::turn(&session_id);
+    // A client that loads the session mid-turn is sent the history from
+    // before this prompt, the prompt, and what the turn sent since.
+    let _live = clients.begin_turn(state.lock().await.history.len(), Some(text.clone()));
     let user_index = crate::checkpoints::next_user_index(&state.lock().await.history);
     crate::checkpoints::before_turn(&session_id, &cwd, &text, Some(user_index)).await;
     // ACP turns get the same identity as terminal turns. Remote projection,
@@ -317,7 +320,7 @@ pub(crate) async fn run_prompt(
             // Subagents outlive this turn and do not run under its policy;
             // their approvals still have to reach the client.
             state.external_tool_approver = Some(super::permissions::external_tool_approver(
-                connection.clone(),
+                clients.clone(),
                 session_id.clone(),
             ));
             (
@@ -370,7 +373,7 @@ pub(crate) async fn run_prompt(
                 // The command card says what started; the goal prompt is the
                 // user turn the model answers, as a session replay shows it.
                 send_updates(
-                    &connection,
+                    &clients,
                     &session_id,
                     vec![
                         agent_text(
@@ -396,7 +399,7 @@ pub(crate) async fn run_prompt(
                     &client,
                     turn.cancel_token(),
                     |progress| {
-                        let _ = send_updates(&connection, &session_id, vec![agent_text(progress)]);
+                        let _ = send_updates(&clients, &session_id, vec![agent_text(progress)]);
                     },
                 )
                 .await;
@@ -436,7 +439,7 @@ pub(crate) async fn run_prompt(
                     }
                     (None, reply, _) => reply,
                 };
-                send_updates(&connection, &session_id, vec![reply, usage, options])?;
+                send_updates(&clients, &session_id, vec![reply, usage, options])?;
                 return Ok(if turn.cancel_token().is_cancelled() {
                     StopReason::Cancelled
                 } else {
@@ -451,17 +454,17 @@ pub(crate) async fn run_prompt(
             is_first
         };
         if is_first_prompt {
-            spawn_session_title(&state, &client, &connection, &session_id, &text);
+            spawn_session_title(&state, &client, &clients, &session_id, &text);
         }
         // Send the context and token usage as the turn begins, so a long
         // running turn keeps the client's meter current instead of only
         // updating once the turn ends.
         let opening_usage = super::usage::usage_update(&*state.lock().await);
-        send_updates(&connection, &session_id, vec![opening_usage])?;
+        send_updates(&clients, &session_id, vec![opening_usage])?;
 
         let stream_buffer = Arc::new(Mutex::new(crate::network::StreamBuffer::new()));
         let policy = Arc::new(AcpPolicy {
-            connection: connection.clone(),
+            clients: clients.clone(),
             session_id: session_id.clone(),
             auto_approve,
         });
@@ -478,7 +481,7 @@ pub(crate) async fn run_prompt(
             text,
             events.clone(),
             &mut receiver,
-            &connection,
+            &clients,
             &session_id,
             &mut event_stream,
             remote.as_ref(),
@@ -503,19 +506,14 @@ pub(crate) async fn run_prompt(
                 // chat is free meanwhile; a server that never exits used to
                 // keep it busy for good (#2280). The command's completion
                 // resumes the turn.
-                send_activity(
-                    &connection,
-                    &session_id,
-                    "waiting",
-                    turn_tasks.pending.len(),
-                );
+                send_activity(&clients, &session_id, "waiting", turn_tasks.pending.len());
                 tokio::spawn(resume_after_background(BackgroundWakeup {
                     state: Arc::clone(&state),
                     cwd: cwd.clone(),
                     turns: turns.clone(),
                     session_id: session_id.clone(),
                     client: Arc::clone(&client),
-                    connection: connection.clone(),
+                    clients: clients.clone(),
                     auto_approve,
                     remote: remote.clone(),
                     turn_tasks,
@@ -562,13 +560,8 @@ pub(crate) struct SessionActivityNotification {
     pub background: usize,
 }
 
-fn send_activity(
-    connection: &ConnectionTo<Client>,
-    session_id: &str,
-    state: &str,
-    background: usize,
-) {
-    let _ = connection.send_notification(SessionActivityNotification {
+fn send_activity(clients: &SessionClients, session_id: &str, state: &str, background: usize) {
+    let _ = clients.notify(SessionActivityNotification {
         session_id: session_id.to_owned(),
         state: state.to_owned(),
         background,
@@ -583,7 +576,7 @@ struct BackgroundWakeup {
     turns: std::sync::Weak<super::session::SessionTurnState>,
     session_id: String,
     client: Arc<reqwest::Client>,
-    connection: ConnectionTo<Client>,
+    clients: SessionClients,
     auto_approve: bool,
     remote: Option<super::remote::RemoteManager>,
     turn_tasks: BackgroundTurnTasks,
@@ -626,7 +619,10 @@ async fn resume_after_background_inner(mut wakeup: BackgroundWakeup) {
     let scheduled = turns.schedule();
     drop(turns);
     let turn = scheduled.begin().await;
-    send_activity(&wakeup.connection, &session_id, "running", 0);
+    let _live = wakeup
+        .clients
+        .begin_turn(wakeup.state.lock().await.history.len(), None);
+    send_activity(&wakeup.clients, &session_id, "running", 0);
     let mut parked_again = false;
     let turn_id = {
         let mut state = wakeup.state.lock().await;
@@ -645,7 +641,7 @@ async fn resume_after_background_inner(mut wakeup: BackgroundWakeup) {
             None,
         );
         let policy = Arc::new(AcpPolicy {
-            connection: wakeup.connection.clone(),
+            clients: wakeup.clients.clone(),
             session_id: session_id.clone(),
             auto_approve: wakeup.auto_approve,
         });
@@ -661,7 +657,7 @@ async fn resume_after_background_inner(mut wakeup: BackgroundWakeup) {
             String::new(),
             events,
             &mut receiver,
-            &wakeup.connection,
+            &wakeup.clients,
             &session_id,
             &mut event_stream,
             wakeup.context,
@@ -685,7 +681,7 @@ async fn resume_after_background_inner(mut wakeup: BackgroundWakeup) {
             if !turn_tasks.pending.is_empty() {
                 parked_again = true;
                 send_activity(
-                    &wakeup.connection,
+                    &wakeup.clients,
                     &session_id,
                     "waiting",
                     turn_tasks.pending.len(),
@@ -696,7 +692,7 @@ async fn resume_after_background_inner(mut wakeup: BackgroundWakeup) {
                     turns: wakeup.turns.clone(),
                     session_id: session_id.clone(),
                     client: Arc::clone(&wakeup.client),
-                    connection: wakeup.connection.clone(),
+                    clients: wakeup.clients.clone(),
                     auto_approve: wakeup.auto_approve,
                     remote: wakeup.remote.clone(),
                     turn_tasks,
@@ -707,7 +703,7 @@ async fn resume_after_background_inner(mut wakeup: BackgroundWakeup) {
     })
     .await;
     if !parked_again {
-        send_activity(&wakeup.connection, &session_id, "idle", 0);
+        send_activity(&wakeup.clients, &session_id, "idle", 0);
     }
     let mut state = state.lock().await;
     state.end_turn_identity(&turn_id);
@@ -748,7 +744,7 @@ async fn run_prompt_turn<P: crate::network::policy::TurnPolicy + 'static>(
     text: String,
     events: crate::network::AgentUiEventSender,
     receiver: &mut crate::network::AgentUiEventReceiver,
-    connection: &ConnectionTo<Client>,
+    clients: &SessionClients,
     session_id: &str,
     event_stream: &mut AcpEventStream,
     remote: Option<&super::remote::RemoteManager>,
@@ -764,7 +760,7 @@ async fn run_prompt_turn<P: crate::network::policy::TurnPolicy + 'static>(
             events,
         ),
         receiver,
-        connection,
+        clients,
         session_id,
         event_stream,
         state,
@@ -783,7 +779,7 @@ async fn run_prompt_continuation<P: crate::network::policy::TurnPolicy + 'static
     text: String,
     events: crate::network::AgentUiEventSender,
     receiver: &mut crate::network::AgentUiEventReceiver,
-    connection: &ConnectionTo<Client>,
+    clients: &SessionClients,
     session_id: &str,
     event_stream: &mut AcpEventStream,
     context: crate::network::TurnContext,
@@ -801,7 +797,7 @@ async fn run_prompt_continuation<P: crate::network::policy::TurnPolicy + 'static
             context,
         ),
         receiver,
-        connection,
+        clients,
         session_id,
         event_stream,
         state,
@@ -814,7 +810,7 @@ async fn run_prompt_continuation<P: crate::network::policy::TurnPolicy + 'static
 async fn forward_prompt_run<F>(
     run: F,
     receiver: &mut crate::network::AgentUiEventReceiver,
-    connection: &ConnectionTo<Client>,
+    clients: &SessionClients,
     session_id: &str,
     event_stream: &mut AcpEventStream,
     state: &Arc<Mutex<crate::app::AppState>>,
@@ -849,15 +845,15 @@ where
                     crate::tools::abort_background_starts(session_id);
                 }
                 if matches!(&event, crate::network::AgentUiEvent::QuestionRequested { .. }) {
-                    ask_pending_questions(connection, session_id, state, cancel_token, &asked)?;
+                    ask_pending_questions(clients, session_id, state, cancel_token, &asked)?;
                 }
                 let title_update = title_tracker.observe_event(&event, session_id);
                 if let Some(remote) = remote {
                     remote.observe(session_id, &event);
                 }
-                send_updates(connection, session_id, event_stream.updates(event))?;
+                send_updates(clients, session_id, event_stream.updates(event))?;
                 if let Some(update) = title_update {
-                    send_updates(connection, session_id, vec![update])?;
+                    send_updates(clients, session_id, vec![update])?;
                 }
             }
         }
@@ -867,26 +863,26 @@ where
             &event,
             crate::network::AgentUiEvent::QuestionRequested { .. }
         ) {
-            ask_pending_questions(connection, session_id, state, cancel_token, &asked)?;
+            ask_pending_questions(clients, session_id, state, cancel_token, &asked)?;
         }
         let title_update = title_tracker.observe_event(&event, session_id);
         if let Some(remote) = remote {
             remote.observe(session_id, &event);
         }
-        send_updates(connection, session_id, event_stream.updates(event))?;
+        send_updates(clients, session_id, event_stream.updates(event))?;
         if let Some(update) = title_update {
-            send_updates(connection, session_id, vec![update])?;
+            send_updates(clients, session_id, vec![update])?;
         }
     }
     if let Some(title) = crate::config::load_session_title(session_id)
         && let Some(update) = title_tracker.observe_title(Some(title))
     {
-        send_updates(connection, session_id, vec![update])?;
+        send_updates(clients, session_id, vec![update])?;
     }
     // Every run (the turn and each background continuation) ends with the
     // session's context and token usage, so the client's meter stays current.
     let usage = super::usage::usage_update(&*state.lock().await);
-    send_updates(connection, session_id, vec![usage])?;
+    send_updates(clients, session_id, vec![usage])?;
     Ok(context)
 }
 
@@ -894,14 +890,14 @@ where
 /// is read from state, not from the event, so a stale event cannot pair old
 /// text with a newer question's id.
 fn ask_pending_questions(
-    connection: &ConnectionTo<Client>,
+    clients: &SessionClients,
     session_id: &str,
     state: &Arc<Mutex<crate::app::AppState>>,
     cancel_token: &tokio_util::sync::CancellationToken,
     asked: &super::questions::AskedQuestions,
 ) -> Result<(), agent_client_protocol::Error> {
     super::questions::spawn_question_requests(
-        connection,
+        clients,
         session_id,
         Arc::clone(state),
         cancel_token.clone(),
@@ -1080,7 +1076,7 @@ mod tests {
 }
 
 fn send_updates(
-    connection: &ConnectionTo<Client>,
+    clients: &SessionClients,
     session_id: &str,
     updates: Vec<SessionUpdate>,
 ) -> Result<(), agent_client_protocol::Error> {
@@ -1094,11 +1090,11 @@ fn send_updates(
             }
             _ => None,
         };
-        let result =
-            connection.send_notification(SessionNotification::new(session_id.to_owned(), update));
+        debug_assert_eq!(clients.session_id(), session_id);
+        let result = clients.update(update);
         if pending_call_id.is_some() {
             // The pending history result is the start barrier: release only
-            // after its ACP notification was accepted by the connection.
+            // after its ACP notification was accepted by the connections.
             crate::tools::release_background_start(
                 pending_call_id.as_deref().expect("pending call ID missing"),
             );

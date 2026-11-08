@@ -3080,21 +3080,3 @@ pub enum SmartUi {
     /// The client runs blocks.
     On,
 }
-
-impl SmartUi {
-    pub(crate) fn as_u8(self) -> u8 {
-        match self {
-            Self::Unsupported => 0,
-            Self::Off => 1,
-            Self::On => 2,
-        }
-    }
-
-    pub(crate) fn from_u8(value: u8) -> Self {
-        match value {
-            1 => Self::Off,
-            2 => Self::On,
-            _ => Self::Unsupported,
-        }
-    }
-}

@@ -103,8 +103,8 @@ export function failureText(plan: UsagePlan): { title: string; subtitle?: string
       };
     case "denied":
       return {
-        title: "Could not read the sign-in from the Keychain",
-        subtitle: "macOS did not allow it. Press Refresh to be asked again.",
+        title: "Could not read the sign-in",
+        subtitle: "The system did not allow it. Press Refresh to be asked again.",
       };
     case "transient":
       return {

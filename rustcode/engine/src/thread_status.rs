@@ -5,9 +5,10 @@
 //! and never stored: a [`TurnGuard`] marks a turn, a [`WaitGuard`] an
 //! approval or question the turn waits on. `review` and `done` are set with
 //! `_rustcode/session/status` (or `done` by a merged pull request) and stored
-//! in the thread's directory as `status.json`. Each change is told to the
-//! client as `session/update` `session_info_update` carrying
-//! `_meta.rustcode.status`.
+//! in the thread's directory as `status.json`. Each change is told to every
+//! connected client as `session/update` `session_info_update` carrying
+//! `_meta.rustcode.status`, whether or not it has the thread open: thread
+//! lists show it.
 //!
 //! Pins are stored the same way (`pin.json`), set with
 //! `_rustcode/session/pin` and carried as `_meta.rustcode.pinned`, so the
@@ -70,7 +71,7 @@ fn notifier() -> &'static Mutex<Option<Notifier>> {
     NOTIFIER.get_or_init(Default::default)
 }
 
-/// Where status changes go: the ACP client connection.
+/// Where status changes go: every connected ACP client (`acp/clients.rs`).
 pub(crate) fn set_notifier(notify: impl Fn(String, SessionUpdate) + Send + Sync + 'static) {
     *notifier().lock().unwrap_or_else(|error| error.into_inner()) = Some(Box::new(notify));
 }

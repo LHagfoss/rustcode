@@ -1,4 +1,5 @@
 // design-lint: allow-file (a dev-only overlay, readable over any theme)
+import { primaryModifier } from "./platform";
 // Dev builds only (main.tsx): a frame-rate overlay, toggled with ⌘⌥F. It shows
 // the requestAnimationFrame rate, frame-time p95, late frames and long tasks,
 // plus what the native side reports (display refresh rate, Low Power Mode,
@@ -131,7 +132,7 @@ export function installPerfOverlay() {
   window.addEventListener(
     "keydown",
     (e) => {
-      if (e.metaKey && e.altKey && e.code === "KeyF") {
+      if (primaryModifier(e) && e.altKey && e.code === "KeyF") {
         e.preventDefault();
         e.stopPropagation();
         if (box) hide();

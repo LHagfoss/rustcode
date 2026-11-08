@@ -44,6 +44,7 @@ pub mod pull_watch;
 pub mod raw_cli;
 pub mod remote;
 pub mod serve;
+pub mod server;
 pub mod shell_env;
 pub mod skills;
 mod smart_ui;

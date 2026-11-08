@@ -1469,6 +1469,44 @@ export function fillAnswers(book: LinkBook, answers: Readonly<Record<string, str
 }
 
 /**
+ * What a parent reads about a message it queued on `title` that never started: the turn ahead of
+ * it failed. The message is not sent into a thread that just failed (it would meet the same full
+ * context or harness error); the parent hears why, and `message_session` reopens the thread when it
+ * sends again.
+ */
+export function undeliveredReason(title: string, failure: string | undefined): string {
+  const why = failure?.trim() ? ` (${failure.trim()})` : "";
+  return `Not delivered: “${title}” failed its turn before this message started${why}. It was taken out of the queue; message the thread again to retry.`;
+}
+
+/**
+ * The book after a turn of `target` failed: every message still queued on it is failed with
+ * {@link undeliveredReason}, so no row says Queued for a message that will never start on its own
+ * (a failed turn holds the queue, `thread.ts` `holdsQueue`). Answers the links it failed, whose
+ * messages the caller takes out of the target's queue.
+ */
+export function failQueuedLinks(
+  book: LinkBook,
+  target: string,
+  failure: string | undefined,
+  now: number,
+): { book: LinkBook; failed: string[] } {
+  const failed: string[] = [];
+  const links = book.links.map((link) => {
+    if (link.target !== target || link.state !== "queued") return link;
+    failed.push(link.id);
+    return {
+      ...link,
+      state: "failed" as const,
+      answer: undeliveredReason(link.targetTitle || "the thread", failure),
+      truncated: false,
+      settledAt: now,
+    };
+  });
+  return failed.length ? { book: { ...book, links }, failed } : { book, failed };
+}
+
+/**
  * The book after a turn of `target` ended. A link from a parent that settled
  * but was not reported yet takes this turn's answer: the parent's wake waits for
  * the target's whole subtree to be quiet, so the answer it carries must be the

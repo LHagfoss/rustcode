@@ -68,6 +68,7 @@ import {
 } from "../acp/v2";
 import { approvalSubject, optionScope, resolvedLine } from "../lib/approval";
 import { CHAT_WIDTH_DEFAULT, type ChatWidth, parseChatWidth } from "../lib/chatWidth";
+import { capServerLogLine } from "../lib/diagnostics";
 import { afterPaint } from "../lib/frame";
 import {
   APP_COMMANDS,
@@ -111,6 +112,7 @@ import {
   splitImageMarkers,
 } from "./compose";
 import type { ConnectCode } from "./connectRequests";
+import { contextPercent } from "./details";
 import { DRAFTS_KEY, parseDrafts, persistable, withDraft } from "./drafts";
 import { parseGrants, type TimedGrant } from "./grants";
 import {
@@ -218,6 +220,7 @@ import {
   type ToastTone,
 } from "./toasts";
 import { userTypedPrompt } from "./topLevel";
+import { readableTurnError } from "./turnError";
 
 export type { Toast, ToastTone } from "./toasts";
 
@@ -235,6 +238,7 @@ export type SettingsSection =
   | "usage"
   | "statistics"
   | "advanced"
+  | "diagnostics"
   | "about";
 
 /** Every Settings page, in the order the panel's nav lists them. */
@@ -250,6 +254,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   "usage",
   "statistics",
   "advanced",
+  "diagnostics",
   "about",
 ];
 
@@ -921,6 +926,8 @@ let remoteStatusReadId = 0;
 let latestRemoteStatusReadId = 0;
 /** Sessions whose `session/load` replay is arriving. */
 const loading = new Set<string>();
+/** The shared `session/load` for each thread; callers must not prompt before its replay finishes. */
+const opening = new Map<string, Promise<string | null>>();
 
 /**
  * Threads whose messages contain `query`, from the engine's SQLite index
@@ -942,7 +949,7 @@ export async function searchThreads(query: string): Promise<Record<string, strin
 }
 
 export function engine(): AcpConnection {
-  if (!connection) throw new Error("The engine is not connected.");
+  if (!connection) throw new Error("The server is not connected.");
   return connection;
 }
 
@@ -961,9 +968,14 @@ const inbound = frameQueue<string>((lines) =>
     }),
   ),
 );
-/** Engine stderr, kept for Settings › Advanced; appended once a frame, not per line. */
-const logs = frameQueue<string>((lines) =>
-  set((s) => ({ engineLog: [...s.engineLog, ...lines].slice(-400) })),
+/** Lines of server stderr kept for Settings › Diagnostics. */
+export const SERVER_LOG_LINES = 1000;
+/** Server stderr, kept for Settings › Diagnostics; appended once a frame, not per line. */
+const logs = frameQueue<string>(
+  (lines) =>
+    set((s) => ({ engineLog: [...s.engineLog, ...lines.map(capServerLogLine)].slice(-SERVER_LOG_LINES) })),
+  16,
+  SERVER_LOG_LINES,
 );
 
 // ---------------------------------------------------------------- engine toast
@@ -994,14 +1006,14 @@ function onEngineStatus(s: AppState, prev?: AppState) {
   clearTimeout(slowTimer);
   if (s.status === "ready") {
     // Batched updates can go from closed straight to ready: this keys on `crashed` alone.
-    if (crashed && prev) toast("The engine restarted", "success", { id: ENGINE_TOAST });
+    if (crashed && prev) toast("The server restarted", "success", { id: ENGINE_TOAST });
     else dismissToast(ENGINE_TOAST);
     crashed = false;
     return;
   }
   if (s.status === "closed") {
     crashed = true;
-    toast(s.statusDetail ?? "The engine stopped.", "error", {
+    toast(s.statusDetail ?? "The server stopped.", "error", {
       id: ENGINE_TOAST,
       action: { label: "Restart", run: () => void restartEngine() },
     });
@@ -1011,7 +1023,7 @@ function onEngineStatus(s: AppState, prev?: AppState) {
   if (get().toasts.some((t) => t.id === ENGINE_TOAST && t.tone === "error")) dismissToast(ENGINE_TOAST);
   slowTimer = setTimeout(() => {
     if (get().status !== "connecting") return;
-    toast(crashed ? "Restarting engine…" : "Starting engine…", "info", {
+    toast(crashed ? "Restarting the server…" : "Starting the server…", "info", {
       id: ENGINE_TOAST,
       persist: true,
       progress: bootProgress,
@@ -1055,7 +1067,7 @@ export async function connect(next: Transport): Promise<void> {
 }
 
 async function handshake(): Promise<void> {
-  connection?.close("The engine restarted.");
+  connection?.close("The server restarted.");
   const conn = new AcpConnection((line) => transport?.send(line));
   connection = conn;
   conn.onInbound((message) => {
@@ -1285,7 +1297,7 @@ async function syncPinsAndSettled(conn: AcpConnection): Promise<void> {
 export function featureMissing(feature: keyof AppState["features"]): string | null {
   const known = get().features[feature];
   if (known) return null;
-  if (known === undefined) return "Checking what the engine supports…";
+  if (known === undefined) return "Checking what the server supports…";
   const what = {
     worktrees: "worktrees",
     checkpoints: "checkpoints",
@@ -1293,14 +1305,14 @@ export function featureMissing(feature: keyof AppState["features"]): string | nu
     themes: "themes",
     pins: "pins",
   }[feature];
-  return `This engine has no ${what} yet (update RustCode).`;
+  return `This server has no ${what} yet (update RustCode).`;
 }
 
 export async function restartEngine(): Promise<void> {
   if (!transport) return;
   crashed = true;
   bootProgress = 0.15;
-  set({ status: "connecting", statusDetail: "Restarting the engine…" });
+  set({ status: "connecting", statusDetail: "Restarting the server…" });
   await transport.restart().catch((error) => set({ status: "closed", statusDetail: errorText(error) }));
 }
 
@@ -1334,7 +1346,7 @@ async function handleInbound(message: Inbound) {
         threads: Object.fromEntries(
           Object.entries(s.threads).map(([id, t]) => [
             id,
-            t.running ? finishTurn(t, "failed", Date.now(), "The engine stopped during this turn.") : t,
+            t.running ? finishTurn(t, "failed", Date.now(), "The server stopped during this turn.") : t,
           ]),
         ),
       }));
@@ -1693,7 +1705,7 @@ export async function moveThread(id: string, cwd: string): Promise<boolean> {
     return false;
   }
   if (!get().agent?.sessionMove || !connection) {
-    toast("This engine cannot move a thread to another folder. Update RustCode.", "error");
+    toast("This server cannot move a thread to another folder. Update RustCode.", "error");
     return false;
   }
   if (thread && get().agent?.closeSession) await closeThread(id);
@@ -1721,37 +1733,48 @@ export async function moveThread(id: string, cwd: string): Promise<boolean> {
  * open error when it could not be opened, so a caller can say why instead of
  * reporting an empty thread.
  */
-export async function openThread(id: string): Promise<string | null> {
+export function openThread(id: string): Promise<string | null> {
+  const inFlight = opening.get(id);
+  if (inFlight) return inFlight;
   const conn = connection;
   const existing = get().threads[id];
-  if (!conn || existing?.loaded || existing?.loading || loading.has(id)) return null;
+  // A copy whose open failed is no copy: opening it again tries again, so a thread that could not
+  // be opened once (the engine was restarting, its harness was down) is not refused for good.
+  if (!conn || (existing?.loaded && !existing.openFailed) || existing?.loading || loading.has(id))
+    return Promise.resolve(null);
   const summary = get().sessions.find((x) => x.id === id);
   const cwd = existing?.cwd ?? summary?.cwd ?? get().projectCwd;
+  let pending: Promise<string | null>;
+  pending = Promise.resolve().then(async () => {
+    try {
+      const result = await conn.request(Method.sessionLoad, { sessionId: id, cwd, mcpServers: [] }, 60_000);
+      updateThread(id, (t) => ({
+        ...finishLoad(t),
+        configOptions: parseConfigOptions((result as JsonObject | null)?.configOptions),
+        harness: parseSessionHarness(result) ?? t.harness,
+      }));
+      const opened = get().threads[id];
+      if (opened && lacksModels(opened)) void ensureHarnessModels(opened.harness!.id);
+      void refreshPlanUsage(id);
+      void refreshCheckpoints(id);
+      // A thread opened after it went idle can still be before its cache deadline.
+      scheduleAutoCompact(id);
+      return null;
+    } catch (error) {
+      const message = `Could not open this thread: ${errorText(error)}`;
+      updateThread(id, (t) => ({ ...finishLoad(t), error: message, openFailed: true }));
+      return message;
+    } finally {
+      loading.delete(id);
+      if (opening.get(id) === pending) opening.delete(id);
+    }
+  });
+  opening.set(id, pending);
   loading.add(id);
   set((s) => ({
     threads: { ...s.threads, [id]: { ...emptyThread(id, cwd, summary?.title), loading: true } },
   }));
-  try {
-    const result = await conn.request(Method.sessionLoad, { sessionId: id, cwd, mcpServers: [] }, 60_000);
-    updateThread(id, (t) => ({
-      ...finishLoad(t),
-      configOptions: parseConfigOptions((result as JsonObject | null)?.configOptions),
-      harness: parseSessionHarness(result) ?? t.harness,
-    }));
-    const opened = get().threads[id];
-    if (opened && lacksModels(opened)) void ensureHarnessModels(opened.harness!.id);
-    void refreshPlanUsage(id);
-    void refreshCheckpoints(id);
-    // A thread opened after it went idle can still be before its cache deadline.
-    scheduleAutoCompact(id);
-    return null;
-  } catch (error) {
-    const message = `Could not open this thread: ${errorText(error)}`;
-    updateThread(id, (t) => ({ ...finishLoad(t), error: message }));
-    return message;
-  } finally {
-    loading.delete(id);
-  }
+  return pending;
 }
 
 /**
@@ -1762,7 +1785,7 @@ export async function openThread(id: string): Promise<string | null> {
 export async function repairThread(id: string): Promise<void> {
   const conn = connection;
   if (!conn || !get().agent?.sessionRepair) {
-    toast("This engine cannot repair threads. Update RustCode.", "error");
+    toast("This server cannot repair threads. Update RustCode.", "error");
     return;
   }
   if (get().threads[id]?.running) {
@@ -1850,7 +1873,7 @@ export async function createSession(options: NewSession): Promise<string> {
   if (Object.keys(meta).length) params._meta = { rustcode: meta };
   const result = (await conn.request(Method.sessionNew, params, 120_000)) as JsonObject;
   const id = str(result.sessionId);
-  if (!id) throw new Error("The engine did not return a session id.");
+  if (!id) throw new Error("The server did not return a thread id.");
   const worktree: Worktree | undefined = parseWorktree(
     ((result._meta as JsonObject | undefined)?.rustcode as JsonObject | undefined)?.worktree,
   );
@@ -2906,14 +2929,20 @@ export async function runPrompt(
     outcome = "failed";
     failure = errorText(error);
   }
-  updateThread(id, (t) =>
-    requeueSteers(finishTurn(t, outcome, Date.now(), failure, options.autoCompact), unused),
-  );
+  // A provider's raw answer (`Codex: {"detail":"Bad Request"}`) is said in words, with what to do
+  // when the conversation is full; the raw text stays on the thread, behind the error's Details.
+  const rawFailure = failure;
+  if (failure !== undefined) failure = readableTurnError(failure, contextPercent(get().threads[id]?.usage));
+  updateThread(id, (t) => ({
+    ...requeueSteers(finishTurn(t, outcome, Date.now(), failure, options.autoCompact), unused),
+    ...(rawFailure !== failure ? { errorDetail: rawFailure } : {}),
+  }));
   // The limit is settled first: a turn it stopped is reported as the limit, not twice.
   // An automatic compaction must leave a pending wait alone, not settle it.
   const waiting = options.autoCompact
     ? (get().limitWaits[id] ?? null)
-    : settleLimitWait(id, outcome, failure, startIndex);
+    : // The limit is read from what the harness said, not the words the thread shows.
+      settleLimitWait(id, outcome, rawFailure, startIndex);
   // An automatic compaction is not a turn the user waits for: it is not "Done"
   // news, and it must not wake the thread's parent as if its work finished.
   if (!options.autoCompact) {
@@ -4111,7 +4140,15 @@ export function setThreadStatus(id: string, status: "review" | "done" | "idle"):
  */
 export async function setThreadsStatus(ids: string[], status: "review" | "done" | "idle"): Promise<number> {
   const wanted = new Set(ids);
-  set((s) => ({ sessions: s.sessions.map((x) => (wanted.has(x.id) ? { ...x, status } : x)) }));
+  set((s) => ({
+    sessions: s.sessions.map((x) => (wanted.has(x.id) ? { ...x, status } : x)),
+    // A settled thread asks nothing of the user: a turn of it that failed is no longer theirs to
+    // retry (`cleanup_worktree`, a fan-out's losers, a delegate its parent replaced), so its
+    // Inbox card goes with the settle.
+    ...(status === "done"
+      ? { failed: Object.fromEntries(Object.entries(s.failed).filter(([id]) => !wanted.has(id))) }
+      : {}),
+  }));
   if (status === "idle") for (const id of ids) clearStatusMark(id);
   else saveMarks({ ...get().statusMarks, ...Object.fromEntries(ids.map((id) => [id, status])) });
   for (const id of ids) scheduleAutoCompact(id);
@@ -4365,7 +4402,7 @@ export async function rewindCheckpoint(id: string, checkpoint: Checkpoint): Prom
     askConfirm({
       title: `Rewind to before turn ${checkpoint.turn}?`,
       message:
-        "The files and the conversation go back to before this turn. This engine cannot keep the state it leaves, so there is no way back to it.",
+        "The files and the conversation go back to before this turn. This server cannot keep the state it leaves, so there is no way back to it.",
       action: "Rewind",
       destructive: true,
       run: go,
@@ -5298,6 +5335,7 @@ export function resetForTests() {
   transport = null;
   setShellTransport(null);
   loading.clear();
+  opening.clear();
   set({
     status: "connecting",
     remote: null,

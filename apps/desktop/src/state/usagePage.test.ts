@@ -179,7 +179,7 @@ describe("what a failed row says", () => {
     expect(failureText(failed("refused")).title).toMatch(/did not accept/);
     expect(failureText(failed("forbidden")).title).toMatch(/does not allow/);
     expect(failureText(failed("forbidden")).subtitle).toMatch(/does not change/);
-    expect(failureText(failed("denied")).title).toMatch(/Keychain/);
+    expect(failureText(failed("denied")).title).toMatch(/sign-in/);
     expect(failureText(failed("transient")).title).toBe("Could not read the usage");
     // An older engine's row keeps the old words.
     expect(failureText(failed(undefined))).toEqual({ title: "Could not read the usage" });

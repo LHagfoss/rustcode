@@ -28,14 +28,14 @@ export class RpcError extends Error {
 
 export class ConnectionClosedError extends Error {
   constructor(reason: string) {
-    super(`The RustCode engine connection closed: ${reason}`);
+    super(`The RustCode server connection closed: ${reason}`);
     this.name = "ConnectionClosedError";
   }
 }
 
 export class TimeoutError extends Error {
   constructor(method: string) {
-    super(`The RustCode engine did not answer ${method} in time.`);
+    super(`The RustCode server did not answer ${method} in time.`);
     this.name = "TimeoutError";
   }
 }
@@ -79,7 +79,7 @@ export class AcpConnection {
       try {
         this.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
       } catch (error) {
-        this.settle(id)?.reject(new Error(`Could not write to the RustCode engine: ${String(error)}`));
+        this.settle(id)?.reject(new Error(`Could not write to the RustCode server: ${String(error)}`));
       }
     });
   }
@@ -127,7 +127,7 @@ export class AcpConnection {
       waiter.reject(
         new RpcError(
           typeof error.code === "number" ? error.code : -32603,
-          typeof error.message === "string" ? error.message : "Engine error",
+          typeof error.message === "string" ? error.message : "Server error",
           error.data,
         ),
       );

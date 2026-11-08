@@ -1,5 +1,6 @@
 mod agents;
 mod capabilities;
+mod clients;
 mod commands;
 mod config;
 mod connections;
@@ -37,11 +38,11 @@ use agent_client_protocol::schema::v1::{
     SessionConfigId, SessionConfigKind, SessionConfigOptionCategory, SessionConfigOptionValue,
     SessionConfigSelectOptions, StopReason,
 };
-use agent_client_protocol::{Agent, Client, Stdio};
+use agent_client_protocol::{Agent, Stdio};
 use rustcode_tasks::TaskEvent;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
 
 pub(crate) use config::{build_session_config_options, handle_set_config_option};
@@ -549,19 +550,39 @@ fn session_workspace(
     }
 }
 
+/// Give a session the client half of what its client advertised: how replies
+/// are drawn, and the preview, desktop, orchestration and Smart UI requests.
+/// Read once, from the client that created or loaded it, so its prompt never
+/// changes mid-session; each request goes to whichever client has the
+/// session then.
+fn apply_client_info(
+    state: &mut crate::app::AppState,
+    info: clients::ClientInfo,
+    clients: &clients::SessionClients,
+) {
+    state.visualization_level = info.visualization_level;
+    state.smart_ui = info.smart_ui;
+    state.preview_client = preview::preview_client_for(info.preview, clients);
+    state.desktop_client = preview::desktop_client_for(info.desktop, clients);
+    (state.orchestration_client, state.orchestration_version) =
+        preview::orchestration_for(info.orchestration, clients);
+    state.smart_ui_client = preview::smart_ui_client_for(
+        info.smart_ui == crate::app::SmartUi::On && info.smart_ui_preview,
+        clients,
+    );
+}
+
 /// The session `session/new` creates on the built-in harness: the engine's own
-/// chat state, its task route and the connection it publishes to. Also what a
+/// chat state, its task route and the client it publishes to. Also what a
 /// thread a paired device asked for starts as (`super::hosted`), which is why
 /// it is a function of its own.
 async fn create_builtin_session(
     server: &AcpServer,
-    connection: &agent_client_protocol::ConnectionTo<Client>,
+    peer: &clients::Peer,
     request: NewSessionRequest,
 ) -> Result<NewSessionResponse, agent_client_protocol::Error> {
     let cwd = canonical_acp_cwd(&request.cwd, "session/new")?;
     let mut state = new_session_state(&cwd);
-    state.visualization_level = server.visualization_level.load(Ordering::Relaxed);
-    state.smart_ui = crate::app::SmartUi::from_u8(server.client_smart_ui.load(Ordering::Relaxed));
     let session_id = state.active_session_id.clone();
     // Who started this thread, from the `_meta.rustcode.parent` its
     // caller gave: kept in the thread's own metadata, not only in
@@ -569,27 +590,8 @@ async fn create_builtin_session(
     if let Some(parent) = crate::thread_parent::requested(request.meta.as_ref()) {
         crate::thread_parent::record(&session_id, &parent);
     }
-    state.preview_client = preview::preview_client_for(
-        server.client_has_preview.load(Ordering::Relaxed),
-        &connection,
-        &session_id,
-    );
-    state.desktop_client = preview::desktop_client_for(
-        server.client_has_desktop.load(Ordering::Relaxed),
-        &connection,
-        &session_id,
-    );
-    (state.orchestration_client, state.orchestration_version) = preview::orchestration_for(
-        server.client_has_orchestration.load(Ordering::Relaxed),
-        &connection,
-        &session_id,
-    );
-    state.smart_ui_client = preview::smart_ui_client_for(
-        state.smart_ui == crate::app::SmartUi::On
-            && server.client_has_smart_ui_preview.load(Ordering::Relaxed),
-        &connection,
-        &session_id,
-    );
+    let session_clients = peer.attach(&session_id);
+    apply_client_info(&mut state, peer.info(), &session_clients);
     state.raw_cli_mode = false;
     state.task_working_directory = Some(cwd.clone());
     // ACP's requested cwd is both the task's initial location
@@ -613,9 +615,8 @@ async fn create_builtin_session(
     let terminal_overflow = Arc::new(AtomicBool::new(false));
     let state = Arc::new(Mutex::new(state));
     let task_sink = Arc::new(SessionTaskSink {
-        session_id: session_id.clone(),
         state: Arc::clone(&state),
-        connection: connection.clone(),
+        clients: session_clients,
         runtime: tokio::runtime::Handle::current(),
         terminal_ledger: std::sync::Mutex::new(TerminalLedger::default()),
         terminal_backlog: Arc::clone(&terminal_backlog),
@@ -654,8 +655,9 @@ async fn create_builtin_session(
         usage::usage_update(&state)
     };
     for update in [commands::available_commands_update(), opening_usage] {
-        if let Err(error) =
-            connection.send_notification(SessionNotification::new(session_id.clone(), update))
+        if let Err(error) = peer
+            .connection()
+            .send_notification(SessionNotification::new(session_id.clone(), update))
         {
             unregister_acp_session(server, &session_id).await;
             return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
@@ -669,8 +671,9 @@ async fn create_builtin_session(
 async fn acp_load_session(
     server: &AcpServer,
     mut request: LoadSessionRequest,
-    connection: &agent_client_protocol::ConnectionTo<Client>,
+    peer: &clients::Peer,
 ) -> Result<LoadSessionResponse, agent_client_protocol::Error> {
+    let connection = peer.connection();
     let session_id = request.session_id.to_string();
     if !valid_acp_session_id(&session_id) {
         return Err(agent_client_protocol::Error::invalid_params().data("invalid session id"));
@@ -680,21 +683,22 @@ async fn acp_load_session(
     if let Some(cwd) = crate::worktrees::recover_missing_worktree(&session_id, &request.cwd) {
         request.cwd = cwd;
     }
+    // Open here already, from another client or one that has gone: this
+    // client joins it, mid-turn or not.
+    if let Some(external) = harnesses::get(&server.external, &session_id).await {
+        return harnesses::attach_open(&external, &request, peer).await;
+    }
+    if let Some(response) = attach_open_builtin(server, &request, peer).await? {
+        return Ok(response);
+    }
     if let Some(record) = crate::harness::store::load(&session_id) {
         if session_id_is_active(&*server.sessions.lock().await, &session_id) {
             return Err(
                 agent_client_protocol::Error::invalid_params().data("session is already active")
             );
         }
-        return harnesses::load_session(
-            &server.external,
-            &request,
-            record,
-            connection,
-            server.client_has_orchestration.load(Ordering::Relaxed),
-            &server.remote,
-        )
-        .await;
+        return harnesses::load_session(&server.external, &request, record, peer, &server.remote)
+            .await;
     }
     let cwd = canonical_acp_cwd(&request.cwd, "session/load")?;
     let (meta, history) = crate::config::load_session_by_id(&session_id).ok_or_else(|| {
@@ -729,30 +733,10 @@ async fn acp_load_session(
             );
         }
         let mut state = build_loaded_app_state(&session_id, &cwd, history.clone());
-        state.visualization_level = server.visualization_level.load(Ordering::Relaxed);
-        state.smart_ui =
-            crate::app::SmartUi::from_u8(server.client_smart_ui.load(Ordering::Relaxed));
-        state.preview_client = preview::preview_client_for(
-            server.client_has_preview.load(Ordering::Relaxed),
-            connection,
-            &session_id,
-        );
-        state.desktop_client = preview::desktop_client_for(
-            server.client_has_desktop.load(Ordering::Relaxed),
-            connection,
-            &session_id,
-        );
-        (state.orchestration_client, state.orchestration_version) = preview::orchestration_for(
-            server.client_has_orchestration.load(Ordering::Relaxed),
-            connection,
-            &session_id,
-        );
-        state.smart_ui_client = preview::smart_ui_client_for(
-            state.smart_ui == crate::app::SmartUi::On
-                && server.client_has_smart_ui_preview.load(Ordering::Relaxed),
-            connection,
-            &session_id,
-        );
+        // The loading client gets the session's updates; the replay below
+        // goes to it alone.
+        let session_clients = peer.attach(&session_id);
+        apply_client_info(&mut state, peer.info(), &session_clients);
         let config_options = build_session_config_options(&state);
         let loaded_usage = usage::usage_update(&state);
         let loaded_compaction = state.last_compaction.clone();
@@ -762,9 +746,8 @@ async fn acp_load_session(
         let terminal_backlog = Arc::new(std::sync::Mutex::new(VecDeque::new()));
         let terminal_overflow = Arc::new(AtomicBool::new(false));
         let task_sink = Arc::new(SessionTaskSink {
-            session_id: session_id.clone(),
             state: Arc::clone(&state),
-            connection: connection.clone(),
+            clients: session_clients,
             runtime: tokio::runtime::Handle::current(),
             terminal_ledger: std::sync::Mutex::new(TerminalLedger::default()),
             terminal_backlog: Arc::clone(&terminal_backlog),
@@ -838,6 +821,92 @@ async fn acp_load_session(
     }
 }
 
+/// `session/load` of a built-in session already open in this engine: `peer`
+/// joins it. `None` when it is not open.
+async fn attach_open_builtin(
+    server: &AcpServer,
+    request: &LoadSessionRequest,
+    peer: &clients::Peer,
+) -> Result<Option<LoadSessionResponse>, agent_client_protocol::Error> {
+    let session_id = request.session_id.to_string();
+    let Some((state, cwd)) = server.session_handle(&session_id).await else {
+        return Ok(None);
+    };
+    if canonical_acp_cwd(&request.cwd, "session/load")? != cwd {
+        return Err(agent_client_protocol::Error::invalid_params()
+            .data("session/load cwd does not match the open session"));
+    }
+    let compaction = state.lock().await.last_compaction.clone();
+    attach_with_replay(
+        peer,
+        &session_id,
+        || {
+            let state = Arc::clone(&state);
+            async move { state.lock().await.history.clone() }
+        },
+        |history| replay_history_updates_with_compaction(history, Some(&cwd), compaction.as_ref()),
+    )
+    .await?;
+    let (config_options, usage) = {
+        let state = state.lock().await;
+        (
+            build_session_config_options(&state),
+            usage::usage_update(&state),
+        )
+    };
+    let title = crate::config::session_meta_by_id(&session_id)
+        .map(|meta| meta.title)
+        .filter(|title| !title.trim().is_empty())
+        .map(|title| SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(title)));
+    for update in title
+        .into_iter()
+        .chain([commands::available_commands_update(), usage])
+    {
+        let _ = peer
+            .connection()
+            .send_notification(SessionNotification::new(session_id.clone(), update));
+    }
+    Ok(Some(crate::worktrees::finish_load(
+        LoadSessionResponse::new()
+            .config_options(config_options)
+            .meta(crate::harness::builtin_session_meta()),
+        &session_id,
+    )))
+}
+
+/// How often a replay is rebuilt when a turn starts or ends while it is
+/// built. If it keeps changing, fail without attaching a stale transcript.
+const ATTACH_ATTEMPTS: usize = 4;
+
+/// Attach `peer` to the open session `session_id` and replay it: the
+/// transcript up to the running turn, what the turn sent so far, then every
+/// update live, with nothing lost or sent twice between them.
+///
+/// `history` reads the session's transcript; `replay` turns a prefix of it
+/// into updates. While a turn runs only the messages from before it are
+/// replayed: the rest is the turn's, and the turn's own record has it.
+pub(crate) async fn attach_with_replay<F>(
+    peer: &clients::Peer,
+    session_id: &str,
+    history: impl Fn() -> F,
+    replay: impl Fn(&[crate::app::ChatMessage]) -> Vec<SessionUpdate>,
+) -> Result<(), agent_client_protocol::Error>
+where
+    F: std::future::Future<Output = rustcode_core::History>,
+{
+    for _ in 0..ATTACH_ATTEMPTS {
+        let (generation, base) = peer.clients().turn_marker(session_id);
+        let transcript = history().await;
+        let transcript = transcript.as_slice();
+        let before_turn = &transcript[..base.unwrap_or(transcript.len()).min(transcript.len())];
+        if peer.attach_open(session_id, Some(generation), replay(before_turn))? {
+            return Ok(());
+        }
+    }
+    Err(agent_client_protocol::Error::internal_error()
+        .data("session changed repeatedly while loading; retry session/load"))
+}
+
 const ACP_TERMINAL_LEDGER_CAPACITY: usize = 1024;
 const ACP_TERMINAL_BACKLOG_CAPACITY: usize = 256;
 static ACTIVE_ACP_SESSIONS: std::sync::OnceLock<std::sync::Mutex<HashSet<String>>> =
@@ -900,9 +969,9 @@ impl TerminalLedger {
 }
 
 struct SessionTaskSink {
-    session_id: String,
     state: Arc<Mutex<crate::app::AppState>>,
-    connection: agent_client_protocol::ConnectionTo<Client>,
+    /// Where the session's updates go: the clients that have it.
+    clients: clients::SessionClients,
     runtime: tokio::runtime::Handle,
     terminal_ledger: std::sync::Mutex<TerminalLedger>,
     terminal_backlog: Arc<std::sync::Mutex<VecDeque<TaskEvent>>>,
@@ -935,8 +1004,7 @@ impl SessionTaskSink {
             .map(str::to_owned)
             .unwrap_or_else(|| task_id.clone());
         let state = Arc::clone(&self.state);
-        let connection = self.connection.clone();
-        let session_id = self.session_id.clone();
+        let clients = self.clients.clone();
         let terminal_backlog = Arc::clone(&self.terminal_backlog);
         let terminal_overflow = Arc::clone(&self.terminal_overflow);
         self.runtime.spawn(async move {
@@ -976,7 +1044,7 @@ impl SessionTaskSink {
                         })),
                 ),
             );
-            let _ = connection.send_notification(SessionNotification::new(session_id, update));
+            let _ = clients.update(update);
             // Do not expose the fallback event until its history and ACP
             // notification have been handled. This keeps a prompt that wins
             // the receive race from resuming before durable completion.
@@ -1042,22 +1110,13 @@ struct AcpServer {
     client: Arc<reqwest::Client>,
     auto_approve: bool,
     task_routes: TaskRoutes,
-    /// Set from the client's initialize capabilities; read when each session
-    /// state is created so its prompt never changes mid-session.
-    visualization_level: Arc<AtomicU8>,
-    /// What the client advertised in `_meta.rustcode.smartUi` (#2484), as
-    /// [`crate::app::SmartUi::as_u8`].
-    client_smart_ui: Arc<AtomicU8>,
-    /// The client advertised `_meta.rustcode.preview` (#2138), so its
-    /// sessions get `localhost_preview`.
-    client_has_preview: Arc<AtomicBool>,
-    client_has_desktop: Arc<AtomicBool>,
-    /// The client renders `smart_ui_preview` calls (`smartUi >= 2`).
-    client_has_smart_ui_preview: Arc<AtomicBool>,
-    /// The client hosts other threads for `message_session` (#2637).
-    /// The orchestration version the client advertised; 0 for none.
-    client_has_orchestration: Arc<AtomicU8>,
-    /// Discord Rich Presence, for a client that asked for it (#2179).
+    /// The connected clients: each one's capabilities and the sessions it
+    /// created or loaded, which is where those sessions' updates go.
+    clients: clients::Clients,
+    /// Serializes capability registry changes with the process-wide features
+    /// derived from them (presence and remote thread hosting).
+    client_capability_updates: Arc<std::sync::Mutex<()>>,
+    /// Discord Rich Presence, while a connected client asks for it (#2179).
     presence: presence::Presence,
     /// `/remote` shares and their pairing offers.
     remote: remote::RemoteManager,
@@ -1067,6 +1126,8 @@ struct AcpServer {
     share_retry_at: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
     /// Threads running on an external harness (`docs/harnesses.md`).
     external: harnesses::ExternalSessions,
+    /// The auto-share loop runs, once for the engine.
+    auto_sharing: Arc<AtomicBool>,
 }
 
 /// Close a built-in thread: its turn, remote share, tasks and background
@@ -1086,6 +1147,7 @@ async fn close_builtin(server: &AcpServer, session_id: &str) -> Option<std::path
         .remove(session_id);
     let session = server.sessions.lock().await.remove(session_id);
     unmark_acp_session(session_id);
+    server.clients.forget_session(session_id);
     let cwd = match session {
         Some(session) => {
             session.turns.cancel_active().await;
@@ -1150,7 +1212,7 @@ impl AcpServer {
     /// built-in harness shares from its `AppState`; one on an external
     /// harness shares the mirror of its updates. Both are the same threads
     /// the app has open, so a device sees exactly those.
-    async fn auto_share(&self, connection: &agent_client_protocol::ConnectionTo<Client>) {
+    async fn auto_share(&self) {
         if !remote::enabled() {
             if self.remote.shared_count() > 0 {
                 self.remote
@@ -1199,7 +1261,7 @@ impl AcpServer {
                     target: CandidateTarget::Builtin(remote::RemoteSession::from_acp(
                         session_id.clone(),
                         session,
-                        connection.clone(),
+                        self.clients.session(session_id),
                         Arc::clone(&self.client),
                         self.auto_approve,
                         self.presence.clone(),
@@ -1240,8 +1302,9 @@ impl AcpServer {
             let started = match candidate.target {
                 CandidateTarget::Builtin(session) => self.remote.start(session, false).await,
                 CandidateTarget::Harness(id, session) => {
+                    let clients = self.clients.session(&id);
                     self.remote
-                        .start_harness(id, session, Some(connection.clone()), false)
+                        .start_harness(id, session, Some(clients), false)
                         .await
                 }
             };
@@ -1329,17 +1392,117 @@ impl AcpServer {
             client: Arc::new(client),
             auto_approve,
             task_routes,
-            visualization_level: Arc::new(AtomicU8::new(0)),
-            client_smart_ui: Arc::new(AtomicU8::new(0)),
-            client_has_preview: Arc::new(AtomicBool::new(false)),
-            client_has_desktop: Arc::new(AtomicBool::new(false)),
-            client_has_smart_ui_preview: Arc::new(AtomicBool::new(false)),
-            client_has_orchestration: Arc::new(AtomicU8::new(0)),
+            clients: clients::Clients::default(),
+            client_capability_updates: Arc::new(std::sync::Mutex::new(())),
             presence: presence::Presence::default(),
             remote: remote::RemoteManager::default(),
             share_retry_at: Arc::new(std::sync::Mutex::new(None)),
             external: harnesses::ExternalSessions::default(),
+            auto_sharing: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    /// `initialize` from the connection `peer`: keep what it advertised, and
+    /// start what the engine runs once for all its clients.
+    fn client_initialized(&self, peer: &clients::Peer, info: clients::ClientInfo) {
+        {
+            let _updates = self
+                .client_capability_updates
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.clients.connect(peer.id(), peer.connection(), info);
+            // A thread's status is shown in every client's thread list.
+            let clients = self.clients.clone();
+            crate::thread_status::set_notifier(move |session_id, update| {
+                clients.broadcast(SessionNotification::new(session_id, update));
+            });
+            self.refresh_presence();
+            self.refresh_thread_host();
+        }
+        // While remote access is on for this machine, every thread the
+        // engine has open shares itself, the way a terminal does
+        // (`docs/remote.md`). The flag is read again on every pass:
+        // `/remote` in a terminal and Settings › Remote access here are one
+        // switch.
+        if !self.auto_sharing.swap(true, Ordering::AcqRel) {
+            let autosharer = self.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    interval.tick().await;
+                    autosharer.auto_share().await;
+                }
+            });
+        }
+    }
+
+    /// Advertise thread creation only while a connected client can list the
+    /// thread the engine starts for a paired device.
+    fn refresh_thread_host(&self) {
+        if !self.clients.any(|info| info.shows_threads) {
+            self.remote.clear_thread_host();
+            return;
+        }
+        let hosted_server = self.clone();
+        self.remote.set_thread_host(move |ask| {
+            let server = hosted_server.clone();
+            Box::pin(async move { hosted::start(&server, ask).await })
+        });
+    }
+
+    /// Presence follows whether any connected client asks for it.
+    fn refresh_presence(&self) {
+        self.presence
+            .set_client(self.clients.any(|info| info.presence));
+    }
+
+    /// The connection `id` ended. What it started keeps running: sessions,
+    /// turns and harness processes belong to the engine.
+    fn client_closed(&self, id: clients::ClientId) {
+        let _updates = self
+            .client_capability_updates
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.clients.disconnect(id);
+        self.refresh_presence();
+        self.refresh_thread_host();
+    }
+
+    /// The engine stops: every share, harness, turn and background task ends.
+    async fn shutdown(&self) {
+        {
+            let _updates = self
+                .client_capability_updates
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.remote.clear_thread_host();
+        }
+        self.remote.shutdown().await;
+        harnesses::close_all(&self.external).await;
+        let route_ids = self
+            .task_routes
+            .lock()
+            .expect("ACP task routes mutex poisoned")
+            .drain()
+            .map(|(session_id, _)| session_id)
+            .collect::<Vec<_>>();
+        let sessions = self
+            .sessions
+            .lock()
+            .await
+            .drain()
+            .map(|(session_id, session)| (session_id, session.turns))
+            .collect::<Vec<_>>();
+        for (session_id, turns) in sessions {
+            unmark_acp_session(&session_id);
+            turns.cancel_active().await;
+        }
+        for session_id in route_ids {
+            unmark_acp_session(&session_id);
+            crate::tools::abort_background_starts(&session_id);
+            crate::tools::stop_background_tasks(&session_id);
+        }
     }
 }
 
@@ -1358,6 +1521,7 @@ async fn unregister_acp_session(server: &AcpServer, session_id: &str) {
         .remove(session_id);
     let session = server.sessions.lock().await.remove(session_id);
     unmark_acp_session(session_id);
+    server.clients.forget_session(session_id);
     if let Some(session) = session {
         session.turns.cancel_active().await;
     }
@@ -1450,10 +1614,10 @@ pub(crate) struct PullWatchNotification {
     pub events: Vec<crate::pull_watch::WatchEvent>,
 }
 
-/// Start checking watches for this connection's client, once per engine.
-/// Each round tries for the checking lease, so a second engine takes over
-/// when the first one exits.
-fn start_pull_watching(connection: &agent_client_protocol::ConnectionTo<Client>) {
+/// Start checking watches, once per engine, for every client that asked about
+/// them. Each round tries for the checking lease, so a second engine takes
+/// over when the first one exits.
+fn start_pull_watching(clients: &clients::Clients) {
     static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
@@ -1461,8 +1625,8 @@ fn start_pull_watching(connection: &agent_client_protocol::ConnectionTo<Client>)
     let Some(store) = crate::pull_watch::WatchStore::default_store() else {
         return;
     };
-    let notify = connection.clone();
-    let _ = connection.spawn(async move {
+    let notify = clients.clone();
+    tokio::spawn(async move {
         let mut lease = None;
         loop {
             if lease.is_none() {
@@ -1472,10 +1636,13 @@ fn start_pull_watching(connection: &agent_client_protocol::ConnectionTo<Client>)
                 crate::pull_watch::check_due(&store, |watch, events| {
                     // A worktree thread whose pull request merged is done.
                     crate::thread_status::on_pull_watch(watch);
-                    let _ = notify.send_notification(PullWatchNotification {
-                        watch: watch.clone(),
-                        events: events.to_vec(),
-                    });
+                    notify.publish(
+                        clients::Topic::PullWatches,
+                        PullWatchNotification {
+                            watch: watch.clone(),
+                            events: events.to_vec(),
+                        },
+                    );
                 })
                 .await;
             }
@@ -1651,106 +1818,197 @@ pub(crate) fn client_shows_threads(
 }
 
 pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let startup_state = crate::app::AppState::new();
-    // Servers start on the session's first turn, not here: the app attaches
-    // an engine for chats that may never run one (#2503).
-    crate::mcp::defer_enabled_servers(&startup_state.config.mcp_servers);
-    // The thread above each delegated one, recorded once for threads older than
-    // the record, before the first session list is read (`thread_parent.rs`).
-    // After that first run it reads one `store_meta` row and returns.
-    crate::thread_parent::ensure_ready();
-    crate::thread_index::warm();
-    // Metadata for `rustcode usage` and `rustcode data query`; a background
-    // backfill of the existing threads runs once, on first open.
-    crate::data_store::warm();
-
-    let server = AcpServer::new(auto_approve)?;
-    // However the connection ends, no harness process outlives the engine.
-    struct KillHarnesses;
-    impl Drop for KillHarnesses {
-        fn drop(&mut self) {
-            crate::harness::process::kill_all();
-        }
-    }
+    let engine = AcpEngine::start(auto_approve)?;
+    // No harness process outlives the engine, however it ends.
     let _kill_harnesses = KillHarnesses;
-    Agent
+    // Over stdio the engine has this one client and ends with it.
+    let served = serve_connection(&engine.server, Stdio::new()).await;
+    engine.shutdown().await;
+    served?;
+    Ok(())
+}
+
+/// Ends every harness process when dropped: they live as long as the engine
+/// process, whichever way it ends, and no longer.
+pub struct KillHarnesses;
+
+impl Drop for KillHarnesses {
+    fn drop(&mut self) {
+        crate::harness::process::kill_all();
+    }
+}
+
+/// What the engine runs once per process: sessions, their turns and
+/// harnesses, shares and the background work. Every ACP connection
+/// ([`AcpEngine::serve`]) is a client of it; one closing ends nothing that
+/// runs.
+#[derive(Clone)]
+pub struct AcpEngine {
+    server: AcpServer,
+}
+
+impl AcpEngine {
+    /// Warm what every connection reads and start the engine's own tasks.
+    pub fn start(auto_approve: bool) -> Result<Self, agent_client_protocol::Error> {
+        let startup_state = crate::app::AppState::new();
+        // Servers start on the session's first turn, not here: the app attaches
+        // an engine for chats that may never run one (#2503).
+        crate::mcp::defer_enabled_servers(&startup_state.config.mcp_servers);
+        // The thread above each delegated one, recorded once for threads older than
+        // the record, before the first session list is read (`thread_parent.rs`).
+        // After that first run it reads one `store_meta` row and returns.
+        crate::thread_parent::ensure_ready();
+        crate::thread_index::warm();
+        // Metadata for `rustcode usage` and `rustcode data query`; a background
+        // backfill of the existing threads runs once, on first open.
+        crate::data_store::warm();
+        Ok(Self {
+            server: AcpServer::new(auto_approve)?,
+        })
+    }
+
+    /// An engine that starts and defers nothing (tests): the default
+    /// configuration's MCP servers would otherwise start on a test's turn.
+    #[cfg(test)]
+    pub(crate) fn bare(auto_approve: bool) -> Result<Self, agent_client_protocol::Error> {
+        Ok(Self {
+            server: AcpServer::new(auto_approve)?,
+        })
+    }
+
+    /// Serve one client over newline-delimited JSON-RPC on `read` and
+    /// `write` until it disconnects.
+    pub async fn serve<R, W>(&self, read: R, write: W) -> Result<(), agent_client_protocol::Error>
+    where
+        R: tokio::io::AsyncRead + Send + Unpin + 'static,
+        W: tokio::io::AsyncWrite + Send + Unpin + 'static,
+    {
+        serve_connection(&self.server, lines_transport(read, write)).await
+    }
+
+    /// How many clients are connected.
+    pub fn clients(&self) -> usize {
+        self.server.clients.count()
+    }
+
+    /// The engine stops: every share, harness, turn and background task ends.
+    pub async fn shutdown(&self) {
+        self.server.shutdown().await;
+    }
+}
+
+/// Run a turn on the runtime rather than on the connection that asked for
+/// it, whose tasks end with it. Answering a client that has gone fails, and
+/// the turn does not care.
+///
+/// A turn's future is deep to poll in a debug build, deeper than a runtime
+/// worker's stack; on the connection it ran on the thread serving it (the
+/// main thread over stdio). It gets a thread of its own, sized like the
+/// main one's and more, and what it spawns runs on the runtime.
+fn spawn_turn(
+    turn: impl std::future::Future<Output = Result<(), agent_client_protocol::Error>> + Send + 'static,
+) {
+    spawn_on_large_stack("rustcode-turn", async move {
+        if let Err(error) = turn.await {
+            crate::dbg_log!("a turn's answer was not delivered: {error}");
+        }
+    });
+}
+
+/// Poll `future` to completion on a new thread with a large stack, as part of
+/// the current runtime: what it spawns runs on the runtime's workers.
+pub(crate) fn spawn_on_large_stack(
+    name: &str,
+    future: impl std::future::Future<Output = ()> + Send + 'static,
+) {
+    const STACK: usize = 64 << 20;
+    let runtime = tokio::runtime::Handle::current();
+    // A caller scoped to its own MCP servers (a test, `--prompt`) keeps them.
+    let mcp = crate::mcp::DIRECT_MCP_REGISTRY.try_with(Clone::clone).ok();
+    let spawned = std::thread::Builder::new()
+        .name(name.to_owned())
+        .stack_size(STACK)
+        .spawn(move || match mcp {
+            Some(registry) => {
+                runtime.block_on(crate::mcp::DIRECT_MCP_REGISTRY.scope(registry, future))
+            }
+            None => runtime.block_on(future),
+        });
+    if let Err(error) = spawned {
+        crate::dbg_log!("could not start {name}: {error}");
+    }
+}
+
+/// Show a client's prompt to the session's other clients.
+fn echo_prompt(
+    clients: &clients::SessionClients,
+    sender: clients::ClientId,
+    prompt: &[ContentBlock],
+) {
+    let text = prompt
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(text) => Some(text.text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.is_empty() {
+        return;
+    }
+    clients.update_others(
+        sender,
+        SessionUpdate::UserMessageChunk(agent_client_protocol::schema::v1::ContentChunk::new(
+            ContentBlock::Text(agent_client_protocol::schema::v1::TextContent::new(text)),
+        )),
+    );
+}
+
+/// Newline-delimited JSON-RPC over a byte stream, as over stdio.
+pub(crate) fn lines_transport<R, W>(
+    read: R,
+    write: W,
+) -> agent_client_protocol::Lines<
+    impl futures_util::Sink<String, Error = std::io::Error> + Send + 'static,
+    impl futures_util::Stream<Item = std::io::Result<String>> + Send + 'static,
+>
+where
+    R: tokio::io::AsyncRead + Send + Unpin + 'static,
+    W: tokio::io::AsyncWrite + Send + Unpin + 'static,
+{
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    let incoming = futures_util::stream::unfold(
+        tokio::io::BufReader::new(read).lines(),
+        async |mut lines| match lines.next_line().await {
+            Ok(Some(line)) => Some((Ok(line), lines)),
+            Ok(None) => None,
+            Err(error) => Some((Err(error), lines)),
+        },
+    );
+    let outgoing = futures_util::sink::unfold(write, async |mut write, line: String| {
+        write.write_all(line.as_bytes()).await?;
+        write.write_all(b"\n").await?;
+        write.flush().await?;
+        Ok::<_, std::io::Error>(write)
+    });
+    agent_client_protocol::Lines::new(Box::pin(outgoing), Box::pin(incoming))
+}
+
+/// Serve one ACP client on `transport` until it disconnects. The sessions it
+/// creates or loads, and their turns, belong to `server`: they outlive the
+/// connection, and other connections to the same server go on.
+async fn serve_connection(
+    server: &AcpServer,
+    transport: impl agent_client_protocol::ConnectTo<Agent> + 'static,
+) -> Result<(), agent_client_protocol::Error> {
+    let client_id = server.clients.new_id();
+    let served = Agent
         .builder()
         .name("rustcode")
         .on_receive_request(
-            async |request: InitializeRequest, responder, _connection| {
-                let visualization_level = client_visualization_level(&request.client_capabilities);
-                server
-                    .visualization_level
-                    .store(visualization_level, Ordering::Relaxed);
-                crate::harness::set_client_visualization_level(visualization_level);
-                let smart_ui = client_smart_ui(&request.client_capabilities);
-                server
-                    .client_smart_ui
-                    .store(smart_ui.as_u8(), Ordering::Relaxed);
-                // External harnesses have no root prompt or skill: they are taught the fence from this.
-                crate::harness::set_client_smart_ui(smart_ui);
-                let status_connection = _connection.clone();
-                crate::thread_status::set_notifier(move |session_id, update| {
-                    let _ = status_connection
-                        .send_notification(SessionNotification::new(session_id, update));
-                });
-                server.client_has_desktop.store(crate::desktop_control::supported(request.client_capabilities.meta.as_ref()), Ordering::Relaxed);
-                server.client_has_preview.store(
-                    crate::preview::client_meta_supports_preview(
-                        request.client_capabilities.meta.as_ref(),
-                    ),
-                    Ordering::Relaxed,
-                );
-                server.client_has_smart_ui_preview.store(
-                    crate::smart_ui::client_meta_supports_preview(
-                        request.client_capabilities.meta.as_ref(),
-                    ),
-                    Ordering::Relaxed,
-                );
-                server.client_has_orchestration.store(
-                    crate::orchestration::client_meta_version(
-                        request.client_capabilities.meta.as_ref(),
-                    ),
-                    Ordering::Relaxed,
-                );
-                server
-                    .presence
-                    .set_client(presence::client_meta_wants_presence(
-                        request.client_capabilities.meta.as_ref(),
-                    ));
-                // While remote access is on for this machine, every thread
-                // this app has open shares itself, the way a terminal does
-                // (`docs/remote.md`). The flag is read again on every pass:
-                // `/remote` in a terminal and Settings › Remote access here
-                // are one switch.
-                let autosharer = server.clone();
-                let autoshare_connection = _connection.clone();
-                tokio::spawn(async move {
-                    let mut interval =
-                        tokio::time::interval(std::time::Duration::from_secs(2));
-                    interval.set_missed_tick_behavior(
-                        tokio::time::MissedTickBehavior::Delay,
-                    );
-                    loop {
-                        interval.tick().await;
-                        autosharer.auto_share(&autoshare_connection).await;
-                    }
-                });
-                // A paired device's `create_session` starts its thread in
-                // this engine, on the harness it names, while the app shares a
-                // thread: the share advertises `host_threads` and the gateway
-                // routes new threads here instead of starting a session owner
-                // (`docs/remote.md`). Only a client that lists the thread the
-                // engine starts may host them: a terminal's client does not.
-                if client_shows_threads(request.client_capabilities.meta.as_ref()) {
-                    let hosted_server = server.clone();
-                    let hosted_connection = _connection.clone();
-                    server.remote.set_thread_host(move |ask| {
-                        let server = hosted_server.clone();
-                        let connection = hosted_connection.clone();
-                        Box::pin(async move { hosted::start(&server, &connection, ask).await })
-                    });
-                }
+            async |request: InitializeRequest, responder, connection| {
+                let info = clients::ClientInfo::from_capabilities(&request.client_capabilities);
+                server.client_initialized(&server.clients.peer(client_id, &connection), info);
                 responder.respond(
                     InitializeResponse::new(request.protocol_version)
                         .agent_capabilities(server_capabilities()),
@@ -1769,21 +2027,13 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     };
                     // An external harness starts a process, which can take a
                     // while; it does not hold the dispatch loop.
+                    let peer = server.clients.peer(client_id, &_connection);
                     if let Some(asked) = harnesses::external_request(&request) {
                         let external = server.external.clone();
                         let remote = server.remote.clone();
-                        let orchestration = server.client_has_orchestration.load(Ordering::Relaxed);
-                        let connection = _connection.clone();
                         return _connection.spawn(async move {
-                            match harnesses::new_session(
-                                &external,
-                                request,
-                                asked,
-                                &connection,
-                                orchestration,
-                                &remote,
-                            )
-                            .await
+                            match harnesses::new_session(&external, request, asked, &peer, &remote)
+                                .await
                             {
                                 Ok(response) => responder.respond(
                                     crate::worktrees::finish_new(response, worktree.as_ref()),
@@ -1793,7 +2043,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                             Ok(())
                         });
                     }
-                    let response = create_builtin_session(&server, &_connection, request).await?;
+                    let response = create_builtin_session(&server, &peer, request).await?;
                     responder.respond(crate::worktrees::finish_new(response, worktree.as_ref()))?;
                     Ok(())
                 }
@@ -2147,7 +2397,6 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                 let server = server.clone();
                 async move |request: remote::RemoteStartRequest, responder, connection| {
                     let server = server.clone();
-                    let notification = connection.clone();
                     connection.spawn(async move {
                         if request.session_id.is_empty() {
                             // Settings › Remote access: switch the machine on
@@ -2161,7 +2410,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                                 remote::RemoteSession::from_acp(
                                     request.session_id.clone(),
                                     session,
-                                    notification.clone(),
+                                    server.clients.session(&request.session_id),
                                     Arc::clone(&server.client),
                                     server.auto_approve,
                                     server.presence.clone(),
@@ -2366,7 +2615,8 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                 let server = server.clone();
                 async move |request: harnesses::SwitchHarnessRequest, responder, connection| {
                     let server = server.clone();
-                    connection.clone().spawn(async move {
+                    let peer = server.clients.peer(client_id, &connection);
+                    connection.spawn(async move {
                         let session_id = request.session_id.clone();
                         let builtin = if harnesses::get(&server.external, &session_id).await.is_some() {
                             None
@@ -2378,13 +2628,11 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                         } else {
                             close_builtin(&server, &session_id).await
                         };
-                        let orchestration = server.client_has_orchestration.load(Ordering::Relaxed);
                         match harnesses::switch(
                             &server.external,
                             request,
                             builtin,
-                            &connection,
-                            orchestration,
+                            &peer,
                             &server.remote,
                         )
                         .await
@@ -2548,9 +2796,10 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: themes::ThemesRequest, responder, connection| {
+            async |request: themes::ThemesRequest, responder, connection| {
                 // A client that lists themes restyles when they change.
-                themes::start_watching(&connection);
+                server.clients.subscribe(client_id, clients::Topic::Themes);
+                themes::start_watching(&server.clients);
                 connection.spawn(async move {
                     match tokio::task::spawn_blocking(move || themes::answer(request)).await {
                         Ok(answer) => responder.respond(answer)?,
@@ -2562,8 +2811,9 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: themes::SetThemeRequest, responder, connection| {
-                themes::start_watching(&connection);
+            async |request: themes::SetThemeRequest, responder, connection| {
+                server.clients.subscribe(client_id, clients::Topic::Themes);
+                themes::start_watching(&server.clients);
                 connection.spawn(async move {
                     match tokio::task::spawn_blocking(move || themes::answer_set(request)).await {
                         Ok(Ok(answer)) => responder.respond(answer)?,
@@ -2859,8 +3109,9 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: PullWatchStartRequest, responder, connection| {
-                start_pull_watching(&connection);
+            async move |request: PullWatchStartRequest, responder, _connection| {
+                server.clients.subscribe(client_id, clients::Topic::PullWatches);
+                start_pull_watching(&server.clients);
                 let Some(store) = crate::pull_watch::WatchStore::default_store() else {
                     return responder.respond(serde_json::json!({ "error": { "code": "failed", "message": "No config directory" } }));
                 };
@@ -2888,10 +3139,11 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: PullWatchesRequest, responder, connection| {
+            async move |request: PullWatchesRequest, responder, _connection| {
                 // The app asks on launch: watches from before a restart
                 // carry on from here.
-                start_pull_watching(&connection);
+                server.clients.subscribe(client_id, clients::Topic::PullWatches);
+                start_pull_watching(&server.clients);
                 let watches = crate::pull_watch::WatchStore::default_store()
                     .map(|store| store.list(request.session_id.as_deref()))
                     .unwrap_or_default();
@@ -2984,7 +3236,8 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                 let server = server.clone();
                 async move |request: LoadSessionRequest, responder, connection| {
                     let session_id = request.session_id.to_string();
-                    let response = acp_load_session(&server, request, &connection).await?;
+                    let peer = server.clients.peer(client_id, &connection);
+                    let response = acp_load_session(&server, request, &peer).await?;
                     let response = crate::worktrees::finish_load(response, &session_id);
                     responder.respond(response)
                 }
@@ -2997,6 +3250,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                 async move |request: CloseSessionRequest, responder, _connection| {
                     let session_id = request.session_id.to_string();
                     if harnesses::close(&server.external, &session_id, &server.remote).await {
+                        server.clients.forget_session(&session_id);
                         server.presence.session_closed(&session_id);
                         return responder.respond(CloseSessionResponse::new());
                     }
@@ -3111,7 +3365,13 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                         server.remote.note_prompt_applied(&session_id);
                         let remote = server.remote.clone();
                         let turn_session = session_id.clone();
-                        return connection.spawn(async move {
+                        // The other clients that have the thread show the
+                        // prompt too; the one that sent it already does.
+                        echo_prompt(&server.clients.session(&session_id), client_id, &request.prompt);
+                        // The turn belongs to the engine, not this connection:
+                        // it runs on if the client goes, and only its answer
+                        // is lost.
+                        spawn_turn(async move {
                             let result = external.prompt(request.prompt).await;
                             remote.note_turn_returned(&turn_session);
                             match result {
@@ -3124,6 +3384,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                             }
                             Ok(())
                         });
+                        return Ok(());
                     }
                     let session = server
                         .sessions
@@ -3169,13 +3430,14 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                             agent_client_protocol::Error::invalid_params().data(message)
                         })?
                         .text;
+                    echo_prompt(&server.clients.session(&session_id), client_id, &request.prompt);
 
                     // A report only reads the session, so it answers now, beside
                     // a running turn, instead of queueing at the turn gate.
                     if !has_images && commands::is_report(&text) {
-                        let task_connection = connection.clone();
+                        let session_clients = server.clients.session(&session_id);
                         connection.spawn(async move {
-                            match prompt::run_report(&state, &session_id, &text, &task_connection)
+                            match prompt::run_report(&state, &session_id, &text, &session_clients)
                                 .await
                             {
                                 Ok(stop_reason) => {
@@ -3194,10 +3456,12 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                     let scheduled_turn = turns.schedule();
                     let wakeup_turns = Arc::downgrade(&turns);
                     let prompt_server = server.clone();
-                    let task_connection = connection.clone();
+                    let session_clients = server.clients.session(&session_id);
                     let presence_cwd = cwd.clone();
                     server.presence.turn_started(&session_id, &presence_cwd);
-                    connection.spawn(async move {
+                    // The turn belongs to the engine, not this connection: it
+                    // runs on if the client goes, and only its answer is lost.
+                    spawn_turn(async move {
                         let result = prompt::run_prompt(
                             Arc::clone(&state),
                             cwd,
@@ -3208,7 +3472,7 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                             terminal_backlog,
                             terminal_overflow,
                             text,
-                            task_connection,
+                            session_clients,
                             prompt_server.client,
                             prompt_server.auto_approve,
                             Some(prompt_server.remote.clone()),
@@ -3234,46 +3498,16 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                             }
                         }
                         Ok(())
-                    })?;
+                    });
                     Ok(())
                 }
             },
             agent_client_protocol::on_receive_request!(),
         )
-        .on_close({
-            let server = server.clone();
-            async move |_connection| {
-                server.remote.shutdown().await;
-                harnesses::close_all(&server.external).await;
-                let route_ids = server
-                    .task_routes
-                    .lock()
-                    .expect("ACP task routes mutex poisoned")
-                    .drain()
-                    .map(|(session_id, _)| session_id)
-                    .collect::<Vec<_>>();
-                let sessions = server
-                    .sessions
-                    .lock()
-                    .await
-                    .drain()
-                    .map(|(session_id, session)| (session_id, session.turns))
-                    .collect::<Vec<_>>();
-                for (session_id, turns) in sessions {
-                    unmark_acp_session(&session_id);
-                    turns.cancel_active().await;
-                }
-                for session_id in route_ids {
-                    unmark_acp_session(&session_id);
-                    crate::tools::abort_background_starts(&session_id);
-                    crate::tools::stop_background_tasks(&session_id);
-                }
-                Ok(())
-            }
-        })
-        .connect_to(Stdio::new())
-        .await?;
-    Ok(())
+        .connect_to(transport)
+        .await;
+    server.client_closed(client_id);
+    served
 }
 
 #[cfg(test)]
@@ -3453,9 +3687,6 @@ mod tests {
         );
         assert_eq!(parse(serde_json::json!({})), SmartUi::Unsupported);
         assert_eq!(crate::app::AppState::new().smart_ui, SmartUi::Unsupported);
-        for value in [SmartUi::Unsupported, SmartUi::Off, SmartUi::On] {
-            assert_eq!(SmartUi::from_u8(value.as_u8()), value);
-        }
     }
 
     #[test]
@@ -3519,16 +3750,13 @@ mod tests {
             client: Arc::new(reqwest::Client::new()),
             auto_approve: false,
             task_routes: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            visualization_level: Arc::new(AtomicU8::new(0)),
-            client_smart_ui: Arc::new(AtomicU8::new(0)),
-            client_has_preview: Arc::new(AtomicBool::new(false)),
-            client_has_desktop: Arc::new(AtomicBool::new(false)),
-            client_has_smart_ui_preview: Arc::new(AtomicBool::new(false)),
-            client_has_orchestration: Arc::new(AtomicU8::new(0)),
+            clients: clients::Clients::default(),
+            client_capability_updates: Arc::new(std::sync::Mutex::new(())),
             presence: presence::Presence::default(),
             remote: remote::RemoteManager::default(),
             share_retry_at: Arc::new(std::sync::Mutex::new(None)),
             external: harnesses::ExternalSessions::default(),
+            auto_sharing: Arc::new(AtomicBool::new(false)),
         };
         let (task_sender, task_receiver) = std::sync::mpsc::sync_channel(1);
         let state = Arc::new(Mutex::new(crate::app::AppState::new()));
@@ -5343,5 +5571,748 @@ mod tests {
 
         assert_eq!(state2.api_base_url, profile2.url);
         assert_eq!(state2.model_name, profile2.model);
+    }
+
+    /// What a test client got for one session.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    enum Seen {
+        /// A status broadcast, which every client gets.
+        Status,
+        /// Text of a reply: a report streams it through the session's clients.
+        Message,
+        Other,
+    }
+
+    /// One test client: it records every `session/update` it gets, answers
+    /// any request the engine sends it with `{"client": name}`, and stays
+    /// connected until `close` fires.
+    async fn test_client(
+        transport: agent_client_protocol::Channel,
+        name: &'static str,
+        seen: tokio::sync::mpsc::UnboundedSender<(String, Seen)>,
+        connected: tokio::sync::oneshot::Sender<agent_client_protocol::ConnectionTo<Agent>>,
+        close: tokio::sync::oneshot::Receiver<()>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        agent_client_protocol::Client
+            .builder()
+            .on_receive_notification(
+                async move |notification: SessionNotification, _connection| {
+                    let kind = match &notification.update {
+                        SessionUpdate::SessionInfoUpdate(info)
+                            if info
+                                .meta
+                                .as_ref()
+                                .and_then(|meta| meta.get("rustcode"))
+                                .and_then(|rustcode| rustcode.get("status"))
+                                .is_some() =>
+                        {
+                            Seen::Status
+                        }
+                        SessionUpdate::AgentMessageChunk(_) => Seen::Message,
+                        _ => Seen::Other,
+                    };
+                    let _ = seen.send((notification.session_id.to_string(), kind));
+                    Ok(())
+                },
+                agent_client_protocol::on_receive_notification!(),
+            )
+            .on_receive_request(
+                async move |_request: agent_client_protocol::UntypedMessage,
+                            responder,
+                            _connection| {
+                    responder.respond(serde_json::json!({ "client": name }))
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .connect_with(transport, async move |connection| {
+                let _ = connected.send(connection);
+                let _ = close.await;
+                Ok(())
+            })
+            .await
+    }
+
+    fn initialize_with(meta: serde_json::Value) -> InitializeRequest {
+        InitializeRequest::new(agent_client_protocol::schema::ProtocolVersion::V1)
+            .client_capabilities(
+                serde_json::from_value::<agent_client_protocol::schema::v1::ClientCapabilities>(
+                    serde_json::json!({ "_meta": meta }),
+                )
+                .expect("client capabilities"),
+            )
+    }
+
+    fn report_prompt(session_id: &str) -> PromptRequest {
+        PromptRequest::new(
+            session_id.to_owned(),
+            vec![ContentBlock::Text(TextContent::new("/context"))],
+        )
+    }
+
+    /// What a client got, status broadcasts left out: they go to everyone.
+    fn seen_by(
+        seen: &mut tokio::sync::mpsc::UnboundedReceiver<(String, Seen)>,
+    ) -> HashMap<String, Vec<Seen>> {
+        let mut by_session: HashMap<String, Vec<Seen>> = HashMap::new();
+        while let Ok((session_id, kind)) = seen.try_recv() {
+            if kind != Seen::Status {
+                by_session.entry(session_id).or_default().push(kind);
+            }
+        }
+        by_session
+    }
+
+    /// Polling a connection's handler chain is deep in a debug build: the
+    /// engine runs it on the main thread's 8 MB stack, a test thread has 2 MB.
+    fn on_a_large_stack(test: impl std::future::Future<Output = ()> + Send + 'static) {
+        std::thread::Builder::new()
+            .stack_size(64 << 20)
+            .spawn(move || {
+                tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime")
+                    .block_on(test)
+            })
+            .expect("test thread")
+            .join()
+            .expect("the test passes");
+    }
+
+    #[test]
+    fn two_connections_keep_their_own_sessions_and_capabilities() {
+        on_a_large_stack(two_connections());
+    }
+
+    async fn two_connections() {
+        let server = AcpServer::new(false).expect("server");
+        let cwd = tempfile::tempdir().expect("cwd");
+        let (a_engine, a_transport) = agent_client_protocol::Channel::duplex();
+        let (b_engine, b_transport) = agent_client_protocol::Channel::duplex();
+        let (a_seen_tx, mut a_seen) = tokio::sync::mpsc::unbounded_channel();
+        let (b_seen_tx, mut b_seen) = tokio::sync::mpsc::unbounded_channel();
+        let (a_ready_tx, a_ready) =
+            tokio::sync::oneshot::channel::<agent_client_protocol::ConnectionTo<Agent>>();
+        let (b_ready_tx, b_ready) =
+            tokio::sync::oneshot::channel::<agent_client_protocol::ConnectionTo<Agent>>();
+        let (close_a, a_closed) = tokio::sync::oneshot::channel();
+        let (close_b, b_closed) = tokio::sync::oneshot::channel();
+
+        let script = async {
+            let a = a_ready.await.expect("client a connects");
+            let b = b_ready.await.expect("client b connects");
+            // A is an app with the preview and orchestration; B advertises nothing.
+            a.send_request(initialize_with(
+                serde_json::json!({ "rustcode": { "preview": 1, "orchestration": 3, "threads": 1, "visualizations": 2, "smartUi": 1 } }),
+            ))
+            .block_task()
+            .await
+            .expect("a initializes");
+            b.send_request(initialize_with(serde_json::json!({})))
+                .block_task()
+                .await
+                .expect("b initializes");
+            #[cfg(unix)]
+            assert!(server.remote.can_host_threads());
+            let a_session = a
+                .send_request(NewSessionRequest::new(cwd.path().to_path_buf()))
+                .block_task()
+                .await
+                .expect("a creates a session")
+                .session_id
+                .to_string();
+            let b_session = b
+                .send_request(NewSessionRequest::new(cwd.path().to_path_buf()))
+                .block_task()
+                .await
+                .expect("b creates a session")
+                .session_id
+                .to_string();
+
+            // Each session took its creator's capabilities.
+            let (a_state, b_state) = {
+                let sessions = server.sessions.lock().await;
+                (
+                    Arc::clone(&sessions[&a_session].state),
+                    Arc::clone(&sessions[&b_session].state),
+                )
+            };
+            let a_preview = {
+                let state = a_state.lock().await;
+                assert_eq!(state.orchestration_version, 3);
+                assert_eq!(state.visualization_level, 2);
+                assert_eq!(state.smart_ui, crate::app::SmartUi::On);
+                assert!(state.orchestration_client.is_some());
+                state
+                    .preview_client
+                    .clone()
+                    .expect("a's session has a preview")
+            };
+            {
+                let state = b_state.lock().await;
+                assert_eq!(state.orchestration_version, 0);
+                assert_eq!(state.visualization_level, 0);
+                assert_eq!(state.smart_ui, crate::app::SmartUi::Unsupported);
+                assert!(state.orchestration_client.is_none());
+                assert!(state.preview_client.is_none());
+            }
+            // And its client answers for it.
+            assert_eq!(
+                a_preview
+                    .request(serde_json::json!({ "operation": { "action": "inspect" } }))
+                    .await
+                    .expect("a answers its session's preview"),
+                serde_json::json!({ "client": "a" })
+            );
+
+            // A report streams through the session's clients: only its own.
+            a.send_request(report_prompt(&a_session))
+                .block_task()
+                .await
+                .expect("a's report");
+            b.send_request(report_prompt(&b_session))
+                .block_task()
+                .await
+                .expect("b's report");
+
+            // A leaves. B, its session and A's session all go on.
+            let _ = close_a.send(());
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while server.clients.count() != 1 {
+                assert!(std::time::Instant::now() < deadline, "a never disconnected");
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            #[cfg(unix)]
+            assert!(!server.remote.can_host_threads());
+            {
+                let sessions = server.sessions.lock().await;
+                assert!(sessions.contains_key(&a_session));
+                assert!(sessions.contains_key(&b_session));
+            }
+            assert!(
+                a_preview
+                    .request(serde_json::json!({ "operation": { "action": "inspect" } }))
+                    .await
+                    .is_err(),
+                "a request has no client once a's is gone"
+            );
+            b.send_request(report_prompt(&b_session))
+                .block_task()
+                .await
+                .expect("b still runs its session");
+            let _ = close_b.send(());
+            (a_session, b_session)
+        };
+
+        let (served_a, served_b, client_a, client_b, (a_session, b_session)) = tokio::join!(
+            serve_connection(&server, a_engine),
+            serve_connection(&server, b_engine),
+            test_client(a_transport, "a", a_seen_tx, a_ready_tx, a_closed),
+            test_client(b_transport, "b", b_seen_tx, b_ready_tx, b_closed),
+            script,
+        );
+        served_a.expect("a's connection ends cleanly");
+        served_b.expect("b's connection ends cleanly");
+        client_a.expect("client a");
+        client_b.expect("client b");
+
+        let messages = |seen: &HashMap<String, Vec<Seen>>, session: &str| {
+            seen.get(session).map_or(0, |kinds| {
+                kinds.iter().filter(|kind| **kind == Seen::Message).count()
+            })
+        };
+        let a_got = seen_by(&mut a_seen);
+        let b_got = seen_by(&mut b_seen);
+        assert_eq!(a_got.keys().collect::<Vec<_>>(), vec![&a_session]);
+        assert_eq!(b_got.keys().collect::<Vec<_>>(), vec![&b_session]);
+        assert_eq!(messages(&a_got, &a_session), 1, "a's report reached a");
+        assert_eq!(
+            messages(&b_got, &b_session),
+            2,
+            "both of b's reports reached b"
+        );
+        assert_eq!(server.clients.count(), 0);
+        // Closing connections ended nothing: only the engine's shutdown does.
+        assert!(server.sessions.lock().await.contains_key(&a_session));
+        server.shutdown().await;
+        assert!(server.sessions.lock().await.is_empty());
+    }
+
+    /// A chat-completions provider whose first streamed reply sends `first`,
+    /// then waits for `release` to send `rest` and finish. Any later request
+    /// is answered at once.
+    async fn held_provider(
+        first: &'static str,
+        rest: &'static str,
+    ) -> (String, tokio::sync::oneshot::Sender<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        async fn read_request(socket: &mut tokio::net::TcpStream) {
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4_096];
+            loop {
+                let Ok(read) = socket.read(&mut buffer).await else {
+                    return;
+                };
+                if read == 0 {
+                    return;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") else {
+                    continue;
+                };
+                let headers = String::from_utf8_lossy(&request[..end]).to_ascii_lowercase();
+                let length = headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length:"))
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                if request.len() >= end + 4 + length {
+                    return;
+                }
+            }
+        }
+        fn delta(text: &str) -> String {
+            format!(
+                "data: {}\n\n",
+                serde_json::json!({ "choices": [{ "delta": { "content": text } }] })
+            )
+        }
+        const HEAD: &str =
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+        const END: &str =
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind provider");
+        let address = listener.local_addr().expect("provider address");
+        let (release, released) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(async move {
+            let mut released = Some(released);
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let held = released.take();
+                tokio::spawn(async move {
+                    read_request(&mut socket).await;
+                    let _ = socket.write_all(HEAD.as_bytes()).await;
+                    match held {
+                        Some(released) => {
+                            let _ = socket.write_all(delta(first).as_bytes()).await;
+                            let _ = socket.flush().await;
+                            let _ = released.await;
+                            let _ = socket.write_all(delta(rest).as_bytes()).await;
+                        }
+                        None => {
+                            let _ = socket.write_all(delta("ok").as_bytes()).await;
+                        }
+                    }
+                    let _ = socket.write_all(END.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+        (format!("http://{address}/v1/chat/completions"), release)
+    }
+
+    /// Run `test` with MCP servers of its own, none: a real turn otherwise
+    /// starts the configured ones (the default config names one run by `npx`).
+    async fn without_mcp(test: impl std::future::Future<Output = ()>) {
+        crate::mcp::DIRECT_MCP_REGISTRY
+            .scope(Default::default(), test)
+            .await;
+    }
+
+    /// Serve a connection on a thread of its own, as the server does.
+    fn serve_on_thread(
+        server: &AcpServer,
+        transport: agent_client_protocol::Channel,
+    ) -> tokio::sync::oneshot::Receiver<Result<(), agent_client_protocol::Error>> {
+        let (done, served) = tokio::sync::oneshot::channel();
+        let server = server.clone();
+        spawn_on_large_stack("test-connection", async move {
+            let _ = done.send(serve_connection(&server, transport).await);
+        });
+        served
+    }
+
+    /// Point a session at `endpoint`, with an earlier exchange in its history.
+    async fn use_provider(server: &AcpServer, session_id: &str, endpoint: &str) {
+        use crate::config::{ApiProtocol, ModelProfile};
+        let state = Arc::clone(&server.sessions.lock().await[session_id].state);
+        let mut state = state.lock().await;
+        state.api_base_url = endpoint.to_owned();
+        state.model_name = "held-test".to_owned();
+        state.config.models = vec![ModelProfile {
+            name: state.model_name.clone(),
+            url: endpoint.to_owned(),
+            model: state.model_name.clone(),
+            api_protocol: Some(ApiProtocol::ChatCompletions),
+            context_window: Some(8_192),
+            ..ModelProfile::default()
+        }];
+        state.record_function_calling_support(endpoint, false);
+        state
+            .history
+            .push(crate::app::ChatMessage::new("user", "an earlier question"));
+        state.history.push(crate::app::ChatMessage::new(
+            "assistant",
+            "an earlier answer",
+        ));
+    }
+
+    /// A client that sends every `session/update` it gets to `updates` and
+    /// stays connected until `close` fires.
+    async fn recording_client(
+        transport: agent_client_protocol::Channel,
+        updates: tokio::sync::mpsc::UnboundedSender<SessionUpdate>,
+        connected: tokio::sync::oneshot::Sender<agent_client_protocol::ConnectionTo<Agent>>,
+        close: tokio::sync::oneshot::Receiver<()>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        agent_client_protocol::Client
+            .builder()
+            .on_receive_notification(
+                async move |notification: SessionNotification, _connection| {
+                    let _ = updates.send(notification.update);
+                    Ok(())
+                },
+                agent_client_protocol::on_receive_notification!(),
+            )
+            .on_receive_request(
+                async move |_request: agent_client_protocol::UntypedMessage,
+                            responder,
+                            _connection| {
+                    responder.respond(serde_json::json!({}))
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .connect_with(transport, async move |connection| {
+                let _ = connected.send(connection);
+                let _ = close.await;
+                Ok(())
+            })
+            .await
+    }
+
+    /// The text of a message chunk: `("user" | "agent", text)`.
+    fn said(update: &SessionUpdate) -> Option<(&'static str, String)> {
+        let (who, chunk) = match update {
+            SessionUpdate::UserMessageChunk(chunk) => ("user", chunk),
+            SessionUpdate::AgentMessageChunk(chunk) => ("agent", chunk),
+            _ => return None,
+        };
+        match &chunk.content {
+            ContentBlock::Text(text) => Some((who, text.text.clone())),
+            _ => None,
+        }
+    }
+
+    /// Wait for the message chunk that contains `text`, collecting every
+    /// chunk said on the way.
+    async fn wait_for_text(
+        updates: &mut tokio::sync::mpsc::UnboundedReceiver<SessionUpdate>,
+        text: &str,
+        said_so_far: &mut Vec<(&'static str, String)>,
+    ) {
+        let deadline = std::time::Duration::from_secs(20);
+        tokio::time::timeout(deadline, async {
+            while let Some(update) = updates.recv().await {
+                if let Some(chunk) = said(&update) {
+                    let found = chunk.1.contains(text);
+                    said_so_far.push(chunk);
+                    if found {
+                        return;
+                    }
+                }
+            }
+            panic!("the client closed before {text:?}");
+        })
+        .await
+        .unwrap_or_else(|_| panic!("no {text:?} within {deadline:?}: {said_so_far:?}"));
+    }
+
+    async fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !done() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{what} never happened"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    #[test]
+    fn a_load_does_not_attach_a_stale_replay_after_repeated_turn_changes() {
+        on_a_large_stack(without_mcp(replay_retries_until_stable()));
+    }
+
+    async fn replay_retries_until_stable() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let server = AcpServer::new(false).expect("server");
+        let (engine, transport) = agent_client_protocol::Channel::duplex();
+        let served = serve_on_thread(&server, engine);
+        let (updates_tx, _updates) = tokio::sync::mpsc::unbounded_channel();
+        let (ready_tx, ready) = tokio::sync::oneshot::channel();
+        let (close_tx, closed) = tokio::sync::oneshot::channel();
+        let client = tokio::spawn(recording_client(transport, updates_tx, ready_tx, closed));
+        let connection = ready.await.expect("client connects");
+        connection
+            .send_request(initialize_with(
+                serde_json::json!({ "rustcode": { "preview": 1 } }),
+            ))
+            .block_task()
+            .await
+            .expect("client initializes");
+        let peer = server
+            .clients
+            .newest_with(clients::Capability::Preview)
+            .expect("initialized peer");
+
+        let session_id = "replay-retry-test";
+        let session_clients = peer.clients().session(session_id);
+        let reads = Arc::new(AtomicUsize::new(0));
+        let result = attach_with_replay(
+            &peer,
+            session_id,
+            {
+                let reads = Arc::clone(&reads);
+                move || {
+                    let reads = Arc::clone(&reads);
+                    let session_clients = session_clients.clone();
+                    async move {
+                        if reads.fetch_add(1, Ordering::SeqCst) < ATTACH_ATTEMPTS {
+                            drop(session_clients.begin_turn(0, None));
+                        }
+                        rustcode_core::History::default()
+                    }
+                }
+            },
+            |_| Vec::new(),
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "unstable replay must be retried or refused"
+        );
+        assert_eq!(reads.load(Ordering::SeqCst), ATTACH_ATTEMPTS);
+        assert!(
+            peer.clients().session(session_id).requester(None).is_none(),
+            "a stale replay never attaches the client"
+        );
+
+        let _ = close_tx.send(());
+        client
+            .await
+            .expect("client task")
+            .expect("client disconnects cleanly");
+        served
+            .await
+            .expect("server connection")
+            .expect("connection closes cleanly");
+        server.shutdown().await;
+    }
+
+    #[test]
+    fn a_turn_outlives_its_client_and_a_client_that_loads_it_mid_turn_gets_all_of_it() {
+        on_a_large_stack(without_mcp(turn_outlives_client()));
+    }
+
+    async fn turn_outlives_client() {
+        let server = AcpServer::new(false).expect("server");
+        let cwd = tempfile::tempdir().expect("cwd");
+        let cwd_path = std::fs::canonicalize(cwd.path()).expect("cwd");
+        let (endpoint, release) = held_provider("the first half, ", "then the rest").await;
+
+        // A starts a thread, prompts, and leaves once the reply has begun.
+        let (a_engine, a_transport) = agent_client_protocol::Channel::duplex();
+        let (a_updates_tx, mut a_updates) = tokio::sync::mpsc::unbounded_channel();
+        let (a_ready_tx, a_ready) = tokio::sync::oneshot::channel();
+        let (close_a, a_closed) = tokio::sync::oneshot::channel();
+        let a_serving = serve_on_thread(&server, a_engine);
+        let a_client = tokio::spawn(recording_client(
+            a_transport,
+            a_updates_tx,
+            a_ready_tx,
+            a_closed,
+        ));
+        let a = a_ready.await.expect("a connects");
+        a.send_request(initialize_with(serde_json::json!({})))
+            .block_task()
+            .await
+            .expect("a initializes");
+        let session_id = a
+            .send_request(NewSessionRequest::new(cwd_path.clone()))
+            .block_task()
+            .await
+            .expect("a creates a session")
+            .session_id
+            .to_string();
+        use_provider(&server, &session_id, &endpoint).await;
+        // Not awaited: A leaves before the turn answers it.
+        let _unanswered = a.send_request(PromptRequest::new(
+            session_id.clone(),
+            vec![ContentBlock::Text(TextContent::new("do the thing"))],
+        ));
+        let mut a_said = Vec::new();
+        wait_for_text(&mut a_updates, "the first half", &mut a_said).await;
+        let _ = close_a.send(());
+        a_client
+            .await
+            .expect("a's client")
+            .expect("a's client ends cleanly");
+        a_serving
+            .await
+            .expect("a's connection")
+            .expect("a's connection ends cleanly");
+        assert_eq!(server.clients.count(), 0);
+        assert!(
+            server.clients.turn_running(&session_id),
+            "closing the client did not stop the turn"
+        );
+
+        // B loads the thread mid-turn: the history, the turn so far, then live.
+        let (b_engine, b_transport) = agent_client_protocol::Channel::duplex();
+        let (b_updates_tx, mut b_updates) = tokio::sync::mpsc::unbounded_channel();
+        let (b_ready_tx, b_ready) = tokio::sync::oneshot::channel();
+        let (close_b, b_closed) = tokio::sync::oneshot::channel();
+        let b_serving = serve_on_thread(&server, b_engine);
+        let b_client = tokio::spawn(recording_client(
+            b_transport,
+            b_updates_tx,
+            b_ready_tx,
+            b_closed,
+        ));
+        let b = b_ready.await.expect("b connects");
+        b.send_request(initialize_with(serde_json::json!({})))
+            .block_task()
+            .await
+            .expect("b initializes");
+        b.send_request(LoadSessionRequest::new(
+            session_id.clone(),
+            cwd_path.clone(),
+        ))
+        .block_task()
+        .await
+        .expect("b loads the running thread");
+        let mut b_said = Vec::new();
+        wait_for_text(&mut b_updates, "the first half", &mut b_said).await;
+        assert_eq!(
+            b_said,
+            vec![
+                ("user", "an earlier question".to_owned()),
+                ("agent", "an earlier answer".to_owned()),
+                ("user", "do the thing".to_owned()),
+                ("agent", "the first half, ".to_owned()),
+            ],
+            "the transcript, then the turn so far, each once"
+        );
+
+        let _ = release.send(());
+        wait_for_text(&mut b_updates, "then the rest", &mut b_said).await;
+        wait_until("the turn ends", || {
+            !server.clients.turn_running(&session_id)
+        })
+        .await;
+        let answer = {
+            let state = Arc::clone(&server.sessions.lock().await[&session_id].state);
+            let state = state.lock().await;
+            state.history.last().map(|message| message.content.clone())
+        };
+        assert_eq!(
+            answer.as_deref(),
+            Some("the first half, then the rest"),
+            "the turn finished with nobody connected for part of it"
+        );
+
+        let _ = close_b.send(());
+        b_client
+            .await
+            .expect("b's client")
+            .expect("b's client ends cleanly");
+        b_serving
+            .await
+            .expect("b's connection")
+            .expect("b's connection ends cleanly");
+        server.shutdown().await;
+    }
+
+    #[test]
+    fn two_clients_of_one_thread_see_it_live() {
+        on_a_large_stack(without_mcp(two_clients_one_thread()));
+    }
+
+    async fn two_clients_one_thread() {
+        let server = AcpServer::new(false).expect("server");
+        let cwd = tempfile::tempdir().expect("cwd");
+        let cwd_path = std::fs::canonicalize(cwd.path()).expect("cwd");
+        let (endpoint, release) = held_provider("streaming to both, ", "still both").await;
+        let mut clients = Vec::new();
+        for _ in 0..2 {
+            let (engine, transport) = agent_client_protocol::Channel::duplex();
+            let (updates_tx, updates) = tokio::sync::mpsc::unbounded_channel();
+            let (ready_tx, ready) = tokio::sync::oneshot::channel();
+            let (close, closed) = tokio::sync::oneshot::channel();
+            let serving = serve_on_thread(&server, engine);
+            let client = tokio::spawn(recording_client(transport, updates_tx, ready_tx, closed));
+            let connection = ready.await.expect("connects");
+            connection
+                .send_request(initialize_with(serde_json::json!({})))
+                .block_task()
+                .await
+                .expect("initializes");
+            clients.push((connection, updates, close, serving, client));
+        }
+        let session_id = clients[0]
+            .0
+            .send_request(NewSessionRequest::new(cwd_path.clone()))
+            .block_task()
+            .await
+            .expect("a creates a session")
+            .session_id
+            .to_string();
+        use_provider(&server, &session_id, &endpoint).await;
+        clients[1]
+            .0
+            .send_request(LoadSessionRequest::new(
+                session_id.clone(),
+                cwd_path.clone(),
+            ))
+            .block_task()
+            .await
+            .expect("b loads the open thread");
+
+        let prompt = clients[0].0.send_request(PromptRequest::new(
+            session_id.clone(),
+            vec![ContentBlock::Text(TextContent::new("tell us both"))],
+        ));
+        let mut said = [Vec::new(), Vec::new()];
+        for ((_, updates, ..), said) in clients.iter_mut().zip(&mut said) {
+            wait_for_text(updates, "streaming to both", said).await;
+        }
+        let _ = release.send(());
+        for ((_, updates, ..), said) in clients.iter_mut().zip(&mut said) {
+            wait_for_text(updates, "still both", said).await;
+        }
+        assert_eq!(
+            prompt.block_task().await.expect("the prompt").stop_reason,
+            StopReason::EndTurn
+        );
+        // B is shown A's prompt; A shows its own already.
+        let prompt_shown = |said: &[(&str, String)]| {
+            said.iter()
+                .any(|(who, text)| *who == "user" && text == "tell us both")
+        };
+        assert!(!prompt_shown(&said[0]), "a: {:?}", said[0]);
+        assert!(prompt_shown(&said[1]), "b: {:?}", said[1]);
+
+        for (_, _, close, serving, client) in clients {
+            let _ = close.send(());
+            client.await.expect("client").expect("client ends cleanly");
+            serving
+                .await
+                .expect("connection")
+                .expect("connection ends cleanly");
+        }
+        server.shutdown().await;
     }
 }

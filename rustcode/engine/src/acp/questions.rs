@@ -10,11 +10,11 @@
 //! any answer option and adding `_meta.rustcode.answer`, either
 //! `{"options": [labels]}` or `{"text": "..."}`.
 
+use super::clients::SessionClients;
 use agent_client_protocol::schema::v1::{
     PermissionOption, PermissionOptionKind, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
-use agent_client_protocol::{Client, ConnectionTo};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -152,17 +152,18 @@ pub(crate) fn pending_question_prompt(
 /// loop keeps running. Each answer is bound to its question id: if the
 /// question was already answered, replaced or cancelled, the late reply is
 /// dropped. A chain advances without a new UI event, so the task keeps asking
-/// until no unasked question is pending.
+/// until no unasked question is pending. The task belongs to the engine, so
+/// it goes on to whichever client has the session.
 pub(crate) fn spawn_question_requests(
-    connection: &ConnectionTo<Client>,
+    clients: &SessionClients,
     session_id: &str,
     state: Arc<Mutex<crate::app::AppState>>,
     cancel_token: tokio_util::sync::CancellationToken,
     asked: AskedQuestions,
 ) -> Result<(), agent_client_protocol::Error> {
-    let request_connection = connection.clone();
+    let clients = clients.clone();
     let session_id = session_id.to_owned();
-    connection.spawn(async move {
+    tokio::spawn(async move {
         loop {
             let Some((question_id, prompt)) = pending_question_prompt(&*state.lock().await) else {
                 break;
@@ -176,9 +177,8 @@ pub(crate) fn spawn_question_requests(
             }
             let request = question_permission_request(&session_id, &question_id, &prompt);
             let _waiting = crate::thread_status::waiting(&session_id);
-            let answer = request_connection
-                .send_request(request)
-                .block_task()
+            let answer = clients
+                .request(None, request)
                 .await
                 .ok()
                 .and_then(|response| question_reply(&response, &prompt));
@@ -215,8 +215,8 @@ pub(crate) fn spawn_question_requests(
                 }
             }
         }
-        Ok(())
-    })
+    });
+    Ok(())
 }
 
 #[cfg(test)]

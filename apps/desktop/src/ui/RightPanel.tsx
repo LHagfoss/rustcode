@@ -463,11 +463,11 @@ export function RightPanel() {
             onLostPointerCapture={onResizeEnd}
             onDoubleClick={() => commit(panelWidth(DEFAULT_WIDTH, viewport, row))}
             onKeyDown={onResizeKey}
-            className="group absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize touch-none select-none outline-none focus-visible:bg-focus/20"
+            className="group absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize touch-none select-none outline-none keyboard:focus-visible:bg-focus/20"
           >
             <span
               aria-hidden
-              className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent group-hover:bg-fill-strong group-focus-visible:bg-focus"
+              className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent group-hover:bg-fill-strong keyboard:group-focus-visible:bg-focus"
             />
           </div>
         )}

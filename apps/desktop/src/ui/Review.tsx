@@ -1,3 +1,5 @@
+import { formatBinding } from "../lib/keys";
+import { primaryModifier } from "../lib/platform";
 // The Review screen for one thread: its changes as a file tree and a diff
 // (unified or side by side, highlighted, with the words that changed marked
 // inside each line), from the working tree, the worktree's branch, one turn's
@@ -106,10 +108,10 @@ function CommentBox({
         value={body}
         onChange={(e) => setBody(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && body.trim()) onSave(body);
+          if (e.key === "Enter" && primaryModifier(e) && body.trim()) onSave(body);
           if (e.key === "Escape") onCancel();
         }}
-        placeholder="Comment on this line (⌘⏎ to save)"
+        placeholder={`Comment on this line (${formatBinding("mod+enter")} to save)`}
         aria-label="Comment"
         className="w-full resize-y rounded-md bg-fill-subtle px-2 py-1.5 text-callout outline-none hover:bg-fill focus:bg-fill"
       />

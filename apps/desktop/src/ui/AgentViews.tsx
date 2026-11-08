@@ -354,7 +354,7 @@ export function ThreadAgentRow({
   const active = isActive(state);
   // What the thread does now, when this one has it open: its live line is the row's own step.
   const step = useApp((s) =>
-    active && s.threads[link.target]?.running ? workingLabel(s.threads[link.target]!.items) : undefined,
+    active && s.threads[link.target]?.running ? workingLabel(s.threads[link.target]!.items, true) : undefined,
   );
   const now = useNow(active);
   const harness = link.harness ?? session?.harness;

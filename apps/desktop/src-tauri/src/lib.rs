@@ -1,9 +1,10 @@
 //! RustCode desktop shell. The webview talks ACP to the engine sidecar through
 //! the `engine_*` commands; the other commands are the few native helpers the
-//! UI needs (links, Finder, a harness login in Terminal, git changes). Every
-//! argument from the webview is validated here.
+//! UI needs (links, Finder, a harness login in Terminal, git changes, the
+//! Diagnostics page). Every argument from the webview is validated here.
 
 mod banner;
+mod diagnostics;
 mod engine;
 mod links;
 mod native;
@@ -82,6 +83,12 @@ pub fn run() {
             links::link_meta,
             threads::thread_rename,
             threads::thread_trash,
+            threads::thread_log_open,
+            diagnostics::server_status,
+            diagnostics::system_info,
+            diagnostics::resolve_binaries,
+            diagnostics::logs_folder_open,
+            diagnostics::diagnostics_save,
             pty::pty_open,
             pty::pty_write,
             pty::pty_resize,

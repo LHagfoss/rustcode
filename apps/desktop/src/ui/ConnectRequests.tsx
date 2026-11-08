@@ -1,5 +1,5 @@
 // A device asking to connect, answered from anywhere in the app (docs/remote.md › Connection
-// requests). It found this Mac on the network and tapped Connect; the gateway holds the
+// requests). It found this computer on the network and tapped Connect; the gateway holds the
 // request and this asks: "<device> wants to connect", Deny or Accept. Accept shows the code the
 // device now asks for, large, with Copy and its countdown, until it pairs with the code or it runs
 // out. Glass cards in the window's bottom-right corner, over Settings too, like the toasts above.
@@ -136,7 +136,7 @@ function RequestCard({
             {request.remoteAddr ? ` at ${request.remoteAddr}` : ""}
           </div>
           <p className="m-0 pt-2 text-caption text-fg-faint leading-normal">
-            Accept only a device you have with you. This Mac then shows a code to enter on it.
+            Accept only a device you have with you. This computer then shows a code to enter on it.
           </p>
         </div>
       </div>

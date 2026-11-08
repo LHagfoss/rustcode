@@ -4,7 +4,6 @@
 //! or the active theme changed, so the app restyles live.
 
 use crate::themes::{ThemesSnapshot, watch};
-use agent_client_protocol::{Client, ConnectionTo};
 use std::path::PathBuf;
 
 /// `_rustcode/themes`.
@@ -64,19 +63,21 @@ pub(crate) fn answer_set(
         .map_err(|message| agent_client_protocol::Error::invalid_params().data(message))
 }
 
-/// Start watching themes for this connection's client, once per engine.
-pub(crate) fn start_watching(connection: &ConnectionTo<Client>) {
+/// Start watching themes, once per engine, for every client that listed them.
+pub(crate) fn start_watching(clients: &super::clients::Clients) {
     static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
-    let notify = connection.clone();
-    let _ = connection.spawn(async move {
+    let notify = clients.clone();
+    tokio::spawn(async move {
         watch::run(|snapshot| {
-            let _ = notify.send_notification(ThemesChangedNotification { snapshot });
+            notify.publish(
+                super::clients::Topic::Themes,
+                ThemesChangedNotification { snapshot },
+            );
         })
         .await;
-        Ok(())
     });
 }
 

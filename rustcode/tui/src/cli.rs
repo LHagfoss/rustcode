@@ -190,6 +190,13 @@ pub enum Commands {
         command: DaemonCommands,
     },
 
+    /// Run or connect to the RustCode server: one engine that the app and
+    /// other clients share, which keeps threads running when they close
+    Server {
+        #[command(subcommand)]
+        command: ServerCommands,
+    },
+
     /// Serve interactive sessions over TCP for remote frontends (experimental)
     Serve {
         /// TCP port to listen on
@@ -343,6 +350,16 @@ pub enum DaemonCommands {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum ServerCommands {
+    /// Run the server in the foreground until stopped; exits at once if one
+    /// already runs for this user
+    Run,
+    /// Relay ACP on stdin and stdout to the server, starting it in the
+    /// background if it is not running
+    Connect,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -1204,6 +1221,25 @@ mod tests {
         ));
         assert!(Cli::try_parse_from(["rustcode", "remote", "revoke"]).is_err());
         assert!(Cli::try_parse_from(["rustcode", "remote"]).is_err());
+    }
+
+    #[test]
+    fn parses_server_commands() {
+        let cli = Cli::try_parse_from(["rustcode", "server", "run"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Server {
+                command: ServerCommands::Run
+            })
+        ));
+        let cli = Cli::try_parse_from(["rustcode", "server", "connect"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Server {
+                command: ServerCommands::Connect
+            })
+        ));
+        assert!(Cli::try_parse_from(["rustcode", "server"]).is_err());
     }
 
     #[test]

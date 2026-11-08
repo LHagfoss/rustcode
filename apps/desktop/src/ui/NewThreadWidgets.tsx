@@ -1,4 +1,4 @@
-// The cards under the composer on a new thread: what this Mac recorded lately
+// The cards under the composer on a new thread: what this computer recorded lately
 // (the activity heatmap, this month's turns and spend), the project's recent
 // threads and pull requests, and the last thirty days of reported usage. Devin's
 // home screen is the shape: a quiet dashboard of see-through glass cards under
@@ -159,7 +159,7 @@ function ActivityCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
       )}
       <p className="shrink-0 truncate text-caption text-fg-muted" title={`Last ${HEATMAP_WEEKS} weeks`}>
         {rows === undefined
-          ? "Reading what this Mac recorded…"
+          ? "Reading what this computer recorded…"
           : `${count(totalTurns, "turn")} · ${count(activeThreads, "thread")}`}
       </p>
     </Card>

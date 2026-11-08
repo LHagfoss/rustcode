@@ -428,6 +428,7 @@ pub async fn launch_for(
     session_id: &str,
     client: Arc<dyn PreviewClient>,
     version: u8,
+    smart_ui: crate::app::SmartUi,
 ) -> Option<Launch> {
     #[cfg(unix)]
     {
@@ -440,17 +441,15 @@ pub async fn launch_for(
         };
         let command = std::env::current_exe().ok()?;
         let token = hub.register(session_id, client, version);
-        // Smart UI is the client's setting, not the thread's: an engine serves one client.
-        let smart_ui = crate::harness::client_smart_ui() == crate::app::SmartUi::On;
         Some(
             Launch::new(command, session_id, hub.path(), &token)
-                .with_smart_ui(smart_ui)
+                .with_smart_ui(smart_ui == crate::app::SmartUi::On)
                 .with_version(version),
         )
     }
     #[cfg(not(unix))]
     {
-        let _ = (session_id, client, version);
+        let _ = (session_id, client, version, smart_ui);
         None
     }
 }
