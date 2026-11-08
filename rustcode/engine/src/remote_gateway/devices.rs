@@ -260,7 +260,7 @@ impl Devices {
 
 /// Keep a device-supplied label printable and bounded. It is shown in a
 /// terminal, so control characters (including escape sequences) are dropped.
-fn sanitize_name(name: &str) -> String {
+pub(super) fn sanitize_name(name: &str) -> String {
     let cleaned: String = name
         .chars()
         .filter(|c| !c.is_control())

@@ -26,6 +26,10 @@ pub mod host_capability {
     /// desktop app on the harness the device names. Advertised while a share
     /// that advertises [`session_capability::HOST_THREADS`] is live.
     pub const THREAD_CREATE_OPTIONS: &str = "thread_create_options";
+    /// The gateway takes a `connect_request` handshake: a device asks, the
+    /// host's owner accepts and reads it a code. Also in the Bonjour record
+    /// as `caps=connect_requests`, so a device knows before it pairs.
+    pub const CONNECT_REQUESTS: &str = "connect_requests";
 }
 
 /// Optional operations one session owner implements, in

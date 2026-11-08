@@ -110,6 +110,7 @@ import {
   sentAttachments,
   splitImageMarkers,
 } from "./compose";
+import type { ConnectCode } from "./connectRequests";
 import { contextPercent } from "./details";
 import { DRAFTS_KEY, parseDrafts, persistable, withDraft } from "./drafts";
 import { parseGrants, type TimedGrant } from "./grants";
@@ -494,6 +495,11 @@ export interface AppState {
    * look off.
    */
   remoteError: string | null;
+  /**
+   * The code shown after accepting a phone that asked to connect, until the phone pairs or it
+   * runs out (`state/connectRequests.ts`). The only copy: never persisted.
+   */
+  connectCode: ConnectCode | null;
   /** What the main column shows instead of the chat. */
   view:
     | { kind: "chat" }
@@ -744,6 +750,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   remotePaired: null,
   remoteByThread: {},
   remoteError: null,
+  connectCode: null,
   view: { kind: "chat" },
   checkpoints: {},
   attempts: {},
@@ -910,6 +917,10 @@ function rpcReason(data: Json | undefined): string | null {
 
 let connection: AcpConnection | null = null;
 let transport: Transport | null = null;
+/** Ignore machine-status reads that started before a newer answer changed remote state. */
+let remoteStatusRevision = 0;
+let remoteStatusReadId = 0;
+let latestRemoteStatusReadId = 0;
 /** Sessions whose `session/load` replay is arriving. */
 const loading = new Set<string>();
 /** The shared `session/load` for each thread; callers must not prompt before its replay finishes. */
@@ -5099,11 +5110,23 @@ export async function request<T = Json>(
 
 // ---------------------------------------------------------------- remote access
 
-// Discard status reads that started before a pairing request completed.
-let remotePairGeneration = 0;
+// Every read of the machine's remote state runs on one clock. A change made here (pair, answer,
+// revoke, the switch) or a dismissed QR code bumps the revision, so a read that started before it
+// cannot put back what it changed; among the reads that started after, only the newest lands. All
+// of them, and every mutation's answer, land through `applyRemoteStatus`, which keeps or clears the
+// QR challenge and notices a device that just paired.
+function invalidateRemoteStatusReads() {
+  remoteStatusRevision += 1;
+  latestRemoteStatusReadId = remoteStatusReadId;
+}
+
+function commitRemoteStatus(status: RemoteStatus) {
+  invalidateRemoteStatusReads();
+  applyRemoteStatus(status);
+}
 
 export function dismissRemoteChallenge() {
-  remotePairGeneration++;
+  invalidateRemoteStatusReads();
   set({ remoteChallenge: null });
 }
 
@@ -5120,10 +5143,15 @@ export function applyRemoteStatus(status: RemoteStatus, now = Date.now()) {
   });
 }
 
-/** Re-read the machine's remote state, or one thread's share. Never throws. */
+/**
+ * Re-read the machine's remote access state. `sessionId` reads one thread's
+ * share instead, for its header indicator. Never throws: Settings shows the
+ * engine's refusal next to the switch.
+ */
 export async function refreshRemote(sessionId?: string): Promise<RemoteStatus | null> {
   const params: JsonObject = sessionId ? { sessionId } : {};
-  const generation = remotePairGeneration;
+  const revision = remoteStatusRevision;
+  const readId = sessionId ? 0 : ++remoteStatusReadId;
   try {
     const status = parseRemoteStatus(await request(RemoteMethod.status, params, 10_000));
     if (sessionId)
@@ -5131,12 +5159,20 @@ export async function refreshRemote(sessionId?: string): Promise<RemoteStatus | 
         remoteByThread: { ...s.remoteByThread, [sessionId]: status },
         remoteError: null,
       }));
-    else if (generation === remotePairGeneration) applyRemoteStatus(status);
-    return status;
+    else if (revision === remoteStatusRevision && readId > latestRemoteStatusReadId) {
+      latestRemoteStatusReadId = readId;
+      applyRemoteStatus(status);
+    }
+    return sessionId || (revision === remoteStatusRevision && readId === latestRemoteStatusReadId)
+      ? status
+      : get().remote;
   } catch (error) {
     // The engine answered nothing (a restart, a dropped request): say so and
     // keep what was last true, rather than showing remote access as off.
-    set({ remoteError: errorText(error) });
+    if (sessionId || (revision === remoteStatusRevision && readId > latestRemoteStatusReadId)) {
+      if (!sessionId) latestRemoteStatusReadId = readId;
+      set({ remoteError: errorText(error) });
+    }
     return null;
   }
 }
@@ -5147,11 +5183,9 @@ export async function refreshRemote(sessionId?: string): Promise<RemoteStatus | 
  * sees anything until it is switched on again. Pairings are kept.
  */
 export async function setRemoteAccess(on: boolean): Promise<void> {
-  if (!on) {
-    dismissRemoteChallenge();
-    set({ remotePaired: null });
-  }
-  if (on)
+  invalidateRemoteStatusReads();
+  if (!on) set({ remoteChallenge: null, remotePaired: null });
+  if (on) {
     set({
       remote: {
         ...(get().remote ?? {}),
@@ -5162,9 +5196,10 @@ export async function setRemoteAccess(on: boolean): Promise<void> {
         devices: [],
       } as RemoteStatus,
     });
+  }
   try {
     const status = parseRemoteStatus(await request(on ? RemoteMethod.start : RemoteMethod.stop, {}, 20_000));
-    set({ remote: status });
+    commitRemoteStatus(status);
     if (status.error) toast(status.error, "error");
     else {
       toast(
@@ -5188,25 +5223,29 @@ export async function setRemoteAccess(on: boolean): Promise<void> {
  */
 export async function pairRemoteDevice(): Promise<RemoteStatus | null> {
   const baselineIds = (get().remote?.devices ?? []).map((device) => device.id);
-  const generation = ++remotePairGeneration;
+  invalidateRemoteStatusReads();
+  const revision = remoteStatusRevision;
   set({ remoteChallenge: null, remotePaired: null });
   try {
     const status = parseRemoteStatus(await request(RemoteMethod.pair, {}, 20_000));
-    if (generation === remotePairGeneration) {
-      remotePairGeneration++;
+    if (revision === remoteStatusRevision) {
       const fresh = newPairedDevice(baselineIds, status.devices);
       const instanceChanged =
         status.offer?.instanceId &&
         status.gateway?.instanceId &&
         status.offer.instanceId !== status.gateway.instanceId;
       set({
-        remote: status,
         remotePaired: fresh ? { name: fresh.name } : null,
         remoteChallenge:
           status.offer && !fresh && !instanceChanged
             ? makeChallenge(status.offer, Date.now(), baselineIds)
             : null,
       });
+      commitRemoteStatus(status);
+    } else {
+      // Dismissed, switched off or answered meanwhile: the code is not shown, but the machine's
+      // state did change, so read it again.
+      void refreshRemote();
     }
     if (status.pairingError) toast(status.pairingError, "error");
     return status;
@@ -5216,10 +5255,63 @@ export async function pairRemoteDevice(): Promise<RemoteStatus | null> {
   }
 }
 
+/**
+ * Accept or deny a phone that asked to connect. Accepting shows the code the phone needs
+ * (`connectCode`); the request's own prompt goes with the next status either way.
+ */
+export async function answerConnectRequest(id: string, accept: boolean): Promise<boolean> {
+  invalidateRemoteStatusReads();
+  try {
+    const status = parseRemoteStatus(await request(RemoteMethod.answer, { id, accept }, 15_000));
+    commitRemoteStatus(status);
+    if (status.connectError) {
+      toast(status.connectError, "error");
+      return false;
+    }
+    const answer = status.connectAnswer;
+    if (accept && answer?.code) {
+      set({
+        connectCode: {
+          requestId: answer.id,
+          deviceName: answer.deviceName,
+          code: answer.code,
+          instanceId: answer.instanceId ?? status.gateway?.instanceId,
+          expiresAt: Date.now() + (answer.expiresInSecs ?? 120) * 1000,
+          lockedForSecs: answer.lockedForSecs,
+        },
+      });
+    }
+    return true;
+  } catch (error) {
+    toast(errorText(error), "error");
+    return false;
+  }
+}
+
+/** Take the connection code off the screen. */
+export function closeConnectCode() {
+  set({ connectCode: null });
+}
+
+/** Forget a paired device: its token stops working and its connections close. */
+export async function revokeRemoteDevice(id: string): Promise<void> {
+  invalidateRemoteStatusReads();
+  try {
+    const status = parseRemoteStatus(await request(RemoteMethod.revoke, { deviceId: id }, 15_000));
+    commitRemoteStatus(status);
+    if (status.revokeError) toast(status.revokeError, "error");
+    else if (status.revoked) toast(`${status.revoked.name} can no longer connect.`, "success");
+  } catch (error) {
+    toast(errorText(error), "error");
+  }
+}
+
 /** Test hook: reset to a clean slate. */
 export function resetForTests() {
-  remotePairGeneration++;
   lastFocusListAt = 0;
+  remoteStatusRevision += 1;
+  remoteStatusReadId = 0;
+  latestRemoteStatusReadId = 0;
   clearTimeout(slowTimer);
   if (limitTimer) clearInterval(limitTimer);
   limitTimer = null;
@@ -5263,6 +5355,7 @@ export function resetForTests() {
     onboardingOpen: false,
     toasts: [],
     toastsPaused: false,
+    connectCode: null,
     limitWaits: {},
     continueAfterLimit: true,
     agent: undefined,
