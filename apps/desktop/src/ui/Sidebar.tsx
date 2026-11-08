@@ -1,3 +1,4 @@
+import { fileManagerName, primaryModifier } from "../lib/platform";
 // The sidebar: a toolbar clear of the traffic lights, a search row with the
 // filter and the buttons that make a thread or a project, then one list:
 // pinned threads first, then every active thread (by project when asked). A row
@@ -409,7 +410,7 @@ function ThreadMenuItems({
             <GitBranch size={11} /> <span className="truncate font-mono">{worktree.branch}</span>
           </div>
           <Item className={menuItem} disabled={!canFiles} onSelect={() => revealPath(worktree.path)}>
-            <FolderOpen size={13} /> Open in Finder
+            <FolderOpen size={13} /> Open in {fileManagerName()}
           </Item>
           <Item
             className={menuItem}
@@ -1927,7 +1928,7 @@ export function Sidebar() {
     if (!id) return;
     // The pending row has no session to pin, settle or rename: it opens, and never joins a bulk pick.
     if (pending && id === pending.id) {
-      if (e.metaKey || e.ctrlKey || e.shiftKey) {
+      if (primaryModifier(e) || e.shiftKey) {
         e.preventDefault();
         e.stopPropagation();
       }
@@ -1936,7 +1937,7 @@ export function Sidebar() {
       clearSelection();
       return;
     }
-    const mod = e.metaKey || e.ctrlKey;
+    const mod = primaryModifier(e);
     if (!mod && !e.shiftKey) {
       setActiveId(id);
       anchor.current = id;
@@ -2039,7 +2040,7 @@ export function Sidebar() {
       // ⌘F searches threads while the sidebar has the keyboard, and the transcript's find bar
       // everywhere else: the event is stopped here, before it reaches the window.
       onKeyDownCapture={(e) => {
-        if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "f") return;
+        if (!primaryModifier(e) || e.key.toLowerCase() !== "f") return;
         e.preventDefault();
         e.stopPropagation();
         setSearchOpen(true);

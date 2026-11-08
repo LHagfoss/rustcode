@@ -152,7 +152,7 @@ export function UsagePage() {
                 p.error ??
                 failureText(p).subtitle ??
                 (p.status === "signedOut"
-                  ? `Sign in with ${p.via ?? p.name} on this Mac to see this plan here.`
+                  ? `Sign in with ${p.via ?? p.name} on this computer to see this plan here.`
                   : p.status === "notInstalled"
                     ? `Install ${p.via ?? p.name} and sign in to see this plan here.`
                     : undefined)
@@ -170,7 +170,7 @@ export function UsagePage() {
                     }
                   : undefined
               }
-              subtitle="RustCode reads Claude Code's sign-in every few minutes while the app is open, so the composer shows your plan. macOS may ask once to allow it in the Keychain. Only reads; never signs in or out."
+              subtitle="RustCode reads Claude Code's sign-in every few minutes while the app is open, so the composer shows your plan. Your system may ask once to allow it. Only reads; never signs in or out."
             >
               <Switch label="Show Claude usage in the composer" checked={claude} onChange={allowClaude} />
             </Row>

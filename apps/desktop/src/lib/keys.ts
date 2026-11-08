@@ -1,3 +1,5 @@
+import { currentPlatform, type Platform } from "./platform";
+
 // Every keyboard shortcut the app answers, one table: the command's id, its
 // label, its default binding and whether Settings may change it. Pure (no
 // React, no store, no DOM) so the matcher, the recorder's rules and the
@@ -207,7 +209,8 @@ function eventKey(event: KeyEventLike): { key: string; shifted: boolean } | null
     if (base) return { key: base, shifted: false };
     return { key: lower, shifted: true };
   }
-  return KEY_NAMES.has(lower) ? { key: lower, shifted: true } : null;
+  const key = lower.startsWith("arrow") ? lower.slice("arrow".length) : lower;
+  return KEY_NAMES.has(key) ? { key, shifted: true } : null;
 }
 
 export interface KeyEventLike {
@@ -222,11 +225,12 @@ export interface KeyEventLike {
  * The canonical binding a keydown is, or null for a modifier on its own or a
  * key the table does not name.
  */
-export function bindingFromEvent(event: KeyEventLike): string | null {
+export function bindingFromEvent(event: KeyEventLike, platform: Platform = currentPlatform()): string | null {
+  if (platform === "mac" ? event.ctrlKey : event.metaKey) return null;
   const named = eventKey(event);
   if (!named) return null;
   const parts: string[] = [];
-  if (event.metaKey || event.ctrlKey) parts.push("mod");
+  if (platform === "mac" ? event.metaKey : event.ctrlKey) parts.push("mod");
   if (event.altKey) parts.push("alt");
   // Shift is part of a letter or digit ("mod+shift+o"), and of any named key
   // ("shift+enter"); on punctuation it is how the character is typed, not a
@@ -281,16 +285,19 @@ const KEY_LABELS: Record<string, string> = {
 };
 
 /** How a binding reads in the app: "⌘⇧O", "⌘⏎". */
-export function formatBinding(binding: string): string {
+export function formatBinding(binding: string, platform: Platform = currentPlatform()): string {
   const parsed = parseBinding(binding);
   if (!parsed) return binding;
   const parts: string[] = [];
-  if (parsed.mod) parts.push("⌘");
-  if (parsed.alt) parts.push("⌥");
-  if (parsed.shift) parts.push("⇧");
-  const key = KEY_LABELS[parsed.key] ?? parsed.key.toUpperCase();
+  if (parsed.mod) parts.push(platform === "mac" ? "⌘" : "Ctrl");
+  if (parsed.alt) parts.push(platform === "mac" ? "⌥" : "Alt");
+  if (parsed.shift) parts.push(platform === "mac" ? "⇧" : "Shift");
+  const key =
+    platform !== "mac" && parsed.key === "enter"
+      ? "Enter"
+      : (KEY_LABELS[parsed.key] ?? parsed.key.toUpperCase());
   parts.push(key);
-  return parts.join("");
+  return parts.join(platform === "mac" ? "" : "+");
 }
 
 /** The shortcut to show for a command, its own display text when it has none. */
@@ -301,11 +308,7 @@ export function commandHint(binding: string, command?: AppCommand): string {
 /** Combos the system or the app's own menu owns; a remap may not take them. */
 export const RESERVED_BINDINGS: readonly string[] = ["mod+q", "mod+w", "mod+h", "mod+m", "mod+tab"];
 
-/**
- * The editing keys every text field has. The window's menu or the webview
- * answers them before a page sees the keydown, so a remap to one would never
- * fire: refused rather than stored and dead.
- */
+/** Editing keys owned by text fields; an app shortcut would consume them first. */
 export const RESERVED_EDITING: readonly string[] = [
   "mod+c",
   "mod+v",
@@ -313,6 +316,23 @@ export const RESERVED_EDITING: readonly string[] = [
   "mod+a",
   "mod+z",
   "mod+shift+z",
+  "mod+y",
+  "mod+backspace",
+  "mod+shift+backspace",
+  "mod+delete",
+  "mod+shift+delete",
+  "mod+left",
+  "mod+right",
+  "mod+up",
+  "mod+down",
+  "mod+shift+left",
+  "mod+shift+right",
+  "mod+shift+up",
+  "mod+shift+down",
+  "mod+home",
+  "mod+end",
+  "mod+shift+home",
+  "mod+shift+end",
 ];
 
 /** Alt and ⌘ are modifiers; Shift alone (or nothing) is not enough. */
@@ -386,13 +406,13 @@ export function bindingProblem(
   const parsed = parseBinding(binding);
   if (!parsed) return "That is not a key this app can use.";
   const text = formatBinding(binding);
-  if (RESERVED_BINDINGS.includes(binding)) return `${text} belongs to macOS.`;
-  if (RESERVED_EDITING.includes(binding)) return `${text} belongs to copy, paste and undo.`;
+  if (RESERVED_BINDINGS.includes(binding)) return `${text} is reserved by the system.`;
+  if (RESERVED_EDITING.includes(binding)) return `${text} belongs to text editing.`;
   // A list key is typed where nothing else takes it (a row has the keyboard), so a bare letter
   // is usable for one; every other command needs ⌘/⌥ or a function key, and so does a list key
   // that is not a character of its own (Tab, Space, the arrows).
   if (!hasModifier(parsed) && !isFunctionKey(parsed) && !(isListKey(id) && isPrintableKey(parsed))) {
-    return `Add ⌘ to it, or use a function key like F6.`;
+    return `Add ${currentPlatform() === "mac" ? "⌘" : "Ctrl"} to it, or use a function key like F6.`;
   }
   const [taken] = conflictingCommands(overrides, id, binding);
   if (taken) return `${taken.label} already uses ${text}. Reset that one first.`;
