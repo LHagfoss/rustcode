@@ -198,7 +198,14 @@ mod tests {
         let mut archive =
             zip::ZipArchive::new(std::fs::File::open(&archive_path).unwrap()).unwrap();
         let mut names = (0..archive.len())
-            .map(|index| archive.by_index(index).unwrap().name().to_owned())
+            .map(|index| {
+                archive
+                    .by_index(index)
+                    .unwrap()
+                    .name()
+                    .unwrap()
+                    .into_owned()
+            })
             .collect::<Vec<_>>();
         names.sort();
         assert_eq!(
