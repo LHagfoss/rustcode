@@ -168,6 +168,102 @@ export interface PullError {
   message: string;
 }
 
+/** A delegate's pull request and its checks (`_rustcode/pulls/state`). */
+export interface DelegatePull {
+  number: number;
+  title: string;
+  state: "open" | "closed" | "merged";
+  merged: boolean;
+  draft: boolean;
+  url?: string;
+  branch: string;
+  /** The commit the pull request is at; cleanup proves the worktree's commits are part of it. */
+  headSha: string;
+  /** `none` when the pull request has no checks at all. */
+  ci: "none" | "passing" | "pending" | "failing";
+  /** The checks that failed, by name. */
+  failing: string[];
+  pending: number;
+  passed: number;
+}
+
+const CI_STATES = new Set(["none", "passing", "pending", "failing"]);
+
+/** The answer to `_rustcode/pulls/state`: the branch and its pull request, or neither. */
+export function parsePullState(result: Json | undefined): {
+  branch?: string;
+  pull?: DelegatePull;
+  error?: PullError;
+} {
+  const root = obj(result);
+  const error = parsePullError(root);
+  if (error) return { error };
+  const p = obj(root?.pull);
+  const number = num(p?.number);
+  const ci = str(p?.ci);
+  return {
+    branch: str(root?.branch),
+    ...(p && number !== undefined
+      ? {
+          pull: {
+            number,
+            title: str(p.title) ?? "",
+            state: p.state === "closed" || p.state === "merged" ? p.state : "open",
+            merged: bool(p.merged) ?? p.state === "merged",
+            draft: bool(p.draft) ?? false,
+            url: str(p.url),
+            branch: str(p.branch) ?? "",
+            headSha: str(p.headSha) ?? "",
+            ci: (ci && CI_STATES.has(ci) ? ci : "none") as DelegatePull["ci"],
+            failing: arr(p.failing).flatMap((name) => (typeof name === "string" ? [name] : [])),
+            pending: num(p.pending) ?? 0,
+            passed: num(p.passed) ?? 0,
+          },
+        }
+      : {}),
+  };
+}
+
+/** What `_rustcode/pulls/merge` did: merged, or why it stopped. */
+export interface MergeOutcome {
+  number: number;
+  state: "merged" | "failing" | "closed" | "no_checks" | "pending" | "failed";
+  merged: boolean;
+  failing: string[];
+  url?: string;
+  waitedSecs: number;
+  message: string;
+}
+
+export function parseMergeOutcome(result: Json | undefined): MergeOutcome | null {
+  const m = obj(obj(result)?.merge);
+  const number = num(m?.number);
+  if (!m || number === undefined) return null;
+  const state = str(m.state);
+  return {
+    number,
+    state:
+      state === "merged" ||
+      state === "failing" ||
+      state === "closed" ||
+      state === "no_checks" ||
+      state === "pending"
+        ? state
+        : "failed",
+    merged: bool(m.merged) ?? false,
+    failing: arr(m.failing).flatMap((name) => (typeof name === "string" ? [name] : [])),
+    url: str(m.url),
+    waitedSecs: num(m.waitedSecs) ?? 0,
+    message: str(m.message) ?? "",
+  };
+}
+
+/** What `_rustcode/worktrees/cleanup` removed, or why it refused (`error.data.reason`). */
+export function cleanupRefusal(data: Json | undefined): string | undefined {
+  const reason = str(obj(data)?.reason);
+  return reason || undefined;
+}
+
 export function parsePull(value: Json | undefined): PullRequest | null {
   const o = obj(value);
   const number = num(o?.number);

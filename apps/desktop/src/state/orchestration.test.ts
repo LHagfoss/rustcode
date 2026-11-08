@@ -23,6 +23,7 @@ import {
   DEFAULT_DELEGATE_LIMITS,
   DEFAULT_DELEGATES_PER_THREAD,
   DEFAULT_DELEGATES_TOTAL,
+  DEFAULT_MERGE_MS,
   depthOf,
   doneLinks,
   effectivePerThreadLimit,
@@ -140,6 +141,34 @@ describe("management tools", () => {
     });
     expect(isFailure(parseCall({ tool: "transfer_session", args: { session_id: "a" } }))).toBe(true);
     expect(parseCall({ tool: "list_pending_requests", args: {} })).toEqual({ tool: "list_pending_requests" });
+    // A delegate's pull request: report it, merge it, clean up after it.
+    expect(parseCall({ tool: "thread_status", args: {} })).toEqual({
+      tool: "thread_status",
+      target: undefined,
+    });
+    expect(parseCall({ tool: "thread_status", args: { session_id: "d1" } })).toEqual({
+      tool: "thread_status",
+      target: "d1",
+    });
+    expect(parseCall({ tool: "merge_when_green", args: { session_id: "d1" } })).toEqual({
+      tool: "merge_when_green",
+      target: "d1",
+      timeoutMs: DEFAULT_MERGE_MS,
+    });
+    expect(parseCall({ tool: "merge_when_green", args: { session_id: "d1", timeout_ms: 0 } })).toMatchObject({
+      timeoutMs: 1,
+    });
+    expect(isFailure(parseCall({ tool: "merge_when_green", args: {} }))).toBe(true);
+    // Settling after cleanup is the default; a caller can keep the thread.
+    expect(parseCall({ tool: "cleanup_worktree", args: { session_id: "d1" } })).toEqual({
+      tool: "cleanup_worktree",
+      target: "d1",
+      settle: true,
+    });
+    expect(parseCall({ tool: "cleanup_worktree", args: { session_id: "d1", settle: false } })).toMatchObject({
+      settle: false,
+    });
+    expect(isFailure(parseCall({ tool: "cleanup_worktree", args: {} }))).toBe(true);
   });
 
   test("checkManage keeps a thread to its own project", () => {
@@ -153,7 +182,7 @@ describe("management tools", () => {
 describe("orchestration rules", () => {
   test("the app advertises the version whose account argument it answers", () => {
     // The engine strips `account` below this version and refuses a call that carries one.
-    expect(CAPABILITY_VERSION).toBe(8);
+    expect(CAPABILITY_VERSION).toBe(9);
   });
 
   test("parses the v2 calls and refuses bad arguments", () => {

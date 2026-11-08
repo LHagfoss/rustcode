@@ -41,6 +41,8 @@ export const Method = {
   /** The two payload-capture switches (`engine/src/acp/telemetry.rs`). */
   telemetry: "_rustcode/config/telemetry",
   telemetrySet: "_rustcode/config/telemetry/set",
+  pullState: "_rustcode/pulls/state",
+  pullMerge: "_rustcode/pulls/merge",
   pullView: "_rustcode/pulls/view",
   pullDiff: "_rustcode/pulls/diff",
   pullReview: "_rustcode/pulls/review",

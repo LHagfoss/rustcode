@@ -27,6 +27,9 @@ export const ORCHESTRATION_TOOLS = [
   "list_projects",
   "list_pull_requests",
   "manage_queue",
+  "thread_status",
+  "merge_when_green",
+  "cleanup_worktree",
 ] as const;
 
 /** `mcp__server__tool`, `server__tool`, `server.tool`, `server/tool`, `server:tool`. */
@@ -198,6 +201,12 @@ function orchestrationLabel(
       const state = text(args.state) || "open";
       return { title: "Listed pull requests", summary: state };
     }
+    case "thread_status":
+      return { title: "Checked delegate pull requests" };
+    case "merge_when_green":
+      return { title: running(status) ? "Merging pull request" : "Merged pull request" };
+    case "cleanup_worktree":
+      return { title: "Cleaned up a worktree" };
     case "update_session":
       return { title: "Updated thread", summary: text(args.title) || text(args.status) || undefined };
     case "interrupt_session":

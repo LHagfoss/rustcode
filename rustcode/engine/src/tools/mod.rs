@@ -1541,6 +1541,9 @@ pub const TOOLS: &[Tool] = &[
     misc::QUERY_DATA,
     misc::READ_ACTIVITY,
     misc::MANAGE_QUEUE,
+    misc::THREAD_STATUS,
+    misc::MERGE_WHEN_GREEN,
+    misc::CLEANUP_WORKTREE,
 ];
 
 pub fn is_agent_tool(name: &str) -> bool {

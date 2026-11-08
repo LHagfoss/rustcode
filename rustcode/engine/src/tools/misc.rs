@@ -640,6 +640,70 @@ pub const LIST_PULL_REQUESTS: Tool = Tool {
     safety: ToolSafety::Interactive,
 };
 
+/// Orchestration version 9 (`docs/orchestrator.md`): a delegate's pull
+/// request and its checks, merging it when green, and cleaning up after it.
+pub const THREAD_STATUS: Tool = Tool {
+    name: crate::orchestration::THREAD_STATUS,
+    description: "Report where each of this thread's delegates stands: its worktree path, branch, project, thread status, and its pull request (number, url, open/closed/merged) with its checks (pending, passing, failing with the failing check names, or none). With no session_id it reports every delegate this thread started or messaged; with one, that thread. Ask it instead of combining read_session, list_pull_requests and a shell `gh pr checks`.",
+    arguments: r#"{"session_id": "id from list_sessions, or omit for all delegates"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "minLength": 1, "description": "One delegate; omit to report every delegate of this thread"}
+            },
+            "required": [],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const MERGE_WHEN_GREEN: Tool = Tool {
+    name: crate::orchestration::MERGE_WHEN_GREEN,
+    description: "Wait for a delegate's pull request checks to pass, then squash-merge it and delete its branch, the way scripts/pr-merge.sh does: advisory portability jobs are ignored, a cancelled or superseded run does not block, a failing check stops it before anything merges (the failing names come back), and two quiet rounds catch a job that registers late. A pull request with no checks stops at once as no_checks instead of waiting. Returns merged, failing, closed, no_checks or pending (still waiting when the wait ran out). The user approves it; nothing merges without that.",
+    arguments: r#"{"session_id": "the delegate whose PR should merge", "timeout_ms": 3300000}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "minLength": 1},
+                "timeout_ms": {"type": "integer", "minimum": 1, "maximum": crate::orchestration::MAX_MERGE_WAIT_MS, "description": "How long to wait for checks; 55 minutes at most, the default"}
+            },
+            "required": ["session_id"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const CLEANUP_WORKTREE: Tool = Tool {
+    name: crate::orchestration::CLEANUP_WORKTREE,
+    description: "Remove a merged delegate's worktree and its branch, then settle the thread when settle is not false. It refuses a worktree that is on another branch than the caller read, on the base or default branch, dirtied, holding ignored files that are not build output, or with commits `git cherry <base> <branch>` shows are not on the base and not part of the merged pull request's head; the refusal says which commits or files those are. Only worktrees under RustCode's worktrees folder are touched, never the main checkout, and a git that cannot answer refuses instead of guessing. The user approves it.",
+    arguments: r#"{"session_id": "the merged delegate", "settle": true}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "minLength": 1},
+                "settle": {"type": "boolean", "description": "Set the thread to Settled after cleanup; true by default"}
+            },
+            "required": ["session_id"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
 /// Tokens and the cost a harness reported, from the local data store
 /// (`docs/data-store.md`). The app answers it, so the project scope follows
 /// "Let agents read threads in other projects".
