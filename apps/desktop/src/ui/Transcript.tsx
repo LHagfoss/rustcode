@@ -4,7 +4,16 @@
 
 import { measureElement, useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, ChevronDown, ChevronUp, RotateCw, Search, X } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { modelName, type PermissionRequest, type PlanEntry } from "../acp/types";
 import { type Checkpoint, checkpointsByTurn } from "../acp/v2";
 import { observeSize } from "../lib/resize";
@@ -17,12 +26,15 @@ import {
   foldTurns,
   footerChangeTurns,
   groupTools,
+  keepUnchangedRows,
   newestTurnEnd,
+  sameShallow,
   type ToolGroup,
   type TurnChangeLine,
   type TurnFold,
   turnChangeLine,
   turnFoldKey,
+  turnItemsByEnd,
 } from "../state/fold";
 import { selectOption } from "../state/harness";
 import type { Link } from "../state/orchestration";
@@ -131,6 +143,7 @@ export type Row = {
 const openFolds = new Map<string, Set<string>>();
 const NO_STEPS: Extract<TranscriptItem, { kind: "tool" }>[] = [];
 const NO_FOLDS: ReadonlySet<string> = new Set();
+const NO_CHECKPOINTS: Record<string, Checkpoint> = {};
 const ALL_OPEN: ReadonlySet<string> = { has: () => true } as unknown as ReadonlySet<string>;
 
 // Measured row heights by item id, kept across mounts and threads: reopening a
@@ -338,6 +351,45 @@ function ChangeLine({ threadId, line }: { threadId: string; line: TurnChangeLine
   );
 }
 
+/**
+ * A finished turn's footer. Memoised, and handed only what stays the same while another turn
+ * streams (its item, its slice of the thread, its change line), so a chunk does not redraw it.
+ */
+const TurnFooter = memo(function TurnFooter({
+  item,
+  folded,
+  timeInFold,
+  threadId,
+  reply,
+  completion,
+  checkpoint,
+  items,
+  model,
+}: {
+  item: Extract<TranscriptItem, { kind: "turnEnd" }>;
+  folded: boolean;
+  timeInFold: boolean;
+  threadId: string;
+  reply?: string;
+  completion?: TurnCompletion;
+  checkpoint?: Checkpoint;
+  items?: TranscriptItem[];
+  model?: string;
+}) {
+  return (
+    <TurnEndRow
+      item={item}
+      folded={folded}
+      timeInFold={timeInFold}
+      threadId={threadId}
+      reply={reply}
+      completion={completion}
+      changes={checkpoint ? <TurnChanges threadId={threadId} checkpoint={checkpoint} /> : undefined}
+      trace={hasTimeline(item) ? <TurnTrace end={item} items={items} model={model} /> : undefined}
+    />
+  );
+});
+
 export function Transcript({
   thread,
   bottomInset,
@@ -402,6 +454,9 @@ export function Transcript({
       ),
     [visible, links, thread.id],
   );
+  // The rows the last render drew: an unchanged row keeps its object, so its memoised component
+  // skips a streamed chunk (state/fold.ts keepUnchangedRows).
+  const drawnRows = useRef<Row[]>([]);
   const rows = useMemo<Row[]>(() => {
     // Finished turns fold, then runs of finished tool calls inside what shows fold into one row each.
     const shown = searching ? ALL_OPEN : open;
@@ -560,7 +615,8 @@ export function Transcript({
       if (at >= 0) out.splice(at + 1, 0, { key: `steer-${note.id}`, steerNote: note });
       else out.push({ key: `steer-${note.id}`, steerNote: note });
     }
-    return out;
+    drawnRows.current = keepUnchangedRows(drawnRows.current, out);
+    return drawnRows.current;
   }, [visible, subagentSteps, started, links, thread, open, searching, wait, childRequests, settleEnd]);
   // Footers of folded turns: their time is in the summary row, not repeated. The turn that just
   // finished still counts as folded while its live header holds the place of that summary row.
@@ -614,7 +670,7 @@ export function Transcript({
   const checkpoints = useApp((s) => s.checkpoints[thread.id]);
   // Each finished turn's checkpoint, for its Changes chip.
   const turnCheckpoints = useMemo(() => {
-    if (!checkpoints?.length) return {};
+    if (!checkpoints?.length) return NO_CHECKPOINTS;
     const turns: { id: string; prompt: string; at?: number }[] = [];
     let prompt = "";
     for (const item of thread.items) {
@@ -670,17 +726,11 @@ export function Transcript({
   }, [rows, thread.items, changeLines, footerLines, thread.id]);
 
   // Those turns' lines as their footer's props: the completion card, else the checkpoint chip.
-  const footerChanges = useMemo(() => {
-    const map: Record<string, { completion?: TurnCompletion; changes?: ReactNode }> = {};
-    for (const item of thread.items) {
-      if (item.kind !== "turnEnd" || !footerLines.has(item.id)) continue;
-      const line = changeLines[item.id];
-      if (!line) continue;
-      if (line.kind === "completion") map[item.id] = { completion: line.completion };
-      else map[item.id] = { changes: <ChangeLine threadId={thread.id} line={line} /> };
-    }
-    return map;
-  }, [thread.items, changeLines, footerLines, thread.id]);
+  const footerLineOf = (id: string): { completion?: TurnCompletion; checkpoint?: Checkpoint } => {
+    const line = footerLines.has(id) ? changeLines[id] : undefined;
+    if (!line) return {};
+    return line.kind === "completion" ? { completion: line.completion } : { checkpoint: line.checkpoint };
+  };
 
   // The thread's model names its Trace's model calls (state/thread.ts TurnUsage).
   const model = useMemo(
@@ -691,15 +741,11 @@ export function Transcript({
   // Each finished turn's own rows, for its Trace chip: everything since the
   // turn before it, so a wake turn (which has no message of its own) comes out
   // whole. The trace keeps only what falls between its start and its end.
+  // A finished turn keeps its array, so its memoised footer skips a streamed chunk.
+  const drawnTurnItems = useRef<Record<string, TranscriptItem[]>>({});
   const turnItems = useMemo(() => {
-    const map: Record<string, TranscriptItem[]> = {};
-    let from = 0;
-    thread.items.forEach((item, i) => {
-      if (item.kind !== "turnEnd") return;
-      map[item.id] = thread.items.slice(from, i + 1);
-      from = i + 1;
-    });
-    return map;
+    drawnTurnItems.current = turnItemsByEnd(thread.items, drawnTurnItems.current);
+    return drawnTurnItems.current;
   }, [thread.items]);
 
   // Turn footers that render nothing at all. Nothing measures a row that never mounts, so the
@@ -710,19 +756,19 @@ export function Transcript({
       const item = row.item;
       if (item?.kind !== "turnEnd") continue;
       // A turn with a footered change line keeps its footer; an older folded one has none.
-      const line = footerChanges[item.id];
+      const line = footerLines.has(item.id) ? changeLines[item.id] : undefined;
       const hidden = turnFooterHidden({
         folded: foldedEnds.has(item.id),
         reply: turnReply.byEnd[item.id]?.text,
-        completion: !!line?.completion,
-        changes: !!line?.changes,
+        completion: line?.kind === "completion",
+        changes: line?.kind === "checkpoint",
         trace: hasTimeline(item),
         outcome: item.outcome,
       });
       if (hidden) set.add(item.id);
     }
     return set;
-  }, [rows, foldedEnds, turnReply, footerChanges]);
+  }, [rows, foldedEnds, turnReply, footerLines, changeLines]);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -856,6 +902,8 @@ export function Transcript({
   }
   const turns = turnsKey.current.turns;
   // Each message you sent that started a turn with a checkpoint: named in that turn's hover card.
+  // The same array while the nodes are the same, so a streamed chunk does not redraw the rail.
+  const drawnNodes = useRef<RailNode[]>([]);
   const checkpointNodes = useMemo(() => {
     const byMessage = checkpointsByMessage(thread.items, turnCheckpoints);
     const nodes: RailNode[] = [];
@@ -863,7 +911,8 @@ export function Transcript({
       const checkpoint = byMessage[turn.id];
       if (checkpoint) nodes.push({ at: index, checkpoint });
     });
-    return nodes;
+    if (!sameShallow(drawnNodes.current, nodes, 2)) drawnNodes.current = nodes;
+    return drawnNodes.current;
   }, [thread.items, turnCheckpoints, turns]);
   // The rail's card offers the rewind the turn's Changes chip does, when the harness can go back.
   const railRewind = useCallback(
@@ -1264,19 +1313,15 @@ export function Transcript({
                     ) : item?.kind === "question" ? (
                       <QuestionRow item={item} />
                     ) : item?.kind === "turnEnd" ? (
-                      <TurnEndRow
+                      <TurnFooter
                         item={item}
                         folded={foldedEnds.has(item.id)}
                         timeInFold={timeInFold.has(item.id)}
                         threadId={thread.id}
                         reply={turnReply.byEnd[item.id]?.text}
-                        completion={footerChanges[item.id]?.completion}
-                        changes={footerChanges[item.id]?.changes}
-                        trace={
-                          hasTimeline(item) ? (
-                            <TurnTrace end={item} items={turnItems[item.id]} model={model} />
-                          ) : undefined
-                        }
+                        {...footerLineOf(item.id)}
+                        items={turnItems[item.id]}
+                        model={model}
                       />
                     ) : null}
                   </div>

@@ -404,3 +404,79 @@ export function groupTools(rows: FoldRow[], open: ReadonlySet<string>): FoldRow[
   }
   return out;
 }
+
+// ---------------------------------------------------------------- stable rows
+
+/**
+ * Whether two values are the same down to `depth` levels of plain objects and
+ * arrays, comparing what lies below that by identity. Bounded, so a long
+ * reply's text or a tool's output is never walked: it is a leaf, compared
+ * with `===`.
+ */
+export function sameShallow(a: unknown, b: unknown, depth: number): boolean {
+  if (a === b) return true;
+  if (depth <= 0 || typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!sameShallow(a[i], b[i], depth - 1)) return false;
+    return true;
+  }
+  if (Array.isArray(b) || Object.getPrototypeOf(a) !== Object.prototype) return false;
+  if (Object.getPrototypeOf(b) !== Object.prototype) return false;
+  const x = a as Record<string, unknown>;
+  const y = b as Record<string, unknown>;
+  let count = 0;
+  for (const key in x) {
+    count++;
+    if (!(key in y) || !sameShallow(x[key], y[key], depth - 1)) return false;
+  }
+  for (const _ in y) count--;
+  return count === 0;
+}
+
+/**
+ * The transcript's rows, with each row that did not change since `previous`
+ * kept as the object it was there. The fold and the grouping build every row
+ * afresh, so a streamed chunk handed each memoised row (a turn's
+ * `Worked for …`, a group of calls) a new object and redrew it; kept, only the
+ * row whose item changed draws again. When nothing changed, `previous` itself
+ * comes back, so what is derived from the rows holds too.
+ */
+export function keepUnchangedRows<T extends { key: string }>(previous: readonly T[], next: T[]): T[] {
+  if (!previous.length) return next;
+  const before = new Map<string, T>();
+  for (const row of previous) before.set(row.key, row);
+  let reused = 0;
+  const out = next.map((row, i) => {
+    const old = before.get(row.key);
+    // A row, its parts (a fold, a group, a queued message) and their fields: three levels.
+    if (!old || !sameShallow(old, row, 3)) return row;
+    if (previous[i] === old) reused++;
+    return old;
+  });
+  return reused === previous.length && out.length === previous.length ? (previous as T[]) : out;
+}
+
+/**
+ * Each finished turn's own items, by its footer's id: everything since the
+ * turn before it, so a wake turn (which has no message of its own) comes out
+ * whole. A turn whose items are the ones `previous` held keeps that array, so
+ * its footer's Trace is not handed a new one on every streamed chunk.
+ */
+export function turnItemsByEnd(
+  items: readonly TranscriptItem[],
+  previous: Readonly<Record<string, TranscriptItem[]>> = {},
+): Record<string, TranscriptItem[]> {
+  const map: Record<string, TranscriptItem[]> = {};
+  let from = 0;
+  items.forEach((item, i) => {
+    if (item.kind !== "turnEnd") return;
+    const old = previous[item.id];
+    const length = i + 1 - from;
+    let kept = old?.length === length;
+    for (let k = 0; kept && k < length; k++) kept = old![k] === items[from + k];
+    map[item.id] = kept ? old! : items.slice(from, i + 1);
+    from = i + 1;
+  });
+  return map;
+}
