@@ -7,6 +7,7 @@ import {
   applyUpdate,
   attachAutoAllowed,
   autoAllowedNoticeNeeded,
+  beginQuietTurn,
   beginTurn,
   checkCommands,
   departQueued,
@@ -550,6 +551,87 @@ describe("compaction", () => {
       tone: "info",
       text: "Context compacted: Codex summarized the conversation.",
     });
+  });
+
+  /** A thread whose last turn wrote an answer and ended. */
+  const answered = () =>
+    finishTurn(
+      apply(
+        [
+          { kind: "user", text: "which build?" },
+          { kind: "agent", text: "The one from #3183." },
+        ],
+        emptyThread("s", "/p"),
+      ),
+      "completed",
+      1_200,
+    );
+
+  test("a quiet turn writes no rows, so the answer above it stays the last one", () => {
+    const before = answered();
+    const quiet = beginQuietTurn(before, 1_300);
+    expect(quiet.quiet).toBe(true);
+    expect(quiet.items).toEqual(before.items);
+
+    const during = [
+      { kind: "thought", text: "Summarizing", summary: false },
+      {
+        kind: "toolCall",
+        id: "c1",
+        title: "Compact conversation",
+        status: "in_progress",
+        diffs: [],
+      },
+      { kind: "toolCallUpdate", id: "c1", status: "completed", diffs: [] },
+      { kind: "agent", text: "A summary of the thread." },
+    ] satisfies SessionUpdate[];
+    const state = during.reduce((s, u) => applyUpdate(s, u, 1_400), quiet);
+    expect(state.items).toEqual(before.items);
+    // The notice is the one row it leaves, below the answer.
+    const notice = applyUpdate(state, { kind: "compaction", text: "Compacted automatically." }, 1_400);
+    expect(notice.items.map((item) => item.kind)).toEqual([...before.items.map((i) => i.kind), "notice"]);
+
+    // Its end is quiet too: no second footer, and the flag is gone.
+    const ended = finishTurn(notice, "completed", 1_500, undefined, true);
+    expect(ended.quiet).toBeUndefined();
+    expect(ended.items.at(-1)).toMatchObject({ kind: "notice", text: "Compacted automatically." });
+  });
+
+  test("a quiet turn leaves the answer's own turn end where it was", () => {
+    const before = answered();
+    // The previous turn left its timing open (the reply carried it, no message followed):
+    // the quiet turn closes it before it starts, so the answer keeps its footer.
+    const open = { ...before, items: before.items.filter((i) => i.kind !== "turnEnd") };
+    const quiet = beginQuietTurn(
+      { ...open, pendingTurn: { id: "t1", elapsedMs: 800, at: 1_250, outcome: "completed" } },
+      1_300,
+    );
+    expect(quiet.items.at(-1)).toMatchObject({ kind: "turnEnd", elapsedMs: 800, at: 1_250 });
+    expect(quiet.items.filter((i) => i.kind === "assistant")).toHaveLength(1);
+  });
+
+  test("a call from an earlier turn keeps updating while the quiet turn runs", () => {
+    const parked = apply(
+      [
+        { kind: "user", text: "run the tests" },
+        {
+          kind: "toolCall",
+          id: "bg1",
+          title: "bun test",
+          status: "in_progress",
+          diffs: [],
+        },
+      ],
+      emptyThread("s", "/p"),
+    );
+    const quiet = beginQuietTurn(parked, 1_000);
+    const state = applyUpdate(
+      quiet,
+      { kind: "toolCallUpdate", id: "bg1", status: "completed", output: "ok", diffs: [] },
+      1_100,
+    );
+    const row = state.items.find((item) => item.kind === "tool");
+    expect(row).toMatchObject({ status: "completed", output: "ok" });
   });
 });
 

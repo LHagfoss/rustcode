@@ -300,6 +300,12 @@ export interface ThreadState {
   waiting?: number;
   /** The running turn is one the engine resumed itself, not a prompt the app sent. */
   woken?: boolean;
+  /**
+   * The running turn is the app's own (an automatic compaction): it writes no
+   * rows, so the answer the user has not read stays the last thing in the
+   * transcript and one notice below it says what the app did (`applyUpdate`).
+   */
+  quiet?: boolean;
   /** The replay of `session/load` is still arriving. */
   loading: boolean;
   loaded: boolean;
@@ -439,8 +445,31 @@ function replaceLast(items: TranscriptItem[], item: TranscriptItem): TranscriptI
   return replaceAt(items, items.length - 1, item);
 }
 
+/**
+ * The rows a quiet turn does not write. A compaction answers nothing, so its
+ * thoughts, its call and the summary it streams are not the thread's record:
+ * the notice saying it compacted is (`appendNotice`, or the harness's card).
+ */
+function quietHides(state: ThreadState, update: SessionUpdate): boolean {
+  switch (update.kind) {
+    case "user":
+    case "agent":
+    case "thought":
+    case "toolCall":
+      return true;
+    // A call already in the transcript keeps updating (a background command of
+    // an earlier turn); one this turn started never reaches a row.
+    case "toolCallUpdate":
+      return state.toolIndex[update.id] === undefined;
+    default:
+      return false;
+  }
+}
+
 /** Fold one update into the thread. Pure: returns the same object when nothing changed. */
 export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Date.now()): ThreadState {
+  // A quiet turn leaves the transcript where it was, above a notice row.
+  if (state.quiet && quietHides(state, update)) return state;
   const last = state.items[state.items.length - 1];
   switch (update.kind) {
     case "user": {
@@ -696,13 +725,18 @@ export function beginTurn(
  */
 /**
  * A turn the app starts for the thread's own good (an automatic compaction):
- * it runs like any other, but adds no message the user did not write.
+ * it runs like any other, but adds no message the user did not write, and none
+ * of the work it does. Without that, its thoughts and its compaction call land
+ * in the turn above it, whose final answer then counts as folded work and
+ * disappears under a `Worked for …` divider the reader never asked for.
  */
 export function beginQuietTurn(state: ThreadState, now = Date.now()): ThreadState {
+  // The answer above it ends here, whatever the turn's own timing left open.
   const closed = closePendingTurn(state);
   return {
     ...closed,
     running: true,
+    quiet: true,
     queueHeld: undefined,
     turnStartedAt: now,
     turnUsage: usageBaseline(state),
@@ -778,6 +812,7 @@ export function finishTurn(
   return {
     ...state,
     running: false,
+    quiet: undefined,
     // A turn that completed runs the queue on (store.ts `runPrompt`); one the user stopped, or that
     // failed, leaves its messages in order for Resume. A message that stopped the turn (`restart`)
     // starts as soon as the stop lands.

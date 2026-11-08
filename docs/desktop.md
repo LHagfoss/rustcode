@@ -44,7 +44,8 @@ Next, in rough order:
    auto-compact point and the card compares the context before and after a
    compaction; a harness that reports no threshold keeps the total-only view.
    RustCode now also decides its own auto-compaction from the app: when a turn
-   ends above the size threshold, and shortly before a prompt cache expires.
+   ends above the size threshold, and, in its second mode, shortly before a
+   prompt cache expires.
 4. SQLite as the store, not only an index: pins and status first, then an
    event table with projections, the
    sidebar listed from the index, lazy transcript import.
@@ -474,17 +475,24 @@ composer's keys stay outside the table.
   them.
 - **Auto-compact.** Settings › General › Threads owns one mode and a size
   threshold. RustCode sends the harness's own `/compact` after a turn when the
-  context is above the threshold, and on Claude Code and Codex again about
-  4.5 minutes after a turn ended, while the prompt cache is warm and the
-  context is above 60k. Codex uses only the second rule (it compacts inside a
-  turn itself); the built-in harness keeps its own pre-request compaction; any
-  other ACP agent is used only when it advertises `/compact`. The decision is
-  pure (`state/autoCompact.ts`): it never fires while a turn runs, a message
-  waits, an approval is open, the user is typing, the thread is settled, or a
+  context is above the threshold. The second mode, *Also before the cache
+  expires*, adds a second rule: on Claude Code and Codex
+  again about 4.5 minutes after a turn ended, while the prompt cache is warm and
+  the context is above 60k. That rule is off by default: it once ran four and a
+  half minutes after an answer the reader had not come back to, which read as
+  the answer going missing. The threshold rule is the default one. Codex uses
+  only the cache rule when it is on (it compacts inside a turn itself); the
+  built-in harness keeps its own pre-request compaction; any other ACP agent is
+  used only when it advertises `/compact`. The decision is pure
+  (`state/autoCompact.ts`): it never fires while a turn runs, a message waits,
+  an approval is open, the user is typing, the thread is settled, the last
+  answer is still unread (the row says Done or Failed until it is opened), or a
   delegate's orchestrator has stopped talking to it, and it runs at most once
-  per idle period. The thread menu turns it off for one thread. A compaction
-  it ran says *Compacted automatically*, and the context inspector compares
-  the context before and after it.
+  per idle period. The thread menu turns it off for one thread. The compaction
+  turn writes no rows of its own (`state/thread.ts` `beginQuietTurn`): the
+  answer above it stays the last answer and one row under it says
+  *Compacted automatically*, and the context inspector compares the context
+  before and after it.
 - **Model picker.** After `ModelEffortPanel`: *Fast mode* (when the thread's
   model has the `fast` option) and the model with its effort on one line;
   the model's name drills into the list. Effort is a slider with a dot per

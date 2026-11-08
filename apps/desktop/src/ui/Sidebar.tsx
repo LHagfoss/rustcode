@@ -386,32 +386,9 @@ function ThreadMenuItems({
       <Item className={menuItem} onSelect={() => void repairThread(session.id)}>
         <Wrench size={13} /> Repair Thread
       </Item>
-      <Menu.Sub>
-        <Menu.SubTrigger className={menuItem}>
-          <Copy size={13} /> Copy
-          <ChevronRight size={11} strokeWidth={2.5} className="ml-auto text-fg-faint" />
-        </Menu.SubTrigger>
-        <Menu.Portal>
-          <Menu.SubContent
-            sideOffset={4}
-            alignOffset={-5}
-            collisionPadding={surfaceCollisionPadding}
-            className={menuSurface}
-          >
-            {session.cwd && (
-              <Item
-                className={menuItem}
-                onSelect={() => copyText(worktree?.path ?? session.cwd!, "Path copied")}
-              >
-                Path
-              </Item>
-            )}
-            <Item className={menuItem} onSelect={() => copyText(session.id, "Thread ID copied")}>
-              Thread ID
-            </Item>
-          </Menu.SubContent>
-        </Menu.Portal>
-      </Menu.Sub>
+      <Item className={menuItem} onSelect={() => copyText(session.id, "Thread ID copied")}>
+        <Copy size={13} /> Copy Thread ID
+      </Item>
       {worktree && (
         <>
           <Separator className={menuSeparator} />

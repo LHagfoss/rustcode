@@ -9,6 +9,9 @@
 //   2. shortly before the prompt cache expires, when the thread is above a
 //      smaller threshold, so the next turn writes a small context instead of
 //      the whole thread.
+// Rule 1 is the default. Rule 2 is the opt-in one: it was the default and it
+// compacted threads four and a half minutes after an answer the reader had not
+// come back to, which read as the answer going missing.
 
 import type { ThreadStatus } from "../acp/v2";
 
@@ -53,7 +56,9 @@ export const AUTO_COMPACT_CACHE_WINDOW_MS = 60_000;
 export const AUTO_COMPACT_FOLLOW_UP_MS = 60 * 60_000;
 
 export const DEFAULT_AUTO_COMPACT: AutoCompactSettings = {
-  mode: "cache",
+  // The size rule only: a compaction nobody asked for must not take a thread's
+  // answer away from a reader who has not come back to it yet.
+  mode: "size",
   threshold: AUTO_COMPACT_DEFAULT_THRESHOLD,
 };
 
@@ -124,6 +129,12 @@ export interface AutoCompactInput {
   limitWaiting: boolean;
   /** The thread was snoozed by the user. */
   snoozed: boolean;
+  /**
+   * The thread's last answer is still unread: the row is flagged Done (or
+   * Failed) until the user opens it. Compacting then would rewrite the
+   * transcript of an answer they have not read yet, so it waits.
+   */
+  unread: boolean;
   /** The user has started typing in the thread since it went idle. */
   typing: boolean;
   /** An automatic compaction already ran in this idle period. */
@@ -153,6 +164,8 @@ export function autoCompactDecision(input: AutoCompactInput): AutoCompactDecisio
   if (input.waiting) return NONE("background task running");
   if (input.limitWaiting) return NONE("usage limit wait pending");
   if (input.snoozed) return NONE("thread snoozed");
+  // A thread the reader has not opened since its turn ended keeps its answer as it is.
+  if (input.unread) return NONE("the last answer is unread");
   if (input.typing) return NONE("user typing");
   if (input.status === "done") return NONE("thread settled");
   if (input.delegated && !input.orchestratorTalking) return NONE("orchestrator is not talking to it");

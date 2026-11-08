@@ -315,7 +315,7 @@ function GeneralPage() {
               ? undefined
               : () => setAutoCompactMode(SETTINGS_DEFAULTS.autoCompact.mode)
           }
-          subtitle="RustCode asks the harness to compact its own context when a turn ends above the threshold, and, for Claude Code and Codex, shortly before their prompt cache expires. Never while a turn runs, a message waits or an approval is open; turn it off for one thread in its menu."
+          subtitle="RustCode asks the harness to compact its own context when a turn ends above the threshold; the second mode also compacts shortly before Claude Code's or Codex's prompt cache expires. Never while a turn runs, a message waits, an approval is open or the thread's last answer is unread, and never over the answer itself: the compaction leaves one quiet row under it. Turn it off for one thread in its menu."
         >
           <Choice
             label="Auto-compact"
@@ -332,7 +332,7 @@ function GeneralPage() {
                 ? undefined
                 : () => setAutoCompactThreshold(AUTO_COMPACT_DEFAULT_THRESHOLD)
             }
-            subtitle="Compact once the context passes this many tokens. The idle, pre-cache rule uses a smaller 60k threshold."
+            subtitle="Compact once the context passes this many tokens. The second mode's idle, pre-cache rule uses a smaller 60k threshold."
           >
             <Slider
               label="Auto-compact threshold"

@@ -6,9 +6,12 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { MockTransport } from "../acp/mock";
 import type { SessionSummary, SessionUsage } from "../acp/types";
 import { emptyExtras } from "./compose";
+import { foldTurns } from "./fold";
 import {
   cancel,
+  clearFinished,
   connect,
+  markUnread,
   resetForTests,
   runPrompt,
   scheduleAutoCompact,
@@ -189,6 +192,22 @@ describe("auto-compaction in the store", () => {
     await until(() => compacted(id));
   });
 
+  test("a thread whose last answer is unread is left alone", async () => {
+    const id = await openClaudeThread();
+    endedTurn(id, Date.now(), 30_000);
+    // Done until the user opens it: the answer is not read yet.
+    markUnread(id);
+
+    scheduleAutoCompact(id);
+    await settle(80);
+    expect(compacted(id)).toBe(false);
+
+    // Read: the size rule may run.
+    clearFinished(id);
+    scheduleAutoCompact(id);
+    await until(() => compacted(id));
+  });
+
   test("the per-thread off switch and a trashed thread leave no scheduler state", async () => {
     const id = await openClaudeThread();
     endedTurn(id, Date.now(), 30_000);
@@ -219,5 +238,32 @@ describe("quiet automatic compaction", () => {
     expect(after.items.slice(before).some((item) => item.kind === "user")).toBe(false);
     expect(after.items.slice(before).some((item) => item.kind === "turnEnd")).toBe(false);
     expect(after.running).toBe(false);
+  });
+
+  test("the answer above it stays the last answer, not folded away", async () => {
+    const id = await openClaudeThread();
+    await runPrompt(id, "yolo, what shipped?");
+    const answer = useApp
+      .getState()
+      .threads[id]!.items.findLast((item) => item.kind === "assistant" && !!item.text.trim());
+    expect(answer).toBeDefined();
+    // The user has read it: Done is cleared, and the size rule may run.
+    clearFinished(id);
+    updateThread(id, (t) => ({ ...t, usage: usage(30_000) }));
+    scheduleAutoCompact(id);
+    await until(() => compacted(id));
+
+    const thread = useApp.getState().threads[id]!;
+    const index = thread.items.findIndex((item) => item.id === answer!.id);
+    expect(index).toBeGreaterThanOrEqual(0);
+    // Nothing the compaction did became a row: the answer, its footer, then the notice.
+    const after = thread.items.slice(index + 1).map((item) => item.kind);
+    expect(after.filter((kind) => kind === "user" || kind === "tool")).toEqual([]);
+    expect(after.at(-1)).toBe("notice");
+    // And the fold does not hide it under the turn's `Worked for …`.
+    const rows = foldTurns(thread.items, false, new Set());
+    expect(rows.some((row) => "item" in row && row.item.id === answer!.id)).toBe(true);
+    // The read answer was not flagged again by the compaction.
+    expect(id in useApp.getState().finished).toBe(false);
   });
 });

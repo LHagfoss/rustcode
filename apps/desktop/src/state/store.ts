@@ -3911,6 +3911,9 @@ function autoCompactInput(s: AppState, id: string, now: number) {
     waiting: (thread?.waiting ?? 0) > 0,
     limitWaiting: s.limitWaits[id] !== undefined,
     snoozed: id in s.snoozed,
+    // Done or Failed until the row is opened (`markFinished`, `clearFinished`). A delegate is
+    // read by its orchestrator, not by the user, so its own flag says nothing about what they read.
+    unread: !delegated && (id in s.finished || id in s.failed),
     typing: !!(s.drafts[id] ?? "").trim() || hasExtras(s.extras[id]),
     compactedThisIdle: autoCompactedIdle.has(id),
     delegated,
