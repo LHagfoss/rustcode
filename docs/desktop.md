@@ -520,8 +520,14 @@ composer's keys stay outside the table.
   page shows the gateway's address, the pairing QR code and the eight-digit
   code with the challenge's countdown and the wrong codes left, and the paired
   devices. A new device appears as *Paired ‹name›* and the used code is taken
-  down, not left until it expires. It asks the engine's `_rustcode/remote`,
-  `_rustcode/remote/start`, `_rustcode/remote/pair` and
+  down, not left until it expires. A phone that asks to connect gets a card
+  in the window's corner over any page (`src/ui/ConnectRequests.tsx`):
+  *‹name› wants to connect*, Deny or Accept; Accept shows the code with
+  Copy and a countdown until the phone pairs or it runs out. The app reads
+  the machine's status every 2.5 s while the gateway runs for that. Each
+  paired device has *Revoke*. It asks the engine's `_rustcode/remote`,
+  `_rustcode/remote/start`, `_rustcode/remote/pair`,
+  `_rustcode/remote/answer`, `_rustcode/remote/revoke` and
   `_rustcode/remote/stop` over ACP, with no `sessionId` for the machine's own
   switch and pairing; the engine owns the gateway, the shares and pairing
   (`rustcode/engine/src/acp/remote.rs`). The QR code is the engine's own rows
