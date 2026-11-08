@@ -533,6 +533,11 @@ composer's keys stay outside the table.
   name), decoded once, and the text drawn once per size on an offscreen
   canvas (`src/lib/banner.ts`), so a resize scales the last drawing until
   the new one is ready. It fades in, and does not move under Reduce motion.
+  Under the picture, *Darken* (0–80%, black over it), *Blur* (0–40px) and
+  *Show in threads* (off by default): on, open threads draw the same picture,
+  darkened and blurred the same, behind the transcript, under a heavier wash of
+  the pane colour (60%, against 35% on the new-thread screen) so the text stays
+  readable. They are kept with the banner (`lib/banner.ts`).
 - **Remote access.** Settings › Remote access ([remote.md](remote.md)) is the
   machine's switch: turned on it starts the remote gateway and shares every
   thread this app has open with the paired devices — on the built-in harness
@@ -570,8 +575,8 @@ composer's keys stay outside the table.
   pick up the wallpaper through the window's material (`windowEffects` is
   still set in `tauri.conf.json` but nothing shows it). What floats (the
   composer, popovers, menus, tooltips, dialogs, toasts, the lightbox)
-  shares one glass, `--rc-glass-bg` + `--rc-glass-filter`; Reduce transparency (the media query, or the system setting
-  read by the shell's `reduce_transparency`) makes them solid. Hover is
+  shares one glass, `--rc-glass-bg` + `--rc-glass-filter` on every OS; Reduce transparency (Settings › Appearance, the media query, or the system setting
+  read by the shell's `reduce_transparency`) makes them solid. Windows 11 lets Mica show through the sidebar alone (design.md › Platforms). Hover is
   colour only, in 60 ms and out 120 ms; focus rings show for the keyboard
   only; scrollbars are thin and appear on hover, with a stable gutter on
   long scrollers.

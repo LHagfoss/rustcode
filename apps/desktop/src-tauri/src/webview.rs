@@ -123,6 +123,7 @@ pub fn build_main_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow
         None => builder,
     };
     let window = builder.build()?;
+    apply_material(&window);
     // Closing the window (macOS keeps the app running) is the last chance to remember its size.
     let handle = app.handle().clone();
     window.on_window_event(move |event| {
@@ -131,6 +132,35 @@ pub fn build_main_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow
         }
     });
     Ok(window)
+}
+
+/// Whether the window's backdrop material (Mica) is on, for the page to let it show through.
+static MATERIAL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Windows 11's Mica behind the sidebar (docs/design.md › Platforms). The window is transparent in
+/// `tauri.windows.conf.json`, so a failure (Windows 10 has no Mica) must leave the page opaque:
+/// the page asks `window_material` and only lets the material through when it is on. Acrylic is
+/// not the fallback: it drags and resizes badly on both Windows versions. Other systems have no
+/// window material; macOS's comes from `windowEffects` in `tauri.conf.json`.
+fn apply_material(window: &tauri::WebviewWindow) {
+    if !cfg!(windows) {
+        return;
+    }
+    let effects = tauri::window::EffectsBuilder::new()
+        .effect(tauri::window::Effect::Mica)
+        .build();
+    let applied = window.set_effects(effects).is_ok();
+    MATERIAL.store(applied, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// `"mica"` when the window has its material, else `"none"`.
+#[tauri::command]
+pub fn window_material() -> &'static str {
+    if MATERIAL.load(std::sync::atomic::Ordering::Relaxed) {
+        "mica"
+    } else {
+        "none"
+    }
 }
 
 /// Save the window's size on quit too, for a quit that does not come from closing the window.

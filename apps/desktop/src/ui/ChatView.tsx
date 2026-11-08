@@ -22,7 +22,7 @@ import { DropdownMenu, Popover } from "radix-ui";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { displayPath, projectName } from "../acp/types";
 import { STATUS_LABEL } from "../acp/v2";
-import { useBanner } from "../lib/banner";
+import { darkenOverlay, useBanner } from "../lib/banner";
 import { observeSize } from "../lib/resize";
 import { motionAllowed, PENDING_ENTRY_MS } from "../lib/sendFlight";
 import { composedText, emptyExtras, sentAttachments } from "../state/compose";
@@ -699,7 +699,9 @@ export function ChatView() {
   // The lane's gutter sits outside the cap: `px-3 sm:px-12` on the transcript's scroller (its rows
   // carry the cap alone) and `inset-x-3 sm:inset-x-12` here, so the field's edges and a message's
   // edges are one line at every width.
-  const showsBanner = isNew && !!banner.name;
+  // The new-thread screen always has the picture; an open thread has it when Settings says so.
+  const showsBanner = !!banner.name && (isNew || banner.inThreads);
+  const veil = showsBanner ? darkenOverlay(banner.darken) : null;
 
   return (
     <main
@@ -715,12 +717,23 @@ export function ChatView() {
           name={banner.name}
           style={banner.style}
           height={Math.round(height) + HEADER_HEIGHT}
+          blur={banner.blur}
           className="!absolute top-0 left-0 rc-fade-in"
         />
       )}
+      {/* The Darken setting: black over the picture, under the pane's wash. */}
+      {veil && (
+        <div aria-hidden className="pointer-events-none absolute inset-0" style={{ background: veil }} />
+      )}
       {/* One light scrim over it, so the field and the cards stay the readable thing: dark text on
-          a light theme's pane wash, light text on the dark one's. */}
-      {showsBanner && <div aria-hidden className="pointer-events-none absolute inset-0 bg-bg/35" />}
+          a light theme's pane wash, light text on the dark one's. An open thread's transcript is
+          read line by line, so its wash is heavier than the new-thread screen's. */}
+      {showsBanner && (
+        <div
+          aria-hidden
+          className={cx("pointer-events-none absolute inset-0", isNew ? "bg-bg/35" : "bg-bg/60")}
+        />
+      )}
       <Header thread={thread} pending={showsPending ? setup : undefined} overBanner={showsBanner} />
       {/*
         The chat column and the right panel share one row, so the panel is docked beside

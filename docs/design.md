@@ -402,7 +402,7 @@ that change use `tabular`.
 ## Platforms
 
 The design is drawn on macOS; Windows (WebView2) and Linux (WebKitGTK) get the
-same layout with their own type, and Linux without glass. `lib/platform.ts`
+same layout with their own type, Windows with Mica behind the sidebar. `lib/platform.ts`
 sets `data-platform="mac|windows|linux"` on `<html>` from the web view's user
 agent before the first render (`main.tsx`); a browser (the mock, `dev:web`)
 is always `mac`. Every rule for another platform is a token override under
@@ -416,13 +416,29 @@ the macOS look is the base rules alone. To look at one in the mock, set
 | Sans (`--font-sans`, `--font-rounded`) | SF Pro / SF Pro Rounded | Segoe UI Variable Text, Segoe UI | Inter, Cantarell, Ubuntu, Noto Sans |
 | Mono (`--font-mono`) | SF Mono, Menlo | Cascadia Mono, Consolas | JetBrains Mono, DejaVu Sans Mono |
 | Font smoothing | `antialiased` | system (ClearType) | system |
-| Glass | the recipe above | the recipe above (13px is the cap; nothing blurs more) | solid, as Reduce transparency |
+| Glass | the recipe above | the recipe above (13px is the cap; nothing blurs more) | the recipe above |
+| Window material | `sidebar` vibrancy (painted over by the solid sidebar) | Mica on Windows 11, under the sidebar | none |
 | Word reveal | fade + 4px blur | fade + 4px blur | fade only |
 | Popovers, toasts, What's New open | scale + fade | scale + fade | slide/fade, no scale |
 
-- Linux takes the Reduce-transparency tokens: WebKitGTK draws
-  `backdrop-filter` slowly or not at all, and a translucent surface without its
-  blur is text over text. Headers fall back to the pane colour.
+- Linux has the same in-app glass as the others; Tauri cannot ask a Linux
+  compositor to blur behind the window, so there is no window material.
+  Where the web view has no `backdrop-filter` at all, the page takes the
+  Reduce-transparency tokens by itself (`lib/transparency.ts`): a translucent
+  surface without its blur is text over text.
+- Windows 11: the shell applies Mica when it builds the window
+  (`src-tauri/src/webview.rs`; the window is `transparent` in
+  `tauri.windows.conf.json`) and `window_material` tells the page, which sets
+  `data-material="mica"` (`lib/material.ts`). Only then is the sidebar (and the
+  shell behind it) 72% of its colour, and the body transparent, so the material
+  shows through the sidebar and nowhere else; the chat pane stays opaque.
+  Windows 10 has no Mica (Acrylic drags and resizes badly, so it is not the
+  fallback): the sidebar stays solid. The native title bar from the window's
+  decorations is unchanged.
+- Settings › Appearance › Reduce transparency makes all glass solid on any
+  platform (default off). The system's request does the same: the media query
+  where the web view has it, the shell's `reduce_transparency` on macOS. The
+  sidebar goes solid too.
 - There is no rounded face off macOS, so Settings › Appearance › Rounded keeps
   the system face there.
 - WebKitGTK often composites in software, so on Linux nothing animates
