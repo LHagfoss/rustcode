@@ -7,7 +7,9 @@
 //! signal. The gateway keeps its own directory and registration, separate
 //! from scheduled jobs.
 
-use super::control::{self, ControlRequest, ControlResponse, GatewayStatus, OfferDetails};
+use super::control::{
+    self, ConnectAnswer, ControlRequest, ControlResponse, GatewayStatus, OfferDetails,
+};
 use super::devices::{DeviceRecord, DeviceStore};
 use crate::daemon::lifecycle::{
     ensure_private_directory, is_lock_busy, lock_private_file, process_start_time,
@@ -455,6 +457,24 @@ impl RemoteLifecycle {
                 }
             }
             Err(error) => Err(error),
+        }
+    }
+
+    /// Accept or deny a device's connection request on the running gateway.
+    /// Accepting answers with the code to show; it replaces any outstanding
+    /// pairing challenge.
+    pub async fn answer_connect_request(&self, id: &str, accept: bool) -> Result<ConnectAnswer> {
+        let request = ControlRequest::AnswerConnectRequest {
+            id: id.to_owned(),
+            accept,
+        };
+        match control::request(&self.socket_path(), &request)
+            .await
+            .context("the remote gateway did not answer")?
+        {
+            ControlResponse::ConnectAnswered { answer } => Ok(answer),
+            ControlResponse::Error { message } => bail!(message),
+            response => bail!("unexpected answer to a connection request: {response:?}"),
         }
     }
 }

@@ -1,7 +1,13 @@
-//! Bonjour advertises a service name, the protocol version and the gateway
-//! identifier, never pairing material. The identifier lets a paired device
-//! recognise its host at a new address; it is a name, not a credential.
+//! Bonjour advertises a service name, the protocol version, the gateway
+//! identifier and the optional handshakes the gateway takes, never pairing
+//! material. The identifier lets a paired device recognise its host at a new
+//! address; it is a name, not a credential.
 use std::process::Stdio;
+
+/// The TXT record's `caps` value: comma-separated optional handshakes.
+/// `connect_requests` means a device may send `connect_request` and have the
+/// host's owner accept it ([`super::connect`]).
+pub const TXT_CAPS: &str = "caps=connect_requests";
 
 pub fn advertise(port: u16, loopback: bool, gateway_id: &str) -> Option<tokio::process::Child> {
     if loopback {
@@ -20,6 +26,7 @@ pub fn advertise(port: u16, loopback: bool, gateway_id: &str) -> Option<tokio::p
             &port.to_string(),
             "protocol=1",
             &gateway,
+            TXT_CAPS,
         ]);
         command
     };
@@ -32,6 +39,7 @@ pub fn advertise(port: u16, loopback: bool, gateway_id: &str) -> Option<tokio::p
             &port.to_string(),
             "protocol=1",
             &gateway,
+            TXT_CAPS,
         ]);
         command
     };

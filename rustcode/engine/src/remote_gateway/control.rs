@@ -7,6 +7,7 @@
 //! owner socket next to it ([`super::owner_ipc`]).
 
 use super::address::AdvertisedAddress;
+use super::connect::{RequestEnd, RequestState};
 use super::handshake::Secret;
 use super::hub::SessionSummary;
 use super::pairing::{self, ChallengeEnd, PairingOffer};
@@ -32,6 +33,13 @@ pub enum ControlRequest {
     Revoke {
         device: String,
     },
+    /// Accept or deny a device's connection request. Accepting issues a
+    /// pairing challenge bound to it, replacing any outstanding one, and
+    /// answers with its code.
+    AnswerConnectRequest {
+        id: String,
+        accept: bool,
+    },
     /// Stop the gateway. The instance must match so a stale caller cannot
     /// stop a successor.
     Shutdown {
@@ -52,6 +60,9 @@ pub enum ControlResponse {
         device_id: String,
         device_name: String,
         closed_connections: usize,
+    },
+    ConnectAnswered {
+        answer: ConnectAnswer,
     },
     Ack,
     Error {
@@ -100,6 +111,13 @@ pub struct GatewayStatus {
     /// Holds one `<session id>.log` per session started from a device.
     #[serde(default)]
     pub owner_log_directory: Option<PathBuf>,
+    /// Devices asking to connect, oldest first. Empty from a gateway that
+    /// does not take connection requests.
+    #[serde(default)]
+    pub connect_requests: Vec<ConnectRequestSummary>,
+    /// Connection requests that ended recently, oldest first.
+    #[serde(default)]
+    pub ended_connect_requests: Vec<EndedConnectRequest>,
     /// The bind is `auto` and follows the machine's addresses. `None` from a
     /// gateway that does not report it.
     #[serde(default)]
@@ -143,6 +161,49 @@ pub struct PairingStatus {
 pub struct EndedChallenge {
     pub challenge: u64,
     pub end: ChallengeEnd,
+}
+
+/// A device asking to connect. Never a secret.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectRequestSummary {
+    pub id: String,
+    /// The label the device sent, trimmed and bounded. Not an identity.
+    pub device_name: String,
+    pub platform: String,
+    /// The network address the request came from.
+    pub remote_addr: String,
+    pub age_secs: u64,
+    /// Time left to answer, or once accepted to present the code.
+    pub expires_in_secs: u64,
+    pub state: RequestState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EndedConnectRequest {
+    pub id: String,
+    pub device_name: String,
+    pub end: RequestEnd,
+    /// The device it paired, when it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    pub ended_secs_ago: u64,
+}
+
+/// The owner's answer to a connection request. On acceptance `code` is the
+/// only copy of the challenge's code, for the host to show.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectAnswer {
+    pub id: String,
+    pub device_name: String,
+    pub accepted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<Secret>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_in_secs: Option<u64>,
+    /// Pairing is locked on this host right now: the code cannot be
+    /// redeemed until the lockout ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locked_for_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

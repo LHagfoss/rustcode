@@ -4,9 +4,20 @@
 //! slow or stuck device can only hurt itself. Until the handshake succeeds
 //! the socket holds an unauthenticated slot, works against one deadline and
 //! receives nothing but a handshake response or an error.
+//!
+//! The one exception is a socket whose first frame is `connect_request`: it
+//! stays open, past the handshake deadline, while the host's owner answers
+//! (see [`super::connect`]). It is told `connect_pending`, then
+//! `connect_approved`, `connect_denied` or `connect_expired`; after
+//! `connect_approved` it may send exactly one more frame, a `pair` request
+//! with the code the owner reads off the host.
 
-use super::gateway::{Admitted, LiveConnection, MAX_FRAME_BYTES, Shared, UnauthenticatedSlot};
+use super::connect::Outcome;
+use super::gateway::{
+    Admitted, ConnectTicket, LiveConnection, MAX_FRAME_BYTES, Shared, UnauthenticatedSlot,
+};
 use super::handshake::{ErrorCode, HandshakeRequest, HandshakeResponse, MAX_HANDSHAKE_FRAME_BYTES};
+use super::pairing::CODE_DIGITS;
 use super::router::{FrameQueue, FrameSink};
 use super::wire_names;
 use futures_util::{SinkExt, StreamExt, stream::SplitSink, stream::SplitStream};
@@ -62,11 +73,36 @@ pub(super) async fn serve_connection(
         )),
         Ok(Err(None)) => return,
         Ok(Err(Some(rejection))) => Err(rejection),
-        Ok(Ok(text)) => {
-            thread_names =
-                HandshakeRequest::parse(&text).is_ok_and(|request| request.wants_thread_names());
-            shared.admit_device(&text)
-        }
+        Ok(Ok(text)) => match HandshakeRequest::parse(&text) {
+            Ok(HandshakeRequest::ConnectRequest {
+                device_name,
+                platform,
+                install_id,
+                ..
+            }) => {
+                let ticket = shared.open_connect_request(
+                    slot.ip(),
+                    &device_name,
+                    &platform,
+                    install_id.as_deref(),
+                );
+                match ticket {
+                    Err(rejection) => Err(rejection),
+                    Ok(ticket) => match connect_request(&shared, &mut socket, ticket).await {
+                        Connected::Admitted(admitted, names) => {
+                            thread_names = names;
+                            Ok(admitted)
+                        }
+                        Connected::Closing(frame) => Err(frame),
+                        Connected::Gone => return,
+                    },
+                }
+            }
+            parsed => {
+                thread_names = parsed.is_ok_and(|request| request.wants_thread_names());
+                shared.admit_device(&text)
+            }
+        },
     };
     let Admitted {
         connection,
@@ -160,6 +196,200 @@ async fn first_frame(socket: &mut Socket) -> Result<String, Option<HandshakeResp
             }
             Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return Err(None),
         }
+    }
+}
+
+/// How a connection request ended for its socket.
+enum Connected {
+    /// The device presented the code and is paired; with whether it asked
+    /// for the thread names.
+    Admitted(Admitted, bool),
+    /// Send this frame, then close.
+    Closing(HandshakeResponse),
+    /// The device went away.
+    Gone,
+}
+
+/// What happened while a requesting socket waited.
+enum Waited {
+    Outcome(Outcome),
+    Deadline,
+    Text(String),
+    Closing(HandshakeResponse),
+    Gone,
+}
+
+/// Follow a connection request from `connect_pending` to its end. Dropping
+/// the ticket on the way out ends the request if nothing else did.
+async fn connect_request(
+    shared: &Arc<Shared>,
+    socket: &mut Socket,
+    ticket: ConnectTicket,
+) -> Connected {
+    let mut outcome = ticket.outcome.clone();
+    let pending = HandshakeResponse::ConnectPending {
+        request_id: ticket.id.clone(),
+        // Rounded up: the request was opened a moment ago.
+        expires_in_secs: ticket
+            .expires_at
+            .saturating_duration_since(std::time::Instant::now())
+            .as_secs_f64()
+            .ceil() as u64,
+    };
+    if send_frame(shared, socket, &pending).await.is_none() {
+        return Connected::Gone;
+    }
+    let deadline = Instant::from_std(ticket.expires_at);
+    // Until the owner answers, the socket only listens.
+    let expires_in = loop {
+        let decided = match wait(shared, socket, &mut outcome, deadline, false).await {
+            Waited::Deadline if !shared.expire_connect_request(&ticket.id) => {
+                // Accepted at the last moment: its challenge runs on.
+                *outcome.borrow_and_update()
+            }
+            Waited::Deadline => return Connected::Closing(HandshakeResponse::ConnectExpired),
+            Waited::Outcome(decided) => decided,
+            Waited::Text(_) => unreachable!("text is refused while waiting"),
+            Waited::Closing(frame) => return Connected::Closing(frame),
+            Waited::Gone => return Connected::Gone,
+        };
+        match decided {
+            Outcome::Pending => {}
+            Outcome::Approved { expires_in } => break expires_in,
+            Outcome::Denied => return Connected::Closing(HandshakeResponse::ConnectDenied),
+            Outcome::Expired => return Connected::Closing(HandshakeResponse::ConnectExpired),
+        }
+    };
+    let approved = HandshakeResponse::ConnectApproved {
+        request_id: ticket.id.clone(),
+        code_length: CODE_DIGITS as u8,
+        expires_in_secs: expires_in.as_secs(),
+    };
+    if send_frame(shared, socket, &approved).await.is_none() {
+        return Connected::Gone;
+    }
+    // One frame: the pair request with the code.
+    let deadline = Instant::now() + expires_in;
+    loop {
+        match wait(shared, socket, &mut outcome, deadline, true).await {
+            Waited::Text(text) => {
+                let names = HandshakeRequest::parse(&text)
+                    .is_ok_and(|request| request.wants_thread_names());
+                return match shared.admit_connected(&ticket.id, &text) {
+                    Ok(admitted) => Connected::Admitted(admitted, names),
+                    Err(rejection) => Connected::Closing(rejection),
+                };
+            }
+            Waited::Outcome(Outcome::Pending | Outcome::Approved { .. }) => {}
+            Waited::Outcome(Outcome::Denied | Outcome::Expired) => {
+                return Connected::Closing(HandshakeResponse::ConnectExpired);
+            }
+            Waited::Deadline => {
+                shared.expire_connect_request(&ticket.id);
+                return Connected::Closing(HandshakeResponse::ConnectExpired);
+            }
+            Waited::Closing(frame) => return Connected::Closing(frame),
+            Waited::Gone => return Connected::Gone,
+        }
+    }
+}
+
+/// Wait on a requesting socket for the owner's answer, the deadline, or
+/// (with `accept_text`) the device's next frame. Pings keep the socket
+/// alive meanwhile; any other frame the device sends early is an error.
+async fn wait(
+    shared: &Arc<Shared>,
+    socket: &mut Socket,
+    outcome: &mut tokio::sync::watch::Receiver<Outcome>,
+    deadline: Instant,
+    accept_text: bool,
+) -> Waited {
+    let limits = shared.limits;
+    let mut ping =
+        tokio::time::interval_at(Instant::now() + limits.ping_interval, limits.ping_interval);
+    enum Event {
+        Shutdown,
+        Changed(bool),
+        Deadline,
+        Ping,
+        Inbound(Option<Result<Message, WsError>>),
+    }
+    loop {
+        let event = tokio::select! {
+            biased;
+            _ = shared.shutdown.cancelled() => Event::Shutdown,
+            changed = outcome.changed() => Event::Changed(changed.is_ok()),
+            _ = tokio::time::sleep_until(deadline) => Event::Deadline,
+            _ = ping.tick() => Event::Ping,
+            inbound = socket.next() => Event::Inbound(inbound),
+        };
+        match event {
+            Event::Shutdown => {
+                return Waited::Closing(HandshakeResponse::error(
+                    ErrorCode::ShuttingDown,
+                    close_message(ErrorCode::ShuttingDown),
+                ));
+            }
+            // A request that ends without a word to its socket is over.
+            Event::Changed(false) => return Waited::Outcome(Outcome::Expired),
+            Event::Changed(true) => return Waited::Outcome(*outcome.borrow_and_update()),
+            Event::Deadline => return Waited::Deadline,
+            Event::Ping => {
+                let sent = tokio::time::timeout(
+                    limits.write_timeout,
+                    socket.send(Message::Ping(Default::default())),
+                )
+                .await;
+                if !matches!(sent, Ok(Ok(()))) {
+                    return Waited::Gone;
+                }
+            }
+            Event::Inbound(inbound) => match inbound {
+                Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_))) => {}
+                Some(Ok(Message::Text(text))) if accept_text => {
+                    if text.len() > MAX_HANDSHAKE_FRAME_BYTES {
+                        return Waited::Closing(HandshakeResponse::error(
+                            ErrorCode::FrameTooLarge,
+                            "handshake frame is too large",
+                        ));
+                    }
+                    return Waited::Text(text.as_str().to_owned());
+                }
+                Some(Ok(Message::Text(_))) => {
+                    return Waited::Closing(HandshakeResponse::error(
+                        ErrorCode::InvalidFrame,
+                        "wait for connect_approved before sending the code",
+                    ));
+                }
+                Some(Ok(Message::Binary(_))) => {
+                    return Waited::Closing(HandshakeResponse::error(
+                        ErrorCode::InvalidFrame,
+                        "frames must be JSON text",
+                    ));
+                }
+                Some(Err(WsError::Capacity(_))) => {
+                    return Waited::Closing(HandshakeResponse::error(
+                        ErrorCode::FrameTooLarge,
+                        "handshake frame is too large",
+                    ));
+                }
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return Waited::Gone,
+            },
+        }
+    }
+}
+
+/// Send one handshake frame within the write deadline; `None` when the
+/// socket is dead.
+async fn send_frame(shared: &Shared, socket: &mut Socket, frame: &HandshakeResponse) -> Option<()> {
+    match tokio::time::timeout(
+        shared.limits.write_timeout,
+        socket.send(Message::text(frame.to_text())),
+    )
+    .await
+    {
+        Ok(Ok(())) => Some(()),
+        _ => None,
     }
 }
 

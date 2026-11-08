@@ -5,6 +5,10 @@
 //! same challenge: they share its lifetime and attempt budget and are
 //! consumed together. Only digests are kept after the offer is handed out.
 //!
+//! A challenge can also be bound to one connection request
+//! ([`super::connect`]): the host's owner accepted a device that asked to
+//! connect, and only that device's socket may redeem the code shown for it.
+//!
 //! The state is plain data behind the gateway's one state lock, so redeeming
 //! is atomic: two sockets racing on one challenge cannot both win. Time is
 //! passed in, which keeps expiry and rate limits testable without sleeping.
@@ -30,7 +34,8 @@ pub const ATTEMPTS_PER_CHALLENGE: u8 = 5;
 pub const HOST_FAILURE_LIMIT: usize = 10;
 pub const HOST_FAILURE_WINDOW: Duration = Duration::from_secs(300);
 
-const CODE_DIGITS: usize = 8;
+/// Digits of the manual code, without the separator.
+pub const CODE_DIGITS: usize = 8;
 
 /// A freshly issued challenge. The only place the secrets exist in the clear.
 #[derive(Debug, Clone)]
@@ -99,6 +104,10 @@ struct Challenge {
     code_digest: [u8; 32],
     expires_at: Instant,
     attempts_left: u8,
+    /// The connection request this challenge was issued for; only that
+    /// request's socket may redeem it. `None` for a challenge any device
+    /// may redeem (the QR code and the code next to it).
+    bound_to: Option<String>,
 }
 
 #[derive(Default)]
@@ -117,6 +126,12 @@ impl PairingState {
     /// can reach this (through the private control socket), so a network peer
     /// cannot refill its own attempt budget.
     pub fn issue(&mut self, now: Instant) -> PairingOffer {
+        self.issue_bound(now, None)
+    }
+
+    /// [`Self::issue`] for one connection request: only a redeem that names
+    /// `request` can use it.
+    pub fn issue_bound(&mut self, now: Instant, request: Option<String>) -> PairingOffer {
         let mut bytes = [0u8; 32];
         rand::rng().fill(&mut bytes);
         let credential = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
@@ -129,6 +144,7 @@ impl PairingState {
             code_digest: digest(digits.as_bytes()),
             expires_at: now + CHALLENGE_LIFETIME,
             attempts_left: ATTEMPTS_PER_CHALLENGE,
+            bound_to: request,
         });
         PairingOffer {
             credential: Secret::new(credential),
@@ -172,6 +188,27 @@ impl PairingState {
         ))
     }
 
+    /// The connection request the open challenge is bound to, if any.
+    pub fn bound_request(&self, now: Instant) -> Option<&str> {
+        self.challenge
+            .as_ref()
+            .filter(|_| self.is_open(now))
+            .and_then(|challenge| challenge.bound_to.as_deref())
+    }
+
+    /// Destroy the challenge bound to `request`, if it is the outstanding
+    /// one: the socket that could redeem it is gone. Not an early end a
+    /// watcher is told about; it is as if it expired.
+    pub fn withdraw_bound(&mut self, request: &str) {
+        if self
+            .challenge
+            .as_ref()
+            .is_some_and(|challenge| challenge.bound_to.as_deref() == Some(request))
+        {
+            self.challenge = None;
+        }
+    }
+
     /// Remaining lockout, if too many attempts failed on this host.
     pub fn lockout(&mut self, now: Instant) -> Option<Duration> {
         self.locked_for(now)
@@ -185,6 +222,21 @@ impl PairingState {
         method: PairingMethod,
         presented: &str,
     ) -> Result<(), PairingError> {
+        self.redeem_as(now, None, method, presented)
+    }
+
+    /// [`Self::redeem`] from the socket of connection request `request`
+    /// (`None` for any other socket). A challenge bound to another request,
+    /// or to none when one is named, fails like a wrong secret: nothing is
+    /// compared and the challenge keeps its attempts, but the failure counts
+    /// against the host.
+    pub fn redeem_as(
+        &mut self,
+        now: Instant,
+        request: Option<&str>,
+        method: PairingMethod,
+        presented: &str,
+    ) -> Result<(), PairingError> {
         // Fail closed while rate limited: not even a correct secret is
         // compared, so a locked-out guesser learns nothing.
         if let Some(retry_after) = self.locked_for(now) {
@@ -192,6 +244,13 @@ impl PairingState {
         }
         if !self.is_open(now) {
             self.challenge = None;
+            return Err(self.fail(now));
+        }
+        if self
+            .challenge
+            .as_ref()
+            .is_some_and(|challenge| challenge.bound_to.as_deref() != request)
+        {
             return Err(self.fail(now));
         }
         let challenge = self.challenge.as_mut().expect("challenge is open");
@@ -511,6 +570,62 @@ mod tests {
             Err(PairingError::RateLimited { .. })
         ));
         assert_eq!(state.failures.len(), HOST_FAILURE_LIMIT);
+    }
+
+    #[test]
+    fn a_bound_challenge_is_redeemed_only_by_its_request() {
+        let now = Instant::now();
+        let mut state = PairingState::default();
+        let offer = state.issue_bound(now, Some("r1".into()));
+        assert_eq!(state.bound_request(now), Some("r1"));
+        // Any other socket, with the right code, fails without spending an attempt.
+        for request in [None, Some("r2")] {
+            assert_eq!(
+                state.redeem_as(now, request, PairingMethod::Code, offer.code.expose()),
+                Err(PairingError::Failed)
+            );
+        }
+        assert_eq!(
+            state.open_challenge(now).map(|(_, attempts)| attempts),
+            Some(ATTEMPTS_PER_CHALLENGE)
+        );
+        assert_eq!(state.failures.len(), 2);
+        assert_eq!(
+            state.redeem_as(now, Some("r1"), PairingMethod::Code, offer.code.expose()),
+            Ok(())
+        );
+        assert_eq!(state.last_ended(), Some((1, ChallengeEnd::Paired)));
+    }
+
+    #[test]
+    fn an_unbound_challenge_is_not_redeemed_by_a_request_socket() {
+        let now = Instant::now();
+        let mut state = PairingState::default();
+        let offer = state.issue(now);
+        assert_eq!(state.bound_request(now), None);
+        assert_eq!(
+            state.redeem_as(now, Some("r1"), PairingMethod::Code, offer.code.expose()),
+            Err(PairingError::Failed)
+        );
+        assert!(state.is_open(now));
+    }
+
+    #[test]
+    fn withdrawing_drops_only_the_challenge_bound_to_that_request() {
+        let now = Instant::now();
+        let mut state = PairingState::default();
+        state.issue_bound(now, Some("r1".into()));
+        state.withdraw_bound("r2");
+        assert!(state.is_open(now));
+        state.withdraw_bound("r1");
+        assert!(!state.is_open(now));
+        assert_eq!(state.last_ended(), None);
+        // A desktop Pair press replaces a bound challenge with an unbound one.
+        state.issue_bound(now, Some("r3".into()));
+        state.issue(now);
+        assert_eq!(state.bound_request(now), None);
+        state.withdraw_bound("r3");
+        assert!(state.is_open(now));
     }
 
     #[test]
