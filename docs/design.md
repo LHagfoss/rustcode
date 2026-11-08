@@ -751,8 +751,10 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   change the effort at once; the model's name (Enter or a click) swaps the card
   for the searchable list of every harness's models, and picking one comes back
   to the track on that model's own last level.
-- **New thread screen:** the field and its strip, and the cards below them. No heading, no path
-  line and no starter prompts: the project is picked from the folder pill in the strip, whose
+- **New thread screen:** a centred heading and a rotating tip above the field and its strip, with optional cards below.
+  The project name in the heading opens the folder picker; there is no path line or starter prompts.
+  The tip hides in short windows and while the overview is open. The folder pill in the strip
+  also picks the project, and its
   panel already lists the projects and ends with `Choose Folder…`. A chosen picture covers the
   whole pane top to bottom (`object-fit: cover`, no fade) under one light scrim (`bg` at 35%), so
   what is written on it stays readable in either theme.
