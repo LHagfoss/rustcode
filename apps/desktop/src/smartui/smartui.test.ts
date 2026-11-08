@@ -256,6 +256,12 @@ describe("smart ui", () => {
     }
   });
 
+  test("list items wrap descriptions and keep badges intact", () => {
+    expect(BASE_CSS).toContain(".rc-item > div, .rc-item > p { flex: 0 0 100%; margin: 0; }");
+    expect(BASE_CSS).toContain(".rc-item > .rc-badge, .rc-item > .rc-chip { flex: none; }");
+    expect(BASE_CSS).toContain(".rc-item > * { min-width: 0; overflow-wrap: anywhere; }");
+  });
+
   test("the kit is in the page's stylesheet, in variables only", () => {
     for (const name of [
       ".rc-title",

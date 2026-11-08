@@ -49,6 +49,7 @@ Set no colours and write as little CSS as you can.
 - Rows: `<table class="rc-table" data-rc-sort>` sorts on a click or Enter in a
   heading (`data-rc-sort="text"` on one `th` compares it as text) and
   highlights the row under the pointer; in `.rc-scroll` its header sticks.
+  An item is a label row with an optional trailing value and may carry a description block (`div` or `p`).
   `<ul class="rc-list"><li class="rc-item"><span>Name</span><span class="rc-badge rc-ok">Ready</span></li></ul>`
 - Plans: `<ol class="rc-steps"><li class="rc-step rc-done">Built</li></ol>`, also `rc-active rc-failed rc-todo`.
 - Folding: `<details class="rc-details"><summary>Files</summary>…</details>`,
