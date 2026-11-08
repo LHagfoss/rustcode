@@ -25,6 +25,7 @@ import {
   useApp,
 } from "../state/store";
 import { copyText, cx, Spinner, Switch } from "./primitives";
+import { ConnectRequestsGroup, RevokeDeviceAction } from "./RemoteConnect";
 import { Action, Chip, Group, Loading, Row } from "./settingsKit";
 
 /** The page keeps itself current while it is open: pairing counts down in the engine. */
@@ -264,20 +265,23 @@ export function RemoteAccessPage() {
         )
       )}
 
+      <ConnectRequestsGroup />
+
       <Group
         title={`Paired devices · ${devices.length}`}
-        footer="Revoke a device in a terminal: `rustcode remote revoke <device>`. A pairing lasts 30 days, then the device pairs again."
+        footer="A pairing lasts 30 days, then the device pairs again. Revoke disconnects a device at once."
       >
         {devices.length ? (
           devices.map((device) => (
             <Row key={device.id} title={device.name} status={<span className="font-mono">{device.id}</span>}>
               <Chip tone="ok">Paired</Chip>
+              <RevokeDeviceAction device={device} />
             </Row>
           ))
         ) : (
           <Row
             title="No devices paired yet"
-            subtitle="A phone appears here once it scans the QR code or enters the eight-digit code."
+            subtitle="A phone appears here once it scans the QR code, enters the eight-digit code, or asks to connect and you accept."
           />
         )}
       </Group>

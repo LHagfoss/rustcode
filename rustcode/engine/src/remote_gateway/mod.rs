@@ -25,6 +25,8 @@ pub mod router;
 #[cfg(unix)]
 pub mod command;
 #[cfg(unix)]
+pub mod connect;
+#[cfg(unix)]
 pub mod control;
 #[cfg(unix)]
 pub mod devices;

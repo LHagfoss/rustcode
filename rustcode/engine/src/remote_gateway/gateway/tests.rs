@@ -1045,3 +1045,397 @@ async fn a_long_configuration_path_still_gets_working_sockets() {
     assert!(!lifecycle.owner_socket_path().exists());
     let _ = fs::remove_dir_all(lifecycle.socket_path().parent().unwrap());
 }
+
+// ---------------------------------------------------------------- connection requests
+
+impl Harness {
+    async fn answer(&self, id: &str, accept: bool) -> control::ConnectAnswer {
+        bounded(self.lifecycle.answer_connect_request(id, accept))
+            .await
+            .unwrap()
+    }
+}
+
+impl Client {
+    /// Open a socket that asks to connect; returns it and its request id.
+    async fn ask_to_connect(addr: SocketAddr, install_id: Option<&str>) -> (Self, String) {
+        let mut client = Self::connect(addr).await;
+        let mut frame = json!({
+            "type": "connect_request",
+            "protocol_version": 1,
+            "device_name": "Lars's iPhone",
+            "platform": "ios",
+        });
+        if let Some(install_id) = install_id {
+            frame["install_id"] = json!(install_id);
+        }
+        client.send(frame).await;
+        let pending = client.next_json().await;
+        assert_eq!(pending["type"], "connect_pending", "{pending}");
+        assert_eq!(pending["expires_in_secs"], 120, "{pending}");
+        let id = pending["request_id"].as_str().unwrap().to_owned();
+        (client, id)
+    }
+
+    async fn send_code(&mut self, code: &str) {
+        self.send(json!({
+            "type": "pair",
+            "protocol_version": 1,
+            "method": "code",
+            "secret": code,
+            "device_name": "Lars's iPhone",
+            "install_id": "install-0123456789abcdef",
+        }))
+        .await;
+    }
+}
+
+#[tokio::test]
+async fn an_accepted_request_pairs_with_the_code_shown_on_the_host() {
+    let harness = Harness::start().await;
+    let (mut phone, id) = Client::ask_to_connect(harness.addr, None).await;
+
+    let status = harness.status().await;
+    assert_eq!(status.connect_requests.len(), 1);
+    let request = &status.connect_requests[0];
+    assert_eq!(request.id, id);
+    assert_eq!(request.device_name, "Lars's iPhone");
+    assert_eq!(request.platform, "ios");
+    assert_eq!(request.remote_addr, "127.0.0.1");
+    assert_eq!(
+        request.state,
+        crate::remote_gateway::connect::RequestState::Pending
+    );
+    assert!(!status.pairing_open);
+
+    let answer = harness.answer(&id, true).await;
+    assert!(answer.accepted);
+    assert_eq!(answer.instance_id, harness.status().await.instance_id);
+    assert_eq!(answer.expires_in_secs, Some(120));
+    let code = answer.code.unwrap();
+    let approved = phone.next_json().await;
+    assert_eq!(approved["type"], "connect_approved", "{approved}");
+    assert_eq!(approved["request_id"], id.as_str());
+    assert_eq!(approved["code_length"], 8);
+    assert_eq!(approved["expires_in_secs"], 120);
+    let status = harness.status().await;
+    assert!(status.pairing_open);
+    assert_eq!(
+        status.connect_requests[0].state,
+        crate::remote_gateway::connect::RequestState::Approved
+    );
+
+    phone.send_code(code.expose()).await;
+    let paired = phone.next_json().await;
+    assert_eq!(paired["type"], "paired", "{paired}");
+    let device_id = paired["device_id"].as_str().unwrap().to_owned();
+    // The pairing connection is authenticated, like any other.
+    phone.send(json!({"type": "list_sessions"})).await;
+    assert_eq!(phone.next_json().await["code"], "not_implemented");
+
+    let status = harness.status().await;
+    assert!(status.connect_requests.is_empty());
+    assert!(!status.pairing_open);
+    let ended = status.ended_connect_requests.last().unwrap();
+    assert_eq!(ended.id, id);
+    assert_eq!(
+        ended.end,
+        crate::remote_gateway::connect::RequestEnd::Paired
+    );
+    assert_eq!(ended.device_id.as_deref(), Some(device_id.as_str()));
+    assert_eq!(status.devices.len(), 1);
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn an_accepted_request_cannot_be_denied_after_approval() {
+    let harness = Harness::start().await;
+    let (mut phone, id) = Client::ask_to_connect(harness.addr, None).await;
+    let code = harness.answer(&id, true).await.code.unwrap();
+    assert_eq!(phone.next_json().await["type"], "connect_approved");
+
+    let denied = bounded(harness.lifecycle.answer_connect_request(&id, false)).await;
+    assert!(denied.is_err());
+
+    phone.send_code(code.expose()).await;
+    assert_eq!(phone.next_json().await["type"], "paired");
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn a_denied_request_is_told_and_its_address_waits() {
+    let harness = Harness::start().await;
+    let (mut phone, id) = Client::ask_to_connect(harness.addr, None).await;
+    let answer = harness.answer(&id, false).await;
+    assert!(!answer.accepted && answer.code.is_none());
+    let denied = phone.next_json().await;
+    assert_eq!(denied["type"], "connect_denied", "{denied}");
+    phone.expect_closed().await;
+
+    // The same address asking again right away is refused for a while.
+    let mut again = Client::connect(harness.addr).await;
+    again
+        .send(json!({"type": "connect_request", "protocol_version": 1, "device_name": "x", "platform": "ios"}))
+        .await;
+    let refused = again.expect_error("connect_rate_limited").await;
+    assert!(
+        refused["retry_after_secs"]
+            .as_u64()
+            .is_some_and(|left| (1..=30).contains(&left))
+    );
+    // A denied request cannot be answered again.
+    assert!(
+        bounded(harness.lifecycle.answer_connect_request(&id, true))
+            .await
+            .is_err()
+    );
+    let status = harness.status().await;
+    assert!(status.connect_requests.is_empty() && !status.pairing_open);
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn an_unanswered_request_expires() {
+    let limits = Limits {
+        connect_request_lifetime: Duration::from_millis(300),
+        ..Limits::default()
+    };
+    let harness = Harness::start_with(limits, RecordingRouter::default()).await;
+    let mut phone = Client::connect(harness.addr).await;
+    phone
+        .send(json!({"type": "connect_request", "protocol_version": 1, "device_name": "phone", "platform": "android"}))
+        .await;
+    let pending = phone.next_json().await;
+    assert_eq!(pending["type"], "connect_pending", "{pending}");
+    let id = pending["request_id"].as_str().unwrap().to_owned();
+    // Past the 10 s handshake deadline's place: the request's own clock runs.
+    let expired = phone.next_json().await;
+    assert_eq!(expired["type"], "connect_expired", "{expired}");
+    phone.expect_closed().await;
+    let status = harness.status().await;
+    assert!(status.connect_requests.is_empty());
+    assert_eq!(
+        status
+            .ended_connect_requests
+            .last()
+            .map(|ended| (ended.id.clone(), ended.end)),
+        Some((
+            id.clone(),
+            crate::remote_gateway::connect::RequestEnd::Expired
+        ))
+    );
+    assert!(
+        bounded(harness.lifecycle.answer_connect_request(&id, true))
+            .await
+            .is_err()
+    );
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn a_wrong_code_ends_the_request_and_counts_against_the_host() {
+    let harness = Harness::start().await;
+    let (mut phone, id) = Client::ask_to_connect(harness.addr, None).await;
+    let code = harness.answer(&id, true).await.code.unwrap();
+    assert_eq!(phone.next_json().await["type"], "connect_approved");
+    let wrong = if code.expose() == "0000-0000" {
+        "1111-1111"
+    } else {
+        "0000-0000"
+    };
+    phone.send_code(wrong).await;
+    phone.expect_error("pairing_failed").await;
+    let status = harness.status().await;
+    // One code per accepted request: the challenge went with the socket.
+    assert!(!status.pairing_open && status.connect_requests.is_empty());
+    assert_eq!(
+        status.ended_connect_requests.last().map(|ended| ended.end),
+        Some(crate::remote_gateway::connect::RequestEnd::Failed)
+    );
+    assert!(status.devices.is_empty());
+
+    // Failures on requests share the host-wide budget with every other pairing.
+    for _ in 1..HOST_FAILURE_LIMIT {
+        let frame = Client::pair(harness.addr, "code", "0000-0000").await;
+        assert_eq!(frame["code"], "pairing_failed", "{frame}");
+    }
+    let (phone, id) = Client::ask_to_connect(harness.addr, None).await;
+    let answer = bounded(harness.lifecycle.answer_connect_request(&id, true)).await;
+    assert!(answer.is_err());
+    assert!(
+        answer
+            .unwrap_err()
+            .to_string()
+            .contains("pairing is locked")
+    );
+    let status = harness.status().await;
+    assert_eq!(status.connect_requests.len(), 1);
+    assert_eq!(
+        status.connect_requests[0].state,
+        crate::remote_gateway::connect::RequestState::Pending
+    );
+    assert!(!status.pairing_open);
+    drop(phone);
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn a_socket_cannot_send_a_handshake_before_its_request_is_accepted() {
+    let harness = Harness::start().await;
+    let (mut phone, _id) = Client::ask_to_connect(harness.addr, None).await;
+    // An open challenge it could guess at changes nothing.
+    let offer = harness.offer().await;
+    phone.send_code(offer.code.expose()).await;
+    phone.expect_error("invalid_frame").await;
+    let status = harness.status().await;
+    assert!(status.connect_requests.is_empty());
+    assert!(status.devices.is_empty());
+    // The QR challenge was not touched.
+    assert_eq!(
+        status.pairing.unwrap().attempts_left,
+        Some(ATTEMPTS_PER_CHALLENGE)
+    );
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn after_approval_only_one_pair_frame_is_accepted() {
+    let harness = Harness::start().await;
+    let (mut phone, id) = Client::ask_to_connect(harness.addr, None).await;
+    harness.answer(&id, true).await;
+    assert_eq!(phone.next_json().await["type"], "connect_approved");
+    phone
+        .send(json!({"type": "authenticate", "protocol_version": 1, "device_id": "0011223344556677", "token": "x"}))
+        .await;
+    phone.expect_error("invalid_frame").await;
+    assert!(!harness.status().await.pairing_open);
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn only_the_accepted_socket_can_redeem_its_code() {
+    let harness = Harness::start().await;
+    let (mut phone, id) = Client::ask_to_connect(harness.addr, None).await;
+    let code = harness.answer(&id, true).await.code.unwrap();
+    assert_eq!(phone.next_json().await["type"], "connect_approved");
+
+    // Another socket presenting the same code is refused, and the
+    // challenge keeps every attempt for its own socket.
+    let frame = Client::pair(harness.addr, "code", code.expose()).await;
+    assert_eq!(frame["code"], "pairing_failed", "{frame}");
+    let pairing = harness.status().await.pairing.unwrap();
+    assert_eq!(pairing.attempts_left, Some(ATTEMPTS_PER_CHALLENGE));
+
+    phone.send_code(code.expose()).await;
+    assert_eq!(phone.next_json().await["type"], "paired");
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn a_pair_press_on_the_host_replaces_an_accepted_request() {
+    let harness = Harness::start().await;
+    let (mut phone, id) = Client::ask_to_connect(harness.addr, None).await;
+    let code = harness.answer(&id, true).await.code.unwrap();
+    assert_eq!(phone.next_json().await["type"], "connect_approved");
+    let offer = harness.offer().await;
+    let expired = phone.next_json().await;
+    assert_eq!(expired["type"], "connect_expired", "{expired}");
+    phone.expect_closed().await;
+    // The old code is worthless; the QR code's challenge pairs as usual.
+    let frame = Client::pair(harness.addr, "code", code.expose()).await;
+    assert_eq!(frame["code"], "pairing_failed", "{frame}");
+    let frame = Client::pair(harness.addr, "code", offer.code.expose()).await;
+    assert_eq!(frame["type"], "paired", "{frame}");
+    let status = harness.status().await;
+    assert_eq!(
+        status.ended_connect_requests.last().map(|ended| ended.end),
+        Some(crate::remote_gateway::connect::RequestEnd::Replaced)
+    );
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn one_address_holds_one_request_unless_the_same_install_asks_again() {
+    let harness = Harness::start().await;
+    let install = "install-0123456789abcdef";
+    let (mut first, first_id) = Client::ask_to_connect(harness.addr, Some(install)).await;
+
+    // Another device behind the same address waits its turn.
+    let mut other = Client::connect(harness.addr).await;
+    other
+        .send(json!({"type": "connect_request", "protocol_version": 1, "device_name": "tablet", "platform": "android"}))
+        .await;
+    other.expect_error("connect_busy").await;
+
+    // The same install reconnecting replaces its own request.
+    let (_second, second_id) = Client::ask_to_connect(harness.addr, Some(install)).await;
+    assert_ne!(first_id, second_id);
+    assert_eq!(first.next_json().await["type"], "connect_expired");
+    first.expect_closed().await;
+    let status = harness.status().await;
+    assert_eq!(
+        status
+            .connect_requests
+            .iter()
+            .map(|request| request.id.as_str())
+            .collect::<Vec<_>>(),
+        [second_id.as_str()]
+    );
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn a_closed_socket_withdraws_its_request_and_its_code() {
+    let harness = Harness::start().await;
+    let (phone, id) = Client::ask_to_connect(harness.addr, None).await;
+    harness.answer(&id, true).await;
+    drop(phone);
+    let mut withdrawn = false;
+    for _ in 0..100 {
+        let status = harness.status().await;
+        if status.connect_requests.is_empty() {
+            assert!(!status.pairing_open);
+            assert_eq!(
+                status.ended_connect_requests.last().map(|ended| ended.end),
+                Some(crate::remote_gateway::connect::RequestEnd::Withdrawn)
+            );
+            withdrawn = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(withdrawn, "the request outlived its socket");
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn pairing_again_through_a_request_replaces_the_install_record() {
+    let harness = Harness::start().await;
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let (mut phone, id) = Client::ask_to_connect(harness.addr, None).await;
+        let code = harness.answer(&id, true).await.code.unwrap();
+        assert_eq!(phone.next_json().await["type"], "connect_approved");
+        phone.send_code(code.expose()).await;
+        let paired = phone.next_json().await;
+        assert_eq!(paired["type"], "paired", "{paired}");
+        ids.push(paired["device_id"].as_str().unwrap().to_owned());
+        if ids.len() == 1 {
+            // The second pairing revokes the first record's connection.
+            phone.send(json!({"type": "ping"})).await;
+            assert_eq!(phone.next_json().await["code"], "not_implemented");
+            drop(phone);
+        }
+    }
+    assert_ne!(ids[0], ids[1]);
+    let status = harness.status().await;
+    assert_eq!(
+        status
+            .devices
+            .iter()
+            .map(|device| device.id.clone())
+            .collect::<Vec<_>>(),
+        [ids[1].clone()]
+    );
+    harness.stop().await;
+}

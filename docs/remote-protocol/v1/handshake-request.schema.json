@@ -24,6 +24,42 @@
   "description": "First frame from a device. Anything else closes the connection.",
   "oneOf": [
     {
+      "description": "Ask the host's owner to let this device pair. Carries no secret. The\nsocket stays open for the answer (`connect_pending`, then\n`connect_approved`, `connect_denied` or `connect_expired`); after\n`connect_approved` it sends one `pair` frame with `method: \"code\"` and\nthe code the owner reads off the host. Only gateways that list\n`connect_requests` in their Bonjour `caps` take it.",
+      "properties": {
+        "device_name": {
+          "description": "A label chosen by the device, shown to the owner. Never an identity.",
+          "type": "string"
+        },
+        "install_id": {
+          "description": "As in `pair`. A new request from the same address and install\nreplaces the one still open, so a reconnecting app does not wait\nfor its old request to expire.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "platform": {
+          "description": "What the device is, for the owner: `ios`, `android`, ….",
+          "type": "string"
+        },
+        "protocol_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "type": {
+          "const": "connect_request",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "protocol_version",
+        "device_name",
+        "platform"
+      ],
+      "type": "object"
+    },
+    {
       "description": "Exchange a pairing challenge for a device token.",
       "properties": {
         "device_name": {

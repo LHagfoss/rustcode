@@ -50,9 +50,20 @@ export interface MockOptions {
   /**
    * Remote access the mock starts in (`?remote=`): `disconnected` shares with
    * the gateway unreachable, `expired` issues a pairing code that has already
-   * run out. The default starts idle.
+   * run out, `connect` starts on with a phone asking to connect. The default
+   * starts idle.
    */
-  remote?: "disconnected" | "expired";
+  remote?: "disconnected" | "expired" | "connect";
+}
+
+interface MockConnectRequest {
+  id: string;
+  deviceName: string;
+  platform: string;
+  remoteAddr: string;
+  createdAt: number;
+  expiresAt: number;
+  state: "pending" | "approved";
 }
 
 interface MockThread {
@@ -1804,6 +1815,10 @@ export class MockEngine {
     pairingDue: false,
     pairingError: null as string | null,
     refused: new Map<string, string>(),
+    /** Phones asking to connect, as the gateway holds them (`remote_gateway/connect.rs`). */
+    connect: [] as MockConnectRequest[],
+    /** Requests that ended, oldest first, as the gateway keeps its last eight. */
+    endedConnect: [] as { id: string; deviceName: string; end: string; deviceId?: string; at: number }[],
   };
   private removedWorktrees = new Set<string>();
   /** The link book the app keeps in the data store: none until it saves one, and kept in `options` as the engine's disk does. */
@@ -1943,6 +1958,74 @@ export class MockEngine {
       };
     }
     this.harnesses = withLast(initialHarnesses(scenario !== "onboarding"));
+    if (options.remote === "connect") {
+      this.remote.enabled = true;
+      this.remote.gateway = this.remoteGateway();
+      for (const open of this.threads) this.remote.shared.add(open.id);
+      this.askToConnect("Lars's Pixel", "android", "192.168.1.31");
+    }
+  }
+
+  /** A phone on the network asks to connect, as `connect_request` does at the gateway. */
+  private askToConnect(deviceName: string, platform: string, remoteAddr: string): string {
+    const id = Math.random().toString(16).slice(2, 18).padEnd(16, "0");
+    const now = Date.now();
+    this.remote.connect.push({
+      id,
+      deviceName,
+      platform,
+      remoteAddr,
+      createdAt: now,
+      expiresAt: now + 120_000,
+      state: "pending",
+    });
+    return id;
+  }
+
+  private endConnect(id: string, end: string, deviceId?: string) {
+    const request = this.remote.connect.find((entry) => entry.id === id);
+    if (!request) return;
+    this.remote.connect = this.remote.connect.filter((entry) => entry !== request);
+    this.remote.endedConnect.push({ id, deviceName: request.deviceName, end, deviceId, at: Date.now() });
+    this.remote.endedConnect = this.remote.endedConnect.slice(-8);
+  }
+
+  /** The phone enters the code the app showed: it pairs, as a new device. */
+  private enterConnectCode(): boolean {
+    const request = this.remote.connect.find((entry) => entry.state === "approved");
+    if (!request) return false;
+    const deviceId = Math.random().toString(16).slice(2, 10).padEnd(8, "0");
+    this.remote.devices.push({ id: deviceId, name: request.deviceName });
+    this.endConnect(request.id, "paired", deviceId);
+    return true;
+  }
+
+  private connectRequestsJson(): JsonObject {
+    const now = Date.now();
+    for (const request of [...this.remote.connect]) {
+      if (request.expiresAt <= now) this.endConnect(request.id, "expired");
+    }
+    return {
+      connectRequests: this.remote.connect.map((request) => ({
+        id: request.id,
+        deviceName: request.deviceName,
+        platform: request.platform,
+        remoteAddr: request.remoteAddr,
+        ageSecs: Math.floor((now - request.createdAt) / 1000),
+        expiresInSecs: Math.max(0, Math.floor((request.expiresAt - now) / 1000)),
+        state: request.state,
+      })),
+      endedConnectRequests: this.remote.endedConnect.map((ended) => {
+        const entry: JsonObject = {
+          id: ended.id,
+          deviceName: ended.deviceName,
+          end: ended.end,
+          endedSecsAgo: Math.floor((now - ended.at) / 1000),
+        };
+        if (ended.deviceId) entry.deviceId = ended.deviceId;
+        return entry;
+      }),
+    };
   }
 
   private get delay() {
@@ -2146,6 +2229,7 @@ export class MockEngine {
     const phones = connected ? this.remote.devices.map((device) => str(device.name) ?? "phone") : [];
     return {
       connected,
+      instanceId: "mock-gateway-instance-1",
       advertisedAddress: "192.168.1.24:17879",
       listenAddress: "192.168.1.24:17879",
       loopbackOnly: false,
@@ -2192,6 +2276,7 @@ export class MockEngine {
       notShared: this.remote.refused.size,
       pairedDevices: this.remote.devices.length,
       devices: this.remote.devices,
+      ...this.connectRequestsJson(),
     };
     if (this.remote.gateway) {
       const gateway: JsonObject = {
@@ -2882,6 +2967,61 @@ export class MockEngine {
         this.issueRemoteOffer();
         return { ...obj(this.remoteStatus(sessionId)), offer: this.remoteOffer() } as Json;
       }
+      case "_rustcode/remote/answer": {
+        const id = str(params.id) ?? "";
+        const accept = params.accept === true;
+        await this.sleep(this.delay * 2);
+        const request = this.remote.connect.find((entry) => entry.id === id);
+        if (!request)
+          return { ...this.remoteHost(), connectError: "that connection request is no longer open" };
+        if (!accept) {
+          this.endConnect(id, "denied");
+          return {
+            ...this.remoteHost(),
+            connectAnswer: { id, deviceName: request.deviceName, accepted: false },
+          };
+        }
+        if (request.state !== "pending")
+          return { ...this.remoteHost(), connectError: "that connection request was already accepted" };
+        // One challenge at a time: the code replaces the QR code's and any other accepted request's.
+        for (const other of this.remote.connect.filter((entry) => entry.state === "approved"))
+          this.endConnect(other.id, "replaced");
+        this.remote.offer = null;
+        request.state = "approved";
+        request.expiresAt = Date.now() + 120_000;
+        // In the browser the phone types the code a few seconds later; tests enter it themselves.
+        if (this.delay > 0) setTimeout(() => this.enterConnectCode(), 6_000);
+        return {
+          ...this.remoteHost(),
+          connectAnswer: {
+            id,
+            deviceName: request.deviceName,
+            instanceId: "mock-gateway-instance-1",
+            accepted: true,
+            code: "4821-9034",
+            expiresInSecs: 120,
+          },
+        };
+      }
+      case "_rustcode/remote/revoke": {
+        const deviceId = str(params.deviceId) ?? "";
+        await this.sleep(this.delay * 2);
+        const device = this.remote.devices.find((entry) => entry.id === deviceId);
+        if (!device) return { ...this.remoteHost(), revokeError: `no paired device matches ${deviceId}` };
+        this.remote.devices = this.remote.devices.filter((entry) => entry !== device);
+        return { ...this.remoteHost(), revoked: { deviceId: device.id, deviceName: device.name } };
+      }
+      // Test and mock-window hooks: a phone asks to connect, or enters the code it was shown.
+      case "_mock/remote/askToConnect":
+        return {
+          id: this.askToConnect(
+            str(params.deviceName) ?? "Lars's iPhone",
+            str(params.platform) ?? "ios",
+            str(params.remoteAddr) ?? "192.168.1.42",
+          ),
+        };
+      case "_mock/remote/enterCode":
+        return { paired: this.enterConnectCode() };
       case "_rustcode/remote/stop": {
         const sessionId = str(params.sessionId) ?? "";
         await this.sleep(this.delay * 2);
@@ -2892,6 +3032,8 @@ export class MockEngine {
         this.remote.pairingDue = false;
         this.remote.pairingError = null;
         this.remote.refused.clear();
+        // The gateway is gone, and with it every phone waiting on it.
+        this.remote.connect = [];
         return this.remoteStatus(sessionId);
       }
       case "_rustcode/warm":

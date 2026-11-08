@@ -7,6 +7,7 @@ import { closeConfirm, openSettings, setOnboarding, setView, shortcutFor, useApp
 import { startUpdateChecks } from "./state/updates";
 import { ChatView } from "./ui/ChatView";
 import { CommandPalette } from "./ui/CommandPalette";
+import { ConnectRequests } from "./ui/ConnectRequests";
 import { Inbox } from "./ui/Inbox";
 import { Lightbox } from "./ui/Lightbox";
 import { GrantDialog } from "./ui/Links";
@@ -192,6 +193,7 @@ export function App() {
       <ConfirmDialog />
       <GrantDialog />
       <Toaster />
+      <ConnectRequests />
       <WhatsNewDialog />
       <Lightbox />
     </Tooltip.Provider>

@@ -8,6 +8,8 @@ describe("remote access", () => {
       start: "_rustcode/remote/start",
       pair: "_rustcode/remote/pair",
       stop: "_rustcode/remote/stop",
+      answer: "_rustcode/remote/answer",
+      revoke: "_rustcode/remote/revoke",
     });
   });
 
@@ -19,6 +21,7 @@ describe("remote access", () => {
       sessionId: "session-1",
       gateway: {
         connected: true,
+        instanceId: "gateway-instance-1",
         advertisedAddress: "192.168.1.24:17879",
         loopbackOnly: false,
         attachedDevices: ["Lars's iPhone"],
@@ -42,6 +45,7 @@ describe("remote access", () => {
     expect(status.shared).toBe(true);
     expect(status.enabled).toBe(true);
     expect(status.gateway?.advertisedAddress).toBe("192.168.1.24:17879");
+    expect(status.gateway?.instanceId).toBe("gateway-instance-1");
     expect(status.gateway?.attachedDevices).toEqual(["Lars's iPhone"]);
     expect(status.gateway?.connectedDevices).toHaveLength(2);
     expect(status.offer?.code).toBe("1234-5678");

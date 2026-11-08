@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { type JsonObject, RpcError } from "../acp/jsonrpc";
 import { MockTransport } from "../acp/mock";
 import { harnessPlanKey, parsePlans } from "../acp/rustcode";
+import type { Transport, TransportEvent } from "../acp/transport";
 import { Method } from "../acp/types";
 import { V2Method } from "../acp/v2";
 import { type ComposeExtras, emptyExtras } from "./compose";
@@ -29,6 +30,7 @@ import { QUEUE_REASON } from "./queue";
 import {
   addHarnessAccount,
   agentHistory,
+  answerConnectRequest,
   answerPermission,
   answerQuestionOptions,
   type CachedPlan,
@@ -58,6 +60,7 @@ import {
   openThread,
   PLAN_CACHE_MAX_AGE_MS,
   PLAN_CACHE_POLL_MS,
+  pairRemoteDevice,
   parsePanels,
   peekThread,
   permissionModeOf,
@@ -74,6 +77,7 @@ import {
   RESUME_TEXT,
   refreshAgents,
   refreshHarnesses,
+  refreshRemote,
   refreshSessions,
   refreshSessionsOnFocus,
   removeQueued,
@@ -154,6 +158,56 @@ function testStorage(seed: Record<string, string> = {}) {
   return { data, done: () => delete scope.localStorage };
 }
 
+/** Holds one machine-status response so a test can deliver it after a newer answer. */
+class DelayedRemoteStatusTransport implements Transport {
+  readonly name = "mock" as const;
+  private readonly mock = new MockTransport({ delayMs: 0, remote: "connect" });
+  private onEvent: ((event: TransportEvent) => void) | null = null;
+  private readonly methods = new Map<number, string>();
+  holdNextStatus = false;
+  heldResponse: string | null = null;
+
+  async start(onEvent: (event: TransportEvent) => void): Promise<void> {
+    this.onEvent = onEvent;
+    await this.mock.start((event) => {
+      if (event.type === "line") {
+        const response = JSON.parse(event.line) as { id?: number };
+        if (
+          this.holdNextStatus &&
+          response.id !== undefined &&
+          this.methods.get(response.id) === "_rustcode/remote"
+        ) {
+          this.holdNextStatus = false;
+          this.heldResponse = event.line;
+          return;
+        }
+      }
+      onEvent(event);
+    });
+  }
+
+  send(line: string): void {
+    const message = JSON.parse(line) as { id?: number; method?: string };
+    if (message.id !== undefined && message.method) this.methods.set(message.id, message.method);
+    this.mock.send(line);
+  }
+
+  releaseStatus(): void {
+    if (!this.heldResponse) throw new Error("no remote status response is being held");
+    const line = this.heldResponse;
+    this.heldResponse = null;
+    this.onEvent?.({ type: "line", line });
+  }
+
+  async restart(): Promise<void> {
+    await this.mock.restart();
+  }
+
+  async stop(): Promise<void> {
+    await this.mock.stop();
+  }
+}
+
 /** A running thread whose own record still reads no steering: the harness learned it after the thread started. */
 const setStaleSteer = (id: string) =>
   updateThread(id, (t) => ({
@@ -178,6 +232,48 @@ const selected = () => {
 beforeEach(() => resetForTests());
 
 describe("engine controller with the mock engine", () => {
+  test("an old status read cannot restore a connection prompt after Accept", async () => {
+    const transport = new DelayedRemoteStatusTransport();
+    await connect(transport);
+    await until(() => useApp.getState().status === "ready");
+    try {
+      const initial = await refreshRemote();
+      const id = initial?.connectRequests[0]?.id;
+      if (!id) throw new Error("the mock must seed a connection request");
+
+      transport.holdNextStatus = true;
+      const staleRead = refreshRemote();
+      await until(() => transport.heldResponse !== null);
+      expect(await answerConnectRequest(id, true)).toBe(true);
+      expect(useApp.getState().remote?.connectRequests[0]?.state).toBe("approved");
+
+      transport.releaseStatus();
+      await staleRead;
+      expect(useApp.getState().remote?.connectRequests[0]?.state).toBe("approved");
+    } finally {
+      await transport.stop();
+    }
+  });
+
+  test("accepting a phone's request takes down the QR code it replaced", async () => {
+    const transport = new MockTransport({ delayMs: 0, remote: "connect" });
+    await connect(transport);
+    await until(() => useApp.getState().status === "ready");
+    try {
+      const initial = await refreshRemote();
+      const id = initial?.connectRequests[0]?.id;
+      if (!id) throw new Error("the mock must seed a connection request");
+      await pairRemoteDevice();
+      expect(useApp.getState().remoteChallenge).not.toBeNull();
+
+      expect(await answerConnectRequest(id, true)).toBe(true);
+      expect(useApp.getState().remoteChallenge).toBeNull();
+      expect(useApp.getState().connectCode?.requestId).toBe(id);
+    } finally {
+      await transport.stop();
+    }
+  });
+
   test("the migrated delegate total is written once, so a later per-thread change does not move it", () => {
     // An earlier build kept only the per-thread limit; its old twice-it tree ceiling becomes the
     // total. The migration is one-shot: the total is stored, not recomputed on every launch.

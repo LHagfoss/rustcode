@@ -7,9 +7,11 @@
 //! connections. Nothing awaits while the lock is held.
 
 use super::address::{AdvertisedAddress, Candidate, ListenPlan, candidate_addresses};
+use super::connect::{ConnectRequests, OpenError, Outcome, RequestEnd, RequestState};
 use super::control::{
-    CONTROL_TIMEOUT, ConnectionSummary, ControlRequest, ControlResponse, DeviceSummary,
-    EndedChallenge, GatewayStatus, OfferDetails, PairingStatus,
+    CONTROL_TIMEOUT, ConnectAnswer, ConnectRequestSummary, ConnectionSummary, ControlRequest,
+    ControlResponse, DeviceSummary, EndedChallenge, EndedConnectRequest, GatewayStatus,
+    OfferDetails, PairingStatus,
 };
 use super::devices::{DeviceError, DeviceRecord, DeviceStore, Devices};
 use super::handshake::{
@@ -23,6 +25,7 @@ use super::router::{ConnectionControl, DeviceContext, FrameQueue, FrameRouter, F
 use super::transport;
 use crate::daemon::lifecycle::remove_if_exists;
 use crate::daemon::protocol::{read_async_frame, write_async_frame};
+use crate::remote::host_capability;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -59,6 +62,8 @@ pub struct Limits {
     pub idle_timeout: Duration,
     /// How often the listen plan is resolved again; see [`GatewayConfig::replan`].
     pub replan_interval: Duration,
+    /// How long a connection request waits for the owner's answer.
+    pub connect_request_lifetime: Duration,
 }
 
 impl Default for Limits {
@@ -73,6 +78,7 @@ impl Default for Limits {
             ping_interval: Duration::from_secs(30),
             idle_timeout: Duration::from_secs(90),
             replan_interval: Duration::from_secs(5),
+            connect_request_lifetime: super::connect::REQUEST_LIFETIME,
         }
     }
 }
@@ -140,6 +146,7 @@ fn clean_host_name(name: &str) -> Option<String> {
 
 struct State {
     pairing: PairingState,
+    connect: ConnectRequests,
     devices: Devices,
     live: HashMap<u64, Live>,
     next_connection: u64,
@@ -184,6 +191,13 @@ pub(super) struct UnauthenticatedSlot {
     ip: IpAddr,
 }
 
+impl UnauthenticatedSlot {
+    /// The peer's address, canonical.
+    pub(super) fn ip(&self) -> IpAddr {
+        self.ip
+    }
+}
+
 impl Drop for UnauthenticatedSlot {
     fn drop(&mut self) {
         let mut slots = self
@@ -216,6 +230,30 @@ impl Drop for LiveConnection {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .live
             .remove(&self.context.connection_id);
+    }
+}
+
+/// A socket's open connection request. Dropping it ends the request as
+/// withdrawn, unless something ended it first, and destroys a challenge
+/// still bound to it: nobody else may redeem that.
+pub(super) struct ConnectTicket {
+    shared: Arc<Shared>,
+    pub(super) id: String,
+    pub(super) expires_at: Instant,
+    pub(super) outcome: tokio::sync::watch::Receiver<Outcome>,
+}
+
+impl Drop for ConnectTicket {
+    fn drop(&mut self) {
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.pairing.withdraw_bound(&self.id);
+        state
+            .connect
+            .finish(Instant::now(), &self.id, RequestEnd::Withdrawn, None);
     }
 }
 
@@ -261,21 +299,198 @@ impl Shared {
         text: &str,
     ) -> Result<Admitted, HandshakeResponse> {
         match HandshakeRequest::parse(text)? {
+            // The transport keeps a socket that asks to connect open
+            // ([`Self::open_connect_request`]); it never reaches here.
+            HandshakeRequest::ConnectRequest { .. } => Err(HandshakeResponse::error(
+                ErrorCode::InvalidFrame,
+                "a connection request is only valid as the first frame",
+            )),
             HandshakeRequest::Pair {
                 method,
                 secret,
                 device_name,
                 install_id,
                 ..
-            } => self.pair(method, secret.expose(), &device_name, install_id.as_deref()),
+            } => self.pair(
+                None,
+                method,
+                secret.expose(),
+                &device_name,
+                install_id.as_deref(),
+            ),
             HandshakeRequest::Authenticate {
                 device_id, token, ..
             } => self.authenticate(&device_id, token.expose()),
         }
     }
 
+    /// The second frame of a socket whose connection request was accepted:
+    /// a `pair` frame presenting the code bound to that request.
+    pub(super) fn admit_connected(
+        self: &Arc<Self>,
+        request: &str,
+        text: &str,
+    ) -> Result<Admitted, HandshakeResponse> {
+        let HandshakeRequest::Pair {
+            method,
+            secret,
+            device_name,
+            install_id,
+            ..
+        } = HandshakeRequest::parse(text)?
+        else {
+            return Err(HandshakeResponse::error(
+                ErrorCode::InvalidFrame,
+                "after connect_approved the only frame is a pair request with the code",
+            ));
+        };
+        let admitted = self.pair(
+            Some(request),
+            method,
+            secret.expose(),
+            &device_name,
+            install_id.as_deref(),
+        );
+        let mut state = self.state();
+        let now = Instant::now();
+        match &admitted {
+            Ok(admitted) => {
+                let device_id = admitted.connection.context.device_id.clone();
+                state
+                    .connect
+                    .finish(now, request, RequestEnd::Paired, Some(device_id));
+            }
+            Err(_) => {
+                // One code per accepted request: the socket closes, and the
+                // challenge it was shown for goes with it.
+                state.pairing.withdraw_bound(request);
+                state.connect.finish(now, request, RequestEnd::Failed, None);
+            }
+        }
+        admitted
+    }
+
+    /// Open a connection request for a socket that sent `connect_request`.
+    pub(super) fn open_connect_request(
+        self: &Arc<Self>,
+        ip: IpAddr,
+        device_name: &str,
+        platform: &str,
+        install_id: Option<&str>,
+    ) -> Result<ConnectTicket, HandshakeResponse> {
+        let now = Instant::now();
+        let mut state = self.state();
+        self.expire_connect_requests(&mut state, now);
+        if let Some(replaced) = state.connect.replaceable(ip, install_id) {
+            state.pairing.withdraw_bound(&replaced);
+            state
+                .connect
+                .finish(now, &replaced, RequestEnd::Replaced, None);
+        }
+        let opened = state
+            .connect
+            .open(
+                now,
+                self.limits.connect_request_lifetime,
+                ip,
+                device_name,
+                platform,
+                install_id,
+            )
+            .map_err(|error| match error {
+                OpenError::Busy => HandshakeResponse::error(
+                    ErrorCode::ConnectBusy,
+                    "the host has too many connection requests open; try again shortly",
+                ),
+                OpenError::RateLimited { retry_after } => HandshakeResponse::Error {
+                    code: ErrorCode::ConnectRateLimited,
+                    message: "the host denied this device a moment ago".into(),
+                    retry_after_secs: Some(retry_after.as_secs().max(1)),
+                },
+            })?;
+        Ok(ConnectTicket {
+            shared: Arc::clone(self),
+            id: opened.id,
+            expires_at: opened.expires_at,
+            outcome: opened.outcome,
+        })
+    }
+
+    /// End a request whose time ran out, unless it was approved meanwhile
+    /// and its challenge still runs. True when it ended.
+    pub(super) fn expire_connect_request(&self, id: &str) -> bool {
+        let now = Instant::now();
+        let mut state = self.state();
+        let Some(request) = state.connect.get(id) else {
+            return true;
+        };
+        if request.expires_at > now {
+            return false;
+        }
+        state.pairing.withdraw_bound(id);
+        state.connect.finish(now, id, RequestEnd::Expired, None);
+        true
+    }
+
+    fn expire_connect_requests(&self, state: &mut State, now: Instant) {
+        for id in state.connect.expired(now) {
+            state.pairing.withdraw_bound(&id);
+            state.connect.finish(now, &id, RequestEnd::Expired, None);
+        }
+    }
+
+    /// The owner's answer to a connection request. Accepting replaces any
+    /// outstanding challenge, the QR code's or another request's, with one
+    /// bound to this request.
+    fn answer_connect_request(&self, id: &str, accept: bool) -> Result<ConnectAnswer, String> {
+        let now = Instant::now();
+        let mut state = self.state();
+        self.expire_connect_requests(&mut state, now);
+        let Some(request) = state.connect.get(id) else {
+            return Err("that connection request is no longer open".into());
+        };
+        if request.state != RequestState::Pending {
+            return Err("that connection request was already answered".into());
+        }
+        let device_name = request.device_name.clone();
+        if !accept {
+            state.pairing.withdraw_bound(id);
+            state.connect.finish(now, id, RequestEnd::Denied, None);
+            return Ok(ConnectAnswer {
+                id: id.to_owned(),
+                device_name,
+                instance_id: self.instance_id.clone(),
+                accepted: false,
+                code: None,
+                expires_in_secs: None,
+                locked_for_secs: None,
+            });
+        }
+        if let Some(retry_after) = state.pairing.lockout(now) {
+            return Err(format!(
+                "pairing is locked for {} seconds after too many failed codes",
+                retry_after.as_secs().max(1)
+            ));
+        }
+        replace_approved(&mut state, now);
+        let offer = state.pairing.issue_bound(now, Some(id.to_owned()));
+        state.connect.approve(now, id, now + offer.lifetime);
+        Ok(ConnectAnswer {
+            id: id.to_owned(),
+            device_name,
+            instance_id: self.instance_id.clone(),
+            accepted: true,
+            code: Some(offer.code),
+            expires_in_secs: Some(offer.lifetime.as_secs()),
+            locked_for_secs: state.pairing.lockout(now).map(|left| left.as_secs().max(1)),
+        })
+    }
+
+    /// Redeem the outstanding challenge and enroll the device. `request`
+    /// names the connection request whose socket presents it, if any.
     fn pair(
         self: &Arc<Self>,
+        request: Option<&str>,
         method: PairingMethod,
         secret: &str,
         device_name: &str,
@@ -284,7 +499,7 @@ impl Shared {
         let mut state = self.state();
         state
             .pairing
-            .redeem(Instant::now(), method, secret)
+            .redeem_as(Instant::now(), request, method, secret)
             .map_err(|error| match error {
                 PairingError::Failed => HandshakeResponse::error(
                     ErrorCode::PairingFailed,
@@ -446,6 +661,7 @@ impl Shared {
     fn issue_pairing(&self) -> OfferDetails {
         let now = Instant::now();
         let mut state = self.state();
+        replace_approved(&mut state, now);
         let offer = state.pairing.issue(now);
         let mut details = OfferDetails::new(
             &self.advertised.borrow(),
@@ -513,6 +729,15 @@ fn close_device(state: &mut State, device_id: &str) -> usize {
         false
     });
     closed
+}
+
+/// End the accepted connection request, if there is one, because a new
+/// challenge is about to replace the one issued for it. Its socket is told
+/// the code expired.
+fn replace_approved(state: &mut State, now: Instant) {
+    if let Some(id) = state.connect.approved().map(|request| request.id.clone()) {
+        state.connect.finish(now, &id, RequestEnd::Replaced, None);
+    }
 }
 
 fn busy(message: impl Into<String>) -> HandshakeResponse {
@@ -603,6 +828,7 @@ impl Gateway {
             fs::Permissions::from_mode(0o600),
         )?;
         if let Some(sessions) = &config.sessions {
+            sessions.advertise_capabilities(&[host_capability::CONNECT_REQUESTS]);
             sessions.bind_identity(HubIdentity {
                 gateway_id: gateway_id.clone(),
                 instance_id: instance_id.clone(),
@@ -630,6 +856,7 @@ impl Gateway {
             store,
             state: Mutex::new(State {
                 pairing: PairingState::default(),
+                connect: ConnectRequests::default(),
                 devices,
                 live: HashMap::new(),
                 next_connection: 1,
@@ -782,6 +1009,12 @@ async fn serve_control(shared: Arc<Shared>, started: Instant, stream: UnixStream
                     },
                 },
             },
+            ControlRequest::AnswerConnectRequest { id, accept } => {
+                match shared.answer_connect_request(&id, accept) {
+                    Ok(answer) => ControlResponse::ConnectAnswered { answer },
+                    Err(message) => ControlResponse::Error { message },
+                }
+            }
             ControlRequest::Shutdown { instance_id } => {
                 if instance_id == shared.instance_id {
                     stop = true;
@@ -820,6 +1053,32 @@ fn status(shared: &Shared, started: Instant) -> GatewayStatus {
         .collect();
     let now = Instant::now();
     let mut state = shared.state();
+    shared.expire_connect_requests(&mut state, now);
+    let connect_requests = state
+        .connect
+        .list()
+        .iter()
+        .map(|request| ConnectRequestSummary {
+            id: request.id.clone(),
+            device_name: request.device_name.clone(),
+            platform: request.platform.clone(),
+            remote_addr: request.remote_addr.to_string(),
+            age_secs: now.saturating_duration_since(request.created).as_secs(),
+            expires_in_secs: request.expires_at.saturating_duration_since(now).as_secs(),
+            state: request.state,
+        })
+        .collect();
+    let ended_connect_requests = state
+        .connect
+        .ended()
+        .map(|ended| EndedConnectRequest {
+            id: ended.id.clone(),
+            device_name: ended.device_name.clone(),
+            end: ended.end,
+            device_id: ended.device_id.clone(),
+            ended_secs_ago: now.saturating_duration_since(ended.at).as_secs(),
+        })
+        .collect();
     let mut connections: Vec<(u64, ConnectionSummary)> = state
         .live
         .iter()
@@ -877,6 +1136,8 @@ fn status(shared: &Shared, started: Instant) -> GatewayStatus {
         unregistered_owners,
         log_path: Some(shared.lifecycle.log_path()),
         owner_log_directory: Some(shared.lifecycle.owners_directory()),
+        connect_requests,
+        ended_connect_requests,
         automatic_bind: Some(shared.automatic_bind),
         fixed_advertise: Some(shared.fixed_advertise),
     }
