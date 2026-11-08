@@ -1105,7 +1105,7 @@
 .rc-toast {
   background: var(--rc-glass-bg-strong);
 }
-/* The composer's own pair: its own glass and filter, and its own edge. */
+/* The composer uses a solid raised surface and its own edge. */
 .rc-composer {
   background: var(--rc-composer-bg);
   backdrop-filter: var(--rc-composer-filter);
@@ -1190,6 +1190,8 @@
 }
 .rc-composer:focus-within {
   background: var(--rc-composer-bg-focus);
+  outline: 2px solid color-mix(in srgb, var(--rc-focus) 40%, transparent);
+  outline-offset: 1px;
 }
 /*
  * A new thread draws its picture behind the whole screen, so the field there is a step more opaque
