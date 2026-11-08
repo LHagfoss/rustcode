@@ -35,10 +35,19 @@ import { arr, bool, type Json, type JsonObject, obj, str } from "../acp/jsonrpc"
 import { type PayloadCapture, parsePayloadCapture } from "../acp/rustcode";
 import { Method } from "../acp/types";
 import {
+  BANNER_BLUR_DEFAULT,
+  BANNER_BLUR_MAX,
+  BANNER_DARKEN_DEFAULT,
+  BANNER_DARKEN_MAX,
+  BANNER_IN_THREADS_DEFAULT,
   BANNER_NAME_DEFAULT,
   BANNER_STYLE_DEFAULT,
   chooseBanner,
+  darkenOverlay,
   removeBanner,
+  setBannerBlur,
+  setBannerDarken,
+  setBannerInThreads,
   setBannerStyle,
   useBanner,
 } from "../lib/banner";
@@ -88,6 +97,7 @@ import {
   setReadAcrossProjects,
   setRecapHours,
   setRecapWhileAway,
+  setReduceTransparency,
   setResumeAfterRestart,
   setRoundedFont,
   setSmartUi,
@@ -897,6 +907,7 @@ function AppearancePage() {
   const mode = useApp((s) => s.theme);
   const roundedFont = useApp((s) => s.roundedFont);
   const animateStreaming = useApp((s) => s.animateStreaming);
+  const reduceTransparency = useApp((s) => s.reduceTransparency);
   const active = useApp((s) => s.themeActive);
   const snapshot = useApp((s) => s.themes);
   const supported = useApp((s) => s.features.themes);
@@ -937,6 +948,17 @@ function AppearancePage() {
           subtitle="A reply's new words fade in as the model writes them. Finished replies never animate."
         >
           <Switch label="Animate streaming text" checked={animateStreaming} onChange={setAnimateStreaming} />
+        </Row>
+        <Row
+          title="Reduce transparency"
+          reset={
+            reduceTransparency !== SETTINGS_DEFAULTS.reduceTransparency
+              ? () => setReduceTransparency(SETTINGS_DEFAULTS.reduceTransparency)
+              : undefined
+          }
+          subtitle="Menus, dialogs, the sidebar and headers turn solid instead of frosted. Also on when your system asks for it."
+        >
+          <Switch label="Reduce transparency" checked={reduceTransparency} onChange={setReduceTransparency} />
         </Row>
       </Group>
       <Group
@@ -1024,6 +1046,9 @@ function BannerSetting() {
   const reset = () => {
     void removeBanner();
     setBannerStyle(BANNER_STYLE_DEFAULT);
+    setBannerDarken(BANNER_DARKEN_DEFAULT);
+    setBannerBlur(BANNER_BLUR_DEFAULT);
+    setBannerInThreads(BANNER_IN_THREADS_DEFAULT);
   };
   return (
     <div>
@@ -1055,12 +1080,76 @@ function BannerSetting() {
         </div>
       </Row>
       {banner.name && (
-        // As a new thread shows it, at a size that reads.
-        <div className="px-4 pb-4">
-          <div className="overflow-hidden rounded-lg bg-bg">
-            <NewThreadBanner key={banner.style} name={banner.name} style={banner.style} height={240} />
+        <>
+          <Row
+            title="Darken"
+            reset={
+              banner.darken !== BANNER_DARKEN_DEFAULT
+                ? () => setBannerDarken(BANNER_DARKEN_DEFAULT)
+                : undefined
+            }
+            subtitle="Black over the picture, so the text on it reads"
+          >
+            <Slider
+              label="Darken the banner"
+              value={banner.darken}
+              min={0}
+              max={BANNER_DARKEN_MAX}
+              step={5}
+              unit="%"
+              onChange={setBannerDarken}
+            />
+          </Row>
+          <Row
+            title="Blur"
+            reset={banner.blur !== BANNER_BLUR_DEFAULT ? () => setBannerBlur(BANNER_BLUR_DEFAULT) : undefined}
+            subtitle="Softens the picture"
+          >
+            <Slider
+              label="Blur the banner"
+              value={banner.blur}
+              min={0}
+              max={BANNER_BLUR_MAX}
+              step={2}
+              unit="px"
+              onChange={setBannerBlur}
+            />
+          </Row>
+          <Row
+            title="Show in threads"
+            reset={
+              banner.inThreads !== BANNER_IN_THREADS_DEFAULT
+                ? () => setBannerInThreads(BANNER_IN_THREADS_DEFAULT)
+                : undefined
+            }
+            subtitle="Behind open threads too, with the same darkening and blur"
+          >
+            <Switch
+              label="Show the banner in threads"
+              checked={banner.inThreads}
+              onChange={setBannerInThreads}
+            />
+          </Row>
+          {/* As a new thread shows it, at a size that reads. */}
+          <div className="px-4 pb-4">
+            <div className="relative overflow-hidden rounded-lg bg-bg">
+              <NewThreadBanner
+                key={banner.style}
+                name={banner.name}
+                style={banner.style}
+                height={240}
+                blur={banner.blur}
+              />
+              {banner.darken > 0 && (
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0"
+                  style={{ background: darkenOverlay(banner.darken) ?? undefined }}
+                />
+              )}
+            </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   );
@@ -1068,8 +1157,9 @@ function BannerSetting() {
 
 /**
  * The app's version and its update, like the SwiftUI app's UpdateControl:
- * Check for Updates, then Update to X (macOS installs in place, quits and
- * reopens) or Download X (the release page, where the installer updates).
+ * Check for Updates, then Update to X (installs in place on macOS, a Linux
+ * AppImage or .deb and Windows, quits and reopens) or Download X (the release
+ * page, for a copy that cannot replace itself).
  */
 function AppVersion() {
   const info = useUpdates((s) => s.info);
@@ -1111,7 +1201,9 @@ function AppVersion() {
         ? "RustCode is up to date."
         : info?.development
           ? "A development build; it does not update itself."
-          : undefined;
+          : offered
+            ? (info?.installNote ?? undefined)
+            : undefined;
   return (
     <Row
       title={`RustCode ${version}`}
@@ -1140,6 +1232,9 @@ function AppVersion() {
       }
     >
       {canUpdate() && <Action onClick={() => void showWhatsNew(version)}>What's New</Action>}
+      {error && offered && info?.canInstall && info.page && (
+        <Action onClick={() => openExternal(info.page ?? "")}>Release page</Action>
+      )}
       {!canUpdate() ? (
         <Info size={14} className="text-fg-faint" />
       ) : offered && info.latest ? (

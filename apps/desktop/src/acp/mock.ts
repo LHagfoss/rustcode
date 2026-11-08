@@ -2785,6 +2785,8 @@ export class MockEngine {
         // One row per login, as the engine answers it: the default login when
         // asked for, and each account the client names (all of them on an
         // explicit look in Settings › Usage, else the one the app asks for).
+        // Naming an account is independent of `claude`, so a background read of
+        // one account leaves the default login unread (engine `acp/usage.rs`).
         const accounts = [
           {
             id: "paral-2",
@@ -2794,7 +2796,7 @@ export class MockEngine {
               { label: "Weekly", usedPercent: 12, windowMinutes: 10080, resetsAt: at(90) },
             ],
           },
-        ].filter((a) => p?.claude && (p?.claudeAccounts || a.id === p?.claudeAccount));
+        ].filter((a) => (p?.claude && p?.claudeAccounts) || a.id === p?.claudeAccount);
         return {
           plans: [
             p?.claude

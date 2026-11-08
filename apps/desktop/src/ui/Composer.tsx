@@ -859,7 +859,7 @@ export const Composer = memo(function Composer({
               "flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-1 px-5",
               // Pictures above already carry their own band and padding: the field then sits close
               // under them, while a field with nothing above it keeps the card's own air.
-              extras.attachments.length > 0 ? "pt-1.5" : "pt-4",
+              extras.attachments.length > 0 ? "pt-1.5" : "pt-3",
             )}
           >
             {extras.command && (

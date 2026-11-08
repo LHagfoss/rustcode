@@ -7,14 +7,15 @@
 
 use super::handshake::Secret;
 use super::pairing::{constant_time_eq, digest};
-use crate::daemon::lifecycle::{ensure_private_directory, publish_private_json, read_private_json};
+use crate::daemon::private_files::{
+    ensure_private_directory, owner_only, publish_private_json, read_private_json,
+};
 use anyhow::{Context, Result, bail, ensure};
 use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use rand::RngExt as _;
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 /// Upper bound on paired devices; pairing fails with `busy` beyond it.
@@ -468,7 +469,7 @@ impl DeviceStore {
             Err(error) => return Err(error).context("failed to inspect the device store"),
         };
         ensure!(
-            metadata.is_file() && metadata.permissions().mode() & 0o077 == 0,
+            metadata.is_file() && owner_only(&metadata),
             "device store {} must be a regular owner-only file (0600)",
             self.path.display()
         );
@@ -498,6 +499,8 @@ impl DeviceStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     fn store() -> (tempfile::TempDir, DeviceStore) {
         let dir = tempfile::tempdir_in("/tmp").unwrap();
@@ -619,6 +622,7 @@ mod tests {
         assert!(devices.remove(&record.id).is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn store_and_directory_are_owner_only_from_the_first_write() {
         let (dir, store) = store();
@@ -639,6 +643,7 @@ mod tests {
         assert_eq!(mode(store.path()), 0o600);
     }
 
+    #[cfg(unix)]
     #[test]
     fn widened_permissions_are_refused_not_repaired() {
         let (dir, store) = store();
@@ -659,6 +664,7 @@ mod tests {
         assert!(error.contains("private"), "{error}");
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_symlinked_store_is_refused() {
         let (dir, store) = store();

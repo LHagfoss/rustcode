@@ -12,6 +12,7 @@ import { bool, type Json, type JsonObject, obj, RpcError, str } from "../acp/jso
 import {
   cleanupRefusal,
   type DelegatePull,
+  harnessPlanKey,
   parseMergeOutcome,
   parsePullError,
   parsePullList,
@@ -23,6 +24,7 @@ import { V2Method } from "../acp/v2";
 import { hasShell, shellCall } from "../lib/shell";
 import { childTitle, titleFrom } from "../lib/title";
 import { selectOption, unavailableReason, usableHarnesses } from "./harness";
+import { usageOf } from "./harnessUsage";
 import {
   accountLabelOf,
   accountNameOf,
@@ -117,6 +119,7 @@ import {
 import {
   type AppState,
   cancel,
+  claudeUsageAllowed,
   createSession,
   ensureHarnessModels,
   errorText,
@@ -124,6 +127,8 @@ import {
   markUnread,
   openThread,
   permissionModeOf,
+  planCacheStale,
+  refreshReadPlanLogins,
   removeQueued,
   renameThread,
   request,
@@ -733,6 +738,21 @@ async function listHarnesses(caller: RuleThread): Promise<JsonObject> {
   const signedOut = useApp.getState().signedOutLogins;
   await Promise.all(harnesses.filter((h) => !unavailableReason(h)).map((h) => ensureHarnessModels(h.id)));
   const fresh = useApp.getState().harnesses?.harnesses ?? harnesses;
+  // Each login's plan windows come from the cache Settings › Usage and the
+  // composer's meter fill, never from a read this call starts: a model's tool
+  // call must not raise a Keychain prompt or an Anthropic request of its own.
+  // A stale cache is refreshed in the background so that the next call has
+  // newer numbers (`refreshReadPlanLogins`): the default login and the account
+  // of the thread on screen, plus every named login that was read before, since
+  // those are the accounts an agent is choosing between. It honours the pauses
+  // and the read's rate limit, and it is not awaited: this answer is what the
+  // cache holds now.
+  const cache = useApp.getState().planCache;
+  if (planCacheStale(cache)) refreshReadPlanLogins();
+  const claudeReadable = claudeUsageAllowed();
+  // Claude's plan comes from its own sign-in, which the user opts into reading.
+  const usage = (harness: string, account?: string | null) =>
+    usageOf(cache[harnessPlanKey(harness, account)], harness !== "claude-code" || claudeReadable);
   return {
     current: { harness: caller.harness ?? "rustcode", ...ranWith(caller.id) },
     harnesses: fresh.map((h) => {
@@ -742,20 +762,29 @@ async function listHarnesses(caller: RuleThread): Promise<JsonObject> {
         name: m.name,
         ...(m.efforts.length ? { efforts: m.efforts } : {}),
       }));
+      // The harness's own login has no id, so its windows sit on the harness
+      // entry: they are what a thread runs on with no `account`. A named
+      // login's own numbers sit on its entry, and are never swapped with it.
+      const own = usage(h.id);
       return {
         id: h.id,
         name: h.name,
         available: !reason,
+        ...(own ? { usage: own } : {}),
         // The logins start_session and fan_out may name; the harness's own sign-in has no id.
         ...(h.accounts?.length
           ? {
-              accounts: h.accounts.map((a) => ({
-                id: a.id,
-                name: a.name,
-                auth: a.auth,
-                // The plan read saw this login signed out: naming it is refused.
-                ...(accountSignedOut(h.id, a.id, signedOut) ? { signed_out: true } : {}),
-              })),
+              accounts: h.accounts.map((a) => {
+                const numbers = usage(h.id, a.id);
+                return {
+                  id: a.id,
+                  name: a.name,
+                  auth: a.auth,
+                  // The plan read saw this login signed out: naming it is refused.
+                  ...(accountSignedOut(h.id, a.id, signedOut) ? { signed_out: true } : {}),
+                  ...(numbers ? { usage: numbers } : {}),
+                };
+              }),
             }
           : {}),
         ...(reason ? { reason } : { models }),

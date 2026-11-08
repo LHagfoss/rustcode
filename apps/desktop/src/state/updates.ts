@@ -307,6 +307,7 @@ export function startUpdateChecks() {
         latest: "0.116.0",
         available: true,
         canInstall: true,
+        installNote: null,
         development: false,
         page: null,
         channels: ["stable", "beta"],
@@ -342,6 +343,11 @@ export function startUpdateChecks() {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") relaunched();
   });
+}
+
+/** What the update row says under its title while idle: how this copy updates. */
+export function updateHint(info: UpdateInfo): string {
+  return info.installNote ?? (info.canInstall ? "Installs and reopens RustCode" : "Opens the release page");
 }
 
 /** The sidebar row's action: install in place where the app can, else the release page. */

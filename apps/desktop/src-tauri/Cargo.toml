@@ -25,6 +25,8 @@ tauri-plugin-notification = "=2.8.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
+# Checks a downloaded update against the release SHA256SUMS (src/updater.rs); the version tauri already uses.
+sha2 = "0.10"
 # Link previews: fetched here, never by the webview (src/links.rs).
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 tokio = { version = "1", features = ["net", "time"] }
@@ -35,6 +37,11 @@ portable-pty = "0.9"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "=0.6.5"
 objc2-web-kit = { version = "=0.3.2", default-features = false, features = ["WKWebViewConfiguration", "WKPreferences"] }
+
+# Windows 11's Mica (src/webview.rs), the version tauri 2.12.5 already builds: its `Result` is the
+# only true answer to "did the material take", which tauri's own `set_effects` throws away.
+[target.'cfg(target_os = "windows")'.dependencies]
+window-vibrancy = "=0.8.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }

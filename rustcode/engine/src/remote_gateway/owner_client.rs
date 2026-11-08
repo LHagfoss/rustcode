@@ -19,11 +19,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use super::local_socket::{LocalReadHalf, LocalWriteHalf};
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use sha2::{Digest, Sha256};
 use tokio::io::BufReader;
-use tokio::net::UnixStream;
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
@@ -319,8 +318,8 @@ struct InFlight {
 type InFlightFuture = std::pin::Pin<Box<dyn std::future::Future<Output = InFlight> + Send + Sync>>;
 
 struct Connection {
-    reader: BufReader<OwnedReadHalf>,
-    writer: OwnedWriteHalf,
+    reader: BufReader<LocalReadHalf>,
+    writer: LocalWriteHalf,
     buffer: Vec<u8>,
 }
 
@@ -469,7 +468,7 @@ impl Client {
             let attempt = async {
                 self.gateway(first).await?;
                 let path = self.connector.lifecycle.owner_socket_path();
-                tokio::time::timeout(Duration::from_secs(5), UnixStream::connect(path))
+                tokio::time::timeout(Duration::from_secs(5), super::local_socket::connect(&path))
                     .await
                     .map_err(|_| "the gateway did not accept the connection".to_owned())?
                     .map_err(|error| {
@@ -827,6 +826,7 @@ mod tests {
     use super::*;
     use crate::remote::REMOTE_PROTOCOL_VERSION;
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn unregister_keeps_the_socket_open_until_the_gateway_reads_the_reason() {
         let directory = tempfile::tempdir().unwrap();
@@ -845,7 +845,7 @@ mod tests {
             status_due: false,
             snapshot_due: false,
         };
-        let (socket, peer) = UnixStream::pair().unwrap();
+        let (socket, peer) = tokio::net::UnixStream::pair().unwrap();
         let (reader, writer) = socket.into_split();
         let mut task = tokio::spawn(async move {
             client

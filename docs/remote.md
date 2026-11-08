@@ -4,8 +4,8 @@ Share a running terminal session with a paired device, watch it live and
 continue it from there. A shared terminal session keeps running in its
 terminal, which must stay open; the device is a remote control. A device can
 also start a new session, or reopen any saved one, without a terminal (see
-[Sessions started from a device](#sessions-started-from-a-device)). macOS and
-Linux only.
+[Sessions started from a device](#sessions-started-from-a-device)). macOS,
+Linux and Windows; see [Windows](#windows) for what differs there.
 
 Three pieces are involved:
 
@@ -525,12 +525,39 @@ next start installs it with the current environment.
   (or the same two values as `[remote] bind` and `advertise`). On Linux
   `--prefer-interface netbird` finds the address by itself.
 - **Bonjour** announces the service name, port, protocol version,
-  gateway identifier and optional handshakes (`caps=connect_requests`), but
+  gateway identifier and optional handshakes (`caps=connect_requests,desktops`), but
   no address on purpose: the phone resolves the
   announcement itself on the network it is on, so the record cannot go stale
   after a DHCP change and never points at an interface the phone cannot
   reach. A paired phone that finds its gateway identifier at a new address
   reconnects there with its token.
+
+### Bonjour
+
+The gateway announces itself with its own mDNS responder (the `mdns-sd`
+crate) on macOS, Linux and Windows alike; it needs neither `dns-sd` nor Avahi
+installed. The record:
+
+| Field | Value |
+| --- | --- |
+| Service type | `_rustcode._tcp` in `local.` |
+| Instance name | the machine's name (the computer name on macOS and Windows, the host name on Linux), else `RustCode` |
+| Host | `rustcode-<gateway id prefix>.local.`, RustCode's own name, so it never competes with the name the system's responder already answers for |
+| Port | the gateway's port |
+| TXT | `protocol=1`, `gateway=<gateway id>`, `caps=connect_requests,desktops` |
+
+Each network interface answers with its own addresses, and the record follows
+address changes. A gateway that listens on loopback only is not announced:
+no phone could reach it. Stopping the gateway (`remote stop`, Ctrl-C,
+SIGTERM, or the console closing on Windows) withdraws the record with a
+goodbye, so phones drop the machine from their nearby list at once; a gateway
+that is killed outright disappears when the record's lifetime runs out.
+
+To see the announcement from another machine: `dns-sd -B _rustcode._tcp` on
+macOS, `avahi-browse -r _rustcode._tcp` on Linux. Windows has no built-in
+browser for it; the phone app's nearby list is the check there. Windows
+Firewall must allow `rustcode` on private networks, for UDP 5353 (mDNS) and
+the gateway's TCP port; Windows asks the first time the gateway listens.
 
 ## Security posture
 
@@ -541,7 +568,8 @@ next start installs it with the current environment.
   for a plain address.
 - **Pairing:** a 2-minute, single-use challenge with five wrong codes; ten
   failures in five minutes lock pairing for the host. Only the local user can
-  ask for a challenge (control socket `0600`).
+  ask for a challenge (control socket `0600`, or on Windows the endpoint's
+  token; see [Local sockets](#how-it-holds-together)).
 - **Access is per host.** A paired device can read and drive every session
   this machine shares, now and later, for 30 days or until revoked. There are
   no per-session grants and no per-session opt-out. Per-session grants have
@@ -563,6 +591,15 @@ session. Only the user who runs the gateway can connect; the owner socket also
 checks the peer's user ID. If the configuration path is too long for a socket
 address, both sockets go to `/tmp/rustcode-<uid>/<hash>/` instead, created
 `0700` and verified to belong to you.
+
+On Windows, where Tokio has no Unix sockets, each endpoint listens on
+`127.0.0.1` at a port the system picks, and `remote/control.endpoint` and
+`remote/owner.endpoint` hold that port and a random 256-bit token. Those files
+are in your profile, whose permissions admit only you (and the system and
+administrators), like the device store. A client sends the token before
+anything else; a connection that sends anything else, or nothing within five
+seconds, is closed unanswered. The token is new every time the gateway
+starts.
 
 **Liveness.** A terminal's connection to the owner socket is what keeps its
 session listed. The terminal sends a heartbeat every five seconds; after 15
@@ -617,6 +654,24 @@ exactly `rustcode-mobile://app`: browsers send an `http(s)` origin and a page
 cannot set headers on a WebSocket, so a web page cannot reach the gateway. The
 native app sends that value because React Native always adds an `Origin`
 header; see [the connection step](remote-protocol/README.md#connection).
+
+## Windows
+
+The gateway, pairing, connection requests, Bonjour and Settings › Remote
+access work as on the other systems. What differs:
+
+- **No login service yet.** Remote access started from the app, `/remote` or
+  `rustcode remote start` runs the gateway as a detached background process
+  (no console window, its own process group). It stops when you sign out or
+  restart; the next RustCode start brings it back while Remote access is on.
+  macOS installs a LaunchAgent for this; a Windows logon task is planned.
+- **Local endpoints** are loopback ports with a token instead of Unix sockets
+  (see [How it holds together](#how-it-holds-together)).
+- **`/adopt`** of a thread a device started is refused: Windows cannot ask
+  its session owner to exit gracefully. End it on the device, then resume it
+  from `/history`.
+- **Firewall:** allow `rustcode` on private networks when Windows asks, or a
+  phone can neither find nor reach the gateway.
 
 ## Not covered yet
 

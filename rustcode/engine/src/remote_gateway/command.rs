@@ -3,6 +3,7 @@
 use super::address::{candidate_addresses, plan_listen_with_preference};
 use super::control::{GatewayStatus, OfferDetails};
 use super::devices::DeviceRecord;
+use super::discovery::Advertisement;
 use super::gateway::{Gateway, GatewayConfig, Limits};
 use super::hub::{HubLimits, SessionHub};
 use super::lifecycle::{RemoteLifecycle, Revocation};
@@ -106,23 +107,41 @@ pub async fn serve(
     )
     .await?;
     let port = gateway.local_addr().port();
+    let initial_bind = gateway.local_addr().ip();
+    let initial_loopback = plan.advertise.is_loopback();
     let gateway_id = gateway.gateway_id().to_owned();
-    let mut discovery =
-        super::discovery::advertise(port, plan.advertise.is_loopback(), &gateway_id);
-    // Bonjour is announced only while a phone could reach the address.
+    // Bonjour is announced only while a phone could reach the address. The
+    // listener interface scopes both the announcement and its resolved IPs.
+    // The task owns the responder and awaits its goodbye on every exit path.
     let mut advertised = gateway.advertised_changes();
-    let announce = async move {
-        let mut loopback = plan.advertise.is_loopback();
-        while advertised.changed().await.is_ok() {
-            let now = advertised.borrow_and_update().host().is_loopback();
-            if now != loopback {
-                loopback = now;
-                discovery = super::discovery::advertise(port, loopback, &gateway_id);
+    let mut listen_address = gateway.listen_address_changes();
+    let discovery_shutdown = gateway.shutdown_token();
+    let announce = {
+        async move {
+            let mut bind = initial_bind;
+            let mut loopback = initial_loopback;
+            let mut advertisement = Advertisement::start(port, bind, loopback, &gateway_id);
+            loop {
+                tokio::select! {
+                    changed = advertised.changed() => if changed.is_err() { break; },
+                    changed = listen_address.changed() => if changed.is_err() { break; },
+                    _ = discovery_shutdown.cancelled() => break,
+                }
+                let next_loopback = advertised.borrow_and_update().host().is_loopback();
+                let next_bind = *listen_address.borrow_and_update();
+                if next_bind != bind || next_loopback != loopback {
+                    if let Some(current) = advertisement.take() {
+                        current.stop().await;
+                    }
+                    bind = next_bind;
+                    loopback = next_loopback;
+                    advertisement = Advertisement::start(port, bind, loopback, &gateway_id);
+                }
+            }
+            if let Some(advertisement) = advertisement {
+                advertisement.stop().await;
             }
         }
-        // Keeps the announcement up when the address can no longer change.
-        let _discovery = discovery;
-        std::future::pending::<()>().await
     };
     let plan = ListenPlanSummary {
         loopback_bind: gateway.local_addr().ip().is_loopback(),
@@ -148,20 +167,29 @@ pub async fn serve(
     let upgraded = super::service::wait_for_upgrade(program.clone());
     tokio::pin!(upgraded);
     let shutdown = gateway.shutdown_token();
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let terminate = terminate_signal()?;
+    tokio::pin!(terminate);
     let run = gateway.run();
     tokio::pin!(run);
     tokio::pin!(announce);
-    let restart = tokio::select! {
-        result = &mut run => return result,
-        _ = &mut announce => false,
-        _ = tokio::signal::ctrl_c() => false,
-        _ = terminate.recv() => false,
-        _ = &mut upgraded => true,
+    let (restart, run_result, announcement_finished) = tokio::select! {
+        result = &mut run => (false, Some(result), false),
+        _ = &mut announce => (false, None, true),
+        _ = tokio::signal::ctrl_c() => (false, None, false),
+        _ = &mut terminate => (false, None, false),
+        _ = &mut upgraded => (true, None, false),
     };
-    // Let the gateway close its connections and remove its registration.
+    // Let the gateway close its connections and the responder send its
+    // goodbye, including when `remote stop` made `run` finish first.
     shutdown.cancel();
-    run.await?;
+    if !announcement_finished {
+        announce.await;
+    }
+    let result = match run_result {
+        Some(result) => result,
+        None => run.await,
+    };
+    result?;
     if restart && std::env::var_os("RUSTCODE_REMOTE_MANAGED").is_none() {
         let launcher = super::owner_client::Launcher {
             program,
@@ -174,6 +202,58 @@ pub async fn serve(
         lifecycle.start(launcher.command()).await?;
     }
     Ok(())
+}
+
+/// Resolves when the system asks the process to stop: `SIGTERM` (launchd,
+/// systemd, `kill`), or the console closing, logoff or shutdown on Windows.
+#[cfg(unix)]
+pub fn terminate_signal() -> Result<impl std::future::Future<Output = ()>> {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    Ok(async move {
+        terminate.recv().await;
+    })
+}
+
+/// A handler that cannot be registered (a detached gateway has no console)
+/// is left out: `remote stop` still ends the process through its control
+/// endpoint.
+#[cfg(windows)]
+pub fn terminate_signal() -> Result<impl std::future::Future<Output = ()>> {
+    use tokio::signal::windows::{ctrl_close, ctrl_logoff, ctrl_shutdown};
+    let mut close = ctrl_close().ok();
+    let mut logoff = ctrl_logoff().ok();
+    let mut shutdown = ctrl_shutdown().ok();
+    Ok(async move {
+        let close = async {
+            match close.as_mut() {
+                Some(signal) => {
+                    let _ = signal.recv().await;
+                }
+                None => std::future::pending().await,
+            }
+        };
+        let logoff = async {
+            match logoff.as_mut() {
+                Some(signal) => {
+                    let _ = signal.recv().await;
+                }
+                None => std::future::pending().await,
+            }
+        };
+        let shutdown = async {
+            match shutdown.as_mut() {
+                Some(signal) => {
+                    let _ = signal.recv().await;
+                }
+                None => std::future::pending().await,
+            }
+        };
+        tokio::select! {
+            () = close => {}
+            () = logoff => {}
+            () = shutdown => {}
+        }
+    })
 }
 
 struct ListenPlanSummary {

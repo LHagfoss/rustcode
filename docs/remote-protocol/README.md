@@ -763,7 +763,7 @@ restarts after a crash or binary upgrade. `rustcode remote start` enables it,
 LaunchAgent. Development binaries run detached without installing a login job.
 The gateway advertises `_rustcode._tcp` on the local network; its Bonjour record
 contains only the host name, port, protocol version (`protocol=1`), gateway
-identifier (`gateway=…`) and optional handshakes (`caps=connect_requests`).
+identifier (`gateway=…`) and optional handshakes (`caps=connect_requests,desktops`).
 Discovery does not pair a device or grant access; a
 [connection request](#connection-requests) only asks the owner.
 

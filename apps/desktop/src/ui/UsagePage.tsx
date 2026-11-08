@@ -1,11 +1,17 @@
 // Settings › Usage: every subscription this machine is signed in to, with its
-// plan windows (`_rustcode/usage/plans`), whatever thread is open. Claude's
-// numbers come from Claude Code's sign-in in the macOS Keychain: while the app
-// is open it is read every few minutes, so the composer's meter has the plan
-// (macOS may ask once to allow it); the switch below turns that off.
+// plan windows (`_rustcode/usage/plans`), whatever thread is open. The page
+// reads again by itself every three minutes while its window is visible (and
+// at once when it comes back after longer than that), so the numbers and the
+// read time move on their own; Refresh reads now, past the engine's minute of
+// cache. Opening the page and Refresh are explicit looks: every login, in one
+// read. The page's own timer is a background read like the app's poll — the
+// default login and the account of the thread on screen, never a login nothing
+// was read for or one a failed read paused — and it waits longer after a read
+// that failed. Claude's numbers come from Claude Code's sign-in in the macOS
+// Keychain: they are read only while the switch below allows it.
 
 import { RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { parsePlans, resetLabel, type UsagePlan } from "../acp/rustcode";
 import { Method } from "../acp/types";
 import { usageRows } from "../state/logins";
@@ -19,16 +25,25 @@ import {
 } from "../state/pageCache";
 import {
   accountOn,
+  backgroundPlansAsk,
   CLAUDE_USAGE_DEFAULT,
   claudeUsageAllowed,
   commitPlansAnswer,
   harnessOf,
+  PLAN_CACHE_POLL_MS,
   request,
   setClaudeUsageAllowed,
   useApp,
 } from "../state/store";
 import { relativeAge } from "../state/thread";
-import { answeredPlans, failureText, USAGE_PLANS_KEY, type UsageAnswer, usageView } from "../state/usagePage";
+import {
+  answeredPlans,
+  failureText,
+  USAGE_PLANS_KEY,
+  type UsageAnswer,
+  usageView,
+  watchUsageRefresh,
+} from "../state/usagePage";
 import { PlanWindow } from "./ComposerUsage";
 import { Skeleton, Spinner, Switch } from "./primitives";
 import { Action, Group, Row } from "./settingsKit";
@@ -41,44 +56,67 @@ export function UsagePage() {
   );
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const load = useCallback(async (withClaude: boolean, force: boolean) => {
+  // One read at a time: the interval and a press of Refresh never double a
+  // Keychain read or an Anthropic request.
+  const reading = useRef(false);
+  const load = useCallback(async (withClaude: boolean, force: boolean, asked = true): Promise<boolean> => {
+    if (reading.current) return true;
+    reading.current = true;
     const token = beginPageRead(USAGE_PLANS_KEY);
     setLoading(true);
     try {
-      // Showing this page (or Refresh) is the explicit consent that also
-      // reads each account's own sign-in at once; the background reads one
-      // account at a time, the one the thread on screen runs on. Refresh forces
+      // Showing this page (or Refresh) is the explicit consent that also reads
+      // each account's own sign-in at once (`claudeAccounts`); Refresh forces
       // the read past the engine's minute of cache, so a sign-in renewed in
       // Claude Code shows now rather than after that minute.
+      //
+      // The page's own interval passes `asked: false`, and then it asks like
+      // every other background read (`backgroundPlansAsk`, `state/plans.ts`):
+      // the default login and the account of the thread on screen, only with
+      // consent and never one a failed read paused, so a Deny cannot prompt
+      // every three minutes and a named login the user never asked about is
+      // never read from the Keychain.
+      const ask = asked ? { claude: withClaude, claudeAccounts: withClaude } : backgroundPlansAsk();
       const plans = parsePlans(
-        await request(
-          Method.usagePlans,
-          { claude: withClaude, claudeAccounts: withClaude, ...(force ? { force: true } : {}) },
-          20_000,
-        ),
+        await request(Method.usagePlans, { ...ask, ...(force ? { force: true } : {}) }, 20_000),
       );
-      // A whole read replaces the list; one with Claude off replaces only the
-      // rows it asked, so turning the switch back on has numbers to draw while
-      // it reads the logins again.
-      const shown = cachedPage<UsageAnswer>(USAGE_PLANS_KEY)?.data.plans ?? [];
-      const next = commitPage(USAGE_PLANS_KEY, token, {
-        plans: answeredPlans(shown, plans, withClaude),
-        asked: withClaude,
-      });
-      if (!next) return;
+      // A whole read (every login) replaces the list; a partial one — Claude
+      // off, or the interval's read of the default login and one account —
+      // keeps the rows it did not ask, so a named login's numbers stay on
+      // screen instead of vanishing, and turning the switch back on has
+      // numbers to draw while the logins are read again.
+      const shownPage = cachedPage<UsageAnswer>(USAGE_PLANS_KEY);
+      const shown = shownPage?.data.plans ?? [];
+      const whole = asked && withClaude;
+      // A background read with Claude on answers part of the page: the default
+      // login and one account, not every named login, so the foot keeps the
+      // time of the last whole read instead of saying "just now" over rows it
+      // did not ask. With Claude off a read answers every row there is.
+      const partial = withClaude && !asked;
+      const next = commitPage(
+        USAGE_PLANS_KEY,
+        token,
+        { plans: answeredPlans(shown, plans, whole), asked: whole },
+        partial ? shownPage?.readAt : undefined,
+      );
+      if (!next) return true;
       // The same answer fills the cache the composer's meter reads, and asking
       // here is what lets the background poll read Claude again after a pause.
-      commitPlansAnswer(plans, withClaude);
+      // A background read never clears a pause (`asked`), or a Deny would stop
+      // holding.
+      commitPlansAnswer(plans, whole);
       // An answer equal to what is drawn keeps its list and rows, so the bars do
       // not re-animate; only the foot's read time changes.
       setAnswer((current) =>
         current && sameValue(current.data, next.data) ? { data: current.data, readAt: next.readAt } : next,
       );
       setError(null);
+      return true;
     } catch (e) {
-      if (!isLatestPageRead(USAGE_PLANS_KEY, token)) return;
-      setError(e instanceof Error ? e.message : String(e));
+      if (isLatestPageRead(USAGE_PLANS_KEY, token)) setError(e instanceof Error ? e.message : String(e));
+      return false;
     } finally {
+      reading.current = false;
       if (isLatestPageRead(USAGE_PLANS_KEY, token)) setLoading(false);
     }
   }, []);
@@ -93,6 +131,23 @@ export function UsagePage() {
     const cached = cachedPage<UsageAnswer>(USAGE_PLANS_KEY) ?? null;
     const view = usageView(cached, claude, null);
     if (view.fetch) void load(claude, view.force);
+  }, [status, claude, load]);
+  // The page keeps itself current: a background read every three minutes while
+  // its window is visible, one on coming back after being hidden longer than
+  // that, and a longer wait after one that failed. The numbers, the bars and
+  // the foot's read time then move without a press; a press of Refresh reads now
+  // instead, past the engine's minute of cache. The tick reads even when the
+  // app's own poll just filled the cache: the rows on screen come from this
+  // read, and the engine shares a read that is already under way.
+  useEffect(() => {
+    if (status !== "ready") return;
+    return watchUsageRefresh({
+      read: () => load(claude, false, false),
+      reading: () => reading.current,
+      visible: () => document.visibilityState === "visible",
+      readAt: () => cachedPage<UsageAnswer>(USAGE_PLANS_KEY)?.readAt ?? null,
+      everyMs: PLAN_CACHE_POLL_MS,
+    });
   }, [status, claude, load]);
   const allowClaude = (on: boolean) => {
     setClaudeUsageAllowed(on);
@@ -170,7 +225,7 @@ export function UsagePage() {
                     }
                   : undefined
               }
-              subtitle="RustCode reads Claude Code's sign-in every few minutes while the app is open, so the composer shows your plan. Your system may ask once to allow it. Only reads; never signs in or out."
+              subtitle="RustCode reads Claude Code's sign-in every few minutes while the app is open, so the composer and this page show your plan. Your system may ask once to allow it. Only reads; never signs in or out."
             >
               <Switch label="Show Claude usage in the composer" checked={claude} onChange={allowClaude} />
             </Row>
@@ -182,9 +237,9 @@ export function UsagePage() {
           {view.note ? (
             <span className="text-warning">Could not refresh: {view.note}</span>
           ) : view.readAt ? (
-            `Read ${Date.now() - view.readAt < 60_000 ? "just now" : relativeAge(view.readAt)}. ${
-              soonestReset(view.plans) ?? ""
-            }`
+            `${Date.now() - view.readAt < 60_000 ? "Read just now" : `Read ${relativeAge(view.readAt)}`} · this page refreshes every ${
+              PLAN_CACHE_POLL_MS / 60_000
+            } minutes. ${soonestReset(view.plans) ?? ""}`
           ) : null}
         </span>
         <Action onClick={() => void load(claude, true)} disabled={loading}>

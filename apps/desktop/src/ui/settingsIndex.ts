@@ -225,13 +225,33 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "appearance",
+    title: "Reduce transparency",
+    keywords: "glass blur frosted translucent solid mica acrylic vibrancy accessibility contrast",
+  },
+  {
+    section: "appearance",
     title: "Theme",
     keywords: "colors colours palette theme files editor tokens create",
   },
   {
     section: "appearance",
     title: "New thread banner",
-    keywords: "banner picture image header new thread",
+    keywords: "banner picture image header new thread background wallpaper",
+  },
+  {
+    section: "appearance",
+    title: "Darken",
+    keywords: "banner background picture image dim overlay dark",
+  },
+  {
+    section: "appearance",
+    title: "Blur",
+    keywords: "banner background picture image soften frosted",
+  },
+  {
+    section: "appearance",
+    title: "Show in threads",
+    keywords: "banner background picture image open threads chat behind transcript",
   },
 
   // ------------------------------------------------------------ Keyboard

@@ -2048,7 +2048,7 @@ export function Sidebar() {
     >
       <div
         className={cx(
-          "flex h-full flex-col bg-sidebar transition-[translate] duration-200 ease-snappy",
+          "flex h-full flex-col bg-sidebar-glass transition-[translate] duration-200 ease-snappy",
           hidden ? "-translate-x-full" : "translate-x-0",
         )}
         style={{ width, minWidth: width }}

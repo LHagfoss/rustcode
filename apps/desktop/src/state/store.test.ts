@@ -1,12 +1,13 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { type JsonObject, RpcError } from "../acp/jsonrpc";
 import { MockTransport } from "../acp/mock";
-import { harnessPlanKey, parsePlans } from "../acp/rustcode";
+import { harnessPlanKey, parsePlans, type UsagePlan } from "../acp/rustcode";
 import type { Transport, TransportEvent } from "../acp/transport";
 import { Method } from "../acp/types";
 import { V2Method } from "../acp/v2";
 import { type ComposeExtras, emptyExtras } from "./compose";
 import { preferredDefault, rememberedEffort } from "./harness";
+import type { AgentUsage } from "./harnessUsage";
 import {
   answerOrchestration,
   linkFinished,
@@ -33,6 +34,7 @@ import {
   answerConnectRequest,
   answerPermission,
   answerQuestionOptions,
+  backgroundPlansAsk,
   type CachedPlan,
   cancel,
   cancelQueuedEdit,
@@ -61,6 +63,7 @@ import {
   openThread,
   PLAN_CACHE_MAX_AGE_MS,
   PLAN_CACHE_POLL_MS,
+  PLAN_STALE_MARGIN_MS,
   pairRemoteDevice,
   parsePanels,
   peekThread,
@@ -78,6 +81,7 @@ import {
   RESUME_TEXT,
   refreshAgents,
   refreshHarnesses,
+  refreshReadPlanLogins,
   refreshRemote,
   refreshSessions,
   refreshSessionsOnFocus,
@@ -91,12 +95,14 @@ import {
   revokeGrant,
   rewindCheckpoint,
   runPrompt,
+  SETTINGS_DEFAULTS,
   saveQueuedEdit,
   selectThread,
   sendDecisionFor,
   sendQueuedNow,
   setActiveTheme,
   setArchived,
+  setClaudeUsageAllowed,
   setConfigOption,
   setDefaultCwd,
   setDefaultHarness,
@@ -108,6 +114,7 @@ import {
   setPanel,
   setPermissionMode,
   setProjectCwd,
+  setReduceTransparency,
   setThreadLimit,
   setThreadStatus,
   setTotalLimit,
@@ -897,6 +904,187 @@ describe("engine controller with the mock engine", () => {
     });
     // A harness with no named logins says nothing rather than an empty list.
     expect(listed.find((h) => h.id === "rustcode")?.accounts).toBeUndefined();
+  });
+
+  test("list_harnesses carries each login's usage windows from the plan cache", async () => {
+    const storage = testStorage();
+    try {
+      await connect(new MockTransport({ delayMs: 0 }));
+      await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+      const caller = useApp.getState().sessions[0]!.id;
+      type Listed = {
+        id: string;
+        usage?: AgentUsage;
+        accounts?: { id: string; usage?: AgentUsage }[];
+      };
+      const listed = async () =>
+        (await answerOrchestration({ sessionId: caller, tool: "list_harnesses", args: {} }))
+          .harnesses as Listed[];
+      useApp.setState({ planCache: {} });
+      // Reading Claude's sign-in is the user's to allow: off, its logins say
+      // so instead of looking like accounts with nothing used.
+      let harnesses = await listed();
+      expect(harnesses.find((h) => h.id === "claude-code")?.usage).toEqual({
+        status: "not_enabled",
+        windows: [],
+      });
+      expect(harnesses.find((h) => h.id === "claude-code")?.accounts?.[0]?.usage).toEqual({
+        status: "not_enabled",
+        windows: [],
+      });
+      // A login nothing was read for yet carries no usage at all.
+      expect(harnesses.find((h) => h.id === "rustcode")?.usage).toBeUndefined();
+
+      // Allowed, the numbers the cache holds come out as an agent reads them.
+      setClaudeUsageAllowed(true);
+      const fetchedAt = Date.now();
+      const resetsAt = fetchedAt + 4 * 3_600_000;
+      const entry = (usedPercent: number, account: string | null): CachedPlan => ({
+        source: "claude-code",
+        harness: "claude-code",
+        account,
+        name: account ?? "Claude",
+        plan: "max",
+        windows: [{ label: "5-hour", usedPercent, minutes: 300, resetsAt }],
+        fetchedAt,
+      });
+      useApp.setState({
+        planCache: { "claude-code": entry(48, null), "claude-code#paral-2": entry(71, "paral-2") },
+      });
+      harnesses = await listed();
+      const claude = harnesses.find((h) => h.id === "claude-code");
+      expect(claude?.usage).toEqual({
+        status: "ok",
+        as_of: new Date(fetchedAt).toISOString(),
+        windows: [
+          {
+            label: "5-hour",
+            used_percent: 48,
+            window_minutes: 300,
+            resets_at: new Date(resetsAt).toISOString(),
+          },
+        ],
+      });
+      expect(claude?.accounts?.find((a) => a.id === "paral-2")?.usage).toMatchObject({
+        status: "ok",
+        as_of: new Date(fetchedAt).toISOString(),
+        windows: [{ label: "5-hour", used_percent: 71 }],
+      });
+    } finally {
+      setClaudeUsageAllowed(false);
+      storage.done();
+    }
+  });
+
+  test("list_harnesses refreshes the logins it read before, never one it did not, and once per interval", async () => {
+    const storage = testStorage();
+    try {
+      const transport = new MockTransport({ delayMs: 0 });
+      type Ask = { claude?: boolean; claudeAccounts?: boolean; claudeAccount?: string; force?: boolean };
+      const asked: Ask[] = [];
+      const send = transport.send.bind(transport);
+      transport.send = (line: string) => {
+        if (line.includes("_rustcode/usage/plans")) {
+          asked.push(((JSON.parse(line) as { params?: Ask }).params ?? {}) as Ask);
+        }
+        return send(line);
+      };
+      await connect(transport);
+      await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
+      setClaudeUsageAllowed(true);
+      const stale = Date.now() - PLAN_CACHE_POLL_MS - 1_000;
+      const entry = (account: string | null, fetchedAt: number, usedPercent: number): CachedPlan => ({
+        source: "claude-code",
+        harness: "claude-code",
+        account,
+        name: account ?? "Claude",
+        windows: [{ label: "5-hour", usedPercent, minutes: 300 }],
+        fetchedAt,
+      });
+      // The default login was just read, one named login is old, and one is old
+      // but a denied Keychain read paused it. A login nothing was read for has
+      // no entry at all — reading an unseen item may prompt macOS, so it is
+      // never asked for.
+      useApp.setState({
+        planCache: {
+          "claude-code": entry(null, Date.now(), 18),
+          "claude-code#paral-2": entry("paral-2", stale, 71),
+          "claude-code#paused": entry("paused", stale, 5),
+        },
+      });
+      commitPlansAnswer([
+        {
+          id: "claude",
+          name: "Claude",
+          via: "Claude Code",
+          harness: "claude-code",
+          account: "paused",
+          status: "unavailable",
+          reason: "denied",
+          windows: [],
+        },
+      ]);
+      asked.length = 0;
+      const at = Date.now();
+      refreshReadPlanLogins(at);
+      await until(() => asked.some((p) => p.claudeAccount === "paral-2"));
+      // One login at a time, and never every account at once (that is the
+      // page's own explicit look, which can read an unseen item).
+      expect(asked.filter((p) => p.claudeAccounts)).toEqual([]);
+      expect(asked.filter((p) => p.force)).toEqual([]);
+      expect(asked.map((p) => p.claudeAccount).filter(Boolean)).toEqual(["paral-2"]);
+      // Its numbers land in the cache the answer is drawn from.
+      await until(() => useApp.getState().planCache["claude-code#paral-2"]?.windows[0]?.usedPercent === 4);
+      // The same call again reads nothing: at most once per poll interval,
+      // however often an agent asks.
+      const sent = asked.length;
+      refreshReadPlanLogins();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(asked.length).toBe(sent);
+      // The app's own ask is rate-limited with the rest: the logins it read are
+      // stale again by the next interval, so only the throttle is in question
+      // here — a call a moment later reads nothing.
+      refreshReadPlanLogins(at + PLAN_CACHE_POLL_MS - 1);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(asked.length).toBe(sent);
+      // The paused login was never asked for.
+      expect(asked.some((p) => p.claudeAccount === "paused")).toBe(false);
+    } finally {
+      setClaudeUsageAllowed(false);
+      storage.done();
+    }
+  });
+
+  test("the page's own interval asks what a background read asks, never every login", async () => {
+    const storage = testStorage();
+    try {
+      await connect(new MockTransport({ delayMs: 0 }));
+      await until(() => useApp.getState().status === "ready");
+      // Consent off: the page's tick reads no Keychain item at all.
+      expect(backgroundPlansAsk()).toEqual({ claude: false });
+      setClaudeUsageAllowed(true);
+      // Consent on, nothing paused: the default login and whatever account the
+      // thread on screen runs on — never `claudeAccounts`, which is the page's
+      // explicit look and can read a login nobody asked about.
+      expect(backgroundPlansAsk()).toMatchObject({ claude: true });
+      expect(backgroundPlansAsk().force).toBeUndefined();
+      // A denied Keychain read pauses that login, and the tick follows it.
+      commitPlansAnswer([
+        {
+          id: "claude",
+          name: "Claude",
+          via: "Claude Code",
+          harness: "claude-code",
+          status: "unavailable",
+          reason: "denied",
+          windows: [],
+        },
+      ]);
+      expect(backgroundPlansAsk()).toEqual({ claude: false });
+    } finally {
+      setClaudeUsageAllowed(false);
+      storage.done();
+    }
   });
 
   test("read_session says why a thread could not be opened instead of reporting no turns", async () => {
@@ -2156,6 +2344,21 @@ describe("engine controller with the mock engine", () => {
     expect(useApp.getState().panel).toBeNull();
   });
 
+  test("Reduce transparency defaults off and is kept in storage", () => {
+    expect(SETTINGS_DEFAULTS.reduceTransparency).toBe(false);
+    const storage = testStorage();
+    try {
+      setReduceTransparency(true);
+      expect(useApp.getState().reduceTransparency).toBe(true);
+      expect(storage.data.get("rustcode.reduceTransparency")).toBe("1");
+      setReduceTransparency(SETTINGS_DEFAULTS.reduceTransparency);
+      expect(useApp.getState().reduceTransparency).toBe(false);
+      expect(storage.data.get("rustcode.reduceTransparency")).toBe("0");
+    } finally {
+      storage.done();
+    }
+  });
+
   test("the per-thread panel is kept in storage, bounded to the newest entries", async () => {
     // The app keeps it through `store()`; a test has no window, so it gets one map.
     const data = new Map<string, string>();
@@ -3376,6 +3579,18 @@ describe("a message sent from the new-thread screen", () => {
 });
 
 describe("plan usage cache", () => {
+  // `commitPlansAnswer` keeps no Claude row while the meter is off, so these
+  // tests read as if the user had allowed it.
+  let storage: ReturnType<typeof testStorage>;
+  beforeEach(() => {
+    storage = testStorage();
+    setClaudeUsageAllowed(true);
+  });
+  afterEach(() => {
+    setClaudeUsageAllowed(false);
+    storage.done();
+  });
+
   const plan = (used: number, fetchedAt: number): CachedPlan => ({
     source: "claude-code",
     windows: [{ usedPercent: used, minutes: 300 }],
@@ -3402,12 +3617,60 @@ describe("plan usage cache", () => {
     expect((before as Record<string, CachedPlan>).codex).toBeUndefined();
   });
 
-  test("staleness follows the three-minute poll", () => {
+  test("staleness follows the three-minute poll, with room for a read that ends after its tick", () => {
     const now = 10_000_000;
     expect(PLAN_CACHE_POLL_MS).toBe(180_000);
+    expect(PLAN_STALE_MARGIN_MS).toBe(15_000);
     expect(planIsStale(undefined, now)).toBe(true);
-    expect(planIsStale(plan(20, now - PLAN_CACHE_POLL_MS + 1), now)).toBe(false);
-    expect(planIsStale(plan(20, now - PLAN_CACHE_POLL_MS), now)).toBe(true);
+    const whole = PLAN_CACHE_POLL_MS - PLAN_STALE_MARGIN_MS;
+    expect(planIsStale(plan(20, now - whole + 1), now)).toBe(false);
+    expect(planIsStale(plan(20, now - whole), now)).toBe(true);
+    // A read stamps `fetchedAt` a moment after the tick that asked for it, so
+    // the exact interval would leave this fresh at the next tick and read every
+    // six minutes instead of three.
+    expect(planIsStale(plan(20, now - PLAN_CACHE_POLL_MS + 5_000), now)).toBe(true);
+  });
+
+  test("a plans answer that arrives after the switch went off keeps no Claude rows", () => {
+    resetForTests();
+    const storage = testStorage();
+    try {
+      const claude: UsagePlan = {
+        id: "claude",
+        name: "Claude",
+        via: "Claude Code",
+        harness: "claude-code",
+        status: "ok",
+        plan: "max",
+        windows: [{ label: "5-hour", usedPercent: 18, minutes: 300 }],
+      };
+      const codex: UsagePlan = {
+        id: "codex",
+        name: "ChatGPT",
+        via: "Codex CLI",
+        status: "ok",
+        windows: [{ label: "Weekly", usedPercent: 46, minutes: 10_080 }],
+      };
+      setClaudeUsageAllowed(true);
+      commitPlansAnswer([claude, codex]);
+      expect(useApp.getState().planCache["claude-code"]).toBeDefined();
+      // The user switches the meter off while a read is in flight; that read's
+      // answer must not put Claude's numbers back (or its sign-out record).
+      setClaudeUsageAllowed(false);
+      commitPlansAnswer([
+        claude,
+        { ...claude, id: "claude:work", account: "work", status: "signedOut" },
+        codex,
+      ]);
+      expect(useApp.getState().planCache["claude-code"]).toBeUndefined();
+      expect(useApp.getState().planCache["claude-code#work"]).toBeUndefined();
+      expect(useApp.getState().signedOutLogins["claude-code"]).toBeUndefined();
+      // Every other subscription is committed as usual.
+      expect(useApp.getState().planCache.codex?.windows[0]?.usedPercent).toBe(46);
+    } finally {
+      setClaudeUsageAllowed(false);
+      storage.done();
+    }
   });
 
   test("the plans answer maps a subscription to its harness, dropping ones with no windows", () => {
@@ -3428,9 +3691,11 @@ describe("plan usage cache", () => {
       5000,
     );
     expect(Object.keys(cache)).toEqual(["claude-code"]);
+    // The window keeps the name the provider gave it, so `list_harnesses` can
+    // report it to an agent (state/harnessUsage.ts).
     expect(cache["claude-code"]).toEqual({
       source: "claude-code",
-      windows: [{ usedPercent: 18, minutes: 300, resetsAt: 1_000_000 }],
+      windows: [{ label: "5-hour", usedPercent: 18, minutes: 300, resetsAt: 1_000_000 }],
       fetchedAt: 5000,
       name: "Claude",
       plan: "max",

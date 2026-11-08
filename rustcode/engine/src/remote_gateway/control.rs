@@ -17,7 +17,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tokio::{io::BufReader, net::UnixStream};
+use tokio::io::BufReader;
 
 pub const CONTROL_PROTOCOL_VERSION: u32 = 1;
 
@@ -301,7 +301,7 @@ impl OfferDetails {
 /// Send one request to a running gateway and wait for its answer.
 pub async fn request(socket_path: &Path, request: &ControlRequest) -> Result<ControlResponse> {
     tokio::time::timeout(CONTROL_TIMEOUT, async {
-        let mut stream = UnixStream::connect(socket_path).await?;
+        let mut stream = super::local_socket::connect(socket_path).await?;
         write_async_frame(&mut stream, request).await?;
         Ok(read_async_frame(&mut BufReader::new(stream)).await?)
     })

@@ -1536,6 +1536,36 @@ mod tests {
         assert!(tool(LIST_HARNESSES).description.contains("named accounts"));
     }
 
+    /// An orchestrator that wants room left on an account reads
+    /// `list_harnesses` (answered by the app, from its plan cache): the tool
+    /// has to say the field is there and what its numbers mean, or a model
+    /// never looks at it and delegates onto a window that is nearly used up.
+    #[test]
+    fn list_harnesses_advertises_each_logins_usage_windows() {
+        let tool = crate::tools::TOOLS
+            .iter()
+            .find(|tool| tool.name == LIST_HARNESSES)
+            .expect("list_harnesses");
+        for field in [
+            "usage",
+            "used_percent",
+            "window_minutes",
+            "resets_at",
+            "as_of",
+            "not_enabled",
+        ] {
+            assert!(tool.description.contains(field), "{field}");
+        }
+        // An external harness gets the same wording through the MCP server.
+        let listed = crate::orchestration::mcp_server::tools(VERSION, false)
+            .into_iter()
+            .find(|tool| tool["name"] == LIST_HARNESSES)
+            .expect("list_harnesses for an MCP harness");
+        let description = listed["description"].as_str().unwrap_or_default();
+        assert!(description.contains("used_percent"), "{description}");
+        assert!(description.contains("not_enabled"), "{description}");
+    }
+
     #[tokio::test]
     async fn an_older_client_cannot_smuggle_an_account_past_its_version() {
         let cancel = tokio_util::sync::CancellationToken::new();
