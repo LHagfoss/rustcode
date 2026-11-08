@@ -66,6 +66,7 @@ describe("connection requests", () => {
       connectAnswer: {
         id: "r1",
         deviceName: "Lars's iPhone",
+        instanceId: "gateway-instance-1",
         accepted: true,
         code: "4821-9034",
         expiresInSecs: 120,
@@ -74,6 +75,7 @@ describe("connection requests", () => {
     expect(read.connectAnswer).toEqual({
       id: "r1",
       deviceName: "Lars's iPhone",
+      instanceId: "gateway-instance-1",
       accepted: true,
       code: "4821-9034",
       expiresInSecs: 120,
@@ -117,6 +119,26 @@ describe("connection requests", () => {
       ],
     });
     expect(settleCode(code, read, 10_000)).toEqual({ kind: "paired", deviceName: "Lars's iPhone" });
+  });
+
+  test("the code goes when the gateway restarts", () => {
+    const restarted = status({
+      gateway: {
+        connected: true,
+        instanceId: "gateway-instance-2",
+        loopbackOnly: false,
+        attachedDevices: [],
+        connectedDevices: [],
+      },
+    });
+    expect(restarted.gateway?.instanceId).toBe("gateway-instance-2");
+
+    const oldCode = { ...code, instanceId: "gateway-instance-1" };
+    expect(settleCode(oldCode, restarted, 10_000)).toEqual({
+      kind: "ended",
+      end: "stopped",
+      deviceName: "Lars's iPhone",
+    });
   });
 
   test("the code goes, and says why, when its request ends otherwise", () => {

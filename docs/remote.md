@@ -176,8 +176,8 @@ status, plus `connectRequests` (open: `id`, `deviceName`, `platform`,
 `remoteAddr`, `ageSecs`, `expiresInSecs`, `state` `pending` or `approved`) and
 `endedConnectRequests` (the last eight: `id`, `deviceName`, `end`, `deviceId`
 when it paired, `endedSecsAgo`). `_rustcode/remote/answer { id, accept }`
-answers with the machine's status plus `connectAnswer` (`code` and
-`expiresInSecs` on acceptance) or `connectError`;
+answers with the machine's status plus `connectAnswer` (`code`,
+`expiresInSecs` and `instanceId` on acceptance) or `connectError`;
 `_rustcode/remote/revoke { deviceId }` with `revoked` or `revokeError`. The
 app reads the machine's status every 2.5 s while the gateway runs, and every
 15 s otherwise, whichever page is open. The wire protocol to the gateway

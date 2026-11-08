@@ -59,6 +59,8 @@ export interface RemoteEndedConnectRequest {
 export interface RemoteConnectAnswer {
   id: string;
   deviceName: string;
+  /** Gateway process that issued the answer and its code. */
+  instanceId?: string;
   accepted: boolean;
   code?: string;
   expiresInSecs?: number;
@@ -86,6 +88,8 @@ export interface RemotePairing {
 /** Where the gateway listens and who is on it. */
 export interface RemoteGateway {
   connected: boolean;
+  /** Changes every time the gateway process starts. */
+  instanceId?: string;
   /** The address a phone dials, when the gateway knows it. */
   advertisedAddress?: string;
   /** The address the gateway bound. */
@@ -221,6 +225,7 @@ function parseConnectAnswer(value: Json | undefined): RemoteConnectAnswer | unde
   return {
     id,
     deviceName: str(answer.deviceName) ?? "A device",
+    instanceId: str(answer.instanceId),
     accepted: bool(answer.accepted) ?? false,
     code: str(answer.code),
     expiresInSecs: num(answer.expiresInSecs),
@@ -281,6 +286,7 @@ function parseGateway(value: Json | undefined): RemoteGateway | undefined {
   if (!gateway) return undefined;
   return {
     connected: bool(gateway.connected) ?? false,
+    instanceId: str(gateway.instanceId),
     advertisedAddress: str(gateway.advertisedAddress),
     listenAddress: str(gateway.listenAddress),
     loopbackOnly: bool(gateway.loopbackOnly) ?? false,

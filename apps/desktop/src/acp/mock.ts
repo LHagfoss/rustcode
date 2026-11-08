@@ -2229,6 +2229,7 @@ export class MockEngine {
     const phones = connected ? this.remote.devices.map((device) => str(device.name) ?? "phone") : [];
     return {
       connected,
+      instanceId: "mock-gateway-instance-1",
       advertisedAddress: "192.168.1.24:17879",
       listenAddress: "192.168.1.24:17879",
       loopbackOnly: false,
@@ -2994,6 +2995,7 @@ export class MockEngine {
           connectAnswer: {
             id,
             deviceName: request.deviceName,
+            instanceId: "mock-gateway-instance-1",
             accepted: true,
             code: "4821-9034",
             expiresInSecs: 120,

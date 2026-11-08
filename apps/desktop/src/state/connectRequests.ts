@@ -15,6 +15,8 @@ export interface ConnectCode {
   requestId: string;
   deviceName: string;
   code: string;
+  /** Gateway process that issued the code. */
+  instanceId?: string;
   /** Epoch milliseconds at which the code stops working. */
   expiresAt: number;
   /** Pairing is locked after too many wrong codes; the code works once this runs out. */
@@ -47,6 +49,8 @@ export function settleCode(
   now: number,
 ): CodeSettlement {
   const deviceName = code.deviceName;
+  if (status?.gateway?.instanceId && code.instanceId && status.gateway.instanceId !== code.instanceId)
+    return { kind: "ended", end: "stopped", deviceName };
   if (status && (!status.enabled || status.gateway?.connected === false || !status.gateway))
     return { kind: "ended", end: "stopped", deviceName };
   const ended = status?.endedConnectRequests.find((request) => request.id === code.requestId);
