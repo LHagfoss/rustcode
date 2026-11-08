@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { heldBackCount, heldBackReason, type RemoteOffer, type RemotePairing } from "../acp/remote";
 import { encodeQr } from "../lib/qr";
 import { errorText, pairRemoteDevice, refreshRemote, setRemoteAccess, toast, useApp } from "../state/store";
+import { activeChallenge, makeChallenge, newPairedDevice, type PairingChallenge } from "./pairingChallenge";
 import { copyText, cx, Spinner, Switch } from "./primitives";
 import { Action, Chip, Group, Loading, Row } from "./settingsKit";
 
@@ -48,6 +49,7 @@ export function RemoteAccessPage() {
   const [now, setNow] = useState(() => Date.now());
   const [readAt, setReadAt] = useState(0);
   const [paired, setPaired] = useState<{ name: string } | null>(null);
+  const [challenge, setChallenge] = useState<PairingChallenge | null>(null);
   const [pairAskedAt, setPairAskedAt] = useState<number | null>(null);
 
   // The app's open threads, with the harness each runs on. Both kinds are
@@ -88,7 +90,8 @@ export function RemoteAccessPage() {
 
   const devices = remote?.devices ?? [];
   const gateway = remote?.gateway;
-  const offer = remote?.offer;
+  const active = activeChallenge(challenge, now);
+  const offer = active?.offer;
   const pairing = gateway?.pairing;
   const unavailable = remote?.available === false;
   const enabled = remote?.enabled === true;
@@ -104,11 +107,19 @@ export function RemoteAccessPage() {
   useEffect(() => {
     const baseline = baselineDevices.current;
     if (!baseline) return;
-    const fresh = devices.find((device) => !baseline.includes(device.id));
+    const fresh = newPairedDevice(baseline, devices);
     if (!fresh) return;
     baselineDevices.current = null;
+    setChallenge(null);
     setPaired({ name: fresh.name });
   }, [devices]);
+
+  useEffect(() => {
+    if (challenge && now >= challenge.expiresAt) {
+      baselineDevices.current = null;
+      setChallenge(null);
+    }
+  }, [challenge, now]);
 
   useEffect(() => {
     if (!enabled) setPaired(null);
@@ -128,15 +139,25 @@ export function RemoteAccessPage() {
   };
 
   const toggle = (next: boolean) => {
-    if (!next) setPaired(null);
+    if (!next) {
+      setPaired(null);
+      setChallenge(null);
+      baselineDevices.current = null;
+    }
     void run("toggle", () => setRemoteAccess(next));
   };
 
   const pair = () => {
     setPaired(null);
+    setChallenge(null);
     baselineDevices.current = devices.map((device) => device.id);
     setPairAskedAt(Date.now());
-    void run("pair", () => pairRemoteDevice());
+    void run("pair", async () => {
+      const status = await pairRemoteDevice();
+      if (status?.offer && baselineDevices.current) {
+        setChallenge(makeChallenge(status.offer, Date.now()));
+      }
+    });
   };
 
   if (engine !== "ready" || (remote === null && !remoteError)) {
@@ -259,11 +280,15 @@ export function RemoteAccessPage() {
               pending={pending}
               error={pairingError}
               now={now}
-              readAt={readAt}
+              readAt={active ? active.expiresAt - active.offer.expiresInSecs * 1000 : readAt}
               overdue={pending && pairAskedAt !== null && now - pairAskedAt > PAIR_DEADLINE_MS}
               busy={busy === "pair"}
               onRenew={pair}
               onStop={() => toggle(false)}
+              onDismiss={() => {
+                baselineDevices.current = null;
+                setChallenge(null);
+              }}
             />
           </Group>
         )
@@ -357,6 +382,7 @@ function PairingCard({
   busy,
   onRenew,
   onStop,
+  onDismiss,
 }: {
   offer?: RemoteOffer;
   pairing?: RemotePairing;
@@ -368,6 +394,7 @@ function PairingCard({
   busy: boolean;
   onRenew: () => void;
   onStop: () => void;
+  onDismiss: () => void;
 }) {
   const secs = pairing?.expiresInSecs ?? offer?.expiresInSecs ?? 0;
   const left = Math.max(0, Math.ceil((readAt + secs * 1000 - now) / 1000));
@@ -415,6 +442,9 @@ function PairingCard({
               </span>
               {lockedFor > 0 && <Chip tone="warn">Pairing locked</Chip>}
               {offer.loopbackOnly && <Chip tone="warn">This Mac only</Chip>}
+              <Action quiet size="sm" onClick={onDismiss}>
+                Dismiss
+              </Action>
               <Action quiet size="sm" disabled={busy} onClick={onRenew}>
                 {busy ? <Spinner /> : <RefreshCw size={12} />}
                 New code
