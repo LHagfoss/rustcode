@@ -6,6 +6,7 @@ import {
   newerVersion,
   readChannel,
   shouldShowWhatsNew,
+  updateHint,
 } from "./updates";
 
 describe("updates", () => {
@@ -92,5 +93,29 @@ describe("install progress", () => {
     });
     expect(installProgress({ phase: "installing" }).step).toMatch(/reopens/);
     expect(installProgress(null)).toEqual({ fraction: 0, step: "Starting the download…" });
+  });
+});
+
+describe("the update row's hint", () => {
+  const info = {
+    current: "1.21.0",
+    latest: "1.22.0",
+    available: true,
+    canInstall: true,
+    installNote: null,
+    development: false,
+    page: "https://github.com/LHagfoss/rustcode/releases/tag/v1.22.0",
+    channels: ["stable"],
+    channel: "stable",
+  } as const;
+
+  test("an installable copy says it installs and reopens; any other opens the release page", () => {
+    expect(updateHint({ ...info, channels: ["stable"] })).toBe("Installs and reopens RustCode");
+    expect(updateHint({ ...info, canInstall: false, channels: ["stable"] })).toBe("Opens the release page");
+  });
+
+  test("a note from the shell replaces the default (the .deb asks for a password)", () => {
+    const note = "Asks for your password to install the package";
+    expect(updateHint({ ...info, installNote: note, channels: ["stable"] })).toBe(note);
   });
 });

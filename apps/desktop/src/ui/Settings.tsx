@@ -1068,8 +1068,9 @@ function BannerSetting() {
 
 /**
  * The app's version and its update, like the SwiftUI app's UpdateControl:
- * Check for Updates, then Update to X (macOS installs in place, quits and
- * reopens) or Download X (the release page, where the installer updates).
+ * Check for Updates, then Update to X (installs in place on macOS, a Linux
+ * AppImage or .deb and Windows, quits and reopens) or Download X (the release
+ * page, for a copy that cannot replace itself).
  */
 function AppVersion() {
   const info = useUpdates((s) => s.info);
@@ -1111,7 +1112,9 @@ function AppVersion() {
         ? "RustCode is up to date."
         : info?.development
           ? "A development build; it does not update itself."
-          : undefined;
+          : offered
+            ? (info?.installNote ?? undefined)
+            : undefined;
   return (
     <Row
       title={`RustCode ${version}`}
@@ -1140,6 +1143,9 @@ function AppVersion() {
       }
     >
       {canUpdate() && <Action onClick={() => void showWhatsNew(version)}>What's New</Action>}
+      {error && offered && info?.canInstall && info.page && (
+        <Action onClick={() => openExternal(info.page ?? "")}>Release page</Action>
+      )}
       {!canUpdate() ? (
         <Info size={14} className="text-fg-faint" />
       ) : offered && info.latest ? (
