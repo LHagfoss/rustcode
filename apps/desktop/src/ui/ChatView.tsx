@@ -55,12 +55,14 @@ import { LinkedThreads } from "./Links";
 import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
 import { NEW_THREAD_WIDGETS_MIN_HEIGHT, NewThreadWidgets } from "./NewThreadWidgets";
+import { boundTips } from "./newThreadTips";
 import { ProjectMark } from "./ProjectMark";
 import {
   Callout,
   Cluster,
   ClusterButton,
   cx,
+  Kbd,
   MenuContent,
   menuItem,
   menuSeparator,
@@ -588,6 +590,55 @@ function LaneItem({ over = false, children }: { over?: boolean; children: ReactN
   );
 }
 
+function NewThreadHeading({
+  project,
+  banner,
+  showTip,
+}: {
+  project: string | null;
+  banner: boolean;
+  showTip: boolean;
+}) {
+  const [tip] = useState(() => {
+    const tips = boundTips(useApp.getState().shortcuts);
+    return tips[Math.floor(Math.random() * tips.length)];
+  });
+  const shortcut = useShortcutHint(tip?.command ?? "");
+  return (
+    <div className="flex min-w-0 max-w-full flex-col items-center gap-2 pb-2 text-center">
+      <h2
+        className={cx(
+          "min-w-0 max-w-full rounded-full px-3 py-1 font-semibold text-title tracking-tight",
+          banner && "rc-glass",
+        )}
+      >
+        {project ? (
+          <>
+            What should we build in{" "}
+            <button
+              type="button"
+              onClick={() => void chooseFolder(false)}
+              title={`Change folder (${displayPath(project)})`}
+              className="-mx-1 inline-block max-w-full truncate rounded-md px-1 align-bottom text-fg hover:bg-fill"
+            >
+              {projectName(project)}
+              <span className="sr-only"> (change folder)</span>
+            </button>
+            ?
+          </>
+        ) : (
+          "What should we build?"
+        )}
+      </h2>
+      {showTip && tip && shortcut && (
+        <p className={cx("rounded-full px-3 py-1 text-caption text-fg-muted", banner && "rc-glass")}>
+          Tip: {tip.text} with <Kbd>{shortcut}</Kbd>
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function ChatView() {
   const selectedId = useApp((s) => s.selectedId);
   const projectCwd = useApp((s) => s.projectCwd);
@@ -791,6 +842,13 @@ export function ChatView() {
             )}
           >
             <div className="mx-auto flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-2">
+              {isNew && (
+                <NewThreadHeading
+                  project={projectCwd}
+                  banner={showsBanner}
+                  showTip={height >= NEW_THREAD_WIDGETS_MIN_HEIGHT && !overviewMounted}
+                />
+              )}
               {error && (
                 <LaneItem over>
                   <ErrorBanner
