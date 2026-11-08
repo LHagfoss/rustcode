@@ -385,9 +385,27 @@ composer's keys stay outside the table.
   read-only and never refreshed (`provider_auth/claude_usage.rs`). Claude is
   read only after the user
   presses **Show** once (`rustcode.claudeUsage`), since macOS may ask to
-  allow Keychain access. Each source is cached a minute. Showing the page
-  reads every Claude login; the background reads one at a time, the account
-  of the thread on screen (`claudeAccount`).
+  allow Keychain access. Each source is cached a minute. Showing the page is an
+  explicit look and reads every Claude login; the background reads one at a
+  time, the default login and the account of the thread on screen
+  (`claudeAccount`). While the page is open it reads again every three minutes
+  (`PLAN_CACHE_POLL_MS`, the meter poll's interval, `watchUsageRefresh` in
+  `state/usagePage.ts`), and once on coming back to the window when what it
+  draws is older than that. That tick is a background read: it asks for the same
+  logins the app's poll asks for (`backgroundPlansAsk`, through
+  `state/plans.ts`), so it never reads a login nothing was read for or one a
+  failed read paused, and it keeps the rows it did not ask rather than dropping
+  them; the foot keeps the time of the last whole read, since a background read
+  does not ask for every named login. It reads even when the app's own poll just
+  filled the plan cache — the rows on screen come from the page's read, and the
+  engine shares a read that is already under way. A read that fails doubles the
+  wait, up to fifteen minutes, and a read that answers puts it back on the
+  interval; a read in flight is never doubled, and Refresh still reads at once,
+  past the engine's minute of cache. What the page reads fills the same cache
+  `list_harnesses` reports to an agent (`state/harnessUsage.ts`,
+  `docs/orchestrator.md`), which answers without a Keychain read or a request of
+  its own and refreshes the stale named logins in the background. With Claude's
+  switch off, an answer that was already in flight commits no Claude row.
   A Claude access token lives hours and is renewed only when Claude Code runs,
   so a login nobody ran a thread on since reads as lapsed. The row then draws
   the numbers RustCode last read for that login, from `claude-usage.json` in
@@ -1287,9 +1305,10 @@ window is in front (every 30 minutes behind it), when its window comes back,
 and 30 s after a failed check, doubling to 5 minutes (`src/state/updates.ts`).
 A check is a HEAD request to the release page on Stable, and the release feed
 on Beta: neither is the GitHub API, which a 30-second check would exhaust. A
-release counts as out only once its macOS app is uploaded and its
-`SHA256SUMS` lists it: the release goes public minutes before the other
-platforms and the sums land, and an install verifies against them. When a newer release is out, an *Update to X* row
+release counts as out only once the package this copy installs from is
+uploaded and its `SHA256SUMS` lists it: the release goes public minutes before
+the other platforms and the sums land, and an install verifies against them.
+When a newer release is out, an *Update to X* row
 sits at the foot of the sidebar: it installs in place where the app can
 (below), else opens the release page; while it installs, the row shows a
 progress bar (`Downloading · 39% of 58.2 MB`, then Verifying and Installing)
@@ -1329,16 +1348,42 @@ and switching back to Stable never offers a downgrade (a beta is already newer
 than the release before it). On Beta the row reads **Update to
 1.21.0-beta.3**, with **Skip this beta** under it: that version is kept out of
 the row across restarts (`rustcode.skippedBeta`) and the next beta is offered
-as usual. On macOS **Update to X** downloads
-`RustCode-<ver>-macos-<arch>.app.zip`, checks it against the release's
-`SHA256SUMS`, unpacks it with `ditto`, requires `codesign --verify --deep
---strict` and this app's bundle id, then a detached shell waits for the app
-to quit, swaps the bundle, re-registers it with Launch Services and opens
-it. It installs in place only from a release bundle in a folder it can write;
-otherwise, and on Windows and Linux, the button opens the release page and
-the installer does the update. A `tauri dev` build always sees an update
-but never installs it. The channel is the app's own: Homebrew and the CLI
-updater stay on stable (`scripts/release.sh --beta` publishes a GitHub
+as usual. **Update to X** installs in place on macOS, Linux (AppImage and
+`.deb`) and Windows; how depends on how this copy was installed
+(`Install` in `updater.rs`, decided from `$APPIMAGE`, the binary's path,
+`dpkg-query -S` and the files beside it). Every route first downloads the
+package, checks it against the release's `SHA256SUMS` in memory and refuses a
+mismatch, so nothing unverified is written or run:
+
+- **macOS app bundle**: `RustCode-<ver>-macos-<arch>.app.zip`, unpacked with
+  `ditto`; `codesign --verify --deep --strict` and this app's bundle id are
+  required, then a detached shell waits for the app to quit, swaps the bundle,
+  re-registers it with Launch Services and opens it.
+- **Linux AppImage** (`$APPIMAGE` is set): `RustCode-<ver>-linux-x86_64.AppImage`
+  is written next to the running file, made executable and renamed over it
+  (atomic, no root); a detached shell then starts it once the app has quit.
+- **Linux `.deb`** (a dpkg-owned binary under `/usr`, no `$APPIMAGE`, not
+  Flatpak or Snap): `RustCode-<ver>-linux-x86_64.deb` is saved in a new
+  `0700` folder and installed with `pkexec apt-get install -y <file>` (`pkexec
+  dpkg -i` when there is no apt-get); polkit asks for the password. A
+  dismissed dialog, a missing `pkexec` or a failing package tool shows the
+  reason in a toast with a **Release page** button. The app reopens from the
+  path it started from.
+- **Windows** (an NSIS install: `uninstall.exe` beside the app):
+  `RustCode-<ver>-windows-x64-setup.exe` is saved to a new temp folder and run
+  as `setup.exe /S /UPDATE /R` (the flags Tauri's NSIS template reads: silent,
+  keep the install and skip its pages, start the app again), the path passed as
+  one argument and never through a shell. The app quits so the installer can
+  replace its files; it needs no administrator rights (`installMode:
+  currentUser`).
+
+Any other copy (a tarball or AUR/manual install, Flatpak, an AppImage or
+bundle in a folder RustCode cannot write, Linux or Windows on arm) cannot
+replace itself: the button opens the release page, and a read-only folder says
+so in the row. A `tauri dev` build always sees an update but never installs it.
+An install that fails leaves the running app as it was and shows the reason
+with a **Release page** button. The channel is the app's own: Homebrew and the
+CLI updater stay on stable (`scripts/release.sh --beta` publishes a GitHub
 prerelease both skip).
 
 It does not use `tauri-plugin-updater`: that plugin requires its own

@@ -1,9 +1,26 @@
 //! The in-app updater, the SwiftUI app's `Updater.swift` ported: ask GitHub
-//! what the update channel offers, and on macOS install it in place. It
-//! downloads `RustCode-<ver>-macos-<arch>.app.zip`, checks it against the
-//! release's `SHA256SUMS`, unpacks it with `ditto`, requires a valid code
-//! signature and this app's bundle identifier, then a detached shell swaps the
-//! bundle once this process has quit and opens the new one.
+//! what the update channel offers, and install it in place. Every download is
+//! checked against the release's `SHA256SUMS` before a byte of it is written
+//! or run; what happens next depends on how this copy was installed
+//! (`Install`):
+//!
+//! - macOS app bundle: `RustCode-<ver>-macos-<arch>.app.zip`, unpacked with
+//!   `ditto`, a valid code signature and this app's bundle identifier
+//!   required, then a detached shell swaps the bundle once this process has
+//!   quit and opens the new one.
+//! - Linux AppImage (`$APPIMAGE`): the new AppImage is written next to the
+//!   running one, made executable and renamed over it, then launched once this
+//!   process has quit. No root needed.
+//! - Linux `.deb` (a dpkg-owned binary under `/usr`): the package is saved in
+//!   a private temp directory and installed with `pkexec apt-get install -y`
+//!   (`pkexec dpkg -i` without apt-get), then the app reopens.
+//! - Windows (an NSIS install, `uninstall.exe` beside the app): the setup is
+//!   run silently with the flags Tauri's NSIS template reads (`/S /UPDATE
+//!   /R`: no UI, keep the install, start the app again), and this process
+//!   quits so the installer can replace its files.
+//!
+//! Any other copy (a tarball, Flatpak, a folder it cannot write) reports the
+//! release and opens its page instead.
 //!
 //! The channel is Stable or Beta (Settings › About). Stable reads the tag that
 //! `releases/latest` redirects to, as it always has. Beta also offers
@@ -14,10 +31,11 @@
 //!
 //! No tauri-plugin-updater: it needs its own signing key pair, and every
 //! release would fail without that secret. SHA256SUMS is what the installers
-//! already trust. Windows and Linux report the release and leave installing
-//! it to the installer (docs/install.md).
+//! already trust.
 
 use serde::Serialize;
+use sha2::{Digest, Sha256};
+use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -36,11 +54,15 @@ pub struct UpdateInfo {
     latest: Option<String>,
     /// The channel offers an update this platform can install.
     available: bool,
-    /// The app can replace itself (a macOS release bundle in a folder it may write).
+    /// The app can replace itself (see `Install`).
     can_install: bool,
+    /// What to tell the user about how this copy updates, when the default
+    /// ("installs and reopens" / "opens the release page") is not the whole
+    /// story: the .deb asks for a password, a read-only folder cannot update.
+    install_note: Option<String>,
     /// A `tauri dev` build, which never updates itself.
     development: bool,
-    /// The release page, for platforms that update with the installer.
+    /// The release page: the fallback for a copy that cannot install itself.
     page: Option<String>,
     /// The channels this build offers: `beta` only where a beta has an app.
     channels: Vec<&'static str>,
@@ -236,12 +258,242 @@ fn arch() -> &'static str {
     }
 }
 
-fn asset_name(version: &str) -> String {
-    format!("RustCode-{version}-macos-{}.app.zip", arch())
+/// The release asset an install kind updates from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Package {
+    /// `RustCode-<ver>-macos-<arch>.app.zip`
+    MacApp,
+    /// `RustCode-<ver>-linux-x86_64.AppImage`
+    AppImage,
+    /// `RustCode-<ver>-linux-x86_64.deb`
+    Deb,
+    /// `RustCode-<ver>-windows-x64-setup.exe` (NSIS)
+    WindowsSetup,
+}
+
+impl Package {
+    /// The asset's name in the release (.github/workflows/build.yml), or `None`
+    /// where the release ships none for `arch`: the Linux and Windows apps are
+    /// built for x86_64 only.
+    fn asset(self, version: &str, arch: &str) -> Option<String> {
+        let x86_64 = arch == "x86_64";
+        match self {
+            Package::MacApp => Some(format!("RustCode-{version}-macos-{arch}.app.zip")),
+            Package::AppImage => {
+                x86_64.then(|| format!("RustCode-{version}-linux-x86_64.AppImage"))
+            }
+            Package::Deb => x86_64.then(|| format!("RustCode-{version}-linux-x86_64.deb")),
+            Package::WindowsSetup => {
+                x86_64.then(|| format!("RustCode-{version}-windows-x64-setup.exe"))
+            }
+        }
+    }
 }
 
 fn download_url(tag: &str, asset: &str) -> String {
-    format!("https://github.com/{REPO}/releases/download/{tag}/{asset}")
+    format!("{}/{asset}", download_base(tag))
+}
+
+/// Where a release's assets are served from.
+fn download_base(tag: &str) -> String {
+    format!("https://github.com/{REPO}/releases/download/{tag}")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Os {
+    Mac,
+    Linux,
+    Windows,
+    Other,
+}
+
+impl Os {
+    fn current() -> Os {
+        if cfg!(target_os = "macos") {
+            Os::Mac
+        } else if cfg!(target_os = "linux") {
+            Os::Linux
+        } else if cfg!(windows) {
+            Os::Windows
+        } else {
+            Os::Other
+        }
+    }
+}
+
+/// What this process can tell about how it was installed, gathered once per
+/// check so `classify` is a pure function of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Host {
+    os: Os,
+    arch: &'static str,
+    /// The running binary.
+    exe: Option<PathBuf>,
+    /// The `.app` it runs from (macOS).
+    bundle: Option<PathBuf>,
+    /// `$APPIMAGE`: the AppImage file it was started from (Linux).
+    appimage: Option<PathBuf>,
+    /// Inside Flatpak or Snap, where the package manager owns the files.
+    sandboxed: bool,
+    /// The binary belongs to an installed dpkg package (Linux).
+    dpkg_owned: bool,
+    /// `uninstall.exe` sits beside the binary: an NSIS install (Windows).
+    has_uninstaller: bool,
+    /// The folder an update would replace files in is writable (macOS bundle
+    /// or AppImage).
+    folder_writable: bool,
+}
+
+/// How this copy of the app was installed, and so how it updates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Install {
+    /// A macOS `.app` in a folder it may write.
+    MacApp(PathBuf),
+    /// The AppImage file at this path, in a folder it may write.
+    AppImage(PathBuf),
+    /// A dpkg-owned install; the path is the binary to start again.
+    Deb(PathBuf),
+    /// An NSIS install.
+    Windows,
+    /// A bundle or AppImage whose folder cannot be written: no in-place update.
+    ReadOnly(PathBuf),
+    /// Anything else (a tarball, Flatpak, a dev build): the release page.
+    Manual,
+}
+
+impl Install {
+    fn package(&self) -> Option<Package> {
+        match self {
+            Install::MacApp(_) => Some(Package::MacApp),
+            Install::AppImage(_) => Some(Package::AppImage),
+            Install::Deb(_) => Some(Package::Deb),
+            Install::Windows => Some(Package::WindowsSetup),
+            Install::ReadOnly(_) | Install::Manual => None,
+        }
+    }
+
+    fn installable(&self) -> bool {
+        self.package().is_some()
+    }
+
+    /// A line for the update row and Settings when the default does not fit.
+    fn note(&self) -> Option<String> {
+        match self {
+            Install::Deb(_) => Some("Asks for your password to install the package".into()),
+            Install::ReadOnly(dir) => Some(format!(
+                "RustCode cannot write to {}, so the update opens the release page",
+                dir.display()
+            )),
+            _ => None,
+        }
+    }
+}
+
+/// How `host` was installed. Anything this cannot recognise is `Manual`: the
+/// updater only replaces files it knows how to replace.
+fn classify(host: &Host) -> Install {
+    let in_place = |path: &Path| {
+        let folder = path.parent().unwrap_or(path).to_path_buf();
+        if host.folder_writable {
+            None
+        } else {
+            Some(Install::ReadOnly(folder))
+        }
+    };
+    match host.os {
+        Os::Mac => match &host.bundle {
+            Some(bundle) => in_place(bundle).unwrap_or_else(|| Install::MacApp(bundle.clone())),
+            None => Install::Manual,
+        },
+        Os::Linux => {
+            // The release has Linux apps for x86_64 only.
+            if host.arch != "x86_64" {
+                return Install::Manual;
+            }
+            if let Some(image) = &host.appimage {
+                return in_place(image).unwrap_or_else(|| Install::AppImage(image.clone()));
+            }
+            match &host.exe {
+                Some(exe) if !host.sandboxed && host.dpkg_owned && exe.starts_with("/usr/") => {
+                    Install::Deb(exe.clone())
+                }
+                _ => Install::Manual,
+            }
+        }
+        Os::Windows if host.arch == "x86_64" && host.has_uninstaller => Install::Windows,
+        Os::Windows => Install::Manual,
+        Os::Other => Install::Manual,
+    }
+}
+
+impl Host {
+    fn probe() -> Host {
+        let os = Os::current();
+        let exe = std::env::current_exe()
+            .ok()
+            .map(|exe| exe.canonicalize().unwrap_or(exe));
+        let bundle = bundle_path();
+        let appimage = std::env::var_os("APPIMAGE")
+            .map(PathBuf::from)
+            .filter(|path| os == Os::Linux && path.is_absolute() && path.is_file());
+        let sandboxed = std::env::var_os("FLATPAK_ID").is_some()
+            || std::env::var_os("SNAP").is_some()
+            || Path::new("/.flatpak-info").exists();
+        let dpkg_owned = os == Os::Linux
+            && appimage.is_none()
+            && exe
+                .as_deref()
+                .is_some_and(|exe| exe.starts_with("/usr/") && dpkg_owns(exe));
+        let has_uninstaller = os == Os::Windows
+            && exe
+                .as_deref()
+                .and_then(Path::parent)
+                .is_some_and(|dir| dir.join("uninstall.exe").is_file());
+        let folder_writable = if os == Os::Mac {
+            bundle.as_deref()
+        } else {
+            appimage.as_deref()
+        }
+        .and_then(Path::parent)
+        .is_some_and(writable);
+        Host {
+            os,
+            arch: arch(),
+            exe,
+            bundle,
+            appimage,
+            sandboxed,
+            dpkg_owned,
+            has_uninstaller,
+            folder_writable,
+        }
+    }
+}
+
+/// Whether dpkg lists `exe` as a file of an installed package. The answer
+/// does not change while the app runs, so it is asked once.
+fn dpkg_owns(exe: &Path) -> bool {
+    static OWNED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OWNED.get_or_init(|| {
+        crate::process::command("dpkg-query")
+            .arg("-S")
+            .arg("--")
+            .arg(exe)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    })
+}
+
+/// How this copy installs updates.
+fn current_install() -> Install {
+    // A `tauri dev` build never updates itself.
+    if cfg!(debug_assertions) {
+        return Install::Manual;
+    }
+    classify(&Host::probe())
 }
 
 /// The one well-formed `SHA256SUMS` entry for `asset`.
@@ -340,29 +592,31 @@ fn bundle_path() -> Option<PathBuf> {
 
 fn writable(dir: &Path) -> bool {
     let probe = dir.join(format!(".rustcode-update-probe-{}", std::process::id()));
-    let ok = std::fs::write(&probe, b"").is_ok();
+    let create = || {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe)
+    };
+    // `create_new` never follows a file already at the name, so a folder others
+    // can write cannot be used to point the write at another file; a probe left
+    // by an earlier run (the same pid) is removed and made again.
+    let ok = create().is_ok() || (std::fs::remove_file(&probe).is_ok() && create().is_ok());
     let _ = std::fs::remove_file(&probe);
     ok
 }
 
-fn can_install() -> bool {
-    cfg!(target_os = "macos")
-        && !cfg!(debug_assertions)
-        && bundle_path()
-            .and_then(|b| b.parent().map(writable))
-            .unwrap_or(false)
-}
-
 /// What the channel offers this app, if anything: the newest version that is
-/// newer than this one (any, for a dev build) and, on macOS, uploaded with its
-/// `SHA256SUMS`. A release whose app is not there yet is passed over for the
-/// one before it.
+/// newer than this one (any, for a dev build) and, where the app can install
+/// itself, uploaded with its `SHA256SUMS`. A release whose package is not there
+/// yet is passed over for the one before it.
 async fn select(
     client: &reqwest::Client,
     current: &str,
     channel: ReleaseChannel,
     skipped: Option<&str>,
     development: bool,
+    package: Option<Package>,
 ) -> Result<Option<String>, String> {
     let tags = release_tags(client, channel).await?;
     for version in candidates(&tags, channel, skipped) {
@@ -374,10 +628,10 @@ async fn select(
         // app minutes before the other platforms and `SHA256SUMS` land, and
         // an install needs the sums to verify the download. Offer it only
         // once both are there.
-        if cfg!(target_os = "macos")
-            && !ready(client, &format!("v{version}"), &asset_name(&version)).await
-        {
-            continue;
+        if let Some(asset) = package.and_then(|p| p.asset(&version, arch())) {
+            if !ready(client, &format!("v{version}"), &asset).await {
+                continue;
+            }
         }
         return Ok(Some(version));
     }
@@ -388,11 +642,20 @@ async fn check(
     app: &AppHandle,
     channel: ReleaseChannel,
     skipped: Option<&str>,
+    install: &Install,
 ) -> Result<UpdateInfo, String> {
     let current = app.package_info().version.to_string();
     let development = cfg!(debug_assertions);
     let client = client()?;
-    let latest = select(&client, &current, channel, skipped, development).await?;
+    let latest = select(
+        &client,
+        &current,
+        channel,
+        skipped,
+        development,
+        install.package(),
+    )
+    .await?;
     let page = match &latest {
         Some(version) => format!("https://github.com/{REPO}/releases/tag/v{version}"),
         None => format!("https://github.com/{REPO}/releases"),
@@ -401,7 +664,8 @@ async fn check(
         current,
         available: latest.is_some(),
         latest,
-        can_install: can_install(),
+        can_install: install.installable(),
+        install_note: install.note(),
         development,
         page: Some(page),
         channels: channel_names(),
@@ -519,22 +783,28 @@ pub async fn update_check(
     channel: Option<String>,
     skipped: Option<String>,
 ) -> Result<UpdateInfo, String> {
-    check(&app, channel_of(channel.as_deref()), skipped.as_deref()).await
+    check(
+        &app,
+        channel_of(channel.as_deref()),
+        skipped.as_deref(),
+        &current_install(),
+    )
+    .await
 }
 
 /// Where an install is, for the sidebar's progress bar.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase", tag = "phase")]
 pub enum InstallProgress {
-    /// Bytes of the app zip so far, and its size when the server said.
+    /// Bytes of the download so far, and its size when the server said.
     Downloading { received: u64, total: Option<u64> },
-    /// Checking the checksum and the code signature.
+    /// Checking the download against the release's checksums.
     Verifying,
-    /// Swapping the bundle; the app quits next.
+    /// Swapping the app in; the app quits next.
     Installing,
 }
 
-/// Downloads, verifies and stages the update, then quits; the app reopens
+/// Downloads, verifies and installs the update, then quits; the app reopens
 /// updated. An error leaves the running app as it was.
 #[tauri::command]
 pub async fn update_install(
@@ -543,46 +813,373 @@ pub async fn update_install(
     skipped: Option<String>,
     on_progress: Channel<InstallProgress>,
 ) -> Result<(), String> {
-    let info = check(&app, channel_of(channel.as_deref()), skipped.as_deref()).await?;
-    if !info.available || !info.can_install {
-        return Err("No update this app can install itself.".into());
-    }
-    let version = info.latest.unwrap_or_default();
-    let tag = format!("v{version}");
-    let asset = asset_name(&version);
+    let install = current_install();
+    let info = check(
+        &app,
+        channel_of(channel.as_deref()),
+        skipped.as_deref(),
+        &install,
+    )
+    .await?;
+    let Some(package) = install.package() else {
+        return Err(install
+            .note()
+            .unwrap_or_else(|| "No update this app can install itself.".into()));
+    };
+    // The check this install re-runs has to offer it again: the release can be
+    // gone, or a beta the user skipped, between the row and the click. The
+    // install note is no answer to that (it says how an install works).
+    let offered = info.available;
+    let Some(version) = info.latest.filter(|_| offered) else {
+        return Err("This update is no longer offered. Check for updates again.".into());
+    };
+    let asset = package
+        .asset(&version, arch())
+        .ok_or("This release has no app for this platform.")?;
     let client = client()?;
-    let work = std::env::temp_dir().join(format!(
-        "rustcode-update-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0)
-    ));
-    std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
-    let zip = work.join(&asset);
-    let result = async {
-        let body = download(&client, &download_url(&tag, &asset), |received, total| {
-            let _ = on_progress.send(InstallProgress::Downloading { received, total });
-        })
-        .await?;
-        std::fs::write(&zip, &body).map_err(|e| e.to_string())?;
-        let _ = on_progress.send(InstallProgress::Verifying);
-        let sums = fetch(&client, &download_url(&tag, "SHA256SUMS")).await?;
-        let expected = checksum(&String::from_utf8_lossy(&sums), &asset)
-            .ok_or("The release checksums do not list the app.")?;
-        let staged = stage(&app, &zip, &work, &expected)?;
-        let _ = on_progress.send(InstallProgress::Installing);
-        Ok(staged)
+    let bytes = fetch_verified(
+        &client,
+        &download_base(&format!("v{version}")),
+        &asset,
+        |progress| {
+            let _ = on_progress.send(progress);
+        },
+    )
+    .await?;
+    // Verified: nothing from here on installs a file that did not match.
+    let _ = on_progress.send(InstallProgress::Installing);
+    let quit = app.clone();
+    tauri::async_runtime::spawn_blocking(move || install_package(&quit, &install, &asset, &bytes))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// The release asset, checked against the release's `SHA256SUMS`, as bytes
+/// that are not written anywhere until they match. `base` is the folder the
+/// assets are served from.
+async fn fetch_verified(
+    client: &reqwest::Client,
+    base: &str,
+    asset: &str,
+    mut progress: impl FnMut(InstallProgress),
+) -> Result<Vec<u8>, String> {
+    let body = download(client, &format!("{base}/{asset}"), |received, total| {
+        progress(InstallProgress::Downloading { received, total })
+    })
+    .await?;
+    progress(InstallProgress::Verifying);
+    let sums = fetch(client, &format!("{base}/SHA256SUMS")).await?;
+    let expected = checksum(&String::from_utf8_lossy(&sums), asset)
+        .ok_or("The release checksums do not list the app.")?;
+    verify_digest(&body, &expected)?;
+    Ok(body)
+}
+
+/// Whether `bytes` hash to `expected`, a lowercase hex SHA-256.
+fn verify_digest(bytes: &[u8], expected: &str) -> Result<(), String> {
+    let digest: String = Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    if digest == expected {
+        Ok(())
+    } else {
+        Err("The download does not match the release checksum.".into())
     }
-    .await;
-    match result {
-        Ok(new_app) => relaunch(&app, &new_app),
-        Err(e) => {
-            let _ = std::fs::remove_dir_all(&work);
-            Err(e)
+}
+
+/// Installs the verified `bytes` of `asset` the way `install` updates, then
+/// quits the app (every route reopens it).
+fn install_package(
+    app: &AppHandle,
+    install: &Install,
+    asset: &str,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let work = private_dir()?;
+    let result = match install {
+        Install::MacApp(current) => {
+            let zip = work.join(asset);
+            let staged = std::fs::write(&zip, bytes)
+                .map_err(|e| e.to_string())
+                .and_then(|()| stage(app, &zip, &work));
+            // The script removes the work folder once it has swapped the bundle.
+            return match staged {
+                Ok(staged) => relaunch(app, current, &staged),
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(&work);
+                    Err(e)
+                }
+            };
+        }
+        Install::AppImage(target) => replace_appimage(target, bytes)
+            .and_then(|()| relaunch_after_exit(target, &APPIMAGE_ENV)),
+        Install::Deb(exe) => std::fs::write(work.join(asset), bytes)
+            .map_err(|e| e.to_string())
+            .and_then(|()| install_deb(&work.join(asset)))
+            .and_then(|()| relaunch_after_exit(exe, &[])),
+        Install::Windows => {
+            let setup = work.join(asset);
+            // The installer runs from the work folder, so it stays there (the
+            // OS clears its temp directory) unless it could not start.
+            let started = std::fs::write(&setup, bytes)
+                .map_err(|e| e.to_string())
+                .and_then(|()| run_installer(&setup));
+            if started.is_err() {
+                let _ = std::fs::remove_dir_all(&work);
+            }
+            return started.map(|()| app.exit(0));
+        }
+        Install::ReadOnly(_) | Install::Manual => Err("This copy cannot update itself.".into()),
+    };
+    let _ = std::fs::remove_dir_all(&work);
+    result.map(|()| app.exit(0))
+}
+
+/// A new folder only this user can enter, for a download that is about to be
+/// installed (with root, for a .deb): nobody can put a file in it between the
+/// checksum and the install.
+fn private_dir() -> Result<PathBuf, String> {
+    let base = std::env::temp_dir();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    for attempt in 0..8 {
+        let dir = base.join(format!(
+            "rustcode-update-{}-{stamp}-{attempt}",
+            std::process::id()
+        ));
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        match builder.create(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("Could not make a folder for the update: {e}")),
         }
     }
+    Err("Could not make a folder for the update.".into())
+}
+
+/// Writes the new AppImage next to the running one and renames it over that
+/// file: the swap is atomic, and the running copy keeps its old file open
+/// until it quits. The staged file is made with `create_new`, so a file another
+/// user planted at the name (the AppImage can live in `/tmp`) is never followed.
+fn replace_appimage(target: &Path, bytes: &[u8]) -> Result<(), String> {
+    let dir = target.parent().ok_or("The AppImage has no folder.")?;
+    let name = target.file_name().unwrap_or_default().to_string_lossy();
+    let mut staged = None;
+    for attempt in 0..8 {
+        let path = dir.join(format!(".{name}.update-{}-{attempt}", std::process::id()));
+        match write_executable(&path, bytes) {
+            Ok(()) => {
+                staged = Some(path);
+                break;
+            }
+            // A name taken by a leftover of an earlier attempt: the next one.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(appimage_failure(target, &e)),
+        }
+    }
+    let Some(staged) = staged else {
+        return Err(format!(
+            "RustCode could not write a new copy of {} (every name it tried is taken). Download the new AppImage from the release page.",
+            target.display()
+        ));
+    };
+    if let Err(e) = std::fs::rename(&staged, target) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(appimage_failure(target, &e));
+    }
+    Ok(())
+}
+
+/// Writes `bytes` to a new file at `path`, executable: `create_new` refuses a
+/// file already there instead of writing through it.
+fn write_executable(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(bytes)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(())
+}
+
+fn appimage_failure(target: &Path, error: &std::io::Error) -> String {
+    format!(
+        "RustCode could not replace {} ({error}). Download the new AppImage from the release page.",
+        target.display()
+    )
+}
+
+/// Variables the AppImage runtime and its launcher set for the running copy;
+/// the new one sets its own.
+const APPIMAGE_ENV: [&str; 4] = ["APPDIR", "APPIMAGE", "ARGV0", "OWD"];
+
+/// The arguments of the shell that waits for `pid` to exit, then starts `exe`.
+const WAIT_THEN_START: &str = r#"while kill -0 "$1" 2>/dev/null; do sleep 0.2; done
+exec "$2""#;
+
+fn relaunch_args(pid: u32, exe: &Path) -> Vec<OsString> {
+    vec![
+        "-c".into(),
+        WAIT_THEN_START.into(),
+        "sh".into(),
+        pid.to_string().into(),
+        exe.as_os_str().to_owned(),
+    ]
+}
+
+/// Starts `exe` once this process has exited, detached from it. `unset` names
+/// environment variables the new process must not inherit.
+fn relaunch_after_exit(exe: &Path, unset: &[&str]) -> Result<(), String> {
+    let mut command = crate::process::command("/bin/sh");
+    command
+        .args(relaunch_args(std::process::id(), exe))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    for name in unset {
+        command.env_remove(name);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    command
+        .spawn()
+        .map(drop)
+        .map_err(|e| format!("The update installed, but RustCode could not reopen: {e}"))
+}
+
+/// The first of `names` that is an executable file in `path`'s folders, then in
+/// the system's own (an app started from a launcher can have a short PATH).
+fn find_tool(name: &str, path: Option<OsString>) -> Option<PathBuf> {
+    let system = ["/usr/bin", "/usr/sbin", "/bin", "/sbin"].map(PathBuf::from);
+    path.iter()
+        .flat_map(std::env::split_paths)
+        .chain(system)
+        .map(|dir| dir.join(name))
+        .find(|candidate| is_executable(candidate))
+}
+
+fn is_executable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        path.metadata()
+            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    {
+        path.is_file()
+    }
+}
+
+/// What `pkexec` runs to install `deb`: `apt-get install -y <deb>` (which
+/// resolves dependencies), else `dpkg -i <deb>`. `None` with neither.
+fn deb_install_args(
+    apt_get: Option<&Path>,
+    dpkg: Option<&Path>,
+    deb: &Path,
+) -> Option<Vec<OsString>> {
+    if let Some(apt_get) = apt_get {
+        return Some(vec![
+            apt_get.as_os_str().to_owned(),
+            "install".into(),
+            "-y".into(),
+            deb.as_os_str().to_owned(),
+        ]);
+    }
+    dpkg.map(|dpkg| {
+        vec![
+            dpkg.as_os_str().to_owned(),
+            "-i".into(),
+            deb.as_os_str().to_owned(),
+        ]
+    })
+}
+
+/// What a failed `pkexec` run means: 126 is the dialog dismissed (or no
+/// permission), 127 no authentication was possible; anything else is the
+/// package tool's own failure.
+fn pkexec_failure(code: Option<i32>, stderr: &str) -> String {
+    match code {
+        Some(126) => "The update was cancelled: RustCode was not allowed to install the package. Try again, or download the .deb from the release page.".into(),
+        Some(127) => "The update could not ask for permission: no polkit authentication agent answered. Download the .deb from the release page and install it yourself.".into(),
+        _ => {
+            let detail = stderr
+                .lines()
+                .rev()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .map(|line| format!(": {}", line.chars().take(200).collect::<String>()))
+                .unwrap_or_default();
+            match code {
+                Some(code) => format!("Installing the package failed (status {code}){detail}"),
+                None => format!("Installing the package was interrupted{detail}"),
+            }
+        }
+    }
+}
+
+/// Installs the .deb as root through polkit (`pkexec`), which asks the user.
+fn install_deb(deb: &Path) -> Result<(), String> {
+    let path = std::env::var_os("PATH");
+    let pkexec = find_tool("pkexec", path.clone()).ok_or(
+        "The update needs pkexec (polkit) to install the package, and this system has none. Download the .deb from the release page.",
+    )?;
+    let args = deb_install_args(
+        find_tool("apt-get", path.clone()).as_deref(),
+        find_tool("dpkg", path).as_deref(),
+        deb,
+    )
+    .ok_or("Neither apt-get nor dpkg was found. Download the .deb from the release page.")?;
+    let output = crate::process::command(pkexec)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("Could not run pkexec: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(pkexec_failure(
+            output.status.code(),
+            &String::from_utf8_lossy(&output.stderr),
+        ))
+    }
+}
+
+/// The flags Tauri's NSIS template reads (crates/tauri-bundler/src/bundle/
+/// windows/nsis/installer.nsi): `/S` silent, `/UPDATE` keep the install and
+/// skip the pages, `/R` start the app again once it is done (silent and
+/// passive installs only).
+const NSIS_ARGS: [&str; 3] = ["/S", "/UPDATE", "/R"];
+
+/// Runs the NSIS setup silently and leaves it running: the caller quits so it
+/// can replace the app's files, and it reopens the app when it is done. The
+/// path is passed as one argument, never through a shell.
+fn run_installer(setup: &Path) -> Result<(), String> {
+    crate::process::command(setup)
+        .args(NSIS_ARGS)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(drop)
+        .map_err(|e| format!("Could not start the installer: {e}"))
 }
 
 /// Like `fetch`, reporting progress at most every 64 KiB.
@@ -646,22 +1243,9 @@ fn run(tool: &str, args: &[&std::ffi::OsStr]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-/// Verifies the zip and unpacks it; returns the new RustCode.app.
+/// Unpacks the verified zip; returns the new RustCode.app.
 #[cfg(target_os = "macos")]
-fn stage(app: &AppHandle, zip: &Path, work: &Path, expected: &str) -> Result<PathBuf, String> {
-    let digest = run(
-        "/usr/bin/shasum",
-        &["-a".as_ref(), "256".as_ref(), zip.as_os_str()],
-    )?;
-    if digest
-        .split_whitespace()
-        .next()
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-        != Some(expected)
-    {
-        return Err("The download does not match the release checksum.".into());
-    }
+fn stage(app: &AppHandle, zip: &Path, work: &Path) -> Result<PathBuf, String> {
     let unpacked = work.join("unpacked");
     run(
         "/usr/bin/ditto",
@@ -701,14 +1285,13 @@ fn stage(app: &AppHandle, zip: &Path, work: &Path, expected: &str) -> Result<Pat
 }
 
 #[cfg(not(target_os = "macos"))]
-fn stage(_: &AppHandle, _: &Path, _: &Path, _: &str) -> Result<PathBuf, String> {
-    Err("Run the installer again to update RustCode on this platform.".into())
+fn stage(_: &AppHandle, _: &Path, _: &Path) -> Result<PathBuf, String> {
+    Err("Only a macOS app bundle updates this way.".into())
 }
 
 /// A detached shell waits for this process to exit, swaps the bundle and
 /// opens the new one; the app then quits.
-fn relaunch(app: &AppHandle, new_app: &Path) -> Result<(), String> {
-    let current = bundle_path().ok_or("RustCode is not running from an app bundle.")?;
+fn relaunch(app: &AppHandle, current: &Path, new_app: &Path) -> Result<(), String> {
     let script = r#"while kill -0 "$1" 2>/dev/null; do sleep 0.2; done
 rm -rf "$2.old" && mv "$2" "$2.old" && mv "$3" "$2" && rm -rf "$2.old"
 xattr -dr com.apple.quarantine "$2" 2>/dev/null
@@ -721,7 +1304,7 @@ rm -rf "$4""#;
         .arg(script)
         .arg("sh")
         .arg(std::process::id().to_string())
-        .arg(&current)
+        .arg(current)
         .arg(new_app)
         .arg(work)
         .stdin(std::process::Stdio::null())
@@ -934,6 +1517,46 @@ mod tests {
         assert_eq!(checksum("", asset), None);
     }
 
+    #[test]
+    fn a_checksum_names_its_own_asset_and_any_hex_case() {
+        let hash = "a1b2c3d4".repeat(8);
+        let asset = "RustCode-1.22.0-linux-x86_64.AppImage";
+        // The manifest's hex may be printed in either case (and mixed).
+        for written in [
+            hash.clone(),
+            hash.to_uppercase(),
+            hash.chars()
+                .enumerate()
+                .map(|(i, c)| {
+                    if i % 2 == 0 {
+                        c.to_ascii_uppercase()
+                    } else {
+                        c
+                    }
+                })
+                .collect(),
+        ] {
+            assert_eq!(
+                checksum(&format!("{written}  {asset}\n"), asset).as_deref(),
+                Some(hash.as_str()),
+                "{written}"
+            );
+        }
+        // A different asset whose name only shares a prefix or a suffix is not
+        // this one: the entry has to name it exactly.
+        for other in [
+            format!("{asset}.old"),
+            asset.trim_end_matches(".AppImage").to_string(),
+            asset.replace("x86_64", "aarch64"),
+        ] {
+            assert_eq!(
+                checksum(&format!("{hash}  {other}\n"), asset),
+                None,
+                "{other}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn download_reports_progress_to_the_end() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -970,13 +1593,474 @@ mod tests {
         assert!(seen.windows(2).all(|w| w[0].0 <= w[1].0));
     }
 
+    #[test]
+    fn picks_the_release_asset_per_platform_and_arch() {
+        let asset = |package: Package, arch| package.asset("1.22.0", arch);
+        assert_eq!(
+            asset(Package::MacApp, "aarch64").as_deref(),
+            Some("RustCode-1.22.0-macos-aarch64.app.zip")
+        );
+        assert_eq!(
+            asset(Package::MacApp, "x86_64").as_deref(),
+            Some("RustCode-1.22.0-macos-x86_64.app.zip")
+        );
+        assert_eq!(
+            asset(Package::AppImage, "x86_64").as_deref(),
+            Some("RustCode-1.22.0-linux-x86_64.AppImage")
+        );
+        assert_eq!(
+            asset(Package::Deb, "x86_64").as_deref(),
+            Some("RustCode-1.22.0-linux-x86_64.deb")
+        );
+        assert_eq!(
+            asset(Package::WindowsSetup, "x86_64").as_deref(),
+            Some("RustCode-1.22.0-windows-x64-setup.exe")
+        );
+        // The release ships no Linux or Windows app for arm.
+        for package in [Package::AppImage, Package::Deb, Package::WindowsSetup] {
+            assert_eq!(asset(package, "aarch64"), None);
+        }
+        assert_eq!(
+            download_url("v1.22.0", "SHA256SUMS"),
+            "https://github.com/LHagfoss/rustcode/releases/download/v1.22.0/SHA256SUMS"
+        );
+    }
+
+    fn host(os: Os) -> Host {
+        Host {
+            os,
+            arch: "x86_64",
+            exe: None,
+            bundle: None,
+            appimage: None,
+            sandboxed: false,
+            dpkg_owned: false,
+            has_uninstaller: false,
+            folder_writable: true,
+        }
+    }
+
+    #[test]
+    fn a_linux_appimage_installs_in_place_where_its_folder_is_writable() {
+        let image = PathBuf::from("/home/me/Applications/RustCode.AppImage");
+        let mut linux = Host {
+            appimage: Some(image.clone()),
+            exe: Some("/tmp/.mount_RustCoXYZ/usr/bin/rustcode-desktop".into()),
+            ..host(Os::Linux)
+        };
+        assert_eq!(classify(&linux), Install::AppImage(image.clone()));
+        assert_eq!(classify(&linux).package(), Some(Package::AppImage));
+        // `$APPIMAGE` wins over a dpkg-owned binary of the same name.
+        linux.dpkg_owned = true;
+        assert_eq!(classify(&linux), Install::AppImage(image.clone()));
+        // A read-only folder keeps the release page, and says why.
+        linux.folder_writable = false;
+        let read_only = classify(&linux);
+        assert_eq!(read_only, Install::ReadOnly("/home/me/Applications".into()));
+        assert!(!read_only.installable());
+        assert!(read_only.note().unwrap().contains("/home/me/Applications"));
+    }
+
+    #[test]
+    fn a_linux_deb_is_a_dpkg_owned_binary_under_usr() {
+        let exe = PathBuf::from("/usr/bin/rustcode-desktop");
+        let deb = Host {
+            exe: Some(exe.clone()),
+            dpkg_owned: true,
+            ..host(Os::Linux)
+        };
+        assert_eq!(classify(&deb), Install::Deb(exe.clone()));
+        assert_eq!(classify(&deb).package(), Some(Package::Deb));
+        assert!(classify(&deb).note().unwrap().contains("password"));
+        // Not owned by a package (AUR, a manual copy), not under /usr, or in a
+        // sandbox: the release page.
+        let owned = |change: fn(&mut Host)| {
+            let mut other = deb.clone();
+            change(&mut other);
+            classify(&other)
+        };
+        assert_eq!(owned(|h| h.dpkg_owned = false), Install::Manual);
+        assert_eq!(
+            owned(|h| h.exe = Some("/opt/rustcode/rustcode-desktop".into())),
+            Install::Manual
+        );
+        assert_eq!(
+            owned(|h| h.exe = Some("/home/me/rustcode/rustcode-desktop".into())),
+            Install::Manual
+        );
+        assert_eq!(owned(|h| h.sandboxed = true), Install::Manual);
+        assert_eq!(owned(|h| h.exe = None), Install::Manual);
+        // No Linux app ships for arm.
+        assert_eq!(owned(|h| h.arch = "aarch64"), Install::Manual);
+    }
+
+    #[test]
+    fn windows_installs_from_the_nsis_setup_only() {
+        let nsis = Host {
+            exe: Some(r"C:\Users\me\AppData\Local\RustCode\rustcode-desktop.exe".into()),
+            has_uninstaller: true,
+            ..host(Os::Windows)
+        };
+        assert_eq!(classify(&nsis), Install::Windows);
+        assert_eq!(classify(&nsis).package(), Some(Package::WindowsSetup));
+        // A copy with no uninstaller beside it is not an NSIS install.
+        let portable = Host {
+            has_uninstaller: false,
+            ..nsis.clone()
+        };
+        assert_eq!(classify(&portable), Install::Manual);
+        let arm = Host {
+            arch: "aarch64",
+            ..nsis
+        };
+        assert_eq!(classify(&arm), Install::Manual);
+    }
+
+    #[test]
+    fn a_macos_bundle_installs_in_place_where_its_folder_is_writable() {
+        let bundle = PathBuf::from("/Applications/RustCode.app");
+        let mac = Host {
+            bundle: Some(bundle.clone()),
+            ..host(Os::Mac)
+        };
+        assert_eq!(classify(&mac), Install::MacApp(bundle));
+        let locked = Host {
+            folder_writable: false,
+            ..mac.clone()
+        };
+        assert_eq!(classify(&locked), Install::ReadOnly("/Applications".into()));
+        let bare = Host {
+            bundle: None,
+            ..mac
+        };
+        assert_eq!(classify(&bare), Install::Manual);
+        assert_eq!(classify(&host(Os::Other)), Install::Manual);
+    }
+
+    #[test]
+    fn a_wrong_checksum_is_refused() {
+        let body = b"the new app";
+        let good: String = Sha256::digest(body)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(verify_digest(body, &good), Ok(()));
+        assert_eq!(
+            verify_digest(b"another file", &good),
+            Err("The download does not match the release checksum.".to_string())
+        );
+        assert!(verify_digest(body, &"0".repeat(64)).is_err());
+        assert!(verify_digest(body, "").is_err());
+    }
+
+    /// Serves `routes` (path, body) over HTTP on a free local port until the
+    /// test ends; any other path is a 404.
+    async fn serve(routes: Vec<(&'static str, Vec<u8>)>) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let routes = routes.clone();
+                tokio::spawn(async move {
+                    let mut request = [0u8; 2048];
+                    let read = socket.read(&mut request).await.unwrap_or(0);
+                    let request = String::from_utf8_lossy(&request[..read]).into_owned();
+                    let path = request.split_whitespace().nth(1).unwrap_or("/");
+                    let (status, body) = match routes.iter().find(|(route, _)| *route == path) {
+                        Some((_, body)) => ("200 OK", body.clone()),
+                        None => ("404 Not Found", Vec::new()),
+                    };
+                    let head = format!(
+                        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = socket.write_all(head.as_bytes()).await;
+                    let _ = socket.write_all(&body).await;
+                });
+            }
+        });
+        base
+    }
+
+    fn sums_for(body: &[u8], asset: &str) -> Vec<u8> {
+        let hash: String = Sha256::digest(body)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        format!("{hash}  {asset}\n").into_bytes()
+    }
+
+    #[tokio::test]
+    async fn a_download_that_matches_the_release_sums_is_returned() {
+        let asset = "RustCode-1.22.0-linux-x86_64.AppImage";
+        let body = vec![9u8; 100 * 1024];
+        let base = serve(vec![
+            ("/RustCode-1.22.0-linux-x86_64.AppImage", body.clone()),
+            ("/SHA256SUMS", sums_for(&body, asset)),
+        ])
+        .await;
+        let mut phases = Vec::new();
+        let got = fetch_verified(&client().unwrap(), &base, asset, |p| phases.push(p))
+            .await
+            .unwrap();
+        assert_eq!(got, body);
+        assert!(matches!(
+            phases.first(),
+            Some(InstallProgress::Downloading { received: 0, .. })
+        ));
+        assert!(matches!(phases.last(), Some(InstallProgress::Verifying)));
+    }
+
+    #[tokio::test]
+    async fn a_release_sums_file_in_upper_case_still_verifies() {
+        let asset = "RustCode-1.22.0-linux-x86_64.deb";
+        let body = vec![3u8; 4096];
+        let hash: String = Sha256::digest(&body)
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect();
+        let sums = format!("{hash}  {asset}\n").into_bytes();
+        let base = serve(vec![
+            ("/RustCode-1.22.0-linux-x86_64.deb", body.clone()),
+            ("/SHA256SUMS", sums),
+        ])
+        .await;
+        let got = fetch_verified(&client().unwrap(), &base, asset, |_| {})
+            .await
+            .expect("an upper-case manifest verifies");
+        assert_eq!(got, body);
+    }
+
+    #[tokio::test]
+    async fn a_download_that_does_not_match_the_release_sums_is_refused() {
+        let asset = "RustCode-1.22.0-windows-x64-setup.exe";
+        let served = vec![1u8; 4096];
+        // The sums name a different file's hash: a tampered or swapped download.
+        let base = serve(vec![
+            ("/RustCode-1.22.0-windows-x64-setup.exe", served),
+            ("/SHA256SUMS", sums_for(b"the real setup", asset)),
+        ])
+        .await;
+        let err = fetch_verified(&client().unwrap(), &base, asset, |_| {})
+            .await
+            .unwrap_err();
+        assert_eq!(err, "The download does not match the release checksum.");
+        // Sums that do not list the asset refuse as well.
+        let base = serve(vec![
+            ("/RustCode-1.22.0-windows-x64-setup.exe", vec![1u8; 16]),
+            ("/SHA256SUMS", sums_for(b"x", "other.exe")),
+        ])
+        .await;
+        let err = fetch_verified(&client().unwrap(), &base, asset, |_| {})
+            .await
+            .unwrap_err();
+        assert_eq!(err, "The release checksums do not list the app.");
+        // And so do missing sums.
+        let base = serve(vec![(
+            "/RustCode-1.22.0-windows-x64-setup.exe",
+            vec![1u8; 16],
+        )])
+        .await;
+        assert!(fetch_verified(&client().unwrap(), &base, asset, |_| {})
+            .await
+            .is_err());
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "rustcode-updater-test-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The AppImage can sit in a folder others can write (`/tmp`), where anyone
+    /// may plant the name the swap would stage under. The write must make its
+    /// own file instead of following that one, in every attempt.
+    #[cfg(unix)]
+    #[test]
+    fn the_appimage_swap_never_writes_through_a_planted_file() {
+        let dir = scratch("appimage-planted");
+        let target = dir.join("RustCode.AppImage");
+        std::fs::write(&target, b"old").unwrap();
+        let victim = dir.join("victim.txt");
+        std::fs::write(&victim, b"keep me").unwrap();
+        for attempt in 0..8 {
+            let staged = dir.join(format!(
+                ".RustCode.AppImage.update-{}-{attempt}",
+                std::process::id()
+            ));
+            std::os::unix::fs::symlink(&victim, &staged).unwrap();
+        }
+        // Every name is taken: nothing is written, and the app stays as it was.
+        let err = replace_appimage(&target, b"new build").unwrap_err();
+        assert!(err.contains("release page"), "{err}");
+        assert_eq!(std::fs::read(&target).unwrap(), b"old");
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep me");
+        // One name free: the swap uses it, not the planted link.
+        std::fs::remove_file(dir.join(format!(
+            ".RustCode.AppImage.update-{}-7",
+            std::process::id()
+        )))
+        .unwrap();
+        replace_appimage(&target, b"new build").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new build");
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep me");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The write probe asks whether the folder takes a new file; it must not
+    /// truncate a file the name already names.
+    #[cfg(unix)]
+    #[test]
+    fn the_write_probe_never_truncates_a_planted_file() {
+        let dir = scratch("probe-planted");
+        let victim = dir.join("victim.txt");
+        std::fs::write(&victim, b"keep me").unwrap();
+        let probe = dir.join(format!(".rustcode-update-probe-{}", std::process::id()));
+        std::os::unix::fs::symlink(&victim, &probe).unwrap();
+        // The folder does take a file: the probe proves it with one of its own.
+        assert!(writable(&dir));
+        // The planted link is unlinked, not written through, and gone either way.
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep me");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_appimage_is_replaced_atomically_and_stays_executable() {
+        let dir = scratch("appimage");
+        let target = dir.join("RustCode.AppImage");
+        std::fs::write(&target, b"old").unwrap();
+        replace_appimage(&target, b"new build").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new build");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&target).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o755);
+        }
+        // Nothing but the app is left beside it.
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("RustCode.AppImage")]);
+        // A folder that cannot take the file leaves the old app alone and says so.
+        let missing = dir.join("gone").join("RustCode.AppImage");
+        let err = replace_appimage(&missing, b"x").unwrap_err();
+        assert!(err.contains("release page"), "{err}");
+        assert_eq!(std::fs::read(&target).unwrap(), b"new build");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_download_folder_is_private_and_new() {
+        use std::os::unix::fs::PermissionsExt;
+        let one = private_dir().unwrap();
+        let two = private_dir().unwrap();
+        assert_ne!(one, two);
+        assert_eq!(
+            std::fs::metadata(&one).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let _ = std::fs::remove_dir_all(one);
+        let _ = std::fs::remove_dir_all(two);
+    }
+
+    #[test]
+    fn builds_the_linux_relaunch_and_package_commands() {
+        let exe = Path::new("/home/me/Applications/Rust Code $(x).AppImage");
+        let args = relaunch_args(4242, exe);
+        // The path is one argument, never part of the script text.
+        assert_eq!(args[0], "-c");
+        assert_eq!(args[1], WAIT_THEN_START);
+        assert!(!args[1].to_string_lossy().contains("Rust Code"));
+        assert_eq!(args[3], "4242");
+        assert_eq!(args[4], exe.as_os_str());
+
+        let deb = Path::new("/tmp/rustcode-update-1/RustCode-1.22.0-linux-x86_64.deb");
+        let apt = Path::new("/usr/bin/apt-get");
+        let dpkg = Path::new("/usr/bin/dpkg");
+        assert_eq!(
+            deb_install_args(Some(apt), Some(dpkg), deb),
+            Some(vec![
+                "/usr/bin/apt-get".into(),
+                "install".into(),
+                "-y".into(),
+                deb.as_os_str().to_owned(),
+            ])
+        );
+        assert_eq!(
+            deb_install_args(None, Some(dpkg), deb),
+            Some(vec![
+                "/usr/bin/dpkg".into(),
+                "-i".into(),
+                deb.as_os_str().to_owned()
+            ])
+        );
+        assert_eq!(deb_install_args(None, None, deb), None);
+    }
+
+    #[test]
+    fn says_what_a_failed_pkexec_means() {
+        assert!(pkexec_failure(Some(126), "").contains("cancelled"));
+        assert!(pkexec_failure(Some(127), "").contains("polkit"));
+        let failed = pkexec_failure(
+            Some(100),
+            "Reading package lists\nE: Unable to locate package x\n\n",
+        );
+        assert_eq!(
+            failed,
+            "Installing the package failed (status 100): E: Unable to locate package x"
+        );
+        assert_eq!(
+            pkexec_failure(None, ""),
+            "Installing the package was interrupted"
+        );
+    }
+
+    #[test]
+    fn the_windows_setup_runs_silently_and_reopens_the_app() {
+        // The flags Tauri's NSIS template reads: no UI, keep the install, relaunch.
+        assert_eq!(NSIS_ARGS, ["/S", "/UPDATE", "/R"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn finds_a_tool_on_the_path_before_the_system_folders() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("tools");
+        let tool = dir.join("pkexec-test-tool");
+        std::fs::write(&tool, b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let plain = dir.join("not-executable");
+        std::fs::write(&plain, b"").unwrap();
+        let path = std::env::join_paths([&dir]).unwrap();
+        assert_eq!(
+            find_tool("pkexec-test-tool", Some(path.clone())),
+            Some(tool)
+        );
+        assert_eq!(find_tool("not-executable", Some(path.clone())), None);
+        assert_eq!(find_tool("no-such-tool-anywhere", Some(path)), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[tokio::test]
     #[ignore = "needs the network"]
     async fn the_latest_release_and_its_app_are_found() {
         let client = client().unwrap();
         let tag = latest_tag(&client).await.expect("latest tag");
         let latest = tag.trim_start_matches('v');
-        let url = download_url(&tag, &asset_name(latest));
+        let asset = Package::MacApp.asset(latest, arch()).unwrap();
+        let url = download_url(&tag, &asset);
         println!(
             "tag {tag} newer than 1.0.0-beta.1: {} asset {url}",
             newer(latest, "1.0.0-beta.1")

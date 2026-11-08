@@ -14,6 +14,7 @@ import {
   parsePlanUsage,
   planHarness,
   planKey,
+  planOf,
   type SubagentInfo,
   type UsagePlan,
   type UsageWindow,
@@ -292,6 +293,13 @@ export interface CachedPlan extends PlanUsage {
   account?: string | null;
   /** Its tier ("max"), when the provider named one. */
   plan?: string;
+  /**
+   * When the numbers were read (ms) when they are the last ones RustCode
+   * recorded for the login rather than a read made now: its access token
+   * lapsed, so `fetchedAt` is when the app heard them and this is when they
+   * were true (`list_harnesses` reports it as `as_of`).
+   */
+  asOf?: number;
 }
 
 export interface AppState {
@@ -4737,9 +4745,17 @@ export function commandsFor(s: CommandsSource, threadId?: string | null): SlashC
 /** How often the app asks for every plan while its window is visible. */
 export const PLAN_CACHE_POLL_MS = 180_000;
 
-/** True when a harness's numbers are missing or older than the poll interval. */
+/**
+ * How much before the poll interval an entry counts as stale. A read stamps
+ * `fetchedAt` when it finishes, a moment after the timer that asked for it
+ * fired, so comparing against the whole interval would always miss the next
+ * tick and read every other one — every six minutes instead of three.
+ */
+export const PLAN_STALE_MARGIN_MS = 15_000;
+
+/** True when a harness's numbers are missing or old enough for the next tick to read them again. */
 export function planIsStale(plan: CachedPlan | undefined, now = Date.now()): boolean {
-  return !plan?.fetchedAt || now - plan.fetchedAt >= PLAN_CACHE_POLL_MS;
+  return !plan?.fetchedAt || now - plan.fetchedAt >= PLAN_CACHE_POLL_MS - PLAN_STALE_MARGIN_MS;
 }
 
 /** True when anything in the cache wants a refresh: an entry past the poll, or none at all. */
@@ -4771,7 +4787,7 @@ export function forgetPlans(
  * used, and the stale reset time dropped, until the next read says otherwise.
  */
 export function windowNow(w: UsageWindow, now = Date.now()): UsageWindow {
-  return w.resetsAt && w.resetsAt <= now ? { usedPercent: 0, minutes: w.minutes } : w;
+  return w.resetsAt && w.resetsAt <= now ? { ...w, usedPercent: 0, resetsAt: undefined } : w;
 }
 
 /** The plan with every passed reset folded in; undefined when it has no windows. */
@@ -4813,12 +4829,14 @@ export function plansToCache(plans: UsagePlan[], fetchedAt = Date.now()): Record
         usedPercent: w.usedPercent,
         minutes: w.minutes,
         resetsAt: w.resetsAt,
+        label: w.label,
       })),
       fetchedAt,
       name: p.name,
       plan: p.plan,
       harness,
       account: p.account ?? null,
+      ...(p.asOf !== undefined ? { asOf: p.asOf } : {}),
     };
   }
   return out;
@@ -4929,6 +4947,8 @@ export function setClaudeUsageAllowed(on: boolean): void {
   store(CLAUDE_USAGE_KEY, on ? "1" : "0");
   planPauses = NO_PAUSES;
   if (on) return;
+  // Nothing waiting may read a login after the switch went off.
+  plansQueued = [];
   // Every Claude login, the default one and each account's own row.
   setPlanCache(
     Object.fromEntries(Object.entries(get().planCache).filter(([key]) => !key.startsWith("claude-code"))),
@@ -4951,6 +4971,9 @@ export function setClaudeUsageAllowed(on: boolean): void {
  * what unpauses them.
  */
 export function commitPlansAnswer(answers: UsagePlan[], asked = false): void {
+  // A read already in flight when the switch went off still answers Claude's
+  // rows; nothing may put them back while the meter is off.
+  if (!claudeUsageAllowed()) answers = answers.filter((p) => planOf(p) !== CLAUDE_CODE);
   if (asked) planPauses = NO_PAUSES;
   const gone = answers.filter((p) => p.status === "signedOut" || p.status === "notInstalled").map(planKey);
   const kept = forgetPlans(get().planCache, gone);
@@ -5026,6 +5049,54 @@ export async function refreshPlanCache(again = false): Promise<void> {
   }
 }
 
+/**
+ * What a background read asks for, for a caller that sends its own request
+ * (Settings › Usage's own interval): the default login and the account of the
+ * thread on screen, each only with consent and while the last read did not
+ * pause it (`state/plans.ts`). Settings' explicit look asks for every login
+ * instead, which is what `_rustcode/usage/plans`'s `claudeAccounts` does.
+ */
+export function backgroundPlansAsk(): PlansAsk {
+  return currentPlansAsk(false);
+}
+
+/** The harness whose plans come from named logins (`acp/rustcode.ts` `harnessPlanKey`). */
+const CLAUDE_CODE = "claude-code";
+
+/** When the named logins were last asked for, so that it happens once per poll. */
+let planLoginsAskedAt = 0;
+
+/**
+ * Asks in the background for the numbers a caller that can only report the
+ * cache needs newer ones of (`list_harnesses`): the app's own ask — the default
+ * login and the account of the thread on screen (`currentPlansAsk`) — and every
+ * named login that was read before and has gone stale, which the poll alone
+ * never reads.
+ *
+ * A login nothing was read for is never asked for: reading an unseen Keychain
+ * item can prompt macOS, and the user never asked for that. Neither is one a
+ * failed read paused (`failurePauses` in `state/plans.ts`). All of it happens
+ * at most once per poll interval however often it is called, and the requests
+ * queue behind the one in flight, so one Keychain item is read at a time. The
+ * caller's answer stays cache-only: this never awaits.
+ */
+export function refreshReadPlanLogins(now = Date.now()): void {
+  if (!connection || get().status !== "ready") return;
+  if (now - planLoginsAskedAt < PLAN_CACHE_POLL_MS) return;
+  planLoginsAskedAt = now;
+  const cache = get().planCache;
+  const prefix = `${CLAUDE_CODE}#`;
+  const stale = Object.keys(cache)
+    .filter((key) => key.startsWith(prefix))
+    .map((key) => key.slice(prefix.length))
+    .filter((id) => planIsStale(cache[harnessPlanKey(CLAUDE_CODE, id)], now))
+    .filter((id) => !planPauses.accounts.has(id));
+  for (const account of stale) plansQueued = queueAsks(plansQueued, { claude: false, account });
+  // One request at a time: with one in flight its loop drains these asks, and
+  // otherwise the app's own ask goes first and they follow it.
+  if (!plansInFlight) void refreshPlanCache();
+}
+
 let planTimer: ReturnType<typeof setInterval> | null = null;
 let planResetTimer: ReturnType<typeof setTimeout> | null = null;
 let planResetDue = 0;
@@ -5057,12 +5128,14 @@ function schedulePlanReset(cache: Record<string, CachedPlan>) {
 /**
  * One poller for the app, not one per thread: every three minutes while the
  * window is visible, and at once when it comes back after being hidden for
- * longer than that. A hidden window asks for nothing.
+ * longer than that. A hidden window asks for nothing, and a cache another read
+ * just filled (Settings › Usage reads the same subscriptions) is left alone.
  */
 export function startPlanPolling() {
   if (planTimer) return;
   planTimer = setInterval(() => {
     if (typeof document !== "undefined" && document.hidden) return;
+    if (!planCacheStale(get().planCache)) return;
     void refreshPlanCache();
   }, PLAN_CACHE_POLL_MS);
   if (typeof document === "undefined") return;
@@ -5085,6 +5158,7 @@ function stopPlanPolling() {
   plansOnVisible = null;
   plansInFlight = null;
   plansQueued = [];
+  planLoginsAskedAt = 0;
 }
 
 // ---------------------------------------------------------------- UI

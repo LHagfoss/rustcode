@@ -368,6 +368,12 @@ export interface UsageWindow {
   usedPercent: number;
   minutes?: number;
   resetsAt?: number;
+  /**
+   * The provider's own name for the window (`5-hour`, `Weekly · Opus`), kept
+   * from a plans answer so an agent reading `list_harnesses` can name it. A
+   * thread's own limits answer has lengths only.
+   */
+  label?: string;
 }
 
 export interface PlanUsage {

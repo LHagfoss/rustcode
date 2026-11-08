@@ -193,6 +193,54 @@ worktree thread); a status or pin change is sent as `session/update`
 `session_info_update` with `_meta.rustcode.status` or
 `_meta.rustcode.pinned`.
 
+## Replay cursor
+
+Every update of a session's stream (what its turns, tools and title changes
+send, and a prompt shown to its other clients) carries a cursor in
+`_meta.rustcode.cursor`, a number that only grows. Each update is numbered,
+logged and queued to every client under one lock, so a client gets cursors in
+increasing order and never an update behind one it has not been sent.
+
+What a load sends to rebuild a view (the transcript, the running turn, the
+title, commands and usage, and the reset marker below) is not in that stream
+and carries no cursor. The `session/load` answer carries the client's cursor
+in `_meta.rustcode.cursor`: the newest update queued to that connection before
+the answer, so everything up to it has been sent. A client keeps the greatest
+cursor it has, with two rules:
+
+- Do not store the cursor of a load before its answer has arrived. A load cut
+  off halfway leaves nothing to resume from, so the next one is a full load.
+- On a `reset`, drop the stored cursor along with the view, and store the
+  answer's. (A cursor that was too old to resume stays too old, so asking
+  again with it also rebuilds.)
+
+Thread status updates sent to every client for the thread list have no cursor.
+
+`session/load` accepts `_meta.rustcode.resume: {"cursor"}`, the cursor the
+client last saw:
+
+- The engine keeps the latest updates of each open session in memory (8,192
+  updates or 8 MiB as JSON, whichever comes first). When every update after
+  `cursor` is still kept it sends only those, each with its own cursor, then
+  streams live, with nothing missed or sent twice. Nothing else is sent: not
+  the transcript, and not the title, commands and usage a plain load adds.
+- Otherwise the cursor is too old, from before the engine restarted or the
+  session was closed (cursors start from the clock, so an earlier run's never
+  fall in a later log, as long as the clock does not step back), or from the
+  future. The engine sends an empty `session_info_update` with
+  `_meta.rustcode.reset: true` (also in the answer), then everything a load
+  without `resume` sends. The client clears what it shows of the session at
+  the marker.
+- A rewind (`_rustcode/rewind`, a checkpoint restore that rewinds the chat)
+  cuts the history without an update, so it ends every resume from before it.
+- A load without `resume` behaves as before, plus the cursors, and never gets
+  a `reset`.
+
+Each connection keeps its own position; the engine holds none for them. A
+prompt shown to the session's other clients is logged too, but not sent to the
+connection that sent it, so that connection's cursors skip it; if it drops
+before the next update it gets its own prompt again on resume.
+
 ## Slash commands
 
 A session's commands arrive as `session/update` `available_commands_update`
