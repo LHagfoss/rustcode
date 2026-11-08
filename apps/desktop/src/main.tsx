@@ -4,9 +4,15 @@ import { App } from "./App";
 import { defaultTransport, isTauri } from "./acp/transport";
 import "./index.css";
 import { installFocusModality } from "./lib/focusModality";
+import { applyMaterial } from "./lib/material";
 import { applyPlatform } from "./lib/platform";
 import { quietNativeChrome } from "./lib/quietNative";
 import { applyCachedTheme } from "./lib/themes";
+import {
+  installReduceTransparency,
+  setSystemReduceTransparency,
+  setUserReduceTransparency,
+} from "./lib/transparency";
 import * as store from "./state/store";
 import { Recoverable } from "./ui/Recover";
 
@@ -16,13 +22,22 @@ const platform = applyPlatform();
 // The last theme, before the first render, so a custom theme does not flash the default.
 applyCachedTheme();
 
+// Glass goes solid when the user, the system or a web view that cannot blur asks (lib/transparency.ts).
+// The kept switch is read here, not in App's effect, so the first frame is already solid for someone
+// who asked for that; the system's answer follows below, once the shell has it.
+installReduceTransparency();
+setUserReduceTransparency(store.useApp.getState().reduceTransparency);
+
 // Surfaces are opaque (docs/design.md); the few frosted ones go solid under Reduce transparency.
 if (isTauri() && platform === "mac") {
   void import("./lib/shell")
     .then(({ shellCall }) => shellCall<boolean>("reduce_transparency"))
-    .then((reduce) => document.documentElement.classList.toggle("reduce-transparency", reduce))
+    .then(setSystemReduceTransparency)
     .catch(() => undefined);
 }
+
+// Windows 11's Mica behind the sidebar, once the shell says the window has it (lib/material.ts).
+void applyMaterial();
 
 // Focus rings only while the keyboard moves focus: on from a Tab, off at the next click.
 installFocusModality();

@@ -41,6 +41,8 @@
   --color-inherit: inherit;
   --color-bg: var(--rc-bg);
   --color-sidebar: var(--rc-sidebar);
+  /* The shell's own sidebar fill (`bg-sidebar-glass`): see-through where the window has a material. */
+  --color-sidebar-glass: var(--rc-sidebar-bg);
   --color-surface: var(--rc-surface);
   --color-surface-2: var(--rc-surface-2);
   --color-surface-3: var(--rc-surface-3);
@@ -92,6 +94,7 @@
   color-scheme: light;
   --rc-bg: #ffffff;
   --rc-sidebar: #f7f7f8;
+  --rc-sidebar-bg: var(--rc-sidebar);
   --rc-surface: #eaeaea;
   --rc-surface-2: #ffffff;
   --rc-surface-3: #e4e4e6;
@@ -1354,13 +1357,16 @@
 
 /*
  * Reduce transparency: glass turns solid. The media query where the web
- * view has it, else the `reduce-transparency` class main.tsx sets from the
- * system setting. Linux always takes this path (Platforms, below): WebKitGTK
- * draws `backdrop-filter` slowly or not at all, and translucency without the
- * blur leaves text over text.
+ * view has it, else the `reduce-transparency` class (lib/transparency.ts):
+ * on for Settings › Appearance › Reduce transparency, the system's request
+ * (macOS reads it through the shell), and a web view with no
+ * `backdrop-filter` at all, where translucency without the blur leaves text
+ * over text. Every platform takes this path alike (Platforms, below).
  */
 @media (prefers-reduced-transparency: reduce) {
   :root {
+    /* Before lib/transparency.ts has run, so the sidebar goes solid with the rest of the glass. */
+    --rc-sidebar-bg: var(--rc-sidebar);
     --rc-glass-bg: var(--rc-surface-2);
     --rc-glass-bg-strong: var(--rc-surface-2);
     --rc-glass-faint-bg: var(--rc-surface-2);
@@ -1380,8 +1386,8 @@
     background: var(--rc-surface-2);
   }
 }
-:root.reduce-transparency,
-:root[data-platform="linux"] {
+:root.reduce-transparency {
+  --rc-sidebar-bg: var(--rc-sidebar);
   --rc-glass-bg: var(--rc-surface-2);
   --rc-glass-bg-strong: var(--rc-surface-2);
   --rc-glass-faint-bg: var(--rc-surface-2);
@@ -1393,22 +1399,26 @@
   --rc-composer-bg-over: var(--rc-surface-2);
   --rc-composer-filter: none;
 }
-:root.reduce-transparency .rc-composer:focus-within,
-:root[data-platform="linux"] .rc-composer:focus-within {
+:root.reduce-transparency .rc-composer:focus-within {
   background: var(--rc-surface-2);
 }
 :root.reduce-transparency,
-:root.reduce-transparency .rc-header-glass.rc-frost::before,
-:root[data-platform="linux"],
-:root[data-platform="linux"] .rc-header-glass.rc-frost::before {
+:root.reduce-transparency .rc-header-glass.rc-frost::before {
   --rc-glass-pane: var(--rc-bg);
 }
 
 /*
  * Platforms (docs/design.md › Platforms): `data-platform` on <html> (lib/platform.ts) fits the
  * macOS design to the other web views. Nothing here applies to `mac` or to a page without the
- * attribute, so the macOS look is the rules above alone. Glass on Linux is solid (above); Windows
- * keeps the glass, whose 13px blur WebView2 draws on the GPU.
+ * attribute, so the macOS look is the rules above alone. Glass is the same on every platform:
+ * WebView2 (Chromium) and WebKitGTK draw the 13px `backdrop-filter` themselves, and Reduce
+ * transparency (above) is the solid fallback on all of them.
+ *
+ * Windows 11 also shows Mica (the window's material, applied by the shell; `data-material` on
+ * <html>, lib/material.ts) through the sidebar: its fill is 72% of the sidebar colour, which keeps
+ * the labels' contrast whatever the wallpaper tints the material, and the pane beside it stays
+ * opaque. Without the material (Windows 10) or under Reduce transparency it is the solid colour.
+ * Linux has no window blur: Tauri cannot ask the compositor for one.
  *
  * Type: each OS's own UI face, since SF Pro is not there to find and the macOS names in the stack
  * fall through to whatever the font config aliases them to. There is no rounded face elsewhere, so
@@ -1419,6 +1429,13 @@
   --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --font-rounded: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --font-mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+}
+:root[data-platform="windows"][data-material="mica"]:not(.reduce-transparency) {
+  --rc-sidebar-bg: color-mix(in srgb, var(--rc-sidebar) 72%, transparent);
+}
+/* The body's pane colour would hide the material under the sidebar; the chat paints its own. */
+:root[data-platform="windows"][data-material="mica"]:not(.reduce-transparency) body {
+  background: transparent;
 }
 :root[data-platform="linux"] {
   --font-sans: Inter, Cantarell, Ubuntu, "Noto Sans", system-ui, sans-serif;
