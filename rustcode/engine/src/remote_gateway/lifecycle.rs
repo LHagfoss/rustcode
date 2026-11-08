@@ -10,7 +10,7 @@
 use super::control::{
     self, ConnectAnswer, ControlRequest, ControlResponse, GatewayStatus, OfferDetails,
 };
-use super::devices::{DeviceRecord, DeviceStore};
+use super::devices::{DeviceRecord, DeviceStore, RevocationNotes};
 use super::local_socket::{CONTROL_ENDPOINT, OWNER_ENDPOINT};
 use crate::daemon::private_files::{
     ensure_private_directory, is_lock_busy, lock_private_file, private_open_options,
@@ -212,6 +212,13 @@ impl RemoteLifecycle {
     }
     pub fn devices_path(&self) -> PathBuf {
         self.directory.join("devices.json")
+    }
+    /// Families a failed device-store write marked revoked.
+    pub fn revocations_path(&self) -> PathBuf {
+        self.directory.join("revocations.json")
+    }
+    pub fn revocation_notes(&self) -> RevocationNotes {
+        RevocationNotes::new(self.revocations_path())
     }
     pub fn identity_path(&self) -> PathBuf {
         self.directory.join("gateway.json")

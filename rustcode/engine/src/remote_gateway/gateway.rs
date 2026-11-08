@@ -14,7 +14,8 @@ use super::control::{
     OfferDetails, PairingStatus,
 };
 use super::devices::{
-    AuthenticateError, Credential, DeviceError, DeviceProfile, DeviceRecord, DeviceStore, Devices,
+    Acknowledgement, AuthenticateError, Credential, DeviceError, DeviceProfile, DeviceRecord,
+    DeviceStore, Devices, RevocationNotes, apply_revocation_notes,
 };
 use super::handshake::{
     ErrorCode, HANDSHAKE_PROTOCOL_VERSION, HandshakeRequest, HandshakeResponse, PairingMethod,
@@ -191,6 +192,8 @@ pub(super) struct Shared {
     fixed_advertise: bool,
     pub(super) shutdown: CancellationToken,
     store: DeviceStore,
+    /// Revocation notes a failed store write left, applied at startup.
+    notes: RevocationNotes,
     state: Mutex<State>,
     unauthenticated: Mutex<Unauthenticated>,
 }
@@ -588,14 +591,13 @@ impl Shared {
         if request.is_some() && profile.kind == super::devices::DeviceKind::Desktop {
             enrolled.record = devices.set_acp(&enrolled.record.id, true).unwrap();
         }
-        if let Err(error) = self.store.save(&devices) {
+        if let Err(error) = self.persist(&mut state, devices) {
             crate::dbg_log!("remote gateway: device store write failed: {error:#}");
             return Err(HandshakeResponse::error(
                 ErrorCode::Internal,
                 "the host could not store the new device",
             ));
         }
-        state.devices = devices;
         let record = enrolled.record;
         let issued = enrolled.issued;
         // The same install paired again: its old token is gone, and so is
@@ -647,24 +649,31 @@ impl Shared {
         let mut devices = state.devices.clone();
         let accepted = match devices.accept(device_id, credential, now) {
             Ok(accepted) => accepted,
-            Err(AuthenticateError::Replayed) => {
-                // The family is gone from `devices`: write that down, close
-                // whatever is still live with it, and tell the owner.
-                if let Err(error) = self.store.save(&devices) {
-                    crate::dbg_log!("remote gateway: device store write failed: {error:#}");
-                }
-                state.devices = devices;
+            Err(error @ (AuthenticateError::Replayed | AuthenticateError::Exhausted)) => {
+                // The family is gone from `devices`: write that down before
+                // anything is closed or answered, close whatever is still live
+                // with it, and tell the owner. A removal that could not be
+                // written is still refused, and reported as not persisted.
+                let persisted = self.revoke_family(&mut state, devices, device_id);
                 let closed = close_device(&mut state, device_id);
-                report_replay(
+                report_family_revocation(
                     device_id,
                     device_name.as_deref(),
                     family_id.as_deref(),
                     closed,
+                    error,
+                    persisted,
                 );
-                return Err(HandshakeResponse::error(
-                    ErrorCode::TokenReplayed,
-                    "a copy of this device's key was used; the host removed it. Pair again if this was you",
-                ));
+                return Err(match error {
+                    AuthenticateError::Replayed => HandshakeResponse::error(
+                        ErrorCode::TokenReplayed,
+                        "a copy of this device's key was used; the host removed it. Pair again if this was you",
+                    ),
+                    _ => HandshakeResponse::error(
+                        ErrorCode::Unauthorized,
+                        "this pairing rotated more tokens than the host keeps history for and was removed; pair again",
+                    ),
+                });
             }
             Err(AuthenticateError::AccessExpired) => {
                 return Err(HandshakeResponse::error(
@@ -682,16 +691,19 @@ impl Shared {
         if accepted.issued.is_some() {
             // A rotation is on disk before its token is handed out, so the
             // device it reaches is never one the host forgot.
-            if let Err(error) = self.store.save(&devices) {
+            if let Err(error) = self.persist(&mut state, devices) {
                 crate::dbg_log!("remote gateway: device store write failed: {error:#}");
                 return Err(HandshakeResponse::error(
                     ErrorCode::Internal,
                     "the host could not store the rotated token",
                 ));
             }
+        } else {
+            // An access token reconnected: nothing rotated, but the record it
+            // confirmed is the one to keep.
+            state.devices = devices;
         }
         let record = accepted.record;
-        state.devices = devices;
         self.mark_seen(&mut state, &record.id, now);
         let issued = accepted.issued;
         let welcome = HandshakeResponse::Authenticated {
@@ -721,18 +733,153 @@ impl Shared {
     /// named `rotation_id`: the token before it may be retired for good. An
     /// acknowledgement of a rotation another connection replaced changes
     /// nothing, so a late or duplicated ack is harmless.
-    pub(super) fn acknowledge_rotation(&self, device_id: &str, rotation_id: &str) {
+    pub(super) fn acknowledge_rotation(self: &Arc<Self>, device_id: &str, rotation_id: &str) {
         let mut state = self.state();
         let mut devices = state.devices.clone();
-        if !devices.acknowledge(device_id, rotation_id) {
-            return;
-        }
-        match self.store.save(&devices) {
-            Ok(()) => state.devices = devices,
-            Err(error) => {
-                crate::dbg_log!("remote gateway: device store write failed: {error:#}");
+        let record = state
+            .devices
+            .list()
+            .iter()
+            .find(|record| record.id == device_id);
+        let device_name = record.map(|record| record.name.clone());
+        let family_id = record
+            .and_then(|record| record.family_id())
+            .map(str::to_owned);
+        match devices.acknowledge(device_id, rotation_id) {
+            Acknowledgement::Ignored => {}
+            Acknowledgement::Retired => match self.persist(&mut state, devices) {
+                Ok(()) => {}
+                Err(error) => {
+                    crate::dbg_log!("remote gateway: device store write failed: {error:#}");
+                }
+            },
+            // The history was full: the family is removed rather than left
+            // with a token it can no longer recognize.
+            Acknowledgement::Exhausted => {
+                let persisted = self.revoke_family(&mut state, devices, device_id);
+                let closed = close_device(&mut state, device_id);
+                report_family_revocation(
+                    device_id,
+                    device_name.as_deref(),
+                    family_id.as_deref(),
+                    closed,
+                    AuthenticateError::Exhausted,
+                    persisted,
+                );
             }
         }
+    }
+
+    /// Write the device set, then drop the revocation notes a failed write left
+    /// behind: with the store on disk it is the truth again.
+    fn persist(&self, state: &mut State, devices: Devices) -> Result<()> {
+        self.store.save(&devices)?;
+        state.devices = devices;
+        if let Err(error) = self.notes.clear() {
+            crate::dbg_log!("remote gateway: could not clear the revocation notes: {error:#}");
+        }
+        Ok(())
+    }
+
+    /// Remove a family for good, durably before anything is reported. The store is
+    /// written first; when that fails, a note next to it records the revocation for
+    /// the next start. Either way the family is gone from memory, so it is refused
+    /// for the rest of this run; a removal that reached no disk is retried in the
+    /// background. Returns whether the removal reached the disk.
+    fn revoke_family(
+        self: &Arc<Self>,
+        state: &mut State,
+        devices: Devices,
+        device_id: &str,
+    ) -> bool {
+        let persisted = match self.store.save(&devices) {
+            Ok(()) => true,
+            Err(error) => {
+                crate::dbg_log!(
+                    "remote gateway: ERROR: device store write failed while revoking {device_id}: {error:#}"
+                );
+                match self.notes.add(device_id) {
+                    Ok(()) => {
+                        crate::dbg_log!(
+                            "remote gateway: noted the revocation of {device_id} for the next start"
+                        );
+                        true
+                    }
+                    Err(note_error) => {
+                        crate::dbg_log!(
+                            "remote gateway: ERROR: could not write the revocation note for {device_id} either ({note_error:#}); it is refused in memory only until a retry gets through"
+                        );
+                        false
+                    }
+                }
+            }
+        };
+        state.devices = devices;
+        if !persisted {
+            self.retry_family_revocation(device_id);
+        }
+        persisted
+    }
+
+    /// Keep trying to write a revocation that reached no disk, with exponential
+    /// backoff. The family is already refused in memory; this only narrows the
+    /// window in which a restart could bring it back. The note goes first, since it
+    /// survives a store that cannot be written.
+    fn retry_family_revocation(self: &Arc<Self>, device_id: &str) {
+        const ATTEMPTS: u32 = 6;
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            crate::dbg_log!(
+                "remote gateway: ERROR: no runtime to retry the revocation of {device_id}; a restart could bring it back"
+            );
+            return;
+        };
+        let shared = Arc::clone(self);
+        let device_id = device_id.to_owned();
+        handle.spawn(async move {
+        for attempt in 0..ATTEMPTS {
+            tokio::time::sleep(Duration::from_secs(1 << attempt)).await;
+            let mut state = shared.state();
+            let devices = state.devices.clone();
+            let noted = shared.notes.add(&device_id);
+            match shared.store.save(&devices) {
+                Ok(()) => {
+                    state.devices = devices;
+                    if let Err(error) = shared.notes.clear() {
+                        crate::dbg_log!(
+                            "remote gateway: could not clear the revocation notes: {error:#}"
+                        );
+                    }
+                    crate::dbg_log!(
+                        "remote gateway: wrote the revocation of {device_id} on retry {}",
+                        attempt + 1
+                    );
+                    crate::logger::operational_event(
+                        "remote.revocation_written",
+                        serde_json::json!({
+                            "device_id": device_id,
+                            "persisted": true,
+                            "attempts": attempt + 1,
+                        }),
+                    );
+                    return;
+                }
+                Err(error) => {
+                    crate::dbg_log!(
+                        "remote gateway: ERROR: retry {} of the revocation write for {device_id} failed: {error:#}",
+                        attempt + 1
+                    );
+                    if let Err(note_error) = noted {
+                        crate::dbg_log!(
+                            "remote gateway: ERROR: the revocation note for {device_id} failed too: {note_error:#}"
+                        );
+                    }
+                }
+            }
+        }
+        crate::dbg_log!(
+            "remote gateway: ERROR: gave up writing the revocation of {device_id}; it is refused in memory only and a restart could bring it back"
+        );
+    });
     }
 
     /// Record that `device_id` was connected at `now`, within
@@ -740,13 +887,10 @@ impl Shared {
     /// owner's device list; failing to store it never keeps a device out.
     fn mark_seen(&self, state: &mut State, device_id: &str, now: chrono::DateTime<chrono::Utc>) {
         let mut devices = state.devices.clone();
-        if devices.mark_seen(device_id, now) {
-            match self.store.save(&devices) {
-                Ok(()) => state.devices = devices,
-                Err(error) => {
-                    crate::dbg_log!("remote gateway: device store write failed: {error:#}");
-                }
-            }
+        if devices.mark_seen(device_id, now)
+            && let Err(error) = self.persist(state, devices)
+        {
+            crate::dbg_log!("remote gateway: device store write failed: {error:#}");
         }
     }
 
@@ -792,11 +936,8 @@ impl Shared {
         if devices.remove(device_id).is_none() {
             return;
         }
-        match self.store.save(&devices) {
-            Ok(()) => state.devices = devices,
-            Err(error) => {
-                crate::dbg_log!("remote gateway: device store write failed: {error:#}");
-            }
+        if let Err(error) = self.persist(&mut state, devices) {
+            crate::dbg_log!("remote gateway: device store write failed: {error:#}");
         }
     }
 
@@ -807,8 +948,7 @@ impl Shared {
         let record = state.devices.select(selector)?.clone();
         let mut devices = state.devices.clone();
         devices.remove(&record.id);
-        self.store.save(&devices)?;
-        state.devices = devices;
+        self.persist(&mut state, devices)?;
         let closed = close_device(&mut state, &record.id);
         Ok((record, closed))
     }
@@ -824,8 +964,7 @@ impl Shared {
         let mut state = self.state();
         let mut devices = state.devices.clone();
         let record = devices.set_acp(selector, allow)?;
-        self.store.save(&devices)?;
-        state.devices = devices;
+        self.persist(&mut state, devices)?;
         if !allow {
             close_device(&mut state, &record.id);
         }
@@ -895,23 +1034,38 @@ impl Shared {
 /// Tell the owner that a retired refresh token was presented and its whole
 /// family revoked: in the gateway log and as an operational event, next to
 /// what `rustcode remote revoke` reports.
-fn report_replay(
+fn report_family_revocation(
     device_id: &str,
     device_name: Option<&str>,
     family_id: Option<&str>,
     closed_connections: usize,
+    reason: AuthenticateError,
+    persisted: bool,
 ) {
     let name = device_name.unwrap_or("a paired device");
+    let (event, why) = match reason {
+        AuthenticateError::Exhausted => (
+            "remote.pairing_retired",
+            "rotated more refresh tokens than the host keeps history for",
+        ),
+        _ => ("remote.token_replayed", "presented a retired refresh token"),
+    };
+    let durability = if persisted {
+        "the revocation is on disk"
+    } else {
+        "the revocation could not be written and is not on disk"
+    };
     crate::dbg_log!(
-        "remote gateway: {name} ({device_id}) presented a retired refresh token; the pairing was revoked and {closed_connections} live connection(s) closed"
+        "remote gateway: {name} ({device_id}) {why}; the pairing was revoked ({durability}) and {closed_connections} live connection(s) closed"
     );
     crate::logger::operational_event(
-        "remote.token_replayed",
+        event,
         serde_json::json!({
             "device_id": device_id,
             "device_name": name,
             "family_id": family_id,
             "revoked": true,
+            "persisted": persisted,
             "closed_connections": closed_connections,
         }),
     );
@@ -997,7 +1151,8 @@ impl Gateway {
         let lock = lifecycle.claim()?;
         let gateway_id = lifecycle.gateway_id(&lock)?;
         let store = lifecycle.device_store();
-        let devices = store.load()?;
+        let notes = lifecycle.revocation_notes();
+        let devices = apply_revocation_notes(&store, &notes, store.load()?);
         let listener = TcpListener::bind(SocketAddr::new(config.plan.bind, config.port)).await?;
         let local = listener.local_addr()?;
         let advertised = config.plan.advertise.clone().with_port(local.port());
@@ -1059,6 +1214,7 @@ impl Gateway {
             fixed_advertise: config.plan.fixed_advertise,
             shutdown: CancellationToken::new(),
             store,
+            notes,
             state: Mutex::new(State {
                 pairing: PairingState::default(),
                 connect: ConnectRequests::default(),

@@ -14,7 +14,7 @@
 use super::handshake::Secret;
 use super::pairing::{constant_time_eq, digest};
 use crate::daemon::private_files::{
-    ensure_private_directory, owner_only, publish_private_json, read_private_json,
+    ensure_private_directory, owner_only, publish_private_json, read_private_json, remove_if_exists,
 };
 use anyhow::{Context, Result, bail, ensure};
 use base64::Engine as _;
@@ -49,10 +49,18 @@ pub const DEVICE_LIFETIME: chrono::Duration = chrono::Duration::days(30);
 /// reconnect on a flapping network without rotating its refresh token.
 pub const ACCESS_TOKEN_LIFETIME: chrono::Duration = chrono::Duration::minutes(15);
 
-/// Retired refresh-token digests kept per device, so a retired token is
-/// recognized as a replay and an unrelated wrong token is not mistaken for
-/// one: only a token this host really issued can revoke a family.
-const MAX_RETIRED_TOKENS: usize = 8;
+/// Retired refresh-token fingerprints kept for one device, so any token this
+/// host ever issued is recognized as a replay instead of being answered as a
+/// wrong token. Each is 64 bits of the token's SHA-256, which keeps 1024 of
+/// them to a few dozen KiB of the owner-only store. A family that rotates past
+/// the cap is revoked conservatively rather than forgotten, so no issued
+/// token can fall out of the history.
+const MAX_RETIRED_TOKENS: usize = 1024;
+
+/// Bytes of a digest kept for a retired refresh token. 64 bits is far beyond
+/// any forged match at this scale (a wrong token collides with 2^-64), while
+/// keeping the whole history small enough for the store.
+const RETIRED_FINGERPRINT_BYTES: usize = 8;
 
 /// Longest platform label kept.
 pub const MAX_PLATFORM_CHARS: usize = 32;
@@ -62,7 +70,9 @@ pub const MAX_PLATFORM_CHARS: usize = 32;
 pub const UNKNOWN_PLATFORM: &str = "unknown";
 
 const STORE_VERSION: u32 = 1;
-const MAX_STORE_BYTES: u64 = 256 * 1024;
+/// Room for [`MAX_DEVICES`] families, each with [`MAX_RETIRED_TOKENS`] retired
+/// fingerprint, inside one owner-only JSON file.
+const MAX_STORE_BYTES: u64 = 1024 * 1024;
 
 /// What a paired device is, as it says. A label for the owner, never a
 /// permission: ACP access requires a separate host-controlled grant.
@@ -213,7 +223,8 @@ struct TokenFamily {
     /// device acknowledges `current` or uses it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     previous: Option<String>,
-    /// Hex digests of refresh tokens replaced for good.
+    /// Fingerprints ([`RETIRED_FINGERPRINT_BYTES`] of the SHA-256, hex) of
+    /// every refresh token replaced for good. Presenting one is a replay.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     retired: Vec<String>,
     /// The rotation whose answer the device has not acknowledged yet.
@@ -224,12 +235,28 @@ struct TokenFamily {
     /// restart a device authenticates with its refresh token.
     #[serde(skip)]
     access: Option<AccessToken>,
+    /// The answer the last rotation handed out, while it awaits
+    /// acknowledgement. A retry with the previous refresh token gets exactly
+    /// this answer again, so a second holder of the previous token cannot make
+    /// the host rotate the stored token away. Memory only: after a restart
+    /// there is nothing to re-issue, and a retry is a replay.
+    #[serde(skip)]
+    pending: Option<PendingRotation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AccessToken {
     sha256: String,
     expires_at: DateTime<Utc>,
+}
+
+/// The tokens of a rotation whose acknowledgement has not arrived.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingRotation {
+    refresh_token: Secret,
+    access_token: Secret,
+    access_expires_at: DateTime<Utc>,
+    rotation_id: String,
 }
 
 impl TokenFamily {
@@ -241,6 +268,19 @@ impl TokenFamily {
             return false;
         }
         constant_time_eq(presented, &expected)
+    }
+
+    /// Whether `stored` is the fingerprint of `presented`.
+    fn fingerprint_matches(stored: &str, presented: &[u8; 32]) -> bool {
+        let mut expected = [0u8; RETIRED_FINGERPRINT_BYTES];
+        if hex::decode_to_slice(stored, &mut expected).is_err() {
+            return false;
+        }
+        let mut difference = 0u8;
+        for (a, b) in presented[..RETIRED_FINGERPRINT_BYTES].iter().zip(&expected) {
+            difference |= a ^ b;
+        }
+        std::hint::black_box(difference) == 0
     }
 
     /// A fresh family: its first refresh token and the access token that goes
@@ -257,6 +297,7 @@ impl TokenFamily {
                 sha256: hex::encode(digest(access.expose().as_bytes())),
                 expires_at: access_expires_at,
             }),
+            pending: None,
         };
         let issued = Issued {
             refresh_token: refresh,
@@ -267,52 +308,69 @@ impl TokenFamily {
         (family, issued)
     }
 
-    /// Replace the tokens after an accepted refresh token. `from_current` says
-    /// the newest token was presented, which retires the one before it;
-    /// otherwise the presented token stays `previous`, so a retry with it keeps
-    /// working and the superseded token is not a replay.
-    fn rotate(&mut self, from_current: bool, now: DateTime<Utc>) -> Issued {
+    /// Replace the tokens after the newest refresh token was presented. The
+    /// token before it is retired for good. `None` when the family already
+    /// keeps as many retired tokens as it may; the caller revokes it then.
+    fn rotate(&mut self, now: DateTime<Utc>) -> Option<Issued> {
+        if !self.has_room() {
+            return None;
+        }
+        if let Some(previous) = self.previous.take() {
+            self.retire(previous);
+        }
         let (refresh, access, access_expires_at) = mint(now);
         let current = hex::encode(digest(refresh.expose().as_bytes()));
-        if from_current {
-            // The token before `current` is replaced for good; `current` takes
-            // its place as the one a retry may still present.
-            if let Some(retired) = self.previous.take() {
-                self.retire(retired);
-            }
-            self.previous = Some(std::mem::replace(&mut self.current, current));
-        } else {
-            // The presented token stays `previous`, so the device that never
-            // stored `current` can keep using it; `current` is superseded.
-            self.current = current;
-        }
-        let rotation_id = random_id();
-        self.rotation_id = Some(rotation_id.clone());
+        self.previous = Some(std::mem::replace(&mut self.current, current));
         self.access = Some(AccessToken {
             sha256: hex::encode(digest(access.expose().as_bytes())),
             expires_at: access_expires_at,
         });
-        Issued {
+        let rotation_id = random_id();
+        self.rotation_id = Some(rotation_id.clone());
+        self.pending = Some(PendingRotation {
+            refresh_token: refresh.clone(),
+            access_token: access.clone(),
+            access_expires_at,
+            rotation_id: rotation_id.clone(),
+        });
+        Some(Issued {
             refresh_token: refresh,
             access_token: access,
             access_expires_at,
             rotation_id: Some(rotation_id),
-        }
+        })
+    }
+
+    /// The answer still awaiting acknowledgement, for a retry with the
+    /// previous refresh token. `None` once it was acknowledged, or after a
+    /// restart: a retry then is a replay.
+    fn pending_answer(&self) -> Option<Issued> {
+        let pending = self.pending.as_ref()?;
+        Some(Issued {
+            refresh_token: pending.refresh_token.clone(),
+            access_token: pending.access_token.clone(),
+            access_expires_at: pending.access_expires_at,
+            rotation_id: Some(pending.rotation_id.clone()),
+        })
+    }
+
+    /// Whether one more retired token fits in the history.
+    fn has_room(&self) -> bool {
+        self.retired.len() < MAX_RETIRED_TOKENS
     }
 
     /// Whether `presented` is a refresh token this family retired.
     fn is_retired(&self, presented: &[u8; 32]) -> bool {
         self.retired
             .iter()
-            .any(|digest| Self::digest_matches(digest, presented))
+            .any(|stored| Self::fingerprint_matches(stored, presented))
     }
 
-    /// Forget a token for good, keeping the newest retirements.
+    /// Forget a token for good, keeping the fingerprint its digest starts
+    /// with. Only called with room ([`Self::has_room`]).
     fn retire(&mut self, digest: String) {
-        self.retired.push(digest);
-        if self.retired.len() > MAX_RETIRED_TOKENS {
-            self.retired.remove(0);
-        }
+        self.retired
+            .push(digest.chars().take(RETIRED_FINGERPRINT_BYTES * 2).collect());
     }
 }
 
@@ -461,12 +519,27 @@ pub enum AuthenticateError {
     /// Unknown device, wrong token, expired static pairing, or an access
     /// token this host never issued. All indistinguishable, as before.
     Unauthorized,
-    /// The access token this record issued has expired: authenticate with the
-    /// refresh token instead of pairing again.
+    /// The access token this record issued has expired or was replaced:
+    /// authenticate with the refresh token instead of pairing again.
     AccessExpired,
     /// A refresh token this family retired for good: the whole family was
     /// revoked by this call.
     Replayed,
+    /// The family retired as many tokens as the host keeps history for, so it
+    /// was revoked rather than let an issued token be answered as a wrong one.
+    /// The device pairs again.
+    Exhausted,
+}
+
+/// What `Devices::acknowledge` did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Acknowledgement {
+    /// Nothing to retire: unknown device, a static one, or a stale rotation.
+    Ignored,
+    /// The previous refresh token is retired for good.
+    Retired,
+    /// The history was full, so the family was removed instead.
+    Exhausted,
 }
 
 /// The set of paired devices, as held in memory and written to disk.
@@ -630,13 +703,20 @@ impl Devices {
     ///   one it replaced are both accepted.
     /// - Using the newest token retires the one before it, so a copy of it
     ///   presented later is a replay; acknowledging the newest retires it too.
-    /// - Presenting the previous token (a lost `authenticated` frame, or two
-    ///   routes racing with one credential) is accepted and rotates again: the
-    ///   presented token stays `previous`, so it keeps working, and the token
-    ///   the other connection was handed is superseded without a replay.
-    /// - Any other token this family retired is a replay, and removes the
-    ///   whole record. A token this host never issued is only refused, so a
-    ///   guessed device identifier cannot revoke a device.
+    /// - A retry with the previous token inside that window is idempotent: it
+    ///   gets the very same answer again and changes nothing. A second holder
+    ///   of the previous token therefore gains nothing the device did not
+    ///   already receive, and cannot rotate the stored token away. Without the
+    ///   answer in memory (a restart since the rotation) the retry is a replay.
+    /// - Any token this family retired is a replay, and removes the whole
+    ///   record. A token this host never issued is only refused, so a guessed
+    ///   device identifier cannot revoke a device.
+    /// - An access token that is not the live one is answered
+    ///   [`AuthenticateError::AccessExpired`], so a route holding the one a
+    ///   rotation replaced refreshes instead of pairing again.
+    /// - A family that has retired as many tokens as it may keep is removed
+    ///   ([`AuthenticateError::Exhausted`]): forgetting a retired token would
+    ///   answer it `unauthorized` instead of a replay.
     pub fn accept(
         &mut self,
         device_id: &str,
@@ -678,20 +758,26 @@ impl Devices {
             };
         };
         if matches!(credential, Credential::Access(_)) {
-            let Some(access) = family.access.as_ref() else {
-                return Err(AuthenticateError::AccessExpired);
-            };
-            if !TokenFamily::digest_matches(&access.sha256, &presented) {
-                return Err(AuthenticateError::Unauthorized);
+            // The live access token reconnects without rotating.
+            if let Some(access) = family.access.as_ref()
+                && TokenFamily::digest_matches(&access.sha256, &presented)
+            {
+                return if now >= access.expires_at {
+                    Err(AuthenticateError::AccessExpired)
+                } else {
+                    Ok(Accepted {
+                        record: record.clone(),
+                        issued: None,
+                        access_expires_at: Some(access.expires_at),
+                    })
+                };
             }
-            if now >= access.expires_at {
-                return Err(AuthenticateError::AccessExpired);
-            }
-            return Ok(Accepted {
-                record: record.clone(),
-                issued: None,
-                access_expires_at: Some(access.expires_at),
-            });
+            // A rotating record never answers an access token `unauthorized`:
+            // it cannot tell the token a rotation replaced, one a restart
+            // forgot, and a wrong one apart, and pairing again is never the
+            // right answer to an access token. `access_expired` sends the
+            // device to its refresh token, which is always valid.
+            return Err(AuthenticateError::AccessExpired);
         }
         let from_current = TokenFamily::digest_matches(&family.current, &presented);
         let from_previous = family
@@ -706,37 +792,74 @@ impl Devices {
             }
             return Err(AuthenticateError::Unauthorized);
         }
+        if from_previous {
+            // The two-phase window: hand back the same answer, unchanged.
+            return match family.pending_answer() {
+                Some(issued) => {
+                    let access_expires_at = issued.access_expires_at;
+                    Ok(Accepted {
+                        record: record.clone(),
+                        issued: Some(issued),
+                        access_expires_at: Some(access_expires_at),
+                    })
+                }
+                // Acknowledged already, or a restart lost the answer: a copy
+                // of the previous token is in use.
+                None => {
+                    self.devices.remove(index);
+                    Err(AuthenticateError::Replayed)
+                }
+            };
+        }
         let mut family = family;
-        let issued = family.rotate(from_current, now);
+        let Some(issued) = family.rotate(now) else {
+            // No room left to remember this one: revoke rather than forget.
+            self.devices.remove(index);
+            return Err(AuthenticateError::Exhausted);
+        };
+        let access_expires_at = issued.access_expires_at;
         let mut record = record.clone();
         record.rotation = Some(family);
         self.devices[index] = record.clone();
         Ok(Accepted {
             record,
-            access_expires_at: Some(issued.access_expires_at),
+            access_expires_at: Some(access_expires_at),
             issued: Some(issued),
         })
     }
 
     /// Retire the previous refresh token after the device acknowledged the
-    /// rotation that issued the current one. False when nothing changed: the
-    /// record is gone, does not rotate, or the acknowledgement names a rotation
-    /// another connection has replaced, which is not an error.
-    pub fn acknowledge(&mut self, device_id: &str, rotation_id: &str) -> bool {
-        let Some(record) = self.devices.iter_mut().find(|r| r.id == device_id) else {
-            return false;
+    /// rotation that issued the current one. [`Acknowledgement::Ignored`] when
+    /// nothing changed: the record is gone, does not rotate, or the
+    /// acknowledgement names a rotation another connection replaced, which is
+    /// not an error.
+    pub fn acknowledge(&mut self, device_id: &str, rotation_id: &str) -> Acknowledgement {
+        let Some(index) = self.devices.iter().position(|r| r.id == device_id) else {
+            return Acknowledgement::Ignored;
         };
-        let Some(family) = record.rotation.as_mut() else {
-            return false;
+        let exhausted = {
+            let Some(family) = self.devices[index].rotation.as_mut() else {
+                return Acknowledgement::Ignored;
+            };
+            if family.rotation_id.as_deref() != Some(rotation_id) {
+                return Acknowledgement::Ignored;
+            }
+            family.rotation_id = None;
+            family.pending = None;
+            match family.previous.take() {
+                Some(previous) if family.has_room() => {
+                    family.retire(previous);
+                    false
+                }
+                Some(_) => true,
+                None => false,
+            }
         };
-        if family.rotation_id.as_deref() != Some(rotation_id) {
-            return false;
+        if exhausted {
+            self.devices.remove(index);
+            return Acknowledgement::Exhausted;
         }
-        if let Some(previous) = family.previous.take() {
-            family.retire(previous);
-        }
-        family.rotation_id = None;
-        true
+        Acknowledgement::Retired
     }
 
     /// Resolve what a user typed: a full identifier, a unique identifier
@@ -834,6 +957,137 @@ fn install_digest(install_id: &str) -> Option<String> {
     let valid = (MIN_INSTALL_ID_CHARS..=MAX_INSTALL_ID_CHARS).contains(&length)
         && install_id.chars().all(|c| c.is_ascii_graphic());
     valid.then(|| hex::encode(digest(install_id.as_bytes())))
+}
+
+/// A note that one family must never authenticate again, kept in its own file
+/// next to the store. It exists for the one case where the store write that
+/// removed a family fails: the note is written instead, before the family's
+/// connections are closed, and applied at startup before anything is served, so
+/// a restart cannot bring a revoked family back.
+#[derive(Debug, Clone)]
+pub struct RevocationNotes {
+    path: PathBuf,
+}
+
+/// Largest number of pending revocations kept; there cannot be more devices.
+const MAX_REVOCATION_NOTES: usize = MAX_DEVICES;
+const NOTES_VERSION: u32 = 1;
+const MAX_NOTES_BYTES: u64 = 16 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct Notes {
+    version: u32,
+    families: Vec<String>,
+}
+
+impl Default for Notes {
+    fn default() -> Self {
+        Self {
+            version: NOTES_VERSION,
+            families: Vec::new(),
+        }
+    }
+}
+
+impl RevocationNotes {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The families noted so far; a missing file is none.
+    pub fn load(&self) -> Result<Vec<String>> {
+        match std::fs::symlink_metadata(&self.path) {
+            Ok(metadata) => ensure!(
+                metadata.is_file() && owner_only(&metadata),
+                "revocation notes {} must be a regular owner-only file (0600)",
+                self.path.display()
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error).context("failed to inspect the revocation notes"),
+        }
+        let notes: Notes = read_private_json(&self.path, MAX_NOTES_BYTES)
+            .with_context(|| format!("failed to read {}", self.path.display()))?;
+        ensure!(notes.version == NOTES_VERSION, "unsupported notes version");
+        Ok(notes.families)
+    }
+
+    /// Note `device_id`, replacing the file atomically. A note already there is
+    /// left as it is.
+    pub fn add(&self, device_id: &str) -> Result<()> {
+        let mut notes = Notes {
+            version: NOTES_VERSION,
+            families: self.load().unwrap_or_default(),
+        };
+        if notes.families.iter().any(|known| known == device_id) {
+            return Ok(());
+        }
+        notes.families.push(device_id.to_owned());
+        if notes.families.len() > MAX_REVOCATION_NOTES {
+            notes.families.remove(0);
+        }
+        let parent = self
+            .path
+            .parent()
+            .context("revocation notes have no parent")?;
+        ensure_private_directory(parent, "remote gateway")?;
+        publish_private_json(&self.path, &notes)
+            .with_context(|| format!("failed to write {}", self.path.display()))
+    }
+
+    /// Drop the notes: the store on disk is authoritative again. A missing file
+    /// is fine.
+    pub fn clear(&self) -> Result<()> {
+        match remove_if_exists(&self.path) {
+            Ok(()) => Ok(()),
+            Err(error) => Err(error).context("failed to remove the revocation notes"),
+        }
+    }
+}
+
+/// Apply the notes left by a store write that failed: every noted family is
+/// gone from `devices` before the gateway serves anyone, and the store is
+/// rewritten. A store that cannot be rewritten keeps the notes for the next
+/// start, and the families stay refused in memory.
+pub fn apply_revocation_notes(
+    store: &DeviceStore,
+    notes: &RevocationNotes,
+    mut devices: Devices,
+) -> Devices {
+    let noted = match notes.load() {
+        Ok(noted) => noted,
+        Err(error) => {
+            crate::dbg_log!("remote gateway: ERROR: cannot read revocation notes: {error:#}");
+            return devices;
+        }
+    };
+    if noted.is_empty() {
+        return devices;
+    }
+    let mut removed = false;
+    for device_id in &noted {
+        removed |= devices.remove(device_id).is_some();
+    }
+    if let Err(error) = store.save(&devices) {
+        crate::dbg_log!(
+            "remote gateway: ERROR: could not write the store while applying {} revocation note(s); they stay refused and the notes are kept: {error:#}",
+            noted.len()
+        );
+        return devices;
+    }
+    if removed {
+        crate::dbg_log!(
+            "remote gateway: applied {} revocation note(s) left by a failed store write",
+            noted.len()
+        );
+    }
+    if let Err(error) = notes.clear() {
+        crate::dbg_log!("remote gateway: could not clear the revocation notes: {error:#}");
+    }
+    devices
 }
 
 /// The owner-only file behind [`Devices`].
@@ -1446,12 +1700,13 @@ mod rotation_tests {
                 .unwrap_err(),
             AuthenticateError::AccessExpired
         );
-        // A wrong access token revokes nothing.
+        // Any other access token asks the device to refresh, and revokes
+        // nothing.
         assert_eq!(
             devices
                 .accept(&record.id, Credential::Access("not-a-token"), at)
                 .unwrap_err(),
-            AuthenticateError::Unauthorized
+            AuthenticateError::AccessExpired
         );
         assert_eq!(devices.list().len(), 1);
     }
@@ -1468,8 +1723,14 @@ mod rotation_tests {
         assert_eq!(next.access_expires_at, at + ACCESS_TOKEN_LIFETIME);
         // The acknowledgement retires the token before the new one; from then
         // on presenting it is a replay.
-        assert!(devices.acknowledge(&record.id, &rotation_id));
-        assert!(!devices.acknowledge(&record.id, &rotation_id));
+        assert_eq!(
+            devices.acknowledge(&record.id, &rotation_id),
+            Acknowledgement::Retired
+        );
+        assert_eq!(
+            devices.acknowledge(&record.id, &rotation_id),
+            Acknowledgement::Ignored
+        );
         assert_eq!(
             devices
                 .accept(&record.id, Credential::Refresh(refresh.expose()), at)
@@ -1483,48 +1744,70 @@ mod rotation_tests {
     fn a_dropped_authenticated_frame_never_locks_a_device_out() {
         let (mut devices, record, refresh, _access) = rotating();
         let at = record.paired_at + chrono::Duration::minutes(20);
-        // The answer was dropped, so the device still holds R1, twice.
-        let second = devices
+        // The answer was dropped, so the device still holds R1.
+        let first = devices
             .accept(&record.id, Credential::Refresh(refresh.expose()), at)
             .unwrap()
             .issued
             .unwrap();
-        let third = devices
+        let retry = devices
             .accept(&record.id, Credential::Refresh(refresh.expose()), at)
             .unwrap()
             .issued
             .unwrap();
-        assert_ne!(second.refresh_token.expose(), third.refresh_token.expose());
+        // The retry hands back the very same answer: nothing rotated away.
+        assert_eq!(first.refresh_token.expose(), retry.refresh_token.expose());
+        assert_eq!(first.access_token.expose(), retry.access_token.expose());
+        assert_eq!(first.rotation_id, retry.rotation_id);
         assert_eq!(devices.list().len(), 1, "no revocation on a retry");
-        // The newest answer keeps working, and using it retires R1 for good.
+        // The stored answer keeps working, and using it retires R1 for good.
         assert!(
             devices
                 .accept(
                     &record.id,
-                    Credential::Refresh(third.refresh_token.expose()),
+                    Credential::Refresh(first.refresh_token.expose()),
                     at
                 )
                 .is_ok()
         );
-        // The answer a retry superseded is refused, but that is not a replay:
-        // the pairing stays.
-        assert_eq!(
-            devices
-                .accept(
-                    &record.id,
-                    Credential::Refresh(second.refresh_token.expose()),
-                    at
-                )
-                .unwrap_err(),
-            AuthenticateError::Unauthorized
-        );
-        assert_eq!(devices.list().len(), 1);
         assert_eq!(
             devices
                 .accept(&record.id, Credential::Refresh(refresh.expose()), at)
                 .unwrap_err(),
             AuthenticateError::Replayed
         );
+    }
+
+    #[test]
+    fn a_retry_after_a_restart_is_a_replay_not_a_fresh_answer() {
+        let (_dir, store) = store();
+        let mut devices = store.load().unwrap();
+        let enrolled = devices
+            .enroll_rotating("desktop", None, &DeviceProfile::default())
+            .unwrap();
+        let refresh = enrolled
+            .issued
+            .as_ref()
+            .unwrap()
+            .refresh_token
+            .expose()
+            .to_owned();
+        let at = enrolled.record.paired_at + chrono::Duration::minutes(20);
+        devices
+            .accept(&enrolled.record.id, Credential::Refresh(&refresh), at)
+            .unwrap();
+        store.save(&devices).unwrap();
+
+        // The restart forgot the answer it handed out, so presenting the
+        // previous token again is a copy of it, not a retry.
+        let mut reloaded = store.load().unwrap();
+        assert_eq!(
+            reloaded
+                .accept(&enrolled.record.id, Credential::Refresh(&refresh), at)
+                .unwrap_err(),
+            AuthenticateError::Replayed
+        );
+        assert!(reloaded.list().is_empty());
     }
 
     #[test]
@@ -1558,8 +1841,8 @@ mod rotation_tests {
     fn two_connections_racing_on_one_refresh_token_are_not_a_replay() {
         let (mut devices, record, refresh, _access) = rotating();
         let at = record.paired_at + chrono::Duration::minutes(20);
-        // Two routes race with the same R1: both are answered, neither is a
-        // replay, and the device stays paired.
+        // Two routes race with the same R1: the second is an idempotent retry,
+        // so both are answered with the same tokens and neither is a replay.
         let first = devices
             .accept(&record.id, Credential::Refresh(refresh.expose()), at)
             .unwrap()
@@ -1570,14 +1853,89 @@ mod rotation_tests {
             .unwrap()
             .issued
             .unwrap();
-        assert_ne!(first.refresh_token.expose(), second.refresh_token.expose());
+        assert_eq!(first.refresh_token.expose(), second.refresh_token.expose());
         assert_eq!(devices.list().len(), 1);
-        // The last answer is the current token, and it works.
+        // The answer both hold is the current token, and it works.
         assert!(
             devices
                 .accept(
                     &record.id,
                     Credential::Refresh(second.refresh_token.expose()),
+                    at
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_thief_with_the_previous_token_cannot_supersede_the_answer() {
+        let (mut devices, record, refresh, _access) = rotating();
+        let at = record.paired_at + chrono::Duration::minutes(20);
+        // The real device rotates R1 into R2.
+        let real = devices
+            .accept(&record.id, Credential::Refresh(refresh.expose()), at)
+            .unwrap()
+            .issued
+            .unwrap();
+        // A thief presenting the same R1 gets R2 again, not a new token.
+        let thief = devices
+            .accept(&record.id, Credential::Refresh(refresh.expose()), at)
+            .unwrap()
+            .issued
+            .unwrap();
+        assert_eq!(real.refresh_token.expose(), thief.refresh_token.expose());
+        assert_eq!(real.rotation_id, thief.rotation_id);
+        // The real device acknowledges R2: it is the current token, and R1 is
+        // retired for good.
+        assert_eq!(
+            devices.acknowledge(&record.id, real.rotation_id.as_deref().unwrap()),
+            Acknowledgement::Retired
+        );
+        assert_eq!(devices.list().len(), 1);
+        assert!(
+            devices
+                .accept(
+                    &record.id,
+                    Credential::Refresh(real.refresh_token.expose()),
+                    at
+                )
+                .is_ok()
+        );
+        // The real device was never locked out; a copy of R1 is a replay.
+        assert_eq!(
+            devices
+                .accept(&record.id, Credential::Refresh(refresh.expose()), at)
+                .unwrap_err(),
+            AuthenticateError::Replayed
+        );
+    }
+
+    #[test]
+    fn an_access_token_a_rotation_replaced_asks_for_a_refresh() {
+        let (mut devices, record, refresh, access) = rotating();
+        let at = record.paired_at + chrono::Duration::minutes(5);
+        let rotated = devices
+            .accept(&record.id, Credential::Refresh(refresh.expose()), at)
+            .unwrap()
+            .issued
+            .unwrap();
+        // Both the replaced token and one this host never issued send the
+        // device to its refresh token instead of pairing again.
+        for stale in [access.expose(), "not-an-access-token"] {
+            assert_eq!(
+                devices
+                    .accept(&record.id, Credential::Access(stale), at)
+                    .unwrap_err(),
+                AuthenticateError::AccessExpired,
+                "{stale}"
+            );
+        }
+        // The live one reconnects, and the refresh token is untouched.
+        assert!(
+            devices
+                .accept(
+                    &record.id,
+                    Credential::Access(rotated.access_token.expose()),
                     at
                 )
                 .is_ok()
@@ -1669,15 +2027,18 @@ mod rotation_tests {
                 )
                 .is_ok()
         );
+        // The answer that replaced R1 only lived in memory, so after the
+        // restart a copy of R1 is a replay rather than a retry.
         let mut reloaded = store.load().unwrap();
-        assert!(
+        assert_eq!(
             reloaded
                 .accept(
                     &enrolled.record.id,
                     Credential::Refresh(issued.refresh_token.expose()),
                     at
                 )
-                .is_ok()
+                .unwrap_err(),
+            AuthenticateError::Replayed
         );
     }
 
@@ -1721,10 +2082,10 @@ mod rotation_tests {
     }
 
     #[test]
-    fn retired_digests_are_bounded() {
+    fn a_family_that_retires_too_many_tokens_is_revoked_not_forgotten() {
         let (mut devices, record, mut refresh, _access) = rotating();
         let mut at = record.paired_at;
-        for _ in 0..MAX_RETIRED_TOKENS + 3 {
+        for _ in 0..MAX_RETIRED_TOKENS {
             at += chrono::Duration::minutes(1);
             let rotated = devices
                 .accept(&record.id, Credential::Refresh(refresh.expose()), at)
@@ -1732,10 +2093,174 @@ mod rotation_tests {
                 .issued
                 .expect("a refresh token rotates");
             let rotation_id = rotated.rotation_id.expect("a rotation has an id");
-            assert!(devices.acknowledge(&record.id, &rotation_id));
+            assert_eq!(
+                devices.acknowledge(&record.id, &rotation_id),
+                Acknowledgement::Retired
+            );
             refresh = rotated.refresh_token;
         }
         let family = devices.list()[0].rotation.as_ref().unwrap();
         assert_eq!(family.retired.len(), MAX_RETIRED_TOKENS);
+        // One more rotation would have to forget the oldest fingerprint, which
+        // would answer an issued token as a wrong one: revoke instead.
+        at += chrono::Duration::minutes(1);
+        assert_eq!(
+            devices
+                .accept(&record.id, Credential::Refresh(refresh.expose()), at)
+                .unwrap_err(),
+            AuthenticateError::Exhausted
+        );
+        assert!(devices.list().is_empty());
+    }
+
+    #[test]
+    fn an_acknowledgement_that_would_overfill_the_history_revokes_the_family() {
+        let (mut devices, record, mut refresh, _access) = rotating();
+        let mut at = record.paired_at;
+        for _ in 0..MAX_RETIRED_TOKENS - 1 {
+            at += chrono::Duration::minutes(1);
+            let rotated = devices
+                .accept(&record.id, Credential::Refresh(refresh.expose()), at)
+                .unwrap()
+                .issued
+                .expect("a refresh token rotates");
+            let rotation_id = rotated.rotation_id.expect("a rotation has an id");
+            assert_eq!(
+                devices.acknowledge(&record.id, &rotation_id),
+                Acknowledgement::Retired
+            );
+            refresh = rotated.refresh_token;
+        }
+        // One rotation leaves the history full with a token still pending, so
+        // the next rotation retires the one before it and fills the history.
+        let first = devices
+            .accept(&record.id, Credential::Refresh(refresh.expose()), at)
+            .unwrap()
+            .issued
+            .expect("a refresh token rotates");
+        let second = devices
+            .accept(
+                &record.id,
+                Credential::Refresh(first.refresh_token.expose()),
+                at,
+            )
+            .unwrap()
+            .issued
+            .expect("a refresh token rotates");
+        assert_eq!(
+            devices.acknowledge(
+                &record.id,
+                second.rotation_id.as_deref().expect("a rotation has an id")
+            ),
+            Acknowledgement::Exhausted
+        );
+        assert!(devices.list().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod revocation_note_tests {
+    use super::*;
+
+    fn paths() -> (tempfile::TempDir, DeviceStore, RevocationNotes) {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let remote = dir.path().join("remote");
+        (
+            dir,
+            DeviceStore::new(remote.join("devices.json")),
+            RevocationNotes::new(remote.join("revocations.json")),
+        )
+    }
+
+    #[test]
+    fn notes_are_written_read_back_and_cleared() {
+        let (_dir, store, notes) = paths();
+        assert!(notes.load().unwrap().is_empty());
+        notes.add("0011223344556677").unwrap();
+        notes.add("0011223344556677").unwrap();
+        notes.add("8899aabbccddeeff").unwrap();
+        assert_eq!(
+            notes.load().unwrap(),
+            ["0011223344556677", "8899aabbccddeeff"]
+        );
+        notes.clear().unwrap();
+        assert!(notes.load().unwrap().is_empty());
+        // Clearing a note that is already gone is fine.
+        notes.clear().unwrap();
+        // A note never carries a token or a name.
+        notes.add("0011223344556677").unwrap();
+        let on_disk = std::fs::read_to_string(notes.path()).unwrap();
+        assert!(!on_disk.contains("token"));
+        let loaded = store.load().unwrap();
+        assert!(loaded.list().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_note_is_owner_only_from_the_first_write() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_dir, _store, notes) = paths();
+        notes.add("0011223344556677").unwrap();
+        let mode = std::fs::metadata(notes.path())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+        let directory = std::fs::metadata(notes.path().parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(directory, 0o700);
+    }
+
+    #[test]
+    fn notes_apply_before_serving_and_survive_a_store_that_cannot_be_written() {
+        let (dir, store, notes) = paths();
+        let mut devices = store.load().unwrap();
+        let enrolled = devices
+            .enroll_rotating("desktop", None, &DeviceProfile::default())
+            .unwrap();
+        let device_id = enrolled.record.id.clone();
+        store.save(&devices).unwrap();
+        notes.add(&device_id).unwrap();
+
+        // The store is there and the note is there: the family is withdrawn
+        // before anything is served, and the store is rewritten.
+        let applied = apply_revocation_notes(&store, &notes, store.load().unwrap());
+        assert!(applied.list().is_empty());
+        assert!(store.load().unwrap().list().is_empty());
+        assert!(notes.load().unwrap().is_empty());
+
+        // Now with a directory that cannot be written: the family is still
+        // refused in memory, and the note stays for the next start.
+        let mut devices = store.load().unwrap();
+        let second = devices
+            .enroll_rotating("desktop", None, &DeviceProfile::default())
+            .unwrap();
+        let second_id = second.record.id.clone();
+        store.save(&devices).unwrap();
+        notes.add(&second_id).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let remote = store.path().parent().unwrap().to_path_buf();
+            std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o500)).unwrap();
+            let applied = apply_revocation_notes(&store, &notes, store.load().unwrap());
+            assert!(applied.list().is_empty(), "refused in memory");
+            assert!(
+                !store.load().unwrap().list().is_empty(),
+                "the store could not be written"
+            );
+            assert_eq!(notes.load().unwrap(), [second_id.clone()]);
+            std::fs::set_permissions(&remote, std::fs::Permissions::from_mode(0o700)).unwrap();
+            // Once the directory is writable again, the next start finishes.
+            let applied = apply_revocation_notes(&store, &notes, store.load().unwrap());
+            assert!(applied.list().is_empty());
+            assert!(store.load().unwrap().list().is_empty());
+            assert!(notes.load().unwrap().is_empty());
+        }
+        let _ = dir;
     }
 }

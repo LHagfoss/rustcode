@@ -334,11 +334,17 @@ access token's digest stays in memory, so a gateway restart asks for a
 refresh. Presenting a refresh token the host has already replaced revokes the
 whole pairing: the device's connections close as revoked with
 `token_replayed`, the record is removed as if revoked, and the gateway logs
-`remote.token_replayed` for the owner. Pair again if that was you. Until the
-device acknowledges the new token, the previous one is still accepted, so a
-lost acknowledgement never locks it out. A client acknowledges a rotation
-once it has stored the new token; the phone app's client change belongs to its
-repository.
+`remote.token_replayed` for the owner. The removal is written before anything
+closes; if the device store cannot be written, the revocation is noted next to
+it, retried, and the device is refused meanwhile. Pair again if that was you.
+Until the device acknowledges the new token, presenting the previous one again
+is a retry that gets the same tokens back, so a lost acknowledgement never
+locks it out and a copy of the previous token cannot rotate the device's token
+away; after a gateway restart such a retry is a replay. A client acknowledges a
+rotation once it has stored the new token; the phone app's client change
+belongs to its repository. A family that has rotated more tokens than the host
+keeps history for (1024) is revoked rather than letting an old token be
+answered as a wrong one.
 
 A device that does not ask for rotation keeps the static token, and its
 pairing lasts 30 days. Within them the device reconnects on its own, with no

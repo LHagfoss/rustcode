@@ -200,33 +200,49 @@ reconnect <15m  → authenticate {device_id, access_token: A2}
   (Keychain) before anything else; the host keeps only digests.
 - `access_expires_at` is RFC 3339 in UTC, 15 minutes after the access token was
   minted. Until then `authenticate` with `access_token` reconnects without
-  rotating. After it the host answers `access_expired`: authenticate with the
-  refresh token, which never expires. `access_token` itself is never sent
-  again, so a client keeps the one it has.
+  rotating. Any other access token of a rotating device is answered
+  `access_expired` — the one a rotation replaced, one a restart forgot, or a
+  wrong one — because the only right answer is to authenticate with the refresh
+  token, which never expires. `access_token` itself is never sent again, so a
+  client keeps the one it has.
 - Every accepted refresh token rotates: the answer carries a new
   `refresh_token` and the `rotation_id` of that rotation. Replace the stored
   one and send `{"type": "token_ack", "rotation_id": "5be1c4a07d2e9f63"}` on
   the same connection. It is a session-path frame the gateway itself consumes;
   it is never routed to a session, and one that names an older rotation is
-  ignored. Until the acknowledgement arrives, the token before the new one is
-  still accepted, so a lost `authenticated` frame cannot lock a device out:
-  retry with what you have, and the answer rotates again.
+  ignored.
+- **Retry in the two-phase window**: until the acknowledgement arrives, the
+  token before the new one is still accepted, and presenting it again is an
+  idempotent retry: the host answers with the *same* `refresh_token`,
+  `access_token` and `rotation_id` it issued before, and rotates nothing. A
+  lost `authenticated` frame therefore cannot lock a device out, and a second
+  holder of the previous token gains nothing beyond the answer the device
+  already received. The answer is kept in memory only; after a gateway restart
+  the host has nothing to re-issue, and a retry with the previous token is a
+  replay.
 - **Replay**: presenting a refresh token the host has retired for good revokes
   the whole pairing. The host closes the device's connections with `revoked`,
-  answers this attempt with `token_replayed`, removes the record as if revoked,
-  and logs `remote.token_replayed` for its owner. Pair again. A token this host
+  answers this attempt with `token_replayed`, and removes the record as if
+  revoked. The revocation is written before anything is closed; when the device
+  store cannot be written, it is noted next to it for the next start and
+  retried, and the device is refused in memory either way. The owner sees
+  `remote.token_replayed` in the gateway log. Pair again. A token this host
   never issued is only `unauthorized`: a guessed `device_id` cannot revoke a
   device.
 - Two connections racing with the same refresh token (a client trying several
-  routes at once) are not a replay: the first answer's token becomes
-  `previous`, the second rotates again, and both are accepted. Keep the answer
-  from the route that stays up; the token an earlier answer carried is then
-  superseded, and presenting it later is `unauthorized`, not a revocation.
+  routes at once) are not a replay: the first rotates, the second gets the same
+  answer, and both are accepted. Keep the answer from the route that stays up;
+  it is the same on every route.
 - The host stores digests only: the current refresh token, the previous one
-  until it is acknowledged or used, the retired ones, and the access token's
-  digest, which stays in memory and never reaches disk. After a gateway restart
-  an access token answers `access_expired` and the refresh token reconnects as
-  usual, so the pairing survives.
+  until it is acknowledged, and a 64-bit fingerprint of every refresh token it
+  retired, so any token it issued is recognized as a replay rather than answered
+  as a wrong one. A family that retires more than 1024 tokens is revoked instead
+  of forgetting one: its connections close with `revoked`, the device is refused
+  (`unauthorized` with the pairing gone) and the owner sees
+  `remote.pairing_retired`. The access token's digest stays in memory and never
+  reaches disk, so after a gateway restart an access token answers
+  `access_expired` and the refresh token reconnects as usual: the pairing
+  survives.
 - `rotation_id` is absent when nothing rotated: an access token reconnected, or
   the device does not rotate. `refresh_token` and `access_token` are absent on
   an access-token reconnect.
