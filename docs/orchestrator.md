@@ -625,7 +625,7 @@ message to a busy thread waited unread and uncorrectable: the agent that sent it
 could neither see nor change what it had queued. The version is bumped rather
 than the tool added to v6 for the same reason as v4 and v6 — the *client* holds
 the queue (`state/queues.ts`, delivered by `state/host.ts`). The app advertises
-9 from `CAPABILITY_VERSION` (`state/orchestration.ts`), and a v6 app keeps
+7 from `CAPABILITY_VERSION` (`state/orchestration.ts`), and a v6 app keeps
 exactly the v6 set and `PROMPT_HINT_V6`.
 
 | Tool | Args | Answer | Approval |
@@ -677,8 +677,8 @@ out, and a v8 app has neither the code nor the engine methods.
 
 | Tool | Args | Answer | Approval |
 | --- | --- | --- | --- |
-| `thread_status` | `{ session_id? }` — omit for every delegate this thread started or messaged; at most 12 are reported (`omitted_delegates` says how many more) | `{ delegates: [{ session_id, title, status, project, worktree? { path, branch }, branch?, pull, error? }], omitted_delegates?, note? }`, newest first. `pull` is `{ number, title, state, merged, draft, url?, branch, head_sha, ci, failing, pending, passed }`: `state` is `open`, `closed` or `merged`, `ci` is `none`, `passing`, `pending` or `failing` (advisory portability jobs excluded, like the merge), and `failing` names the checks that failed. `pull: null` means no pull request for the thread's branch; an unreadable one carries `error: { code, message }` on that delegate and not on the others, and all delegates are read concurrently | None: a read, this project's threads, like `read_session` |
-| `merge_when_green` | `{ session_id, timeout_ms? }` — the wait defaults to and is at most 80 minutes, 240 rounds of 20 s | `{ session_id, number, state, merged, url?, failing?, waited_secs, detail }`; `state` is `merged`, `failing` (with the names), `closed`, `no_checks` (there is nothing to wait for, returned after two empty rounds) or `pending` (still waiting when the time ran out) | Asked, allowed by Full access, grant `merge:<session id>:<PR number>` (a new PR asks again) |
+| `thread_status` | `{ session_id? }` — omit for every delegate this thread started or messaged; at most 12 are reported (`omitted_delegates` says how many more) | `{ delegates: [{ session_id, title, status, project, worktree? { path, branch }, branch?, pull, error? }], omitted_delegates?, note? }`, newest first. `pull` is `{ number, title, state, merged, draft, url?, branch, head_sha, ci, failing, pending, passed }`: `state` is `open`, `closed` or `merged`, `ci` is `none`, `passing`, `pending` or `failing` (advisory portability jobs excluded, like the merge), and `failing` names the checks that failed. `pull: null` means no pull request for the thread's branch; an unreadable one carries `error: { code, message }` on that delegate and not on the others, and all delegates are read concurrently | None: it asks nothing; a read of this project's threads, like `read_session` |
+| `merge_when_green` | `{ session_id, timeout_ms? }` — the wait defaults to and is at most 55 minutes, 165 rounds of 20 s | `{ session_id, number, state, merged, url?, failing?, waited_secs, detail }`; `state` is `merged`, `failing` (with the names), `closed`, `no_checks` (there is nothing to wait for, returned after two empty rounds) or `pending` (still waiting when the time ran out) | Asked, allowed by Full access, grant `merge:<session id>:<PR number>` (a new PR asks again) |
 | `cleanup_worktree` | `{ session_id, settle? }` — `settle` is true by default | `{ session_id, removed: true, branch, branch_removed, settled? }`. A refusal is `conflict`, with the reason (`dirty`, `unmerged`, `ignored_files`, `branch_changed`, `protected_branch`, `no_base` or `not_managed`) and, for unmerged commits, their subjects; `unknown` means git could not answer and is an `unavailable` failure | Asked, allowed by Full access, grant `cleanup:<session id>` |
 
 `thread_status` asks the engine `_rustcode/pulls/state` `{ cwd, branch? }`

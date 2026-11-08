@@ -670,11 +670,20 @@ pub(crate) fn list(repo: &Path) -> Result<Vec<Value>, WorktreeError> {
                 base_ref: None,
                 created_at: String::new(),
             });
-        let (dirty, ahead, behind) =
-            status_counts(&path, &worktree.base).map_err(|message| WorktreeError {
-                reason: "unknown",
-                message,
-            })?;
+        // A worktree whose git state cannot be read (a prunable folder, a
+        // broken checkout) still exists and still lists: the row says its
+        // state is unknown. Removal is where unknown refuses.
+        let counts = status_counts(&path, &worktree.base);
+        let (dirty, ahead, behind) = match &counts {
+            Ok((dirty, ahead, behind)) => (json!(dirty), json!(ahead), json!(behind)),
+            Err(message) => {
+                crate::dbg_log!(
+                    "[worktrees] {} has no readable state: {message}",
+                    path.display()
+                );
+                (Value::Null, Value::Null, Value::Null)
+            }
+        };
         let mut row = serde_json::to_value(Worktree {
             branch: if branch.is_empty() {
                 worktree.branch.clone()
@@ -685,9 +694,9 @@ pub(crate) fn list(repo: &Path) -> Result<Vec<Value>, WorktreeError> {
         })
         .unwrap_or_default();
         if let Some(object) = row.as_object_mut() {
-            object.insert("dirty".into(), json!(dirty));
-            object.insert("ahead".into(), json!(ahead));
-            object.insert("behind".into(), json!(behind));
+            object.insert("dirty".into(), dirty);
+            object.insert("ahead".into(), ahead);
+            object.insert("behind".into(), behind);
             object.insert(
                 "session_ids".into(),
                 json!(record.map(|record| record.session_ids).unwrap_or_default()),
@@ -961,8 +970,13 @@ fn ignored_files(path: &Path) -> Result<Vec<String>, String> {
             continue;
         };
         let entry = entry.trim_end_matches('/');
-        let top = entry.split('/').next().unwrap_or(entry);
-        if IGNORED_BUILD_DIRS.contains(&top) {
+        // Any component counts: `apps/desktop/node_modules` and
+        // `apps/desktop/src-tauri/target` are the same build output as the
+        // root's, not a user file to refuse.
+        if entry
+            .split('/')
+            .any(|component| IGNORED_BUILD_DIRS.contains(&component))
+        {
             continue;
         }
         if others.len() >= MAX_IGNORED_LISTED {
@@ -976,6 +990,29 @@ fn ignored_files(path: &Path) -> Result<Vec<String>, String> {
         listed.push("...".to_owned());
     }
     Ok(listed)
+}
+
+/// The branch a worktree is on. A detached HEAD is its own refusal; a git that
+/// cannot answer is `unknown`, never "not on a branch".
+fn worktree_branch(path: &Path) -> Result<String, WorktreeError> {
+    match git_line(path, &["symbolic-ref", "--quiet", "--short", "HEAD"]) {
+        Ok(branch) if !branch.is_empty() => Ok(branch),
+        // `--quiet` exits 1 with no stderr for a detached HEAD.
+        Ok(_) => Err(WorktreeError {
+            reason: "detached",
+            message: "the worktree is on a detached HEAD, so there is no branch to clean up"
+                .to_owned(),
+        }),
+        Err(error) if error.trim().is_empty() => Err(WorktreeError {
+            reason: "detached",
+            message: "the worktree is on a detached HEAD, so there is no branch to clean up"
+                .to_owned(),
+        }),
+        Err(error) => Err(WorktreeError {
+            reason: "unknown",
+            message: format!("git symbolic-ref failed: {error}"),
+        }),
+    }
 }
 
 /// Remove a merged delegate's worktree and branch (#3153), refusing when the
@@ -1008,11 +1045,7 @@ pub(crate) fn cleanup(
         reason: "not_git",
         message: format!("{} is not a git worktree", path.display()),
     })?;
-    let Some(branch) = git_line(&path, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok() else {
-        return Err(WorktreeError::failed(
-            "the worktree is not on a branch, so there is no branch to clean up",
-        ));
-    };
+    let branch = worktree_branch(&path)?;
     // The caller cleaned up the worktree it read the pull request for. A
     // delegate that switched branches must not take the new one down with it.
     if let Some(expected) = expected_branch.filter(|branch| !branch.trim().is_empty())
@@ -1502,7 +1535,11 @@ pub(crate) mod tests {
         let (_dir, repo) = repo();
         // Build output is ignored too, but cleanup may delete it.
         let gitignore = std::fs::read_to_string(repo.join(".gitignore")).unwrap();
-        std::fs::write(repo.join(".gitignore"), format!("{gitignore}target/\n")).unwrap();
+        std::fs::write(
+            repo.join(".gitignore"),
+            format!("{gitignore}target/\nnode_modules/\ndist/\n"),
+        )
+        .unwrap();
         git(&repo, &["add", "-A"]).unwrap();
         git(&repo, &["commit", "-q", "-m", "ignore target"]).unwrap();
         let worktree = create(&CreateRequest {
@@ -1523,8 +1560,15 @@ pub(crate) mod tests {
         assert!(worktree.path.exists());
         // Remove it and leave only build output: that may go.
         std::fs::remove_file(worktree.path.join("ignored.txt")).unwrap();
-        std::fs::create_dir_all(worktree.path.join("target/debug")).unwrap();
-        std::fs::write(worktree.path.join("target/debug/app"), "binary\n").unwrap();
+        for (dir, file) in [
+            ("target/debug", "app"),
+            ("apps/desktop/node_modules/left-pad", "index.js"),
+            ("apps/desktop/dist/assets", "app.js"),
+            ("apps/desktop/src-tauri/target/debug", "build"),
+        ] {
+            std::fs::create_dir_all(worktree.path.join(dir)).unwrap();
+            std::fs::write(worktree.path.join(dir).join(file), "built\n").unwrap();
+        }
         let answer = cleanup(
             &worktree.path,
             Some(&worktree.branch),
@@ -1533,6 +1577,46 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert_eq!(answer["removed"], true);
+    }
+
+    #[test]
+    fn a_list_keeps_a_worktree_whose_state_cannot_be_read() {
+        let (_dir, repo) = repo();
+        let worktree = create(&CreateRequest {
+            repo: repo.clone(),
+            title: Some("Add the login form".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        // A prunable checkout: git still knows the worktree, but its state
+        // cannot be read. It is listed with null state rather than failing
+        // the whole list; removal is where it refuses.
+        std::fs::remove_dir_all(&worktree.path).unwrap();
+        let rows = list(&repo).unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row["branch"] == worktree.branch.as_str())
+            .unwrap_or_else(|| panic!("{} is still listed: {rows:?}", worktree.branch));
+        assert_eq!(row["dirty"], Value::Null);
+        assert_eq!(row["ahead"], Value::Null);
+        assert_eq!(row["behind"], Value::Null);
+    }
+
+    #[test]
+    fn a_cleanup_tells_a_detached_head_from_a_git_error() {
+        let (_dir, repo) = repo();
+        let worktree = create(&CreateRequest {
+            repo: repo.clone(),
+            title: Some("Add the login form".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        git(&worktree.path, &["checkout", "--detach", "-q"]).unwrap();
+        let refused = cleanup(&worktree.path, Some(&worktree.branch), None, false).unwrap_err();
+        assert_eq!(refused.reason, "detached");
+        // A folder git cannot read is an unknown state, not a detached HEAD.
+        let other = tempfile::tempdir().unwrap();
+        assert_eq!(worktree_branch(other.path()).unwrap_err().reason, "unknown");
     }
 
     #[test]

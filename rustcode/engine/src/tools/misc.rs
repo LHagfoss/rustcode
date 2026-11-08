@@ -640,7 +640,7 @@ pub const LIST_PULL_REQUESTS: Tool = Tool {
     safety: ToolSafety::Interactive,
 };
 
-/// Orchestration version 8 (`docs/orchestrator.md`): a delegate's pull
+/// Orchestration version 9 (`docs/orchestrator.md`): a delegate's pull
 /// request and its checks, merging it when green, and cleaning up after it.
 pub const THREAD_STATUS: Tool = Tool {
     name: crate::orchestration::THREAD_STATUS,
@@ -665,7 +665,7 @@ pub const THREAD_STATUS: Tool = Tool {
 pub const MERGE_WHEN_GREEN: Tool = Tool {
     name: crate::orchestration::MERGE_WHEN_GREEN,
     description: "Wait for a delegate's pull request checks to pass, then squash-merge it and delete its branch, the way scripts/pr-merge.sh does: advisory portability jobs are ignored, a cancelled or superseded run does not block, a failing check stops it before anything merges (the failing names come back), and two quiet rounds catch a job that registers late. A pull request with no checks stops at once as no_checks instead of waiting. Returns merged, failing, closed, no_checks or pending (still waiting when the wait ran out). The user approves it; nothing merges without that.",
-    arguments: r#"{"session_id": "the delegate whose PR should merge", "timeout_ms": 4800000}"#,
+    arguments: r#"{"session_id": "the delegate whose PR should merge", "timeout_ms": 3300000}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
     schema: || {
@@ -673,7 +673,7 @@ pub const MERGE_WHEN_GREEN: Tool = Tool {
             "type": "object",
             "properties": {
                 "session_id": {"type": "string", "minLength": 1},
-                "timeout_ms": {"type": "integer", "minimum": 1, "maximum": crate::orchestration::MAX_MERGE_WAIT_MS, "description": "How long to wait for checks; 80 minutes at most, the default"}
+                "timeout_ms": {"type": "integer", "minimum": 1, "maximum": crate::orchestration::MAX_MERGE_WAIT_MS, "description": "How long to wait for checks; 55 minutes at most, the default"}
             },
             "required": ["session_id"],
             "additionalProperties": false

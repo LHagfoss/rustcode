@@ -540,10 +540,45 @@ pub async fn for_branch(cwd: &Path, branch: &str) -> Result<Option<DelegatePull>
     Ok(chosen.and_then(|value| delegate_pull(&value)))
 }
 
-/// How often a merge re-reads the checks, and how long it waits for them, as
-/// `scripts/pr-merge.sh` does (240 rounds of 20 s).
+/// How often a merge re-reads the checks, and how long it waits for them. The
+/// cap is under an hour so the wait fits inside an external harness's MCP call
+/// timeout (Codex's `tool_timeout_sec` is 61 minutes).
 pub const MERGE_POLL_SECS: u64 = 20;
-pub const MAX_MERGE_WAIT_SECS: u64 = 240 * 20;
+pub const MAX_MERGE_WAIT_SECS: u64 = 55 * 60;
+
+/// The `gh pr merge` arguments: squash and delete the remote branch, with
+/// `--repo` so gh leaves the local branch (checked out in the delegate's
+/// worktree) alone.
+pub(crate) fn merge_args(number: u64, repository: Option<&str>) -> Vec<String> {
+    let mut args = vec![
+        "pr".to_owned(),
+        "merge".to_owned(),
+        number.to_string(),
+        "--squash".to_owned(),
+        "--delete-branch".to_owned(),
+    ];
+    if let Some(repository) = repository {
+        args.push("--repo".to_owned());
+        args.push(repository.to_owned());
+    }
+    args
+}
+
+/// `owner/name` from a pull request's URL, for `gh --repo`.
+pub(crate) fn repository_of(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("https://github.com/")?;
+    let mut parts = rest.split('/');
+    let owner = parts.next().filter(|part| !part.is_empty())?;
+    let name = parts.next().filter(|part| !part.is_empty())?;
+    if parts.next()? != "pull" {
+        return None;
+    }
+    let number = parts.next()?;
+    if number.is_empty() || !number.chars().all(|c| c.is_ascii_digit()) || parts.next().is_some() {
+        return None;
+    }
+    Some(format!("{owner}/{name}"))
+}
 
 /// What `merge_when_green` did: merged, or why it stopped.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -674,22 +709,42 @@ pub async fn merge_when_green(
         }
         match poll.observe(&checks) {
             PollAction::Merge => {
-                let number_text = number.to_string();
-                gh(
-                    cwd,
-                    &["pr", "merge", &number_text, "--squash", "--delete-branch"],
-                    None,
-                )
-                .await?;
-                return Ok(MergeOutcome {
-                    number,
-                    state: "merged",
-                    merged: true,
-                    failing: Vec::new(),
-                    url: detail.summary.url,
-                    waited_secs: started.elapsed().as_secs(),
-                    message: "squash-merged and the branch was deleted".to_owned(),
-                });
+                let repository = repository_of(&detail.summary.url);
+                let args = merge_args(number, repository.as_deref());
+                let args: Vec<&str> = args.iter().map(String::as_str).collect();
+                match gh(cwd, &args, None).await {
+                    Ok(_) => {
+                        return Ok(MergeOutcome {
+                            number,
+                            state: "merged",
+                            merged: true,
+                            failing: Vec::new(),
+                            url: detail.summary.url,
+                            waited_secs: started.elapsed().as_secs(),
+                            message: "squash-merged and the remote branch was deleted".to_owned(),
+                        });
+                    }
+                    Err(error) => {
+                        // gh can still exit non-zero after the merge landed (a
+                        // race on the branch delete). The pull request is the
+                        // truth: if it merged, report that and keep the note.
+                        let after = watch_view(cwd, number).await?;
+                        let merged = crate::pull_requests::detail(&after)
+                            .is_some_and(|after| after.summary.state == PullState::Merged);
+                        if merged {
+                            return Ok(MergeOutcome {
+                                number,
+                                state: "merged",
+                                merged: true,
+                                failing: Vec::new(),
+                                url: detail.summary.url,
+                                waited_secs: started.elapsed().as_secs(),
+                                message: format!("squash-merged; gh reported: {}", error.message),
+                            });
+                        }
+                        return Err(error);
+                    }
+                }
             }
             PollAction::StopNoChecks => {
                 return Ok(MergeOutcome {
@@ -1086,6 +1141,36 @@ mod tests {
         assert_eq!(poll.observe(&[check("test", "pending")]), PollAction::Wait);
         assert_eq!(poll.observe(&[check("test", "passed")]), PollAction::Wait);
         assert_eq!(poll.observe(&[check("test", "passed")]), PollAction::Merge);
+    }
+
+    #[test]
+    fn a_merge_gets_repo_so_it_never_deletes_the_local_branch() {
+        let args = merge_args(3184, Some("LHagfoss/rustcode"));
+        assert_eq!(
+            args,
+            [
+                "pr",
+                "merge",
+                "3184",
+                "--squash",
+                "--delete-branch",
+                "--repo",
+                "LHagfoss/rustcode"
+            ]
+        );
+        // Without a repository it still merges; only the local-cleanup guard is gone.
+        assert_eq!(merge_args(1, None).len(), 5);
+    }
+
+    #[test]
+    fn a_pull_request_url_names_the_repository_for_gh() {
+        assert_eq!(
+            repository_of("https://github.com/LHagfoss/rustcode/pull/3184").as_deref(),
+            Some("LHagfoss/rustcode")
+        );
+        assert_eq!(repository_of("https://github.com/o/r/pull/1/files"), None);
+        assert_eq!(repository_of("https://gitlab.com/o/r/pull/1"), None);
+        assert_eq!(repository_of(""), None);
     }
 
     #[test]

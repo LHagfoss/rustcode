@@ -339,8 +339,8 @@ export const MAX_QUEUE_ITEMS = 50;
 /** How much of a queued message a list shows: enough to know which one it is. */
 export const QUEUE_PREVIEW_CHARS = 200;
 
-/** How long `merge_when_green` waits for checks by default, and at most: the same 80 minutes as `scripts/pr-merge.sh`. */
-export const DEFAULT_MERGE_MS = 240 * 20 * 1000;
+/** How long `merge_when_green` waits for checks by default, and at most: under an hour, inside an external harness's MCP call timeout. */
+export const DEFAULT_MERGE_MS = 55 * 60 * 1000;
 export const MAX_MERGE_MS = DEFAULT_MERGE_MS;
 
 /** Pull requests listed, and projects: an agent's context pays for each. */

@@ -1079,12 +1079,21 @@ async function cleanupWorktree(
       if (reason) {
         // "unknown" is not a refusal to fix but a git that could not answer.
         const code = reason === "unknown" ? "target_unavailable" : "conflict";
-        return failureJson(failure(code, error.message));
+        // The engine's detail (which commits or files, which branch) is in
+        // `error.data.message`; `error.message` alone is "Invalid params".
+        return failureJson(failure(code, `${reason}: ${errorText(error)}`));
       }
     }
     return failureJson(failure("failed", `the worktree could not be cleaned up: ${errorText(error)}`));
   }
   const cleanup = obj(result)?.cleanup;
+  // The worktree is gone and the engine moved the thread back to the
+  // repository; the store must not keep offering the old folder.
+  const repo = projectOf(target);
+  useApp.setState((s) => ({
+    sessions: s.sessions.map((x) => (x.id === target.id ? { ...x, worktree: undefined, cwd: repo } : x)),
+  }));
+  updateThread(target.id, (t) => ({ ...t, worktree: undefined, cwd: repo }));
   const answer: JsonObject = {
     session_id: target.id,
     removed: bool(obj(cleanup)?.removed) ?? true,

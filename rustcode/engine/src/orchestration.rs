@@ -116,9 +116,10 @@ pub const MAX_SQL_BYTES: usize = 8 * 1024;
 pub const MAX_ACTIVITY_CURSOR_BYTES: usize = 128;
 /// The longest title a new thread takes.
 pub const MAX_TITLE_CHARS: usize = 200;
-/// How long `merge_when_green` waits for checks by default, and at most: the
-/// same 80 minutes `scripts/pr-merge.sh` gives them.
-pub const DEFAULT_MERGE_WAIT_MS: u64 = 240 * 20 * 1000;
+/// How long `merge_when_green` waits for checks by default, and at most: under
+/// an hour, so the wait plus the engine's deadline fits inside an external
+/// harness's MCP call timeout (Codex's `tool_timeout_sec` is 61 minutes).
+pub const DEFAULT_MERGE_WAIT_MS: u64 = 55 * 60 * 1000;
 pub const MAX_MERGE_WAIT_MS: u64 = DEFAULT_MERGE_WAIT_MS;
 
 /// The most text a message or a prompt carries: 32 KiB.
@@ -730,13 +731,15 @@ pub fn timeout(name: &str, args: &Value) -> Duration {
         // Room for the client to answer after its own wait ends.
         Duration::from_millis(wait) + Duration::from_secs(30)
     } else if name == MERGE_WHEN_GREEN {
-        // The client merges once its own 80-minute wait ends, and answers after.
+        // The client merges once its own wait ends, re-reads the pull request,
+        // and answers; the loop's tail can outlast the wait by a poll and a
+        // second quiet round, so give it a full three minutes.
         let wait = args
             .get("timeout_ms")
             .and_then(Value::as_u64)
             .unwrap_or(DEFAULT_MERGE_WAIT_MS)
             .clamp(1, MAX_MERGE_WAIT_MS);
-        Duration::from_millis(wait) + Duration::from_secs(60)
+        Duration::from_millis(wait) + Duration::from_secs(180)
     } else {
         REQUEST_TIMEOUT
     }
@@ -1125,10 +1128,11 @@ mod tests {
             CLEANUP_WORKTREE,
             json!({"session_id": "d1", "settle": "yes"})
         ));
-        // The merge may wait its 80 minutes; the engine outlasts the client.
-        assert!(
-            timeout(MERGE_WHEN_GREEN, &json!({"session_id": "d1"})) > Duration::from_secs(60 * 60)
-        );
+        // The merge waits under an hour and the engine outlasts the loop's tail,
+        // still inside the external harness's 61-minute MCP timeout.
+        let deadline = timeout(MERGE_WHEN_GREEN, &json!({"session_id": "d1"}));
+        assert!(deadline >= Duration::from_millis(MAX_MERGE_WAIT_MS) + Duration::from_secs(170));
+        assert!(deadline < Duration::from_secs(61 * 60));
     }
 
     #[test]
