@@ -141,10 +141,6 @@ export function usableHarnesses(snapshot: HarnessSnapshot): Harness[] {
   return snapshot.harnesses.filter((h) => unavailableReason(h) === undefined);
 }
 
-export function modelEfforts(model: HarnessModel | undefined): string[] {
-  return model?.efforts ?? [];
-}
-
 /** A default must name a usable harness, a model it lists (when it lists any) and an effort that model offers. */
 export function validateDefault(
   snapshot: HarnessSnapshot,

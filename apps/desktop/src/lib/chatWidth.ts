@@ -12,13 +12,6 @@ export const CHAT_WIDTH_LABEL: Record<ChatWidth, string> = {
   full: "Full",
 };
 
-/** The cap in rem, or null for the pane's own width. */
-export const CHAT_WIDTH_REM: Record<ChatWidth, number | null> = {
-  comfortable: 46,
-  wide: 72,
-  full: null,
-};
-
 export function parseChatWidth(raw: string | null | undefined): ChatWidth {
   return raw === "wide" || raw === "full" ? raw : CHAT_WIDTH_DEFAULT;
 }

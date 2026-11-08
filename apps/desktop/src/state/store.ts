@@ -3378,8 +3378,6 @@ export async function checkHarnessAccounts(readPlans = true): Promise<HarnessSna
   return snapshot;
 }
 
-export const addHarness = (id: string, name: string, command: string[]) =>
-  harnessCall(Method.harnessSet, { id, name, kind: "acp", command, enabled: true });
 export const removeHarness = (id: string) => harnessCall(Method.harnessRemove, { id });
 /**
  * The Settings default: it is also where a new thread starts, so a draft the new-thread screen
