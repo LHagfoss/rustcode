@@ -1,3 +1,7 @@
+## [v1.20.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.20.1) - 2026-11-08
+
+### Features
+- The desktop app uses the lavender accent by default, matching the built-in themes; text on accent buttons switches to dark so it stays readable. (#3192)
 ## [v1.20.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.20.0) - 2026-11-08
 
 ### Features
