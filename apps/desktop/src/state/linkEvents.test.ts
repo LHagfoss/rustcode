@@ -9,6 +9,7 @@ import {
   linkEventText,
   linkStatusText,
   MAX_LINK_EVENTS,
+  mergeBooks,
   noteEvent,
   noteLinkEvent,
   parseBook,
@@ -54,6 +55,27 @@ describe("a link's events", () => {
     expect(noteEvent(one, "asking", at(2))).toBe(one);
   });
 
+  test("a moment already in the list is not a second row, wherever it sits", () => {
+    // `working, asking, working` at one moment is two events, and the repeat must not eat the cap.
+    const list = noteEvent(noteEvent(noteEvent(link(), "working", at(1)), "asking", at(1)), "working", at(1));
+    expect(list.events?.map((e) => `${e.kind}@${e.at}`)).toEqual([`working@${at(1)}`, `asking@${at(1)}`]);
+    // A later moment of the same kind is its own event.
+    expect(noteEvent(list, "working", at(2)).events).toHaveLength(3);
+  });
+
+  test("two windows' copies of one link merge into one row per moment", () => {
+    const started: LinkEvent = { kind: "started", at: at(0), detail: "Pi" };
+    const working: LinkEvent = { kind: "working", at: at(1) };
+    const shared = { ...emptyBook(), links: [link({ events: [started, working] })] };
+    // This window wrote `working` twice and then asked: the duplicate is dropped, not carried over.
+    const mine = {
+      ...emptyBook(),
+      links: [link({ events: [working, working, { kind: "asking", at: at(2) }] })],
+    };
+    const merged = mergeBooks(shared, mine);
+    expect(merged.links[0]?.events).toEqual([started, working, { kind: "asking", at: at(2) }]);
+  });
+
   test("a state it newly reaches is the event that says so", () => {
     const queued = link({ state: "queued", startedAt: undefined });
     const working = advanceLink(queued, { state: "working", startedAt: at(3) }, at(3));
@@ -68,6 +90,33 @@ describe("a link's events", () => {
 
     // A change that settles nothing new is not an event (the answer's own text, a mark).
     expect(advanceLink(answered, { answer: "done" }, at(71)).events).toHaveLength(2);
+  });
+
+  test("an answer's worked time leaves out the wait on the user", () => {
+    // Ten minutes from the turn's start, five of them waiting on an approval.
+    const answered = advanceLink(
+      link({ startedAt: at(0) }),
+      { state: "done", settledAt: at(600), workedMs: 600_000, waitedMs: 300_000 },
+      at(600),
+    );
+    expect(answered.events?.at(-1)).toEqual({ kind: "answered", at: at(600), detail: "worked 5m 0s" });
+
+    // A wait still open when the turn ends is left out too: ten minutes, five waited and four
+    // more in a question never answered, is one minute of work.
+    const openWait = advanceLink(
+      link({ startedAt: at(0), waitingSince: at(360) }),
+      { state: "done", settledAt: at(600), workedMs: 600_000, waitedMs: 300_000 },
+      at(600),
+    );
+    expect(openWait.events?.at(-1)).toEqual({ kind: "answered", at: at(600), detail: "worked 1m 0s" });
+
+    // A turn that spent all of it waiting has no worked time to report.
+    const waitedOut = advanceLink(
+      link({ startedAt: at(0) }),
+      { state: "done", settledAt: at(60), workedMs: 60_000, waitedMs: 60_000 },
+      at(60),
+    );
+    expect(waitedOut.events?.at(-1)).toEqual({ kind: "answered", at: at(60) });
   });
 
   test("a wait on the user is asked, and its end is work again", () => {

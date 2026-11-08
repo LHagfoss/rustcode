@@ -147,12 +147,17 @@ const EVENT_OF_STATE: Partial<Record<LinkState, LinkEventKind>> = {
   interrupted: "interrupted",
 };
 
+/** One event's identity: its kind at one moment. Two of them are the same event. */
+const eventKey = (kind: LinkEventKind, at: number) => `${kind}@${at}`;
+
 /** `link` with one more event, keeping the last {@link MAX_LINK_EVENTS}. */
 export function noteEvent(link: Link, kind: LinkEventKind, at: number, detail?: string): Link {
   const events = link.events ?? [];
-  const last = events.at(-1);
-  // The same moment written twice is one event: a state set again is not news.
-  if (last && last.kind === kind && last.at === at) return link;
+  // A moment already in the list is one event, wherever it sits: a state set again is not news, and
+  // a repeat must not push a real event out of the bounded list (`working, asking, working` at one
+  // moment is two rows, not three).
+  const key = eventKey(kind, at);
+  if (events.some((event) => eventKey(event.kind, event.at) === key)) return link;
   const next = [...events, { kind, at, ...(detail ? { detail } : {}) }];
   return { ...link, events: next.slice(-MAX_LINK_EVENTS) };
 }
@@ -167,8 +172,22 @@ export function advanceLink(link: Link, change: Partial<Link>, at: number): Link
   if (change.state === undefined || change.state === link.state) return next;
   const kind = EVENT_OF_STATE[change.state];
   if (!kind) return next;
-  const detail = kind === "answered" && next.workedMs ? `worked ${formatDuration(next.workedMs)}` : undefined;
+  const worked = kind === "answered" ? workedTime(next, at) : undefined;
+  const detail = worked ? `worked ${formatDuration(worked)}` : undefined;
   return noteEvent(next, kind, at, detail);
+}
+
+/**
+ * How long a link actually worked: the turn's span less the time it spent
+ * waiting on the user, which the app tracks apart (`waitedMs`, plus a wait
+ * still open in `waitingSince`) so a five-minute approval is not five minutes
+ * of work in the event that reports the answer.
+ */
+export function workedTime(link: Link, at: number): number | undefined {
+  if (link.workedMs === undefined) return undefined;
+  const waited =
+    (link.waitedMs ?? 0) + (link.waitingSince === undefined ? 0 : Math.max(0, at - link.waitingSince));
+  return Math.max(0, link.workedMs - waited);
 }
 
 /** An event's word with what it adds: `Answered · worked 2m 10s`. */
@@ -1637,12 +1656,19 @@ function mergeEvents(
   one: readonly LinkEvent[] | undefined,
   other: readonly LinkEvent[] | undefined,
 ): LinkEvent[] | undefined {
-  if (!one?.length) return other?.length ? [...other] : undefined;
-  if (!other?.length) return [...one];
-  const seen = new Set(one.map((event) => `${event.kind}@${event.at}`));
-  const added = other.filter((event) => !seen.has(`${event.kind}@${event.at}`));
-  if (!added.length) return [...one];
-  return [...one, ...added].sort((a, b) => a.at - b.at).slice(-MAX_LINK_EVENTS);
+  const all = [...(one ?? []), ...(other ?? [])];
+  if (!all.length) return undefined;
+  // One row per moment across both copies, including a moment one copy repeats itself: the first
+  // copy of it wins, and its duplicate does not survive the merge.
+  const seen = new Set<string>();
+  const merged: LinkEvent[] = [];
+  for (const event of all) {
+    const key = eventKey(event.kind, event.at);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(event);
+  }
+  return merged.sort((a, b) => a.at - b.at).slice(-MAX_LINK_EVENTS);
 }
 
 /**
