@@ -434,7 +434,10 @@ the macOS look is the base rules alone. To look at one in the mock, set
   shows through the sidebar and nowhere else; the chat pane stays opaque.
   Windows 10 has no Mica (Acrylic drags and resizes badly, so it is not the
   fallback): the sidebar stays solid. The native title bar from the window's
-  decorations is unchanged.
+  decorations is unchanged. `window_material` reports the material's own result
+  (`window_vibrancy::apply_mica`), because tauri's `set_effects` returns `Ok`
+  even where the platform refused: a wrong `mica` there would paint a
+  see-through sidebar over a window whose backdrop is the desktop.
 - Settings › Appearance › Reduce transparency makes all glass solid on any
   platform (default off). The system's request does the same: the media query
   where the web view has it, the shell's `reduce_transparency` on macOS. The

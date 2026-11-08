@@ -215,6 +215,8 @@ describe("design system", () => {
     const reducedRoot = block(css.indexOf("  :root {", reducedAt));
     expect(reducedRoot).toContain("--rc-scrim-bg: var(--rc-bg);");
     expect(reducedRoot).toContain("--rc-lightbox-scrim-bg: var(--rc-bg);");
+    // The media query is the fallback before lib/transparency.ts has run: the sidebar is solid too.
+    expect(reducedRoot).toContain("--rc-sidebar-bg: var(--rc-sidebar);");
   });
 
   test("Linux keeps the glass; Reduce transparency is the solid fallback on every platform", () => {

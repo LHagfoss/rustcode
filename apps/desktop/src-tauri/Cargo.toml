@@ -36,6 +36,11 @@ portable-pty = "0.9"
 objc2 = "=0.6.5"
 objc2-web-kit = { version = "=0.3.2", default-features = false, features = ["WKWebViewConfiguration", "WKPreferences"] }
 
+# Windows 11's Mica (src/webview.rs), the version tauri 2.12.5 already builds: its `Result` is the
+# only true answer to "did the material take", which tauri's own `set_effects` throws away.
+[target.'cfg(target_os = "windows")'.dependencies]
+window-vibrancy = "=0.8.1"
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
 

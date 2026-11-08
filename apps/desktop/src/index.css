@@ -1365,6 +1365,8 @@
  */
 @media (prefers-reduced-transparency: reduce) {
   :root {
+    /* Before lib/transparency.ts has run, so the sidebar goes solid with the rest of the glass. */
+    --rc-sidebar-bg: var(--rc-sidebar);
     --rc-glass-bg: var(--rc-surface-2);
     --rc-glass-bg-strong: var(--rc-surface-2);
     --rc-glass-faint-bg: var(--rc-surface-2);

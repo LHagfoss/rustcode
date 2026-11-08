@@ -536,8 +536,10 @@ composer's keys stay outside the table.
   Under the picture, *Darken* (0–80%, black over it), *Blur* (0–40px) and
   *Show in threads* (off by default): on, open threads draw the same picture,
   darkened and blurred the same, behind the transcript, under a heavier wash of
-  the pane colour (60%, against 35% on the new-thread screen) so the text stays
-  readable. They are kept with the banner (`lib/banner.ts`).
+  the pane colour (80%, against 35% on the new-thread screen): a white photo in the dark theme left
+  the body text at 4.4:1 and its muted lines at 2.0:1 under the 60% first tried, where 80% keeps
+  9.4:1 and 4.3:1. A thread is read line by line and a new thread is not. They are kept with the
+  banner (`lib/banner.ts`).
 - **Remote access.** Settings › Remote access ([remote.md](remote.md)) is the
   machine's switch: turned on it starts the remote gateway and shares every
   thread this app has open with the paired devices — on the built-in harness

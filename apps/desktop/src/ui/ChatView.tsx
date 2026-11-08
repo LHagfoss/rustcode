@@ -726,12 +726,16 @@ export function ChatView() {
         <div aria-hidden className="pointer-events-none absolute inset-0" style={{ background: veil }} />
       )}
       {/* One light scrim over it, so the field and the cards stay the readable thing: dark text on
-          a light theme's pane wash, light text on the dark one's. An open thread's transcript is
-          read line by line, so its wash is heavier than the new-thread screen's. */}
+          a light theme's pane wash, light text on the dark one's. A new thread shows the picture
+          alone, so its wash is light; an open thread is read line by line over whatever picture was
+          chosen, so its wash has to carry the text on its own. The white photo and the dark theme
+          are the worst case (the black photo and the light theme are the mirror): at 60% the body
+          text read at 4.4:1 and its muted lines at 2.0:1, where 80% keeps 9.4:1 and 4.3:1. A
+          picture that should show more than that is a darker one, or the Darken slider. */}
       {showsBanner && (
         <div
           aria-hidden
-          className={cx("pointer-events-none absolute inset-0", isNew ? "bg-bg/35" : "bg-bg/60")}
+          className={cx("pointer-events-none absolute inset-0", isNew ? "bg-bg/35" : "bg-bg/80")}
         />
       )}
       <Header thread={thread} pending={showsPending ? setup : undefined} overBanner={showsBanner} />

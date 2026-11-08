@@ -142,25 +142,33 @@ static MATERIAL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::
 /// the page asks `window_material` and only lets the material through when it is on. Acrylic is
 /// not the fallback: it drags and resizes badly on both Windows versions. Other systems have no
 /// window material; macOS's comes from `windowEffects` in `tauri.conf.json`.
+#[cfg(target_os = "windows")]
 fn apply_material(window: &tauri::WebviewWindow) {
-    if !cfg!(windows) {
-        return;
-    }
-    let effects = tauri::window::EffectsBuilder::new()
-        .effect(tauri::window::Effect::Mica)
-        .build();
-    let applied = window.set_effects(effects).is_ok();
+    // Not `WebviewWindow::set_effects`: tauri drops the platform's result (`let _ =` around
+    // `vibrancy::set_window_effects`, whose Windows side ignores `window_vibrancy`'s), so it returns
+    // Ok on Windows 10, where nothing was applied. The page would then paint a see-through sidebar
+    // over a window whose only backdrop is the desktop. This call's result is the real answer.
+    let applied = window_vibrancy::apply_mica(window, None).is_ok();
     MATERIAL.store(applied, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Only Windows has a window material here; macOS's comes from `tauri.conf.json`.
+#[cfg(not(target_os = "windows"))]
+fn apply_material(_window: &tauri::WebviewWindow) {}
+
+/// What `window_material` answers: whether the window has its material.
+fn material_name(applied: bool) -> &'static str {
+    if applied {
+        "mica"
+    } else {
+        "none"
+    }
 }
 
 /// `"mica"` when the window has its material, else `"none"`.
 #[tauri::command]
 pub fn window_material() -> &'static str {
-    if MATERIAL.load(std::sync::atomic::Ordering::Relaxed) {
-        "mica"
-    } else {
-        "none"
-    }
+    material_name(MATERIAL.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 /// Save the window's size on quit too, for a quit that does not come from closing the window.
@@ -328,5 +336,13 @@ mod tests {
     #[test]
     fn a_missing_file_is_no_size() {
         assert_eq!(read_size(&temp("missing")), None);
+    }
+
+    // The page lets the window's backdrop show (transparent body, see-through sidebar) only for
+    // `mica`; every other answer has to leave it opaque (lib/material.ts).
+    #[test]
+    fn the_material_is_only_announced_when_it_took() {
+        assert_eq!(material_name(true), "mica");
+        assert_eq!(material_name(false), "none");
     }
 }

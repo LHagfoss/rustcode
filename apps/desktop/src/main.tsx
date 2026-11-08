@@ -8,7 +8,11 @@ import { applyMaterial } from "./lib/material";
 import { applyPlatform } from "./lib/platform";
 import { quietNativeChrome } from "./lib/quietNative";
 import { applyCachedTheme } from "./lib/themes";
-import { installReduceTransparency, setSystemReduceTransparency } from "./lib/transparency";
+import {
+  installReduceTransparency,
+  setSystemReduceTransparency,
+  setUserReduceTransparency,
+} from "./lib/transparency";
 import * as store from "./state/store";
 import { Recoverable } from "./ui/Recover";
 
@@ -19,7 +23,10 @@ const platform = applyPlatform();
 applyCachedTheme();
 
 // Glass goes solid when the user, the system or a web view that cannot blur asks (lib/transparency.ts).
+// The kept switch is read here, not in App's effect, so the first frame is already solid for someone
+// who asked for that; the system's answer follows below, once the shell has it.
 installReduceTransparency();
+setUserReduceTransparency(store.useApp.getState().reduceTransparency);
 
 // Surfaces are opaque (docs/design.md); the few frosted ones go solid under Reduce transparency.
 if (isTauri() && platform === "mac") {
