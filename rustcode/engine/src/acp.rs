@@ -5727,6 +5727,22 @@ mod tests {
         )
     }
 
+    /// A connection ended because its client hung up. A status broadcast goes
+    /// to every client, so one can be on its way while the client leaves; the
+    /// write then fails on the closed channel, and the connection ends with
+    /// that error instead of `Ok`. Any other error fails the test.
+    fn ends_with_its_client(served: Result<(), agent_client_protocol::Error>, name: &str) {
+        let Err(error) = served else {
+            return;
+        };
+        let hung_up = error
+            .data
+            .as_ref()
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|data| data.contains("receiver is gone"));
+        assert!(hung_up, "{name}'s connection ends cleanly: {error:?}");
+    }
+
     /// What a client got, status broadcasts left out: they go to everyone.
     fn seen_by(
         seen: &mut tokio::sync::mpsc::UnboundedReceiver<(String, Seen)>,
@@ -5889,8 +5905,8 @@ mod tests {
             test_client(b_transport, "b", b_seen_tx, b_ready_tx, b_closed),
             script,
         );
-        served_a.expect("a's connection ends cleanly");
-        served_b.expect("b's connection ends cleanly");
+        ends_with_its_client(served_a, "a");
+        ends_with_its_client(served_b, "b");
         client_a.expect("client a");
         client_b.expect("client b");
 
