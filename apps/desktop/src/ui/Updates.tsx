@@ -29,6 +29,7 @@ import {
   isPrerelease,
   offersUpdate,
   skipBeta,
+  updateHint,
   useUpdates,
   type WhatsNew,
 } from "../state/updates";
@@ -57,7 +58,13 @@ export function UpdateRow() {
         type="button"
         disabled={installing}
         onClick={() =>
-          void applyUpdate().then((error) => error && toast(`The update did not install: ${error}`, "error"))
+          void applyUpdate().then(
+            (error) =>
+              error &&
+              toast(`The update did not install: ${error}`, "error", {
+                action: { label: "Release page", run: () => info.page && openExternal(info.page) },
+              }),
+          )
         }
         className="flex w-full items-center gap-2 rounded-md bg-accent/12 px-2 py-2 text-left text-callout hover:bg-accent/18 disabled:opacity-70"
       >
@@ -85,9 +92,7 @@ export function UpdateRow() {
             </span>
           )}
           <span className="block text-caption text-fg-muted tabular">
-            {installing
-              ? step
-              : `${beta ? "Beta · " : ""}${info.canInstall ? "Installs and reopens RustCode" : "Opens the release page"}`}
+            {installing ? step : `${beta ? "Beta · " : ""}${updateHint(info)}`}
           </span>
         </span>
       </button>

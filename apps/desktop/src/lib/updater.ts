@@ -1,6 +1,6 @@
 // The shell's updater (src-tauri/src/updater.rs): the release the update
-// channel offers, and on macOS an in-place install that quits and reopens the
-// app.
+// channel offers, and an in-place install that quits and reopens the app: a
+// macOS bundle, a Linux AppImage or .deb, or a Windows NSIS install.
 
 import { isTauri } from "../acp/transport";
 import { shellCall } from "./shell";
@@ -12,7 +12,10 @@ export interface UpdateInfo {
   current: string;
   latest: string | null;
   available: boolean;
+  /** The app can replace itself here; otherwise Update opens the release page. */
   canInstall: boolean;
+  /** How this copy updates when the default wording is not the whole story (the .deb asks for a password). */
+  installNote: string | null;
   development: boolean;
   page: string | null;
   /** The channels this build offers: `beta` only where a beta has an app. */
