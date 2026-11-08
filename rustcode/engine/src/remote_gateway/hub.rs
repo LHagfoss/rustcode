@@ -34,6 +34,7 @@ use crate::remote::{
     RemoteErrorCode, RemoteEvent, RemoteEventFrame, RemoteFrame, RemoteOperation, RemoteRequest,
     RemoteResponse, RemoteResult, RemoteSessionInfo, RemoteSessionsFrame, RemoteSnapshot,
     ResumeCursor, ResyncReason, SessionCloseReason, SessionRegistration, decode_request,
+    host_capability, session_capability,
 };
 
 /// Resource bounds of one hub. The defaults are the production values; tests
@@ -195,6 +196,9 @@ struct Session {
     pending: HashMap<u64, Pending>,
     last_heard: Instant,
     status_sent: Option<GatewayLinkStatus>,
+    /// The owner starts threads a device asks for: its snapshot advertises
+    /// [`session_capability::HOST_THREADS`].
+    hosts_threads: bool,
     /// A subscriber is waiting for room in its queue.
     backlog: bool,
 }
@@ -312,6 +316,47 @@ fn refuse(
         });
     }
     respond(sink, response);
+}
+
+/// Host-wide optional operations a device is offered right now: the ones a
+/// router implements, plus `thread_create_options` while a share that can
+/// start threads is live.
+fn host_capabilities(state: &State) -> Vec<String> {
+    let mut capabilities = state.capabilities.clone();
+    if state.has_thread_host() {
+        capabilities.push(host_capability::THREAD_CREATE_OPTIONS.to_owned());
+    }
+    capabilities
+}
+
+fn snapshot_hosts_threads(snapshot: &RemoteSnapshot) -> bool {
+    snapshot
+        .capabilities
+        .iter()
+        .any(|capability| capability == session_capability::HOST_THREADS)
+}
+
+impl State {
+    /// Whether some live share can start a thread for a device.
+    fn has_thread_host(&self) -> bool {
+        self.thread_host().is_some()
+    }
+
+    /// The share that takes the next `create_session`: a live one whose owner
+    /// advertised [`session_capability::HOST_THREADS`], by session ID so the
+    /// choice does not depend on registration order.
+    fn thread_host(&self) -> Option<&str> {
+        let mut hosts: Vec<&str> = self
+            .sessions
+            .iter()
+            .filter(|(_, session)| {
+                session.hosts_threads && session.info.health == OwnerHealth::Live
+            })
+            .map(|(session_id, _)| session_id.as_str())
+            .collect();
+        hosts.sort_unstable();
+        hosts.first().copied()
+    }
 }
 
 impl Session {
@@ -589,12 +634,18 @@ impl SessionHub {
 
     /// Host-wide operations listed in `sessions` results.
     pub fn capabilities(&self) -> Vec<String> {
-        self.state().capabilities.clone()
+        host_capabilities(&self.state())
     }
 
     /// Whether a terminal announced `id` without sharing it.
     pub fn is_announced(&self, id: &str) -> bool {
         self.state().standby_by_session.contains_key(id)
+    }
+
+    /// Whether a live share can start a thread a device asks for: the desktop
+    /// app's, while it is sharing one.
+    pub fn hosts_threads(&self) -> bool {
+        self.state().has_thread_host()
     }
 
     /// Shared sessions and the devices attached to each.
@@ -911,6 +962,7 @@ impl SessionHub {
         let info = owned_info(&registration, snapshot.session.clone(), OwnerHealth::Live);
         snapshot.session = info.clone();
         snapshot.snapshot_id = Some(uuid::Uuid::new_v4().to_string());
+        let hosts_threads = snapshot_hosts_threads(&snapshot);
         let mut session = Session {
             owner_id,
             epoch: registration.registration_epoch,
@@ -924,6 +976,7 @@ impl SessionHub {
             pending: HashMap::new(),
             last_heard: Instant::now(),
             status_sent: None,
+            hosts_threads,
             backlog: false,
         };
         let status = self.link_status(&state, &session);
@@ -1039,6 +1092,7 @@ impl SessionHub {
                 let info = owned_info(&registration, snapshot.session.clone(), OwnerHealth::Live);
                 list_changed |= info != session.info;
                 session.info = info.clone();
+                session.hosts_threads = snapshot_hosts_threads(&snapshot);
                 snapshot.session = info;
                 snapshot.snapshot_id = Some(uuid::Uuid::new_v4().to_string());
                 session.last = snapshot.sequence;
@@ -1389,6 +1443,76 @@ impl SessionHub {
         }
     }
 
+    /// Hand a request that names no session to the share that starts threads:
+    /// the desktop app's, while one is live. `Err` returns the request
+    /// untouched when no such share is registered, so the caller can fall
+    /// back to starting a session owner. The answer is delivered by the
+    /// hub's ordinary pending rules: one response, a receipt on mutations,
+    /// `owner_unavailable` with receipt `unknown` when it does not come.
+    pub fn forward_host_request(
+        &self,
+        device: &DeviceContext,
+        sink: &FrameSink,
+        request: RemoteRequest,
+    ) -> Result<(), RemoteRequest> {
+        let mut guard = self.state();
+        let state = &mut *guard;
+        let Some(host) = state.thread_host().map(str::to_owned) else {
+            return Err(request);
+        };
+        let mutation = request.operation.is_mutation();
+        let request_id = request.request_id.clone();
+        let refuse = |code, message: &str| refuse(sink, &request_id, mutation, code, message);
+        let in_flight = state
+            .connections
+            .get(&device.connection_id)
+            .map_or(0, |connection| connection.in_flight);
+        if in_flight >= self.limits.max_in_flight {
+            refuse(
+                RemoteErrorCode::RateLimited,
+                "too many requests are waiting on session owners",
+            );
+            return Ok(());
+        }
+        state.next_id += 1;
+        let id = state.next_id;
+        let frame = GatewayFrame::Request {
+            id,
+            device_id: device.device_id.clone(),
+            request,
+        };
+        let Some(session) = state.sessions.get_mut(&host) else {
+            // The host went away between the choice and the send.
+            refuse(
+                RemoteErrorCode::OwnerUnavailable,
+                "the app that starts threads is no longer sharing one",
+            );
+            return Ok(());
+        };
+        if session.to_owner.try_send(frame).is_err() {
+            refuse(
+                RemoteErrorCode::RateLimited,
+                "the app is not keeping up; nothing was applied",
+            );
+            return Ok(());
+        }
+        session.pending.insert(
+            id,
+            Pending {
+                connection_id: device.connection_id,
+                sink: sink.clone(),
+                request_id,
+                mutation,
+                deadline: Instant::now() + self.limits.request_timeout,
+                lookup: None,
+            },
+        );
+        if let Some(connection) = state.connections.get_mut(&device.connection_id) {
+            connection.in_flight += 1;
+        }
+        Ok(())
+    }
+
     /// `get_request_status`: ask the owner that holds the receipt. With a
     /// session on the envelope that is one owner; without, every live owner
     /// is asked and the first that knows the request answers.
@@ -1673,7 +1797,7 @@ impl FrameRouter for SessionHub {
                             .connections
                             .get(&device.connection_id)
                             .is_some_and(|connection| connection.list_subscribed),
-                        capabilities: state.capabilities.clone(),
+                        capabilities: host_capabilities(state),
                     },
                 );
             }

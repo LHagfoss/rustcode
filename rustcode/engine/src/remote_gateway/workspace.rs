@@ -1019,6 +1019,51 @@ impl FrameRouter for WorkspaceRouter {
                 });
             }
             RemoteOperation::CreateSession { .. } | RemoteOperation::ResumeSession { .. } => {
+                // The desktop app starts the thread when it shares one: it
+                // runs the harness, so the thread opens there and a device
+                // can attach to it as to any other. The folder is checked
+                // here first, so the app is only ever asked for one this host
+                // allows. With no such share, a session owner is started
+                // below, exactly as before.
+                if let RemoteOperation::CreateSession {
+                    path,
+                    harness,
+                    model,
+                } = &request.operation
+                    && self.hub.hosts_threads()
+                {
+                    let directory = allowed_roots(&self.config)
+                        .and_then(|roots| resolve_directory(path.as_deref(), &roots));
+                    match directory {
+                        Ok(directory) => {
+                            let mut forwarded = request.clone();
+                            forwarded.operation = RemoteOperation::CreateSession {
+                                path: Some(directory.to_string_lossy().into_owned()),
+                                harness: harness.clone(),
+                                model: model.clone(),
+                            };
+                            if self
+                                .hub
+                                .forward_host_request(device, sink, forwarded)
+                                .is_ok()
+                            {
+                                return;
+                            }
+                        }
+                        Err(error) => {
+                            let code = error
+                                .downcast_ref::<Refused>()
+                                .map_or(RemoteErrorCode::Internal, |refused| refused.0);
+                            let mut response = RemoteResponse::error(
+                                request.request_id.clone(),
+                                RemoteError::new(code, format!("{error:#}")),
+                            );
+                            response.receipt = Some(ReceiptState::Rejected);
+                            send(sink, response);
+                            return;
+                        }
+                    }
+                }
                 if let Ok(stored) = read_private_json::<Creation>(
                     &Self::receipt_path(&self.config, &device.device_id, &request.request_id),
                     64 * 1024,
@@ -1059,7 +1104,7 @@ impl FrameRouter for WorkspaceRouter {
                                     )
                                     .await
                                 }
-                                RemoteOperation::CreateSession { path } => {
+                                RemoteOperation::CreateSession { path, .. } => {
                                     Self::create(
                                         &hub,
                                         &config,
@@ -1185,7 +1230,11 @@ mod tests {
             request_id: "new".into(),
             session_id: None,
             registration_epoch: None,
-            operation: RemoteOperation::CreateSession { path: None },
+            operation: RemoteOperation::CreateSession {
+                path: None,
+                harness: None,
+                model: None,
+            },
         };
         let creation = planned_creation(&request);
         assert!(rustcode_session::valid_session_id(&creation.session_id));
@@ -1212,6 +1261,8 @@ mod tests {
             registration_epoch: None,
             operation: RemoteOperation::CreateSession {
                 path: Some("/directory/no/longer/present".into()),
+                harness: None,
+                model: None,
             },
         };
         let response = RemoteResponse::new(request.request_id.clone(), RemoteResult::Detached);
@@ -1270,6 +1321,8 @@ mod tests {
             registration_epoch: None,
             operation: RemoteOperation::CreateSession {
                 path: Some(directory.to_string_lossy().into_owned()),
+                harness: None,
+                model: None,
             },
         }
     }
@@ -1361,6 +1414,123 @@ mod tests {
         assert!(owners.iter().all(|pid| !alive(pid)), "{owners:?}");
         let lifecycle = crate::remote_gateway::lifecycle::RemoteLifecycle::new(config.path());
         assert!(live_owner_sessions(&lifecycle).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_desktop_share_starts_the_thread_rather_than_a_session_owner() {
+        let config = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        allow(config.path(), directory.path());
+        let hub = SessionHub::start(Default::default());
+        let mut desktop = super::super::hub::tests::Owner::register_host(&hub, "desktop-thread", 7);
+        // The program does not exist: a session owner would say so.
+        let router = WorkspaceRouter::new(
+            Arc::clone(&hub),
+            config.path().to_path_buf(),
+            Path::new("/never/launch").to_path_buf(),
+        );
+        let mut phone = super::super::hub::tests::Device::connect(&hub, 1, "phone");
+        let request = RemoteRequest {
+            authenticated_device_id: None,
+            protocol_version: REMOTE_PROTOCOL_VERSION,
+            request_id: "create-1".into(),
+            session_id: None,
+            registration_epoch: None,
+            operation: RemoteOperation::CreateSession {
+                path: Some(directory.path().to_str().unwrap().into()),
+                harness: Some("claude-code".into()),
+                model: Some("sonnet".into()),
+            },
+        };
+        FrameRouter::frame(
+            &router,
+            &phone.context,
+            &serde_json::to_string(&request).unwrap(),
+            &phone.sink,
+        );
+
+        // The app is asked, with the folder the gateway resolved.
+        let (id, device_id, forwarded) = desktop.request();
+        assert_eq!(device_id, "device-phone");
+        match forwarded.operation {
+            RemoteOperation::CreateSession {
+                path,
+                harness,
+                model,
+            } => {
+                let resolved = directory.path().canonicalize().unwrap();
+                assert_eq!(path.as_deref(), resolved.to_str(), "the folder is resolved");
+                assert_eq!(harness.as_deref(), Some("claude-code"));
+                assert_eq!(model.as_deref(), Some("sonnet"));
+            }
+            other => panic!("the app was asked for {other:?}"),
+        }
+        desktop.reply(
+            id,
+            RemoteResponse::new(
+                "create-1",
+                RemoteResult::SessionCreated {
+                    session: super::super::hub::tests::info("desktop-new", 3),
+                },
+            )
+            .with_receipt(ReceiptState::Applied),
+        );
+        let response = phone.answer("create-1");
+        assert_eq!(response["receipt"], "applied");
+        assert_eq!(response["result"]["type"], "session_created");
+        assert_eq!(response["result"]["session"]["session_id"], "desktop-new");
+        // Nothing of the session-owner path is left behind: no receipt of its
+        // own, and no owner log.
+        assert!(!WorkspaceRouter::receipt_path(config.path(), "device-phone", "create-1").exists());
+        assert!(!config.path().join("remote/owners").exists());
+    }
+
+    #[tokio::test]
+    async fn a_create_on_a_host_without_a_desktop_share_still_starts_a_session_owner() {
+        let config = tempfile::tempdir().unwrap();
+        let directory = stand_in_owner(WAITING_OWNER);
+        allow(config.path(), directory.path());
+        let hub = SessionHub::start(Default::default());
+        let router = WorkspaceRouter::new(
+            Arc::clone(&hub),
+            config.path().to_path_buf(),
+            Path::new("/bin/sh").to_path_buf(),
+        );
+        let mut phone = super::super::hub::tests::Device::connect(&hub, 1, "phone");
+        let request = RemoteRequest {
+            authenticated_device_id: None,
+            protocol_version: REMOTE_PROTOCOL_VERSION,
+            request_id: "create-1".into(),
+            session_id: None,
+            registration_epoch: None,
+            operation: RemoteOperation::CreateSession {
+                path: Some(directory.path().to_str().unwrap().into()),
+                harness: Some("claude-code".into()),
+                model: None,
+            },
+        };
+        FrameRouter::frame(
+            &router,
+            &phone.context,
+            &serde_json::to_string(&request).unwrap(),
+            &phone.sink,
+        );
+        // The session owner is started here, as before: it records its own
+        // command line before it is told to wait.
+        let session_id = started_session(directory.path()).await;
+        assert!(WorkspaceRouter::receipt_path(config.path(), "device-phone", "create-1").exists());
+        stop_owner(directory.path());
+        let _ = session_id;
+        // The answer is the owner's, which never registers: the device is
+        // told the start failed rather than that a thread was started.
+        let response = loop {
+            if let Some(frame) = phone.try_next() {
+                break frame;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        assert_eq!(response["kind"], "response", "{response}");
+        assert_eq!(response["receipt"], "rejected", "{response}");
     }
 
     #[tokio::test]

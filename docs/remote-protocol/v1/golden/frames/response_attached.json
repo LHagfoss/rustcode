@@ -9,7 +9,8 @@
     "snapshot": {
       "capabilities": [
         "cancel_question",
-        "execute_command"
+        "execute_command",
+        "host_threads"
       ],
       "settings": {
         "models": [

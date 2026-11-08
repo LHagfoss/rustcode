@@ -321,9 +321,13 @@ same frames unchanged.
 
 The `sessions` result also carries `capabilities`, the optional host-wide
 operations the gateway implements. It is absent from gateways that implement
-none; the flags are `saved_sessions` and `session_changes`. A client offers a
-feature only when its flag is listed; an older owner answers `get_changes`
-with `unsupported_operation`.
+none; the flags are `saved_sessions`, `session_changes` and
+`thread_create_options`. A client offers a feature only when its flag is
+listed; an older owner answers `get_changes` with `unsupported_operation`.
+`thread_create_options` is not a fixed feature of the gateway: it is listed
+while a share that can start threads (the desktop app's) is live, so a client
+reads it from every `list_sessions`/`subscribe_sessions` answer rather than
+once at connect. A `sessions` frame pushed on a change does not repeat it.
 
 `get_changes` reads the attached session's uncommitted changes in its
 workspace for review. It is read-only: the owner runs `git status` and
@@ -627,9 +631,12 @@ sequence and replay rules.
 
 ### Question cancellation and remote commands
 
-Snapshots advertise optional `capabilities`: `cancel_question` and
-`execute_command`. Missing capabilities mean that the owner or gateway needs an
-upgrade; clients must not emulate these operations by sending provider prompts.
+Snapshots advertise optional `capabilities`: `cancel_question`,
+`execute_command`, `upload_image` and `host_threads`. Missing capabilities mean
+that the owner or gateway needs an upgrade; clients must not emulate these
+operations by sending provider prompts. `host_threads` is on the desktop app's
+shares only: it says this owner starts threads a device asks for, and is what
+the gateway turns into `thread_create_options` on the session list.
 
 `{"type":"cancel_question","question_id":"…"}` dismisses the entire active
 question chain with the same behavior as Escape in the terminal: it cancels the
@@ -674,10 +681,30 @@ contains only the host name, port, and protocol version. Discovery does not pair
 a device or grant access.
 
 Authenticated clients can use `list_directories { path? }` to browse existing
-folders (default `~/`) and `create_session { path? }` to create a session there.
-The latter returns `session_created { session }`. It starts a detached session
-owner with the same runtime, tools, questions, approvals, and turn cancellation
-as the TUI. Closing the app or restarting the gateway does not stop that owner.
+folders (default `~/`) and `create_session { path?, harness?, model? }` to
+create a session there. The latter returns `session_created { session }`.
+
+A gateway routes that request to the running desktop app when one is sharing a
+thread: the app's shares advertise `host_threads` in their snapshot's
+`capabilities`, and while one is live the gateway lists
+`thread_create_options` and starts the thread in the app, on the harness and
+model the device names (`rustcode` for the built-in one). It then shares it
+like any other thread, and the client attaches to it as usual. An unknown
+harness, a harness that is turned off on the host, or a model the host knows
+the harness does not list is answered with `invalid_request` whose message
+names the value, and nothing starts. The delivery rules are the existing ones:
+the share's receipt store answers a retry with the original outcome, and a
+retry with other arguments is `request_conflict`; a lost answer is found with
+`get_request_status`, and a request the app did not answer within 30 seconds is
+`owner_unavailable` with receipt `unknown`, which the client must not resend on
+its own (the status reads `received` until the thread exists).
+
+With no such share live (no app, Remote access off, or an app with no thread
+open) nothing advertises the capacity: `harness` and `model` are ignored and
+the gateway starts a detached session owner with the same runtime, tools,
+questions, approvals, and turn cancellation as the TUI. Closing the app or
+restarting the gateway does not stop that owner.
+
 Folder listings omit dot-folders, cap their count and encoded size, and report
 `truncated`; direct absolute and `~/` paths remain accepted. Both operations
 accept only existing directories inside the host user's home folder or a

@@ -351,12 +351,38 @@ inside your home folder and the `roots` listed under `[remote]` in
 a folder elsewhere, one that does not exist, or a file is refused with
 `invalid_request` and a message that says which, and nothing is started. The
 device attaches to the new session as soon as it has registered. It is listed
-for every device at once; in the Mac app, `/resume` and `rustcode threads` it
-appears after its first exchange, like any other session. No terminal is involved: the
-gateway starts a **session owner**, a `rustcode` process without a terminal
-that runs in that directory, owns the session and registers it like `/remote`
-does. It keeps running after the device disconnects and across gateway
-restarts, and ends when it is killed or the machine restarts.
+for every device at once.
+
+### Started in the app
+
+While the RustCode app is running with Remote access on, the session a device
+starts is created **in the app**: the thread appears in the app's sidebar
+within a second and the phone is attached to it. It runs on the harness the
+device names — Claude Code, Codex, Pi, OpenCode or any other external harness,
+or the built-in one — and on the model it names, exactly as a thread started in
+the app. `create_session` takes optional `harness` and `model`; a device offers
+that choice only when the gateway advertises `thread_create_options`, which it
+does while the app shares at least one thread. An unknown harness, a harness
+that is turned off, or a model the harness does not list is refused with
+`invalid_request` naming the value, and nothing is started.
+
+A thread started this way is the app's, like any other: it is shared while
+Remote access is on, it ends when the app closes it, and it is `open` in the
+app until then, so reopening it from a device or with `rustcode --resume` is
+refused with `open_elsewhere`. The app runs it, so it follows the app's
+harness settings, accounts and models; a device cannot name an account, an
+effort or a worktree.
+
+### Started as a session owner
+
+With no such share live — Remote access off, an app with no thread open, or a
+terminal's engine, which never hosts threads — no terminal is involved either: the gateway starts a **session owner**, a
+`rustcode` process without a terminal that runs in that directory, owns the
+session and registers it like `/remote` does. It keeps running after the
+device disconnects and across gateway restarts, and ends when it is killed or
+the machine restarts. It always runs on the built-in harness, ignores
+`harness` and `model`, and its session appears in the Mac app and the
+terminal's session lists after its first exchange.
 
 - Each owner writes to `remote/owners/<session id>.log`: its start, its
   registration and the reason whenever it gives up. The request's receipt is
@@ -530,6 +556,7 @@ delays the terminal or another device.
 | Requests one connection may have waiting on terminals | 16; more are refused with `rate_limited` |
 | Wait for a terminal's answer | 30 s, then `owner_unavailable` |
 | Answer to `create_session` or `resume_session` | within 15 s of the request; an owner still starting then gets `owner_unavailable` |
+| Answer to a `create_session` the desktop app starts | 30 s; a harness that needs longer gets `owner_unavailable` with receipt `unknown`, and `get_request_status` reports `received` until the thread exists |
 | Wait for a new session's owner to register | 60 s, then the owner is stopped and its receipt withdrawn |
 | Interval at which the listen address is resolved again | 5 s |
 | Replay kept per session | 4 MiB of events |
@@ -550,8 +577,12 @@ header; see [the connection step](remote-protocol/README.md#connection).
   process instead.
 - A device starts sessions only in folders inside the home folder or a
   configured `[remote] roots` entry, and cannot create folders.
-- A session started from a device shows up in the Mac app and the terminal's
-  session lists only after its first exchange.
+- A session the gateway started as a session owner shows up in the Mac app
+  and the terminal's session lists only after its first exchange; one the app
+  started is in the app's sidebar at once.
+- Opening a thread the app started for a device from the app itself, while
+  the app still runs it, answers "session is already active": a live session
+  cannot be opened twice. Close the thread in the app and open it again.
 - No push notifications.
 - Access is per host: a paired device sees every session open in a terminal.
   There are no per-session grants and no per-session opt-out.

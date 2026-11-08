@@ -29,7 +29,7 @@ fn hub(limits: HubLimits) -> Arc<SessionHub> {
     hub
 }
 
-fn info(session_id: &str, epoch: u64) -> RemoteSessionInfo {
+pub(crate) fn info(session_id: &str, epoch: u64) -> RemoteSessionInfo {
     RemoteSessionInfo {
         session_id: session_id.to_owned(),
         registration_epoch: epoch,
@@ -72,7 +72,7 @@ pub(crate) fn snapshot(session_id: &str, epoch: u64, sequence: u64) -> Box<Remot
 }
 
 /// A scripted session owner: what the owner socket would feed the hub.
-struct Owner {
+pub(crate) struct Owner {
     hub: Arc<SessionHub>,
     id: u64,
     session_id: String,
@@ -158,7 +158,7 @@ impl Owner {
     }
 
     /// The next request the gateway forwarded, skipping status frames.
-    fn request(&mut self) -> (u64, String, RemoteRequest) {
+    pub(crate) fn request(&mut self) -> (u64, String, RemoteRequest) {
         loop {
             match self.next().expect("a request was forwarded") {
                 GatewayFrame::Request {
@@ -172,7 +172,7 @@ impl Owner {
         }
     }
 
-    fn reply(&self, id: u64, response: RemoteResponse) {
+    pub(crate) fn reply(&self, id: u64, response: RemoteResponse) {
         assert!(
             self.hub
                 .owner_frame(self.id, OwnerFrame::Reply { id, response })
@@ -180,16 +180,16 @@ impl Owner {
     }
 }
 
-struct Device {
+pub(crate) struct Device {
     hub: Arc<SessionHub>,
-    context: DeviceContext,
-    sink: FrameSink,
+    pub(crate) context: DeviceContext,
+    pub(crate) sink: FrameSink,
     queue: FrameQueue,
     requests: u64,
 }
 
 impl Device {
-    fn connect(hub: &Arc<SessionHub>, connection_id: u64, name: &str) -> Self {
+    pub(crate) fn connect(hub: &Arc<SessionHub>, connection_id: u64, name: &str) -> Self {
         Self::connect_with(hub, connection_id, name, 64)
     }
 
@@ -256,6 +256,22 @@ impl Device {
         assert_eq!(frame["kind"], "response", "{frame}");
         assert_eq!(frame["request_id"], request_id, "{frame}");
         frame
+    }
+
+    /// The next frame, or `None` while nothing is queued.
+    pub(crate) fn try_next(&mut self) -> Option<Value> {
+        self.next()
+    }
+
+    /// The response to `request_id`, skipping list pushes that arrive first.
+    pub(crate) fn answer(&mut self, request_id: &str) -> Value {
+        loop {
+            let frame = self.expect();
+            if frame["kind"] == "response" {
+                assert_eq!(frame["request_id"], request_id, "{frame}");
+                return frame;
+            }
+        }
     }
 
     fn attach(&mut self, session_id: &str, epoch: u64) -> Value {
@@ -1300,4 +1316,170 @@ async fn share_deny_and_terminal_gone_answer_the_device() {
     let gone = phone.response(&waiting);
     assert_eq!(gone["result"]["type"], "share_denied");
     assert_eq!(gone["receipt"], "unknown");
+}
+
+/// A snapshot whose owner says it can start threads a device asks for: the
+/// desktop app, sharing one of its threads.
+pub(crate) fn host_snapshot(session_id: &str, epoch: u64) -> Box<RemoteSnapshot> {
+    let mut snapshot = snapshot(session_id, epoch, 0);
+    snapshot
+        .capabilities
+        .push(crate::remote::session_capability::HOST_THREADS.to_owned());
+    snapshot
+}
+
+impl Owner {
+    /// Share a thread as the desktop app does: its owner starts threads.
+    pub(crate) fn register_host(hub: &Arc<SessionHub>, session_id: &str, epoch: u64) -> Self {
+        let registration = hub
+            .register_owner(
+                SessionRegistration {
+                    session_id: session_id.to_owned(),
+                    registration_epoch: epoch,
+                },
+                host_snapshot(session_id, epoch),
+            )
+            .expect("the registration is accepted");
+        Self {
+            hub: Arc::clone(hub),
+            id: registration.owner_id,
+            session_id: session_id.to_owned(),
+            epoch,
+            sequence: 0,
+            frames: registration.frames,
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_desktop_share_offers_thread_options_and_takes_the_new_thread() {
+    let hub = hub(limits());
+    let mut desktop = Owner::register_host(&hub, "desktop-thread", 7);
+    let mut phone = Device::connect(&hub, 1, "phone");
+
+    let listed = phone.send(None, json!({"type": "list_sessions"}));
+    let listed = phone.response(&listed);
+    assert_eq!(
+        listed["result"]["capabilities"],
+        json!(["thread_create_options"])
+    );
+
+    let created = hub_create(&hub, &mut phone, "create-1");
+    let (id, device_id, forwarded) = desktop.request();
+    assert_eq!(device_id, "device-phone");
+    match forwarded.operation {
+        RemoteOperation::CreateSession {
+            path,
+            harness,
+            model,
+        } => {
+            assert_eq!(path.as_deref(), Some("/tmp"));
+            assert_eq!(harness.as_deref(), Some("claude-code"));
+            assert_eq!(model.as_deref(), Some("sonnet"));
+        }
+        other => panic!("the desktop app was asked for {other:?}"),
+    }
+    desktop.reply(
+        id,
+        RemoteResponse::new(
+            created.clone(),
+            RemoteResult::SessionCreated {
+                session: info("session-new", 3),
+            },
+        )
+        .with_receipt(ReceiptState::Applied),
+    );
+    let response = phone.response(&created);
+    assert_eq!(response["receipt"], "applied");
+    assert_eq!(response["result"]["type"], "session_created");
+    assert_eq!(response["result"]["session"]["session_id"], "session-new");
+
+    // The thread the app started is listed as soon as it shares it.
+    let _fresh = Owner::register(&hub, "session-new", 3);
+    let list = phone.send(None, json!({"type": "subscribe_sessions"}));
+    let list = phone.response(&list);
+    let ids: Vec<&str> = list["result"]["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|session| session["session_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["desktop-thread", "session-new"]);
+
+    // The share that could start threads ends: the offer goes with it, and the
+    // next start is left to a session owner again.
+    hub.owner_gone(desktop.id);
+    assert!(!hub.hosts_threads());
+    let listed = phone.send(None, json!({"type": "list_sessions"}));
+    let listed = phone.answer(&listed);
+    assert!(listed["result"].get("capabilities").is_none(), "{listed}");
+}
+
+/// Ask the hub to start a thread, as the gateway's router does.
+fn hub_create(hub: &Arc<SessionHub>, phone: &mut Device, request_id: &str) -> String {
+    let request = RemoteRequest {
+        authenticated_device_id: None,
+        protocol_version: REMOTE_PROTOCOL_VERSION,
+        request_id: request_id.to_owned(),
+        session_id: None,
+        registration_epoch: None,
+        operation: RemoteOperation::CreateSession {
+            path: Some("/tmp".into()),
+            harness: Some("claude-code".into()),
+            model: Some("sonnet".into()),
+        },
+    };
+    hub.forward_host_request(&phone.context, &phone.sink, request)
+        .expect("a desktop share takes it");
+    request_id.to_owned()
+}
+
+#[tokio::test]
+async fn without_a_desktop_share_no_owner_is_asked_and_nothing_is_offered() {
+    let hub = hub(limits());
+    let mut terminal = Owner::register(&hub, "session-a", 11);
+    let mut phone = Device::connect(&hub, 1, "phone");
+
+    let listed = phone.send(None, json!({"type": "list_sessions"}));
+    let listed = phone.response(&listed);
+    assert!(listed["result"].get("capabilities").is_none(), "{listed}");
+    assert!(!hub.hosts_threads());
+
+    // Nothing was forwarded: the caller keeps the request and starts a
+    // session owner, exactly as before.
+    let request = RemoteRequest {
+        authenticated_device_id: None,
+        protocol_version: REMOTE_PROTOCOL_VERSION,
+        request_id: "create-1".into(),
+        session_id: None,
+        registration_epoch: None,
+        operation: RemoteOperation::CreateSession {
+            path: Some("/tmp".into()),
+            harness: None,
+            model: None,
+        },
+    };
+    let untouched = hub
+        .forward_host_request(&phone.context, &phone.sink, request.clone())
+        .unwrap_err();
+    assert_eq!(untouched, request);
+    assert!(terminal.next().is_none());
+    assert!(phone.next().is_none());
+}
+
+#[tokio::test]
+async fn a_desktop_share_that_never_answers_leaves_the_mutation_uncertain() {
+    let hub = hub(HubLimits {
+        request_timeout: Duration::from_millis(1),
+        tick: Duration::from_secs(3600),
+        ..HubLimits::default()
+    });
+    let _desktop = Owner::register_host(&hub, "desktop-thread", 7);
+    let mut phone = Device::connect(&hub, 1, "phone");
+    let created = hub_create(&hub, &mut phone, "create-1");
+    std::thread::sleep(Duration::from_millis(5));
+    hub.tick();
+    let response = phone.response(&created);
+    assert_eq!(response["receipt"], "unknown");
+    assert_eq!(response["result"]["code"], "owner_unavailable");
 }

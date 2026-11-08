@@ -3,6 +3,8 @@
   "request_id": "req-create",
   "operation": {
     "type": "create_session",
-    "path": "~/projects"
+    "path": "~/projects",
+    "harness": "claude-code",
+    "model": "sonnet"
   }
 }

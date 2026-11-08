@@ -282,6 +282,8 @@ pub fn golden_requests() -> Vec<(&'static str, RemoteRequest)> {
                 None,
                 RemoteOperation::CreateSession {
                     path: Some("~/projects".into()),
+                    harness: Some("claude-code".into()),
+                    model: Some("sonnet".into()),
                 },
             ),
         ),
@@ -693,7 +695,11 @@ fn golden_previous_timing() -> RemoteTurnTiming {
 fn golden_snapshot() -> RemoteSnapshot {
     RemoteSnapshot {
         commands: Vec::new(),
-        capabilities: vec!["cancel_question".into(), "execute_command".into()],
+        capabilities: vec![
+            "cancel_question".into(),
+            "execute_command".into(),
+            session_capability::HOST_THREADS.into(),
+        ],
         settings: Some(golden_settings()),
         snapshot_id: Some("snapshot-example".to_owned()),
         session: golden_session_info(),
@@ -961,6 +967,7 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
                 capabilities: vec![
                     host_capability::SAVED_SESSIONS.to_owned(),
                     host_capability::SESSION_CHANGES.to_owned(),
+                    host_capability::THREAD_CREATE_OPTIONS.to_owned(),
                 ],
             },
         ),

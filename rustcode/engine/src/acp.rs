@@ -6,6 +6,7 @@ mod connections;
 mod data;
 mod edit_diff;
 mod harnesses;
+mod hosted;
 mod permissions;
 mod presence;
 mod preview;
@@ -546,6 +547,123 @@ fn session_workspace(
         additional_directories,
         task_workspace_id: None,
     }
+}
+
+/// The session `session/new` creates on the built-in harness: the engine's own
+/// chat state, its task route and the connection it publishes to. Also what a
+/// thread a paired device asked for starts as (`super::hosted`), which is why
+/// it is a function of its own.
+async fn create_builtin_session(
+    server: &AcpServer,
+    connection: &agent_client_protocol::ConnectionTo<Client>,
+    request: NewSessionRequest,
+) -> Result<NewSessionResponse, agent_client_protocol::Error> {
+    let cwd = canonical_acp_cwd(&request.cwd, "session/new")?;
+    let mut state = new_session_state(&cwd);
+    state.visualization_level = server.visualization_level.load(Ordering::Relaxed);
+    state.smart_ui = crate::app::SmartUi::from_u8(server.client_smart_ui.load(Ordering::Relaxed));
+    let session_id = state.active_session_id.clone();
+    // Who started this thread, from the `_meta.rustcode.parent` its
+    // caller gave: kept in the thread's own metadata, not only in
+    // the link book the app prunes (`thread_parent.rs`).
+    if let Some(parent) = crate::thread_parent::requested(request.meta.as_ref()) {
+        crate::thread_parent::record(&session_id, &parent);
+    }
+    state.preview_client = preview::preview_client_for(
+        server.client_has_preview.load(Ordering::Relaxed),
+        &connection,
+        &session_id,
+    );
+    state.desktop_client = preview::desktop_client_for(
+        server.client_has_desktop.load(Ordering::Relaxed),
+        &connection,
+        &session_id,
+    );
+    (state.orchestration_client, state.orchestration_version) = preview::orchestration_for(
+        server.client_has_orchestration.load(Ordering::Relaxed),
+        &connection,
+        &session_id,
+    );
+    state.smart_ui_client = preview::smart_ui_client_for(
+        state.smart_ui == crate::app::SmartUi::On
+            && server.client_has_smart_ui_preview.load(Ordering::Relaxed),
+        &connection,
+        &session_id,
+    );
+    state.raw_cli_mode = false;
+    state.task_working_directory = Some(cwd.clone());
+    // ACP's requested cwd is both the task's initial location
+    // and its hard filesystem boundary, independent of the
+    // directory from which RustCode itself was launched.
+    state.workspace_root = Some(cwd.clone());
+    // What the request asked for, else the built-in harness's
+    // remembered choice (docs/harnesses.md).
+    apply_requested_model_and_effort(
+        &mut state,
+        &crate::harness::builtin_start(&crate::harness::requested(request.meta.as_ref())),
+    );
+    let config_options = build_session_config_options(&state);
+    let _ = crate::config::save_session_workspace(
+        &session_id,
+        &session_workspace(cwd.clone(), request.additional_directories.clone()),
+    );
+    let (task_sender, task_receiver) = std::sync::mpsc::sync_channel(64);
+    let known_task_ids = Arc::new(std::sync::Mutex::new(KnownTaskIds::default()));
+    let terminal_backlog = Arc::new(std::sync::Mutex::new(VecDeque::new()));
+    let terminal_overflow = Arc::new(AtomicBool::new(false));
+    let state = Arc::new(Mutex::new(state));
+    let task_sink = Arc::new(SessionTaskSink {
+        session_id: session_id.clone(),
+        state: Arc::clone(&state),
+        connection: connection.clone(),
+        runtime: tokio::runtime::Handle::current(),
+        terminal_ledger: std::sync::Mutex::new(TerminalLedger::default()),
+        terminal_backlog: Arc::clone(&terminal_backlog),
+        terminal_overflow: Arc::clone(&terminal_overflow),
+    });
+    mark_acp_session(&session_id);
+    server
+        .task_routes
+        .lock()
+        .expect("ACP task routes mutex poisoned")
+        .insert(
+            session_id.clone(),
+            TaskRoute {
+                sender: task_sender,
+                known_task_ids: Arc::clone(&known_task_ids),
+                sink: Some(task_sink),
+            },
+        );
+    server.sessions.lock().await.insert(
+        session_id.clone(),
+        AcpSession {
+            state: Arc::clone(&state),
+            cwd,
+            turns: Arc::new(SessionTurnState::new()),
+            task_events: Arc::new(std::sync::Mutex::new(task_receiver)),
+            known_task_ids,
+            terminal_backlog,
+            terminal_overflow,
+        },
+    );
+    // Commands, then the session's opening usage, so the client
+    // shows its context meter from the start rather than only
+    // after the first turn ends (#2414 follow-up).
+    let opening_usage = {
+        let state = state.lock().await;
+        usage::usage_update(&state)
+    };
+    for update in [commands::available_commands_update(), opening_usage] {
+        if let Err(error) =
+            connection.send_notification(SessionNotification::new(session_id.clone(), update))
+        {
+            unregister_acp_session(server, &session_id).await;
+            return Err(agent_client_protocol::Error::internal_error().data(error.to_string()));
+        }
+    }
+    Ok(NewSessionResponse::new(session_id)
+        .config_options(config_options)
+        .meta(crate::harness::builtin_session_meta()))
 }
 
 async fn acp_load_session(
@@ -1302,6 +1420,27 @@ pub(crate) struct PullWatchesRequest {
 
 /// A watch changed: checked, stopped, or with new events, which are only
 /// in this message once. The app tells the reader; nothing acts on them.
+/// A thread this engine started because a paired device asked for one
+/// (`docs/remote.md`, *Threads started from a device*). The client lists it as
+/// a thread of its own: a thread has no row in the store before its first turn,
+/// so listing alone would not show it.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcNotification,
+)]
+#[notification(method = "_rustcode/threads/created")]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ThreadCreatedNotification {
+    pub session_id: String,
+    pub cwd: std::path::PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// The harness the thread runs on (`rustcode` for the built-in one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
 #[derive(
     Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcNotification,
 )]
@@ -1499,6 +1638,18 @@ pub(crate) struct PullReviewRequest {
     pub comments: Vec<crate::pull_requests::ReviewComment>,
 }
 
+/// Whether the client lists a thread the engine starts for a paired device:
+/// `_meta.rustcode.threads` in `initialize`. The desktop app does; a terminal's
+/// client does not, so its shares never advertise `host_threads`.
+pub(crate) fn client_shows_threads(
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> bool {
+    meta.and_then(|meta| meta.get("rustcode"))
+        .and_then(|rustcode| rustcode.get("threads"))
+        .and_then(serde_json::Value::as_u64)
+        .is_some_and(|version| version >= 1)
+}
+
 pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error>> {
     let startup_state = crate::app::AppState::new();
     // Servers start on the session's first turn, not here: the app attaches
@@ -1585,6 +1736,21 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                         autosharer.auto_share(&autoshare_connection).await;
                     }
                 });
+                // A paired device's `create_session` starts its thread in
+                // this engine, on the harness it names, while the app shares a
+                // thread: the share advertises `host_threads` and the gateway
+                // routes new threads here instead of starting a session owner
+                // (`docs/remote.md`). Only a client that lists the thread the
+                // engine starts may host them: a terminal's client does not.
+                if client_shows_threads(request.client_capabilities.meta.as_ref()) {
+                    let hosted_server = server.clone();
+                    let hosted_connection = _connection.clone();
+                    server.remote.set_thread_host(move |ask| {
+                        let server = hosted_server.clone();
+                        let connection = hosted_connection.clone();
+                        Box::pin(async move { hosted::start(&server, &connection, ask).await })
+                    });
+                }
                 responder.respond(
                     InitializeResponse::new(request.protocol_version)
                         .agent_capabilities(server_capabilities()),
@@ -1627,120 +1793,8 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
                             Ok(())
                         });
                     }
-                    let cwd = canonical_acp_cwd(&request.cwd, "session/new")?;
-                    let mut state = new_session_state(&cwd);
-                    state.visualization_level = server.visualization_level.load(Ordering::Relaxed);
-                    state.smart_ui = crate::app::SmartUi::from_u8(
-                        server.client_smart_ui.load(Ordering::Relaxed),
-                    );
-                    state.smart_ui = crate::app::SmartUi::from_u8(
-                        server.client_smart_ui.load(Ordering::Relaxed),
-                    );
-                    let session_id = state.active_session_id.clone();
-                    // Who started this thread, from the `_meta.rustcode.parent` its
-                    // caller gave: kept in the thread's own metadata, not only in
-                    // the link book the app prunes (`thread_parent.rs`).
-                    if let Some(parent) = crate::thread_parent::requested(request.meta.as_ref()) {
-                        crate::thread_parent::record(&session_id, &parent);
-                    }
-                    state.preview_client = preview::preview_client_for(
-                        server.client_has_preview.load(Ordering::Relaxed),
-                        &_connection,
-                        &session_id,
-                    );
-                    state.desktop_client = preview::desktop_client_for(server.client_has_desktop.load(Ordering::Relaxed), &_connection, &session_id);
-                    (state.orchestration_client, state.orchestration_version) =
-                        preview::orchestration_for(
-                            server.client_has_orchestration.load(Ordering::Relaxed),
-                            &_connection,
-                            &session_id,
-                        );
-                    state.smart_ui_client = preview::smart_ui_client_for(
-                        state.smart_ui == crate::app::SmartUi::On
-                            && server.client_has_smart_ui_preview.load(Ordering::Relaxed),
-                        &_connection,
-                        &session_id,
-                    );
-                    state.raw_cli_mode = false;
-                    state.task_working_directory = Some(cwd.clone());
-                    // ACP's requested cwd is both the task's initial location
-                    // and its hard filesystem boundary, independent of the
-                    // directory from which RustCode itself was launched.
-                    state.workspace_root = Some(cwd.clone());
-                    // What the request asked for, else the built-in harness's
-                    // remembered choice (docs/harnesses.md).
-                    apply_requested_model_and_effort(
-                        &mut state,
-                        &crate::harness::builtin_start(&crate::harness::requested(
-                            request.meta.as_ref(),
-                        )),
-                    );
-                    let config_options = build_session_config_options(&state);
-                    let _ = crate::config::save_session_workspace(
-                        &session_id,
-                        &session_workspace(cwd.clone(), request.additional_directories.clone()),
-                    );
-                    let (task_sender, task_receiver) = std::sync::mpsc::sync_channel(64);
-                    let known_task_ids = Arc::new(std::sync::Mutex::new(KnownTaskIds::default()));
-                    let terminal_backlog = Arc::new(std::sync::Mutex::new(VecDeque::new()));
-                    let terminal_overflow = Arc::new(AtomicBool::new(false));
-                    let state = Arc::new(Mutex::new(state));
-                    let task_sink = Arc::new(SessionTaskSink {
-                        session_id: session_id.clone(),
-                        state: Arc::clone(&state),
-                        connection: _connection.clone(),
-                        runtime: tokio::runtime::Handle::current(),
-                        terminal_ledger: std::sync::Mutex::new(TerminalLedger::default()),
-                        terminal_backlog: Arc::clone(&terminal_backlog),
-                        terminal_overflow: Arc::clone(&terminal_overflow),
-                    });
-                    mark_acp_session(&session_id);
-                    server
-                        .task_routes
-                        .lock()
-                        .expect("ACP task routes mutex poisoned")
-                        .insert(
-                            session_id.clone(),
-                            TaskRoute {
-                                sender: task_sender,
-                                known_task_ids: Arc::clone(&known_task_ids),
-                                sink: Some(task_sink),
-                            },
-                        );
-                    server.sessions.lock().await.insert(
-                        session_id.clone(),
-                        AcpSession {
-                            state: Arc::clone(&state),
-                            cwd,
-                            turns: Arc::new(SessionTurnState::new()),
-                            task_events: Arc::new(std::sync::Mutex::new(task_receiver)),
-                            known_task_ids,
-                            terminal_backlog,
-                            terminal_overflow,
-                        },
-                    );
-                    responder.respond(crate::worktrees::finish_new(
-                        NewSessionResponse::new(session_id.clone())
-                            .config_options(config_options)
-                            .meta(crate::harness::builtin_session_meta()),
-                        worktree.as_ref(),
-                    ))?;
-                    // Commands, then the session's opening usage, so the client
-                    // shows its context meter from the start rather than only
-                    // after the first turn ends (#2414 follow-up).
-                    let opening_usage = {
-                        let state = state.lock().await;
-                        usage::usage_update(&state)
-                    };
-                    for update in [commands::available_commands_update(), opening_usage] {
-                        if let Err(error) = _connection
-                            .send_notification(SessionNotification::new(session_id.clone(), update))
-                        {
-                            unregister_acp_session(&server, &session_id).await;
-                            return Err(agent_client_protocol::Error::internal_error()
-                                .data(error.to_string()));
-                        }
-                    }
+                    let response = create_builtin_session(&server, &_connection, request).await?;
+                    responder.respond(crate::worktrees::finish_new(response, worktree.as_ref()))?;
                     Ok(())
                 }
             },

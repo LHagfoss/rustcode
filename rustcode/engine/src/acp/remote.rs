@@ -29,20 +29,24 @@ use crate::harness::session::PermissionFuture;
 use crate::harness::session::{ClientSink, ExternalSession};
 use crate::remote::SessionCloseReason;
 use crate::remote::harness::HarnessMirror;
+// The thread-start seam is the same on every host; only the gateway behind it
+// is unix-only.
+use crate::remote::{RemoteError, RemoteSessionInfo};
 use rustcode_tasks::TaskEvent;
+use std::pin::Pin;
 
 // Shares and pairing offers are driven by the remote gateway, which the
 // workspace builds only on unix; everywhere else the manager below is a
 // stub with the same surface that reports the feature as unavailable.
 #[cfg(unix)]
 use crate::remote::owner::{
-    GatewayLinkStatus, OwnerCommand, OwnerConnector, OwnerLink, OwnerMessage, default_connector,
-    next_registration_epoch,
+    GatewayLinkStatus, OwnerCommand, OwnerConnector, OwnerLink, OwnerMessage, OwnerReply,
+    default_connector, next_registration_epoch,
 };
 #[cfg(unix)]
 use crate::remote::{
-    OwnerFollowUp, ProjectionLimits, PromptDisposition, ReceiptState, RemoteError, RemoteErrorCode,
-    RemoteOperation, RemoteRequest, RemoteResponse, RemoteResult, SessionPublisher,
+    OwnerFollowUp, ProjectionLimits, PromptDisposition, ReceiptState, RemoteErrorCode,
+    RemoteOperation, RemoteRequest, RemoteResponse, RemoteResult, RemoteSnapshot, SessionPublisher,
     SessionRegistration, apply_session_mutation, read_session,
 };
 #[cfg(unix)]
@@ -299,11 +303,36 @@ struct Inner {
     /// Threads the gateway would not take, and why, for as long as the reason
     /// may hold. Auto-share skips them and their status says so.
     refused: std::collections::HashMap<String, Refusal>,
+    /// Starts a thread a device asked for. Set by an engine whose client shows
+    /// threads (the desktop app); absent everywhere else, and then the shares
+    /// do not advertise [`crate::remote::session_capability::HOST_THREADS`].
+    thread_host: Option<ThreadHost>,
     /// The gateway link factory, replaced in tests that have no gateway: a
     /// share is otherwise opened against the machine's own gateway.
     #[cfg(test)]
     connector: Option<Arc<dyn Fn() -> Box<dyn OwnerConnector> + Send + Sync>>,
 }
+
+/// What a device asked for when it created a thread on this host.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ThreadStart {
+    /// The folder the gateway resolved, inside the host's allowed roots.
+    pub path: Option<String>,
+    /// The harness to run it on; absent is this host's default.
+    pub harness: Option<String>,
+    /// The model on that harness; absent is the harness's own choice.
+    pub model: Option<String>,
+}
+
+#[cfg(unix)]
+type ThreadHost = Arc<
+    dyn Fn(
+            ThreadStart,
+        ) -> Pin<
+            Box<dyn std::future::Future<Output = Result<RemoteSessionInfo, RemoteError>> + Send>,
+        > + Send
+        + Sync,
+>;
 
 #[cfg(unix)]
 struct Share {
@@ -541,6 +570,133 @@ impl RemoteManager {
     /// Whether `session_id` is shared right now.
     pub(crate) fn is_shared(&self, session_id: &str) -> bool {
         self.get(session_id).is_some()
+    }
+
+    /// Say how a thread a device asks for is started: the desktop app's engine
+    /// sets this, and only then do its shares advertise
+    /// [`crate::remote::session_capability::HOST_THREADS`] and the gateway
+    /// route `create_session` here instead of starting a session owner.
+    pub(crate) fn set_thread_host(
+        &self,
+        start: impl Fn(
+            ThreadStart,
+        ) -> Pin<
+            Box<dyn std::future::Future<Output = Result<RemoteSessionInfo, RemoteError>> + Send>,
+        > + Send
+        + Sync
+        + 'static,
+    ) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.thread_host = Some(Arc::new(start));
+        }
+    }
+
+    /// Whether this engine starts threads for devices.
+    pub(crate) fn can_host_threads(&self) -> bool {
+        self.inner
+            .lock()
+            .is_ok_and(|inner| inner.thread_host.is_some())
+    }
+
+    fn thread_host(&self) -> Option<ThreadHost> {
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|inner| inner.thread_host.clone())
+    }
+
+    /// Answer a device's `create_session`: the client starts the thread, the
+    /// share of it follows, and the row is what the device attaches to. The
+    /// owner's own receipt store (`remote_gateway::owner_client`) records the
+    /// request before it reaches this share, so a retry is answered from it
+    /// and nothing is started twice.
+    async fn host_thread(&self, request: RemoteRequest, reply: OwnerReply) {
+        let request_id = request.request_id.clone();
+        let Some(host) = self.thread_host() else {
+            reply.send(
+                RemoteResponse::error(
+                    request_id,
+                    RemoteError::new(
+                        RemoteErrorCode::UnsupportedOperation,
+                        "this host does not start threads for devices",
+                    ),
+                )
+                .with_receipt(ReceiptState::Rejected),
+            );
+            return;
+        };
+        let RemoteOperation::CreateSession {
+            path,
+            harness,
+            model,
+        } = request.operation
+        else {
+            reply.send(
+                RemoteResponse::error(
+                    request_id,
+                    RemoteError::new(
+                        RemoteErrorCode::UnsupportedOperation,
+                        "only `create_session` is answered here",
+                    ),
+                )
+                .with_receipt(ReceiptState::Rejected),
+            );
+            return;
+        };
+        let started = host(ThreadStart {
+            path,
+            harness,
+            model,
+        })
+        .await;
+        reply.send(match started {
+            Ok(session) => {
+                RemoteResponse::new(request_id, RemoteResult::SessionCreated { session })
+                    .with_receipt(ReceiptState::Applied)
+            }
+            Err(error) => {
+                RemoteResponse::error(request_id, error).with_receipt(ReceiptState::Rejected)
+            }
+        });
+    }
+
+    /// The row of a thread this engine just started, for the answer to
+    /// `create_session`: the share's own view when it has one, else what the
+    /// session is known to be at its first moment.
+    pub(crate) fn thread_info(&self, session_id: &str) -> Option<RemoteSessionInfo> {
+        let share = self.get(session_id)?;
+        let epoch = share.registration.registration_epoch;
+        if let Some(harness) = share.harness() {
+            return Some(
+                harness
+                    .mirror
+                    .snapshot(&share.registration, 0, &ProjectionLimits::default())
+                    .session,
+            );
+        }
+        let session = share.acp()?;
+        let model = session
+            .state
+            .try_lock()
+            .ok()
+            .map(|state| crate::remote::projection::project_settings(&state).selected_model)
+            .unwrap_or_default();
+        Some(RemoteSessionInfo {
+            session_id: session_id.to_owned(),
+            registration_epoch: epoch,
+            title: crate::config::load_session_title(session_id).unwrap_or_default(),
+            workspace: Some(session.cwd.display().to_string()),
+            model,
+            harness: Some(crate::harness::BUILTIN_ID.to_owned()),
+            turn_count: Some(0),
+            last_active_at: None,
+            activity: crate::remote::SessionActivity::Idle,
+            attention: crate::remote::RemoteAttention {
+                approval: false,
+                question: false,
+            },
+            health: crate::remote::OwnerHealth::Live,
+        })
     }
 
     /// Note that this thread could not be shared, and why, so the next pass
@@ -793,9 +949,13 @@ impl RemoteManager {
             .connect(&registration)
             .map_err(|error| StartError::Link(error.to_string()))?;
         let lifecycle = directory.map(RemoteLifecycle::new);
+        let mut snapshot = mirror.snapshot(&registration, 0, &ProjectionLimits::default());
+        if self.can_host_threads() {
+            advertise_host_threads(&mut snapshot);
+        }
         let register = OwnerMessage::Register {
             registration: registration.clone(),
-            snapshot: Box::new(mirror.snapshot(&registration, 0, &ProjectionLimits::default())),
+            snapshot: Box::new(snapshot),
         };
         if let Err(error) = link.outbound.try_send(register) {
             return Err(StartError::Link(format!(
@@ -1025,6 +1185,30 @@ impl RemoteManager {
         false
     }
 
+    /// Nothing here starts threads for devices: the gateway keeps starting a
+    /// session owner when no share advertises `host_threads`.
+    pub(crate) fn set_thread_host<F>(&self, _start: F)
+    where
+        F: Fn(
+                ThreadStart,
+            ) -> Pin<
+                Box<
+                    dyn std::future::Future<Output = Result<RemoteSessionInfo, RemoteError>> + Send,
+                >,
+            > + Send
+            + Sync
+            + 'static,
+    {
+    }
+
+    pub(crate) fn can_host_threads(&self) -> bool {
+        false
+    }
+
+    pub(crate) fn thread_info(&self, _session_id: &str) -> Option<RemoteSessionInfo> {
+        None
+    }
+
     pub(crate) fn mirror(&self, _session_id: &str) -> Option<Arc<HarnessMirror>> {
         None
     }
@@ -1239,6 +1423,21 @@ fn offer_json(offer: &PairingOffer, now: Instant) -> Value {
     })
 }
 
+/// Say on a share's snapshot that its owner starts threads a device asks for
+/// (`create_session`): what makes the gateway offer `thread_create_options`
+/// and route new threads here instead of starting a session owner.
+#[cfg(unix)]
+fn advertise_host_threads(snapshot: &mut RemoteSnapshot) {
+    let capability = crate::remote::session_capability::HOST_THREADS;
+    if !snapshot
+        .capabilities
+        .iter()
+        .any(|known| known == capability)
+    {
+        snapshot.capabilities.push(capability.to_owned());
+    }
+}
+
 #[cfg(unix)]
 async fn share_loop(manager: RemoteManager, share: Arc<Share>) {
     let mut interval = tokio::time::interval(Duration::from_millis(100));
@@ -1248,7 +1447,7 @@ async fn share_loop(manager: RemoteManager, share: Arc<Share>) {
             _ = share.stop.cancelled() => break,
             _ = interval.tick() => {}
         }
-        if !share.tick().await {
+        if !share.tick(&manager).await {
             break;
         }
     }
@@ -1394,10 +1593,10 @@ impl Share {
 
     /// One pass of the owner loop: apply device commands, publish state, and
     /// start a turn when a device queued a prompt.
-    async fn tick(&self) -> bool {
+    async fn tick(&self, manager: &RemoteManager) -> bool {
         if let Some(share) = self.harness() {
             let share = Arc::clone(share);
-            return self.tick_harness(&share).await;
+            return self.tick_harness(&share, manager).await;
         }
         let Some(session) = self.acp().cloned() else {
             return false;
@@ -1426,6 +1625,14 @@ impl Share {
                 };
                 match command {
                     OwnerCommand::Request { request, reply } => {
+                        // A thread the device asked for is started by the
+                        // client, not by this share: it answers on its own
+                        // once the thread exists.
+                        if matches!(request.operation, RemoteOperation::CreateSession { .. }) {
+                            let manager = manager.clone();
+                            tokio::spawn(async move { manager.host_thread(request, reply).await });
+                            continue;
+                        }
                         let request_id = request.request_id.clone();
                         let mut cancel_token = session
                             .turns
@@ -1518,7 +1725,14 @@ impl Share {
                 return false;
             }
             let room_for_resync = state.link.outbound.capacity() > 1;
-            let messages = state.publisher.publish(&app, room_for_resync);
+            let mut messages = state.publisher.publish(&app, room_for_resync);
+            if manager.can_host_threads() {
+                for message in &mut messages {
+                    if let OwnerMessage::Snapshot { snapshot, .. } = message {
+                        advertise_host_threads(snapshot);
+                    }
+                }
+            }
             start_runner |= !session.runner.load(Ordering::Acquire)
                 && !app.has_active_turn()
                 && !app.pending_queue.is_empty();
@@ -1574,7 +1788,7 @@ impl Share {
     /// One pass for a thread on an external harness: apply device commands,
     /// keep the mirror's turn in step with the harness, publish a snapshot
     /// when it changed, and start a queued prompt the harness is free for.
-    async fn tick_harness(&self, share: &Arc<HarnessShare>) -> bool {
+    async fn tick_harness(&self, share: &Arc<HarnessShare>, manager: &RemoteManager) -> bool {
         // The app closed the thread: its share ends, even if the close raced
         // the pass that started it.
         if share.external.is_closed() {
@@ -1598,7 +1812,14 @@ impl Share {
                     }
                 };
                 match command {
-                    OwnerCommand::Request { request, reply } => requests.push((request, reply)),
+                    OwnerCommand::Request { request, reply } => {
+                        if matches!(request.operation, RemoteOperation::CreateSession { .. }) {
+                            let manager = manager.clone();
+                            tokio::spawn(async move { manager.host_thread(request, reply).await });
+                            continue;
+                        }
+                        requests.push((request, reply))
+                    }
                     OwnerCommand::SnapshotRequested => state.publisher.request_snapshot(),
                     OwnerCommand::Status(status) => {
                         should_pair |= status.connected && state.pairing_due;
@@ -1695,11 +1916,14 @@ impl Share {
             let dirty = share.mirror.dirty();
             if let Some(resync) = state.publisher.harness_snapshot(dirty, room_for_resync) {
                 let sequence = state.publisher.sequence();
-                let snapshot = share.mirror.snapshot(
+                let mut snapshot = share.mirror.snapshot(
                     &self.registration,
                     sequence,
                     &ProjectionLimits::default(),
                 );
+                if manager.can_host_threads() {
+                    advertise_host_threads(&mut snapshot);
+                }
                 let message = OwnerMessage::Snapshot {
                     snapshot: Box::new(snapshot),
                     resync,
@@ -2097,6 +2321,187 @@ mod tests {
     /// A shared thread on an external harness registers under its own id, and
     /// switching remote access off ends the share.
     #[cfg(unix)]
+    /// A share connected to a gateway this test holds: it keeps both ends so
+    /// it can read the registration and answer requests itself.
+    struct TestGateway {
+        slot: Arc<std::sync::Mutex<Option<crate::remote::owner::GatewayLink>>>,
+    }
+
+    impl crate::remote::owner::OwnerConnector for TestGateway {
+        fn connect(
+            &mut self,
+            _registration: &SessionRegistration,
+        ) -> Result<crate::remote::owner::OwnerLink, crate::remote::owner::OwnerLinkError> {
+            let (owner, gateway) = crate::remote::owner::owner_link_pair(16, 16);
+            if let Ok(mut slot) = self.slot.lock() {
+                *slot = Some(gateway);
+            }
+            Ok(owner)
+        }
+    }
+
+    fn registered_thread(session_id: &str) -> RemoteSessionInfo {
+        RemoteSessionInfo {
+            session_id: session_id.to_owned(),
+            registration_epoch: 3,
+            title: String::new(),
+            workspace: Some("/tmp/project".to_owned()),
+            model: "sonnet".to_owned(),
+            harness: Some("claude-code".to_owned()),
+            turn_count: Some(0),
+            last_active_at: None,
+            activity: crate::remote::SessionActivity::Idle,
+            attention: crate::remote::RemoteAttention {
+                approval: false,
+                question: false,
+            },
+            health: crate::remote::OwnerHealth::Live,
+        }
+    }
+
+    /// Share `test-thread` with the gateway `gateway` hands back, and start a
+    /// thread on request.
+    async fn hosted_share(manager: &super::RemoteManager) {
+        manager.set_thread_host(|ask| {
+            Box::pin(async move {
+                assert_eq!(ask.path.as_deref(), Some("/tmp/project"));
+                Ok(registered_thread(match ask.harness.as_deref() {
+                    Some("claude-code") => "thread-new",
+                    _ => "thread-other",
+                }))
+            })
+        });
+        let harness = crate::harness::session::test_support::harness(
+            "fake-acp",
+            crate::harness::HarnessKind::Acp,
+        );
+        let thread = crate::harness::session::test_support::thread(&harness, None);
+        manager
+            .start_harness(
+                "test-thread".to_owned(),
+                Arc::clone(&thread.session),
+                None,
+                false,
+            )
+            .await
+            .expect("the thread shares itself");
+    }
+
+    fn create_request(request_id: &str, harness: &str) -> RemoteRequest {
+        RemoteRequest {
+            authenticated_device_id: None,
+            protocol_version: crate::remote::REMOTE_PROTOCOL_VERSION,
+            request_id: request_id.to_owned(),
+            session_id: None,
+            registration_epoch: None,
+            operation: RemoteOperation::CreateSession {
+                path: Some("/tmp/project".to_owned()),
+                harness: Some(harness.to_owned()),
+                model: None,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn a_share_that_hosts_threads_advertises_it_and_answers_the_create() {
+        use crate::remote::owner::OwnerMessage;
+
+        let slot = Arc::new(std::sync::Mutex::new(None));
+        let for_connector = Arc::clone(&slot);
+        let manager = super::RemoteManager::with_connector(move || {
+            Box::new(TestGateway {
+                slot: Arc::clone(&for_connector),
+            })
+        });
+        hosted_share(&manager).await;
+        let mut gateway = slot.lock().unwrap().take().expect("a gateway connection");
+        let registered = gateway.messages.try_recv().expect("a registration");
+        let OwnerMessage::Register { snapshot, .. } = registered else {
+            panic!("the first message is the registration");
+        };
+        assert!(
+            snapshot
+                .capabilities
+                .iter()
+                .any(|capability| capability == crate::remote::session_capability::HOST_THREADS),
+            "{:?}",
+            snapshot.capabilities
+        );
+
+        // The gateway forwards a device's `create_session`; the share answers
+        // with the row the app's new thread has.
+        let (reply, response) = crate::remote::owner::OwnerReply::channel();
+        gateway
+            .commands
+            .send(crate::remote::owner::OwnerCommand::Request {
+                request: create_request("create-1", "claude-code"),
+                reply,
+            })
+            .await
+            .expect("the share takes the request");
+        let response = tokio::time::timeout(std::time::Duration::from_secs(5), response)
+            .await
+            .expect("the share answers")
+            .expect("the reply handle is not dropped");
+        assert_eq!(response.receipt, Some(ReceiptState::Applied));
+        match response.result {
+            RemoteResult::SessionCreated { session } => {
+                assert_eq!(session.session_id, "thread-new");
+                assert_eq!(session.harness.as_deref(), Some("claude-code"));
+            }
+            other => panic!("a thread was created: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_share_without_a_thread_host_neither_advertises_nor_answers_it() {
+        use crate::remote::owner::{
+            GatewayLink, OwnerConnector, OwnerLink, OwnerLinkError, OwnerMessage,
+        };
+
+        struct QuietGateway;
+        impl OwnerConnector for QuietGateway {
+            fn connect(
+                &mut self,
+                _registration: &SessionRegistration,
+            ) -> Result<OwnerLink, OwnerLinkError> {
+                let (owner, gateway) = crate::remote::owner::owner_link_pair(16, 16);
+                tokio::spawn(async move {
+                    let GatewayLink {
+                        mut messages,
+                        commands,
+                    } = gateway;
+                    let register = messages.recv().await.expect("a registration");
+                    assert!(matches!(&register, OwnerMessage::Register { snapshot, .. }
+                            if !snapshot.capabilities.iter().any(|capability| capability
+                                == crate::remote::session_capability::HOST_THREADS)));
+                    drop(commands);
+                });
+                Ok(owner)
+            }
+        }
+
+        let manager = super::RemoteManager::with_connector(|| Box::new(QuietGateway));
+        assert!(!manager.can_host_threads());
+        let harness = crate::harness::session::test_support::harness(
+            "fake-acp",
+            crate::harness::HarnessKind::Acp,
+        );
+        let thread = crate::harness::session::test_support::thread(&harness, None);
+        manager
+            .start_harness(
+                "test-thread".to_owned(),
+                Arc::clone(&thread.session),
+                None,
+                false,
+            )
+            .await
+            .expect("the thread shares itself");
+        manager
+            .unshare_all(crate::remote::SessionCloseReason::SharingDisabled)
+            .await;
+    }
+
     #[tokio::test]
     async fn a_harness_share_registers_and_unshares() {
         use crate::remote::owner::{GatewayLink, OwnerConnector, OwnerLink, OwnerLinkError};

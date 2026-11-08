@@ -1058,6 +1058,9 @@ async function handshake(): Promise<void> {
         visualizations: 2,
         // Discord Rich Presence (docs/discord-rich-presence.md); whether it publishes is the config.
         presence: 1,
+        // A thread a paired device starts appears in this app's sidebar
+        // (`_rustcode/threads/created`, docs/remote.md).
+        threads: 1,
       }),
       20_000,
     );
@@ -1323,6 +1326,7 @@ async function handleInbound(message: Inbound) {
     case "notification":
       if (message.method === Method.sessionUpdate) onSessionUpdate(message.params);
       else if (message.method === Method.sessionActivity) onSessionActivity(message.params);
+      else if (message.method === Method.threadCreated) threadCreated(message.params);
       else if (message.method === V2Method.orchestrationCancelled) orchestrationCallDropped(message.params);
       else if (message.method === ThemeMethod.changed) onThemesChanged(message.params);
       return;
@@ -1435,6 +1439,30 @@ function onSessionUpdate(params: JsonObject) {
 }
 
 // ---------------------------------------------------------------- sessions
+
+/**
+ * A thread the engine started for a paired device (Remote access, `docs/remote.md`): the thread
+ * has no row in the engine's list before its first turn, so the engine names it here and the
+ * sidebar shows it as any other. Nothing is opened: the device is using it.
+ */
+export function threadCreated(params: unknown) {
+  const p = obj(params);
+  const id = str(p?.sessionId);
+  const cwd = str(p?.cwd);
+  if (!id || !cwd) return;
+  set((s) => {
+    if (s.sessions.some((x) => x.id === id)) return {};
+    const summary: SessionSummary = {
+      id,
+      cwd,
+      updatedAt: Date.now(),
+      title: str(p?.title) || undefined,
+      harness: str(p?.harness) || undefined,
+      model: str(p?.model) || undefined,
+    };
+    return { sessions: [summary, ...s.sessions] };
+  });
+}
 
 export async function refreshSessions(): Promise<void> {
   const conn = connection;

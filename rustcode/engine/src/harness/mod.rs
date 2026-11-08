@@ -732,7 +732,7 @@ fn snapshot_entry(
 /// The built-in harness's model profiles, each with the reasoning efforts
 /// its `effort` option offers (none when it offers no choice) and the one it
 /// starts on.
-fn builtin_models() -> Vec<HarnessModel> {
+pub(crate) fn builtin_models() -> Vec<HarnessModel> {
     let (_, _, config) = crate::config::load_config();
     profile_models(&config.models)
 }
