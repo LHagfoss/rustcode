@@ -1,3 +1,4 @@
+import { fileManagerName, primaryModifier } from "../lib/platform";
 // The sidebar: a toolbar clear of the traffic lights, a search row with the
 // filter and the buttons that make a thread or a project, then one list:
 // pinned threads first, then every active thread (by project when asked). A row
@@ -22,6 +23,7 @@ import {
   Ellipsis,
   Eye,
   FileDiff,
+  FileText,
   Folder,
   FolderOpen,
   FolderPlus,
@@ -64,7 +66,7 @@ import type { PullRequest, SubagentInfo } from "../acp/rustcode";
 import { displayPath, modelName, projectName, type SessionSummary } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
 import { listCommandFor } from "../lib/keys";
-import { openTerminalAt, pickFolder, revealPath } from "../lib/native";
+import { openTerminalAt, openThreadLog, pickFolder, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { liveSubagents, type StackAgent } from "../state/agentStack";
 import { type ChildInfo, childInfo } from "../state/children";
@@ -100,6 +102,7 @@ import {
   askCustomSnooze,
   autoCompactOffFor,
   dismissPendingSetup,
+  errorText,
   featureMissing,
   markUnread,
   removeWorktree,
@@ -389,6 +392,17 @@ function ThreadMenuItems({
       <Item className={menuItem} onSelect={() => copyText(session.id, "Thread ID copied")}>
         <Copy size={13} /> Copy Thread ID
       </Item>
+      <Item
+        className={menuItem}
+        disabled={!canFiles}
+        onSelect={() =>
+          void openThreadLog(session.id).catch((e) =>
+            toast(`Could not open the thread log: ${errorText(e)}`, "error"),
+          )
+        }
+      >
+        <FileText size={13} /> Open Thread Log
+      </Item>
       {worktree && (
         <>
           <Separator className={menuSeparator} />
@@ -396,7 +410,7 @@ function ThreadMenuItems({
             <GitBranch size={11} /> <span className="truncate font-mono">{worktree.branch}</span>
           </div>
           <Item className={menuItem} disabled={!canFiles} onSelect={() => revealPath(worktree.path)}>
-            <FolderOpen size={13} /> Open in Finder
+            <FolderOpen size={13} /> Open in {fileManagerName()}
           </Item>
           <Item
             className={menuItem}
@@ -1914,7 +1928,7 @@ export function Sidebar() {
     if (!id) return;
     // The pending row has no session to pin, settle or rename: it opens, and never joins a bulk pick.
     if (pending && id === pending.id) {
-      if (e.metaKey || e.ctrlKey || e.shiftKey) {
+      if (primaryModifier(e) || e.shiftKey) {
         e.preventDefault();
         e.stopPropagation();
       }
@@ -1923,7 +1937,7 @@ export function Sidebar() {
       clearSelection();
       return;
     }
-    const mod = e.metaKey || e.ctrlKey;
+    const mod = primaryModifier(e);
     if (!mod && !e.shiftKey) {
       setActiveId(id);
       anchor.current = id;
@@ -2026,7 +2040,7 @@ export function Sidebar() {
       // ⌘F searches threads while the sidebar has the keyboard, and the transcript's find bar
       // everywhere else: the event is stopped here, before it reaches the window.
       onKeyDownCapture={(e) => {
-        if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "f") return;
+        if (!primaryModifier(e) || e.key.toLowerCase() !== "f") return;
         e.preventDefault();
         e.stopPropagation();
         setSearchOpen(true);

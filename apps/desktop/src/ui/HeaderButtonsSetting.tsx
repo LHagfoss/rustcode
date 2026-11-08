@@ -1,3 +1,4 @@
+import { formatBinding } from "../lib/keys";
 // Settings › Chat › Thread header buttons: which of the thread header's buttons
 // show, and in what order. Two lists — Shown and Hidden — and a row moves
 // between them by drag or by its own Show/Hide button, so it works without a
@@ -213,7 +214,7 @@ export function HeaderButtonsSetting() {
             : () => setHeaderButtons([...DEFAULT_HEADER_BUTTONS])
         }
         subtitle="Which buttons the thread header shows, and in what order. A button whose thread has nothing to show (no plan, no pull requests) still stays out of the way."
-        status="Drag a row to move it, or press ⌥↑ or ⌥↓ on a focused row. Show and Hide work too."
+        status={`Drag a row to move it, or press ${formatBinding("alt+up")} or ${formatBinding("alt+down")} on a focused row. Show and Hide work too.`}
       />
       <div className="@container px-4 pt-3 pb-4">
         <div className="grid grid-cols-1 gap-4 @min-[34rem]:grid-cols-2">

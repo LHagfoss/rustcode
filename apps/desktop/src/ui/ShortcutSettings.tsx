@@ -66,7 +66,7 @@ export function ShortcutsPage() {
     <>
       <Group
         title="Shortcuts"
-        footer="Click a key to change it, then press the new combination; Esc leaves it as it was. A shortcut needs ⌘ (or ⌥) unless it is a function key or one of the thread list's marking keys, which only fire while a thread row has the keyboard, and it may not take a key another command answers."
+        footer="Click a key to change it, then press the new combination; Esc leaves it as it was. A shortcut needs a modifier unless it is a function key or one of the thread list's marking keys, which only fire while a thread row has the keyboard, and it may not take a key another command answers."
       >
         {APP_COMMANDS.filter((command) => command.remappable).map((command) => (
           <ShortcutRow

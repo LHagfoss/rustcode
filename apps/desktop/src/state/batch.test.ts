@@ -83,4 +83,12 @@ describe("frame queue", () => {
     await Promise.resolve();
     expect(batches.length).toBe(2);
   });
+
+  test("a bounded queue keeps only its newest items", () => {
+    const batches: number[][] = [];
+    const q = frameQueue<number>((items) => batches.push(items), 16, 3);
+    for (let i = 0; i < 5; i++) q.push(i);
+    q.flush();
+    expect(batches).toEqual([[2, 3, 4]]);
+  });
 });

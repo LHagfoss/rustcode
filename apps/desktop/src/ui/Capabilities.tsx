@@ -1,3 +1,4 @@
+import { fileManagerName } from "../lib/platform";
 // Settings › Capabilities: skills and MCP servers in one place, through the
 // engine process that runs them (`_rustcode/capabilities*`), so a status
 // is never a guess. Skills by where they come from, each with its file;
@@ -351,7 +352,7 @@ function McpRow({
           <div>
             <div className="mb-1 text-caption text-fg-faint">Log</div>
             <pre className="selectable m-0 max-h-[160px] overflow-auto rounded-md bg-code-bg p-2 font-mono text-caption leading-[15px] whitespace-pre-wrap text-fg-muted">
-              {log?.length ? log.join("\n") : "No lines from this server in the engine's log."}
+              {log?.length ? log.join("\n") : "No lines from this MCP server in the RustCode server's log."}
             </pre>
           </div>
           {s.scope === "user" && (
@@ -507,10 +508,10 @@ function SkillsSection({
                       </button>
                     </Tooltip>
                   )}
-                  <Tooltip label="Show in Finder">
+                  <Tooltip label={`Show in ${fileManagerName()}`}>
                     <button
                       type="button"
-                      aria-label={`Show ${s.name} in Finder`}
+                      aria-label={`Show ${s.name} in ${fileManagerName()}`}
                       onClick={() => revealPath(s.path)}
                       className="flex size-7 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg active:bg-fill-strong"
                     >
@@ -550,7 +551,7 @@ function NewSkill({ onDone }: { onDone: () => void }) {
     try {
       const path = await createSkill(name, scope, cwd);
       openPath(path);
-      toast("Skill created. The engine finds it on the next turn.", "success");
+      toast("Skill created. The agent finds it on the next turn.", "success");
       onDone();
     } catch (e) {
       toast(e instanceof Error ? e.message : String(e), "error");

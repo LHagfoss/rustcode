@@ -50,7 +50,7 @@ export function RevokeDeviceAction({ device }: { device: RemoteDevice }) {
   const revoke = () =>
     askConfirm({
       title: `Revoke ${device.name}?`,
-      message: `${device.name} is disconnected and can no longer reach this Mac's threads. To use it again, pair it again.`,
+      message: `${device.name} is disconnected and can no longer reach this computer's threads. To use it again, pair it again.`,
       action: "Revoke",
       destructive: true,
       run: () => {

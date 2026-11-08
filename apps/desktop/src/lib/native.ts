@@ -2,6 +2,7 @@
 // `bun run dev:web` keeps working; the shell validates every argument.
 
 import { isTauri } from "../acp/transport";
+import type { ServerInfo, SystemInfo } from "./diagnostics";
 import { hasShell, shellCall } from "./shell";
 
 function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -146,4 +147,49 @@ export async function onFileDrop(
     else if (p.type === "leave") handler({ type: "leave", paths: [] });
     else handler({ type: "over", paths: [] });
   });
+}
+
+// ---------------------------------------------------------------- Diagnostics (src-tauri/src/diagnostics.rs)
+
+/** The server process as the shell runs it; null where no shell answers (the browser). */
+export async function serverStatus(): Promise<ServerInfo | null> {
+  if (!hasShell()) return null;
+  return invoke<ServerInfo>("server_status").catch(() => null);
+}
+
+/** The OS, the web view and the app's version; null where no shell answers. */
+export async function systemInfo(): Promise<SystemInfo | null> {
+  if (!hasShell()) return null;
+  return invoke<SystemInfo>("system_info").catch(() => null);
+}
+
+/** Each command's binary as the app's PATH finds it. */
+export async function resolveBinaries(names: string[]): Promise<(string | null)[]> {
+  if (!hasShell() || !names.length) return names.map(() => null);
+  return invoke<(string | null)[]>("resolve_binaries", { names }).catch(() => names.map(() => null));
+}
+
+/** Shows the server's debug.log in the file manager. */
+export function openLogsFolder(): Promise<void> {
+  return invoke<void>("logs_folder_open");
+}
+
+/** Opens a thread's logs/debug.log (its folder when it has none yet); answers what opened. */
+export function openThreadLog(id: string): Promise<string> {
+  return invoke<string>("thread_log_open", { id });
+}
+
+/**
+ * Saves text where the user picks: the save panel in the app, a download in
+ * the browser. Answers where it went, or null when the user cancelled.
+ */
+export async function saveText(name: string, text: string): Promise<string | null> {
+  if (hasShell()) return invoke<string | null>("diagnostics_save", { name, text });
+  const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return name;
 }

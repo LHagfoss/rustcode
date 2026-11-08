@@ -1,3 +1,5 @@
+import { formatBinding } from "../lib/keys";
+import { primaryModifier } from "../lib/platform";
 // A soft reload: the interface mounts again from the store, the engine and
 // every running thread carry on. ⌘R does it, and a render error offers it
 // instead of a blank window. A webview reload would hand the page a fresh
@@ -37,7 +39,7 @@ class Boundary extends Component<{ children: ReactNode }, { error: Error | null 
           {error.message}
         </pre>
         <Pill prominent size="lg" onClick={softReload}>
-          <RotateCw size={13} /> Reload view <span className="text-bg/60">⌘R</span>
+          <RotateCw size={13} /> Reload view <span className="text-bg/60">{formatBinding("mod+r")}</span>
         </Pill>
       </div>
     );
@@ -51,7 +53,7 @@ export function Recoverable({ children }: { children: ReactNode }) {
     const listener = () => setGeneration((g) => g + 1);
     listeners.add(listener);
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "r") {
+      if (primaryModifier(e) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "r") {
         e.preventDefault();
         softReload();
       }

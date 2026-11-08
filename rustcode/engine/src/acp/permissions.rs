@@ -1,8 +1,8 @@
+use super::clients::SessionClients;
 use agent_client_protocol::schema::v1::{
     PermissionOption, PermissionOptionKind, RequestPermissionOutcome, RequestPermissionRequest,
     ToolCallUpdate, ToolCallUpdateFields,
 };
-use agent_client_protocol::{Client, ConnectionTo};
 use std::sync::Arc;
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ApprovalRequirement {
@@ -42,7 +42,7 @@ pub(crate) fn approval_requirement(
 }
 
 pub(crate) struct AcpPolicy {
-    pub(crate) connection: ConnectionTo<Client>,
+    pub(crate) clients: SessionClients,
     pub(crate) session_id: String,
     pub(crate) auto_approve: bool,
 }
@@ -281,11 +281,11 @@ fn confirmation_response(
 /// modal, so without this the subagent waited forever (#2558). A failed
 /// request counts as a rejection, so the child never hangs on it.
 pub(crate) fn external_tool_approver(
-    connection: ConnectionTo<Client>,
+    clients: SessionClients,
     session_id: String,
 ) -> crate::app::ExternalToolApprover {
     crate::app::ExternalToolApprover(Arc::new(move |request| {
-        let connection = connection.clone();
+        let clients = clients.clone();
         let session_id = session_id.clone();
         Box::pin(async move {
             let crate::app::ExternalApprovalRequest { call, title } = request;
@@ -311,7 +311,7 @@ pub(crate) fn external_tool_approver(
             let request =
                 RequestPermissionRequest::new(session_id, tool_call, permission_options(&call));
             let started = std::time::Instant::now();
-            let response = connection.send_request(request).block_task().await;
+            let response = clients.request(None, request).await;
             let choice = response
                 .as_ref()
                 .map_or(PermissionChoice::Reject, |response| {
@@ -339,7 +339,7 @@ impl crate::network::policy::TurnPolicy for AcpPolicy {
         state: &Arc<tokio::sync::Mutex<crate::app::AppState>>,
         tool_calls: &[crate::tools::ToolCall],
     ) -> impl std::future::Future<Output = bool> + Send {
-        let connection = self.connection.clone();
+        let clients = self.clients.clone();
         let session_id = self.session_id.clone();
         let auto_approve = self.auto_approve;
         let state = Arc::clone(state);
@@ -408,7 +408,7 @@ impl crate::network::policy::TurnPolicy for AcpPolicy {
                     .begin_user_wait(std::time::Instant::now());
                 let wait_started = std::time::Instant::now();
                 let waiting = crate::thread_status::waiting(&session_id);
-                let response = connection.send_request(request).block_task().await;
+                let response = clients.request(None, request).await;
                 drop(waiting);
                 let wait = wait_started.elapsed();
                 record_approval_wait(&mut *state.lock().await, wait);

@@ -867,6 +867,23 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         run_remote_command(command).await?;
         return Ok(());
     }
+    if let Some(crate::cli::Commands::Server {
+        command: crate::cli::ServerCommands::Connect,
+    }) = cli_args.command.as_ref()
+    {
+        // A relay only: the server it reaches, or starts, does the rest.
+        let result = rustcode::server::connect(std::env::current_exe()?).await;
+        // Standard input is read on a blocking thread that would hold the
+        // runtime open: leave now that the relay is over.
+        let code = match result {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("rustcode server connect: {error:#}");
+                1
+            }
+        };
+        std::process::exit(code);
+    }
     if let Some(crate::cli::Commands::Serve {
         port,
         bind,
@@ -1210,6 +1227,26 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         std::process::exit(1);
                     }
                 }
+            }
+        }
+        return Ok(());
+    }
+
+    if let Some(crate::cli::Commands::Server {
+        command: crate::cli::ServerCommands::Run,
+    }) = cli_args.command.as_ref()
+    {
+        // Started by launchd, systemd or `server connect` with a bare
+        // environment, as the app's engine is.
+        rustcode::shell_env::hydrate_all_missing();
+        match rustcode::server::run(cli_args.yolo).await? {
+            rustcode::server::RunOutcome::Stopped => rustcode::config::flush_history(),
+            rustcode::server::RunOutcome::AlreadyRunning(Some(info)) => println!(
+                "A RustCode server is already running for this user: pid {}, version {}, at {}.",
+                info.pid, info.version, info.endpoint
+            ),
+            rustcode::server::RunOutcome::AlreadyRunning(None) => {
+                println!("A RustCode server is already starting for this user.")
             }
         }
         return Ok(());

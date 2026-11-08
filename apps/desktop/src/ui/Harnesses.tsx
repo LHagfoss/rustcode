@@ -322,7 +322,7 @@ export function AccountsList({ harness }: { harness: Harness }) {
       )}
       {discovered.length > 0 && (
         <div className="flex flex-col gap-1.5 border-border/70 border-t pt-2">
-          <span className="text-caption text-fg-muted">Found on this Mac</span>
+          <span className="text-caption text-fg-muted">Found on this computer</span>
           {discovered.map((found) => (
             <div key={found.config_dir} className="flex items-center gap-2">
               <span className="min-w-0 flex-1 truncate font-mono text-caption text-fg-muted">

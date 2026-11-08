@@ -3,21 +3,29 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { defaultTransport, isTauri } from "./acp/transport";
 import "./index.css";
+import { installFocusModality } from "./lib/focusModality";
+import { applyPlatform } from "./lib/platform";
 import { quietNativeChrome } from "./lib/quietNative";
 import { applyCachedTheme } from "./lib/themes";
 import * as store from "./state/store";
 import { Recoverable } from "./ui/Recover";
 
+// The OS look (fonts, glass, motion; docs/design.md › Platforms), before the first render.
+const platform = applyPlatform();
+
 // The last theme, before the first render, so a custom theme does not flash the default.
 applyCachedTheme();
 
 // Surfaces are opaque (docs/design.md); the few frosted ones go solid under Reduce transparency.
-if (isTauri() && /Mac/i.test(navigator.userAgent)) {
+if (isTauri() && platform === "mac") {
   void import("./lib/shell")
     .then(({ shellCall }) => shellCall<boolean>("reduce_transparency"))
     .then((reduce) => document.documentElement.classList.toggle("reduce-transparency", reduce))
     .catch(() => undefined);
 }
+
+// Focus rings only while the keyboard moves focus: on from a Tab, off at the next click.
+installFocusModality();
 
 // No native title tooltips or Writing Tools: the app has its own tooltips (lib/quietNative.ts).
 quietNativeChrome();

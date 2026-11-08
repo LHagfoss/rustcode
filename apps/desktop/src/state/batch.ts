@@ -66,11 +66,13 @@ export function createBatcher<T>(): Batcher<T> {
 /**
  * Queues items and hands them to `apply` together: on the next animation frame
  * while the page is visible (so a frame renders once however many arrive), else
- * after `hiddenMs` (frames do not run in a hidden window).
+ * after `hiddenMs` (frames do not run in a hidden window). With `maxItems`, it
+ * keeps only the newest queued items.
  */
 export function frameQueue<T>(
   apply: (items: T[]) => void,
   hiddenMs = 16,
+  maxItems = Number.POSITIVE_INFINITY,
 ): { push: (item: T) => void; flush: () => void } {
   let queue: T[] = [];
   let scheduled = false;
@@ -100,6 +102,7 @@ export function frameQueue<T>(
   return {
     push: (item) => {
       queue.push(item);
+      if (queue.length > maxItems) queue.splice(0, queue.length - maxItems);
       schedule();
     },
     flush,

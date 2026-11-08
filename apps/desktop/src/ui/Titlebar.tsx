@@ -7,6 +7,7 @@
 
 import { type ReactNode, useEffect, useState } from "react";
 import { isTauri } from "../acp/transport";
+import { currentPlatform } from "../lib/platform";
 import { cx } from "./primitives";
 
 /**
@@ -53,7 +54,8 @@ export function useFullscreen(): boolean {
 
 /** The leading room a title-bar row leaves for the traffic lights. */
 export function useLightsInset(): number {
-  return useFullscreen() ? 10 : LIGHTS_INSET;
+  const fullscreen = useFullscreen();
+  return currentPlatform() !== "mac" || fullscreen ? 10 : LIGHTS_INSET;
 }
 
 export function TitlebarRow({

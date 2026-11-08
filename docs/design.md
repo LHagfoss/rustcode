@@ -156,7 +156,15 @@ The model picker's effort slider takes the same knob.
 
 - Controls normally use `:focus-visible` for a ring: 2px `focus` at 40%, offset 2px. It is
   global in `index.css`; components do not add their own focus colours.
-- The composer uses a quiet focus ring on its containing card while any control inside has focus; its text field has no separate outline.
+- Rings follow the keyboard: `lib/focusModality.ts` sets `data-keyboard-nav` on `<html>` on a
+  Tab and removes it on the next pointer press, and every ring is drawn under it. `:focus-visible`
+  alone also matches a text field and a control focused from script after a click (Radix handing
+  focus back to a menu's trigger, a `.focus()` after Enter or Escape), so a click, a hover or a
+  press never draws a ring or a border. Tab itself is never taken over. A component's own focus
+  mark uses the `keyboard:` variant (`keyboard:focus-visible:ring-2`); fills and reveals on
+  `focus-visible` (a menu row's `bg-fill`, a row's hidden button) need no gate.
+- Clicking into the composer changes its fill only (`--rc-composer-bg-focus`); tabbing into it
+  draws the ring on its card. Its text field has no separate outline.
 - `outline-none` is allowed only on a text field whose container already
   shows focus (the composer, a search capsule).
 
@@ -390,6 +398,38 @@ that change use `tabular`.
 - Skeletons sweep once every 1.6s (`transform` only, on the compositor).
 - `prefers-reduced-motion`: all durations collapse to ~0; shimmer and the
   skeleton sweep stop.
+
+## Platforms
+
+The design is drawn on macOS; Windows (WebView2) and Linux (WebKitGTK) get the
+same layout with their own type, and Linux without glass. `lib/platform.ts`
+sets `data-platform="mac|windows|linux"` on `<html>` from the web view's user
+agent before the first render (`main.tsx`); a browser (the mock, `dev:web`)
+is always `mac`. Every rule for another platform is a token override under
+`:root[data-platform=…]` at the end of `index.css`, never a per-component
+branch, and nothing applies to `mac` or to a page without the attribute, so
+the macOS look is the base rules alone. To look at one in the mock, set
+`document.documentElement.dataset.platform` in the page.
+
+| | macOS | Windows | Linux |
+|---|---|---|---|
+| Sans (`--font-sans`, `--font-rounded`) | SF Pro / SF Pro Rounded | Segoe UI Variable Text, Segoe UI | Inter, Cantarell, Ubuntu, Noto Sans |
+| Mono (`--font-mono`) | SF Mono, Menlo | Cascadia Mono, Consolas | JetBrains Mono, DejaVu Sans Mono |
+| Font smoothing | `antialiased` | system (ClearType) | system |
+| Glass | the recipe above | the recipe above (13px is the cap; nothing blurs more) | solid, as Reduce transparency |
+| Word reveal | fade + 4px blur | fade + 4px blur | fade only |
+| Popovers, toasts, What's New open | scale + fade | scale + fade | slide/fade, no scale |
+
+- Linux takes the Reduce-transparency tokens: WebKitGTK draws
+  `backdrop-filter` slowly or not at all, and a translucent surface without its
+  blur is text over text. Headers fall back to the pane colour.
+- There is no rounded face off macOS, so Settings › Appearance › Rounded keeps
+  the system face there.
+- WebKitGTK often composites in software, so on Linux nothing animates
+  `filter` or `scale`; durations stay the ones under Motion.
+- A Smart UI page takes the app's `--font-sans` / `--font-mono` off macOS; the
+  terminal's font list ends in the Windows and Linux faces after Menlo.
+- `prefers-reduced-motion` and Reduce transparency apply on every platform.
 
 ## Tooltips
 

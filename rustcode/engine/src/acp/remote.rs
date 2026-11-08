@@ -11,11 +11,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use super::clients::SessionClients;
 use agent_client_protocol::schema::v1::{
     ContentBlock, ContentChunk, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, SessionNotification, SessionUpdate, TextContent,
+    RequestPermissionResponse, SessionUpdate, TextContent,
 };
-use agent_client_protocol::{Client, ConnectionTo};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -129,7 +129,8 @@ pub(crate) struct RemoteSession {
     pub known_task_ids: Arc<std::sync::Mutex<KnownTaskIds>>,
     pub terminal_backlog: Arc<std::sync::Mutex<VecDeque<TaskEvent>>>,
     pub terminal_overflow: Arc<AtomicBool>,
-    pub connection: ConnectionTo<Client>,
+    /// The clients that have the thread: a device's turn streams to them too.
+    pub clients: SessionClients,
     pub client: Arc<reqwest::Client>,
     pub auto_approve: bool,
     pub presence: super::presence::Presence,
@@ -143,7 +144,7 @@ impl RemoteSession {
     pub(crate) fn from_acp(
         session_id: String,
         session: &AcpSession,
-        connection: ConnectionTo<Client>,
+        clients: SessionClients,
         client: Arc<reqwest::Client>,
         auto_approve: bool,
         presence: super::presence::Presence,
@@ -158,7 +159,7 @@ impl RemoteSession {
             known_task_ids: Arc::clone(&session.known_task_ids),
             terminal_backlog: Arc::clone(&session.terminal_backlog),
             terminal_overflow: Arc::clone(&session.terminal_overflow),
-            connection,
+            clients,
             client,
             auto_approve,
             presence,
@@ -215,9 +216,7 @@ async fn run_remote_turns(session: Arc<RemoteSession>) {
             let update = SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(
                 TextContent::new(prompt.clone()),
             )));
-            let _ = session
-                .connection
-                .send_notification(SessionNotification::new(session.session_id.clone(), update));
+            let _ = session.clients.update(update);
         }
         let scheduled_turn = session.turns.schedule();
         session
@@ -233,7 +232,7 @@ async fn run_remote_turns(session: Arc<RemoteSession>) {
             Arc::clone(&session.terminal_backlog),
             Arc::clone(&session.terminal_overflow),
             prompt,
-            session.connection.clone(),
+            session.clients.clone(),
             Arc::clone(&session.client),
             session.auto_approve,
             Some(session.remote.clone()),
@@ -247,9 +246,7 @@ async fn run_remote_turns(session: Arc<RemoteSession>) {
             let update = SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Text(
                 TextContent::new(format!("**Remote turn failed**\n\n{error}")),
             )));
-            let _ = session
-                .connection
-                .send_notification(SessionNotification::new(session.session_id.clone(), update));
+            let _ = session.clients.update(update);
         }
         {
             let mut state = session.state.lock().await;
@@ -489,10 +486,10 @@ struct HarnessShare {
     session_id: String,
     external: Arc<ExternalSession>,
     mirror: Arc<HarnessMirror>,
-    /// The app's connection: a prompt a device sends is echoed to it as a
-    /// `user_message_chunk`, so the chat shows what the phone did. `None` in a
-    /// test that has no ACP connection.
-    connection: Option<ConnectionTo<Client>>,
+    /// The app's clients that have the thread: a prompt a device sends is
+    /// echoed to them as a `user_message_chunk`, so the chat shows what the
+    /// phone did. `None` in a test that has no ACP connection.
+    clients: Option<SessionClients>,
 }
 
 struct PairingOffer {
@@ -586,6 +583,14 @@ impl RemoteManager {
     ) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.thread_host = Some(Arc::new(start));
+        }
+    }
+
+    /// Stop advertising thread creation when no connected client can list the
+    /// thread that would be started.
+    pub(crate) fn clear_thread_host(&self) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.thread_host = None;
         }
     }
 
@@ -896,7 +901,7 @@ impl RemoteManager {
         &self,
         session_id: String,
         external: Arc<ExternalSession>,
-        connection: Option<ConnectionTo<Client>>,
+        clients: Option<SessionClients>,
         pair: bool,
     ) -> Result<Value, StartError> {
         if let Some(share) = self.get(&session_id) {
@@ -966,7 +971,7 @@ impl RemoteManager {
                 session_id: session_id.clone(),
                 external,
                 mirror,
-                connection,
+                clients,
             })),
             registration,
             state: Mutex::new(ShareState {
@@ -1925,15 +1930,12 @@ impl HarnessShare {
     /// chat: ACP has no other way to tell a client about a message it did not
     /// send.
     fn echo_prompt(&self, text: &str) {
-        let Some(connection) = &self.connection else {
+        let Some(clients) = &self.clients else {
             return;
         };
-        let _ = connection.send_notification(SessionNotification::new(
-            self.session_id.clone(),
-            SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(
-                TextContent::new(text.to_owned()),
-            ))),
-        ));
+        let _ = clients.update(SessionUpdate::UserMessageChunk(ContentChunk::new(
+            ContentBlock::Text(TextContent::new(text.to_owned())),
+        )));
     }
 
     /// Run one prompt on the harness, as the app's own prompt does, and then
@@ -2102,6 +2104,14 @@ impl ClientSink for TeeSink {
             request,
         )
     }
+
+    fn turn_started(&self, history: usize, prompt: String) {
+        self.inner.turn_started(history, prompt);
+    }
+
+    fn turn_ended(&self) {
+        self.inner.turn_ended();
+    }
 }
 
 /// Offer a harness's permission request to paired devices while the app is
@@ -2229,7 +2239,7 @@ mod tests {
             session_id: session_id.to_owned(),
             external: Arc::clone(&thread.session),
             mirror: Arc::clone(&mirror),
-            connection: None,
+            clients: None,
         });
         let registration = SessionRegistration {
             session_id: session_id.to_owned(),
