@@ -956,8 +956,11 @@ const inbound = frameQueue<string>((lines) =>
 /** Lines of server stderr kept for Settings › Diagnostics. */
 export const SERVER_LOG_LINES = 1000;
 /** Server stderr, kept for Settings › Diagnostics; appended once a frame, not per line. */
-const logs = frameQueue<string>((lines) =>
-  set((s) => ({ engineLog: [...s.engineLog, ...lines.map(capServerLogLine)].slice(-SERVER_LOG_LINES) })),
+const logs = frameQueue<string>(
+  (lines) =>
+    set((s) => ({ engineLog: [...s.engineLog, ...lines.map(capServerLogLine)].slice(-SERVER_LOG_LINES) })),
+  16,
+  SERVER_LOG_LINES,
 );
 
 // ---------------------------------------------------------------- engine toast
