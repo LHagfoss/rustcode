@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { dayStart, localDateTime, monthDays } from "./dateTime";
+import { dayStart, daysAhead, localDateTime, monthDays } from "./dateTime";
 
 test("local dates retain calendar day across midnight", () => {
   const day = new Date(2024, 1, 29);
@@ -19,4 +19,11 @@ test("local time rejects the DST gap and preserves midnight", () => {
   } finally {
     process.env.TZ = previous;
   }
+});
+
+test("days ahead counts calendar days, not 24-hour spans", () => {
+  const now = new Date(2024, 2, 9, 22);
+  expect(daysAhead(new Date(2024, 2, 9, 23), now)).toBe("today");
+  expect(daysAhead(new Date(2024, 2, 10, 0, 5), now)).toBe("tomorrow");
+  expect(daysAhead(new Date(2024, 2, 12, 9), now)).toBe("in 3 days");
 });

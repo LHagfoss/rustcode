@@ -30,14 +30,18 @@ export function DateTimePicker({ value, onChange }: { value: Date; onChange: (va
         <button
           type="button"
           aria-label="Previous month"
+          className="flex size-7 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg"
           onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}
         >
           ‹
         </button>
-        <span>{month.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</span>
+        <span className="font-medium text-callout">
+          {month.toLocaleDateString(undefined, { month: "long", year: "numeric" })}
+        </span>
         <button
           type="button"
           aria-label="Next month"
+          className="flex size-7 items-center justify-center rounded-md text-fg-muted hover:bg-fill hover:text-fg"
           onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))}
         >
           ›
@@ -45,7 +49,7 @@ export function DateTimePicker({ value, onChange }: { value: Date; onChange: (va
       </div>
       <div className="grid grid-cols-7 gap-1">
         {Array.from({ length: 7 }, (_, i) => (
-          <span key={i} className="text-center text-fg-muted">
+          <span key={i} className="text-center text-caption text-fg-muted">
             {new Date(2024, 0, 7 + i).toLocaleDateString(undefined, { weekday: "narrow" })}
           </span>
         ))}
@@ -59,14 +63,14 @@ export function DateTimePicker({ value, onChange }: { value: Date; onChange: (va
             disabled={dayStart(d) < dayStart(today)}
             aria-label={d.toLocaleDateString(undefined, { dateStyle: "full" })}
             aria-pressed={dayStart(d) === dayStart(day)}
-            className={`p-1 disabled:opacity-30 ${dayStart(d) === dayStart(day) ? "bg-fill-strong" : dayStart(d) === dayStart(today) ? "text-accent" : "hover:bg-fill"}`}
+            className={`h-8 rounded-md text-callout disabled:opacity-30 disabled:hover:bg-transparent ${dayStart(d) === dayStart(day) ? "bg-accent text-accent-fg" : `hover:bg-fill ${dayStart(d) === dayStart(today) ? "text-accent" : ""}`}`}
             onClick={() => update(d, time)}
           >
             {d.getDate()}
           </button>
         ))}
       </div>
-      <label>
+      <label className="flex items-center justify-between gap-3 text-callout text-fg-muted">
         Time {twelve ? "(HH:MM AM/PM)" : "(HH:MM)"}
         <input
           className={inputClass}

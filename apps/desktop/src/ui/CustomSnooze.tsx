@@ -1,6 +1,7 @@
 import { Dialog } from "radix-ui";
 import { useState } from "react";
 import { askCustomSnooze, snoozeThread, useApp } from "../state/store";
+import { daysAhead } from "./dateTime";
 import { DateTimePicker } from "./DateTimePicker";
 import { Pill } from "./primitives";
 
@@ -38,7 +39,7 @@ export function CustomSnooze() {
             <DateTimePicker value={value ?? new Date()} onChange={setValue} />
             <p aria-live="polite" className="text-fg-muted">
               {value
-                ? `Wakes ${value.toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })} (in ${Math.max(0, Math.ceil((value.getTime() - Date.now()) / 86400000))} days)`
+                ? `Wakes ${value.toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })} (${daysAhead(value, new Date())})`
                 : "Enter a valid time"}
             </p>
             <div className="flex justify-end gap-2">
