@@ -219,6 +219,58 @@ describe("design system", () => {
     expect(reducedRoot).toContain("--rc-sidebar-bg: var(--rc-sidebar);");
   });
 
+  test("every translucent surface draws the shared filter, and nothing animates a blur", () => {
+    const css = readFileSync(join(SRC, "index.css"), "utf8");
+    // One filter for the lot: the composer, popovers, menus, dialogs, toasts, the header pane and
+    // the overview's cards all read `--rc-glass-filter`, so one edit tunes them together.
+    const filters = [...css.matchAll(/^\s*(?:-webkit-)?backdrop-filter:\s*([^;]+);/gm)];
+    expect(filters.length).toBeGreaterThan(6);
+    for (const match of filters) expect(match[1]?.trim()).toBe("var(--rc-glass-filter)");
+    // The composer keeps the sidebar's hue and takes the shared alpha and filter in every theme.
+    expect(css).not.toContain("--rc-composer-filter");
+    for (const alpha of ["--rc-glass-bg", "--rc-glass-bg-strong", "--rc-glass-faint-bg"])
+      expect(css).toContain(`${alpha}: color-mix(in srgb, var(--rc-surface-2) var(--rc-glass-alpha`);
+    // A `backdrop-filter` under an element that fades or slides samples an empty group, so the blur
+    // drops for the length of the motion and snaps back at its end (#3299). Nothing that draws the
+    // glass carries an animation, and the overview's keyframes animate only what a card can afford.
+    const animated: string[] = [];
+    for (const match of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const selector = match[1] ?? "";
+      const body = match[2] ?? "";
+      if (body.includes("backdrop-filter") && body.includes("animation")) animated.push(selector.trim());
+    }
+    expect(animated).toEqual([]);
+    // The motion may only be claimed by what is inside a card: the fade and rise by the body, the
+    // fill fade by the card's own surface. An animation back on `.rc-overview-in`/`-out` themselves
+    // would sit above the glass and bring the dropped blur straight back.
+    const claims: string[] = [];
+    for (const match of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const name = /animation:\s*(rc-overview-[\w-]+)/.exec(match[2] ?? "");
+      if (name) claims.push(`${(match[1] ?? "").trim()} → ${name[1]}`);
+    }
+    expect(claims.sort()).toEqual([
+      ".rc-overview-in .rc-overview-body → rc-overview-in",
+      ".rc-overview-in .rc-overview-card → rc-overview-fill-in",
+      ".rc-overview-out .rc-overview-body → rc-overview-out",
+      ".rc-overview-out .rc-overview-card → rc-overview-fill-out",
+    ]);
+    // ...and each of them animates only what a still surface can afford.
+    const allowed: Record<string, string[]> = {
+      "rc-overview-in": ["opacity", "transform"],
+      "rc-overview-out": ["opacity", "transform"],
+      "rc-overview-fill-in": ["background-color"],
+      "rc-overview-fill-out": ["background-color"],
+    };
+    for (const [name, properties] of Object.entries(allowed)) {
+      const at = css.indexOf(`@keyframes ${name} {`);
+      expect(at).toBeGreaterThanOrEqual(0);
+      const block = css.slice(at, css.indexOf("\n}", at));
+      const found = [...block.matchAll(/^\s+(\S+):/gm)].map((match) => match[1] ?? "");
+      expect(found.length).toBeGreaterThan(0);
+      for (const property of found) expect(properties).toContain(property);
+    }
+  });
+
   test("Linux keeps the glass; Reduce transparency is the solid fallback on every platform", () => {
     const css = readFileSync(join(SRC, "index.css"), "utf8");
     // No rule hands Linux (or Windows) the solid glass tokens: only the class and the media query do.

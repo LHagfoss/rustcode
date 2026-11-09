@@ -82,18 +82,22 @@ function Card({
   return (
     <section
       aria-label={label}
-      // One height for every card and state. It is see-through: a third of
+      // One height for every card and state. It is see-through: a quarter of
       // the surface and the glass filter, no edge ring, so the picture runs on behind it.
+      // The surface is the stable part: the overview's open and close fades its fill and moves
+      // what is inside it, never the blur (index.css, `rc-overview`).
       className={cx(
-        "rc-glass-faint flex min-h-[132px] w-[240px] shrink-0 snap-start flex-col gap-2 rounded-xl p-3 lg:w-auto",
+        "rc-glass-faint rc-overview-card flex min-h-[132px] w-[240px] shrink-0 snap-start flex-col rounded-xl p-3 lg:w-auto",
         span,
       )}
     >
-      <h3 className="flex shrink-0 items-center gap-1.5 text-caption font-medium text-fg-muted">
-        <Icon size={12} className="shrink-0" />
-        {label}
-      </h3>
-      {children}
+      <div className="rc-overview-body flex min-h-0 flex-1 flex-col gap-2">
+        <h3 className="flex shrink-0 items-center gap-1.5 text-caption font-medium text-fg-muted">
+          <Icon size={12} className="shrink-0" />
+          {label}
+        </h3>
+        {children}
+      </div>
     </section>
   );
 }
