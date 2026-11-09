@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 # Merge a PR once its checks pass: `scripts/pr-merge.sh <number>`.
 #
-# Waits for every check except the advisory portability jobs (Windows and
-# macOS compile coverage, `continue-on-error` in ci.yml), which take longest
-# and never block a merge. Late-registering, path-filtered jobs are caught by
+# Waits for every check except the advisory ones, which take longest and never
+# block a merge: the portability jobs (Windows and macOS compile coverage,
+# `continue-on-error` in ci.yml) and CodeQL code scanning (`Analyze (<lang>)`
+# and its `CodeQL` summary; Rust alone takes 15+ minutes against ~4 for the
+# tests). CodeQL keeps running on the PR and on main, and its alerts land in
+# the Security tab. Late-registering, path-filtered jobs are caught by
 # waiting until a pass finds nothing pending twice in a row.
 set -euo pipefail
 
 pr="${1:?usage: scripts/pr-merge.sh <pr-number>}"
-advisory='portability coverage'
+advisory='portability coverage|^Analyze \(|^CodeQL\t'
 quiet=0
 for _ in $(seq 1 240); do
-    checks="$(gh pr checks "$pr" 2>/dev/null | grep -v "$advisory" || true)"
+    checks="$(gh pr checks "$pr" 2>/dev/null | grep -Ev "$advisory" || true)"
     if [[ -z "$checks" ]]; then
         quiet=0
     elif grep -q $'\tfail\t' <<<"$checks"; then

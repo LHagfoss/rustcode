@@ -110,8 +110,9 @@ instructions for work in this repository.
   there conflict with each other and each needs another CI run.
 - When the user asked for merging, merge once CI is green with
   `scripts/pr-merge.sh <n>` (run it in the background). It waits for every
-  check except the advisory Windows/macOS portability jobs, which take longest
-  and never block, catches path-filtered jobs that register late, and merges
+  check except the advisory ones that take longest and never block (the
+  Windows/macOS portability jobs and CodeQL code scanning, whose alerts still
+  reach the Security tab), catches path-filtered jobs that register late, and merges
   with `--squash --delete-branch`. (`gh pr merge --auto` needs required status
   checks on `main`; without them it fails with "clean status", and a plain
   merge would skip CI.)
