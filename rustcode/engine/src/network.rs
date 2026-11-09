@@ -1537,6 +1537,7 @@ async fn prepare_turn_request_pass(
             // can summarize away results the model is still working from.
             tool_rounds == 0,
         );
+        let compaction = compaction::with_compaction_progress(Arc::clone(state), compaction);
         let summarized_or_pruned = if plan_profile {
             compaction::with_session_summarizer(Arc::clone(state), compaction).await
         } else {
@@ -1628,6 +1629,15 @@ async fn prepare_turn_request_pass(
                 crate::config::save_session_history(&live_session_id, &s.history);
             }
         } else {
+            if matches!(
+                s.pending_compaction_progress,
+                Some(crate::app::CompactionProgress::Started)
+            ) {
+                s.pending_compaction_progress = Some(crate::app::CompactionProgress::Failed(
+                    "Context compaction was discarded because the thread changed while it ran."
+                        .to_owned(),
+                ));
+            }
             dbg_log!(
                 "Skipping automatic compaction write-back: active session or history changed underneath the summarizer (captured session '{}', live session '{}', {} messages before, {} now). Live history kept as-is.",
                 active_session_id,
@@ -1635,6 +1645,22 @@ async fn prepare_turn_request_pass(
                 pre_len,
                 s.history.len()
             );
+        }
+        // A summarizer that started but left nothing compacted says so; the
+        // turn goes on with the older messages trimmed, as before.
+        if matches!(
+            s.pending_compaction_progress,
+            Some(crate::app::CompactionProgress::Started)
+        ) {
+            let error = s.compaction_summary_error.take();
+            s.pending_compaction_progress = if cancel_token.is_cancelled() {
+                None
+            } else {
+                Some(crate::app::CompactionProgress::Failed(match error {
+                    Some(error) => format!("Context compaction failed: {error}"),
+                    None => "Context compaction did not reduce the history.".to_owned(),
+                }))
+            };
         }
         drop(s);
     }

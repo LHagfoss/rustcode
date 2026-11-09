@@ -1,4 +1,5 @@
 pub mod events;
+pub(crate) use compaction::CompactionProgress;
 pub use compaction::{CompactionMode, CompactionStats, CompactionTrigger, compaction_summary};
 pub use events::{ApprovalDecision, QuestionAnswer, SessionAction, UpdateDecision};
 pub mod actions;

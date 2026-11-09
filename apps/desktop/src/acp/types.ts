@@ -469,14 +469,21 @@ export interface SlashCommand {
   action: string;
 }
 
+/** Where a compaction is: running, done, or ended without compacting. */
+export type CompactionPhase = "started" | "completed" | "failed";
+
 /** One `session/update`, reduced to what the transcript renders. */
 export type SessionUpdate =
   | { kind: "user"; text: string; at?: number }
   | { kind: "agent"; text: string; turn?: TurnTiming; at?: number }
   | { kind: "thought"; text: string; summary: boolean; durationMs?: number }
   | { kind: "notice"; text: string; resumable: boolean }
-  /** The harness compacted the conversation (`_meta.rustcode.kind == "compaction"`). */
-  | { kind: "compaction"; text: string }
+  /**
+   * The harness compacts the conversation (`_meta.rustcode.kind == "compaction"`): `started` while
+   * the summary is written, then `completed` (the card, the default for a harness that sends no
+   * phase) or `failed` with the reason in `text`.
+   */
+  | { kind: "compaction"; text: string; phase?: CompactionPhase }
   /** The thread moved to another harness here (`_meta.rustcode.kind == "handoff"`). */
   | { kind: "handoff"; from: string; to: string; model?: string }
   /** The thread's model or effort changed here (`_meta.rustcode.kind == "switch"`). */
@@ -565,7 +572,14 @@ export function parseSessionUpdate(params: JsonObject): SessionUpdate {
     case "user_message_chunk":
       return { kind: "user", text: contentText(update.content), at: parseDate(meta?.at) };
     case "agent_message_chunk":
-      if (str(meta?.kind) === "compaction") return { kind: "compaction", text: contentText(update.content) };
+      if (str(meta?.kind) === "compaction") {
+        const phase = str(meta?.phase);
+        return {
+          kind: "compaction",
+          text: contentText(update.content),
+          phase: phase === "started" || phase === "failed" ? phase : "completed",
+        };
+      }
       if (str(meta?.kind) === "handoff") {
         return {
           kind: "handoff",

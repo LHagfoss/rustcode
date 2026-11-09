@@ -66,6 +66,13 @@ pub enum AgentUiEvent {
         stats: crate::app::CompactionStats,
         summary: Option<String>,
     },
+    /// The summarizer began compacting the history. The client shows
+    /// "Compacting context…" until `Compacted` or `CompactionFailed`.
+    CompactionStarted,
+    /// A compaction ended without compacting; `message` says why.
+    CompactionFailed {
+        message: String,
+    },
 
     #[cfg(test)]
     TurnRecovered {
@@ -333,12 +340,18 @@ async fn publish_snapshot_with_mode(
         subagents,
         reasoning_summary,
         compaction,
+        compaction_progress,
     ) = {
         let mut state = state.lock().await;
         let compaction = state.pending_compaction_card.take().map(|stats| {
             let summary = crate::app::compaction_summary(state.history.as_slice());
             (stats, summary)
         });
+        // A card says how it ended, so a "started" seen with it is stale.
+        let compaction_progress = state
+            .pending_compaction_progress
+            .take()
+            .filter(|_| compaction.is_none());
         if let Some(message) = state.pending_service_tier_notice.take() {
             sender.send(AgentUiEvent::Notice { message });
         }
@@ -397,8 +410,19 @@ async fn publish_snapshot_with_mode(
                 .collect::<Vec<_>>(),
             state.history.reasoning_summary(),
             compaction,
+            compaction_progress,
         )
     };
+
+    match compaction_progress {
+        Some(crate::app::CompactionProgress::Started) => {
+            sender.send(AgentUiEvent::CompactionStarted);
+        }
+        Some(crate::app::CompactionProgress::Failed(message)) => {
+            sender.send(AgentUiEvent::CompactionFailed { message });
+        }
+        None => {}
+    }
 
     if let Some((stats, summary)) = compaction {
         sender.send(AgentUiEvent::Compacted { stats, summary });
@@ -815,6 +839,74 @@ mod tests {
     use serde_json::json;
     use std::sync::Arc;
     use tokio::sync::Mutex;
+
+    /// A compaction the summarizer is running, then one that ended without
+    /// compacting, reach the client as events; a finished one is left to its card.
+    #[tokio::test]
+    async fn compaction_progress_is_published_once_and_a_card_supersedes_it() {
+        use crate::app::CompactionProgress;
+        let state = Arc::new(Mutex::new(AppState::new()));
+        let (sender, mut receiver) = AgentUiEventSender::channel();
+        let mut response = super::ResponseDeltaTracker::default();
+        let mut history_len = 0;
+        let mut started = std::collections::HashSet::new();
+        let mut finished = std::collections::HashSet::new();
+        let mut approval = None;
+        let mut question = None;
+        let mut subagents = std::collections::HashMap::new();
+        macro_rules! publish {
+            () => {
+                publish_snapshot(
+                    &state,
+                    &sender,
+                    &mut response,
+                    &mut history_len,
+                    &mut started,
+                    &mut finished,
+                    &mut approval,
+                    &mut question,
+                    &mut subagents,
+                )
+                .await
+            };
+        }
+
+        state.lock().await.pending_compaction_progress = Some(CompactionProgress::Started);
+        publish!();
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(AgentUiEvent::CompactionStarted)
+        ));
+        publish!();
+        assert!(receiver.try_recv().is_err(), "told once");
+
+        state.lock().await.pending_compaction_progress =
+            Some(CompactionProgress::Failed("timed out".into()));
+        publish!();
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(AgentUiEvent::CompactionFailed { message }) if message == "timed out"
+        ));
+
+        // A compaction that finished is the card's to tell.
+        {
+            let mut state = state.lock().await;
+            state.pending_compaction_progress = Some(CompactionProgress::Started);
+            state.record_compaction(
+                crate::app::CompactionTrigger::Auto,
+                crate::app::CompactionMode::DeterministicRecord,
+                9_000,
+                3_000,
+                10,
+            );
+        }
+        publish!();
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(AgentUiEvent::Compacted { .. })
+        ));
+        assert!(receiver.try_recv().is_err());
+    }
 
     #[tokio::test]
     async fn immediate_turn_completion_flushes_final_text() {

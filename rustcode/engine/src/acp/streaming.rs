@@ -364,6 +364,21 @@ impl AcpEventStream {
                 ));
                 updates
             }
+            crate::network::AgentUiEvent::CompactionStarted => {
+                // Where the compaction began: the text so far stays above it.
+                let mut updates = self.flush_answer();
+                updates.push(crate::acp::usage::compaction_progress_card(
+                    crate::acp::usage::CompactionPhase::Started,
+                    "Compacting context…".to_owned(),
+                ));
+                updates
+            }
+            crate::network::AgentUiEvent::CompactionFailed { message } => {
+                vec![crate::acp::usage::compaction_progress_card(
+                    crate::acp::usage::CompactionPhase::Failed,
+                    message,
+                )]
+            }
             crate::network::AgentUiEvent::PromptStarted { .. }
             | crate::network::AgentUiEvent::SubagentUpdated { .. }
             | crate::network::AgentUiEvent::ApprovalRequested { .. }
@@ -492,6 +507,34 @@ mod tests {
         assert_eq!(meta["mode"], "deterministic_record");
         assert_eq!(meta["count"], 1);
         assert_eq!(meta["summary"], "Modified files: src/lib.rs");
+        assert_eq!(meta["phase"], "completed");
+    }
+
+    #[test]
+    fn a_compaction_under_way_is_a_started_line_then_a_failed_one() {
+        let mut stream = AcpEventStream::new();
+
+        let started = stream.updates(AgentUiEvent::CompactionStarted);
+        let [line] = started.as_slice() else {
+            panic!("expected one line, got {started:?}");
+        };
+        let value = serde_json::to_value(line).unwrap();
+        assert_eq!(value["content"]["text"], "Compacting context…");
+        assert_eq!(value["_meta"]["rustcode"]["kind"], "compaction");
+        assert_eq!(value["_meta"]["rustcode"]["phase"], "started");
+
+        let failed = stream.updates(AgentUiEvent::CompactionFailed {
+            message: "Context compaction failed: timed out".into(),
+        });
+        let [line] = failed.as_slice() else {
+            panic!("expected one line, got {failed:?}");
+        };
+        let value = serde_json::to_value(line).unwrap();
+        assert_eq!(
+            value["content"]["text"],
+            "Context compaction failed: timed out"
+        );
+        assert_eq!(value["_meta"]["rustcode"]["phase"], "failed");
     }
 }
 

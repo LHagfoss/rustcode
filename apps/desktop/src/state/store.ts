@@ -184,7 +184,6 @@ import { beginSetup, dismissSetup, type PendingSetup, setupFailed, setupSucceede
 import { keepThreads, type SidebarOrder, withoutThreads } from "./sidebarOrder";
 import { dueSnoozes } from "./snooze";
 import {
-  appendNotice,
   appendSteer,
   applyUpdate,
   beginQuietTurn,
@@ -200,8 +199,10 @@ import {
   type QueuedPrompt,
   questionItem,
   requeueSteers,
+  settleCompaction,
   settledWait,
   settleEveryWait,
+  startCompaction,
   type ThreadState,
   type TranscriptItem,
   truncateBefore,
@@ -1449,10 +1450,12 @@ function onSessionUpdate(params: JsonObject) {
   // A compaction the app sent for the thread's own good says so, whichever
   // harness produced the card. The card's before → after comes from the usage
   // the meter keeps (`autoCompactBeforeUsage`).
-  if (update.kind === "compaction" && autoCompactInFlight.has(sessionId)) {
+  // The harness's own "started" and "failed" are not the card: a failure ends the compaction
+  // without the "Compacted automatically" notice that would follow a quiet turn.
+  if (update.kind === "compaction" && update.phase !== "started" && autoCompactInFlight.has(sessionId)) {
     autoCompactCardSeen.add(sessionId);
     autoCompactPendingNotice.delete(sessionId);
-    update = { ...update, text: automaticCompactionText(update.text) };
+    if (update.phase !== "failed") update = { ...update, text: automaticCompactionText(update.text) };
   }
   if (update.kind === "commands") {
     // The thread's own list, and the harness's last one for the next new thread on it.
@@ -2956,7 +2959,8 @@ export async function runPrompt(
   // follows it, which on a fast harness is the whole rest of the turn's first frame.
   updateThread(id, (t) =>
     options.autoCompact
-      ? beginQuietTurn(t)
+      ? // The turn writes no rows, so "Compacting context…" is the one sign the thread is busy.
+        startCompaction(beginQuietTurn(t))
       : beginTurn(t, shown, Date.now(), sentAttachments(extras), options.fromView, options.wake, sent),
   );
   await afterPaint();
@@ -4082,8 +4086,23 @@ function settleAutoCompactNotice(id: string): void {
   if (!autoCompactPendingNotice.has(id)) return;
   autoCompactPendingNotice.delete(id);
   const before = autoCompactBefore.get(id);
-  if (autoCompactCardSeen.has(id) || !contextMoved(before, get().threads[id]?.usage)) return;
-  updateThread(id, (thread) => appendNotice(thread, "Compacted automatically."));
+  if (autoCompactCardSeen.has(id)) return;
+  // The usage never proved it moved: "Compacting context…" must not stay up for ever.
+  if (!contextMoved(before, get().threads[id]?.usage)) {
+    updateThread(id, (thread) => settleCompaction(thread, null));
+    return;
+  }
+  updateThread(id, (thread) => settleCompaction(thread, compactedNotice()));
+}
+
+/** The quiet row an automatic compaction leaves when its harness sent no card. */
+function compactedNotice() {
+  return {
+    kind: "notice",
+    id: localId("compaction"),
+    text: "Compacted automatically.",
+    tone: "info",
+  } as const;
 }
 
 function runAutoCompact(id: string): void {
@@ -4106,7 +4125,7 @@ function runAutoCompact(id: string): void {
         return;
       }
       if (contextMoved(before, get().threads[id]?.usage)) {
-        updateThread(id, (thread) => appendNotice(thread, "Compacted automatically."));
+        updateThread(id, (thread) => settleCompaction(thread, compactedNotice()));
         return;
       }
       // The harness may send its usage just after the prompt returns: wait for
