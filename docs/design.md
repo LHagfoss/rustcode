@@ -104,8 +104,8 @@ the accent marks state (on, selected, linked), it does not shout.
 | xs | 6 | `rounded-xs` | kbd, inline code (on `bg-fill`), tiny badges, checkboxes |
 | sm | 8 | `rounded-sm` | 22px icon buttons inside rows, branch chips, small inputs |
 | md | 10 | `rounded-md` | Icon buttons, list rows, inputs |
-| lg | 12 | `rounded-lg` | Cards (tool output, error card), settings rows and groups, menu items, tooltips, pictures in replies |
-| xl | 16 | `rounded-xl` | Settings group cards, menus, popovers, dialogs, the command palette, large panels |
+| lg | 12 | `rounded-lg` | Cards (tool output, error card), settings rows and groups, menu items, pictures in replies |
+| xl | 16 | `rounded-xl` | Settings group cards, menus, popovers, dialogs, the command palette, large panels, tooltips and hover cards |
 | 2xl | 20 | `rounded-2xl` | The settings panel, toasts |
 | composer | 20 | `--rc-composer-radius` | The composer's box: one floating card a step rounder than menus and popovers, so its corners read soft over the text sliding under it |
 | 3xl | 26 | `rounded-3xl` | The largest floating surface (nothing uses it yet) |
@@ -185,8 +185,9 @@ A raised surface is told apart by its edge and glass, not by a dark halo.
 Do not hand-tune a shadow on one component: the tokens are the whole scale.
 
 The `elevated` utility is glass (`--rc-glass-bg-strong`) + `shadow-2` +
-`rounded-xl`: use it for every popover, menu and dialog. Tooltips have their
-own `rounded-lg` recipe below.
+`rounded-xl`: use it for every popover, menu, dialog, tooltip and hover
+card. A tip adds only its inset and width: `tipSurface`
+(`ui/primitives.tsx`) is that surface with the tooltip's text size.
 
 ## Glass
 
@@ -452,15 +453,30 @@ the macOS look is the base rules alone. To look at one in the mock, set
   terminal's font list ends in the Windows and Linux faces after Menlo.
 - `prefers-reduced-motion` and Reduce transparency apply on every platform.
 
-## Tooltips
+## Tooltips and hover cards
 
-One `Tooltip` (`ui/primitives.tsx`) under one `Tooltip.Provider`: 400ms
-for the first, then instant while the pointer moves between triggers
-(`skipDelayDuration` 300ms), closing at once. The tip takes no pointer
-events, opens on top by default, 8px from its trigger and 10px from the
-window's edges, and flips when there is no room. Controls in the composer
-open theirs below, clear of the box. Inside a popover, hints are
-secondary text, not tooltips.
+One `Tooltip` (`ui/primitives.tsx`) and one `HoverCard` recipe, both timed by
+`lib/hover.ts`: the pointer rests **300 ms** before a tip appears, a tip the
+pointer has left keeps its place **80 ms** (a slip off and back changes
+nothing), and a target entered while a tip is open — or within **400 ms** of
+one closing — takes the tip over **at once**, so reading along a row of
+buttons never waits. A press, Escape, a scroll, a resize, the window losing
+focus or the target going away puts the tip out, and nothing brings it back
+on its own: a click's own focus is not a reason for a tip, and the next one
+waits for a fresh pointer enter. The keyboard opens tips too, under
+`data-keyboard-nav` like every focus ring.
+
+Both sit on `tipSurface` (`elevated rounded-xl text-callout text-fg`, the
+`xl` radius) and share `surfaceCollisionPadding` (8px from the window's
+edges). A tooltip adds `pointer-events-none px-2 py-1 max-w-80`, opens on
+top by default, 8px from its trigger, and flips when there is no room; a
+hover card adds `p-3` and its own width, and takes the pointer only when it
+has controls in it. Controls in the composer open theirs below, clear of the
+box. Inside a popover, hints are secondary text, not tooltips.
+
+The enter and exit are the popper rule in `index.css` (160 ms
+`--ease-snappy` in, 120 ms `ease-in` out), one motion for every tip: no tip
+carries an animation class of its own.
 
 ## Cursor
 
@@ -707,8 +723,7 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   depth; switches keep their own shape.
 - **Settings row, reset:** rows show their description in full and keep the
   reset button of the bullet below where the value differs from its default.
-- **Tooltip:** `bg-surface-3 rounded-lg px-2 py-1 text-callout shadow-2`
-  (see Tooltips).
+- **Tooltip:** `tipSurface px-2 py-1` (see Tooltips and hover cards).
 - **Composer:** one card, `.rc-composer` (radius `--rc-composer-radius`,
   20px, the `2xl` step), with no padding of its own: every text row in it
   is inset `px-5` (20px) and each keeps its own air. The message row is

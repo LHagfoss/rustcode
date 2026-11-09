@@ -4,7 +4,7 @@
 // It reads the store itself, so the composer never re-renders for usage.
 
 import { HoverCard } from "radix-ui";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   leftPercent,
   type PlanUsage,
@@ -14,6 +14,7 @@ import {
   windowTitle,
 } from "../acp/rustcode";
 import type { SessionUsage } from "../acp/types";
+import { useHoverTip } from "../lib/hover";
 import { layoutTiles } from "../lib/treemap";
 import {
   autoCompactBeforeUsage,
@@ -29,7 +30,7 @@ import {
 } from "../state/store";
 import { formatTokens, relativeAge } from "../state/thread";
 import { usagePressTarget } from "../state/usagePage";
-import { cx, Pill, Segments, Tooltip } from "./primitives";
+import { cx, Pill, Segments, surfaceCollisionPadding, Tooltip, tipSurface } from "./primitives";
 
 /** Brand while there is room; amber, then red, as the window fills up. */
 function contextTint(fraction: number) {
@@ -102,7 +103,9 @@ function ContextGauge({ fraction }: { fraction: number }) {
 export function UsageMeter({ threadId }: { threadId?: string }) {
   const own = useApp((s) => (threadId ? s.planUsage[threadId] : undefined));
   const usageOpen = useApp((s) => s.settings === "usage");
-  const [open, setOpen] = useState(false);
+  // The one tooltip and hover-card timing (lib/hover.ts): the card reads its numbers when it opens.
+  const tip = useHoverTip();
+  const open = tip.open;
   // The context as it was when Compact was pressed, so the card can compare it with what the
   // harness reports afterwards. It is a snapshot, not a second set of numbers.
   const [compactSnapshot, setCompactSnapshot] = useState<{
@@ -125,6 +128,15 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
   const usage = useApp((s) => (threadId ? s.threads[threadId]?.usage : undefined));
   const running = useApp((s) => (threadId ? (s.threads[threadId]?.running ?? false) : false));
   const { plan, cached: fromCache } = shownPlan(own, cached);
+  // The card's numbers are read when it opens, not while it is closed.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: once per opening
+  useEffect(() => {
+    if (!open) return;
+    // The thread's own numbers, when it has any; for a harness that answers
+    // none (Claude Code) the plans call is the only way to refresh the cache.
+    if (threadId) void refreshPlanUsage(threadId);
+    if (fromCache) void refreshPlanCache();
+  }, [open]);
   const shown = plan ? shownWindow(plan) : undefined;
   const left = shown ? leftPercent(shown) : null;
   const low = plan?.windows.find((w) => w !== shown && leftPercent(w) < 20);
@@ -135,20 +147,8 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
     fraction === null ? null : `context ${percentOf(usage!.used, usage!.size)} full`,
   ].filter(Boolean);
   return (
-    <HoverCard.Root
-      open={open}
-      openDelay={60}
-      closeDelay={120}
-      onOpenChange={(next) => {
-        setOpen(next);
-        if (!next) return;
-        // The thread's own numbers, when it has any; for a harness that answers
-        // none (Claude Code) the plans call is the only way to refresh the cache.
-        if (threadId) void refreshPlanUsage(threadId);
-        if (fromCache) void refreshPlanCache();
-      }}
-    >
-      <HoverCard.Trigger asChild>
+    <HoverCard.Root open={open}>
+      <HoverCard.Trigger asChild {...tip.triggerProps}>
         <button
           type="button"
           aria-label={`${said.join(", ")}. Opens Usage in Settings`}
@@ -157,7 +157,7 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
             // A press goes to Settings' Usage page, as it always has (and again closes it); the
             // card is what a hover shows. Pressing also dismisses the card, since the page is
             // where the press said to go.
-            setOpen(false);
+            tip.dismiss();
             openSettings(usagePressTarget(usageOpen));
           }}
           className="flex h-[30px] cursor-pointer items-center gap-2 rounded-full px-2 hover:bg-fill active:bg-fill-strong data-[state=open]:bg-fill"
@@ -193,9 +193,12 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
           side="top"
           align="end"
           sideOffset={8}
-          collisionPadding={10}
+          collisionPadding={surfaceCollisionPadding}
           style={{ maxHeight: "min(var(--radix-popper-available-height, 70vh), calc(100dvh - 140px))" }}
-          className="elevated z-40 flex w-[320px] flex-col overflow-hidden p-3 rc-in"
+          // The one tip surface (ui/primitives.tsx `tipSurface`); this card has a Compact button in
+          // it, so it keeps the pointer instead of letting it through.
+          className={cx(tipSurface, "z-40 flex w-[320px] flex-col overflow-hidden p-3")}
+          {...tip.contentProps}
         >
           <UsageCard
             plan={plan}
