@@ -815,9 +815,12 @@ access work as on the other systems. What differs:
 ### Desktop ACP channel
 
 After authentication, a device with the host-controlled `acp` grant can send
-`{"type":"acp_open"}`. The gateway connects to the already-running RustCode
-server in the gateway's configuration directory and answers
-`{"type":"acp_opened"}`. Subsequent WebSocket text frames each contain one ACP
+`{"type":"acp_open"}`. The gateway opens ACP on the engine running in its
+configuration directory, taking the first that accepts a connection: an engine
+the app started (`run/engine.json`, which holds the threads the app is showing)
+or a shared server (`run/server.json`). A description left behind by an engine
+that has since stopped is skipped. It answers `{"type":"acp_opened"}`. Subsequent
+WebSocket text frames each contain one ACP
 JSON-RPC message, in either direction. These additive frames keep protocol
 version 1. The grant defaults to false, including for existing device records.
 Self-reported device kind never grants access. Accepting a desktop's ask-to-connect
@@ -826,8 +829,9 @@ request grants ACP after it enters the request-bound code; the approval says
 code never grants ACP. The owner can run `rustcode remote devices allow <id>`
 or `rustcode remote devices deny <id>`; deny immediately disconnects the device.
 Devices without the grant receive a gateway
-`error` with code `unauthorized_access` when opening ACP. A missing or unreachable
-local server closes the connection with `internal`.
+`error` with code `unauthorized_access` when opening ACP. When no engine is
+running, or none of the described ones answers, the connection is closed with
+`internal` and the gateway writes why to its log.
 
 Client requests and notifications are restricted to these exact methods:
 

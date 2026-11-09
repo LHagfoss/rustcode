@@ -133,21 +133,12 @@ impl Connection {
                 socket: connection.socket,
             }),
             Err(_) => {
-                // The gateway refuses with an `error` frame. ACP access is a
-                // grant the machine's owner gives, so say how to give it.
+                // The gateway refuses with an `error` frame: ACP access is a
+                // grant the machine's owner gives, and a relay needs an engine
+                // to relay to, so name which one is missing.
                 match serde_json::from_str::<HandshakeResponse>(&answer) {
-                    Ok(HandshakeResponse::Error {
-                        code,
-                        message,
-                        retry_after_secs,
-                    }) => Err(anyhow::anyhow!(
-                        "the machine refused ACP access ({code}): {message}{}; on that machine, \
-                         run `rustcode remote devices allow <device>`",
-                        retry_after_secs
-                            .map(|seconds| format!(" (retry in {seconds}s)"))
-                            .unwrap_or_default(),
-                    )),
-                    _ => bail!("the machine did not confirm acp_open"),
+                    Ok(response) => Err(crate::machine::handshake_failure("acp_open", response)),
+                    Err(_) => bail!("the machine did not confirm acp_open"),
                 }
             }
         }
@@ -535,6 +526,56 @@ mod tests {
         assert_eq!(frame["method"], "session/update");
         assert!(channel.next().await.unwrap().is_none(), "then it closes");
         server.await.unwrap();
+    }
+
+    /// A relay with no engine behind it says which stage failed: a machine
+    /// with nothing to relay to is not the same as one that refused access,
+    /// and neither reads as "not connected" (#3341).
+    #[tokio::test]
+    async fn acp_open_names_the_stage_that_failed() {
+        for (code, expected) in [
+            (
+                crate::protocol::ErrorCode::Internal,
+                "no RustCode engine is running",
+            ),
+            (
+                crate::protocol::ErrorCode::UnauthorizedAccess,
+                "not allowed to use that machine's threads",
+            ),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let answer = HandshakeResponse::Error {
+                code,
+                message: "connection closed".into(),
+                retry_after_secs: None,
+            }
+            .to_text();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+                assert!(matches!(socket.next().await, Some(Ok(Message::Text(_)))));
+                socket.send(Message::text(answer)).await.unwrap();
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            });
+            let error = match Connection::open(&addr.to_string())
+                .await
+                .unwrap()
+                .acp_open()
+                .await
+            {
+                Ok(_) => panic!("a machine with no engine cannot open ACP"),
+                Err(error) => error,
+            };
+            let refusal = error
+                .downcast_ref::<crate::machine::Refusal>()
+                .expect("the refusal keeps its code");
+            assert_eq!(refusal.code, code);
+            assert_eq!(refusal.step, "acp_open");
+            let message = format!("{error:#}");
+            assert!(message.contains(expected), "{message}");
+            server.await.unwrap();
+        }
     }
 
     #[test]

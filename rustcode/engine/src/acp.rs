@@ -1926,11 +1926,40 @@ pub async fn run_acp(auto_approve: bool) -> Result<(), Box<dyn std::error::Error
     let engine = AcpEngine::start(auto_approve)?;
     // No harness process outlives the engine, however it ends.
     let _kill_harnesses = KillHarnesses;
+    // Another local process — the remote gateway relaying a paired desktop —
+    // reaches this engine only through a description it publishes here: there
+    // is no `rustcode server run` behind `--acp` (`server/engine_endpoint.rs`,
+    // #3341). stdio keeps its one client either way.
+    let published = publish_endpoint(&engine);
     // Over stdio the engine has this one client and ends with it.
     let served = serve_connection(&engine.server, Stdio::new()).await;
+    drop(published);
     engine.shutdown().await;
     served?;
     Ok(())
+}
+
+/// Where other local processes can reach this engine while it runs. A failure
+/// here leaves the engine serving stdio: the app works, a paired device is
+/// told the engine has no endpoint instead of being left without an answer.
+fn publish_endpoint(engine: &AcpEngine) -> Option<crate::server::engine_endpoint::Published> {
+    let run_dir = match crate::server::run_dir() {
+        Ok(dir) => dir,
+        Err(error) => {
+            crate::dbg_log!("ACP engine: no run directory to publish an endpoint in: {error}");
+            return None;
+        }
+    };
+    match crate::server::engine_endpoint::publish(&run_dir, engine) {
+        Ok(published) => {
+            crate::dbg_log!("ACP engine: published {}", published.endpoint());
+            Some(published)
+        }
+        Err(error) => {
+            crate::dbg_log!("ACP engine: could not publish an endpoint: {error}");
+            None
+        }
+    }
 }
 
 /// Ends every harness process when dropped: they live as long as the engine

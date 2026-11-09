@@ -76,23 +76,29 @@ impl ServerLock {
     /// Say where this server listens. Replaced whole, so a reader never sees
     /// half of it.
     pub(crate) fn publish(&self, info: &ServerInfo) -> io::Result<()> {
-        let dir = self
-            .info
-            .parent()
-            .ok_or_else(|| io::Error::other("the server description has no directory"))?;
-        let mut temporary = tempfile::NamedTempFile::new_in(dir)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            temporary
-                .as_file()
-                .set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        }
-        serde_json::to_writer(&mut temporary, info)?;
-        temporary.flush()?;
-        temporary.persist(&self.info).map_err(|error| error.error)?;
-        Ok(())
+        write_info(&self.info, info)
     }
+}
+
+/// Write a description of a running endpoint to `path` whole, readable by
+/// this user alone on Unix: a reader never sees half of it, so a partially
+/// written file is never taken for an endpoint.
+pub(crate) fn write_info(path: &Path, info: &ServerInfo) -> io::Result<()> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| io::Error::other("the endpoint description has no directory"))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        temporary
+            .as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    serde_json::to_writer(&mut temporary, info)?;
+    temporary.flush()?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    Ok(())
 }
 
 impl Drop for ServerLock {
@@ -105,9 +111,14 @@ impl Drop for ServerLock {
 
 /// The running server's description, if one has published it.
 pub fn read_info(dir: &Path) -> Option<ServerInfo> {
+    read_info_file(&dir.join(INFO_FILE))
+}
+
+/// The description in `path`, if it is a whole one.
+pub(crate) fn read_info_file(path: &Path) -> Option<ServerInfo> {
     use std::io::Read;
     let mut bytes = Vec::new();
-    File::open(dir.join(INFO_FILE))
+    File::open(path)
         .ok()?
         .take(MAX_INFO_BYTES + 1)
         .read_to_end(&mut bytes)

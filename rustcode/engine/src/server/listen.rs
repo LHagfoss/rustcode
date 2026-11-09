@@ -25,6 +25,15 @@ mod unix {
         run_dir.join("server.sock").to_string_lossy().into_owned()
     }
 
+    /// Where an engine started by a client (`rustcode --acp`) listens: named
+    /// for its process, so two engines never take each other's socket.
+    pub(crate) fn engine_endpoint(run_dir: &Path) -> String {
+        run_dir
+            .join(format!("engine-{}.sock", std::process::id()))
+            .to_string_lossy()
+            .into_owned()
+    }
+
     /// The socket, removed when dropped.
     pub(crate) struct Listener {
         listener: UnixListener,
@@ -113,6 +122,16 @@ mod windows {
     pub(crate) fn endpoint(_run_dir: &Path) -> String {
         format!(
             r"\\.\pipe\rustcode-server-{}",
+            uuid::Uuid::new_v4().simple()
+        )
+    }
+
+    /// An engine started by a client (`rustcode --acp`) gets a pipe of its
+    /// own, named so no other process can find it but through its
+    /// description.
+    pub(crate) fn engine_endpoint(_run_dir: &Path) -> String {
+        format!(
+            r"\\.\pipe\rustcode-engine-{}",
             uuid::Uuid::new_v4().simple()
         )
     }
@@ -255,9 +274,4 @@ mod windows {
             }
         }
     }
-}
-
-/// Endpoint published by the server in this gateway's configuration directory.
-pub(crate) fn running_endpoint(config_directory: &Path) -> Option<String> {
-    super::lock::read_info(&config_directory.join("run")).map(|info| info.endpoint)
 }

@@ -800,7 +800,7 @@ pub async fn thread_titles(channel: &mut AcpChannel) -> Result<Vec<String>> {
 }
 
 /// Turn a failure frame into an error a person can act on.
-fn handshake_failure(step: &str, answer: HandshakeResponse) -> anyhow::Error {
+pub(crate) fn handshake_failure(step: &str, answer: HandshakeResponse) -> anyhow::Error {
     match answer {
         HandshakeResponse::Error {
             code,
@@ -899,26 +899,39 @@ pub struct Refusal {
     pub retry_after_secs: Option<u64>,
 }
 
+impl Refusal {
+    /// What to do about it, appended to the message: each code names what
+    /// failed, so a row never says only "not connected" (`machines.rs`).
+    pub fn hint(&self) -> &'static str {
+        use crate::protocol::ErrorCode;
+        match self.code {
+            code if code.revoked_pairing() => "; pairing revoked — pair with the machine again",
+            code if code.needs_new_pairing() => "; pair with the machine again",
+            ErrorCode::UnauthorizedAccess => {
+                "; this computer is not allowed to use that machine's threads — on that machine, \
+                 run `rustcode remote devices allow <device>`"
+            }
+            ErrorCode::Internal => {
+                "; no RustCode engine is running there to relay to — open RustCode on that \
+                 machine, or run `rustcode server run` on it"
+            }
+            _ => "",
+        }
+    }
+}
+
 impl std::fmt::Display for Refusal {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let hint = if self.code.revoked_pairing() {
-            "; pairing revoked — pair with the machine again"
-        } else if self.code.needs_new_pairing() {
-            "; pair with the machine again"
-        } else if matches!(self.code, crate::protocol::ErrorCode::UnauthorizedAccess) {
-            "; on that machine, run `rustcode remote devices allow <device>`"
-        } else {
-            ""
-        };
         write!(
             formatter,
-            "the machine refused {} ({}): {}{}{hint}",
+            "the machine refused {} ({}): {}{}{}",
             self.step,
             self.code,
             self.message,
             self.retry_after_secs
                 .map(|seconds| format!(" (retry in {seconds}s)"))
                 .unwrap_or_default(),
+            self.hint(),
         )
     }
 }
@@ -1214,5 +1227,34 @@ mod tests {
         machine.device_id = "device-9".into();
         machine.host_id = "gw-b".into();
         assert!(check(&welcome, &machine).is_err());
+    }
+
+    /// Every refusal names the step that failed and, where one exists, what to
+    /// do about it: a machine row never shows only "Not connected" (#3341).
+    #[test]
+    fn a_refusal_names_what_to_do_about_it() {
+        use crate::protocol::ErrorCode;
+        let refusal = |code| Refusal {
+            step: "acp_open".to_owned(),
+            code,
+            message: "connection closed".to_owned(),
+            retry_after_secs: None,
+        };
+        let no_engine = refusal(ErrorCode::Internal).to_string();
+        assert!(no_engine.contains("acp_open"), "{no_engine}");
+        assert!(
+            no_engine.contains("no RustCode engine is running"),
+            "{no_engine}"
+        );
+        let not_allowed = refusal(ErrorCode::UnauthorizedAccess).to_string();
+        assert!(
+            not_allowed.contains("rustcode remote devices allow"),
+            "{not_allowed}"
+        );
+        let revoked = refusal(ErrorCode::Revoked).to_string();
+        assert!(revoked.contains("pair with the machine again"), "{revoked}");
+        // A code with nothing to add says only what happened.
+        let quiet = refusal(ErrorCode::IdleTimeout).to_string();
+        assert!(!quiet.contains(';'), "{quiet}");
     }
 }

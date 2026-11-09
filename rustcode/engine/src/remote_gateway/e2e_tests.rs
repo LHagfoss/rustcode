@@ -1323,6 +1323,102 @@ async fn remote_acp_desktop_round_trip_resume_denial_and_server_close() {
     host.stop_gateway().await;
 }
 
+/// A paired desktop reaches a real engine that runs with no server behind it:
+/// an engine started the way the desktop app starts one (`rustcode --acp`)
+/// publishes `run/engine.json`, and the gateway relays to that (#3341).
+#[tokio::test]
+async fn remote_acp_relays_to_an_engine_started_by_a_client() {
+    let mut host = Host::start().await;
+    let run = host.dir.path().join("run");
+    // The engine the app runs, serving its ACP on an endpoint of its own.
+    let engine = crate::acp::AcpEngine::bare(false).expect("an engine");
+    let published = crate::server::engine_endpoint::publish(&run, &engine).expect("publish");
+    assert!(
+        !run.join("server.json").exists(),
+        "nothing runs `rustcode server run` behind the app"
+    );
+    let described = crate::server::engine_endpoint::published(&run).expect("a description");
+    assert_eq!(described.endpoint, published.endpoint());
+
+    let mut device = acp_device(&host, "desktop", true).await;
+    device.send(json!({"type":"acp_open"})).await;
+    assert_eq!(device.read().await.unwrap(), json!({"type":"acp_opened"}));
+    // A real engine answers, not a stub: this is the app's own engine.
+    device
+        .send(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}))
+        .await;
+    let answer = device.read().await.unwrap();
+    assert_eq!(answer["id"], 1, "{answer}");
+    assert_eq!(answer["result"]["protocolVersion"], 1, "{answer}");
+    assert!(
+        answer["result"]["agentCapabilities"].is_object(),
+        "{answer}"
+    );
+
+    bounded(device.socket.close(None)).await.unwrap();
+    drop(published);
+    engine.shutdown().await;
+    host.stop_gateway().await;
+}
+
+/// A description left by an engine that has since stopped does not hide one
+/// that is running: the relay falls through to the next endpoint (#3341).
+#[tokio::test]
+async fn remote_acp_skips_a_stale_engine_description() {
+    let mut host = Host::start().await;
+    let run = host.dir.path().join("run");
+    std::fs::create_dir_all(&run).unwrap();
+    // The app's engine crashed and left its description; nothing listens
+    // where it points.
+    let stale =
+        crate::server::ServerInfo::now(run.join("engine-1.sock").to_string_lossy().into_owned());
+    std::fs::write(run.join("engine.json"), serde_json::to_vec(&stale).unwrap()).unwrap();
+    // A shared server is running, described by `server.json`.
+    let endpoint = run.join("acp-fallback.sock");
+    let listener = tokio::net::UnixListener::bind(&endpoint).unwrap();
+    std::fs::write(
+        run.join("server.json"),
+        serde_json::to_vec(&crate::server::ServerInfo::now(
+            endpoint.to_string_lossy().into(),
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        drop(stream);
+    });
+    let mut device = acp_device(&host, "desktop", true).await;
+    device.send(json!({"type":"acp_open"})).await;
+    assert_eq!(device.read().await.unwrap()["type"], "acp_opened");
+    assert!(
+        device.read().await.is_none(),
+        "the relay ends with the server"
+    );
+    bounded(server).await.unwrap();
+    host.stop_gateway().await;
+}
+
+/// With no engine described at all, opening ACP is refused with the reason
+/// the row shows, and the gateway writes it to its log.
+#[tokio::test]
+async fn remote_acp_without_an_engine_is_internal() {
+    let mut host = Host::start().await;
+    let mut device = acp_device(&host, "desktop", true).await;
+    device.send(json!({"type":"acp_open"})).await;
+    let refused = device.read().await.unwrap();
+    assert_eq!(refused["code"], "internal", "{refused}");
+    assert!(
+        refused["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("could not be opened"),
+        "{refused}"
+    );
+    assert!(device.read().await.is_none(), "the socket closes");
+    host.stop_gateway().await;
+}
+
 #[tokio::test]
 async fn remote_acp_phone_and_cli_are_refused() {
     let mut host = Host::start().await;
