@@ -222,7 +222,24 @@ given, is 1 to 128 characters of `A-Z`, `a-z`, `0-9`, `.`, `_`, `:` and `-`
 (see [Retrying a call](#retrying-a-call)). The engine waits for the
 client's answer 15 min for `start_session` and `fan_out` (approval, worktrees,
 harness start),
-`timeout_ms` + 30 s for `wait_session`, and 10 min otherwise. The client bounds
+`timeout_ms` + 30 s for `wait_session`, and 10 min otherwise.
+
+A blocking call never outlives its cap. `wait_session` and `merge_when_green`
+wait at most 25 minutes per call: a longer `timeout_ms` is cut to that, not
+refused, and the descriptions tell the model to call again to keep waiting. An
+MCP client aborts a call that sends neither an answer nor progress (Claude Code
+did after about 1950 s: `sent no response or progress for 1956s; aborting`), so
+while any call is pending, `rustcode mcp-orchestrator` sends
+`notifications/progress` `{ progressToken, progress, message }` every 30 s when
+the `tools/call` carried `params._meta.progressToken` (`progress` rises with
+each one; nothing is sent for a call answered sooner, and none after its
+result). The server also bounds the wait itself: if the app has not answered
+`timeout_ms` + 5 s after a `wait_session` began (a slow or suspended app, a
+machine that slept; the check also reads the wall clock, which the runtime's
+timers do not follow during sleep), it answers `{ status: "timeout", links: [],
+note }` on its own and drops the forwarded call, which ends the wait in the
+app. `merge_when_green` gets `{ state: "pending", merged: false, detail }` at
+`timeout_ms` + 3 min, the engine's own deadline for it. The client bounds
 an answer: `wait_session` at 8 KiB (with `answer_truncated`), `read_session`
 at a 16 KiB page (with `next_offset`).
 
@@ -736,7 +753,7 @@ out, and a v8 app has neither the code nor the engine methods.
 | Tool | Args | Answer | Approval |
 | --- | --- | --- | --- |
 | `thread_status` | `{ session_id? }` — omit for every delegate this thread started or messaged; at most 12 are reported (`omitted_delegates` says how many more) | `{ delegates: [{ session_id, title, status, project, worktree? { path, branch }, branch?, pull, error? }], omitted_delegates?, note? }`, newest first. `pull` is `{ number, title, state, merged, draft, url?, branch, head_sha, ci, failing, pending, passed }`: `state` is `open`, `closed` or `merged`, `ci` is `none`, `passing`, `pending` or `failing` (advisory portability jobs excluded, like the merge), and `failing` names the checks that failed. `pull: null` means no pull request for the thread's branch; an unreadable one carries `error: { code, message }` on that delegate and not on the others, and all delegates are read concurrently | None: it asks nothing; a read of this project's threads, like `read_session` |
-| `merge_when_green` | `{ session_id, timeout_ms? }` — the wait defaults to and is at most 55 minutes, 165 rounds of 20 s | `{ session_id, number, state, merged, url?, failing?, waited_secs, detail }`; `state` is `merged`, `failing` (with the names), `closed`, `no_checks` (there is nothing to wait for, returned after two empty rounds) or `pending` (still waiting when the time ran out) | Asked, allowed by Full access, grant `merge:<session id>:<PR number>` (a new PR asks again) |
+| `merge_when_green` | `{ session_id, timeout_ms? }` — the wait defaults to and is at most 25 minutes (a longer value is cut to it), 75 rounds of 20 s | `{ session_id, number, state, merged, url?, failing?, waited_secs, detail }`; `state` is `merged`, `failing` (with the names), `closed`, `no_checks` (there is nothing to wait for, returned after two empty rounds) or `pending` (still waiting when the time ran out) | Asked, allowed by Full access, grant `merge:<session id>:<PR number>` (a new PR asks again) |
 | `cleanup_worktree` | `{ session_id, settle? }` — `settle` is true by default | `{ session_id, removed: true, branch, branch_removed, recorded_branch?, recorded_branch_removed?, settled? }`. A refusal is `conflict`, with the reason (`dirty`, `unmerged`, `ignored_files`, `branch_changed`, `protected_branch`, `no_base` or `not_managed`) and, for unmerged commits, their subjects; `branch_changed` also names the merged-pull-request check that failed (no pull request for the branch, one that is not merged, a dirty tree, or commits not in its head). `unknown` means git could not answer and is an `unavailable` failure | Asked, allowed by Full access, grant `cleanup:<session id>` |
 
 `thread_status` asks the engine `_rustcode/pulls/state` `{ cwd, branch? }`
@@ -833,8 +850,8 @@ a stdio MCP server (`tools/list`, `tools/call`, `ping`; server name
   `mcpServers` (`{ name: "rustcode", command, args, env: [] }`).
 - Codex: `thread/start` / `thread/resume` `config` override
   `"mcp_servers.rustcode": { command, args, tool_timeout_sec }`, for that
-  thread only. `tool_timeout_sec` is 3660, since Codex stops MCP calls after
-  60 s by default and `wait_session` may wait an hour.
+  thread only. `tool_timeout_sec` is 1740, since Codex stops MCP calls after
+  60 s by default and a wait may take 25 minutes plus the app's answer.
 
 - Pi: `pi-acp` ignores `mcpServers`, so the engine starts it with
   `PI_ACP_PI_COMMAND` set to a small script that runs `pi --extension`. The

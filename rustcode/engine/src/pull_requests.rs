@@ -581,10 +581,10 @@ pub async fn for_branch(cwd: &Path, branch: &str) -> Result<Option<DelegatePull>
 }
 
 /// How often a merge re-reads the checks, and how long it waits for them. The
-/// cap is under an hour so the wait fits inside an external harness's MCP call
-/// timeout (Codex's `tool_timeout_sec` is 61 minutes).
+/// cap is 25 minutes, like `wait_session`: an MCP client aborts a call that
+/// stays silent for about half an hour, and `pending` lets the caller ask again.
 pub const MERGE_POLL_SECS: u64 = 20;
-pub const MAX_MERGE_WAIT_SECS: u64 = 55 * 60;
+pub const MAX_MERGE_WAIT_SECS: u64 = 25 * 60;
 
 /// The `gh pr merge` arguments: squash and delete the remote branch, with
 /// `--repo` so gh leaves the local branch (checked out in the delegate's

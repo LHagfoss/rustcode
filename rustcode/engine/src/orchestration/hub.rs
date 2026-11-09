@@ -80,9 +80,15 @@ pub const SMART_UI_ENV: &str = "RUSTCODE_SMART_UI";
 /// would answer with "unknown tool".
 pub const ORCHESTRATION_VERSION_ENV: &str = "RUSTCODE_ORCHESTRATION_VERSION";
 
-/// How long a harness should let one call run: the longest
-/// `wait_session` plus room for the app to answer.
-pub const TOOL_TIMEOUT_SECS: u64 = super::MAX_WAIT_MS / 1000 + 60;
+/// How long a harness should let one call run: the longest wait plus the
+/// engine's own deadline for the app's answer and a minute of room.
+pub const TOOL_TIMEOUT_SECS: u64 = (if super::MAX_WAIT_MS > super::MAX_MERGE_WAIT_MS {
+    super::MAX_WAIT_MS
+} else {
+    super::MAX_MERGE_WAIT_MS
+}) / 1000
+    + super::MERGE_ANSWER_GRACE.as_secs()
+    + 60;
 
 /// The name the server has in a harness's MCP list.
 pub const SERVER_NAME: &str = "rustcode";
