@@ -122,15 +122,18 @@ function suggestions(draft: string, commands: SlashCommand[]): SlashCommand[] {
   return [...prefixed, ...others].slice(0, 40);
 }
 
-// The field's line box: 14px at 1.625 (`leading-relaxed`), the same leading replies read at.
-const LINE = 22.75;
+// The field's line box: 14px at 1.5 (`leading-normal`), a hair tighter than a reply's, which is what
+// makes a draft read as something being typed rather than something read back.
+const LINE = 21;
 // Real padding inside the scroller, so it scrolls with the text: the first and last lines keep their
 // room at either end, and the caret on the last line sits above the padding, never on the edge.
 const PAD = 6;
-// It opens at two lines above the card's foot and scrolls past the eighth. The minimum is whole
-// lines plus that padding (`MIN_HEIGHT`), so the field cuts no line in half as it grows; past the
-// maximum the fade (`.rc-field-fade`) hides the cut, as it does in any scroller.
-const MIN_HEIGHT = Math.round(LINE * 2 + PAD * 2);
+// It opens at one line above the card's foot and scrolls past the ninth. The minimum is that one
+// whole line plus its padding on each side (`MIN_HEIGHT`), so a single line sits centred between
+// them instead of at the top of an empty second line, and the field cuts no line in half as it
+// grows a line at a time; past the maximum the fade (`.rc-field-fade`) hides the cut, as it does in
+// any scroller.
+const MIN_HEIGHT = Math.round(LINE + PAD * 2);
 const MAX_HEIGHT = 208;
 // How much of a folder's path the picker shows: its ends, not the whole of a deep path.
 const PATH_CHARS = 30;
@@ -873,10 +876,10 @@ export const Composer = memo(function Composer({
             )}
           >
             {extras.command && (
-              // One line of the field's own height (22.75px), so the command and its argument read
+              // One line of the field's own height (21px), so the command and its argument read
               // as one entry: the same leading keeps their baselines together.
               <Tooltip label={extras.command.description}>
-                <span className="mt-1.5 flex h-[22.75px] shrink-0 items-center rounded-xs bg-accent/12 px-1.5 font-semibold text-accent text-body leading-[22.75px] rc-in">
+                <span className="mt-1.5 flex h-[21px] shrink-0 items-center rounded-xs bg-accent/12 px-1.5 font-semibold text-accent text-body leading-[21px] rc-in">
                   {extras.command.name}
                 </span>
               </Tooltip>
@@ -903,7 +906,7 @@ export const Composer = memo(function Composer({
                 <div
                   ref={mirror}
                   aria-hidden
-                  className="rc-field-fade pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words py-1.5 text-body text-fg leading-relaxed"
+                  className="rc-field-fade pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words py-1.5 text-body text-fg leading-normal"
                   style={fadeStyle}
                 >
                   {splitTokens(draft).map((part, i) =>
@@ -936,7 +939,7 @@ export const Composer = memo(function Composer({
                 tabIndex={-1}
                 readOnly
                 rows={1}
-                className="pointer-events-none invisible absolute top-0 left-0 block resize-none overflow-hidden py-1.5 text-body leading-relaxed"
+                className="pointer-events-none invisible absolute top-0 left-0 block resize-none overflow-hidden py-1.5 text-body leading-normal"
                 style={{ height: 0, width: 0 }}
               />
               <textarea
@@ -961,7 +964,7 @@ export const Composer = memo(function Composer({
                 spellCheck
                 style={fadeStyle}
                 className={cx(
-                  "rc-field-fade relative block w-full resize-none bg-transparent py-1.5 text-body leading-relaxed outline-none transition-[height] duration-150 ease-snappy placeholder:text-fg-faint",
+                  "rc-field-fade relative block w-full resize-none bg-transparent py-1.5 text-body leading-normal outline-none transition-[height] duration-150 ease-snappy placeholder:text-fg-faint",
                   tokenized && "text-transparent caret-fg selection:bg-accent/30",
                 )}
               />
@@ -1490,14 +1493,17 @@ function PlusMenu({
       onKeyDown={menuKeys}
       className="min-w-[220px]"
       trigger={
-        // The one button the message is added to: the send circle's own diameter with a 20px mark,
-        // so the row's two ends read as the row's two ends and sit on one line.
+        // The one button the message is added to: the send circle's own diameter with a 16px mark, so
+        // the row's two ends read as the row's two ends and sit on one line. `absoluteStrokeWidth`
+        // keeps that mark a true 2px instead of the 1.33px a 16px lucide would otherwise draw, and at
+        // this size the arms land on whole pixels: the cross stays a cross at 2x instead of reading
+        // as two soft, uneven strokes.
         <button
           type="button"
           aria-label="Attach and more"
           className="flex size-9 shrink-0 items-center justify-center rounded-full bg-fill-subtle text-fg hover:bg-fill active:bg-fill-strong data-[state=open]:bg-fill-strong sm:size-8"
         >
-          <Plus size={20} strokeWidth={2.25} />
+          <Plus size={16} strokeWidth={2} absoluteStrokeWidth />
         </button>
       }
     >

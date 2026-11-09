@@ -154,6 +154,8 @@ import {
   wakeDelivered,
   wakeTick,
 } from "./host";
+import type { InboxItem } from "./inbox";
+import { dismissRows, type InboxDismissals, restoreRows } from "./inboxDismissed";
 import { LIMIT_RESUME_TEXT, type LimitWait, limitReset, nextWait, waitDue, waitHolds } from "./limitResume";
 import { newThreadAccountOn, type SignedOutLogins, signedOutFrom } from "./logins";
 import { notifyThread, startNotifications } from "./notify";
@@ -498,6 +500,11 @@ export interface AppState {
   finished: Record<string, number>;
   /** Threads whose last turn failed while you looked elsewhere, until you open them. */
   failed: Record<string, number>;
+  /**
+   * Rows put away from "Needs you" without an answer, kept in app storage: the thread is
+   * untouched, and the row comes back when it asks again (state/inboxDismissed.ts).
+   */
+  inboxDismissed: InboxDismissals;
   /** Timed approvals still in force ("Allow for 1 hour"), from `_rustcode/permissions`. */
   grants: TimedGrant[];
   /**
@@ -568,6 +575,7 @@ const STORAGE = {
   sidebarOrder: "rustcode.sidebarOrder",
   archived: "rustcode.archived",
   messaged: "rustcode.messaged",
+  inboxDismissed: "rustcode.inboxDismissed",
   project: "rustcode.projectCwd",
   theme: "rustcode.theme",
   themeActive: "rustcode.themeActive",
@@ -731,6 +739,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   sidebarOrder: storedJson<SidebarOrder>(STORAGE.sidebarOrder, {}),
   archived: storedJson<Record<string, number>>(STORAGE.archived, {}),
   messaged: storedJson<Record<string, number>>(STORAGE.messaged, {}),
+  inboxDismissed: storedJson<InboxDismissals>(STORAGE.inboxDismissed, {}),
   editing: {},
   queuedEdit: null,
   confirm: null,
@@ -2200,7 +2209,35 @@ export function retryMessage(id: string, itemId: string) {
 }
 
 /**
- * Retry a thread's failed turn: the inbox's action for a failure. The thread is
+ * Put rows away without answering them: a failure nobody will retry, a request the
+ * user would rather answer in the thread itself. Only the inbox row and its count
+ * change — a failed turn still shows in the transcript and a request still waits in
+ * its chat — and the row comes back if the thread asks again (state/inboxDismissed.ts).
+ * One Undo toast puts back every row of this call.
+ */
+export function dismissInbox(items: readonly InboxItem[]): void {
+  if (!items.length) return;
+  const keys = items.map((item) => item.key);
+  const next = dismissRows(get().inboxDismissed, items);
+  set({ inboxDismissed: next });
+  store(STORAGE.inboxDismissed, JSON.stringify(next));
+  const title = items.length === 1 ? items[0]!.title : "";
+  toast(items.length === 1 ? `Dismissed "${title}"` : `Dismissed ${items.length} items`, "info", {
+    id: items.length === 1 ? `inbox-dismiss:${keys[0]}` : "inbox-dismiss",
+    action: { label: "Undo", run: () => restoreInbox(keys) },
+  });
+}
+
+/** Undo: the rows go back in the inbox exactly as they were. */
+export function restoreInbox(keys: readonly string[]): void {
+  const before = get().inboxDismissed;
+  const next = restoreRows(before, keys);
+  if (next === before) return;
+  set({ inboxDismissed: next });
+  store(STORAGE.inboxDismissed, JSON.stringify(next));
+}
+
+/** Retry a thread's failed turn: the inbox's action for a failure. The thread is
  * opened first when the app has not read it, because the message to send again
  * lives in its transcript; its last message is the one the failure answered.
  */

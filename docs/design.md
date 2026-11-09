@@ -787,11 +787,14 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   `--rc-glass-alpha`, behind the shared filter, has
   no edge and no inner highlight, only the lift under it, and a quiet
   focus-within ring for the keyboard. The card clips to its own corner. The editor reads at
-  `text-body leading-relaxed` (22.75px), two lines at rest above the control
-  row and 217px (nine lines) at most, then it scrolls; its text carries 6px
+  `text-body leading-normal` (21px, a hair tighter than a reply's 1.625, so a draft reads as
+  something being typed), one line at rest above the control row and 208px
+  at most, then it scrolls; its text carries 6px
   above and below inside the scroller, so the padding scrolls with it and
   the first and last lines keep their room (the box is sized to whole
-  lines plus that padding). The edge it is cut at fades over 20px
+  lines plus that padding, so one line sits centred between its two paddings
+  rather than at the top of an empty second line, and the first new line
+  grows the field a line instead of jumping). The edge it is cut at fades over 20px
   (`mask-image`, `.rc-field-fade`, whose two edges `lib/fade.ts` decides):
   the top once it is scrolled down, the bottom while there is text below,
   and neither when the draft fits, so a short message never dims. Typing
@@ -811,8 +814,9 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   given the final height once, which lets its 150ms transition run from the
   height it had to the height it needs — growing and shrinking alike. Under
   the field is the card's own row (`28px` controls, `.rc-composer-tray` sets
-  their height): the attach button (**+**, a 28px round target with an 18px
-  mark) at its start, then the working agents, the model and send/queue/stop
+  their height): the attach button (**+**, a 16px mark at a true 2px stroke
+  on the send circle's own diameter, so the row's two ends read as one pair)
+  at its start, then the working agents, the model and send/queue/stop
   at its end, with no divider above it — the air between the field and the row,
   and the row's own `pt-1`, separate them. The model reads as its own name and
   effort, plain on the card, `bg-fill-strong` only while its popover is open;

@@ -60,15 +60,13 @@ export function LinkChip({
           // a line with a chip is exactly as tall as one without. A taller chip would push every
           // line it sits on apart, which is what made the chip look off its baseline.
           // The composer's row is a flex line, where `align-middle` does nothing: the chip takes
-          // the field's own line box (22.75px) and the call site gives it the field's 6px of top
+          // the field's own line box (21px) and the call site gives it the field's 6px of top
           // padding, so it sits on the first line and not above it.
           "group/link inline-flex max-w-[340px] shrink-0 items-center gap-1 text-callout leading-none select-text hover:brightness-125",
           // A chip in a reply is the pill the code and the links around it are too (ui/Markdown.tsx
           // `PILL`): full rounding and a pixel more room on each side. A token in the composer keeps
           // the shape of the field's own tokens (an `@file` reference, the slash command).
-          inline
-            ? "h-[18px] rounded-full pr-[5px] pl-[7px] align-middle"
-            : "h-[22.75px] rounded-sm pr-1 pl-1.5",
+          inline ? "h-[18px] rounded-full pr-[5px] pl-[7px] align-middle" : "h-[21px] rounded-sm pr-1 pl-1.5",
           !tint && "bg-fill shadow-[inset_0_0_0_0.5px_var(--color-border)]",
           className,
         )}
