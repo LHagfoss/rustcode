@@ -63,6 +63,8 @@ pub(crate) struct DataActivityRequest {
     #[serde(default)]
     pub after: Option<String>,
     #[serde(default)]
+    pub order: Option<String>,
+    #[serde(default)]
     pub limit: Option<u32>,
 }
 
@@ -245,6 +247,11 @@ pub(crate) fn activity(request: DataActivityRequest) -> Result<Value, String> {
     if request.session_id.trim().is_empty() {
         return Err("session_id is required".to_owned());
     }
+    let newest = match request.order.as_deref() {
+        None | Some("oldest") => false,
+        Some("newest") => true,
+        Some(_) => return Err("order must be oldest or newest".to_owned()),
+    };
     // The first reader of a fresh install migrates the store once, as
     // `thread_usage` does; the page itself is still read read-only.
     crate::data_store::ensure_ready()?;
@@ -255,12 +262,19 @@ pub(crate) fn activity(request: DataActivityRequest) -> Result<Value, String> {
         .map(|limit| limit as usize)
         .unwrap_or(crate::data_store::DEFAULT_ACTIVITY_ITEMS)
         .clamp(1, crate::data_store::MAX_ACTIVITY_ITEMS);
-    let page = crate::data_store::activity(&request.session_id, request.after.as_deref(), limit)?;
+    let page = crate::data_store::activity_ordered(
+        &request.session_id,
+        request.after.as_deref(),
+        limit,
+        newest,
+    )?;
+    let last_provider_error = crate::data_store::last_provider_error(&request.session_id)?;
     Ok(serde_json::json!({
         "session_id": request.session_id,
         "items": page.items,
         "next": page.next,
         "has_more": page.has_more,
+        "last_provider_error": last_provider_error,
         "version": DATA_METHOD_VERSION,
     }))
 }
@@ -296,6 +310,7 @@ mod tests {
         let refused = super::activity(super::DataActivityRequest {
             session_id: "  ".to_owned(),
             after: None,
+            order: None,
             limit: None,
         });
         assert_eq!(refused.unwrap_err(), "session_id is required");

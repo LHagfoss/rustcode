@@ -2690,6 +2690,18 @@ mod tests {
         rejected.headers(500);
         assert_eq!(rejected.derived_error_kind().as_deref(), Some("http_500"));
 
+        let mut balance = ProviderAttempt::start(&context, 1, 0, &token);
+        balance.headers(402);
+        balance.provider_message("Insufficient balance");
+        assert_eq!(
+            balance.derived_error_kind().as_deref(),
+            Some("insufficient_balance")
+        );
+        let mut limited = ProviderAttempt::start(&context, 1, 0, &token);
+        limited.headers(429);
+        limited.provider_message("rate_limit_error");
+        assert_eq!(limited.derived_error_kind().as_deref(), Some("rate_limit"));
+
         let mut interrupted = ProviderAttempt::start(&context, 1, 0, &token);
         interrupted.headers(200);
         assert_eq!(
@@ -5437,8 +5449,7 @@ impl ProviderAttempt {
 
     /// The exit that knows why: `timeout`, `connect`, `stream`.
     ///
-    /// A provider's own text never becomes the kind: it goes to
-    /// `response_summary_json`, clipped.
+    /// The kind is a fixed label, never the provider's text.
     fn fail(&mut self, kind: &str) {
         if self.row.error_kind.is_none() {
             self.row.error_kind = Some(kind.to_owned());
@@ -5446,6 +5457,21 @@ impl ProviderAttempt {
     }
 
     fn provider_message(&mut self, message: &str) {
+        let lower = message.to_ascii_lowercase();
+        let kind =
+            if lower.contains("insufficient_balance") || lower.contains("insufficient balance") {
+                Some("insufficient_balance")
+            } else if lower.contains("rate_limit")
+                || lower.contains("rate limit")
+                || self.row.status_code == Some(429)
+            {
+                Some("rate_limit")
+            } else {
+                None
+            };
+        if let Some(kind) = kind {
+            self.fail(kind);
+        }
         self.error_message = Some(message.to_owned());
     }
 

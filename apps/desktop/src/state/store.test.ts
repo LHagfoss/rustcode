@@ -1638,6 +1638,56 @@ describe("engine controller with the mock engine", () => {
     return { parent, target, transport };
   };
 
+  test("thread status reports a running delegate's idle time and provider failure", async () => {
+    const { parent, target, transport } = await stagedMerge();
+    await openThread(target);
+    const at = Date.now() - 5000;
+    updateThread(target, (thread) => ({
+      ...thread,
+      running: true,
+      items: [{ kind: "notice", id: "last-activity", at, text: "Working", tone: "info" }],
+    }));
+    const answer = await answerOrchestration({
+      sessionId: parent,
+      tool: "thread_status",
+      args: { session_id: target },
+    });
+    const delegate = (answer.delegates as JsonObject[])[0]!;
+    expect(delegate.idle_ms).toBeGreaterThanOrEqual(5000);
+    expect(delegate.last_provider_error).toMatchObject({ status_code: 429, error_kind: "rate_limit" });
+    expect(transport.asked(Method.dataActivity)[0]?.params).toMatchObject({
+      sessionId: target,
+      order: "newest",
+    });
+    updateThread(target, (thread) => ({
+      ...thread,
+      items: [
+        { kind: "notice", id: "older-activity", at: Date.now() - 120_000, text: "Working", tone: "info" },
+      ],
+    }));
+    const updated = await answerOrchestration({
+      sessionId: parent,
+      tool: "thread_status",
+      args: { session_id: target },
+    });
+    expect((updated.delegates as JsonObject[])[0]!.idle_ms).toBeLessThan(90_000);
+  });
+
+  test("read_activity forwards newest order to the data store", async () => {
+    const { parent, target, transport } = await stagedMerge();
+    const answer = await answerOrchestration({
+      sessionId: parent,
+      tool: "read_activity",
+      args: { session_id: target, order: "newest", limit: 2 },
+    });
+    expect(answer.error).toBeUndefined();
+    expect(transport.asked(Method.dataActivity)[0]?.params).toMatchObject({
+      sessionId: target,
+      order: "newest",
+      limit: 2,
+    });
+  });
+
   test("a merge whose call is dropped while it waits for the approval never merges", async () => {
     const { parent, target, transport } = await stagedMerge();
     const merged = answerOrchestration({

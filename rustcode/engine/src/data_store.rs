@@ -2732,8 +2732,17 @@ pub fn activity(
     after: Option<&str>,
     limit: usize,
 ) -> Result<ActivityPage, String> {
+    activity_ordered(thread_id, after, limit, false)
+}
+
+pub fn activity_ordered(
+    thread_id: &str,
+    after: Option<&str>,
+    limit: usize,
+    newest: bool,
+) -> Result<ActivityPage, String> {
     let path = data_path().ok_or_else(|| "no config directory".to_owned())?;
-    activity_at(&path, thread_id, after, limit)
+    activity_at_ordered(&path, thread_id, after, limit, newest)
 }
 
 /// [`activity`] against one store file (tests). A store that does not exist
@@ -2743,6 +2752,16 @@ pub fn activity_at(
     thread_id: &str,
     after: Option<&str>,
     limit: usize,
+) -> Result<ActivityPage, String> {
+    activity_at_ordered(path, thread_id, after, limit, false)
+}
+
+pub fn activity_at_ordered(
+    path: &Path,
+    thread_id: &str,
+    after: Option<&str>,
+    limit: usize,
+    newest: bool,
 ) -> Result<ActivityPage, String> {
     let thread_id = thread_id.trim();
     if thread_id.is_empty() {
@@ -2754,8 +2773,19 @@ pub fn activity_at(
         return Ok(ActivityPage::default());
     }
     let connection = open_readonly(path)?;
+    let newest_sql = newest.then(|| {
+        ACTIVITY_SQL
+            .replace(
+                "(at, source, row_id) > (?2, ?3, ?4)",
+                "(?2 = '' OR (at, source, row_id) < (?2, ?3, ?4))",
+            )
+            .replace(
+                "ORDER BY at, source, row_id",
+                "ORDER BY at DESC, source DESC, row_id DESC",
+            )
+    });
     let mut statement = connection
-        .prepare(ACTIVITY_SQL)
+        .prepare(newest_sql.as_deref().unwrap_or(ACTIVITY_SQL))
         .map_err(|error| error.to_string())?;
     // One more than the page, so `has_more` needs no second count.
     let mut rows = statement
@@ -2783,6 +2813,24 @@ pub fn activity_at(
         next,
         has_more,
     })
+}
+
+pub fn last_provider_error(thread_id: &str) -> Result<Option<Value>, String> {
+    let path = data_path().ok_or_else(|| "no config directory".to_owned())?;
+    last_provider_error_at(&path, thread_id)
+}
+
+fn last_provider_error_at(path: &Path, thread_id: &str) -> Result<Option<Value>, String> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let connection = open_readonly(path)?;
+    use rusqlite::OptionalExtension;
+    connection.query_row(
+        "SELECT started_at, provider, model, status_code, error_kind, attempt FROM provider_requests WHERE thread_id = ?1 AND (error_kind IS NOT NULL OR status_code >= 400) ORDER BY started_at DESC, id DESC LIMIT 1",
+        [thread_id],
+        |row| Ok(json!({"at": row.get::<_, String>(0)?, "provider": row.get::<_, Option<String>>(1)?, "model": row.get::<_, Option<String>>(2)?, "status_code": row.get::<_, Option<i64>>(3)?, "error_kind": row.get::<_, Option<String>>(4)?, "attempt": row.get::<_, Option<i64>>(5)?})),
+    ).optional().map_err(query_error)
 }
 
 /// The cursor a page starts after: the `(at, source, row id)` of its last item,
@@ -4824,6 +4872,35 @@ mod tests {
 
     // -------------------------------------------------------------- activity
 
+    #[test]
+    fn newest_activity_pages_include_provider_failures_without_gaps() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        mixed_activity(&path, "t", 4);
+        let mut items = Vec::new();
+        let mut after = None;
+        loop {
+            let page = activity_at_ordered(&path, "t", after.as_deref(), 2, true).unwrap();
+            items.extend(page.items);
+            after = page.next;
+            if !page.has_more {
+                break;
+            }
+        }
+        assert_eq!(items.len(), 12);
+        let keys: Vec<_> = items
+            .iter()
+            .map(|i| (i["at"].as_str().unwrap(), i["source"].as_str().unwrap()))
+            .collect();
+        assert!(keys.windows(2).all(|w| w[0] > w[1]));
+        assert!(items.iter().any(|i| i["error_kind"] == "http_500"));
+        assert!(items.iter().any(|i| i["status_code"] == 500));
+        assert_eq!(
+            last_provider_error_at(&path, "t").unwrap().unwrap()["error_kind"],
+            "http_500"
+        );
+    }
+
     /// One row in each telemetry table per minute, oldest first, so a page
     /// boundary can fall inside, between and across sources.
     fn mixed_activity(path: &Path, thread: &str, minutes: usize) {
@@ -4831,6 +4908,9 @@ mod tests {
             let at = minutes_ago(minute as i64);
             let mut request = provider_row(thread, &at, None);
             request.error_kind = (minute % 3 == 0).then(|| "http_500".to_owned());
+            if request.error_kind.is_some() {
+                request.status_code = Some(500);
+            }
             write_provider_request(&open(path).unwrap(), &request).unwrap();
             record_rpc_messages_at(path, &[&rpc_row(thread, &at, None)]).unwrap();
             record_operational_event_at(

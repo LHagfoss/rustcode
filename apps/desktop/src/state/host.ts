@@ -760,6 +760,7 @@ async function perform(
           {
             sessionId: target.id,
             ...(call.after ? { after: call.after } : {}),
+            ...(call.order ? { order: call.order } : {}),
             limit: call.limit,
           },
           20_000,
@@ -1102,7 +1103,19 @@ async function threadStatus(caller: RuleThread, target?: string): Promise<JsonOb
     entries.push(entry);
   }
   const settled = await Promise.allSettled(
-    entries.map(async (entry) => ({ entry, state: await delegatePull(entry) })),
+    entries.map(async (entry) => {
+      const [state, activity] = await Promise.all([
+        delegatePull(entry),
+        entry.running
+          ? request<JsonObject>(
+              Method.dataActivity,
+              { sessionId: entry.id, order: "newest", limit: 1 },
+              20_000,
+            ).catch(() => null)
+          : null,
+      ]);
+      return { entry, state, activity };
+    }),
   );
   const delegates: JsonObject[] = [];
   for (const result of settled) {
@@ -1110,11 +1123,22 @@ async function threadStatus(caller: RuleThread, target?: string): Promise<JsonOb
       delegates.push({ error: { code: "failed", message: errorText(result.reason) } });
       continue;
     }
-    const { entry, state } = result.value;
+    const { entry, state, activity } = result.value;
+    const recorded = Array.isArray(activity?.items) ? obj(activity.items[0]) : undefined;
+    const recordedAt = typeof recorded?.at === "string" ? Date.parse(recorded.at) : NaN;
+    const transcriptAt = activityOf(useApp.getState().threads[entry.id]?.items ?? []).lastAt;
+    const times = [transcriptAt, Number.isFinite(recordedAt) ? recordedAt : undefined].filter(
+      (time): time is number => time !== undefined,
+    );
+    const lastAt = times.length ? Math.max(...times) : entry.updatedAt;
     delegates.push({
       session_id: entry.id,
       title: entry.title,
       status: entry.status ?? (entry.running ? "running" : "idle"),
+      ...(entry.running && lastAt !== undefined ? { idle_ms: Math.max(0, Date.now() - lastAt) } : {}),
+      ...(entry.running && activity?.last_provider_error
+        ? { last_provider_error: activity.last_provider_error }
+        : {}),
       project: projectOf(entry),
       ...(entry.worktree ? { worktree: { path: entry.worktree.path, branch: entry.worktree.branch } } : {}),
       ...(state.branch ? { branch: state.branch } : {}),
