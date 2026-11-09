@@ -112,7 +112,7 @@ pub async fn run(session_id: String, socket: PathBuf, token: String) -> Result<(
 /// Serve newline-delimited JSON-RPC from `input`, answering on `output`.
 pub async fn serve<R, W>(
     input: R,
-    mut output: W,
+    output: W,
     identity: Identity,
     forward: Arc<dyn Forward>,
     // The client's orchestration version: which tools and hint it can answer.
