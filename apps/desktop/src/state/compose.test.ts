@@ -5,6 +5,7 @@ import {
   hasTokens,
   messageCollapses,
   promptBlocks,
+  sentAttachments,
   sentMessages,
   splitImageMarkers,
   splitSlashCommand,
@@ -58,6 +59,33 @@ describe("compose", () => {
     };
     expect(promptBlocks("", extras, { images: true, builtin: false, cwd: "" })).toEqual([
       { type: "text", text: "Attached file `n.txt`:\n```\nx\n```" },
+    ]);
+  });
+
+  test("a long paste is inlined as a fence of its own, after the text", () => {
+    const extras = {
+      ...emptyExtras,
+      attachments: [{ id: "1", kind: "text" as const, text: "error: it broke\n  at main.rs:1" }],
+    };
+    expect(promptBlocks("why does this fail?", extras, { images: true, builtin: true, cwd: "" })).toEqual([
+      { type: "text", text: "why does this fail?\n\n```\nerror: it broke\n  at main.rs:1\n```" },
+    ]);
+  });
+
+  test("a paste holding a fence closes it with a longer one", () => {
+    const extras = {
+      ...emptyExtras,
+      attachments: [{ id: "1", kind: "text" as const, text: "```\ncode\n```" }],
+    };
+    expect(promptBlocks("", extras, { images: true, builtin: true, cwd: "" })).toEqual([
+      { type: "text", text: "````\n```\ncode\n```\n````" },
+    ]);
+  });
+
+  test("a sent paste keeps its chip and its text", () => {
+    const text = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
+    expect(sentAttachments({ ...emptyExtras, attachments: [{ id: "1", kind: "text", text }] })).toEqual([
+      { kind: "text", name: "Pasted text · 20 lines", text },
     ]);
   });
 

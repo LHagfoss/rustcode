@@ -30,6 +30,7 @@ import {
 import { type QueuedPrompt, wakeLine } from "../state/thread";
 import { openLightbox } from "./Lightbox";
 import { Markdown } from "./Markdown";
+import { PasteChip } from "./PasteChip";
 import { cx, Pill, Tooltip } from "./primitives";
 
 const EMPTY_QUEUE: QueuedPrompt[] = [];
@@ -71,7 +72,9 @@ const QueuedAttachments = memo(function QueuedAttachments({ list }: { list: Atta
   return (
     <div className="mb-1.5 flex max-w-[80%] flex-wrap justify-end gap-1.5">
       {list.map((a) =>
-        a.kind === "image" ? (
+        a.kind === "text" ? (
+          <PasteChip key={a.id} text={a.text} />
+        ) : a.kind === "image" ? (
           <button
             key={a.id}
             type="button"

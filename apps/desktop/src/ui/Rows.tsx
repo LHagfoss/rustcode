@@ -63,6 +63,7 @@ import { HarnessIcon } from "./HarnessIcon";
 import { openLightbox } from "./Lightbox";
 import { LinkStateIcon } from "./Links";
 import { COMMAND_MARK, CopyButton, Markdown } from "./Markdown";
+import { PasteChip } from "./PasteChip";
 import { Callout, cx, Pill, Spinner, Tooltip } from "./primitives";
 import { turnActions, turnFooterHidden } from "./replyActions";
 import { SmartUIView } from "./SmartUIView";
@@ -114,7 +115,11 @@ export const UserRow = memo(function UserRow({
       {(attachments.length > 0 || placeholders > 0) && (
         <div className="mb-1.5 flex max-w-full flex-wrap justify-end gap-1.5">
           {attachments.map((a, i) =>
-            a.kind === "image" && a.preview ? (
+            // A message sent with a long paste keeps it as the chip it was written as, not as the
+            // wall of text it came from: the panel opens the text itself.
+            a.kind === "text" ? (
+              <PasteChip key={i} text={a.text ?? ""} />
+            ) : a.kind === "image" && a.preview ? (
               <button
                 key={i}
                 type="button"

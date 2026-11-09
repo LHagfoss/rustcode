@@ -54,6 +54,7 @@ import {
   projectFiles,
   readImage,
 } from "../lib/native";
+import { isLongPaste } from "../lib/paste";
 import { observeSize } from "../lib/resize";
 import { fadeClearedField } from "../lib/sendFlight";
 import {
@@ -106,6 +107,7 @@ import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
 import { openLightbox } from "./Lightbox";
 import { LinkChip } from "./LinkChip";
 import { ModelPicker } from "./ModelPicker";
+import { PasteChip } from "./PasteChip";
 import { cx, MenuSearchField, MenuShortcut, Pill, Tooltip } from "./primitives";
 import { QueuedAnnouncer } from "./QueuedMessages";
 
@@ -509,6 +511,14 @@ export const Composer = memo(function Composer({
     if (files.length) {
       e.preventDefault();
       void attachmentsFromFiles(files, images, harnessName).then(attach);
+      return;
+    }
+    // A long block (a log, a file, a stack trace) would turn the draft into a wall of text and the
+    // card into a tower: it becomes a chip above the field, sent with the message all the same.
+    const text = e.clipboardData.getData("text/plain");
+    if (isLongPaste(text)) {
+      e.preventDefault();
+      attach([{ id: localId("paste"), kind: "text", text }]);
       return;
     }
     // A pasted link stays where it was pasted, as text; the sent message shows it as a chip.
@@ -1165,9 +1175,11 @@ function AttachmentStrip({
           +{more.length}
         </button>
       )}
-      {attachments
-        .filter((a) => a.kind !== "image")
-        .map((a) => (
+      {attachments.map((a) =>
+        // A long paste keeps its size in the chip, and its text in the panel it opens.
+        a.kind === "text" ? (
+          <PasteChip key={a.id} text={a.text} onRemove={() => onRemove(a.id)} />
+        ) : a.kind === "file" ? (
           <Tooltip key={a.id} label={a.path ?? `${a.name} (sent inline)`}>
             <span className="flex h-[26px] shrink-0 items-center gap-1.5 rounded-full bg-fill-subtle pr-1.5 pl-2 text-callout rc-in">
               <FileText size={12} className="text-fg-muted" />
@@ -1182,7 +1194,8 @@ function AttachmentStrip({
               </button>
             </span>
           </Tooltip>
-        ))}
+        ) : null,
+      )}
     </div>
   );
 }
