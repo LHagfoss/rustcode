@@ -15,6 +15,7 @@ import {
   Hand,
   MessageCircleQuestion,
   Sparkles,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isAllow, type PermissionOption, type PermissionRequest, projectName } from "../acp/types";
@@ -31,6 +32,7 @@ import { useInboxItems } from "../state/inboxRead";
 import {
   answerPermission,
   answerQuestionOptions,
+  dismissInbox,
   retryThread,
   selectThread,
   setView,
@@ -80,13 +82,27 @@ function decidedLabel(option: PermissionOption): string {
   return "Answered";
 }
 
-/** The actions one row offers, the same answers the thread's own cards offer. */
+/**
+ * The actions one row offers: the same answers the thread's own cards offer, then
+ * Open and Dismiss, which every row has. Dismiss puts the row away without
+ * answering it, and the row comes back if the thread asks again (state/store.ts
+ * `dismissInbox`).
+ */
 export function inboxActions(item: InboxItem): RowAction[] {
-  const open: RowAction = {
-    label: "Open",
-    run: () => selectThread(item.threadId),
-    decided: "Opened",
-  };
+  return [...rowAnswers(item), openAction(item), dismissAction(item)];
+}
+
+function openAction(item: InboxItem): RowAction {
+  return { label: "Open", run: () => selectThread(item.threadId), decided: "Opened" };
+}
+
+/** Put this row away without answering it: the thread is untouched, so it goes on as it was. */
+export function dismissAction(item: InboxItem): RowAction {
+  return { label: "Dismiss", run: () => dismissInbox([item]), decided: "Dismissed" };
+}
+
+/** The answers a row offers, before Open and Dismiss. */
+function rowAnswers(item: InboxItem): RowAction[] {
   if (item.kind === "failed") {
     return [
       {
@@ -95,17 +111,16 @@ export function inboxActions(item: InboxItem): RowAction[] {
         primary: true,
         decided: "Retried",
       },
-      open,
     ];
   }
   const request: PermissionRequest | undefined = item.request;
-  if (!request) return [open];
+  if (!request) return [];
   if (request.question) {
     // A multiple-choice question needs the thread's own form: one inline answer could
     // send half of it.
-    if (request.question.multiple) return [open];
+    if (request.question.multiple) return [];
     const answers = request.options.filter((option) => isAllow(option.kind) || !option.kind);
-    const actions = answers.slice(0, 3).map(
+    return answers.slice(0, 3).map(
       (option, i): RowAction => ({
         label: option.name,
         run: () => answerQuestionOptions(request, [option]),
@@ -113,7 +128,6 @@ export function inboxActions(item: InboxItem): RowAction[] {
         decided: "Answered",
       }),
     );
-    return [...actions, open];
   }
   // The answer the row leads with is a single call; a grant is a choice of how
   // long it lasts, the same one the thread's own card offers. A destructive
@@ -144,7 +158,7 @@ export function inboxActions(item: InboxItem): RowAction[] {
       decided: decidedLabel(decline),
     });
   }
-  return [...actions, open];
+  return actions;
 }
 
 function KindIcon({ kind }: { kind: InboxItem["kind"] }) {
@@ -260,6 +274,17 @@ function InboxRow({
           <RowActions item={item} onRun={onRun} />
         </span>
       </div>
+      {/* The row's own x: the quick way out for a pointer, beside the answers the
+          hovered line offers and the digit key that does the same. */}
+      <button
+        type="button"
+        onClick={() => onRun(dismissAction(item))}
+        title="Dismiss"
+        aria-label={`Dismiss ${item.title}`}
+        className="mt-0.5 flex size-[22px] shrink-0 items-center justify-center rounded-sm text-fg-faint opacity-0 transition-opacity hover:bg-fill hover:text-fg focus-visible:opacity-100 group-focus-within:opacity-100 group-hover:opacity-100"
+      >
+        <X size={13} />
+      </button>
     </li>
   );
 }
@@ -365,6 +390,13 @@ export function Inbox() {
     action.run();
   }, []);
 
+  // Dismiss all: every row as it stands, with one Undo, and each folded into Decided
+  // as one the user put away rather than answered.
+  const dismissAll = useCallback(() => {
+    for (const item of items) labels.current[item.key] = "Dismissed";
+    dismissInbox(items);
+  }, [items]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return;
@@ -418,7 +450,13 @@ export function Inbox() {
             )}
           </span>
         }
-      />
+      >
+        {items.length > 0 && (
+          <Pill size="sm" quiet onClick={dismissAll}>
+            Dismiss all
+          </Pill>
+        )}
+      </ViewHeader>
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-10 sm:px-12">
         <div className="mx-auto flex w-full max-w-[var(--rc-chat-content-max-width)] flex-col gap-4 pt-1">
           <WhileAwayCard />
