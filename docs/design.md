@@ -253,10 +253,10 @@ rather than retyped: `cardInset` (`p-4`), `rowInset` (`px-4 py-3`) and
 `menuInset` (`p-2`). A card's text, a settings row's text and a menu row's text
 all start on the same 16px line, so the surfaces agree at their edges:
 
-- **Sidebar and header:** the list is `px-2`, a row is `px-2` inside it, and a
-  section header, a menu row and a toolbar button take the same 8px inset; the
-  header floats at `px-2` above the pane, so its controls sit on the edge the
-  sidebar's rows and the queue share. A menu's item text lands on the same
+- **Sidebar and header:** the sidebar's list and its toolbar rows are `px-3`
+  (12px from the edge), a row is `px-2` inside it with `gap-1` between rows,
+  and a section header, a menu row and a toolbar button take the same 8px
+  inset; the header floats at `px-2` above the pane. A menu's item text lands on the same
   16px line as a settings row's.
 - **Settings:** the nav column keeps `px-2` rows; the page column is `px-4`, so
   the breadcrumb, the first section title and the rows under it start on one
@@ -558,10 +558,19 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   action), not to repeat what the screen already shows (no pin, archive,
   theme, harness-switch or steering notice); an error about a thread's turn
   stays an error card over the composer. No banners.
-- **Sidebar sections:** one list, with a header only where a group needs one:
-  Working (threads running now, on top; off with the filter menu or when
-  grouping by project), then pinned and the rest, and at the foot the Snoozed
-  and Settled shelves. A snoozed row shows when it wakes where the age goes.
+- **Sidebar sections:** Pinned and Active lead the list, each with a quiet
+  label once both are there; the Working, Snoozed and Settled shelves follow
+  at the foot, under one hairline, each a one-line header with its count and a
+  chevron that folds it. Every shelf folds on its own and the choice is kept
+  per shelf (`rustcode.sidebar.<shelf>Open`; Working open by default, Snoozed
+  and Settled shut); a shut shelf still shows its count and the dot for a
+  thread that needs you or works. Working holds the threads running now (off
+  from ⌘K, or when grouping by project). A settled thread never sits under
+  Pinned. The sidebar has no search field or filter menu: threads are found
+  with ⌘K, which also holds the view options (group by project, the Working
+  shelf, one project), Add project, Pull requests, Usage and Statistics. The
+  sidebar's own buttons are two icons under the toggle (Add project, New
+  thread) and a small foot row (Settings, Pull requests, Usage). A snoozed row shows when it wakes where the age goes.
   Snooze (presets, or Custom…) is a submenu of the row's menu; a thread comes
   back on time, marked unread, or sooner when it needs you, works or is messaged.
   A row's second line reads the worktree branch, then what the thread's calls

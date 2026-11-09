@@ -1,15 +1,16 @@
 import { fileManagerName, primaryModifier } from "../lib/platform";
-// The sidebar: a toolbar clear of the traffic lights, a search row with the
-// filter and the buttons that make a thread or a project, then one list:
-// pinned threads first, then every active thread (by project when asked). A row
+// The sidebar: a toolbar clear of the traffic lights (the sidebar toggle only), a
+// row with the two buttons that make a project or a thread, then one list:
+// pinned threads first, then every active thread (by project when asked), then
+// the Working, Snoozed and Settled shelves at the foot, each folding on its own
+// header. Settings, pull requests and usage are a small row at the very foot;
+// threads are searched from ⌘K. A row
 // runs two lines: where it runs, its branch and what the branch's pull request
 // became, above its title and the threads it works with. One status chip
 // (`Working 57:13`, `Waiting`, `Needs you`, `Failed`, `Review`) ends the top
 // line, the threads it started end the second as a stack of marks, and a row
 // that is idle or settled shows its age there instead (state/sidebarRows.ts
-// `rowStatus`). Settled (threads settled) opens from the foot.
-// The app's own pages (settings, pull requests) are buttons in the toolbar's
-// titlebar row.
+// `rowStatus`).
 
 import {
   Check,
@@ -28,20 +29,18 @@ import {
   FolderOpen,
   FolderPlus,
   FolderX,
+  Gauge,
   GitBranch,
   GitMerge,
   GitPullRequest,
   GitPullRequestArrow,
   GitPullRequestClosed,
   GitPullRequestDraft,
-  KanbanSquare,
-  ListFilter,
   MessageCircleQuestion,
   PanelLeft,
   Pencil,
   Pin,
   PinOff,
-  Search,
   ShieldQuestion,
   Sparkles,
   SquarePen,
@@ -81,19 +80,27 @@ import {
 } from "../state/pulls";
 import { type PendingSetup, pendingSummary } from "../state/setup";
 import { applyOrder, moveBy, reorder, sectionOrderKey } from "../state/sidebarOrder";
+import { PREF, usePref } from "../state/sidebarPrefs";
 import {
   contextRow,
+  isShelf,
   keepListed,
   listedPicks,
   nextRow,
   type OrderRow,
   type OrderSection,
   opensRowMenu,
+  placeThread,
   type RowStatus,
   type RowStatusKind,
   rangeRows,
   rowKeyAction,
   rowStatus,
+  SECTION_ORDER,
+  type SectionId,
+  type ShelfId,
+  shelfKey,
+  shelfOpen,
   threadDiff,
   visibleRows,
 } from "../state/sidebarRows";
@@ -106,10 +113,10 @@ import {
   errorText,
   featureMissing,
   markUnread,
+  openSettings,
   removeWorktree,
   renameThread,
   repairThread,
-  searchThreads,
   selectThread,
   setAutoCompactForThread,
   setPanel,
@@ -148,7 +155,6 @@ import {
   ContextMenuSurface,
   cx,
   MenuContent,
-  MenuSearchField,
   menuItem,
   menuItemDanger,
   menuLabel,
@@ -578,7 +584,6 @@ const ThreadRow = memo(function ThreadRow({
   context,
   grouped,
   now,
-  snippet,
   hint,
   pull,
   agents,
@@ -599,8 +604,6 @@ const ThreadRow = memo(function ThreadRow({
   /** Under its project's heading: the row leaves out the mark and the name it would repeat. */
   grouped: boolean;
   now: number;
-  /** While searching: the words around the match in what was said. */
-  snippet?: string;
   /** No parent row above it (a search result, or a filtered-out parent): the thread it belongs under. */
   hint?: string;
   /** The thread's branch's pull request, from the project's read (state/pulls.ts). */
@@ -822,17 +825,11 @@ const ThreadRow = memo(function ThreadRow({
                   )}
                 </span>
               </span>
-              {/* What it asks of you; while searching, the words around the match; or which thread a
-                delegated one without a parent row above it belongs under. */}
-              {(snippet || request || hint) && (
+              {/* What it asks of you, or which thread a delegated one without a parent row above it
+                belongs under. */}
+              {(request || hint) && (
                 <span className="relative truncate text-fg-muted text-sub">
-                  {snippet
-                    ? `“${snippet}”`
-                    : request
-                      ? request.question
-                        ? request.question.text
-                        : request.title
-                      : hint}
+                  {request ? (request.question ? request.question.text : request.title) : hint}
                 </span>
               )}
             </button>
@@ -991,30 +988,17 @@ function useNow() {
   return now;
 }
 
-/** A small preference kept in localStorage; it reads back empty in a private window. */
-function useStored<T>(key: string, initial: T) {
-  const [value, setValue] = useState<T>(() => {
-    try {
-      const raw = localStorage.getItem(key);
-      return raw === null ? initial : (JSON.parse(raw) as T);
-    } catch {
-      return initial;
-    }
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem(key, JSON.stringify(value));
-    } catch {
-      // Not kept in a private window.
-    }
-  }, [key, value]);
-  return [value, setValue] as const;
-}
+/** Pinned and Active are the list itself; the shelves have a header that folds them. */
+const LABELS: Record<SectionId, string> = {
+  pinned: "Pinned",
+  threads: "Active",
+  working: "Working",
+  snoozed: "Snoozed",
+  settled: "Settled",
+};
 
-type SectionId = "working" | "pinned" | "threads" | "snoozed" | "settled";
-
-/** Sections with a header; the rest are simply part of the list. */
-const HEADED: SectionId[] = ["working", "snoozed"];
+/** The folds `PREF.folded` keeps (a project's folder), in one array that never changes identity. */
+const NO_FOLDS: string[] = [];
 
 interface Section {
   id: SectionId;
@@ -1151,6 +1135,18 @@ function SectionHeader({
   );
 }
 
+/** The heading of Pinned or Active: it names the group and never folds. */
+function SectionLabel({ section }: { section: Section }) {
+  return (
+    <div className="flex h-8 w-full items-center gap-2 px-2 font-medium text-fg-muted text-sub">
+      <span className="min-w-0 flex-1 truncate">{section.label}</span>
+      <span className="shrink-0 font-normal text-fg-faint">
+        <RollingNumber value={section.items.length} />
+      </span>
+    </div>
+  );
+}
+
 /**
  * A project's folder: the folder and its name, a dot for
  * what it hides and its count only while folded, the chevron at the end, and
@@ -1207,163 +1203,11 @@ function ProjectHeader({
   );
 }
 
-function FilterMenu({
-  byProject,
-  setByProject,
-  showWorking,
-  setShowWorking,
-  onlyProject,
-  setOnlyProject,
-}: {
-  byProject: boolean;
-  setByProject: (v: boolean) => void;
-  showWorking: boolean;
-  setShowWorking: (v: boolean) => void;
-  onlyProject: boolean;
-  setOnlyProject: (v: boolean) => void;
-}) {
-  const projectCwd = useApp((s) => s.projectCwd);
-  const view = useApp((s) => s.view.kind);
-  const on = onlyProject;
-  const check = (value: boolean) => (
-    <span className="flex w-3.5 justify-center">{value && <Check size={12} strokeWidth={2.5} />}</span>
-  );
-  return (
-    <DropdownMenu.Root>
-      <DropdownMenu.Trigger asChild>
-        <ClusterButton label="Filter and view" tooltip="Filter and view" on={on}>
-          <ListFilter size={14} />
-        </ClusterButton>
-      </DropdownMenu.Trigger>
-      <MenuContent align="end">
-        <DropdownMenu.Item className={menuItem} onSelect={() => setByProject(!byProject)}>
-          {check(byProject)} Group by project
-        </DropdownMenu.Item>
-        <DropdownMenu.Item
-          className={menuItem}
-          disabled={byProject}
-          onSelect={() => setShowWorking(!showWorking)}
-        >
-          {check(showWorking)} Working section
-        </DropdownMenu.Item>
-        <DropdownMenu.Item
-          className={menuItem}
-          disabled={!projectCwd}
-          onSelect={() => setOnlyProject(!onlyProject)}
-        >
-          {check(onlyProject)}
-          <span className="truncate">Only {projectCwd ? projectName(projectCwd) : "this project"}</span>
-        </DropdownMenu.Item>
-        <DropdownMenu.Separator className={menuSeparator} />
-        <DropdownMenu.Item
-          className={menuItem}
-          onSelect={() => setView(view === "board" ? { kind: "chat" } : { kind: "board" })}
-        >
-          <KanbanSquare size={13} /> {view === "board" ? "Show the Chat" : "Show the Board"}
-        </DropdownMenu.Item>
-      </MenuContent>
-    </DropdownMenu.Root>
-  );
-}
-
 const NO_MARKS: Record<string, ThreadStatus> = {};
 
 /** Nothing picked: one set, so clearing an empty selection never re-renders the list. */
 const NO_PICKS: ReadonlySet<string> = new Set();
 const NO_AGENTS: SubagentInfo[] = [];
-
-/**
- * The sidebar's search: a row that reads "Search" until it is clicked (or ⌘F
- * while the sidebar has the keyboard), then the field itself. Never a pill: it
- * is a row among the icon buttons beside it, the same height and radius.
- */
-function SidebarSearch({
-  query,
-  setQuery,
-  open,
-  setOpen,
-}: {
-  query: string;
-  setQuery: (query: string) => void;
-  open: boolean;
-  setOpen: (open: boolean) => void;
-}) {
-  const input = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (open) input.current?.focus();
-  }, [open]);
-  if (!open && !query) {
-    return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        aria-label="Search threads"
-        className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left text-callout text-fg-muted hover:bg-fill hover:text-fg"
-      >
-        <Search size={14} className="shrink-0" />
-        <span className="truncate">Search</span>
-      </button>
-    );
-  }
-  return (
-    <MenuSearchField
-      value={query}
-      onChange={setQuery}
-      placeholder="Search"
-      label="Search threads"
-      inputRef={input}
-      size="sm"
-      className="flex-1"
-      onClear={() => setQuery("")}
-      onKeyDown={(e) => {
-        // Escape clears a search; with nothing in it, it closes the field.
-        if (e.key !== "Escape") return;
-        if (query) setQuery("");
-        else setOpen(false);
-      }}
-      // An empty search closes with the keyboard: a field with nothing in it is a label.
-      onBlur={() => {
-        if (!query) setOpen(false);
-      }}
-    />
-  );
-}
-
-/**
- * The shelf at the foot of the sidebar: Settled says how many threads it holds
- * and opens them where they lie, at the end of the list above it.
- */
-function SettledRow({
-  count,
-  open,
-  hidden,
-  onToggle,
-}: {
-  count: number;
-  open: boolean;
-  hidden?: HiddenKind;
-  onToggle: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      aria-expanded={open}
-      disabled={!count}
-      className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-callout text-fg-muted hover:bg-fill-subtle hover:text-fg disabled:cursor-default disabled:hover:bg-transparent disabled:hover:text-fg-muted"
-    >
-      <span className="min-w-0 flex-1 truncate">Settled</span>
-      {!open && <HiddenDot kind={hidden} />}
-      <RollingNumber value={count} className="shrink-0 text-fg-faint text-sub" />
-      {/* Two marks rather than one turned by a class: a rotated icon keeps the transform it had. */}
-      {open ? (
-        <ChevronDown size={12} strokeWidth={2.5} className="shrink-0 text-fg-faint" />
-      ) : (
-        <ChevronRight size={12} strokeWidth={2.5} className="shrink-0 text-fg-faint" />
-      )}
-    </button>
-  );
-}
 
 export function Sidebar() {
   const sessions = useApp((s) => s.sessions);
@@ -1389,28 +1233,31 @@ export function Sidebar() {
   const pinned = useApp((s) => s.pinned);
   // The order each section draws its rows in, as the user arranged it (state/sidebarOrder.ts).
   const layout = useApp((s) => s.sidebarOrder);
-  const [query, setQuery] = useState("");
-  // The search row is a label until it is used: ⌘F while the sidebar has the keyboard opens it.
-  const [searchOpen, setSearchOpen] = useState(false);
   // Each thread's branch's pull request, from the projects' one read (state/pulls.ts).
   const pullsOn = useApp((s) => !!s.agent?.pullRequests);
   // The titlebar's icon buttons open the same places the header's do.
   const panel = useApp((s) => s.panel);
+  const usageOpen = useApp((s) => s.settings === "usage");
   // The cache's version: a landed read re-renders the rows that read it.
   useSyncExternalStore(subscribePulls, pullsVersion);
   // By state, with the project on each row; grouping by project is an option.
-  const [byProject, setByProject] = useStored("rustcode.sidebar.groupByProject", false);
-  const [showWorking, setShowWorking] = useStored("rustcode.sidebar.workingSection", true);
+  // The view options are changed from ⌘K (ui/CommandPalette.tsx), so they are shared, not local.
+  const [byProject] = usePref(PREF.groupByProject, false);
+  const [showWorking] = usePref(PREF.workingSection, true);
   const snoozed = useApp((s) => s.snoozed);
   useEffect(() => {
     wakeSnoozed();
     const t = setInterval(() => wakeSnoozed(), 15_000);
     return () => clearInterval(t);
   }, []);
-  const [onlyProject, setOnlyProject] = useStored("rustcode.sidebar.onlyProject", false);
-  const [folded, setFolded] = useStored<string[]>("rustcode.sidebar.folded", []);
-  // The shelf at the foot has its own switch: it is a row of the sidebar's, not of the list.
-  const [settledOpen, setSettledOpen] = useStored("rustcode.sidebar.settledOpen", false);
+  const [onlyProject] = usePref(PREF.onlyProject, false);
+  // The projects folded under "group by project" (`project:<path>`); the shelves keep their own.
+  const [folded, setFolded] = usePref<string[]>(PREF.folded, NO_FOLDS);
+  // Each shelf's open state is its own, kept per section: `undefined` until the user chooses, so
+  // it takes the shelf's default (Working open, Snoozed and Settled shut).
+  const [workingStored, setWorkingStored] = usePref<boolean | undefined>(shelfKey("working"), undefined);
+  const [snoozedStored, setSnoozedStored] = usePref<boolean | undefined>(shelfKey("snoozed"), undefined);
+  const [settledStored, setSettledStored] = usePref<boolean | undefined>(shelfKey("settled"), undefined);
   // The groups of child rows are gone, and with them the folds older releases kept open: drop
   // the record once, so a stale preference does not sit in localStorage for ever.
   useEffect(() => {
@@ -1444,30 +1291,13 @@ export function Sidebar() {
   // design-lint: allow (mask alpha, not a colour)
   const fade = "linear-gradient(to bottom, #000 calc(100% - 12px), transparent)";
 
-  // What was said in a thread matches too: the engine's index answers once the query has three
-  // characters, a moment after typing stops.
-  const [contentHits, setContentHits] = useState<Record<string, string>>({});
-  useEffect(() => {
-    const q = query.trim();
-    if (q.length < 3) {
-      setContentHits({});
-      return;
-    }
-    let live = true;
-    const t = setTimeout(() => void searchThreads(q).then((hits) => live && setContentHits(hits)), 200);
-    return () => {
-      live = false;
-      clearTimeout(t);
-    };
-  }, [query]);
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return sessions.filter(
-      (s) =>
-        (!onlyProject || !projectCwd || s.cwd === projectCwd || s.worktree?.repo === projectCwd) &&
-        (!q || `${s.title ?? ""} ${s.cwd}`.toLowerCase().includes(q) || s.id in contentHits),
-    );
-  }, [sessions, query, onlyProject, projectCwd, contentHits]);
+  const filtered = useMemo(
+    () =>
+      sessions.filter(
+        (s) => !onlyProject || !projectCwd || s.cwd === projectCwd || s.worktree?.repo === projectCwd,
+      ),
+    [sessions, onlyProject, projectCwd],
+  );
 
   const links = useApp((s) => s.links.links);
   const messaged = useApp((s) => s.messaged);
@@ -1495,28 +1325,18 @@ export function Sidebar() {
     return parentOf;
   }, [sessions, links, pinned, messaged]);
   const byId = useMemo(() => new Map(sessions.map((s) => [s.id, s] as const)), [sessions]);
-  // A search lists every match as a row of its own: the thread you are looking for is not hidden
-  // under a parent that did not match. Each such row says which thread it belongs to instead.
-  const searching = !!query.trim();
   // The threads with a row of their own, before the open delegate's chain is drawn under its parent.
   const topRows = useMemo(
-    () => new Set(filtered.filter((s) => searching || !parentOf.has(s.id)).map((s) => s.id)),
-    [filtered, parentOf, searching],
+    () => new Set(filtered.filter((s) => !parentOf.has(s.id)).map((s) => s.id)),
+    [filtered, parentOf],
   );
   // The open delegated thread and the threads between it and its row of its own: drawn as indented
   // rows under the parent, and folded away when the user opens another thread or goes back.
-  const chain = useMemo(
-    () => (searching ? [] : openChain(selectedId, parentOf, topRows)),
-    [searching, selectedId, parentOf, topRows],
-  );
+  const chain = useMemo(() => openChain(selectedId, parentOf, topRows), [selectedId, parentOf, topRows]);
   // A nested thread the filter left with no drawn row above it: it keeps a row of its own rather
   // than going missing, saying which thread it belongs under.
   const orphanOpen =
-    !searching &&
-    selectedId &&
-    parentOf.has(selectedId) &&
-    !chain.length &&
-    filtered.some((s) => s.id === selectedId)
+    selectedId && parentOf.has(selectedId) && !chain.length && filtered.some((s) => s.id === selectedId)
       ? selectedId
       : undefined;
   // Each open delegate by the row it hangs under. The chain is one path, so a parent has one child.
@@ -1558,41 +1378,44 @@ export function Sidebar() {
 
   const sections = useMemo(() => {
     const flagged = new Set(flags.split(" "));
-    const pins: SessionSummary[] = [];
     const isFresh = (id: string) => !!finished[id];
-    const active: SessionSummary[] = [];
-    const settled: SessionSummary[] = [];
-    const working: SessionSummary[] = [];
-    const sleeping: SessionSummary[] = [];
+    const placed: Record<SectionId, SessionSummary[]> = {
+      pinned: [],
+      threads: [],
+      working: [],
+      snoozed: [],
+      settled: [],
+    };
     // The thread setting up is a row of the list until the session exists: first, where its real
     // row will be, so it keeps its place when it becomes one.
-    const q = query.trim().toLowerCase();
     const pendingRow =
       pending &&
-      (!q || `${pending.title} ${pending.cwd}`.toLowerCase().includes(q)) &&
       (!onlyProject || !projectCwd || pending.cwd === projectCwd || pending.worktree?.repo === projectCwd)
         ? pendingSummary(pending)
         : null;
     for (const s of filtered) {
-      // A delegated thread has no row of its own, unless a search lists it or the filter left the
-      // open one with no row to hang under (`orphanOpen`).
-      if (!searching && parentOf.has(s.id) && s.id !== orphanOpen) continue;
+      // A delegated thread has no row of its own, unless the filter left the open one with no row
+      // to hang under (`orphanOpen`).
+      if (parentOf.has(s.id) && s.id !== orphanOpen) continue;
       const listed = s.status === "done" || s.status === "review" ? s.status : "idle";
       // Settled: threads settled (by the user, or the engine for a merged branch), and
       // threads untouched for three days unless they wait for review.
       const status = marks[s.id] ?? listed;
-      const done = status === "done" || (status !== "review" && idleSettled(s.updatedAt, now));
-      // A pinned thread always shows, whatever it is doing.
-      // One list, each row saying what it does; only settled threads leave it.
-      if (pinned.includes(s.id)) pins.push(s);
-      // Snoozed until its time, unless it needs you or works in the meantime.
-      else if (snoozed[s.id] && !flagged.has(`${s.id}:n`) && !flagged.has(`${s.id}:w`)) sleeping.push(s);
-      // Folders already separate the work, so grouping by project has no Working section.
-      else if (showWorking && !byProject && flagged.has(`${s.id}:w`)) working.push(s);
-      else if (done && !flagged.has(`${s.id}:n`) && !flagged.has(`${s.id}:w`) && !isFresh(s.id))
-        settled.push(s);
-      else active.push(s);
+      placed[
+        placeThread({
+          pinned: pinned.includes(s.id),
+          settled: status === "done",
+          aged: status !== "review" && idleSettled(s.updatedAt, now),
+          snoozed: !!snoozed[s.id],
+          needs: flagged.has(`${s.id}:n`),
+          working: flagged.has(`${s.id}:w`),
+          fresh: isFresh(s.id),
+          showWorking,
+          byProject,
+        })
+      ].push(s);
     }
+    const { pinned: pins, threads: active, snoozed: sleeping } = placed;
     pins.sort((a, b) => pinned.indexOf(a.id) - pinned.indexOf(b.id));
     if (pendingRow) active.unshift(pendingRow);
     // The order the user arranged, per section (state/sidebarOrder.ts): a row that was dragged or
@@ -1619,13 +1442,13 @@ export function Sidebar() {
       project.items = arranged("threads", project.items, project.key);
     }
     sleeping.sort((a, b) => (snoozed[a.id] ?? 0) - (snoozed[b.id] ?? 0));
-    const all: Section[] = [
-      { id: "working", label: "Working", items: arranged("working", working) },
-      { id: "pinned", label: "Pinned", items: arranged("pinned", pins) },
-      { id: "threads", label: "Threads", items: arranged("threads", active), projects },
-      { id: "snoozed", label: "Snoozed", items: arranged("snoozed", sleeping) },
-      { id: "settled", label: "Settled", items: arranged("settled", settled) },
-    ];
+    // Pinned and Active lead; the Working, Snoozed and Settled shelves follow at the foot.
+    const all: Section[] = SECTION_ORDER.map((id) => ({
+      id,
+      label: LABELS[id],
+      items: arranged(id, placed[id]),
+      projects: id === "threads" ? projects : undefined,
+    }));
     for (const g of all) {
       g.hidden = g.items.some((x) => flagged.has(`${x.id}:n`))
         ? "needs"
@@ -1648,18 +1471,16 @@ export function Sidebar() {
     snoozed,
     showWorking,
     pending,
-    query,
     onlyProject,
     projectCwd,
-    searching,
     orphanOpen,
     layout,
   ]);
 
-  const footShelf = sections.some((g) => g.id === "snoozed") ? "snoozed" : "settled";
-  // Settled is the shelf at the foot (ui/Sidebar.tsx SettledRow): its header sits in the footer,
-  // and its rows stay at the end of the list above it.
   const settledSection = sections.find((g) => g.id === "settled");
+  // The first shelf starts the foot of the list; Pinned and Active are labelled once both are there.
+  const firstShelf = sections.find((g) => isShelf(g.id))?.id;
+  const labelled = sections.filter((g) => !isShelf(g.id)).length > 1;
   // The open delegate's parent may have been settled: the shelf opens for it and its slice of the
   // shelf grows to hold the row, so the row it hangs under is reachable rather than out of sight.
   const settledAt = settledSection
@@ -1668,16 +1489,21 @@ export function Sidebar() {
         ...settledSection.items.map((s, index) => (chain.some((c) => c.parent === s.id) ? index : -1)),
       )
     : -1;
-  const settledForChain = !searching && settledAt >= 0;
-  // A search shows every match, folded sections too.
-  const isOpen = (id: string) =>
-    id === "settled"
-      ? !!query.trim() || settledOpen || settledForChain
-      : !!query.trim() || !folded.includes(id);
-  const toggle = (id: string) =>
-    id === "settled"
-      ? setSettledOpen(!settledOpen)
-      : setFolded((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]));
+  const settledForChain = settledAt >= 0;
+  // Every shelf folds on its own header, and the choice is kept per shelf. Pinned and Active are
+  // the list itself and never fold; a project's folder (group by project) folds with `folded`.
+  const shelfIsOpen: Record<ShelfId, boolean> = {
+    working: shelfOpen("working", workingStored),
+    snoozed: shelfOpen("snoozed", snoozedStored),
+    settled: shelfOpen("settled", settledStored, { forced: settledForChain }),
+  };
+  const isOpen = (id: string) => (isShelf(id) ? shelfIsOpen[id] : !folded.includes(id));
+  const toggle = (id: string) => {
+    if (id === "working") setWorkingStored(!isOpen(id));
+    else if (id === "snoozed") setSnoozedStored(!isOpen(id));
+    else if (id === "settled") setSettledStored(!isOpen(id));
+    else setFolded(folded.includes(id) ? folded.filter((x) => x !== id) : [...folded, id]);
+  };
   const settledLimit = Math.max(settledShown, settledAt + 1);
 
   // Which list each drawn row arranges, and the rows drawn in it: a drag and ⌥↑/↓ both move a row
@@ -1694,14 +1520,13 @@ export function Sidebar() {
     for (const section of sections) {
       // Settled draws a slice of its rows, and a folded section draws none: the rows on screen are
       // the ones a drag can move.
-      const items =
-        section.id === "settled" && !query.trim() ? section.items.slice(0, settledLimit) : section.items;
+      const items = section.id === "settled" ? section.items.slice(0, settledLimit) : section.items;
       if (section.projects) {
         for (const p of section.projects) add(sectionOrderKey(section.id, p.key), p.items);
       } else add(section.id, items);
     }
     return homes;
-  }, [byId, query, sections, settledLimit]);
+  }, [byId, sections, settledLimit]);
 
   // ⌥↑/↓ on a focused row takes it one place up or down the list it is drawn in, and keeps the
   // keyboard on it: the row is the same element, moved (ui/Sidebar.tsx `onListKey`).
@@ -1724,7 +1549,7 @@ export function Sidebar() {
   const drag = useThreadDrag({
     list,
     homeOf: (id) => homes.get(id),
-    enabled: !query.trim(),
+    enabled: true,
     drop: (home, id, index) =>
       setSectionOrder(home.key, reorder(layout[home.key] ?? [], home.ids, id, index)),
   });
@@ -1792,8 +1617,13 @@ export function Sidebar() {
   // The order the list draws its rows in, so ↑ ↓ move through what is on screen: a shut section
   // or project contributes nothing. A delegated thread has no row of its own, so it is not here
   // (state/sidebarRows.ts).
+  const { working: workingOpen, snoozed: snoozedOpen, settled: settledShelfOpen } = shelfIsOpen;
   const order = useMemo<OrderSection[]>(() => {
-    const open = (id: string) => !!query.trim() || !folded.includes(id);
+    const shelfShut: Record<ShelfId, boolean> = {
+      working: !workingOpen,
+      snoozed: !snoozedOpen,
+      settled: !settledShelfOpen,
+    };
     // A row with the open delegate under it draws its chain next: ↑ ↓ and the tab stop reach the
     // sub-rows, because the list draws them.
     const toOrder = (items: SessionSummary[]): OrderRow[] => {
@@ -1813,18 +1643,18 @@ export function Sidebar() {
             id: section.id,
             groups: section.projects.map((p) => ({
               key: p.key,
-              shut: !open(`project:${p.key}`),
+              shut: folded.includes(`project:${p.key}`),
               rows: toOrder(p.items),
             })),
           }
         : {
             id: section.id,
-            shut: section.id === "settled" && !open(section.id),
+            shut: isShelf(section.id) && shelfShut[section.id],
             rows: toOrder(section.items),
-            limit: section.id === "settled" && !query.trim() ? settledLimit : undefined,
+            limit: section.id === "settled" ? settledLimit : undefined,
           },
     );
-  }, [byId, folded, query, sections, settledLimit, subOf]);
+  }, [byId, folded, sections, settledLimit, workingOpen, snoozedOpen, settledShelfOpen, subOf]);
   const orderIds = useMemo(() => visibleRows(order), [order]);
 
   // The row the keyboard is on: where it was left, else the open thread, else the first row. A
@@ -2032,7 +1862,6 @@ export function Sidebar() {
       grouped={grouped}
       pull={pullOf(s)}
       now={now}
-      snippet={query.trim() ? contentHits[s.id] : undefined}
       hint={hint ? hintFor(s) : undefined}
       agents={stacks.get(s.id)}
       navActive={s.id === currentId}
@@ -2081,14 +1910,6 @@ export function Sidebar() {
       className="relative flex shrink-0 flex-col"
       style={{ width: hidden ? 0 : width }}
       aria-hidden={hidden}
-      // ⌘F searches threads while the sidebar has the keyboard, and the transcript's find bar
-      // everywhere else: the event is stopped here, before it reaches the window.
-      onKeyDownCapture={(e) => {
-        if (!primaryModifier(e) || e.key.toLowerCase() !== "f") return;
-        e.preventDefault();
-        e.stopPropagation();
-        setSearchOpen(true);
-      }}
     >
       <div
         className={cx(
@@ -2097,7 +1918,7 @@ export function Sidebar() {
         )}
         style={{ width, minWidth: width }}
       >
-        <TitlebarRow className="justify-end pr-2">
+        <TitlebarRow className="justify-end pr-3">
           <Cluster>
             <ClusterButton
               label="Hide sidebar"
@@ -2106,36 +1927,10 @@ export function Sidebar() {
             >
               <PanelLeft size={14} />
             </ClusterButton>
-            <ClusterButton
-              label="New thread"
-              tooltip={`New thread (${newKey})`}
-              onClick={() => startNewThread()}
-            >
-              <SquarePen size={14} />
-            </ClusterButton>
-            <SettingsButton />
-            {pullsOn && (
-              <ClusterButton
-                label="Pull requests"
-                tooltip="Pull requests of this project"
-                on={panel === "pulls"}
-                onClick={() => setPanel("pulls")}
-              >
-                <GitPullRequest size={14} />
-              </ClusterButton>
-            )}
           </Cluster>
         </TitlebarRow>
-        <div className="mx-2 mt-2 mb-1.5 flex shrink-0 items-center gap-0.5">
-          <SidebarSearch query={query} setQuery={setQuery} open={searchOpen} setOpen={setSearchOpen} />
-          <FilterMenu
-            byProject={byProject}
-            setByProject={setByProject}
-            showWorking={showWorking}
-            setShowWorking={setShowWorking}
-            onlyProject={onlyProject}
-            setOnlyProject={setOnlyProject}
-          />
+        {/* Threads are found with ⌘K; the two buttons here make a project or a thread. */}
+        <div className="mx-3 mt-2 mb-2 flex shrink-0 items-center justify-end gap-0.5">
           <ClusterButton
             label="Add project"
             tooltip="Add a project folder"
@@ -2162,85 +1957,88 @@ export function Sidebar() {
           // A press on a row is a drag if the pointer moves (ui/sidebarDrag.tsx), and a click if not.
           onPointerDown={drag.start}
           aria-label="Thread list"
-          className="relative min-h-0 flex-1 overflow-y-auto px-2 pb-2"
+          className="relative min-h-0 flex-1 overflow-y-auto px-3 pb-2"
           style={{ maskImage: fade, WebkitMaskImage: fade }}
         >
           {!sessionsLoaded && <ThreadRowsSkeleton />}
           {sessionsLoaded && !filtered.length && (
             <div className="px-2 py-3 text-callout text-fg-muted">
-              {query
-                ? "No matching threads."
-                : onlyProject
-                  ? "No threads in this project yet."
-                  : "No threads yet."}
+              {onlyProject ? "No threads in this project yet." : "No threads yet."}
             </div>
           )}
           <div className="flex min-h-full flex-col">
             {sections.map((section) => {
-              const open = section.id !== "settled" || isOpen(section.id);
+              const open = isOpen(section.id);
+              const shelf = isShelf(section.id);
               return (
-                <section
-                  key={section.id}
-                  // Snoozed and Settled are shelves at the foot of the list.
-                  className={cx("mt-2 first:mt-0", section.id === footShelf && "mt-auto pt-2")}
-                  aria-label={section.label}
-                >
-                  {/* One list: only the working group and the shelves have a header. */}
-                  {HEADED.includes(section.id) && (
-                    <SectionHeader section={section} open={open} onToggle={() => toggle(section.id)} />
+                <Fragment key={section.id}>
+                  {/* The shelves sit at the foot, under one hairline, apart from Pinned and Active. */}
+                  {section.id === firstShelf && (
+                    <div aria-hidden className="mt-2 min-h-2 flex-1 border-border border-b" />
                   )}
-                  <Fold open={open}>
-                    {section.projects
-                      ? section.projects.map((p) => {
-                          const projectOpen = isOpen(`project:${p.key}`);
-                          return (
-                            <div key={p.key} className="mb-1">
-                              <ProjectHeader
-                                label={p.label}
-                                count={p.items.length}
-                                hidden={
-                                  p.items.some((x) => flags.includes(`${x.id}:n`))
-                                    ? "needs"
-                                    : p.items.some((x) => flags.includes(`${x.id}:w`))
-                                      ? "working"
-                                      : p.items.some((x) => !!finished[x.id])
-                                        ? "finished"
-                                        : undefined
-                                }
-                                open={projectOpen}
-                                onToggle={() => toggle(`project:${p.key}`)}
-                                onNew={p.key ? () => startNewThread(p.key) : undefined}
-                              />
-                              <Fold open={projectOpen}>
-                                <div className="pl-3">{rows(p.items, true)}</div>
-                              </Fold>
-                            </div>
-                          );
-                        })
-                      : rows(
-                          section.id === "settled" && !query.trim()
-                            ? section.items.slice(0, settledLimit)
-                            : section.items,
-                          // Under its project's heading the row drops the mark and the name.
-                          !!section.projects,
-                        )}
-                    {section.id === "settled" && !query.trim() && section.items.length > settledLimit && (
-                      <button
-                        type="button"
-                        onClick={() => setSettledShown((n) => n + 25)}
-                        className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-callout text-fg-muted hover:bg-fill-subtle hover:text-fg"
-                      >
-                        <ChevronDown size={14} className="shrink-0" />
-                        Show {Math.min(25, section.items.length - settledShown)} more
-                      </button>
+                  <section
+                    className={cx("mt-2 first:mt-0", section.id === firstShelf && "mt-0")}
+                    aria-label={section.label}
+                    data-shelf={shelf ? section.id : undefined}
+                  >
+                    {/* Pinned and Active carry a label (they never fold) once there are two of them;
+                      a shelf's header folds it. */}
+                    {shelf ? (
+                      <SectionHeader section={section} open={open} onToggle={() => toggle(section.id)} />
+                    ) : (
+                      labelled && <SectionLabel section={section} />
                     )}
-                    {section.id === "settled" && (
-                      <p className="px-2 pt-1 pb-2 text-caption text-fg-faint">
-                        Settled, or untouched for 3 days. A new message brings one back.
-                      </p>
-                    )}
-                  </Fold>
-                </section>
+                    <Fold open={open}>
+                      {section.projects
+                        ? section.projects.map((p) => {
+                            const projectOpen = isOpen(`project:${p.key}`);
+                            return (
+                              <div key={p.key} className="mb-1">
+                                <ProjectHeader
+                                  label={p.label}
+                                  count={p.items.length}
+                                  hidden={
+                                    p.items.some((x) => flags.includes(`${x.id}:n`))
+                                      ? "needs"
+                                      : p.items.some((x) => flags.includes(`${x.id}:w`))
+                                        ? "working"
+                                        : p.items.some((x) => !!finished[x.id])
+                                          ? "finished"
+                                          : undefined
+                                  }
+                                  open={projectOpen}
+                                  onToggle={() => toggle(`project:${p.key}`)}
+                                  onNew={p.key ? () => startNewThread(p.key) : undefined}
+                                />
+                                <Fold open={projectOpen}>
+                                  <div className="pl-3">{rows(p.items, true)}</div>
+                                </Fold>
+                              </div>
+                            );
+                          })
+                        : rows(
+                            section.id === "settled" ? section.items.slice(0, settledLimit) : section.items,
+                            // Under its project's heading the row drops the mark and the name.
+                            !!section.projects,
+                          )}
+                      {section.id === "settled" && section.items.length > settledLimit && (
+                        <button
+                          type="button"
+                          onClick={() => setSettledShown((n) => n + 25)}
+                          className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-callout text-fg-muted hover:bg-fill-subtle hover:text-fg"
+                        >
+                          <ChevronDown size={14} className="shrink-0" />
+                          Show {Math.min(25, section.items.length - settledShown)} more
+                        </button>
+                      )}
+                      {section.id === "settled" && (
+                        <p className="px-2 pt-1 pb-2 text-caption text-fg-faint">
+                          Settled, or untouched for 3 days. A new message brings one back.
+                        </p>
+                      )}
+                    </Fold>
+                  </section>
+                </Fragment>
               );
             })}
           </div>
@@ -2303,13 +2101,29 @@ export function Sidebar() {
             </Pill>
           </div>
         )}
-        <div className="shrink-0 px-2 pb-1">
-          <SettledRow
-            count={settledSection?.items.length ?? 0}
-            open={!!settledSection && isOpen("settled")}
-            hidden={settledSection?.hidden}
-            onToggle={() => toggle("settled")}
-          />
+        {/* Settings-level places: a small row at the foot, each with a tooltip (all also in ⌘K). */}
+        <div className="flex shrink-0 items-center px-3 pb-2">
+          <Cluster>
+            <SettingsButton />
+            {pullsOn && (
+              <ClusterButton
+                label="Pull requests"
+                tooltip="Pull requests of this project"
+                on={panel === "pulls"}
+                onClick={() => setPanel("pulls")}
+              >
+                <GitPullRequest size={14} />
+              </ClusterButton>
+            )}
+            <ClusterButton
+              label="Usage"
+              tooltip={usageOpen ? "Close Usage (Esc)" : "Usage"}
+              on={usageOpen}
+              onClick={() => openSettings(usageOpen ? null : "usage")}
+            >
+              <Gauge size={14} />
+            </ClusterButton>
+          </Cluster>
         </div>
         <UpdateRow />
       </div>
