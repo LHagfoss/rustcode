@@ -1,14 +1,14 @@
 // The sidebar's brand: the app's mark, its name, and the version of the app
 // that is running, so a screenshot or a bug report says which build it is.
 //
-// It is the row under the title bar's, not part of it: the traffic lights take
-// the left of that row (TitlebarRow's 92px inset), so a name there would start
-// past them and drift further right as the sidebar is dragged wider, while this
-// row keeps the list's own 12px edge at every width and on every platform.
+// It is the title row's leading content (ui/Titlebar.tsx), past the traffic
+// lights, so the sidebar's header is one row rather than a bar with a row under
+// it; the name truncates before it reaches the sidebar's toggle.
 
 import { useEffect, useState } from "react";
 import { systemInfo } from "../lib/native";
 import { useUpdates } from "../state/updates";
+import { cx } from "./primitives";
 
 /** `1.21.0` as the sidebar says it, or null when the app cannot say. */
 export function versionLabel(version: string | null | undefined): string | null {
@@ -38,20 +38,33 @@ function useAppVersion(): string | null {
   return known ?? asked;
 }
 
-export function BrandHeader() {
+/** The mark and name, with the running version after them in quieter type. */
+export function Brand({ className }: { className?: string }) {
   const version = useAppVersion();
   const label = versionLabel(version);
   return (
     <div
-      className="flex shrink-0 select-none items-center gap-2 px-3 pt-0.5 pb-1.5"
+      data-tauri-drag-region
+      className={cx("@container flex min-w-0 select-none items-center gap-1.5", className)}
       title={version ? `RustCode ${version}` : "RustCode"}
     >
-      <img src="/icon.png" alt="" width={18} height={18} draggable={false} className="shrink-0 rounded-xs" />
-      <span className="flex min-w-0 flex-col">
-        {/* The name at the step above the list's own 12px labels, the version quiet under it. */}
-        <span className="truncate font-medium text-callout text-fg">RustCode</span>
-        {label && <span className="truncate text-caption text-fg-muted tabular">{label}</span>}
-      </span>
+      {/* Nothing here takes a press: the row under it drags the window, its toggle is the one control. */}
+      <img
+        src="/icon.png"
+        alt=""
+        width={18}
+        height={18}
+        draggable={false}
+        className="pointer-events-none shrink-0 rounded-xs"
+      />
+      {/* The name at the step above the list's own 12px labels; the version sits after it, and
+          gives way first when the row has no room for the two (a narrow sidebar). */}
+      <span className="pointer-events-none min-w-0 truncate font-medium text-callout text-fg">RustCode</span>
+      {label && (
+        <span className="pointer-events-none hidden shrink-0 text-caption text-fg-faint tabular @min-[130px]:inline">
+          {label}
+        </span>
+      )}
     </div>
   );
 }

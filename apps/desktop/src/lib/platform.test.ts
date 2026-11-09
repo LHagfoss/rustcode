@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import * as platform from "./platform";
 
-const { fileManagerName, platformFor } = platform;
+const { fileManagerName, platformFor, platformOverride } = platform;
 
 const MAC = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)";
 const WINDOWS =
@@ -23,6 +23,23 @@ describe("platformFor", () => {
 
   test("an unknown agent falls back to mac", () => {
     expect(platformFor("", true)).toBe("mac");
+  });
+});
+
+describe("platformOverride", () => {
+  test("a dev build names the look it wants, so the mock window can show Windows' chrome", () => {
+    expect(platformOverride("?platform=windows", true)).toBe("windows");
+    expect(platformOverride("?platform=linux", true)).toBe("linux");
+    expect(platformOverride("?platform=mac", true)).toBe("mac");
+  });
+
+  test("a built app has no such switch", () => {
+    expect(platformOverride("?platform=windows", false)).toBeNull();
+  });
+
+  test("an unknown name, or none, is the web view's own answer", () => {
+    expect(platformOverride("", true)).toBeNull();
+    expect(platformOverride("?platform=beos", true)).toBeNull();
   });
 });
 

@@ -8,6 +8,7 @@ import { useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { projectName, type SessionSummary } from "../acp/types";
 import { STATUS_LABEL, type ThreadStatus } from "../acp/v2";
+import { appPlatform } from "../lib/platform";
 import type { CostTotals } from "../state/pricing";
 import {
   selectThread,
@@ -21,9 +22,11 @@ import {
 } from "../state/store";
 import { relativeAge } from "../state/thread";
 import { DelegateTree, useDelegateCosts } from "./DelegateTree";
+import { HEADER_HEIGHT } from "./MainHeader";
 import { Cluster, ClusterButton, cx, Pill, Tooltip } from "./primitives";
 import { StatusIcon } from "./Status";
 import { useLightsInset } from "./Titlebar";
+import { onTitleRowDoubleClick, windowControlsInset } from "./WindowControls";
 
 const COLUMNS: { status: ThreadStatus; hint: string }[] = [
   { status: "running", hint: "A turn is running" },
@@ -32,17 +35,24 @@ const COLUMNS: { status: ThreadStatus; hint: string }[] = [
   { status: "done", hint: "Finished, or its branch merged" },
 ];
 
-/** A header for views that replace the chat: clear of the traffic lights when the sidebar hides. */
+/** A header for views that replace the chat: clear of the traffic lights and the window's controls. */
 export function ViewHeader({ title, children }: { title: React.ReactNode; children?: React.ReactNode }) {
   const sidebarHidden = useApp((s) => s.sidebarHidden);
   const toggleKey = useShortcutHint("toggle-sidebar");
   const newKey = useShortcutHint("new-thread");
   const lightsInset = useLightsInset();
+  const controlsInset = windowControlsInset(appPlatform());
+  const maximizes = appPlatform() === "windows";
   return (
     <header
       data-tauri-drag-region
-      className={cx("flex h-[42px] shrink-0 items-center gap-2 pt-1.5 pr-2 pb-2", !sidebarHidden && "pl-4")}
-      style={sidebarHidden ? { paddingLeft: lightsInset } : undefined}
+      onDoubleClick={maximizes ? onTitleRowDoubleClick : undefined}
+      className={cx("flex shrink-0 items-center gap-2 pr-2", !sidebarHidden && "pl-4")}
+      style={{
+        height: HEADER_HEIGHT,
+        ...(sidebarHidden ? { paddingLeft: lightsInset } : null),
+        ...(controlsInset ? { paddingRight: controlsInset } : null),
+      }}
     >
       {sidebarHidden && (
         <Cluster>

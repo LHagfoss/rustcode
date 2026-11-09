@@ -1,13 +1,17 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window: core APIs, window dragging, text zoom, and the folder picker only.",
+  "description": "The main window: core APIs, the title row's drag and Windows' own window controls, text zoom, and the folder picker only.",
   "windows": [
     "main"
   ],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-is-maximized",
+    "core:window:allow-close",
     "dialog:allow-open",
     "core:webview:allow-set-webview-zoom"
   ]

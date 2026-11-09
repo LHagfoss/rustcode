@@ -1,13 +1,14 @@
-// The hidden title bar's row, shared by the sidebar and the chat header so
-// their buttons line up with the traffic lights as the SwiftUI app's do
-// (SidebarMetrics: a 28 pt bar under a 6 pt inset, the first cluster a
-// clear 14 pt past the zoom button; `trafficLightPosition` in tauri.conf.json
-// centres the lights on the same line). In full screen the lights are gone,
-// so the row starts at the edge instead of leaving their room empty.
+// The window's title row, shared by the sidebar (its brand and toggle) and the
+// main column's header, so the two line up on one line through the traffic
+// lights. It is the only row the window has: the brand sits in it rather than
+// under it (docs/design.md › Sidebar brand). `trafficLightPosition` in
+// tauri.conf.json puts the lights' centre on this row's centre. In full screen
+// the lights are gone, so the row starts at the edge instead of leaving their
+// room empty, and on Windows the shell draws its own controls (ui/WindowControls.tsx).
 
 import { type ReactNode, useEffect, useState } from "react";
 import { isTauri } from "../acp/transport";
-import { currentPlatform } from "../lib/platform";
+import { appPlatform } from "../lib/platform";
 import { cx } from "./primitives";
 
 /**
@@ -17,6 +18,14 @@ import { cx } from "./primitives";
  * 80 (SidebarMetrics.barLeading), a 14 pt gap, so the row starts at 92.
  */
 export const LIGHTS_INSET = 92;
+
+/**
+ * The title row's height, on every platform: the window's drag strip, the
+ * traffic lights and the main column's header all sit on this one line.
+ * `trafficLightPosition.y` is 38 so the lights' centre (tao sizes their bar to
+ * the close button's height plus y and centres them in it) lands on 26.
+ */
+export const TITLEBAR_HEIGHT = 52;
 
 let fullscreen = false;
 const listeners = new Set<(v: boolean) => void>();
@@ -55,7 +64,7 @@ export function useFullscreen(): boolean {
 /** The leading room a title-bar row leaves for the traffic lights. */
 export function useLightsInset(): number {
   const fullscreen = useFullscreen();
-  return currentPlatform() !== "mac" || fullscreen ? 10 : LIGHTS_INSET;
+  return appPlatform() !== "mac" || fullscreen ? 10 : LIGHTS_INSET;
 }
 
 export function TitlebarRow({
@@ -72,8 +81,8 @@ export function TitlebarRow({
   return (
     <div
       data-tauri-drag-region
-      className={cx("flex h-[34px] shrink-0 items-end gap-1", className)}
-      style={lights ? { paddingLeft: inset } : undefined}
+      className={cx("flex shrink-0 items-center", className)}
+      style={{ height: TITLEBAR_HEIGHT, ...(lights ? { paddingLeft: inset } : null) }}
     >
       {children}
     </div>

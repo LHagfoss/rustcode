@@ -9,10 +9,8 @@
         "height": 820,
         "minWidth": 640,
         "minHeight": 480,
-        "decorations": true,
-        "transparent": false,
-        "titleBarStyle": "Visible",
-        "hiddenTitle": false
+        "decorations": false,
+        "transparent": false
       }
     ]
   }
