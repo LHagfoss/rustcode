@@ -4334,7 +4334,8 @@ describe("continuing after a limit", () => {
 
 describe("a delegate whose turn failed", () => {
   const ready = async () => {
-    await connect(new MockTransport({ delayMs: 0 }));
+    const transport = new HeldSessionLoadTransport({ delayMs: 0 });
+    await connect(transport);
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
     const caller = useApp.getState().sessions[0]!.id;
     setPermissionMode(caller, "full");
@@ -4342,7 +4343,7 @@ describe("a delegate whose turn failed", () => {
       .getState()
       .sessions.find((x) => x.id !== caller && x.cwd === "/Users/you/code/rustcode")!.id;
     await openThread(target);
-    return { caller, target };
+    return { caller, target, transport };
   };
   const send = (caller: string, target: string, message: string) =>
     answerOrchestration({
@@ -4350,6 +4351,46 @@ describe("a delegate whose turn failed", () => {
       tool: "message_session",
       args: { session_id: target, message },
     });
+
+  test("an interrupted delegate runs the next message as a new turn", async () => {
+    const { caller, target, transport } = await ready();
+    const first = runPrompt(target, "keep working");
+    await until(() =>
+      useApp
+        .getState()
+        .threads[target]!.items.some((item) => item.kind === "tool" && item.id.startsWith("live-")),
+    );
+    const interrupted = await answerOrchestration({
+      sessionId: caller,
+      tool: "interrupt_session",
+      args: { session_id: target },
+    });
+    expect(interrupted.interrupted).toBe(true);
+    await first;
+    expect(
+      useApp.getState().threads[target]!.items.findLast((item) => item.kind === "turnEnd"),
+    ).toMatchObject({
+      outcome: "cancelled",
+    });
+    const answer = await send(caller, target, "continue after interrupt");
+    expect(answer.error).toBeUndefined();
+    expect(answer.receipt).toBe("started");
+    await until(() =>
+      useApp
+        .getState()
+        .threads[target]!.items.some(
+          (item) => item.kind === "user" && item.text.includes("continue after interrupt"),
+        ),
+    );
+    await until(
+      () =>
+        transport.requests.filter(
+          (request) =>
+            request.method === Method.sessionPrompt &&
+            (request.params as JsonObject | undefined)?.sessionId === target,
+        ).length >= 2,
+    );
+  });
 
   test("can be messaged again: the failure is no reason to refuse it", async () => {
     const { caller, target } = await ready();
@@ -4462,7 +4503,7 @@ describe("a delegate whose turn failed", () => {
     }
   });
 
-  test("settled and deliberately stopped threads return a clear refusal", async () => {
+  test("archived and settled threads return a clear refusal", async () => {
     const { caller, target } = await ready();
     setArchived(target, true);
     const archived = await send(caller, target, "archived");
@@ -4472,8 +4513,10 @@ describe("a delegate whose turn failed", () => {
     await setThreadStatus(target, "done");
     const settled = await send(caller, target, "settled");
     expect((settled.error as JsonObject).message).toContain("settled");
+  });
 
-    await setThreadStatus(target, "idle");
+  test("a stopped thread starts a new turn when messaged", async () => {
+    const { caller, target } = await ready();
     updateThread(target, (thread) => ({
       ...thread,
       items: [
@@ -4483,7 +4526,13 @@ describe("a delegate whose turn failed", () => {
       ],
     }));
     const stopped = await send(caller, target, "stopped");
-    expect((stopped.error as JsonObject).message).toContain("last turn was stopped");
+    expect(stopped.error).toBeUndefined();
+    expect(stopped.receipt).toBe("started");
+    await until(() =>
+      useApp
+        .getState()
+        .threads[target]!.items.some((item) => item.kind === "user" && item.text.includes("stopped")),
+    );
   });
 
   test("a message queued on it fails with the reason instead of staying Queued", async () => {

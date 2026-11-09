@@ -1580,7 +1580,7 @@ function message(caller: RuleThread, targetId: string, text: string): Promise<Js
   return withLinkGate(() => messageNow(caller, targetId, text));
 }
 
-/** Do not turn an explicit stop, settle, or archive into a background retry. */
+/** Do not message a settled or archived thread. */
 function messageTargetRefusal(state: AppState, targetId: string): Failure | null {
   if (targetId in state.archived) {
     return failure("conflict", "that thread is archived; unarchive it before messaging");
@@ -1588,14 +1588,6 @@ function messageTargetRefusal(state: AppState, targetId: string): Failure | null
   const target = ruleThread(state, targetId);
   if (target && statusOf(state, targetId) === "done") {
     return failure("conflict", "that thread is settled; set it to idle before messaging");
-  }
-  const thread = state.threads[targetId];
-  const lastTurn = thread?.items.findLast((item) => item.kind === "turnEnd");
-  if (!thread?.running && lastTurn?.kind === "turnEnd" && lastTurn.outcome === "cancelled") {
-    return failure(
-      "conflict",
-      "that thread's last turn was stopped; start a new turn there before messaging it",
-    );
   }
   return null;
 }
