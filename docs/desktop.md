@@ -384,7 +384,14 @@ composer's keys stay outside the table.
   (`_rustcode/pulls`), shows one (`/view`: description, checks, files,
   activity) and posts a review you write (`/review`: comment, approve or
   request changes, at the head commit). "Ask the agent to review" starts a
-  thread draft naming the commit.
+  thread draft naming the commit. Each `gh` read is a process, so the answers
+  live in one store (`state/pullQueries.ts`) shared by the panel, the sidebar and
+  the review view: a list, a detail or a diff the app already holds paints at
+  once and is read again behind, and the lists and details are saved on the
+  device (8 projects, 40 details, a week) so a reload paints them too. A row
+  the pointer or the keyboard rests on for 150 ms reads its detail — the same
+  read the click makes, so nothing is wasted — and the review view's pull
+  segment reads that pull's diff the same way.
 - **Settings › Usage.** Every subscription this machine is signed in to, with
   no thread open: `_rustcode/usage/plans` (engine `acp/usage.rs`) answers
   `{plans: [{id, name, via, status, plan?, error?, reason?, windows}]}`. ChatGPT

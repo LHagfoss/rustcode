@@ -19,6 +19,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useIntentRest } from "../lib/intent";
 import { errorText, toast } from "../state/store";
 
 export function cx(...parts: (string | false | null | undefined)[]): string {
@@ -497,15 +498,19 @@ export function Segments<T extends string>({
   options,
   onChange,
   label,
+  onIntent,
 }: {
   value: T;
   options: { value: T; label: string; disabled?: boolean }[];
   onChange: (value: T) => void;
   label: string;
+  /** A rest of the pointer or focus on an option: the screen may read ahead for that choice. */
+  onIntent?: (value: T) => void;
 }) {
   // The selected segment's pill slides to the new one instead of jumping.
   const group = useRef<HTMLDivElement>(null);
   const [thumb, setThumb] = useState<{ left: number; width: number } | null>(null);
+  const intent = useIntentRest((next: T) => onIntent?.(next));
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-measures when the choice or labels change
   useLayoutEffect(() => {
     const el = group.current?.querySelector<HTMLElement>('[aria-checked="true"]');
@@ -541,6 +546,10 @@ export function Segments<T extends string>({
           aria-checked={o.value === value}
           disabled={o.disabled}
           onClick={() => onChange(o.value)}
+          onPointerEnter={() => intent.start(o.value)}
+          onPointerLeave={intent.cancel}
+          onFocus={() => intent.start(o.value)}
+          onBlur={intent.cancel}
           className={cx(
             "relative h-5 whitespace-nowrap rounded-full px-2 font-medium text-caption disabled:opacity-40",
             o.value === value ? selected : "text-fg-muted hover:text-fg",

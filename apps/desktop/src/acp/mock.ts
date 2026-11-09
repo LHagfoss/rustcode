@@ -2934,6 +2934,23 @@ export class MockEngine {
                 deletions: 9,
                 changedFiles: 3,
               },
+              {
+                number: 2795,
+                title: "feat(desktop): add the login form",
+                author: "LHagfoss",
+                state: "open",
+                draft: false,
+                review: "changes_requested",
+                checks: { passed: 4, failed: 1, pending: 0, skipped: 0 },
+                headRef: "feat/login-form",
+                baseRef: "main",
+                headSha: "58961fc5aa",
+                updatedAt: new Date(minutes(30)).toISOString(),
+                url: "https://github.com/LHagfoss/rustcode/pull/2795",
+                additions: 210,
+                deletions: 4,
+                changedFiles: 5,
+              },
             ],
           },
         };
@@ -3012,6 +3029,20 @@ export class MockEngine {
               },
             ],
           },
+        };
+      case "_rustcode/pulls/diff":
+        return {
+          diff: [
+            "diff --git a/apps/desktop/src/ui/Composer.tsx b/apps/desktop/src/ui/Composer.tsx",
+            "--- a/apps/desktop/src/ui/Composer.tsx",
+            "+++ b/apps/desktop/src/ui/Composer.tsx",
+            "@@ -1,4 +1,5 @@",
+            ' import { useApp } from "../state/store";',
+            '+import { compose } from "../state/compose";',
+            " ",
+            "-export const Composer = () => null;",
+            "+export const Composer = () => <div className={compose()} />;",
+          ].join("\n"),
         };
       case "_rustcode/pulls/review":
         return { review: { url: "https://github.com/LHagfoss/rustcode/pull/2788#pullrequestreview-1" } };
