@@ -201,19 +201,16 @@ export function childAccountFor(
   return { account: account.id };
 }
 
-/** Settings › Usage's groups, and which one carries the composer's switch. */
+/** Settings › Usage's visible account rows. */
 export interface UsageRows {
   /** The groups to draw, in order. */
   plans: UsagePlan[];
-  /** The id of the group whose row holds "Show Claude usage in the composer"; none without a Claude group. */
-  switchIn?: string;
 }
 
 /**
  * The groups Settings › Usage draws. The engine always lists the Claude login
  * with no account (`rustcode/engine/src/acp/usage.rs`); with named accounts the
- * app and the engine read those instead, so its row is dropped. The switch that
- * lived in its last row moves to the first Claude group left, once only.
+ * app and the engine read those instead, so its row is dropped.
  */
 export function usageRows(plans: UsagePlan[], keepOwnLogin = false): UsageRows {
   const claude = (plan: UsagePlan) => planOf(plan) === "claude-code";
@@ -223,8 +220,7 @@ export function usageRows(plans: UsagePlan[], keepOwnLogin = false): UsageRows {
   // login"): its row stays so its plan is not lost.
   const drop = named && !keepOwnLogin;
   const shown = plans.filter((plan) => !(drop && isDefault(plan)));
-  const own = shown.find(isDefault);
-  return { plans: shown, switchIn: (own ?? shown.find(claude))?.id };
+  return { plans: shown };
 }
 
 /**
