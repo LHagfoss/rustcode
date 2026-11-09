@@ -240,14 +240,34 @@ describe("design system", () => {
       if (body.includes("backdrop-filter") && body.includes("animation")) animated.push(selector.trim());
     }
     expect(animated).toEqual([]);
-    for (const name of ["rc-overview-in", "rc-overview-out", "rc-overview-fill-in", "rc-overview-fill-out"]) {
+    // The motion may only be claimed by what is inside a card: the fade and rise by the body, the
+    // fill fade by the card's own surface. An animation back on `.rc-overview-in`/`-out` themselves
+    // would sit above the glass and bring the dropped blur straight back.
+    const claims: string[] = [];
+    for (const match of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const name = /animation:\s*(rc-overview-[\w-]+)/.exec(match[2] ?? "");
+      if (name) claims.push(`${(match[1] ?? "").trim()} → ${name[1]}`);
+    }
+    expect(claims.sort()).toEqual([
+      ".rc-overview-in .rc-overview-body → rc-overview-in",
+      ".rc-overview-in .rc-overview-card → rc-overview-fill-in",
+      ".rc-overview-out .rc-overview-body → rc-overview-out",
+      ".rc-overview-out .rc-overview-card → rc-overview-fill-out",
+    ]);
+    // ...and each of them animates only what a still surface can afford.
+    const allowed: Record<string, string[]> = {
+      "rc-overview-in": ["opacity", "transform"],
+      "rc-overview-out": ["opacity", "transform"],
+      "rc-overview-fill-in": ["background-color"],
+      "rc-overview-fill-out": ["background-color"],
+    };
+    for (const [name, properties] of Object.entries(allowed)) {
       const at = css.indexOf(`@keyframes ${name} {`);
       expect(at).toBeGreaterThanOrEqual(0);
       const block = css.slice(at, css.indexOf("\n}", at));
-      const properties = [...block.matchAll(/^\s+(\S+):/gm)].map((match) => match[1] ?? "");
-      expect(properties.length).toBeGreaterThan(0);
-      for (const property of properties)
-        expect(["opacity", "transform", "background-color"]).toContain(property);
+      const found = [...block.matchAll(/^\s+(\S+):/gm)].map((match) => match[1] ?? "");
+      expect(found.length).toBeGreaterThan(0);
+      for (const property of found) expect(properties).toContain(property);
     }
   });
 

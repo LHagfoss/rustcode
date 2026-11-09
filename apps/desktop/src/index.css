@@ -1037,8 +1037,10 @@
  */
 :root {
   --rc-glass-alpha: 72%;
-  --rc-glass-alpha-strong: 84%;
-  --rc-glass-alpha-faint: 24%;
+  /* The two steps a denser or a thinner surface takes are read off the same alpha: a step up for
+     popovers, menus and floating pills, and a third of it for a new thread's cards. */
+  --rc-glass-alpha-strong: calc(var(--rc-glass-alpha) + 12%);
+  --rc-glass-alpha-faint: calc(var(--rc-glass-alpha) / 3);
   --rc-glass-filter: saturate(1.15) blur(9px);
   --rc-glass-bg: color-mix(in srgb, var(--rc-surface-2) var(--rc-glass-alpha), transparent);
   --rc-glass-bg-strong: color-mix(in srgb, var(--rc-surface-2) var(--rc-glass-alpha-strong), transparent);
