@@ -231,21 +231,28 @@ pub fn bump_mcp_generation() {
     MCP_GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Servers an ACP engine was configured with but has not started yet. The
-/// app attaches an engine for every chat it shows, often one that never
-/// runs a turn; starting every server there spawned them over and over
-/// (#2503). They start on the first turn instead.
+/// Enabled servers queued for the ACP engine's background startup.
 static DEFERRED_SERVERS: StdMutex<Option<Vec<crate::config::McpServerConfig>>> =
     StdMutex::new(None);
 static DEFERRED_START: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static CONNECTING_SERVERS: StdMutex<Vec<String>> = StdMutex::new(Vec::new());
 
-/// Remember `servers` to start on first use instead of now.
+pub(crate) fn connecting_servers() -> Vec<String> {
+    CONNECTING_SERVERS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+/// Queue enabled servers before starting the background task.
 pub fn defer_enabled_servers(servers: &[crate::config::McpServerConfig]) {
     let enabled = servers
         .iter()
         .filter(|server| server.enabled)
         .cloned()
         .collect::<Vec<_>>();
+    *CONNECTING_SERVERS.lock().unwrap_or_else(|e| e.into_inner()) =
+        enabled.iter().map(|s| s.name.clone()).collect();
     *DEFERRED_SERVERS
         .lock()
         .unwrap_or_else(|error| error.into_inner()) = (!enabled.is_empty()).then_some(enabled);
@@ -255,13 +262,6 @@ pub fn defer_enabled_servers(servers: &[crate::config::McpServerConfig]) {
 /// took. Later and concurrent callers return when the first start is done;
 /// with nothing deferred this is a no-op.
 pub async fn start_deferred_servers() {
-    if DEFERRED_SERVERS
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .is_none()
-    {
-        return;
-    }
     let _starting = DEFERRED_START.lock().await;
     let Some(servers) = DEFERRED_SERVERS
         .lock()
@@ -271,17 +271,23 @@ pub async fn start_deferred_servers() {
         return;
     };
     let started = std::time::Instant::now();
-    let warnings = futures_util::future::join_all(servers.iter().map(|server| {
-        start_enabled_servers(std::slice::from_ref(server), |name| async move {
+    let warnings = futures_util::future::join_all(servers.iter().map(|server| async move {
+        let warnings = start_enabled_servers(std::slice::from_ref(server), |name| async move {
             start_server_by_name(&name).await
         })
+        .await;
+        CONNECTING_SERVERS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|n| n != &server.name);
+        warnings
     }))
     .await
     .into_iter()
     .flatten()
     .collect::<Vec<_>>();
     crate::logger::operational_event(
-        "mcp.lazy_start",
+        "mcp.background_start",
         serde_json::json!({
             "servers": servers.len(),
             "failed": warnings.len(),
@@ -3875,17 +3881,19 @@ mod deferred_start_tests {
             .expect("server config")
     }
 
-    /// Attaching defers every enabled server and starts none; the first use
-    /// takes them once, and later uses find nothing left to start (#2503).
+    /// Startup queues enabled servers once and clears their connecting state.
     #[tokio::test]
-    async fn deferred_servers_start_once_on_first_use() {
+    async fn queued_servers_start_once() {
         super::defer_enabled_servers(&[server("lazy-a", true), server("lazy-off", false)]);
         assert_eq!(super::deferred_server_names(), ["lazy-a"]);
+        assert_eq!(super::connecting_servers(), ["lazy-a"]);
         assert!(super::get_mcp_registry().lock().unwrap().is_empty());
 
         // `lazy-a` is in no config file, so the start finds nothing to run.
-        super::start_deferred_servers().await;
+        let background = tokio::spawn(super::start_deferred_servers());
+        background.await.unwrap();
         assert!(super::deferred_server_names().is_empty());
+        assert!(super::connecting_servers().is_empty());
         super::start_deferred_servers().await;
         assert!(super::deferred_server_names().is_empty());
     }

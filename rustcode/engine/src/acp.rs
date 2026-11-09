@@ -1720,7 +1720,7 @@ fn start_pull_watching(clients: &clients::Clients) {
     });
 }
 
-/// The user started writing a message: start the deferred MCP servers now,
+/// The user started writing a message: wait for background MCP startup,
 /// so the turn the message starts does not wait for them. Answers at once;
 /// the servers start in the background, once.
 #[derive(
@@ -1943,9 +1943,9 @@ impl AcpEngine {
     /// Warm what every connection reads and start the engine's own tasks.
     pub fn start(auto_approve: bool) -> Result<Self, agent_client_protocol::Error> {
         let startup_state = crate::app::AppState::new();
-        // Servers start on the session's first turn, not here: the app attaches
-        // an engine for chats that may never run one (#2503).
+        // Connect in the background so a slow server cannot hold up startup.
         crate::mcp::defer_enabled_servers(&startup_state.config.mcp_servers);
+        tokio::spawn(crate::mcp::start_deferred_servers());
         // The thread above each delegated one, recorded once for threads older than
         // the record, before the first session list is read (`thread_parent.rs`).
         // After that first run it reads one `store_meta` row and returns.
