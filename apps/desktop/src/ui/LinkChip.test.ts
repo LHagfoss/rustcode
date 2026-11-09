@@ -23,6 +23,20 @@ describe("a link chip", () => {
     expect(out).not.toContain("align-middle");
   });
 
+  test("in text it is the pill the code and the links beside it are", () => {
+    const out = drawn("https://example.com/a");
+    expect(out).toContain("rounded-full");
+    // A pixel more room on each side than the chip had.
+    expect(out).toContain("pl-[7px]");
+    expect(out).toContain("pr-[5px]");
+  });
+
+  test("in the composer it keeps the field tokens' own shape", () => {
+    const out = drawn("https://example.com/a", "token");
+    expect(out).toContain("rounded-sm");
+    expect(out).not.toContain("rounded-full");
+  });
+
   test("it is no drag source, so a drag across it selects the words", () => {
     expect(drawn("https://example.com/a")).toContain('draggable="false"');
     expect(drawn("https://example.com/a", "token")).toContain('draggable="false"');

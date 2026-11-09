@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Tooltip } from "radix-ui";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { renderBlock } from "./Markdown";
+import { COMMAND_MARK, renderBlock } from "./Markdown";
 
 /** One block of a reply, drawn by the components the transcript uses (a chip needs the tooltip's provider). */
 const drawn = (text: string) =>
@@ -47,6 +47,33 @@ describe("blocks in a reply", () => {
 
   test("bold is the semibold titles use, not the browser's 700", () => {
     expect(drawn("**bold**")).toContain('<strong class="font-semibold">');
+  });
+});
+
+describe("the inline pills in a reply", () => {
+  test("code, a file reference and a link are one shape", () => {
+    // One radius and one padding scale (ui/Markdown.tsx `PILL`), in em of the text around them.
+    for (const out of [
+      drawn("run `bun run check` now"),
+      drawn("see `src/lib/keys.ts:12`"),
+      drawn("[the docs](https://example.com/page)"),
+    ]) {
+      expect(out).toContain("rounded-full px-[0.5em] py-[0.2em]");
+    }
+  });
+
+  test("inline code says it copies, keeps its shape when it wraps, and is a pointer", () => {
+    const out = drawn("run `bun run check` now");
+    expect(out).toContain('title="Click to copy"');
+    expect(out).toContain("cursor-pointer");
+    // Every fragment of code that wraps onto another line gets its own pill ends.
+    expect(out).toContain("[box-decoration-break:clone]");
+  });
+
+  test("the slash command that heads a sent message keeps its own shape", () => {
+    const out = drawn(`\`${COMMAND_MARK}/review\` the diff`);
+    expect(out).toContain("rounded-md bg-accent/12");
+    expect(out).not.toContain("Click to copy");
   });
 });
 

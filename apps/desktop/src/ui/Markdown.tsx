@@ -16,6 +16,7 @@ import {
 } from "react";
 import ReactMarkdown, { type Components, defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { copiesOnClick } from "../lib/copyOnClick";
 import { type FileRef, parseInlineRef, parseLinkRef, resolveRef } from "../lib/fileRefs";
 import { highlight, peekHighlight } from "../lib/highlight";
 import { markdownBlocks } from "../lib/markdownBlocks";
@@ -207,6 +208,11 @@ const Formula = memo(function Formula({ tex, display }: { tex: string; display: 
   );
 });
 
+// One pill for the inline things a reply sets on a fill: code, a file reference and a link share
+// the rounding and the padding, so a line holding all three reads as one family. The padding is
+// in em of the text around them, so code in a heading keeps its proportion.
+const PILL = "rounded-full px-[0.5em] py-[0.2em]";
+
 const components: Components = {
   // A heading takes more air above it than the blocks' own gap gives it, so it groups with
   // the text it heads rather than floating between two paragraphs.
@@ -262,7 +268,12 @@ const components: Components = {
           if (ref) openRef(ref);
           else openExternal(href);
         }}
-        className="-mx-1 cursor-pointer rounded-full px-1 text-accent underline decoration-accent/30 underline-offset-2 hover:bg-accent/12 hover:decoration-transparent"
+        // The pill's own room is taken back by the margins, so a link never moves the words around
+        // it; only the tint it gets on hover is wider.
+        className={cx(
+          PILL,
+          "-mx-[0.5em] cursor-pointer text-accent underline decoration-accent/30 underline-offset-2 hover:bg-accent/12 hover:decoration-transparent",
+        )}
       >
         {href ? shortUrl(href, children) : children}
       </a>
@@ -315,13 +326,28 @@ const components: Components = {
           onClick={() => openRef(ref)}
           className="group inline rounded-full text-accent"
         >
-          <code className="rounded-full bg-accent/10 px-1.5 py-px font-mono text-[0.9em] group-hover:bg-accent/20">
+          <code className={cx(PILL, "bg-accent/10 font-mono text-[0.9em] group-hover:bg-accent/20")}>
             {children}
           </code>
         </button>
       );
     return (
-      <code className="rounded-sm bg-fill px-[0.35em] py-[0.1em] font-mono text-[0.85em] [box-decoration-break:clone]">
+      // The text is on the clipboard, so the press is the code's own and not what holds it (a
+      // link around the words would open as well).
+      <code
+        title="Click to copy"
+        onClick={(e) => {
+          // A press that is the end of a drag has just selected the reply: leave it selected.
+          if (!copiesOnClick(window.getSelection())) return;
+          e.stopPropagation();
+          void copyText(e.currentTarget.textContent ?? "");
+        }}
+        className={cx(
+          PILL,
+          // `clone` rounds every fragment of code that wraps onto a second line, not only its ends.
+          "cursor-pointer bg-fill font-mono text-[0.85em] [box-decoration-break:clone] hover:bg-fill-strong",
+        )}
+      >
         {children}
       </code>
     );
