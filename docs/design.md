@@ -522,8 +522,9 @@ horizontal padding, never a circle): the composer's footer buttons, chips,
 segmented items, header actions, Settings' "New…" and "Edit config".
 Circles only for icon-only round buttons (send, stop, close in a panel
 header, toolbar clusters). Icon buttons in dense rows are `rounded-md`.
-Rows are `rounded-md` (sidebar thread rows `rounded-lg`), menu items and cards `rounded-lg`, menus, popovers and
-panels `rounded-xl`.
+Rows are `rounded-md` (compact sidebar thread rows `rounded-lg`, `rounded-xl` in the
+comfortable layout), menu items and cards `rounded-lg`, menus, popovers and panels
+`rounded-xl`.
 
 The shared controls are in `ui/primitives.tsx`; use them instead of restyling
 a raw element. `?catalog` in a dev build shows them all on one page.
@@ -607,16 +608,36 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   shortcut it has. A snoozed row shows when it wakes where the age goes.
   Snooze (presets, or Custom…) is a submenu of the row's menu; a thread comes
   back on time, marked unread, or sooner when it needs you, works or is messaged.
-  A row's second line reads the worktree branch, then what the thread's calls
-  changed (`font-mono +N −N` in `success`/`danger`), for a thread the app has
-  already read; one it has not opened shows neither, rather than a made-up zero.
-  The first line ends with one status chip and nothing else: `Working 57:13`
-  (the row's only spinner, then the running turn's clock in `tabular`),
-  `Waiting`, `Needs you`, `Failed` or `Review`, a pill on its tone at 12–16%
-  (`warning`, `accent`, `muted` for a wait, `danger`, `accent`), with what it
-  waits on in its tooltip. A row that is idle or settled shows its age there
-  instead, in the same slot: one state per row, never a spinner on each line.
-  Logic: `state/sidebarRows.ts` `rowStatus`.
+  Section and project headers are one 28px line of quiet 12px type (`text-sub`
+  in `fg-muted`): the label, a dot for what a folded group hides, a count only
+  while it is folded, then the chevron.
+- **Sidebar rows:** one 32px line. A 14px `ProjectMark`, the title, and one
+  80px trailing slot on the right. The project's name is not repeated on a row:
+  the mark carries it, and the hover card and the project's heading spell it
+  out. A row under a project's heading drops the mark, so its title lines up
+  under the folder's name. The slot holds one thing, by `rowStatus` — what it
+  needs of you, the running turn's spinner and clock, that it waits on work it
+  handed out, a failure, a review, the time a snoozed thread wakes, else its age
+  (`5m`, `3h`) — never two, and never a second spinner. A thread with a worktree
+  branch, a diff, a pull request or a stack of delegates adds one quiet second
+  line (`text-sub`, 48px row): the branch in `font-mono`, `+N −N` in
+  `success`/`danger`, the pull request's mark, and the stack or the harness mark
+  at its end. Counts are shown only for a thread the app has already read; one
+  it has not opened shows neither, rather than a made-up zero. A plain chat
+  thread keeps its one line. What a thread asks of you, and `in <parent title>`
+  for a delegated row drawn on its own, go under the title at full strength.
+  What wants you — a request, a failure, a turn that ended while you were
+  elsewhere, the open thread, a picked row — is weight 500 in full `fg`; what
+  works, waits or is settled recedes to weight 400 at 75%, back to full on
+  hover, with its mark at 60% so a column of marks never competes with the
+  titles. Hovering swaps the slot for Pin, Settle (or Unsettle) and the menu,
+  three 24px targets in the same 80px, so the title does not move; the hover
+  card is the rest. The row layout preference (`rustcode.sidebar.rowLayout`) is
+  `compact` unless the user chose `comfortable`: the two-line row the sidebar
+  had before, title first with the project's mark, the branch and the counts on
+  the line under it (the retired `current` and `title-first` values migrate to
+  it). Logic: `state/sidebarRows.ts` `rowStatus`, `state/sidebarPrefs.ts`
+  `rowLayoutOf`.
 - **Delegated threads:** a thread an agent started has no row of its own while
   its parent exists, and it is nested from its first frame: the parent
   is recorded on the thread when it is created (`_meta.rustcode.parent`, carried
@@ -627,7 +648,7 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   (`ui/AgentStack.tsx`), each with a 1.5px ring in the sidebar's surface so the
   overlapping marks stay apart, the harness glyph filling 60% of the circle,
   the circles overlapping by 30% of the diameter, then `+N` past the third.
-  A mark never spins: the row's one spinner is in the status chip above, so the
+  A mark never spins: the row's one spinner is in its trailing slot, so the
   stack stays still and what it cannot say in a glyph is in its tooltip. What
   needs you comes first,
   and the stack's state is one badge for the whole stack rather than one per

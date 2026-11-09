@@ -73,7 +73,7 @@ import {
 } from "../state/orchestration";
 import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
 import { RECAP_HOUR_OPTIONS } from "../state/recap";
-import { PREF, usePref } from "../state/sidebarPrefs";
+import { useRowLayout } from "../state/sidebarPrefs";
 import {
   APP_VERSION,
   createTheme,
@@ -923,7 +923,7 @@ function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
 }
 
 function AppearancePage() {
-  const [rowLayout, setRowLayout] = usePref<"current" | "title-first">(PREF.rowLayout, "current");
+  const [rowLayout, setRowLayout] = useRowLayout();
   const mode = useApp((s) => s.theme);
   const roundedFont = useApp((s) => s.roundedFont);
   const animateStreaming = useApp((s) => s.animateStreaming);
@@ -939,14 +939,17 @@ function AppearancePage() {
   return (
     <>
       <Group title="Sidebar">
-        <Row title="Thread row layout" subtitle="Choose what appears first in sidebar thread rows.">
+        <Row
+          title="Thread row layout"
+          subtitle="Compact is one line per thread, with a second only for a branch, a diff or a pull request."
+        >
           <Choice
             label="Thread row layout"
             value={rowLayout}
             onChange={setRowLayout}
             options={[
-              { value: "current", label: "Current" },
-              { value: "title-first", label: "Title first" },
+              { value: "compact", label: "Compact" },
+              { value: "comfortable", label: "Comfortable" },
             ]}
           />
         </Row>

@@ -687,18 +687,24 @@ composer's keys stay outside the table.
   and the palette. One list: pinned threads first, then every
   active thread, and Settled as a shelf at the foot: threads marked Settled
   and threads untouched for three days unless they wait
-  for review (`idleSettled`), folded by default, 10 at a time then *Show
+  for review (`idleSettled`), folded by default, 5 at a time then *Show
   25 more*. A thread that works, waits or needs you stays in the list and
-  says so in its row. A row is the title and one meta line (project when
-  not grouped, worktree branch, harness, model) with a single slot on the
-  right: the age (`5m`, `3h`), a live clock while the turn runs, *Approval*
-  (amber) or *Input* (accent) with the request on the meta line, or, for a
-  turn that ended while you looked elsewhere, *Done* (green) or *Failed*
-  (red) until you open the thread (`finished`/`failed` in the store; *Mark
-  Unread* in the menu brings Done back). What wants you reads in medium
-  weight; what works, waits or is settled recedes. Hovering swaps the slot for
-  Pin, Settle (or Unsettle) and the menu, so nothing shifts, each on a
-  26px target. ↑ ↓ move through the rows without opening them, ⏎ opens the
+  says so in its row. A row is one 32px line: the 14px mark of where it runs,
+  its title, and one 80px slot on the right — the age (`5m`, `3h`), the running
+  turn's spinner and clock, *Waiting*, *Needs you* (with the request under the
+  title), *Failed* (red) or *Review* (accent), the hour a snoozed thread wakes;
+  a turn that ended while you looked elsewhere keeps its row at full strength
+  until you open the thread (`finished`/`failed` in the store; *Mark Unread* in
+  the menu brings it back). The project's name is not repeated on the rows: the
+  mark carries it, and the hover card and the project's heading spell it out.
+  A thread with a branch, a diff, a pull request or a stack of delegates adds
+  one quiet second line for them (48px); a plain chat thread is one line. What
+  wants you reads in medium weight; what works, waits or is settled recedes.
+  Hovering swaps the slot for Pin, Settle (or Unsettle) and the menu, so
+  nothing shifts, each on a 24px target. Settings › Appearance › Thread row
+  layout keeps the older two-line row as *Comfortable*; *Compact* is the
+  default and a value stored by an earlier release migrates to *Comfortable*.
+  ↑ ↓ move through the rows without opening them, ⏎ opens the
   one the keyboard is on, and P pins (or unpins) it while D settles (or
   unsettles) it — the picked rows when there are several — with the same
   toast and Undo; Shift+F10 and the ContextMenu key open the row's menu, and
