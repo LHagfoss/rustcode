@@ -4,12 +4,13 @@ import { fileManagerName, primaryModifier } from "../lib/platform";
 // asked), then the Working, Snoozed and Settled shelves at the foot, each folding
 // on its own header. Threads are searched from ⌘K, which also holds the buttons
 // that used to sit here (new thread, add project, settings, pull requests, usage).
-// A row runs two lines: where it runs, its branch and what the branch's pull request
-// became, above its title and the threads it works with. One status chip
-// (`Working 57:13`, `Waiting`, `Needs you`, `Failed`, `Review`) ends the top
-// line, the threads it started end the second as a stack of marks, and a row
-// that is idle or settled shows its age there instead (state/sidebarRows.ts
-// `rowStatus`).
+// A row is one 32px line: the mark of where it runs, its title, and one trailing
+// slot — `Needs you`, `Working 2m`, `Waiting`, `Failed`, `Review`, the time it
+// wakes, or its age (state/sidebarRows.ts `rowStatus`). A thread with a branch,
+// a diff, a pull request or a stack of delegates adds one quiet second line for
+// them (48px); a request from the thread adds its words under the title. The row
+// layout preference (Settings › Appearance) keeps the older two-line row as
+// `comfortable`, which puts the title first and the branch under it.
 
 import {
   Check,
@@ -79,7 +80,7 @@ import {
 } from "../state/pulls";
 import { type PendingSetup, pendingSummary } from "../state/setup";
 import { applyOrder, moveBy, reorder, sectionOrderKey } from "../state/sidebarOrder";
-import { PREF, usePref } from "../state/sidebarPrefs";
+import { PREF, usePref, useRowLayout } from "../state/sidebarPrefs";
 import {
   contextRow,
   isShelf,
@@ -477,7 +478,7 @@ function RowStatusChip({ status, startedAt }: { status: RowStatus; startedAt?: n
   );
 }
 
-/** A small icon button in a row's hover slot: 26px so the pointer finds it without aiming. */
+/** A small icon button in a row's hover slot: 24px, so three of them take the 80px slot. */
 function RowAction({
   label,
   hint,
@@ -499,7 +500,7 @@ function RowAction({
           e.stopPropagation();
           onClick();
         }}
-        className="flex size-[26px] items-center justify-center rounded-sm text-fg-muted hover:bg-fill hover:text-fg"
+        className="flex size-6 items-center justify-center rounded-sm text-fg-muted hover:bg-fill hover:text-fg"
       >
         {children}
       </button>
@@ -508,11 +509,16 @@ function RowAction({
 }
 
 /**
- * The room a row's top line keeps clear of its hover actions: Pin, Settle (or
- * Unsettle) and the menu, three 26px buttons that sit 6px in from the row's end.
+ * The room a row keeps clear of its hover actions: Pin, Settle (or Unsettle) and the menu, three
+ * 24px buttons that sit 8px in from the row's end. The compact row's trailing slot is exactly this
+ * wide, so the actions replace the state in place instead of pushing the title aside.
  */
 const ACTIONS_CLEAR =
-  "group-hover:pr-[84px] group-has-[:focus-visible]:pr-[84px] group-has-[[data-state=open]]:pr-[84px]";
+  "group-hover:pr-20 group-has-[:focus-visible]:pr-20 group-has-[[data-state=open]]:pr-20";
+
+/** What the hover actions are drawn over: the state whose slot they take. */
+const HIDDEN_ON_HOVER =
+  "group-hover:invisible group-has-[:focus-visible]:invisible group-has-[[data-state=open]]:invisible";
 
 /**
  * A row's fill, drawn as its own child under the row's content.
@@ -572,9 +578,10 @@ function PullMark({ pull }: { pull: PullRequest }) {
 }
 
 // Memoized, and reads only the flags it shows: a streamed chunk must not re-render 500 rows.
-// Two lines: where it runs, its branch, what the branch's pull request became and what the thread
-// is doing above; the title and the harness mark below. Hovering swaps the top line's right slot
-// for the row's actions, so nothing shifts.
+// Compact: one line, a mark, the title drawn by what the thread wants, and the state in a fixed
+// slot at its end, with a second line only for a branch, a diff, a pull request or a stack.
+// Comfortable: the title first, the project's mark and the branch under it. Hovering swaps the
+// slot for the row's actions in both, so nothing shifts.
 const ThreadRow = memo(function ThreadRow({
   session,
   selected,
@@ -618,7 +625,7 @@ const ThreadRow = memo(function ThreadRow({
   settleKey?: string;
   onClearSelection?: () => void;
 }) {
-  const [rowLayout] = usePref(PREF.rowLayout, "current");
+  const [rowLayout] = useRowLayout();
   const request = useApp((s) => s.threads[session.id]?.permissions[0]);
   const running = useApp((s) => s.threads[session.id]?.running ?? false);
   const startedAt = useApp((s) => s.threads[session.id]?.turnStartedAt);
@@ -697,6 +704,18 @@ const ThreadRow = memo(function ThreadRow({
   const branch = session.parent ? branchKindOf(session.parent) : undefined;
   // The open thread is a delegated one with no row of its own: its parent stands in as the context.
   const lit = selected || !!context;
+  // One line by default (Settings › Appearance): the second is for a row that has something to put
+  // there. What it carries is the branch, what the branch changed, its pull request, and who else
+  // works beside it; a plain chat thread has none of it.
+  const compact = rowLayout === "compact";
+  const hasMeta = !!(worktree || diff || pull || stack?.length);
+  // What wants you reads strong; what works, waits or has been read recedes until hovered.
+  const wantsYou = !!request || fresh || failed || lit || picked;
+  const recedes = !wantsYou && (running || !!wait || done);
+  const markTint = cx(
+    "transition-opacity duration-150 ease-snappy",
+    wantsYou ? "opacity-100" : "opacity-60 group-hover:opacity-100",
+  );
   return (
     <ContextMenu.Root
       onOpenChange={(open) => {
@@ -750,10 +769,124 @@ const ThreadRow = memo(function ThreadRow({
               }}
               aria-current={selected ? "page" : undefined}
               aria-pressed={picked || undefined}
-              className="relative flex w-full flex-col justify-center gap-0.5 rounded-xl py-2 pr-2 pl-2 text-left"
+              className={cx(
+                "relative flex w-full flex-col justify-center gap-0.5 text-left",
+                compact ? "rounded-lg px-2" : "rounded-xl py-2 pr-2 pl-2",
+                compact && (hasMeta || request || hint) ? "min-h-12" : compact ? "min-h-8" : undefined,
+              )}
             >
-              <RowFill selected={lit} picked={picked} radius="rounded-xl" />
-              {rowLayout === "title-first" ? (
+              <RowFill selected={lit} picked={picked} radius={compact ? "rounded-lg" : "rounded-xl"} />
+              {compact ? (
+                <>
+                  {/* One line: the mark of where it runs, its title, and the one thing it says at
+                      the end. The project's name is not repeated here, since the mark carries it
+                      and the hover card and the folder's heading spell it out. */}
+                  <span className="relative flex w-full min-w-0 items-center gap-2">
+                    {!grouped && <ProjectMark name={project} size={14} className={markTint} />}
+                    {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
+                    {branch && (
+                      <span
+                        title={branch === "fork" ? "A fork" : "A side chat"}
+                        className="shrink-0 text-fg-faint"
+                      >
+                        {branch === "fork" ? <GitFork size={11} /> : <MessageSquareQuote size={11} />}
+                      </span>
+                    )}
+                    <span
+                      className={cx(
+                        "min-w-0 flex-1 truncate text-body",
+                        wantsYou
+                          ? "font-medium text-fg"
+                          : recedes
+                            ? "font-normal text-fg/75 group-hover:text-fg"
+                            : "font-medium text-fg",
+                      )}
+                    >
+                      {session.title || "New thread"}
+                    </span>
+                    {/* The row's one trailing slot, 80px wide: the state sits at its end and the
+                        hover actions take exactly the same room, so the title never moves. */}
+                    <span
+                      title={chip?.title}
+                      className={cx(
+                        "flex w-20 shrink-0 items-center justify-end gap-1 text-sub text-fg-muted tabular",
+                        HIDDEN_ON_HOVER,
+                      )}
+                    >
+                      {chip ? (
+                        chip.kind === "needs" ? (
+                          request?.question ? (
+                            <MessageCircleQuestion size={13} />
+                          ) : (
+                            <ShieldQuestion size={13} />
+                          )
+                        ) : chip.kind === "working" ? (
+                          <span className="flex items-center gap-1">
+                            <Spinner size={9} />
+                            {startedAt !== undefined && <Elapsed since={startedAt} />}
+                          </span>
+                        ) : chip.kind === "waiting" ? (
+                          <span className="flex items-center gap-1">
+                            <Clock size={11} className="shrink-0" />
+                            {chip.label}
+                          </span>
+                        ) : (
+                          <span
+                            className={cx(
+                              "flex items-center gap-1",
+                              chip.kind === "failed" ? "text-danger" : "text-accent",
+                            )}
+                          >
+                            {chip.kind === "failed" ? <CircleAlert size={11} /> : <Eye size={11} />}
+                            {chip.label}
+                          </span>
+                        )
+                      ) : (
+                        <span className="min-w-0 truncate">
+                          {wake ? wakeLabel(wake, now) : shortAge(session.updatedAt, now)}
+                        </span>
+                      )}
+                    </span>
+                  </span>
+                  {/* The second line, only when there is something to say: the branch it works in,
+                      what the branch changed, its pull request, and who else works beside it. */}
+                  {hasMeta && (
+                    <span className="relative flex w-full min-w-0 items-center gap-2 text-sub text-fg-muted">
+                      {worktree && (
+                        <span className="flex min-w-0 items-center gap-1">
+                          <GitBranch size={10} className="shrink-0" />
+                          <span className="min-w-0 truncate font-mono text-[10px]" title={worktree.branch}>
+                            {worktree.branch}
+                          </span>
+                        </span>
+                      )}
+                      {diff && (
+                        <span className="shrink-0 font-mono text-[10px] tabular">
+                          {diff.added > 0 && <span className="text-success">+{diff.added}</span>}
+                          {diff.added > 0 && diff.removed > 0 && " "}
+                          {diff.removed > 0 && <span className="text-danger">−{diff.removed}</span>}
+                        </span>
+                      )}
+                      {pull && <PullMark pull={pull} />}
+                      <span className="ml-auto flex shrink-0 items-center gap-1">
+                        <LinkBadge threadId={session.id} />
+                        {stack?.length ? (
+                          <AgentStack agents={stack} />
+                        ) : (
+                          external && (
+                            <HarnessIcon
+                              id={session.harness!}
+                              name={harness?.name}
+                              size={12}
+                              className="shrink-0"
+                            />
+                          )
+                        )}
+                      </span>
+                    </span>
+                  )}
+                </>
+              ) : (
                 <span className="title-first-row relative block w-full min-w-0">
                   <span className={cx("flex min-w-0 items-center gap-1.5", ACTIONS_CLEAR)}>
                     {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
@@ -767,13 +900,22 @@ const ThreadRow = memo(function ThreadRow({
                     )}
                     <span
                       className={cx(
-                        "min-w-0 flex-1 truncate text-body font-medium",
-                        request || fresh || failed || lit || picked ? "text-fg" : "text-fg/75",
+                        "min-w-0 flex-1 truncate text-body",
+                        wantsYou
+                          ? "font-medium text-fg"
+                          : recedes
+                            ? "font-normal text-fg/75 group-hover:text-fg"
+                            : "font-medium text-fg",
                       )}
                     >
                       {session.title || "New thread"}
                     </span>
-                    <span className="flex shrink-0 items-center gap-1 text-sub text-fg-muted tabular group-hover:invisible group-has-[:focus-visible]:invisible group-has-[[data-state=open]]:invisible">
+                    <span
+                      className={cx(
+                        "flex shrink-0 items-center gap-1 text-sub text-fg-muted tabular",
+                        HIDDEN_ON_HOVER,
+                      )}
+                    >
                       {trailing === "needs" && request ? (
                         request.question ? (
                           <MessageCircleQuestion size={13} />
@@ -797,8 +939,7 @@ const ThreadRow = memo(function ThreadRow({
                     </span>
                   </span>
                   <span className="flex min-w-0 items-center gap-1 text-sub text-fg-muted">
-                    <ProjectMark name={project} />
-                    <span className="min-w-0 max-w-[45%] shrink truncate">{project}</span>
+                    {!grouped && <ProjectMark name={project} size={14} className={markTint} />}
                     {worktree && (
                       <span className="title-first-branch min-w-0 flex-1 truncate font-mono text-[10px]">
                         <GitBranch size={9} className="mr-0.5 inline" />
@@ -835,92 +976,6 @@ const ThreadRow = memo(function ThreadRow({
                     </span>
                   )}
                 </span>
-              ) : (
-                <>
-                  {/* Where it runs, what its branch carries, and what it is doing. The hovered row's
-                actions take the right slot's place, so this line keeps exactly their room clear:
-                Pin, Settle or Unsettle and the menu, 26px each plus the 6px they sit in from
-                the row's edge. */}
-                  <span
-                    className={cx("relative flex h-[17px] w-full min-w-0 items-center gap-1", ACTIONS_CLEAR)}
-                  >
-                    {!grouped && (
-                      <>
-                        <ProjectMark name={project} />
-                        {/* The name keeps its room; the branch, the counts and the pull request give way. */}
-                        <span className="min-w-0 max-w-[50%] shrink-0 truncate text-fg-muted text-sub">
-                          {project}
-                        </span>
-                      </>
-                    )}
-                    {worktree && (
-                      <span className="flex min-w-0 shrink items-center gap-0.5 rounded-xs bg-fill-subtle px-1 font-mono text-[10px] text-fg-muted">
-                        <GitBranch size={9} className="shrink-0" />
-                        <span className="truncate">{worktree.branch}</span>
-                      </span>
-                    )}
-                    {diff && (
-                      <span className="shrink-0 font-mono text-[10px] tabular">
-                        {diff.added > 0 && <span className="text-success">+{diff.added}</span>}
-                        {diff.added > 0 && diff.removed > 0 && " "}
-                        {diff.removed > 0 && <span className="text-danger">−{diff.removed}</span>}
-                      </span>
-                    )}
-                    {pull && <PullMark pull={pull} />}
-                    <span className="ml-auto flex shrink-0 items-center gap-1 text-sub tabular group-hover:invisible group-has-[:focus-visible]:invisible group-has-[[data-state=open]]:invisible">
-                      {chip ? (
-                        <RowStatusChip status={chip} startedAt={startedAt} />
-                      ) : (
-                        <span className="text-fg-muted">
-                          {wake ? wakeLabel(wake, now) : shortAge(session.updatedAt, now)}
-                        </span>
-                      )}
-                    </span>
-                  </span>
-                  {/* Its title, and the harness that runs it. */}
-                  <span className="relative flex w-full min-w-0 items-center gap-1.5">
-                    {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
-                    {branch && (
-                      <span
-                        title={branch === "fork" ? "A fork" : "A side chat"}
-                        className="shrink-0 text-fg-faint"
-                      >
-                        {branch === "fork" ? <GitFork size={11} /> : <MessageSquareQuote size={11} />}
-                      </span>
-                    )}
-                    <span
-                      className={cx(
-                        "min-w-0 flex-1 truncate text-body",
-                        // What wants you reads strong; what works, waits or has been read recedes.
-                        lit || picked || request || fresh || failed
-                          ? "font-medium text-fg"
-                          : done || running || wait
-                            ? "font-normal text-fg/75 group-hover:text-fg"
-                            : "font-medium text-fg",
-                      )}
-                    >
-                      {session.title || "New thread"}
-                    </span>
-                    {/* Who else it is working with, and where: one cluster, ending on the same right
-                  edge as the chip above. The ↳ (it works for another thread) leads it, and a row
-                  with no delegates keeps its harness mark alone instead. */}
-                    <span className="flex min-w-0 shrink-0 items-center gap-1">
-                      <LinkBadge threadId={session.id} />
-                      {stack?.length ? (
-                        <AgentStack agents={stack} />
-                      ) : (
-                        external && (
-                          <HarnessIcon
-                            id={session.harness!}
-                            name={harness?.name}
-                            size={13}
-                            className="shrink-0 text-fg-muted"
-                          />
-                        )
-                      )}
-                    </span>
-                  </span>
-                </>
               )}
               {/* What it asks of you, or which thread a delegated one without a parent row above it
                 belongs under. */}
@@ -935,7 +990,7 @@ const ThreadRow = memo(function ThreadRow({
             data-row-actions
             // Hidden while the row is dragged: the actions sit beside the row, not on it.
             className={cx(
-              "absolute top-0.5 right-1.5 hidden items-center",
+              "absolute top-1 right-2 hidden items-center",
               !dragging &&
                 "group-hover:flex group-has-[:focus-visible]:flex group-has-[[data-state=open]]:flex",
             )}
@@ -962,7 +1017,7 @@ const ThreadRow = memo(function ThreadRow({
                   type="button"
                   aria-label={`Actions for ${session.title || "thread"}`}
                   title={`Actions · ${formatBinding("shift+f10")}`}
-                  className="flex size-[26px] items-center justify-center rounded-sm text-fg-muted hover:bg-fill hover:text-fg"
+                  className="flex size-6 items-center justify-center rounded-sm text-fg-muted hover:bg-fill hover:text-fg"
                 >
                   <Ellipsis size={15} />
                 </button>
@@ -1023,49 +1078,50 @@ const PendingRow = memo(function PendingRow({
         onClick={() => selectThread(pending.id)}
         aria-current={selected ? "page" : undefined}
         title={failure ? `${pending.title} · ${failure.text}` : pending.title}
-        className="relative flex w-full flex-col justify-center gap-0.5 rounded-xl py-2 pr-2 pl-2 text-left"
+        className="relative flex min-h-12 w-full flex-col justify-center gap-0.5 rounded-lg px-2 text-left"
       >
-        <RowFill selected={selected} radius="rounded-xl" />
-        <span
-          className={cx(
-            "relative flex h-[17px] w-full min-w-0 items-center gap-1",
-            failure ? "pr-7" : "group-hover:pr-7 group-has-[:focus-visible]:pr-7",
-          )}
-        >
-          <ProjectMark name={project} />
-          <span className="min-w-0 max-w-[50%] shrink-0 truncate text-fg-muted text-sub">{project}</span>
-          {branch && (
-            <span className="flex min-w-0 shrink items-center gap-0.5 rounded-xs bg-fill-subtle px-1 font-mono text-[10px] text-fg-muted">
-              <GitBranch size={9} className="shrink-0" />
-              <span className="truncate">{branch}</span>
-            </span>
-          )}
-          <span className="ml-auto flex shrink-0 items-center gap-1 text-sub tabular group-hover:invisible group-has-[:focus-visible]:invisible">
+        <RowFill selected={selected} radius="rounded-lg" />
+        <span className="relative flex w-full min-w-0 items-center gap-2">
+          <ProjectMark name={project} size={14} className="opacity-60 group-hover:opacity-100" />
+          <span className="min-w-0 flex-1 truncate text-body font-medium text-fg">{pending.title}</span>
+          {/* The same 80px slot a thread's row has, so the state lands on the same edge. */}
+          {/* Dismiss sits in the slot's end when the setup failed, so the words keep its room. */}
+          <span
+            className={cx(
+              "flex w-20 shrink-0 items-center justify-end gap-1 text-sub text-fg-muted tabular",
+              failure && "pr-6",
+            )}
+          >
             {failure ? (
               <>
-                <CircleAlert size={12} className="text-danger" />
+                <CircleAlert size={11} className="text-danger" />
                 <span className="font-medium text-danger">Failed</span>
               </>
             ) : (
               <>
-                <Spinner size={11} />
-                <span className="text-accent">
-                  {pending.worktree ? "Setting up" : "Starting"} <Elapsed since={pending.startedAt} />
-                </span>
+                <Spinner size={9} />
+                <Elapsed since={pending.startedAt} />
               </>
             )}
           </span>
         </span>
-        <span className={cx("relative min-w-0 truncate text-body", failure ? "pr-7" : "pr-0")}>
-          {pending.title}
+        <span className="relative flex w-full min-w-0 items-center gap-2 text-sub text-fg-muted">
+          {failure ? (
+            <span className="min-w-0 truncate text-danger" title={failure.text}>
+              {failure.text}
+            </span>
+          ) : (
+            <span className="shrink-0 text-accent">{pending.worktree ? "Setting up" : "Starting"}</span>
+          )}
+          {branch && (
+            <span className="flex min-w-0 items-center gap-1">
+              <GitBranch size={10} className="shrink-0" />
+              <span className="min-w-0 truncate font-mono text-[10px]">{branch}</span>
+            </span>
+          )}
         </span>
-        {failure && (
-          <span className="relative truncate text-danger text-sub" title={failure.text}>
-            {failure.text}
-          </span>
-        )}
       </button>
-      <div className="absolute top-1 right-1.5 flex items-center">
+      <div className="absolute top-1 right-2 flex items-center">
         {failure && (
           <RowAction label="Dismiss" onClick={dismissPendingSetup}>
             <X size={12} />
@@ -1236,7 +1292,7 @@ function SectionHeader({
       onClick={onToggle}
       aria-expanded={open}
       className={cx(
-        "group/h flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left font-medium text-fg-muted text-sub hover:bg-fill-subtle",
+        "group/h flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left font-medium text-fg-muted text-sub hover:bg-fill-subtle",
       )}
     >
       <span className="min-w-0 flex-1 truncate">{section.label}</span>
@@ -1273,7 +1329,7 @@ function SectionHeader({
 /** The heading of Pinned or Active: it names the group and never folds. */
 function SectionLabel({ section }: { section: Section }) {
   return (
-    <div className="flex h-8 w-full items-center gap-2 px-2 font-medium text-fg-muted text-sub">
+    <div className="flex h-7 w-full items-center gap-2 px-2 font-medium text-fg-muted text-sub">
       <span className="min-w-0 flex-1 truncate">{section.label}</span>
       <span className="shrink-0 font-normal text-fg-faint">
         <RollingNumber value={section.items.length} />
@@ -1285,7 +1341,8 @@ function SectionLabel({ section }: { section: Section }) {
 /**
  * A project's folder: the folder and its name, a dot for
  * what it hides and its count only while folded, the chevron at the end, and
- * a new-thread button on hover.
+ * a new-thread button on hover. It reads as its section's own labels do: the same 28px, the same
+ * quiet 12px type, so a list of projects is one quiet column of headings.
  */
 function ProjectHeader({
   label,
@@ -1303,18 +1360,14 @@ function ProjectHeader({
   onNew?: () => void;
 }) {
   return (
-    <div className="group/p relative flex h-8 items-center">
+    <div className="group/p relative flex h-7 items-center">
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left font-medium text-body text-fg/90 hover:bg-fill-subtle"
+        className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left font-medium text-fg-muted text-sub hover:bg-fill-subtle"
       >
-        {open ? (
-          <FolderOpen size={14} className="shrink-0 text-fg-muted" />
-        ) : (
-          <Folder size={14} className="shrink-0 text-fg-muted" />
-        )}
+        {open ? <FolderOpen size={12} className="shrink-0" /> : <Folder size={12} className="shrink-0" />}
         <span className="min-w-0 flex-1 truncate">{label}</span>
         {!open && <HiddenDot kind={hidden} />}
         {!open && <RollingNumber value={count} className="font-normal text-fg-faint text-sub" />}
@@ -1417,8 +1470,8 @@ export function Sidebar() {
   }, [hidden, width]);
   const dragging = useRef(false);
   const now = useNow();
-  // Settled lists 10 threads, then 25 more at a time.
-  const [settledShown, setSettledShown] = useState(10);
+  // Settled lists 5 threads, then 25 more at a time.
+  const [settledShown, setSettledShown] = useState(5);
   // design-lint: allow (mask alpha, not a colour)
   const fade = "linear-gradient(to bottom, #000 calc(100% - 12px), transparent)";
 
@@ -2047,7 +2100,7 @@ export function Sidebar() {
     );
   };
   const rows = (items: SessionSummary[], grouped: boolean) => (
-    <div className="flex flex-col gap-0.5">
+    <div className="flex flex-col gap-px">
       {items.map((s) => (
         <Fragment key={s.id}>
           {pending && s.id === pending.id ? (
@@ -2157,8 +2210,10 @@ export function Sidebar() {
                                   onToggle={() => toggle(`project:${p.key}`)}
                                   onNew={p.key ? () => startNewThread(p.key) : undefined}
                                 />
+                                {/* Under its project's heading the row drops the mark: its title then
+                                    lines up under the folder's name. */}
                                 <Fold open={projectOpen}>
-                                  <div className="pl-3">{rows(p.items, true)}</div>
+                                  <div className="pl-5">{rows(p.items, true)}</div>
                                 </Fold>
                               </div>
                             );
@@ -2172,16 +2227,11 @@ export function Sidebar() {
                         <button
                           type="button"
                           onClick={() => setSettledShown((n) => n + 25)}
-                          className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-callout text-fg-muted hover:bg-fill-subtle hover:text-fg"
+                          className="flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left text-fg-muted text-sub hover:bg-fill-subtle hover:text-fg"
                         >
                           <ChevronDown size={14} className="shrink-0" />
                           Show {Math.min(25, section.items.length - settledShown)} more
                         </button>
-                      )}
-                      {section.id === "settled" && (
-                        <p className="px-2 pt-1 pb-2 text-caption text-fg-faint">
-                          Settled, or untouched for 3 days. A new message brings one back.
-                        </p>
                       )}
                     </Fold>
                   </section>
@@ -2269,16 +2319,15 @@ export function Sidebar() {
   );
 }
 
-/** Where the thread list will be: a section header and rows of a title and a meta line. */
+/** Where the thread list will be: a section's label, then rows of one 32px line each. */
 const SKELETON_ROWS = [72, 56, 84, 64, 48, 76, 60];
 function ThreadRowsSkeleton() {
   return (
     <div className="flex flex-col pt-1" role="status" aria-label="Loading threads">
       <Skeleton className="mx-2 mt-2 mb-3 h-2.5 w-16" />
       {SKELETON_ROWS.map((w, i) => (
-        <div key={i} className="flex flex-col gap-1.5 px-2 py-[7px]">
+        <div key={i} className="flex h-8 items-center px-2">
           <Skeleton className="h-3" style={{ width: `${w}%` }} />
-          <Skeleton className="h-2" style={{ width: `${Math.round(w * 0.55)}%` }} />
         </div>
       ))}
     </div>
