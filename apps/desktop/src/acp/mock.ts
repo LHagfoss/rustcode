@@ -3013,6 +3013,20 @@ export class MockEngine {
             ],
           },
         };
+      case "_rustcode/pulls/diff":
+        return {
+          diff: [
+            "diff --git a/apps/desktop/src/ui/Composer.tsx b/apps/desktop/src/ui/Composer.tsx",
+            "--- a/apps/desktop/src/ui/Composer.tsx",
+            "+++ b/apps/desktop/src/ui/Composer.tsx",
+            "@@ -1,4 +1,5 @@",
+            ' import { useApp } from "../state/store";',
+            '+import { compose } from "../state/compose";',
+            " ",
+            "-export const Composer = () => null;",
+            "+export const Composer = () => <div className={compose()} />;",
+          ].join("\n"),
+        };
       case "_rustcode/pulls/review":
         return { review: { url: "https://github.com/LHagfoss/rustcode/pull/2788#pullrequestreview-1" } };
       case "_rustcode/rewind": {

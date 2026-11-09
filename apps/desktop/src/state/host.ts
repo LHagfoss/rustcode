@@ -110,6 +110,7 @@ import {
   wakesDue,
 } from "./orchestration";
 import { delegationAllowed, effectiveMode, modeLabel, type PermissionMode } from "./permissions";
+import { rememberPullSummaries } from "./pullQueries";
 import { QUEUE_REASON, wakeDelivery } from "./queue";
 import {
   parseQueueBook,
@@ -1028,8 +1029,12 @@ async function listPullRequests(caller: RuleThread, state: PullStateChoice): Pro
   }
   const error = parsePullError(result);
   if (error) return failureJson(pullFailure(error));
+  const pulls = parsePullList(result).pulls;
+  // The answer also seeds the panel's header: a pull opened after the agent's
+  // read draws its title, state and checks before its own detail is read.
+  rememberPullSummaries(cwd, pulls);
   return {
-    pull_requests: parsePullList(result).pulls.map((p) => ({
+    pull_requests: pulls.map((p) => ({
       number: p.number,
       title: p.title,
       state: p.state,
@@ -1038,7 +1043,6 @@ async function listPullRequests(caller: RuleThread, state: PullStateChoice): Pro
     })),
   };
 }
-
 /** A thread's pull request and checks, read through the engine's `gh` call. */
 async function delegatePull(
   target: RuleThread,

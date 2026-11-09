@@ -20,13 +20,7 @@ import {
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import type { JsonObject } from "../acp/jsonrpc";
-import {
-  type PullRequest,
-  parsePullError,
-  parsePullList,
-  pullErrorTitle,
-  repositoryOf,
-} from "../acp/rustcode";
+import { type PullRequest, parsePullError, pullErrorTitle, repositoryOf } from "../acp/rustcode";
 import { Method } from "../acp/types";
 import { clip } from "../lib/clip";
 import { setDiffMode, useDiffLayout, useDiffWidth } from "../lib/diffMode";
@@ -41,6 +35,7 @@ import {
   reviewMessage,
   splitRows,
 } from "../state/diff";
+import { loadPullDiff, prefetchPullDiff, usePullList } from "../state/pullQueries";
 import {
   featureMissing,
   refreshCheckpoints,
@@ -345,7 +340,6 @@ export function Review({ threadId }: { threadId: string }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [comments, setComments] = useState<ReviewComment[]>([]);
   const [note, setNote] = useState("");
-  const [pull, setPull] = useState<PullRequest | null>(null);
   const [event, setEvent] = useState<"COMMENT" | "APPROVE" | "REQUEST_CHANGES">("COMMENT");
   const [posting, setPosting] = useState(false);
 
@@ -359,76 +353,74 @@ export function Review({ threadId }: { threadId: string }) {
     setCollapsed(false);
   }, [selected, sourceKey(source)]);
 
-  // The branch's pull request, when the project has one open for it.
-  useEffect(() => {
-    if (!pullsOn || !wt?.branch || !cwd) return;
-    let live = true;
-    void request(Method.pulls, { cwd, state: "open", limit: 30 }, 60_000)
-      .then((r) => {
-        const found = parsePullList((r as JsonObject).list ?? r).pulls.find((p) => p.headRef === wt.branch);
-        if (live) setPull(found ?? null);
-      })
-      .catch(() => undefined);
-    return () => {
-      live = false;
-    };
-  }, [pullsOn, wt?.branch, cwd]);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      let out: ReviewFile[] = [];
-      if (source.kind === "turn") {
-        out = (await turnDiff(threadId, source.turn)).map((f) => ({
-          path: f.path,
-          status: STATUS_LETTER[f.status] ?? "M",
-          added: f.insertions,
-          removed: f.deletions,
-          lines: parsePatch(f.patch),
-        }));
-      } else if (source.kind === "pull") {
-        const r = (await request(Method.pullDiff, { cwd, number: source.pull.number }, 60_000)) as JsonObject;
-        const err = parsePullError(r);
-        if (err) throw new Error(`${pullErrorTitle(err.code)}: ${err.message}`);
-        const chunks = splitUnifiedDiff(String(r.diff ?? ""));
-        out = Object.entries(chunks).map(([path, lines]) => {
-          const parsed = parsePatch(lines);
-          return {
-            path,
-            status: "M",
-            added: parsed.filter((l) => l.kind === "add").length,
-            removed: parsed.filter((l) => l.kind === "del").length,
-            lines: parsed,
-          };
-        });
-      } else {
-        const folder = source.kind === "branch" && wt ? wt.path : cwd;
-        const changes = await gitChanges(folder, source.kind === "branch" ? wt?.base : undefined);
-        if (!changes) throw new Error("Reading changes needs the desktop app: git runs in its native shell.");
-        const chunks = splitUnifiedDiff(changes.diff);
-        out = changes.files.map((f) => ({
-          path: f.path,
-          status: f.status,
-          added: f.added,
-          removed: f.removed,
-          lines: parsePatch(chunks[f.path] ?? []),
-        }));
+  // The branch's pull request, from the pull store the panel and the sidebar
+  // also read: a list one of them read a moment ago answers this at once.
+  const openPulls = usePullList(pullsOn && cwd ? cwd : undefined, "open", { enabled: pullsOn });
+  const pull = useMemo(
+    () => (wt?.branch ? openPulls.data?.find((p) => p.headRef === wt.branch) : undefined) ?? null,
+    [openPulls.data, wt?.branch],
+  );
+  const load = useCallback(
+    async (force = false) => {
+      setLoading(true);
+      setError(null);
+      try {
+        let out: ReviewFile[] = [];
+        if (source.kind === "turn") {
+          out = (await turnDiff(threadId, source.turn)).map((f) => ({
+            path: f.path,
+            status: STATUS_LETTER[f.status] ?? "M",
+            added: f.insertions,
+            removed: f.deletions,
+            lines: parsePatch(f.patch),
+          }));
+        } else if (source.kind === "pull") {
+          // Through the pull store: a diff read on intent (the pointer resting on
+          // the pull segment) is the one this draws, so the click waits for nothing.
+          const answer = await loadPullDiff(cwd, source.pull.number, { force });
+          if (answer.error) {
+            throw new Error(`${pullErrorTitle(answer.error.code)}: ${answer.error.message}`);
+          }
+          const chunks = splitUnifiedDiff(answer.diff ?? "");
+          out = Object.entries(chunks).map(([path, lines]) => {
+            const parsed = parsePatch(lines);
+            return {
+              path,
+              status: "M",
+              added: parsed.filter((l) => l.kind === "add").length,
+              removed: parsed.filter((l) => l.kind === "del").length,
+              lines: parsed,
+            };
+          });
+        } else {
+          const folder = source.kind === "branch" && wt ? wt.path : cwd;
+          const changes = await gitChanges(folder, source.kind === "branch" ? wt?.base : undefined);
+          if (!changes)
+            throw new Error("Reading changes needs the desktop app: git runs in its native shell.");
+          const chunks = splitUnifiedDiff(changes.diff);
+          out = changes.files.map((f) => ({
+            path: f.path,
+            status: f.status,
+            added: f.added,
+            removed: f.removed,
+            lines: parsePatch(chunks[f.path] ?? []),
+          }));
+        }
+        setFiles(out);
+        setSelected((cur) => (cur && out.some((f) => f.path === cur) ? cur : (out[0]?.path ?? null)));
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setFiles(null);
+      } finally {
+        setLoading(false);
       }
-      setFiles(out);
-      setSelected((cur) => (cur && out.some((f) => f.path === cur) ? cur : (out[0]?.path ?? null)));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setFiles(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [source, threadId, cwd, wt]);
+    },
+    [source, threadId, cwd, wt],
+  );
 
   useEffect(() => {
     void load();
   }, [load]);
-
   const tree = useMemo(() => fileTree((files ?? []).map((f) => f.path)), [files]);
   const file = files?.find((f) => f.path === selected);
   const label = sourceLabel(source, wt?.branch);
@@ -496,6 +488,9 @@ export function Review({ threadId }: { threadId: string }) {
             if (v === "uncommitted" || v === "branch") setSource({ kind: v });
             else if (v.startsWith("pull:") && pull) setSource({ kind: "pull", pull });
           }}
+          // The pull segment rests before it is chosen: read its diff now, so the
+          // click draws the files instead of waiting for `gh`.
+          onIntent={(v) => v.startsWith("pull:") && prefetchPullDiff(cwd, Number(v.slice(5)))}
           options={
             source.kind === "turn" ? [...sources, { value: "turn", label: `Turn ${source.turn}` }] : sources
           }
@@ -539,7 +534,7 @@ export function Review({ threadId }: { threadId: string }) {
           <button
             type="button"
             aria-label="Reload"
-            onClick={() => void load()}
+            onClick={() => void load(true)}
             className="flex size-7 items-center justify-center rounded-full text-fg-muted hover:bg-fill"
           >
             {loading ? <Spinner size={12} /> : <RefreshCw size={13} />}

@@ -12,24 +12,40 @@ import {
   GitPullRequest,
   RefreshCw,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import type { JsonObject } from "../acp/jsonrpc";
 import {
-  type PullDetail,
   type PullError,
   type PullRequest,
-  parsePullDetail,
   parsePullError,
-  parsePullList,
   pullErrorTitle,
   repositoryOf,
 } from "../acp/rustcode";
 import { Method } from "../acp/types";
+import { useIntentRest } from "../lib/intent";
 import { openExternal } from "../lib/native";
+import {
+  PULL_LIMIT,
+  type PullListState,
+  prefetchPullDetail,
+  readPullList,
+  usePullDetail,
+  usePullList,
+} from "../state/pullQueries";
+import { pullState } from "../state/pulls";
 import { openSettings, request, setDraft, setPanel, startNewThread, toast, useApp } from "../state/store";
 import { relativeAge } from "../state/thread";
 import { Markdown } from "./Markdown";
 import { Cluster, ClusterButton, cx, Pill, Segments, Skeleton, Spinner } from "./primitives";
+
+/**
+ * Reads a row's detail when the pointer or focus rests on it, so the click has
+ * it already. Passing over rows reads nothing, and the read is under the same
+ * key the click reads, so a rest that ends in a click is never wasted.
+ */
+function useRowIntent(cwd: string | undefined) {
+  return useIntentRest((number: number) => prefetchPullDetail(cwd, number));
+}
 
 function ChecksMark({ pull }: { pull: PullRequest }) {
   const c = pull.checks;
@@ -63,6 +79,15 @@ const REVIEW_LABEL: Record<string, string> = {
   review_required: "Review required",
 };
 
+/** A pull's own state, in its mark's tone, on the detail panel's header. */
+const STATE_LABEL = { open: "Open", draft: "Draft", merged: "Merged", closed: "Closed" } as const;
+const STATE_TONE = {
+  open: "text-success",
+  draft: "text-fg-muted",
+  merged: "text-accent",
+  closed: "text-danger",
+} as const;
+
 function ErrorView({ error }: { error: PullError }) {
   return (
     <div className="p-3">
@@ -77,7 +102,7 @@ function ErrorView({ error }: { error: PullError }) {
   );
 }
 
-function ReviewForm({ cwd, pull, onDone }: { cwd: string; pull: PullDetail; onDone: () => void }) {
+function ReviewForm({ cwd, pull, onDone }: { cwd: string; pull: PullRequest; onDone: () => void }) {
   const [event, setEvent] = useState<"COMMENT" | "APPROVE" | "REQUEST_CHANGES">("COMMENT");
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
@@ -144,24 +169,11 @@ function ReviewForm({ cwd, pull, onDone }: { cwd: string; pull: PullDetail; onDo
 }
 
 function PullView({ cwd, number, onBack }: { cwd: string; number: number; onBack: () => void }) {
-  const [detail, setDetail] = useState<PullDetail | null>(null);
-  const [error, setError] = useState<PullError | null>(null);
+  // The row the list already read draws the header at once; the body, the
+  // files and the activity come from the detail read behind it.
+  const { detail, summary, error } = usePullDetail(cwd, number);
   const [reviewing, setReviewing] = useState(false);
-  useEffect(() => {
-    let live = true;
-    void request(Method.pullView, { cwd, number }, 60_000).then(
-      (result) => {
-        if (!live) return;
-        setError(parsePullError(result));
-        setDetail(parsePullDetail(result));
-      },
-      (e) => live && setError({ code: "failed", message: e instanceof Error ? e.message : String(e) }),
-    );
-    return () => {
-      live = false;
-    };
-  }, [cwd, number]);
-  const askAgent = (pull: PullDetail) => {
+  const askAgent = (pull: PullRequest) => {
     startNewThread(cwd);
     setDraft(
       "new",
@@ -178,37 +190,48 @@ function PullView({ cwd, number, onBack }: { cwd: string; number: number; onBack
       >
         <ArrowLeft size={12} /> All pull requests
       </button>
-      {error && <ErrorView error={error} />}
-      {!detail && !error && <PullSkeleton />}
-      {detail && (
+      {summary ? (
         <>
           <h2 className="selectable font-semibold text-title3">
-            {detail.title} <span className="font-normal text-fg-muted">#{detail.number}</span>
+            {summary.title} <span className="font-normal text-fg-muted">#{summary.number}</span>
           </h2>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-caption">
+            <span className={STATE_TONE[pullState(summary)]}>{STATE_LABEL[pullState(summary)]}</span>
+            <ChecksMark pull={summary} />
+          </div>
           <p className="mt-1 text-caption text-fg-muted">
-            {detail.author} wants to merge <span className="font-mono">{detail.headRef}</span> into{" "}
-            <span className="font-mono">{detail.baseRef}</span> · {detail.changedFiles} files{" "}
-            <span className="text-success">+{detail.additions}</span>{" "}
-            <span className="text-danger">−{detail.deletions}</span>
+            {summary.author} wants to merge <span className="font-mono">{summary.headRef}</span> into{" "}
+            <span className="font-mono">{summary.baseRef}</span> · {summary.changedFiles} files{" "}
+            <span className="text-success">+{summary.additions}</span>{" "}
+            <span className="text-danger">−{summary.deletions}</span>
           </p>
           <div className="mt-2 flex flex-wrap gap-1.5">
-            {detail.url && (
-              <Pill onClick={() => openExternal(detail.url!)}>
+            {summary.url && (
+              <Pill onClick={() => openExternal(summary.url!)}>
                 <ExternalLink size={11} /> GitHub
               </Pill>
             )}
-            <Pill onClick={() => askAgent(detail)}>Ask the agent to review</Pill>
+            <Pill onClick={() => askAgent(summary)}>Ask the agent to review</Pill>
             {!reviewing && (
               <Pill
                 prominent
                 onClick={() => setReviewing(true)}
-                disabled={!repositoryOf(detail.url) || detail.state !== "open"}
+                disabled={!repositoryOf(summary.url) || pullState(summary) !== "open"}
               >
                 Review…
               </Pill>
             )}
           </div>
-          {reviewing && <ReviewForm cwd={cwd} pull={detail} onDone={() => setReviewing(false)} />}
+          {reviewing && <ReviewForm cwd={cwd} pull={summary} onDone={() => setReviewing(false)} />}
+        </>
+      ) : error ? (
+        <ErrorView error={error} />
+      ) : (
+        <PullSkeleton />
+      )}
+      {error && summary && <ErrorView error={error} />}
+      {detail && (
+        <>
           {detail.body && (
             <div className="mt-3 rounded-lg bg-fill-subtle p-3">
               <Markdown text={detail.body} className="text-callout" />
@@ -267,29 +290,20 @@ function PullView({ cwd, number, onBack }: { cwd: string; number: number; onBack
 
 export function PullsPanel() {
   const cwd = useApp((s) => (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? s.projectCwd);
-  const [state, setState] = useState<"open" | "closed" | "merged" | "all">("open");
-  const [pulls, setPulls] = useState<PullRequest[] | null>(null);
-  const [error, setError] = useState<PullError | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [state, setState] = useState<PullListState>("open");
   const [viewing, setViewing] = useState<number | null>(null);
+  // The panel paints the last answer for this state at once and refreshes
+  // behind it; the skeleton is only for a first read with nothing saved.
+  const { data: pulls, error } = usePullList(cwd, state, { limit: PULL_LIMIT });
+  // Only a reload the user asked for spins: a background refresh shows nothing.
+  const [asked, setAsked] = useState(false);
+  const intent = useRowIntent(cwd);
 
-  const load = useCallback(async () => {
+  const reload = useCallback(() => {
     if (!cwd) return;
-    setLoading(true);
-    try {
-      const result = await request(Method.pulls, { cwd, state, limit: 30 }, 60_000);
-      setError(parsePullError(result));
-      setPulls(parsePullList(result).pulls);
-    } catch (e) {
-      setError({ code: "failed", message: e instanceof Error ? e.message : String(e) });
-    } finally {
-      setLoading(false);
-    }
+    setAsked(true);
+    void readPullList(cwd, state, { limit: PULL_LIMIT, force: true }).finally(() => setAsked(false));
   }, [cwd, state]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -299,8 +313,8 @@ export function PullsPanel() {
         </span>
         <span className="flex-1" />
         <Cluster>
-          <ClusterButton label="Reload" onClick={() => void load()}>
-            {loading ? <Spinner size={12} /> : <RefreshCw size={13} />}
+          <ClusterButton label="Reload" onClick={reload}>
+            {asked ? <Spinner size={12} /> : <RefreshCw size={13} />}
           </ClusterButton>
         </Cluster>
       </div>
@@ -313,6 +327,8 @@ export function PullsPanel() {
               label="State"
               value={state}
               onChange={setState}
+              // A rest on a state reads it: choosing it then draws rows at once.
+              onIntent={(next) => cwd && void readPullList(cwd, next, { limit: PULL_LIMIT })}
               options={[
                 { value: "open", label: "Open" },
                 { value: "merged", label: "Merged" },
@@ -332,6 +348,10 @@ export function PullsPanel() {
                 key={pull.number}
                 type="button"
                 onClick={() => setViewing(pull.number)}
+                onPointerEnter={() => intent.start(pull.number)}
+                onPointerLeave={intent.cancel}
+                onFocus={() => intent.start(pull.number)}
+                onBlur={intent.cancel}
                 className="flex w-full flex-col gap-0.5 rounded-md px-2 py-2 text-left hover:bg-fill-subtle"
               >
                 <span className="flex w-full items-baseline gap-1.5">
