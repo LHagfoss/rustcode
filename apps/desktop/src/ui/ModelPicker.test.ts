@@ -2,9 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { BUILTIN_CAPABILITIES, type ConfigOption, type Harness } from "../acp/types";
 import {
   clampEffort,
+  filterModelRows,
   modelThreadWrites,
+  movePickerIndex,
   orderEfforts,
   pickerModels,
+  pillLabel,
   shownAccounts,
   writeModelPick,
 } from "./ModelPicker";
@@ -238,5 +241,25 @@ describe("a new thread before its harness lists models", () => {
     );
     expect(picked.model).toBe("gemini-3.6-flash");
     expect(picked.effort).toBe("high");
+  });
+});
+
+describe("model picker navigation", () => {
+  test("filters across providers or limits the list to the selected provider", () => {
+    const first = harness([]);
+    const second = { ...harness([]), id: "other", name: "Other" };
+    const groups = [
+      { harness: first, models: [{ value: "sonnet", name: "Sonnet 5.5" }] },
+      { harness: second, models: [{ value: "opus", name: "Opus" }] },
+    ];
+    expect(filterModelRows(groups, "codex", "").map((r) => r.model.value)).toEqual(["sonnet"]);
+    expect(filterModelRows(groups, "codex", "opus").map((r) => r.group.harness.id)).toEqual(["other"]);
+    expect(filterModelRows(groups, "codex", "missing")).toEqual([]);
+  });
+  test("clamps keyboard movement and displays the catalog label", () => {
+    expect(movePickerIndex(0, -1, 3)).toBe(0);
+    expect(movePickerIndex(2, 1, 3)).toBe(2);
+    expect(pillLabel("Sonnet 5.5", "medium")).toEqual({ name: "Sonnet 5.5", effort: "medium" });
+    expect(pillLabel(null, null).name).toBe("Default model");
   });
 });
