@@ -35,6 +35,7 @@ import {
   restartEngine,
   type SettingsSection,
   selectThread,
+  setActiveTheme,
   setNewThreadChoice,
   setNewWorktree,
   setSwitcher,
@@ -233,6 +234,13 @@ function baseActions(): PaletteAction[] {
       icon: Sun,
       words: "theme",
       run: () => setTheme("light"),
+    },
+    {
+      id: "theme-oled",
+      label: "Appearance: OLED",
+      icon: Moon,
+      words: "theme black",
+      run: () => void setActiveTheme("oled"),
     },
     { id: "theme-dark", label: "Appearance: Dark", icon: Moon, words: "theme", run: () => setTheme("dark") },
     {

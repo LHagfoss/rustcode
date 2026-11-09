@@ -368,7 +368,7 @@ export function Select({
           align="end"
           sideOffset={6}
           collisionPadding={8}
-          className="elevated z-[60] max-h-[min(360px,var(--radix-select-content-available-height))] max-w-[380px] min-w-[var(--radix-select-trigger-width)] overflow-hidden p-2 rc-in"
+          className="elevated rounded-2xl z-[60] max-h-[min(360px,var(--radix-select-content-available-height))] max-w-[380px] min-w-[var(--radix-select-trigger-width)] overflow-hidden p-2 rc-in"
         >
           <RadixSelect.Viewport>
             {options.map((o) => (

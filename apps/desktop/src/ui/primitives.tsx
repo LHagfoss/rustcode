@@ -224,16 +224,16 @@ export const menuInset = "p-2";
  * Opening and closing motion comes from the one rule for portal surfaces in `index.css`
  * (`rc-pop` from the transform origin), so the surface itself carries no animation class.
  */
-export const menuSurface = `elevated z-50 max-h-[var(--radix-popper-available-height,80vh)] min-w-[200px] max-w-[calc(100vw-16px)] overflow-y-auto ${menuInset}`;
+export const menuSurface = `elevated rounded-2xl z-50 max-h-[var(--radix-popper-available-height,80vh)] min-w-[200px] max-w-[calc(100vw-16px)] overflow-y-auto ${menuInset}`;
 export const menuItem =
-  "flex min-h-7 w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-left text-body outline-none data-[disabled]:cursor-default data-[disabled]:opacity-40 data-[highlighted]:bg-fill";
+  "flex min-h-7 w-full cursor-pointer items-center gap-2 rounded-xl px-2 py-1 text-left text-body outline-none data-[disabled]:cursor-default data-[disabled]:opacity-40 data-[highlighted]:bg-fill";
 export const menuItemDanger = "text-danger data-[highlighted]:bg-danger/12";
 export const menuSeparator = "mx-2 my-1 h-px shrink-0 bg-border";
 export const menuLabel = "px-2 pt-1.5 pb-1 text-caption text-fg-faint";
 
 /** A popover's surface: width and anything else its content needs goes after it. */
 export const popoverSurface =
-  "elevated z-50 max-h-[var(--radix-popper-available-height,80vh)] max-w-[calc(100vw-16px)] overflow-y-auto p-3";
+  "elevated rounded-2xl z-50 max-h-[var(--radix-popper-available-height,80vh)] max-w-[calc(100vw-16px)] overflow-y-auto p-3";
 
 /**
  * A row's trailing shortcut (⌘K, ⏎), pushed to the far edge of its menu row. One spelling of it
@@ -426,7 +426,7 @@ export function Select({
           align="end"
           sideOffset={6}
           collisionPadding={8}
-          className="elevated z-[60] max-h-[min(360px,var(--radix-select-content-available-height))] max-w-[380px] min-w-[var(--radix-select-trigger-width)] overflow-hidden p-2 rc-in"
+          className="elevated rounded-2xl z-[60] max-h-[min(360px,var(--radix-select-content-available-height))] max-w-[380px] min-w-[var(--radix-select-trigger-width)] overflow-hidden p-2 rc-in"
         >
           <RadixSelect.Viewport>
             {options.map((o) => (
