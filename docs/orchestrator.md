@@ -239,7 +239,16 @@ machine that slept; the check also reads the wall clock, which the runtime's
 timers do not follow during sleep), it answers `{ status: "timeout", links: [],
 note }` on its own and drops the forwarded call, which ends the wait in the
 app. `merge_when_green` gets `{ state: "pending", merged: false, detail }` at
-`timeout_ms` + 3 min, the engine's own deadline for it. The client bounds
+`timeout_ms` + 3 min, the engine's own deadline for it.
+
+A dropped `merge_when_green` never merges afterwards. The client tracks it by
+`callId`: a drop while the approval card is up takes that card away (a late
+click changes nothing), and a drop while the engine waits for checks sends
+`_rustcode/pulls/merge/cancel` `{ mergeId }` (the merge request carries the same
+id as `mergeId`), which ends the loop with a `cancelled` error before
+`gh pr merge` starts. The deadline check reads `CLOCK_MONOTONIC` on macOS and
+`CLOCK_BOOTTIME` on Linux, which keep counting through sleep, and a reading that
+went backwards counts as the deadline passed. The client bounds
 an answer: `wait_session` at 8 KiB (with `answer_truncated`), `read_session`
 at a 16 KiB page (with `next_offset`).
 

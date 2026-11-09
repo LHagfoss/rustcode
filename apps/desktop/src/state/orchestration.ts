@@ -435,7 +435,7 @@ export type Call =
       text?: string;
     }
   | { tool: "thread_status"; target?: string }
-  | { tool: "merge_when_green"; target: string; timeoutMs: number }
+  | { tool: "merge_when_green"; target: string; timeoutMs: number; callId?: string }
   | { tool: "cleanup_worktree"; target: string; settle: boolean };
 
 /** What `update_session` may set a thread's status to. */
@@ -552,6 +552,7 @@ export function parseCall(params: JsonObject): Call | Failure {
         tool: "merge_when_green",
         target,
         timeoutMs: Math.min(Math.max(asked, 1), MAX_MERGE_MS),
+        callId: s(params.callId),
       };
     }
     case "cleanup_worktree": {

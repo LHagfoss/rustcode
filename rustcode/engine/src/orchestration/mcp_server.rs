@@ -386,14 +386,51 @@ async fn call(
     }
 }
 
-/// How often a bounded call checks the wall clock. The runtime's timers stop
-/// while the machine sleeps, the wall clock does not.
+/// How often a bounded call checks the clock that keeps counting in sleep. The
+/// runtime's timers stop while the machine sleeps; that clock does not.
 const CLOCK_CHECK: Duration = Duration::from_secs(5);
 
+/// Time from an arbitrary point that keeps counting while the machine sleeps
+/// and never runs backwards: `CLOCK_MONOTONIC` on macOS (which, unlike
+/// `std::time::Instant`'s `CLOCK_UPTIME_RAW`, includes sleep) and
+/// `CLOCK_BOOTTIME` on Linux. Elsewhere the wall clock, which can be set back.
+fn suspend_aware_now() -> Duration {
+    #[cfg(unix)]
+    {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        const CLOCK: libc::clockid_t = libc::CLOCK_BOOTTIME;
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        const CLOCK: libc::clockid_t = libc::CLOCK_MONOTONIC;
+        let mut now = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: `now` is a valid timespec for the call to fill.
+        if unsafe { libc::clock_gettime(CLOCK, &mut now) } == 0 {
+            return Duration::new(
+                now.tv_sec.max(0) as u64,
+                now.tv_nsec.clamp(0, 999_999_999) as u32,
+            );
+        }
+    }
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+}
+
+/// Whether `limit` has passed between two readings of that clock. A reading
+/// that went backwards (a wall clock set back) cannot show how long it was, so
+/// it counts as passed: a wait that ends early is told to call again, a wait
+/// that never ends is aborted by the harness.
+fn deadline_passed(started: Duration, now: Duration, limit: Duration) -> bool {
+    now.checked_sub(started)
+        .is_none_or(|elapsed| elapsed >= limit)
+}
+
 /// `future`'s output, or `None` once `limit` has passed on the runtime's timer
-/// or on the wall clock, whichever comes first.
+/// or on the clock that counts through sleep, whichever comes first.
 async fn bounded<T>(limit: Duration, future: impl std::future::Future<Output = T>) -> Option<T> {
-    let started = std::time::SystemTime::now();
+    let started = suspend_aware_now();
     tokio::pin!(future);
     let timer = tokio::time::sleep(limit);
     tokio::pin!(timer);
@@ -404,7 +441,7 @@ async fn bounded<T>(limit: Duration, future: impl std::future::Future<Output = T
             output = &mut future => return Some(output),
             _ = &mut timer => return None,
             _ = clock.tick() => {
-                if started.elapsed().is_ok_and(|elapsed| elapsed >= limit) {
+                if deadline_passed(started, suspend_aware_now(), limit) {
                     return None;
                 }
             }
@@ -987,6 +1024,26 @@ mod tests {
             serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(text["status"], "timeout");
         assert!(text["note"].as_str().unwrap().contains("again"));
+    }
+
+    #[test]
+    fn a_clock_that_ran_backwards_counts_as_the_deadline_passed() {
+        let at = Duration::from_secs;
+        let limit = at(30);
+        assert!(!deadline_passed(at(100), at(100), limit));
+        assert!(!deadline_passed(at(100), at(129), limit));
+        assert!(deadline_passed(at(100), at(130), limit));
+        // Set back by an hour: no way to tell how long it was, so it is over.
+        assert!(deadline_passed(at(10_000), at(6_400), limit));
+        assert!(deadline_passed(at(100), at(99), limit));
+    }
+
+    #[test]
+    fn the_suspend_aware_clock_never_runs_backwards() {
+        let a = suspend_aware_now();
+        std::thread::sleep(Duration::from_millis(5));
+        let b = suspend_aware_now();
+        assert!(b > a, "{a:?} then {b:?}");
     }
 
     #[tokio::test(start_paused = true)]

@@ -1807,6 +1807,26 @@ pub(crate) struct PullMergeRequest {
     pub branch: Option<String>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+    /// The orchestration call this merge answers: `_rustcode/pulls/merge/cancel`
+    /// with the same id ends it before it merges.
+    #[serde(default)]
+    pub merge_id: Option<String>,
+}
+
+/// Stop the merge started under `merge_id` (the call that asked for it was
+/// dropped). Answers `{ cancelled }`: whether one was still running.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    agent_client_protocol::JsonRpcRequest,
+)]
+#[serde(rename_all = "camelCase")]
+#[request(method = "_rustcode/pulls/merge/cancel", response = serde_json::Value)]
+pub(crate) struct PullMergeCancelRequest {
+    pub merge_id: String,
 }
 
 /// Remove a merged delegate's worktree and branch (#3153). `merged`, `head_sha`
@@ -3076,8 +3096,23 @@ async fn serve_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async move |request: PullMergeCancelRequest, responder, _connection| {
+                let cancelled = crate::pull_requests::cancel_merge(&request.merge_id);
+                responder.respond(serde_json::json!({ "cancelled": cancelled }))
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |request: PullMergeRequest, responder, connection| {
+                // Registered here, in the order requests arrive, so a cancel that
+                // follows this request always finds the merge it is for.
+                let cancel = request
+                    .merge_id
+                    .as_deref()
+                    .map(crate::pull_requests::register_merge)
+                    .unwrap_or_default();
                 connection.spawn(async move {
+                    let _tracked = crate::pull_requests::MergeGuard(request.merge_id.clone());
                     let branch = match request
                         .branch
                         .clone()
@@ -3122,11 +3157,17 @@ async fn serve_connection(
                             .unwrap_or(crate::pull_requests::MAX_MERGE_WAIT_SECS * 1000)
                             .max(1000),
                     );
-                    let answer =
-                        match crate::pull_requests::merge_when_green(&request.cwd, number, wait).await {
-                            Ok(outcome) => serde_json::json!({ "merge": outcome }),
-                            Err(error) => serde_json::json!({ "error": error }),
-                        };
+                    let answer = match crate::pull_requests::merge_when_green(
+                        &request.cwd,
+                        number,
+                        wait,
+                        &cancel,
+                    )
+                    .await
+                    {
+                        Ok(outcome) => serde_json::json!({ "merge": outcome }),
+                        Err(error) => serde_json::json!({ "error": error }),
+                    };
                     responder.respond(answer)?;
                     Ok(())
                 })
