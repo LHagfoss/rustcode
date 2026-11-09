@@ -2531,7 +2531,7 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
     const later = messagesAfter(thread, edit.itemId);
     const go = async () => {
       if (await rewindTo(id!, edit.itemId, edit.original)) {
-        unsettleThreads([id!]);
+        unsettleThreads([id!], { quiet: true });
         void runPrompt(id!, trimmed, extras);
       }
     };
@@ -2546,7 +2546,7 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
     } else void go();
     return true;
   }
-  if (trimmed !== "/fork" || hasExtras(extras)) unsettleThreads([id]);
+  if (trimmed !== "/fork" || hasExtras(extras)) unsettleThreads([id], { quiet: true });
   if (thread.running) {
     updateThread(id, (t) => ({
       ...t,
@@ -2610,7 +2610,7 @@ export async function steerOrSubmit(text: string, extras: ComposeExtras = emptyE
     if (next) return sendQueuedNow(id, next.id);
     return submit(text, extras);
   }
-  unsettleThreads([id]);
+  unsettleThreads([id], { quiet: true });
   const verdict = sendDecisionFor(thread, extras);
   if (verdict.action === "steer" && (await steer(id, trimmed, extras))) return true;
   if (verdict.action === "interruptRestart") return restartWith(id, text, extras);
@@ -2746,6 +2746,7 @@ export async function sendQueuedNow(id: string, queuedId: string): Promise<boole
     toast(QUEUE_REASON[verdict.reason]);
     return false;
   }
+  unsettleThreads([id], { quiet: true });
   if (verdict.action === "interruptRestart") {
     removeQueued(id, queuedId);
     return restartWith(id, item.text, item.extras ?? emptyExtras);
@@ -4367,12 +4368,17 @@ export function settleThread(id: string): void {
  * Unsettles the settled threads among `ids` (the sidebar's selection bar and
  * the selection's menu): a Review mark on the others stays Review. Quiet on
  * purpose — the toast confirms the change and offers no Undo.
+ *
+ * `quiet` is for a message sent to a settled thread: it moves back to the
+ * active list because the user wrote to it, not because they asked to unsettle
+ * anything, so the send says nothing about it.
  */
-export function unsettleThreads(ids: string[]): void {
+export function unsettleThreads(ids: string[], options: { quiet?: boolean } = {}): void {
   const state = get();
   const settled = ids.filter((id) => (state.statusMarks[id] ?? sessionById(state, id)?.status) === "done");
   if (!settled.length) return;
   void setThreadsStatus(settled, "idle");
+  if (options.quiet) return;
   toast(settled.length === 1 ? "Unsettled" : `Unsettled ${settled.length} threads`, "info");
 }
 
