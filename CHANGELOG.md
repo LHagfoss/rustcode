@@ -1,3 +1,24 @@
+## [v1.26.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.26.0) - 2026-11-09
+
+### Features
+- Inline code in replies copies when pressed, and inline code, file references and links now share one pill shape. (#3310)
+- Long pastes in the composer collapse into a pasted-text chip instead of a wall of text. (#3316)
+- The model picker keeps one height while you move inside it, always opens on the model list, and shows its effort slider and accounts compactly. (#3311)
+- Tooltips and hover cards now share one timing: they appear after a short rest, hand over instantly between neighbouring buttons, and dismiss on a press, Escape or a scroll instead of sticking until the next click. (#3313)
+- Glass surfaces are lighter to look through — lower blur, lower alpha, the composer included — and the new thread's overview keeps its blur while it opens and closes. (#3314)
+- Claude Code plan usage is cached for five minutes per account, and a rate limit waits out its `Retry-After` (else backoff up to 30 minutes) while showing the last numbers, instead of polling and showing an error. (#3315)
+- Move the sidebar's new-thread, add-project, Settings, pull requests and usage buttons into ⌘K, so the thread list gets the space. (#3312)
+- Sidebar thread rows are one compact line, with a second only for a thread that has a branch, a diff, a pull request or a delegate stack; Settings offers Compact and Comfortable. (#3319)
+- Smart UI views now keep the same layout, spacing and type scale between turns, no longer resize when the pointer moves over them, and follow the app theme's radius, fonts, accent and text sizes on macOS too; `smart_ui_check` now flags colours, fonts and fixed heights the kit already sets. (#3320)
+- The composer's attach button gets a crisper + and its text a tighter line height, opening at one line. (#3317)
+- The thread's right panel is now one scrollable overview: properties, pull requests, deliverables, the execution log and the details as foldable sections with counts. (#3318)
+- Dismiss items in "Needs you", one at a time or all at once, with Undo. (#3324)
+- The sidebar now leads with the threads that are working and gives the threads waiting on you a section of their own, instead of a shelf at the foot. (#3321)
+- Pasting a screenshot with Ctrl+V now attaches it in the desktop app on Linux. (#3329)
+- The sidebar now shows the RustCode icon, its name and the running version at the top, above Needs you. (#3331)
+- The sidebar's thread section is called Asking you, so it no longer reads as a second Needs you count, and a row's status icon and harness mark sit side by side instead of stacking. (#3333)
+- Glass surfaces blur again in the desktop app on Linux. (#3330)
+- Machine pairing no longer hangs: a credential store that cannot answer is reported before the other machine is asked, every step is bounded, and each stage of the pairing has a cancel. (#3327)
 ## [v1.25.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.25.0) - 2026-11-09
 
 ### Features
