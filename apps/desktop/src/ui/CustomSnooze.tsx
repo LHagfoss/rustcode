@@ -1,8 +1,8 @@
 import { Dialog } from "radix-ui";
 import { useState } from "react";
 import { askCustomSnooze, snoozeThread, useApp } from "../state/store";
-import { daysAhead } from "./dateTime";
 import { DateTimePicker } from "./DateTimePicker";
+import { daysAhead } from "./dateTime";
 import { Pill } from "./primitives";
 
 export function CustomSnooze() {
