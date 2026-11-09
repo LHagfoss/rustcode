@@ -1,3 +1,26 @@
+## [v1.25.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.25.0) - 2026-11-09
+
+### Features
+- Fix a possible app freeze when a thread shows a shell command with a long or unterminated quoted variable. (#3249)
+- The pull request panel, its detail and the review view draw from saved answers and refresh behind, so opening one no longer waits on `gh`. (#3250)
+- Sending a message in a settled thread brings it back to the active list. (#3269)
+- Improve drag feedback when arranging thread header buttons in Settings. (#3270)
+- Keep Tab from moving focus between controls unless enabled in Settings. (#3271)
+- The sidebar is slimmer: search and the filter menu moved into ⌘K, Working, Snoozed and Settled fold on their own, and Pinned and Active are separate from them. (#3274)
+- Group plan usage by harness and show Claude usage without a setting. (#3276)
+- Make models easier to find with provider panes, search, and a compact account selector. (#3273)
+- Add an OLED theme and soften borders, sliders and menu corners. (#3275)
+- Add an in-app date and time picker for custom snoozes. (#3272)
+- Connect enabled MCP servers automatically when the app starts or the engine restarts. (#3278)
+- Settings › Harnesses (renamed from Coding agents) has a single Check per harness that re-detects, verifies sign-ins and lists models, plus Add harness for your own local ACP command. (#3280)
+- Context compaction now shows "Compacting context…" while it runs and an error row if it fails, instead of pausing silently. (#3279)
+- Add an optional title-first layout for sidebar thread rows. (#3284)
+- Delegates can be messaged again after they were interrupted or moved to another harness. (#3281)
+- Orchestrators can see a delegate's latest activity and provider errors first. (#3282)
+- The Settings page for harnesses is called Harnesses in the sidebar too. (#3285)
+- Sending in a settled thread no longer shows an Unsettled toast. (#3286)
+- Forks and side chats record the thread they came from: they nest under it, a fork links back to its parent, and a reply can be asked about in a side chat beside the thread. (#3247)
+- The SwiftUI iOS client is removed from this repository; the phone app is the Expo app in `rustcode-mobile`. (#3289)
 ## [v1.24.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.24.0) - 2026-11-09
 
 ### Features
