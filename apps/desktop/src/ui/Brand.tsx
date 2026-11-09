@@ -1,9 +1,10 @@
-// The sidebar's brand: the app's mark, its name, and the version of the app
-// that is running, so a screenshot or a bug report says which build it is.
+// The sidebar's brand: the app's mark. The name and the version of the app that
+// is running are on its tooltip (and in Settings › About), not spelled out in
+// the header, which keeps the row to the traffic lights, the mark and the toggle.
 //
 // It is the title row's leading content (ui/Titlebar.tsx), past the traffic
 // lights, so the sidebar's header is one row rather than a bar with a row under
-// it; the name truncates before it reaches the sidebar's toggle.
+// it.
 
 import { useEffect, useState } from "react";
 import { systemInfo } from "../lib/native";
@@ -38,15 +39,14 @@ function useAppVersion(): string | null {
   return known ?? asked;
 }
 
-/** The mark and name, with the running version after them in quieter type. */
+/** The app's mark alone; its name and the running version are on its tooltip. */
 export function Brand({ className }: { className?: string }) {
   const version = useAppVersion();
-  const label = versionLabel(version);
   return (
     <div
       data-tauri-drag-region
       className={cx("@container flex min-w-0 select-none items-center gap-1.5", className)}
-      title={version ? `RustCode ${version}` : "RustCode"}
+      title={versionLabel(version) ? `RustCode ${versionLabel(version)}` : "RustCode"}
     >
       {/* Nothing here takes a press: the row under it drags the window, its toggle is the one control. */}
       <img
@@ -57,14 +57,6 @@ export function Brand({ className }: { className?: string }) {
         draggable={false}
         className="pointer-events-none shrink-0 rounded-xs"
       />
-      {/* The name at the step above the list's own 12px labels; the version sits after it, and
-          gives way first when the row has no room for the two (a narrow sidebar). */}
-      <span className="pointer-events-none min-w-0 truncate font-medium text-callout text-fg">RustCode</span>
-      {label && (
-        <span className="pointer-events-none hidden shrink-0 text-caption text-fg-faint tabular @min-[130px]:inline">
-          {label}
-        </span>
-      )}
     </div>
   );
 }
