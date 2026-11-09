@@ -31,6 +31,7 @@ pub const BUILTIN_THEMES: &[(&str, &str)] = &[
     ("rain.toml", include_str!("builtin/rain.toml")),
     ("cozy-rain.toml", include_str!("builtin/cozy-rain.toml")),
     ("light.toml", include_str!("builtin/light.toml")),
+    ("oled.toml", include_str!("builtin/oled.toml")),
     ("nord.toml", include_str!("builtin/nord.toml")),
     ("dracula.toml", include_str!("builtin/dracula.toml")),
     ("tokyo-night.toml", include_str!("builtin/tokyo-night.toml")),
@@ -761,8 +762,39 @@ scrollbar = "#d9d9d9"
 /// Whether `content` is the built-in `filename` as an older release shipped
 /// it: the whole file, unedited, with an older `[desktop]` table.
 fn previous_builtin(filename: &str, content: &str) -> bool {
+    const PREVIOUS_POLISH: &[(&str, &str)] = &[
+        ("light.toml", include_str!("builtin/previous/light.toml")),
+        (
+            "cozy-rain.toml",
+            include_str!("builtin/previous/cozy-rain.toml"),
+        ),
+        ("sky.toml", include_str!("builtin/previous/sky.toml")),
+        (
+            "default.toml",
+            include_str!("builtin/previous/default.toml"),
+        ),
+        ("rain.toml", include_str!("builtin/previous/rain.toml")),
+        (
+            "catppuccin-mocha.toml",
+            include_str!("builtin/previous/catppuccin-mocha.toml"),
+        ),
+        (
+            "tokyo-night.toml",
+            include_str!("builtin/previous/tokyo-night.toml"),
+        ),
+        (
+            "dracula.toml",
+            include_str!("builtin/previous/dracula.toml"),
+        ),
+        (
+            "rustcode.toml",
+            include_str!("builtin/previous/rustcode.toml"),
+        ),
+        ("nord.toml", include_str!("builtin/previous/nord.toml")),
+    ];
     PREVIOUS_BUILTINS
         .iter()
+        .chain(PREVIOUS_POLISH.iter())
         .any(|(file, old)| *file == filename && *old == content)
 }
 

@@ -1,5 +1,5 @@
-// ⌘K: one field for everything. Threads by title or project (as the
-// SwiftUI app's switcher), plus the app's actions: new threads on any
+// ⌘K: one field for everything. Threads by title, project, branch or pull
+// request (and what was said in them), plus the app's actions: new threads on any
 // harness, panels, views, settings pages and the engine. ">" shows actions
 // only; ⇥ switches threads between all projects and this one.
 
@@ -13,7 +13,6 @@ import {
   Settings as Gear,
   GitBranch,
   Hand,
-  type LucideIcon,
   MessageSquare,
   Moon,
   PanelLeft,
@@ -27,14 +26,16 @@ import {
   Zap,
 } from "lucide-react";
 import { Dialog } from "radix-ui";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { modelName, projectName } from "../acp/types";
 import {
   featureMissing,
   openSettings,
   restartEngine,
   type SettingsSection,
+  searchThreads,
   selectThread,
+  setActiveTheme,
   setNewThreadChoice,
   setNewWorktree,
   setSwitcher,
@@ -51,24 +52,15 @@ import {
   useApp,
 } from "../state/store";
 import { relativeAge } from "../state/thread";
+import { matches, type PaletteAction, pullOfThread, sidebarActions, threadHaystack } from "./paletteActions";
 import { cx, Kbd } from "./primitives";
 
-export interface PaletteAction {
-  id: string;
-  label: string;
-  detail?: string;
-  icon: LucideIcon;
-  keys?: string;
-  /** Extra words it is found by. */
-  words?: string;
-  disabled?: string;
-  run: () => void;
-}
+export type { PaletteAction };
 
 const SETTINGS: [SettingsSection, string][] = [
   ["general", "General"],
   ["chat", "Chat"],
-  ["agents", "Agents: harnesses, models and orchestration"],
+  ["agents", "Harnesses: install, sign in, models and orchestration"],
   ["connections", "Connections"],
   ["capabilities", "Capabilities: skills and MCP servers"],
   ["remote", "Remote access: phones and paired devices"],
@@ -234,7 +226,15 @@ function baseActions(): PaletteAction[] {
       words: "theme",
       run: () => setTheme("light"),
     },
+    {
+      id: "theme-oled",
+      label: "Appearance: OLED",
+      icon: Moon,
+      words: "theme black",
+      run: () => void setActiveTheme("oled"),
+    },
     { id: "theme-dark", label: "Appearance: Dark", icon: Moon, words: "theme", run: () => setTheme("dark") },
+    ...sidebarActions(),
     {
       id: "restart",
       label: "Restart server",
@@ -259,16 +259,6 @@ function highlight(text: string, query: string) {
   );
 }
 
-/** Every word of the query appears in the text. */
-function matches(text: string, query: string): boolean {
-  const hay = text.toLowerCase();
-  return query
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean)
-    .every((w) => hay.includes(w));
-}
-
 type Result =
   | { kind: "thread"; id: string; title: string; detail: string; open: boolean }
   | { kind: "action"; action: PaletteAction };
@@ -285,6 +275,22 @@ export function CommandPalette() {
   const actionsOnly = query.startsWith(">");
   const q = (actionsOnly ? query.slice(1) : query).trim();
 
+  // What was said in a thread matches too: the engine's index answers once the query has three
+  // characters, a moment after typing stops.
+  const [contentHits, setContentHits] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (actionsOnly || q.length < 3) {
+      setContentHits({});
+      return;
+    }
+    let live = true;
+    const t = setTimeout(() => void searchThreads(q).then((hits) => live && setContentHits(hits)), 200);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [q, actionsOnly]);
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: actions read live state when the palette opens
   const results = useMemo<Result[]>(() => {
     const actions = [...baseActions(), ...extra.flatMap((p) => p())]
@@ -293,22 +299,32 @@ export function CommandPalette() {
     if (actionsOnly) return actions;
     const threads = sessions
       .filter((s) => scope === "all" || s.cwd === projectCwd)
-      .filter((s) => !q || matches(`${s.title ?? ""} ${projectName(s.cwd)}`, q))
+      // By title, project, branch and pull request, or by what was said in it.
+      .filter((s) => !q || matches(threadHaystack(s), q) || s.id in contentHits)
       .slice(0, q ? 40 : 8)
       .map(
         (s): Result => ({
           kind: "thread",
           id: s.id,
           title: s.title || "New thread",
-          detail: [projectName(s.cwd), modelName(s.model), relativeAge(s.updatedAt)]
-            .filter(Boolean)
-            .join(" · "),
+          detail:
+            q && contentHits[s.id] && !matches(threadHaystack(s), q)
+              ? `“${contentHits[s.id]}”`
+              : [
+                  projectName(s.worktree?.repo || s.cwd),
+                  s.worktree?.branch,
+                  pullOfThread(s) && `#${pullOfThread(s)?.number}`,
+                  modelName(s.model),
+                  relativeAge(s.updatedAt),
+                ]
+                  .filter(Boolean)
+                  .join(" · "),
           open: s.id === selectedId,
         }),
       );
     // With a query, threads lead; without one, the recent threads and then every action.
     return q ? [...threads, ...actions.slice(0, 12)] : [...threads, ...actions];
-  }, [sessions, q, scope, projectCwd, selectedId, actionsOnly, open]);
+  }, [sessions, q, scope, projectCwd, selectedId, actionsOnly, open, contentHits]);
 
   const choose = (i: number) => {
     const r = results[i];
@@ -363,7 +379,7 @@ export function CommandPalette() {
                 setQuery(e.target.value);
                 setIndex(0);
               }}
-              placeholder="Search threads, or > for actions…"
+              placeholder="Search threads, branches and pull requests, or > for actions…"
               aria-label="Search threads and actions"
               className="flex-1 bg-transparent text-title3 outline-none placeholder:text-fg-faint"
             />

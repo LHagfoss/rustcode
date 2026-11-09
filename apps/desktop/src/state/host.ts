@@ -117,6 +117,7 @@ import {
   wakesDue,
 } from "./orchestration";
 import { delegationAllowed, effectiveMode, modeLabel, type PermissionMode } from "./permissions";
+import { rememberPullSummaries } from "./pullQueries";
 import { QUEUE_REASON, wakeDelivery } from "./queue";
 import {
   parseQueueBook,
@@ -130,7 +131,6 @@ import {
 import {
   type AppState,
   cancel,
-  claudeUsageAllowed,
   createSession,
   effortMemory,
   ensureHarnessModels,
@@ -286,7 +286,7 @@ function setBook(fn: (book: LinkBook) => LinkBook) {
 }
 
 const book = () => useApp.getState().links;
-/** The two delegate limits (Settings › Agents): one thread's own, and the machine's total. */
+/** The two delegate limits (Settings › Harnesses): one thread's own, and the machine's total. */
 const delegateLimits = (): DelegateLimits => ({
   perThread: useApp.getState().threadLimit,
   total: useApp.getState().totalLimit,
@@ -667,7 +667,7 @@ function reachRefused(): JsonObject {
   return failureJson(
     failure(
       "not_allowed",
-      "reading across projects is off; turn on “Let agents read threads in other projects” in Settings › Agents",
+      "reading across projects is off; turn on “Let agents read threads in other projects” in Settings › Harnesses",
     ),
   );
 }
@@ -768,6 +768,7 @@ async function perform(
           {
             sessionId: target.id,
             ...(call.after ? { after: call.after } : {}),
+            ...(call.order ? { order: call.order } : {}),
             limit: call.limit,
           },
           20_000,
@@ -899,10 +900,8 @@ async function listHarnesses(
   // cache holds now.
   const cache = useApp.getState().planCache;
   if (planCacheStale(cache)) refreshReadPlanLogins();
-  const claudeReadable = claudeUsageAllowed();
-  // Claude's plan comes from its own sign-in, which the user opts into reading.
   const usage = (harness: string, account?: string | null) =>
-    usageOf(cache[harnessPlanKey(harness, account)], harness !== "claude-code" || claudeReadable);
+    usageOf(cache[harnessPlanKey(harness, account)]);
   return {
     current: { harness: caller.harness ?? "rustcode", ...ranWith(caller.id) },
     harnesses: listed.map((h) => {
@@ -1036,8 +1035,12 @@ async function listPullRequests(caller: RuleThread, state: PullStateChoice): Pro
   }
   const error = parsePullError(result);
   if (error) return failureJson(pullFailure(error));
+  const pulls = parsePullList(result).pulls;
+  // The answer also seeds the panel's header: a pull opened after the agent's
+  // read draws its title, state and checks before its own detail is read.
+  rememberPullSummaries(cwd, pulls);
   return {
-    pull_requests: parsePullList(result).pulls.map((p) => ({
+    pull_requests: pulls.map((p) => ({
       number: p.number,
       title: p.title,
       state: p.state,
@@ -1046,7 +1049,6 @@ async function listPullRequests(caller: RuleThread, state: PullStateChoice): Pro
     })),
   };
 }
-
 /** A thread's pull request and checks, read through the engine's `gh` call. */
 async function delegatePull(
   target: RuleThread,
@@ -1109,7 +1111,19 @@ async function threadStatus(caller: RuleThread, target?: string): Promise<JsonOb
     entries.push(entry);
   }
   const settled = await Promise.allSettled(
-    entries.map(async (entry) => ({ entry, state: await delegatePull(entry) })),
+    entries.map(async (entry) => {
+      const [state, activity] = await Promise.all([
+        delegatePull(entry),
+        entry.running
+          ? request<JsonObject>(
+              Method.dataActivity,
+              { sessionId: entry.id, order: "newest", limit: 1 },
+              20_000,
+            ).catch(() => null)
+          : null,
+      ]);
+      return { entry, state, activity };
+    }),
   );
   const delegates: JsonObject[] = [];
   for (const result of settled) {
@@ -1117,11 +1131,22 @@ async function threadStatus(caller: RuleThread, target?: string): Promise<JsonOb
       delegates.push({ error: { code: "failed", message: errorText(result.reason) } });
       continue;
     }
-    const { entry, state } = result.value;
+    const { entry, state, activity } = result.value;
+    const recorded = Array.isArray(activity?.items) ? obj(activity.items[0]) : undefined;
+    const recordedAt = typeof recorded?.at === "string" ? Date.parse(recorded.at) : NaN;
+    const transcriptAt = activityOf(useApp.getState().threads[entry.id]?.items ?? []).lastAt;
+    const times = [transcriptAt, Number.isFinite(recordedAt) ? recordedAt : undefined].filter(
+      (time): time is number => time !== undefined,
+    );
+    const lastAt = times.length ? Math.max(...times) : entry.updatedAt;
     delegates.push({
       session_id: entry.id,
       title: entry.title,
       status: entry.status ?? (entry.running ? "running" : "idle"),
+      ...(entry.running && lastAt !== undefined ? { idle_ms: Math.max(0, Date.now() - lastAt) } : {}),
+      ...(entry.running && activity?.last_provider_error
+        ? { last_provider_error: activity.last_provider_error }
+        : {}),
       project: projectOf(entry),
       ...(entry.worktree ? { worktree: { path: entry.worktree.path, branch: entry.worktree.branch } } : {}),
       ...(state.branch ? { branch: state.branch } : {}),
@@ -1587,7 +1612,7 @@ function message(caller: RuleThread, targetId: string, text: string): Promise<Js
   return withLinkGate(() => messageNow(caller, targetId, text));
 }
 
-/** Do not turn an explicit stop, settle, or archive into a background retry. */
+/** Do not message a settled or archived thread. */
 function messageTargetRefusal(state: AppState, targetId: string): Failure | null {
   if (targetId in state.archived) {
     return failure("conflict", "that thread is archived; unarchive it before messaging");
@@ -1595,14 +1620,6 @@ function messageTargetRefusal(state: AppState, targetId: string): Failure | null
   const target = ruleThread(state, targetId);
   if (target && statusOf(state, targetId) === "done") {
     return failure("conflict", "that thread is settled; set it to idle before messaging");
-  }
-  const thread = state.threads[targetId];
-  const lastTurn = thread?.items.findLast((item) => item.kind === "turnEnd");
-  if (!thread?.running && lastTurn?.kind === "turnEnd" && lastTurn.outcome === "cancelled") {
-    return failure(
-      "conflict",
-      "that thread's last turn was stopped; start a new turn there before messaging it",
-    );
   }
   return null;
 }
@@ -1884,7 +1901,7 @@ function accountFor(caller: RuleThread, harness: Harness, asked?: string): strin
     case "signedOut":
       return failure(
         "not_allowed",
-        `${harness.name} account “${refusal.name}” (${refusal.account}) is signed out; sign it in in Settings › Agents or pick another login (${refusal.available.join(", ")})`,
+        `${harness.name} account “${refusal.name}” (${refusal.account}) is signed out; sign it in in Settings › Harnesses or pick another login (${refusal.available.join(", ")})`,
       );
     case "unknown":
       return failure(

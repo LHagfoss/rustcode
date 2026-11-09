@@ -2,7 +2,7 @@
 // words people look for but that the row does not say. Pure (no React, no
 // store at runtime), so the nav's search is testable on its own.
 //
-// A few pages have no rows of their own — Agents lists cards, Connections,
+// A few pages have no rows of their own — Harnesses lists cards, Connections,
 // Advanced and Diagnostics render the server's answers — so their groups are
 // listed here; a group title is a landing target too (settingsKit.tsx).
 
@@ -78,6 +78,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     title: "Discord Rich Presence",
     keywords: "rich presence status shared project",
   },
+  {
+    section: "general",
+    title: "Tab moves focus between controls",
+    keywords: "keyboard navigation accessibility focus",
+  },
   { section: "general", title: "Trackpad haptics", keywords: "haptic tap feedback force touch" },
 
   // ------------------------------------------------------------ Chat
@@ -99,7 +104,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
       "header buttons show hide reorder drag arrange customize toolbar status plan pull requests terminal details changes",
   },
 
-  // ------------------------------------------------------------ Agents
+  // ------------------------------------------------------------ Harnesses
   {
     section: "agents",
     title: "New threads start on",
@@ -107,8 +112,9 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "agents",
-    title: "Coding agents",
-    keywords: "agent harness install sign in check enable disable local remove",
+    title: "Harnesses",
+    keywords:
+      "agent harness install sign in check check all detect add harness custom acp command executable argument environment variable enable disable local remove",
   },
   {
     section: "agents",
@@ -245,6 +251,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
 
   // ------------------------------------------------------------ Appearance
+  { section: "appearance", title: "Thread row layout", keywords: "sidebar title first threads" },
   { section: "appearance", title: "Light or dark", keywords: "mode theme system" },
   {
     section: "appearance",
@@ -297,11 +304,6 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   })),
 
   // ------------------------------------------------------------ Usage
-  {
-    section: "usage",
-    title: "Show Claude usage in the composer",
-    keywords: "plan keychain limits windows read composer usage",
-  },
   {
     section: "usage",
     title: "Each account's plan",

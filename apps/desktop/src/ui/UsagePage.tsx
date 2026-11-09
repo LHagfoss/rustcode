@@ -8,7 +8,7 @@
 // default login and the account of the thread on screen, never a login nothing
 // was read for or one a failed read paused — and it waits longer after a read
 // that failed. Claude's numbers come from Claude Code's sign-in in the macOS
-// Keychain: they are read only while the switch below allows it.
+// Keychain; opening this page reads each login.
 
 import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -26,19 +26,17 @@ import {
 import {
   accountOn,
   backgroundPlansAsk,
-  CLAUDE_USAGE_DEFAULT,
-  claudeUsageAllowed,
   commitPlansAnswer,
   harnessOf,
   PLAN_CACHE_POLL_MS,
   request,
-  setClaudeUsageAllowed,
   useApp,
 } from "../state/store";
 import { relativeAge } from "../state/thread";
 import {
   answeredPlans,
   failureText,
+  groupPlans,
   oneReadAtATime,
   USAGE_PLANS_KEY,
   type UsageAnswer,
@@ -46,19 +44,18 @@ import {
   watchUsageRefresh,
 } from "../state/usagePage";
 import { PlanWindow } from "./ComposerUsage";
-import { Skeleton, Spinner, Switch } from "./primitives";
-import { Action, Group, Row } from "./settingsKit";
+import { HarnessIcon } from "./HarnessIcon";
+import { Skeleton, Spinner } from "./primitives";
+import { Action, Group, Row, SectionTitle } from "./settingsKit";
 
-/** One read of the page: whether it asks for Claude, past the engine's cache, as an explicit look. */
+/** One page read, optionally bypassing the cache as an explicit look. */
 interface PageRead {
-  withClaude: boolean;
   force: boolean;
   asked: boolean;
 }
 
 export function UsagePage() {
   const status = useApp((s) => s.status);
-  const [claude, setClaude] = useState(claudeUsageAllowed);
   const [answer, setAnswer] = useState<PageAnswer<UsageAnswer> | null>(
     () => cachedPage<UsageAnswer>(USAGE_PLANS_KEY) ?? null,
   );
@@ -66,40 +63,37 @@ export function UsagePage() {
   const [loading, setLoading] = useState(false);
   // One read at a time: the interval and a press of Refresh never double a
   // Keychain read or an Anthropic request. An explicit look that comes while a
-  // read is in flight (Claude's switch turned on during the interval's read)
+  // read is in flight
   // runs once it ends instead of being dropped (`oneReadAtATime`).
-  const readPage = async ({ withClaude, force, asked }: PageRead): Promise<boolean> => {
+  const readPage = async ({ force, asked }: PageRead): Promise<boolean> => {
     const token = beginPageRead(USAGE_PLANS_KEY);
     setLoading(true);
     try {
-      // Showing this page (or Refresh) is the explicit consent that also reads
+      // Showing this page (or Refresh) is the explicit look that also reads
       // each account's own sign-in at once (`claudeAccounts`); Refresh forces
       // the read past the engine's minute of cache, so a sign-in renewed in
       // Claude Code shows now rather than after that minute.
       //
       // The page's own interval passes `asked: false`, and then it asks like
       // every other background read (`backgroundPlansAsk`, `state/plans.ts`):
-      // the default login and the account of the thread on screen, only with
-      // consent and never one a failed read paused, so a Deny cannot prompt
+      // the default login and the account of the thread on screen, never one a failed read paused, so a Deny cannot prompt
       // every three minutes and a named login the user never asked about is
       // never read from the Keychain.
-      const ask = asked ? { claude: withClaude, claudeAccounts: withClaude } : backgroundPlansAsk();
+      const ask = asked ? { claude: true, claudeAccounts: true } : backgroundPlansAsk();
       const plans = parsePlans(
         await request(Method.usagePlans, { ...ask, ...(force ? { force: true } : {}) }, 20_000),
       );
-      // A whole read (every login) replaces the list; a partial one — Claude
-      // off, or the interval's read of the default login and one account —
+      // A whole read (every login) replaces the list; the interval's partial read
       // keeps the rows it did not ask, so a named login's numbers stay on
-      // screen instead of vanishing, and turning the switch back on has
-      // numbers to draw while the logins are read again.
+      // screen instead of vanishing.
       const shownPage = cachedPage<UsageAnswer>(USAGE_PLANS_KEY);
       const shown = shownPage?.data.plans ?? [];
-      const whole = asked && withClaude;
-      // A background read with Claude on answers part of the page: the default
+      const whole = asked;
+      // A background read answers part of the page: the default
       // login and one account, not every named login, so the foot keeps the
       // time of the last whole read instead of saying "just now" over rows it
-      // did not ask. With Claude off a read answers every row there is.
-      const partial = withClaude && !asked;
+      // did not ask.
+      const partial = !asked;
       const next = commitPage(
         USAGE_PLANS_KEY,
         token,
@@ -130,8 +124,7 @@ export function UsagePage() {
   // not change between renders.
   const [reads] = useState(() => oneReadAtATime<PageRead>(readPage));
   const load = useCallback(
-    (withClaude: boolean, force: boolean, asked = true): Promise<boolean> =>
-      reads.run({ withClaude, force, asked }, asked),
+    (force: boolean, asked = true): Promise<boolean> => reads.run({ force, asked }, asked),
     [reads],
   );
   useEffect(() => {
@@ -143,9 +136,9 @@ export function UsagePage() {
       return;
     }
     const cached = cachedPage<UsageAnswer>(USAGE_PLANS_KEY) ?? null;
-    const view = usageView(cached, claude, null);
-    if (view.fetch) void load(claude, view.force);
-  }, [status, claude, load]);
+    const view = usageView(cached, null);
+    if (view.fetch) void load(view.force);
+  }, [status, load]);
   // The page keeps itself current: a background read every three minutes while
   // its window is visible, one on coming back after being hidden longer than
   // that, and a longer wait after one that failed. The numbers, the bars and
@@ -156,96 +149,90 @@ export function UsagePage() {
   useEffect(() => {
     if (status !== "ready") return;
     return watchUsageRefresh({
-      read: () => load(claude, false, false),
+      read: () => load(false, false),
       reading: () => reads.busy(),
       visible: () => document.visibilityState === "visible",
       readAt: () => cachedPage<UsageAnswer>(USAGE_PLANS_KEY)?.readAt ?? null,
       everyMs: PLAN_CACHE_POLL_MS,
     });
-  }, [status, claude, load, reads.busy]);
-  const allowClaude = (on: boolean) => {
-    setClaudeUsageAllowed(on);
-    setClaude(on);
-  };
+  }, [status, load, reads.busy]);
   // A thread still on the harness's own login ("Original login") keeps its row:
   // dropping it would leave Settings › Usage with nothing for that thread.
   const keepOwnLogin = useApp((s) => {
     const thread = s.selectedId ?? undefined;
     return harnessOf(s, thread) === "claude-code" && !accountOn(s, thread);
   });
-  const view = usageView(answer, claude, error);
+  const view = usageView(answer, error);
   if (view.plans === null) {
     return view.fatal ? <p className="text-callout text-warning">{view.fatal}</p> : <PlansSkeleton />;
   }
   // The harness's own login row is dropped while named accounts are there, unless
-  // the thread on screen still runs on it; the composer's switch moves to the
-  // first Claude group left (state/logins.ts).
+  // the thread on screen still runs on it (state/logins.ts).
   const rows = usageRows(view.plans, keepOwnLogin);
   return (
     <>
-      {rows.plans.map((p) => (
-        <Group
-          key={p.id}
-          title={
-            <span>
-              {p.name}
-              {p.plan && <span className="ml-1.5 font-normal text-fg-faint capitalize">{p.plan}</span>}
-            </span>
-          }
-          action={p.via && <span className="text-caption text-fg-muted">from {p.via}</span>}
-        >
-          {p.status === "ok" && p.windows.length > 0 ? (
-            <div className="flex flex-col gap-4 px-4 py-4">
-              {p.asOf !== undefined && (
-                <p className="text-caption text-fg-muted">
-                  as of {relativeAge(p.asOf)} · the last numbers RustCode read for this login; run a Claude
-                  Code thread on it to refresh them.
-                </p>
-              )}
-              {p.windows.map((w) => (
-                <PlanWindow key={w.label} window={w} title={w.label} />
-              ))}
-            </div>
-          ) : p.status === "notAsked" ? null : (
-            <Row
+      {groupPlans(rows.plans).map(({ harness, plans }) => {
+        const name = plans[0]?.via ?? harness;
+        return (
+          <section key={harness}>
+            <SectionTitle
               title={
-                p.status === "signedOut"
-                  ? `Not signed in to ${p.via ?? p.name}`
-                  : p.status === "notInstalled"
-                    ? `${p.via ?? p.name} not found`
-                    : p.status === "ok"
-                      ? "No plan windows reported"
-                      : failureText(p).title
+                <>
+                  <HarnessIcon id={harness} name={name} size={16} />
+                  {name}
+                </>
               }
-              subtitle={
-                p.error ??
-                failureText(p).subtitle ??
-                (p.status === "signedOut"
-                  ? `Sign in with ${p.via ?? p.name} on this computer to see this plan here.`
-                  : p.status === "notInstalled"
-                    ? `Install ${p.via ?? p.name} and sign in to see this plan here.`
-                    : undefined)
-              }
+              action={<span className="text-caption text-fg-muted">{soonestReset(plans)}</span>}
             />
-          )}
-          {p.id === rows.switchIn && (
-            <Row
-              title="Show Claude usage in the composer"
-              reset={
-                claude
-                  ? () => {
-                      setClaudeUsageAllowed(CLAUDE_USAGE_DEFAULT);
-                      setClaude(CLAUDE_USAGE_DEFAULT);
+            {plans.map((p) => (
+              <Group
+                key={p.id}
+                title={
+                  <span>
+                    {p.name}
+                    {p.plan && <span className="ml-1.5 font-normal text-fg-faint capitalize">{p.plan}</span>}
+                  </span>
+                }
+              >
+                {p.status === "ok" && p.windows.length > 0 ? (
+                  <div className="flex flex-col gap-4 px-4 py-4">
+                    {p.asOf !== undefined && (
+                      <p className="text-caption text-fg-muted">
+                        as of {relativeAge(p.asOf)} · the last numbers RustCode read for this login; run a
+                        Claude Code thread on it to refresh them.
+                      </p>
+                    )}
+                    {p.windows.map((w) => (
+                      <PlanWindow key={w.label} window={w} title={w.label} />
+                    ))}
+                  </div>
+                ) : p.status === "notAsked" ? null : (
+                  <Row
+                    title={
+                      p.status === "signedOut"
+                        ? `Not signed in to ${p.via ?? p.name}`
+                        : p.status === "notInstalled"
+                          ? `${p.via ?? p.name} not found`
+                          : p.status === "ok"
+                            ? "No plan windows reported"
+                            : failureText(p).title
                     }
-                  : undefined
-              }
-              subtitle="RustCode reads Claude Code's sign-in every few minutes while the app is open, so the composer and this page show your plan. Your system may ask once to allow it. Only reads; never signs in or out."
-            >
-              <Switch label="Show Claude usage in the composer" checked={claude} onChange={allowClaude} />
-            </Row>
-          )}
-        </Group>
-      ))}
+                    subtitle={
+                      p.error ??
+                      failureText(p).subtitle ??
+                      (p.status === "signedOut"
+                        ? `Sign in with ${p.via ?? p.name} on this computer to see this plan here.`
+                        : p.status === "notInstalled"
+                          ? `Install ${p.via ?? p.name} and sign in to see this plan here.`
+                          : undefined)
+                    }
+                  />
+                )}
+              </Group>
+            ))}
+          </section>
+        );
+      })}
       <div className="flex items-center gap-2 px-3 text-caption text-fg-muted sm:px-4">
         <span className="flex-1">
           {view.note ? (
@@ -256,10 +243,13 @@ export function UsagePage() {
             } minutes. ${soonestReset(view.plans) ?? ""}`
           ) : null}
         </span>
-        <Action onClick={() => void load(claude, true)} disabled={loading}>
+        <Action onClick={() => void load(true)} disabled={loading}>
           {loading ? <Spinner size={11} /> : <RefreshCw size={12} />} Refresh
         </Action>
       </div>
+      <p className="px-4 text-caption text-fg-muted">
+        Your system may ask once to allow RustCode to read Claude Code’s sign-in for usage.
+      </p>
     </>
   );
 }

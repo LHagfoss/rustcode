@@ -14,7 +14,7 @@ import {
   SquarePen,
   Trash2,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { arr, bool, type Json, type JsonObject, num, obj, str } from "../acp/jsonrpc";
 import { Method } from "../acp/types";
 import { createSkill, openPath, revealPath } from "../lib/native";
@@ -108,6 +108,11 @@ const sourceOf = (s: string) => SOURCE[s] ?? { label: s || "Other", order: 9 };
 
 function useCapabilities() {
   const state = useEngineData(Method.capabilities, parseCapabilities);
+  useEffect(() => {
+    if (!state.data?.mcpServers.some((server) => server.connection === "connecting")) return;
+    const timer = setInterval(() => void state.reload(), 1000);
+    return () => clearInterval(timer);
+  }, [state.data, state.reload]);
   const run = async (method: string, params: JsonObject, timeout = 30_000) => {
     try {
       state.setData(parseCapabilities(await request(method, params, timeout)));
@@ -169,6 +174,7 @@ function StatusDot({ connection }: { connection: string }) {
 
 const CONNECTION: Record<string, string> = {
   connected: "Connected",
+  connecting: "Connecting…",
   failed: "Failed",
   disabled: "Off",
   not_connected: "Not connected",

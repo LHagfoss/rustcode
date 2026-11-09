@@ -43,7 +43,7 @@ import {
 import type { ThreadState } from "../state/thread";
 import { CardPopover } from "./cardPopover";
 import { HarnessIcon } from "./HarnessIcon";
-import { cx, MenuSearchField, Skeleton, Tooltip } from "./primitives";
+import { cx, MenuSearchField, Select, Skeleton, Tooltip } from "./primitives";
 
 interface Choice {
   value: string;
@@ -312,6 +312,7 @@ function EffortCard({
   levels,
   effort,
   model,
+  harness,
   defaultLevel,
   fast,
   fastOn,
@@ -328,6 +329,7 @@ function EffortCard({
   levels: string[];
   effort?: string | null;
   model?: string | null;
+  harness?: Harness;
   defaultLevel: string | null;
   fast?: ConfigOption;
   fastOn: boolean;
@@ -343,27 +345,20 @@ function EffortCard({
   onModels: () => void;
   onPickAccount: (id: string | null) => void;
 }) {
-  const name = modelName(model ?? undefined) ?? "Default model";
+  const name = model ?? "Default model";
   const showEffort = effortsShown(levels, effort);
   return (
     <div className="flex flex-col pb-0.5">
       <div className="flex items-center gap-1 px-1.5 pt-1 pb-0.5">
         <div className="flex min-w-0 flex-1 items-center gap-1">
-          {showEffort && (
-            <>
-              <span className="shrink-0 text-callout font-semibold text-accent">{effortLabel(effort!)}</span>
-              <span aria-hidden className="shrink-0 text-fg-faint">
-                ·
-              </span>
-            </>
-          )}
           <button
             type="button"
             aria-label={`Model: ${name}`}
             disabled={!!modelReason}
             onClick={onModels}
-            className="flex min-w-0 items-center gap-0.5 rounded-full py-0.5 pr-1.5 pl-1 text-callout text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg disabled:opacity-40"
+            className="flex min-w-0 items-center gap-0.5 rounded-full py-0.5 pr-1.5 pl-1 text-body font-semibold text-fg enabled:hover:bg-fill disabled:opacity-40"
           >
+            <HarnessIcon id={harness?.id ?? "rustcode"} name={harness?.name} size={16} />
             <span className="truncate">{name}</span>
             <ChevronRight size={11} strokeWidth={2.5} className="shrink-0" />
           </button>
@@ -399,6 +394,7 @@ function EffortCard({
           </button>
         </Tooltip>
       </div>
+      {showEffort && <span className="px-3 pt-1 text-callout text-fg-muted">{effortLabel(effort!)}</span>}
       <div className="px-1.5">
         {effortReason ? (
           <p className="flex items-start gap-1.5 px-2 py-1.5 text-caption text-fg-faint">
@@ -416,33 +412,52 @@ function EffortCard({
             <span>Account</span>
             {accountsDisabled && <span className="ms-auto">Stop the turn to switch</span>}
           </div>
-          {accounts.map((chip) => (
-            <button
-              key={chip.id ?? chip.name}
-              type="button"
-              aria-pressed={chip.selected}
-              disabled={accountsDisabled || chip.gone || chip.signedOut}
-              title={chip.signedOut ? "This account is not signed in" : undefined}
-              aria-label={chip.signedOut ? `${chip.name} (not signed in)` : undefined}
-              onClick={() => {
-                if (chip.id === undefined) return;
-                onPickAccount(chip.id);
+          {accounts.length > 3 ? (
+            <Select
+              label="Account"
+              value={accounts.findIndex((chip) => chip.selected).toString()}
+              disabled={accountsDisabled}
+              options={accounts.map((chip, index) => ({
+                value: String(index),
+                label: chip.name,
+                disabled: chip.gone || chip.signedOut,
+              }))}
+              onChange={(value) => {
+                const chip = accounts[Number(value)];
+                if (chip && chip.id !== undefined) onPickAccount(chip.id);
               }}
-              className={cx(
-                "flex h-6 w-full items-center gap-2 rounded-md px-2 text-left text-callout",
-                chip.selected
-                  ? "bg-fill font-medium text-fg"
-                  : "text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg",
-                chip.signedOut && !chip.selected && "text-fg-faint",
-                (accountsDisabled || chip.gone) && "opacity-40",
-                chip.gone && "italic",
-              )}
-            >
-              <span className="min-w-0 flex-1 truncate">{chip.name}</span>
-              {chip.signedOut && <span className="shrink-0 text-caption text-fg-faint">Signed out</span>}
-              {chip.selected && <Check size={12} strokeWidth={2.5} className="shrink-0 text-accent" />}
-            </button>
-          ))}
+            />
+          ) : (
+            <div className="flex gap-1 rounded-md bg-fill-subtle p-1">
+              {accounts.map((chip) => (
+                <button
+                  key={chip.id ?? chip.name}
+                  type="button"
+                  aria-pressed={chip.selected}
+                  disabled={accountsDisabled || chip.gone || chip.signedOut}
+                  title={chip.signedOut ? "This account is not signed in" : undefined}
+                  aria-label={chip.signedOut ? `${chip.name} (not signed in)` : undefined}
+                  onClick={() => {
+                    if (chip.id === undefined) return;
+                    onPickAccount(chip.id);
+                  }}
+                  className={cx(
+                    "flex h-6 min-w-0 flex-1 items-center gap-1 rounded-md px-2 text-left text-callout",
+                    chip.selected
+                      ? "bg-fill font-medium text-fg"
+                      : "text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg",
+                    chip.signedOut && !chip.selected && "text-fg-faint",
+                    (accountsDisabled || chip.gone) && "opacity-40",
+                    chip.gone && "italic",
+                  )}
+                >
+                  <span className="min-w-0 flex-1 truncate">{chip.name}</span>
+                  {chip.signedOut && <span className="shrink-0 text-caption text-fg-faint">Signed out</span>}
+                  {chip.selected && <Check size={12} strokeWidth={2.5} className="shrink-0 text-accent" />}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -472,63 +487,42 @@ function ModelPanel({
   onBack: () => void;
 }) {
   const [filter, setFilter] = useState("");
+  const [provider, setProvider] = useState(groups[0]?.harness.id ?? "");
+  const [column, setColumn] = useState<"providers" | "models">("models");
   const [active, setActive] = useState(0);
   const field = useRef<HTMLInputElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const searching = !!filter.trim();
-  const { sections, rows, index } = useMemo(() => {
-    const shown = groups.map((group) => ({
-      group,
-      // One matchModels per group per keystroke, not one per section and one for the flat rows.
-      models: searching ? matchModels(filter, group.models).shown : group.models,
-    }));
-    const sections = shown.filter((s) => !searching || s.models.length);
-    const rows = sections.flatMap((s) => s.models.map((model) => ({ group: s.group, model })));
-    // Where each row sits in the flat list, read once instead of a findIndex per rendered row.
-    const index = new Map(rows.map((row, at) => [`${row.group.harness.id}:${row.model.value}`, at]));
-    return { sections, rows, index };
-  }, [groups, filter, searching]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new query starts at the top
-  useEffect(() => setActive(0), [filter]);
+  const rows = useMemo(() => filterModelRows(groups, provider, filter), [groups, provider, filter]);
   useEffect(() => {
     field.current?.focus();
   }, []);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the highlight moved, so follow it
   useEffect(() => {
-    scroller.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
+    scroller.current?.querySelector(`[id="model-row-${active}"]`)?.scrollIntoView({ block: "nearest" });
   }, [active]);
-  const move = (by: number) => setActive((i) => Math.min(Math.max(i + by, 0), Math.max(rows.length - 1, 0)));
   return (
     <div
       className="flex min-h-0 flex-1 flex-col"
       onKeyDown={(e) => {
-        if (e.key === "Escape") {
-          // A search clears first; the second Escape closes the card (Radix's own dismiss).
-          if (!filter) return;
+        if (e.key === "ArrowLeft") {
           e.preventDefault();
-          e.stopPropagation();
-          setFilter("");
-          return;
-        }
-        if (e.key === "ArrowDown") {
+          setColumn("providers");
+        } else if (e.key === "ArrowRight") {
           e.preventDefault();
-          move(1);
-        } else if (e.key === "ArrowUp") {
+          setColumn("models");
+        } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
           e.preventDefault();
-          move(-1);
-        } else if (e.key === "PageDown") {
-          e.preventDefault();
-          move(6);
-        } else if (e.key === "PageUp") {
-          e.preventDefault();
-          move(-6);
-        } else if (e.key === "Home") {
-          e.preventDefault();
-          setActive(0);
-        } else if (e.key === "End") {
-          e.preventDefault();
-          setActive(Math.max(rows.length - 1, 0));
-        } else if (e.key === "Enter") {
+          const delta = e.key === "ArrowDown" ? 1 : -1;
+          if (column === "providers" && !searching) {
+            const next = movePickerIndex(
+              groups.findIndex((g) => g.harness.id === provider),
+              delta,
+              groups.length,
+            );
+            setProvider(groups[next]?.harness.id ?? provider);
+            setActive(0);
+          } else setActive((i) => movePickerIndex(i, delta, rows.length));
+        } else if (e.key === "Enter" && column === "models") {
           const row = rows[active];
           if (row && !row.group.blocked) {
             e.preventDefault();
@@ -537,104 +531,129 @@ function ModelPanel({
         }
       }}
     >
-      <div className="flex items-center gap-1 px-1 pt-1 pb-0.5">
+      <div className="flex items-center gap-1 p-1">
         <button
           type="button"
           aria-label="Back to effort"
           onClick={onBack}
-          className="flex size-6 shrink-0 items-center justify-center rounded-full text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg"
+          className="flex size-6 shrink-0 items-center justify-center rounded-full text-fg-muted hover:bg-fill"
         >
-          <ChevronLeft size={14} strokeWidth={2.5} />
+          <ChevronLeft size={14} />
         </button>
-        <span className="text-sub font-medium">Model</span>
-      </div>
-      <div className="p-1 pb-1.5">
         <MenuSearchField
           value={filter}
-          onChange={setFilter}
+          onChange={(v) => {
+            setFilter(v);
+            setActive(0);
+            setColumn("models");
+          }}
           placeholder="Search models"
           label="Search models"
           inputRef={field}
           controls="model-list"
-          activeDescendant={
-            rows[active] ? `model-${rows[active]!.group.harness.id}-${rows[active]!.model.value}` : undefined
-          }
+          activeDescendant={rows[active] ? `model-row-${active}` : undefined}
         />
       </div>
-      <div
-        ref={scroller}
-        id="model-list"
-        role="listbox"
-        aria-label="Models"
-        className="scroll-stable min-h-0 flex-1 px-1 pb-1"
-      >
-        {sections.map((section) => (
-          <div key={section.group.harness.id}>
-            {!searching && (
-              <div className="sticky top-0 z-10 -mx-1 flex items-start gap-1.5 bg-surface-2 px-3 pt-1.5 pb-1 text-caption text-fg-faint">
-                <HarnessIcon
-                  id={section.group.harness.id}
-                  name={section.group.harness.name}
-                  size={12}
-                  className="mt-0.5 shrink-0"
-                />
-                {/* The name is the header's own word: it keeps its width and the reason beside
-                    it gives way, so "Not installed. Install with: …" never pushes it out. */}
-                <span className="max-w-[55%] shrink-0 truncate py-0.5">{section.group.harness.name}</span>
-                {section.group.blocked && (
-                  <span className="ms-auto min-w-0 truncate text-right">{section.group.blocked}</span>
+      <div className="px-2 min-[480px]:hidden">
+        <Select
+          label="Provider"
+          value={provider}
+          options={groups.map((g) => ({ value: g.harness.id, label: g.harness.name }))}
+          onChange={(v) => {
+            setProvider(v);
+            setActive(0);
+          }}
+        />
+      </div>
+      <div className="flex min-h-0 flex-1">
+        <div
+          className="hidden w-36 shrink-0 overflow-auto border-r border-border p-1 min-[480px]:block"
+          role="group"
+          aria-label="Providers"
+        >
+          {groups.map((g) => (
+            <button
+              type="button"
+              key={g.harness.id}
+              onClick={() => {
+                setProvider(g.harness.id);
+                setFilter("");
+                setActive(0);
+                setColumn("providers");
+              }}
+              className={cx(
+                "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-callout",
+                provider === g.harness.id && !searching && "font-semibold text-accent",
+              )}
+            >
+              <HarnessIcon id={g.harness.id} name={g.harness.name} size={14} />
+              <span className="truncate">{g.harness.name}</span>
+            </button>
+          ))}
+        </div>
+        <div
+          ref={scroller}
+          id="model-list"
+          role="listbox"
+          aria-label="Models"
+          className="scroll-stable min-h-0 min-w-0 flex-1 p-1"
+        >
+          {rows.map((row, i) => (
+            <div
+              key={`${row.group.harness.id}:${row.model.value}`}
+              id={`model-row-${i}`}
+              role="option"
+              tabIndex={-1}
+              aria-selected={row.group.harness.id === groups[0]?.harness.id && row.model.value === current}
+              aria-disabled={!!row.group.blocked}
+              onMouseEnter={() => setActive(i)}
+              onClick={() => !row.group.blocked && onPick(row.group, row.model.value)}
+              className={cx(
+                "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1",
+                i === active && "bg-fill",
+                row.group.blocked && "opacity-45",
+              )}
+            >
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-body">{row.model.name || row.model.value}</span>
+                {searching && (
+                  <span className="block truncate text-caption text-fg-muted">{row.group.harness.name}</span>
                 )}
-              </div>
-            )}
-            {section.models.map((choice) => {
-              const key = `${section.group.harness.id}:${choice.value}`;
-              const at = index.get(key) ?? 0;
-              const isCurrent =
-                choice.value === current && section.group.harness.id === groups[0]?.harness.id;
-              return (
-                <div
-                  key={key}
-                  id={`model-${section.group.harness.id}-${choice.value}`}
-                  role="option"
-                  tabIndex={-1}
-                  aria-selected={isCurrent}
-                  aria-disabled={!!section.group.blocked}
-                  data-active={at === active}
-                  data-model-row=""
-                  onMouseEnter={() => setActive(at)}
-                  onClick={() => !section.group.blocked && onPick(section.group, choice.value)}
-                  className={cx(
-                    "flex min-h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left",
-                    at === active && "bg-fill",
-                    section.group.blocked && "cursor-default opacity-45",
-                  )}
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-body">{modelName(choice.name)}</span>
-                    {choice.description && choice.description !== modelName(choice.name) && (
-                      <span className="block truncate text-caption text-fg-muted">{choice.description}</span>
-                    )}
-                  </span>
-                  {isCurrent && <Check size={13} strokeWidth={2.5} className="shrink-0 text-accent" />}
-                </div>
-              );
-            })}
-          </div>
-        ))}
-        {!rows.length && (
-          <div className="px-2 py-3 text-center text-callout text-fg-muted">
-            {searching ? "No matching models" : "No models listed"}
-          </div>
-        )}
-        {!searching && rows.length > 0 && <span className="sr-only">{rows.length} models</span>}
+              </span>
+              {row.group.harness.id === groups[0]?.harness.id && row.model.value === current && (
+                <Check size={13} className="text-accent" />
+              )}
+            </div>
+          ))}
+          {!rows.length && (
+            <div className="px-2 py-3 text-center text-callout text-fg-muted">
+              {searching ? "No matching models" : "No models listed"}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-/** The pill label: model (after the last `/`) and effort. */
-function pillLabel(model?: string | null, effort?: string | null, compact = false) {
-  const name = modelName(model ?? undefined) ?? "Default model";
+export function movePickerIndex(index: number, delta: number, count: number): number {
+  return Math.min(Math.max(index + delta, 0), Math.max(count - 1, 0));
+}
+
+export function filterModelRows(groups: ModelGroup[], provider: string, filter: string) {
+  const searching = !!filter.trim();
+  return groups.flatMap((group) =>
+    searching || group.harness.id === provider
+      ? (searching ? matchModels(filter, group.models).shown : group.models).map((model) => ({
+          group,
+          model,
+        }))
+      : [],
+  );
+}
+
+export function pillLabel(model?: string | null, effort?: string | null, compact = false) {
+  const name = model || "Default model";
   return {
     name: compact && name.length > 14 ? `${clip(name, 13)}…` : name,
     effort: compact ? undefined : effort,
@@ -687,6 +706,10 @@ export function pickerModels(
       efforts = listed?.efforts ?? [];
       effort = defaultEffort(listed, efforts);
     }
+    models = models.map((choice) => ({
+      ...choice,
+      name: harness?.models.find((entry) => entry.id === choice.value)?.name || choice.name || choice.value,
+    }));
     return { models, model: m?.current, efforts: orderEfforts(efforts), effort };
   }
   if (harness?.models.length) {
@@ -765,14 +788,12 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     (h) => h.id === (isNew ? effective.harness : (thread?.harness?.id ?? "rustcode")),
   );
   const caps = isNew ? harness?.capabilities : thread?.harness?.capabilities;
-  const accounts = harness?.accounts ?? [];
   // A new thread starts on one of the harness's named accounts while it has
   // any (state/logins.ts); an open thread keeps its own, so the picker says
   // what it really runs on.
   const signedOut = useApp((s) => s.signedOutLogins);
   const newAccount = useApp((s) => newThreadAccountOn(harness, s.newThreadAccount, s.signedOutLogins));
   const account = isNew ? newAccount : (thread?.harness?.account ?? null);
-  const accountName = accounts.find((a) => a.id === account)?.name;
   // A running thread keeps its login, as it keeps its harness.
   const accountBlocked = !isNew && !!thread?.running;
   const engineReady = useApp((s) => s.status === "ready");
@@ -838,7 +859,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     return chips;
   };
 
-  // The harnesses worth listing: RustCode turned off in Settings › Agents leaves the list, and a
+  // The harnesses worth listing: RustCode turned off in Settings › Harnesses leaves the list, and a
   // thread moves only to an external harness (RustCode cannot take one over yet).
   const providers = (harnesses?.harnesses ?? []).filter((h) =>
     isNew ? !h.builtin || h.enabled || h.id === effective.harness : !h.builtin || h.id === harness?.id,
@@ -911,11 +932,13 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     turnPage("effort");
   };
 
-  const label = pillLabel(model, effortReason ? null : effort, compact);
+  // A catalog name is shown as it is; a bare id reads without its `provider/` prefix.
+  const catalogName = modelEntry?.name || models.find((item) => item.value === model)?.name;
+  const displayName = catalogName && catalogName !== model ? catalogName : modelName(model ?? undefined);
+  const label = pillLabel(displayName, effortReason ? null : effort, compact);
   // The pill names the login whenever the harness has named accounts, even
   // when there is one: which subscription a thread spends is worth a word.
   // A thread from before accounts says which login it is really on.
-  const accountLabel = accountName ?? (!isNew && !account && accounts.length ? "Original login" : undefined);
 
   // Nothing to show until the engine lists harnesses (or the thread its options): a placeholder pill.
   if (!harnesses && !thread?.configOptions.length) {
@@ -937,7 +960,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
       onOpenAutoFocus={(event) => event.preventDefault()}
       // One width for both views: the effort card is small, and the model list lives in the same
       // box, so swapping between them never resizes the card.
-      className="w-[min(300px,calc(100vw-32px))] p-0"
+      className="w-[min(480px,calc(100vw-32px))] p-0"
       style={{ maxHeight: "min(430px, var(--radix-popper-available-height, 430px))" }}
       trigger={
         <button
@@ -952,13 +975,6 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
           {fast?.currentBool && <Zap size={11} className="shrink-0 text-fg" fill="currentColor" />}
           <span className="min-w-0 truncate">{label.name}</span>
           {label.effort && <span className="shrink-0 text-fg-faint">{effortLabel(label.effort)}</span>}
-          {accountLabel && (
-            // The account is a hint, not a second model label: capped and ellipsized so a long
-            // login never takes the width the model's own name needs.
-            <span className="min-w-0 max-w-[72px] truncate text-caption text-fg-faint @max-lg/composer:hidden">
-              {accountLabel}
-            </span>
-          )}
           <ChevronUp
             size={11}
             strokeWidth={2.5}
@@ -980,7 +996,8 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
           <EffortCard
             levels={efforts}
             effort={effort}
-            model={model}
+            model={displayName}
+            harness={harness}
             defaultLevel={defaultLevel}
             fast={fast}
             fastOn={!!fast?.currentBool}

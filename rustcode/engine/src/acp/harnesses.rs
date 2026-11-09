@@ -30,6 +30,9 @@ pub(crate) struct HarnessesRequest {}
 #[request(method = "_rustcode/harnesses/models", response = serde_json::Value)]
 pub(crate) struct HarnessModelsRequest {
     pub harness: String,
+    /// Start the harness again even when its models are known: a Check.
+    #[serde(default)]
+    pub refresh: bool,
 }
 
 /// Turn a harness on or off, change its command, or add a custom one.
@@ -41,6 +44,9 @@ pub(crate) struct SetHarnessRequest {
     pub enabled: Option<bool>,
     #[serde(default)]
     pub command: Option<Vec<String>>,
+    /// The custom harness's environment; replaces the old one.
+    #[serde(default)]
+    pub env: Option<std::collections::BTreeMap<String, String>>,
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
@@ -115,7 +121,11 @@ pub(crate) struct RemoveHarnessAccountRequest {
 /// Re-read each account's sign-in and answer the snapshot.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
 #[request(method = "_rustcode/harnesses/accounts/check", response = serde_json::Value)]
-pub(crate) struct CheckHarnessAccountsRequest {}
+pub(crate) struct CheckHarnessAccountsRequest {
+    /// Harnesses whose install is detected again rather than read from the last minute's answer.
+    #[serde(default)]
+    pub redetect: Vec<String>,
+}
 
 /// Mark first-run onboarding done.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
@@ -133,7 +143,7 @@ pub(crate) async fn snapshot() -> Result<Value, agent_client_protocol::Error> {
 pub(crate) async fn models(
     request: HarnessModelsRequest,
 ) -> Result<Value, agent_client_protocol::Error> {
-    let models = harness::models(request.harness.trim())
+    let models = harness::models(request.harness.trim(), request.refresh)
         .await
         .map_err(failure)?;
     Ok(serde_json::json!({ "models": models }))
@@ -144,6 +154,7 @@ pub(crate) async fn set(request: SetHarnessRequest) -> Result<Value, agent_clien
         id: request.id,
         enabled: request.enabled,
         command: request.command,
+        env: request.env,
         name: request.name,
         kind: request.kind,
     })
@@ -227,8 +238,12 @@ pub(crate) async fn remove_account(
 
 /// `_rustcode/harnesses/accounts/check`: look each account's sign-in up
 /// again (only its credentials, nothing is started).
-pub(crate) async fn check_accounts() -> Result<Value, agent_client_protocol::Error> {
-    harness::check_accounts().await.map_err(failure)
+pub(crate) async fn check_accounts(
+    request: CheckHarnessAccountsRequest,
+) -> Result<Value, agent_client_protocol::Error> {
+    harness::check_accounts(&request.redetect)
+        .await
+        .map_err(failure)
 }
 
 pub(crate) async fn complete_onboarding() -> Result<Value, agent_client_protocol::Error> {

@@ -773,7 +773,7 @@ export function NoticeRow({
       >
         <span className="h-px flex-1 bg-border" />
         <span className="flex min-w-0 items-center gap-1.5">
-          <Layers size={11} className="shrink-0 text-fg-faint" />
+          {item.progress ? <Spinner size={11} /> : <Layers size={11} className="shrink-0 text-fg-faint" />}
           <span className="truncate">{item.text}</span>
         </span>
         <span className="h-px flex-1 bg-border" />

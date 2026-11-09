@@ -13,7 +13,8 @@ import { formatBinding } from "../lib/keys";
 // order, so dragging across is what matters there.
 
 import { Eye, EyeOff, GripVertical, type LucideIcon } from "lucide-react";
-import { type KeyboardEvent, type PointerEvent, useRef, useState } from "react";
+import { type KeyboardEvent, type PointerEvent, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   DEFAULT_HEADER_BUTTONS,
   HEADER_BUTTON_IDS,
@@ -36,6 +37,11 @@ function idsOf(list: List, shown: readonly HeaderButtonId[]): HeaderButtonId[] {
 interface Drag {
   id: HeaderButtonId;
   from: List;
+  x: number;
+  y: number;
+  left: number;
+  top: number;
+  width: number;
 }
 
 /** Where the pointer would drop the dragged row, and the line to draw for it. */
@@ -44,12 +50,38 @@ interface Drop {
   index: number;
 }
 
+/** Return the saved order after a drop without mutating the current order. */
+export function reorderHeaderButtons(shown: readonly HeaderButtonId[], id: HeaderButtonId, target: Drop) {
+  const next = shown.filter((item) => item !== id);
+  if (target.list === "shown") next.splice(Math.min(Math.max(target.index, 0), next.length), 0, id);
+  return next;
+}
+
 export function HeaderButtonsSetting() {
   const shown = useApp((s) => s.headerButtons);
   const shownList = useRef<HTMLDivElement>(null);
   const hiddenList = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const [drop, setDrop] = useState<Drop | null>(null);
+  const preview = useRef<HTMLDivElement>(null);
+  const landing = useRef(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const key = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        if (timer.current) clearTimeout(timer.current);
+        landing.current = false;
+        setDrag(null);
+        setDrop(null);
+      }
+    };
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("keydown", key);
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, []);
 
   /** Rows of the Shown list as boxes in the window, without the dragged one. */
   const shownRows = (except: HeaderButtonId) => {
@@ -72,17 +104,12 @@ export function HeaderButtonsSetting() {
 
   /** Moves `id` to `index` of the Shown list (hiding it when the target is Hidden). */
   const place = (id: HeaderButtonId, target: Drop) => {
-    if (target.list === "hidden") {
-      setHeaderButtons(shown.filter((x) => x !== id));
-      return;
-    }
-    const next = shown.filter((x) => x !== id);
-    next.splice(Math.min(Math.max(target.index, 0), next.length), 0, id);
-    setHeaderButtons(next);
+    setHeaderButtons(reorderHeaderButtons(shown, id, target));
   };
 
   const onPointerMove = (e: PointerEvent) => {
-    if (!drag) return;
+    if (!drag || landing.current) return;
+    setDrag({ ...drag, x: e.clientX, y: e.clientY });
     // A drag that started in Hidden has nowhere to go but the Shown list: it is
     // already hidden, and the Hidden list has no order of its own.
     if (drag.from === "hidden" && inside(hiddenList.current, e.clientX, e.clientY)) {
@@ -109,15 +136,48 @@ export function HeaderButtonsSetting() {
     if (e.button !== 0) return;
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
-    setDrag({ id, from });
+    const row = e.currentTarget.closest<HTMLElement>("[data-header-button]");
+    if (!row) return;
+    const box = row.getBoundingClientRect();
+    setDrag({
+      id,
+      from,
+      x: e.clientX,
+      y: e.clientY,
+      left: box.left - e.clientX,
+      top: box.top - e.clientY,
+      width: box.width,
+    });
     setDrop(null);
   };
 
-  const onGripUp = (e: PointerEvent<HTMLElement>) => {
+  const onGripUp = () => {
     if (!drag) return;
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
-    if (drop) place(drag.id, drop);
-    endDrag();
+    if (!drop) {
+      endDrag();
+      return;
+    }
+    landing.current = true;
+    const target = document.querySelector<HTMLElement>("[data-header-drop-slot='active']");
+    const ghost = preview.current;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const finish = () => {
+      place(drag.id, drop);
+      landing.current = false;
+      endDrag();
+    };
+    if (target && ghost && !reduced) {
+      const from = ghost.getBoundingClientRect();
+      const to = target.getBoundingClientRect();
+      ghost.animate(
+        [
+          { transform: "scale(1.03)" },
+          { transform: `translate(${to.left - from.left}px, ${to.top - from.top}px) scale(1)` },
+        ],
+        { duration: 160, easing: "ease-out", fill: "forwards" },
+      );
+      timer.current = setTimeout(finish, 160);
+    } else finish();
   };
 
   const onKeyDown = (e: KeyboardEvent, id: HeaderButtonId, list: List) => {
@@ -134,26 +194,26 @@ export function HeaderButtonsSetting() {
     setHeaderButtons(next);
   };
 
-  /** The insertion line, at the slot the pointer names (absolute, so no layout shift). */
-  const line = () => {
-    if (drop?.list !== "shown" || !drag) return null;
-    const rows = shownRows(drag.id);
-    const box = shownList.current?.getBoundingClientRect();
-    if (!box) return null;
-    const last = rows[rows.length - 1];
-    const slot = rows[drop.index];
-    const top = slot ? slot.top - box.top : last ? last.top + last.height - box.top : 0;
-    return (
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-x-1.5 h-0.5 -translate-y-1/2 rounded-full bg-accent"
-        style={{ top }}
-      />
-    );
-  };
-
   const column = (which: List) => {
     const ids = idsOf(which, shown);
+    const others = ids.filter((id) => id !== drag?.id);
+    const hiddenIndex = drag
+      ? others.filter((id) => HEADER_BUTTON_IDS.indexOf(id) < HEADER_BUTTON_IDS.indexOf(drag.id)).length
+      : 0;
+    const slotIndex = drop?.list === which ? (which === "shown" ? drop.index : hiddenIndex) : -1;
+    const gap = (index: number) => (
+      <div
+        key={`slot-${index}`}
+        data-header-drop-slot={slotIndex === index ? "active" : undefined}
+        aria-hidden
+        className={cx(
+          "overflow-hidden motion-safe:transition-[height] motion-safe:duration-150",
+          slotIndex === index ? "h-9" : "h-0",
+        )}
+      >
+        <div className="h-full rounded-md bg-accent/10 ring-1 ring-inset ring-accent/50" />
+      </div>
+    );
     const body = (
       <div
         ref={which === "shown" ? shownList : hiddenList}
@@ -164,24 +224,29 @@ export function HeaderButtonsSetting() {
           which === "hidden" && drop?.list === "hidden" ? "bg-accent/10" : "bg-fill-subtle/50",
         )}
       >
-        {ids.map((id) => (
-          <HeaderButtonRow
-            key={id}
-            id={id}
-            list={which}
-            dragging={drag?.id === id}
-            onGripDown={onGripDown}
-            onGripUp={onGripUp}
-            onGripMove={onPointerMove}
-            onGripCancel={endDrag}
-            onKeyDown={onKeyDown}
-            onToggle={() =>
-              which === "shown"
-                ? setHeaderButtons(shown.filter((x) => x !== id))
-                : place(id, { list: "shown", index: shown.length })
-            }
-          />
+        {ids.map((id, index) => (
+          <div key={id}>
+            {id !== drag?.id && gap(ids.slice(0, index).filter((item) => item !== drag?.id).length)}
+            <HeaderButtonRow
+              id={id}
+              list={which}
+              dragging={drag?.id === id}
+              onGripDown={onGripDown}
+              onGripUp={onGripUp}
+              onGripMove={onPointerMove}
+              onGripCancel={() => {
+                if (!landing.current) endDrag();
+              }}
+              onKeyDown={onKeyDown}
+              onToggle={() =>
+                which === "shown"
+                  ? setHeaderButtons(shown.filter((x) => x !== id))
+                  : place(id, { list: "shown", index: shown.length })
+              }
+            />
+          </div>
         ))}
+        {gap(others.length)}
         {ids.length === 0 && (
           <p className="px-2 py-2 text-callout text-fg-faint">
             {which === "shown"
@@ -189,7 +254,6 @@ export function HeaderButtonsSetting() {
               : "Every button is in the header."}
           </p>
         )}
-        {which === "shown" && line()}
       </div>
     );
     return (
@@ -222,6 +286,29 @@ export function HeaderButtonsSetting() {
           {column("hidden")}
         </div>
       </div>
+      {drag &&
+        // In the body: the settings page sits in a size container, which would make
+        // `fixed` relative to it instead of the window.
+        (() => {
+          const entry = HEADER_BUTTONS[drag.id];
+          const Icon = entry.icon;
+          return createPortal(
+            <div
+              ref={preview}
+              aria-hidden
+              className="pointer-events-none fixed z-50 flex h-9 items-center gap-2 rounded-md bg-surface-2 px-1.5 text-body shadow-lg motion-safe:scale-[1.03]"
+              style={{ left: drag.x + drag.left, top: drag.y + drag.top, width: drag.width }}
+            >
+              <GripVertical size={13} className="mx-1 shrink-0 text-fg-faint" />
+              <Icon size={14} className="shrink-0 text-fg-muted" />
+              <span className="min-w-0 flex-1 truncate">{entry.label}</span>
+              <span className="px-2 text-caption text-fg-muted">
+                {drag.from === "shown" ? "Hide" : "Show"}
+              </span>
+            </div>,
+            document.body,
+          );
+        })()}
     </>
   );
 }
@@ -258,7 +345,7 @@ function HeaderButtonRow({
       onKeyDown={(e) => onKeyDown(e, id, list)}
       className={cx(
         "flex h-9 items-center gap-2 rounded-md px-1.5 text-body hover:bg-fill",
-        dragging && "opacity-40",
+        dragging && "bg-fill-strong opacity-30",
       )}
     >
       <span

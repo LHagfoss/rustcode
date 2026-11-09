@@ -439,7 +439,7 @@ pub const FAN_OUT: Tool = Tool {
 /// clients that advertise `_meta.rustcode.orchestration >= 3`.
 pub const LIST_HARNESSES: Tool = Tool {
     name: crate::orchestration::LIST_HARNESSES,
-    description: "List the harnesses that can run a thread, each with its models, efforts and named accounts or why it cannot run, and what this thread runs on. Each leads with the model a new thread starts on and the ones this project used recently, then caps at 12: `omitted_models` counts the rest, reachable with `model`. `harness` keeps one (id, else name); `model` matches part of a model id or name, any case (up to 50). Every login a plan was read for carries `usage`: `{ status, as_of, windows: [{ label, used_percent, window_minutes, resets_at }] }`, and `status: \"not_enabled\"` means Claude usage reading is off (Settings › Usage) — read it before choosing an account, so a delegate skips a nearly used window.",
+    description: "List the harnesses that can run a thread, each with its models, efforts and named accounts or why it cannot run, and what this thread runs on. Each leads with the model a new thread starts on and the ones this project used recently, then caps at 12: `omitted_models` counts the rest, reachable with `model`. `harness` keeps one (id, else name); `model` matches part of a model id or name, any case (up to 50). Every login a plan was read for carries `usage`: `{ status, as_of, windows: [{ label, used_percent, window_minutes, resets_at }] }` — read it before choosing an account, so a delegate skips a nearly used window.",
     arguments: r#"{"harness": "codex", "model": "opus"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -647,7 +647,7 @@ pub const LIST_PULL_REQUESTS: Tool = Tool {
 /// request and its checks, merging it when green, and cleaning up after it.
 pub const THREAD_STATUS: Tool = Tool {
     name: crate::orchestration::THREAD_STATUS,
-    description: "Report where each of this thread's delegates stands: its worktree path, branch, project, thread status, and its pull request (number, url, open/closed/merged) with its checks (pending, passing, failing with the failing check names, or none). With no session_id it reports every delegate this thread started or messaged; with one, that thread. Ask it instead of combining read_session, list_pull_requests and a shell `gh pr checks`.",
+    description: "Report delegates' status, project, worktree, branch, pull request and checks. Running delegates include idle time and the last recorded provider error. Omit session_id for every delegate this thread started or messaged.",
     arguments: r#"{"session_id": "id from list_sessions, or omit for all delegates"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -762,7 +762,7 @@ pub const QUERY_DATA: Tool = Tool {
 /// activity, read back from the local data store.
 pub const READ_ACTIVITY: Tool = Tool {
     name: crate::orchestration::READ_ACTIVITY,
-    description: "Page one thread's recorded activity, oldest first: operational events, provider attempts (status, latency, tokens) and harness messages — metadata only, never prompts or payloads. Pass `next` back as `after` for the next page. Any project's thread.",
+    description: "Page a thread's events, provider attempts and harness messages, metadata only. order newest starts with the latest; default oldest. Pass next as after with the same order.",
     arguments: r#"{"session_id": "id from list_sessions", "after": "next from the last page", "limit": 50}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -772,6 +772,7 @@ pub const READ_ACTIVITY: Tool = Tool {
             "properties": {
                 "session_id": {"type": "string", "minLength": 1},
                 "after": {"type": "string", "description": "Opaque `next` token from an earlier page; omit for the first page"},
+                "order": {"type": "string", "enum": ["oldest", "newest"], "default": "oldest"},
                 "limit": {"type": "integer", "minimum": 1, "maximum": crate::data_store::MAX_ACTIVITY_ITEMS, "default": crate::data_store::DEFAULT_ACTIVITY_ITEMS}
             },
             "required": ["session_id"],

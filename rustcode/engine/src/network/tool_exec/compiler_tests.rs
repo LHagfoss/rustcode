@@ -33,9 +33,28 @@ fn standalone_compiler_infrastructure_keeps_edit_success_and_unverified_notice()
 
 fn compiler_project() -> tempfile::TempDir {
     let project = tempfile::tempdir().unwrap();
+    // A `CARGO_TARGET_DIR` exported by the run (CI, or a `cargo test` started
+    // from a shell that sets it) reaches the automatic compiler check through
+    // the inherited environment. Cargo's unit hash keeps a path package's
+    // name, version and relative target path, not the directory it lives in,
+    // so every fixture in this module shared one unit: another fixture's valid
+    // build could answer this project's `cargo check` with a fresh success,
+    // and an edit that broke the source then reported no diagnostics (#3287).
+    // The temp directory name is unique, so naming the package after it makes
+    // each fixture its own unit whatever target directory the run exports.
+    let fixture: String = project
+        .path()
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
     std::fs::write(
         project.path().join("Cargo.toml"),
-        "[package]\nname = \"compiler_check_fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[lib]\npath = \"lib.rs\"\n[workspace]\n",
+        format!(
+            "[package]\nname = \"compiler_check_fixture_{fixture}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[lib]\npath = \"lib.rs\"\n[workspace]\n"
+        ),
     )
     .unwrap();
     project

@@ -270,7 +270,9 @@ export function parsePull(value: Json | undefined): PullRequest | null {
   if (!o || number === undefined) return null;
   const state = str(o.state);
   const c = obj(o.checks);
-  const updated = str(o.updatedAt);
+  // The wire carries an ISO timestamp; a copy saved on the device carries the
+  // parsed number (`state/pullQueries.ts`), so both read here.
+  const updated = num(o.updatedAt) ?? Date.parse(str(o.updatedAt) ?? "");
   return {
     number,
     title: str(o.title) ?? "",
@@ -287,7 +289,7 @@ export function parsePull(value: Json | undefined): PullRequest | null {
     headRef: str(o.headRef) ?? "",
     baseRef: str(o.baseRef) ?? "",
     headSha: str(o.headSha) ?? "",
-    updatedAt: updated ? Date.parse(updated) || undefined : undefined,
+    updatedAt: Number.isFinite(updated) ? updated : undefined,
     url: str(o.url),
     additions: num(o.additions) ?? 0,
     deletions: num(o.deletions) ?? 0,
@@ -330,11 +332,12 @@ export function parsePullDetail(result: Json | undefined): PullDetail | null {
       deletions: num(obj(f)?.deletions) ?? 0,
     })),
     activity: arr(p.activity).map((a) => {
-      const at = str(obj(a)?.at);
+      // A saved copy carries the parsed number, the wire an ISO timestamp.
+      const at = num(obj(a)?.at) ?? Date.parse(str(obj(a)?.at) ?? "");
       return {
         author: str(obj(a)?.author) ?? "",
         kind: str(obj(a)?.kind) ?? "",
-        at: at ? Date.parse(at) || undefined : undefined,
+        at: Number.isFinite(at) ? at : undefined,
         body: str(obj(a)?.body) ?? "",
       };
     }),

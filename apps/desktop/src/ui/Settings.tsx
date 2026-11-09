@@ -1,10 +1,11 @@
+import { setTabMovesFocus, tabMovesFocus } from "../lib/focusModality";
 import { currentPlatform } from "../lib/platform";
 // Settings, a full panel inside the window: the shell stays mounted behind it,
 // hidden and inert, so closing Settings shows the thread exactly where it was.
 // A grouped nav on the left searches every row's title and keywords
 // (settingsIndex.ts) and shows one page at a time beside it; picking a result
 // opens its page and lights the row. After SettingsView.swift.
-// Server-backed pages (Agents, Connections, Capabilities, Appearance's
+// Server-backed pages (Harnesses, Connections, Capabilities, Appearance's
 // themes, Usage, Statistics) read and write through `_rustcode/*` requests.
 // Diagnostics (DiagnosticsPage.tsx) asks the shell about the server itself.
 
@@ -23,7 +24,6 @@ import {
   MessageSquare,
   Palette,
   Plus,
-  RefreshCw,
   RotateCcw,
   Search,
   Smartphone,
@@ -61,6 +61,7 @@ import { BUILTIN_THEMES, cssName, type Theme, TOKENS } from "../lib/themes";
 import { canUpdate } from "../lib/updater";
 import { AUTO_COMPACT_DEFAULT_THRESHOLD, AUTO_COMPACT_MODES } from "../state/autoCompact";
 import { validateDefault } from "../state/harness";
+import { runAllHarnessChecks, useHarnessChecks } from "../state/harnessChecks";
 import {
   activeDelegates,
   busiestThreadDelegates,
@@ -72,13 +73,13 @@ import {
 } from "../state/orchestration";
 import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
 import { RECAP_HOUR_OPTIONS } from "../state/recap";
+import { PREF, usePref } from "../state/sidebarPrefs";
 import {
   APP_VERSION,
   createTheme,
   errorText,
   type NewThreadChoice,
   openSettings,
-  refreshHarnesses,
   request,
   restartEngine,
   SETTINGS_DEFAULTS,
@@ -120,9 +121,10 @@ import {
   showWhatsNew,
   useUpdates,
 } from "../state/updates";
+import { AddHarnessForm } from "./AddHarness";
 import { CapabilitiesPage } from "./Capabilities";
 import { DiagnosticsPage } from "./DiagnosticsPage";
-import { DefaultsForm, HarnessList } from "./Harnesses";
+import { DefaultsForm, HarnessList, useAutoDetect } from "./Harnesses";
 import { HeaderButtonsSetting } from "./HeaderButtonsSetting";
 import { MachinesPage } from "./MachinesPage";
 import { NewThreadBanner } from "./NewThreadBanner";
@@ -168,7 +170,7 @@ const NAV: { heading?: string; pages: Page[] }[] = [
   {
     heading: "Setup",
     pages: [
-      { id: "agents", label: "Agents", icon: Layers },
+      { id: "agents", label: "Harnesses", icon: Layers },
       { id: "connections", label: "Connections", icon: KeyRound },
       { id: "capabilities", label: "Capabilities", icon: Blocks },
       { id: "remote", label: "Remote access", icon: Smartphone },
@@ -270,6 +272,7 @@ function GeneralPage() {
   const backgroundOnly = useApp((s) => s.notificationsBackgroundOnly);
   const recap = useApp((s) => s.recapWhileAway);
   const recapHours = useApp((s) => s.recapHours);
+  const [tabFocus, setTabFocus] = useState(tabMovesFocus);
   const [haptics, setHapticsState] = useState(hapticsEnabled);
   return (
     <>
@@ -284,7 +287,7 @@ function GeneralPage() {
           </Action>
         </Row>
         <Row title="Harness, model and effort" subtitle="Which agent runs a new thread by default.">
-          <Action onClick={() => openSettings("agents")}>Agents…</Action>
+          <Action onClick={() => openSettings("agents")}>Harnesses…</Action>
         </Row>
         <Row
           title="Default access"
@@ -416,6 +419,19 @@ function GeneralPage() {
       </Group>
       <Group title="This computer">
         <PresenceRow />
+        <Row
+          title="Tab moves focus between controls"
+          subtitle="Use Tab and Shift+Tab to navigate controls throughout the app."
+        >
+          <Switch
+            label="Tab moves focus between controls"
+            checked={tabFocus}
+            onChange={(value) => {
+              setTabMovesFocus(value);
+              setTabFocus(value);
+            }}
+          />
+        </Row>
         {currentPlatform() === "mac" && (
           <Row
             title="Trackpad haptics"
@@ -519,17 +535,10 @@ function ChatPage() {
 function AgentsPage() {
   const snapshot = useApp((s) => s.harnesses);
   const [saved, setSaved] = useState(false);
-  const [rechecking, setRechecking] = useState(false);
-  // Installed, signed in, versions: detected again each time the page opens, and on Refresh.
-  const recheck = async () => {
-    setRechecking(true);
-    await refreshHarnesses();
-    setRechecking(false);
-  };
-  // biome-ignore lint/correctness/useExhaustiveDependencies: once per visit to the page
-  useEffect(() => {
-    void recheck();
-  }, []);
+  const [adding, setAdding] = useState(false);
+  const checking = useHarnessChecks((s) => Object.values(s.byHarness).some((e) => "running" in e));
+  // Installed, signed in, versions: detected again each time the page opens and the window is back.
+  useAutoDetect();
   // An unsaved choice stays here while it is not valid yet (a harness that still lists models).
   const [choice, setChoice] = useState<NewThreadChoice | null>(null);
   if (!snapshot) return <Loading error={null} />;
@@ -569,15 +578,22 @@ function AgentsPage() {
         </Group>
       )}
       <Group
-        title="Coding agents"
+        title="Harnesses"
         action={
-          <Action quiet size="sm" onClick={() => void recheck()} disabled={rechecking}>
-            <RefreshCw size={11} />
-            {rechecking ? "Checking…" : "Refresh"}
-          </Action>
+          <div className="flex items-center gap-1">
+            <Action quiet size="sm" onClick={() => void runAllHarnessChecks()} disabled={checking}>
+              {checking && <Spinner size={11} />}
+              Check all
+            </Action>
+            <Action size="sm" onClick={() => setAdding(true)} disabled={adding}>
+              <Plus size={11} />
+              Add harness
+            </Action>
+          </div>
         }
-        footer="Each agent signs in on its own; RustCode never stores its credentials. Advanced runs setup again."
+        footer="Each harness signs in on its own; RustCode never stores its credentials. Check starts a harness to confirm it runs and lists its models."
       >
+        {adding && <AddHarnessForm onClose={() => setAdding(false)} />}
         <HarnessList snapshot={snapshot} />
       </Group>
       <OrchestrationGroup />
@@ -907,6 +923,7 @@ function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
 }
 
 function AppearancePage() {
+  const [rowLayout, setRowLayout] = usePref<"current" | "title-first">(PREF.rowLayout, "current");
   const mode = useApp((s) => s.theme);
   const roundedFont = useApp((s) => s.roundedFont);
   const animateStreaming = useApp((s) => s.animateStreaming);
@@ -921,6 +938,19 @@ function AppearancePage() {
     "~/.config/rustcode/themes";
   return (
     <>
+      <Group title="Sidebar">
+        <Row title="Thread row layout" subtitle="Choose what appears first in sidebar thread rows.">
+          <Choice
+            label="Thread row layout"
+            value={rowLayout}
+            onChange={setRowLayout}
+            options={[
+              { value: "current", label: "Current" },
+              { value: "title-first", label: "Title first" },
+            ]}
+          />
+        </Row>
+      </Group>
       <Group title="Mode">
         <Row
           title="Light or dark"

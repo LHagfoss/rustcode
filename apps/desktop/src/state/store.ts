@@ -14,7 +14,6 @@ import {
   parsePlanUsage,
   planHarness,
   planKey,
-  planOf,
   type SubagentInfo,
   type UsagePlan,
   type UsageWindow,
@@ -186,7 +185,6 @@ import { beginSetup, dismissSetup, type PendingSetup, setupFailed, setupSucceede
 import { keepThreads, type SidebarOrder, withoutThreads } from "./sidebarOrder";
 import { dueSnoozes } from "./snooze";
 import {
-  appendNotice,
   appendSteer,
   applyUpdate,
   beginQuietTurn,
@@ -202,8 +200,10 @@ import {
   type QueuedPrompt,
   questionItem,
   requeueSteers,
+  settleCompaction,
   settledWait,
   settleEveryWait,
+  startCompaction,
   type ThreadState,
   type TranscriptItem,
   truncateBefore,
@@ -265,8 +265,9 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
 ];
 
 /**
- * What an older build's section id opens: Harnesses became Agents and Engine
- * became Advanced. An id no build knows opens General.
+ * What an older build's section id opens: the Harnesses page keeps its old
+ * `agents` id, so a stored `harnesses` opens it, and Engine became Advanced.
+ * An id no build knows opens General.
  */
 const LEGACY_SECTIONS: Record<string, SettingsSection> = {
   harnesses: "agents",
@@ -424,13 +425,13 @@ export interface AppState {
     /** A second, less prominent action (e.g. "Files and conversation"). */
     alt?: { action: string; run: () => void };
   } | null;
-  /** Threads can start and message other threads (Settings › Agents); the engine learns it at initialize. */
+  /** Threads can start and message other threads (Settings › Harnesses); the engine learns it at initialize. */
   orchestration: boolean;
-  /** How many delegates one thread may run at once (Settings › Agents). */
+  /** How many delegates one thread may run at once (Settings › Harnesses). */
   threadLimit: number;
-  /** How many delegates may run at once across this app (Settings › Agents). */
+  /** How many delegates may run at once across this app (Settings › Harnesses). */
   totalLimit: number;
-  /** Agents may read threads of every project, not only the calling thread's (Settings › Agents). */
+  /** Agents may read threads of every project, not only the calling thread's (Settings › Harnesses). */
   readAcrossProjects: boolean;
   /** Threads that were running when the app quit or the engine restarted continue on their own. */
   resumeAfterRestart: boolean;
@@ -1451,10 +1452,12 @@ function onSessionUpdate(params: JsonObject) {
   // A compaction the app sent for the thread's own good says so, whichever
   // harness produced the card. The card's before → after comes from the usage
   // the meter keeps (`autoCompactBeforeUsage`).
-  if (update.kind === "compaction" && autoCompactInFlight.has(sessionId)) {
+  // The harness's own "started" and "failed" are not the card: a failure ends the compaction
+  // without the "Compacted automatically" notice that would follow a quiet turn.
+  if (update.kind === "compaction" && update.phase !== "started" && autoCompactInFlight.has(sessionId)) {
     autoCompactCardSeen.add(sessionId);
     autoCompactPendingNotice.delete(sessionId);
-    update = { ...update, text: automaticCompactionText(update.text) };
+    if (update.phase !== "failed") update = { ...update, text: automaticCompactionText(update.text) };
   }
   if (update.kind === "commands") {
     // The thread's own list, and the harness's last one for the next new thread on it.
@@ -1675,6 +1678,7 @@ export function selectThread(id: string | null) {
     settings: null,
     view: { kind: "chat" },
   }));
+  if (id && harnessOf(get(), id) === CLAUDE_CODE) claudePlansStarted = true;
   // The account this thread runs on may never have been read: its meter has no
   // numbers until it is, and it appears without a visit to Settings › Usage.
   // The list's summary names the account before the thread itself is opened.
@@ -1782,6 +1786,10 @@ export function openThread(id: string): Promise<string | null> {
         harness: parseSessionHarness(result) ?? t.harness,
       }));
       const opened = get().threads[id];
+      if (id === get().selectedId && opened?.harness?.id === CLAUDE_CODE) {
+        claudePlansStarted = true;
+        void refreshPlanCache();
+      }
       if (opened && lacksModels(opened)) void ensureHarnessModels(opened.harness!.id);
       void refreshPlanUsage(id);
       void refreshCheckpoints(id);
@@ -2535,7 +2543,10 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
     cancelEdit(id);
     const later = messagesAfter(thread, edit.itemId);
     const go = async () => {
-      if (await rewindTo(id!, edit.itemId, edit.original)) void runPrompt(id!, trimmed, extras);
+      if (await rewindTo(id!, edit.itemId, edit.original)) {
+        unsettleThreads([id!], { quiet: true });
+        void runPrompt(id!, trimmed, extras);
+      }
     };
     if (later > 0) {
       askConfirm({
@@ -2548,6 +2559,7 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
     } else void go();
     return true;
   }
+  if (trimmed !== "/fork" || hasExtras(extras)) unsettleThreads([id], { quiet: true });
   if (thread.running) {
     updateThread(id, (t) => ({
       ...t,
@@ -2657,6 +2669,7 @@ export async function steerOrSubmit(text: string, extras: ComposeExtras = emptyE
     if (next) return sendQueuedNow(id, next.id);
     return submit(text, extras);
   }
+  unsettleThreads([id], { quiet: true });
   const verdict = sendDecisionFor(thread, extras);
   if (verdict.action === "steer" && (await steer(id, trimmed, extras))) return true;
   if (verdict.action === "interruptRestart") return restartWith(id, text, extras);
@@ -2792,6 +2805,7 @@ export async function sendQueuedNow(id: string, queuedId: string): Promise<boole
     toast(QUEUE_REASON[verdict.reason]);
     return false;
   }
+  unsettleThreads([id], { quiet: true });
   if (verdict.action === "interruptRestart") {
     removeQueued(id, queuedId);
     return restartWith(id, item.text, item.extras ?? emptyExtras);
@@ -3015,7 +3029,8 @@ export async function runPrompt(
   // follows it, which on a fast harness is the whole rest of the turn's first frame.
   updateThread(id, (t) =>
     options.autoCompact
-      ? beginQuietTurn(t)
+      ? // The turn writes no rows, so "Compacting context…" is the one sign the thread is busy.
+        startCompaction(beginQuietTurn(t))
       : beginTurn(t, shown, Date.now(), sentAttachments(extras), options.fromView, options.wake, sent),
   );
   await afterPaint();
@@ -3391,12 +3406,18 @@ export async function refreshHarnesses(): Promise<HarnessSnapshot | null> {
   }
 }
 
-async function harnessCall(method: string, params: JsonObject): Promise<HarnessSnapshot | null> {
+/** `report: false` lets the caller word the failure itself, so no toast says it twice. */
+async function harnessCall(
+  method: string,
+  params: JsonObject,
+  report = true,
+): Promise<HarnessSnapshot | null> {
   try {
     const snapshot = parseHarnessSnapshot(await engine().request(method, params, 15_000));
     set({ harnesses: snapshot });
     return snapshot;
   } catch (error) {
+    if (!report) throw error;
     toast(errorText(error), "error");
     return null;
   }
@@ -3445,6 +3466,7 @@ export function accountSlug(name: string): string {
 /** The user picked an account for new threads on the current harness. */
 export function pickNewThreadAccount(account: string | null) {
   const harness = newThreadChoice(get())?.harness;
+  if (harness === CLAUDE_CODE) claudePlansStarted = true;
   set({ newThreadAccount: account });
   if (harness) storeAccount(harness, account);
   // The login picked may never have been read: its own meter numbers come now.
@@ -3457,6 +3479,7 @@ export function pickNewThreadAccount(account: string | null) {
  * model and effort it was last left on.
  */
 export function pickNewThreadAccountOn(harness: string, account: string) {
+  if (harness === CLAUDE_CODE) claudePlansStarted = true;
   storeAccount(harness, account);
   if (newThreadChoice(get())?.harness !== harness) switchNewThreadHarness(harness);
   set({ newThreadAccount: account });
@@ -3478,19 +3501,44 @@ export const removeHarnessAccount = (harness: string, id: string) =>
  * read). `readPlans` also re-reads the Claude plan rows, which a 3-second
  * wait for a sign-in does not need: that would force a Keychain read each time.
  */
-export async function checkHarnessAccounts(readPlans = true): Promise<HarnessSnapshot | null> {
-  const snapshot = await harnessCall(Method.harnessAccountCheck, {});
+export async function checkHarnessAccounts(
+  readPlans = true,
+  /** Harnesses detected again instead of read from the engine's last-minute detection. */
+  redetect: string[] = [],
+  /** False throws a failure instead of a toast. */
+  report = true,
+): Promise<HarnessSnapshot | null> {
+  const snapshot = await harnessCall(Method.harnessAccountCheck, { redetect }, report);
   // Claude Code signs in with its own credentials, which that snapshot does not
   // report (`auth_probe: None`), and its plan read pauses once it finds the
   // default login signed out or cannot read it (a denied Keychain prompt), so
   // neither asks again and again. An explicit check is the user asking to look
   // now: read the default login again, or it would stay as it was found after
   // signing in or out.
-  if (readPlans && claudeUsageAllowed()) void refreshPlanCache(true);
+  if (readPlans) void refreshPlanCache(true);
   return snapshot;
 }
 
 export const removeHarness = (id: string) => harnessCall(Method.harnessRemove, { id });
+
+/**
+ * Registers a custom ACP harness from a local command (`_rustcode/harnesses/set`): the command is
+ * launched directly, one argument per entry, never through a shell. Off until it is verified.
+ * Throws the engine's refusal so the form can show it.
+ */
+export async function addCustomHarness(request: {
+  id: string;
+  name: string;
+  command: string[];
+  env: Record<string, string>;
+}): Promise<void> {
+  await harnessCall(Method.harnessSet, { ...request, kind: "acp", enabled: false }, false);
+}
+
+/** Turns a verified custom harness on, or takes an unverified one out again; a failure throws. */
+export const enableCustomHarness = (id: string) =>
+  harnessCall(Method.harnessSet, { id, enabled: true }, false);
+export const discardCustomHarness = (id: string) => harnessCall(Method.harnessRemove, { id }, false);
 /**
  * The Settings default: it is also where a new thread starts, so a draft the new-thread screen
  * kept for the session is dropped once the engine took the change, or the new default would never
@@ -3511,8 +3559,13 @@ export const completeOnboarding = async () => {
 };
 
 /** "Test": ask the harness for its models. Throws the harness's error so the card can show it. */
-export async function fetchHarnessModels(id: string): Promise<void> {
-  const result = (await engine().request(Method.harnessModels, { harness: id }, 60_000)) as JsonObject | null;
+export async function fetchHarnessModels(id: string, refresh = false): Promise<number> {
+  // `refresh` starts the harness again even when its models are known: a Check.
+  const result = (await engine().request(
+    Method.harnessModels,
+    refresh ? { harness: id, refresh } : { harness: id },
+    60_000,
+  )) as JsonObject | null;
   const models = parseHarnessModels(result?.models as Json);
   set((s) =>
     s.harnesses
@@ -3527,7 +3580,9 @@ export async function fetchHarnessModels(id: string): Promise<void> {
       : s,
   );
   // The engine may have learned more (auth, version); take its snapshot too.
-  void refreshHarnesses();
+  if (refresh) await refreshHarnesses();
+  else void refreshHarnesses();
+  return models.length;
 }
 
 /** Model listings in flight (ensureHarnessModels), one per harness. */
@@ -3548,6 +3603,7 @@ export function ensureHarnessModels(id: string): Promise<void> {
   let asked = modelsAsked.get(id);
   if (!asked) {
     asked = fetchHarnessModels(id)
+      .then(() => undefined)
       .catch(() => undefined)
       .finally(() => modelsAsked.delete(id));
     modelsAsked.set(id, asked);
@@ -3687,6 +3743,7 @@ export function switchNewThreadHarness(harness: string) {
     // A harness with named accounts never starts on its own sign-in.
     newThreadAccount: newThreadAccountOn(next, remembered, get().signedOutLogins),
   });
+  if (harness === CLAUDE_CODE) claudePlansStarted = true;
   // Another harness means another login, whose meter may have no numbers yet.
   void refreshPlanCache();
 }
@@ -3725,6 +3782,7 @@ export async function switchThreadAccount(id: string, account: string | null): P
       "success",
     );
     void refreshPlanUsage(id);
+    if (harness === CLAUDE_CODE) claudePlansStarted = true;
     // The account switched to may never have been read: its meter numbers come now.
     void refreshPlanCache();
     return true;
@@ -3773,6 +3831,7 @@ export async function switchThreadHarness(
         x.id === id ? { ...x, harness, account: next?.account ?? account ?? undefined } : x,
       ),
     }));
+    if (harness === CLAUDE_CODE) claudePlansStarted = true;
     const opened = get().threads[id];
     if (opened && lacksModels(opened)) void ensureHarnessModels(harness);
     void refreshPlanUsage(id);
@@ -4141,8 +4200,23 @@ function settleAutoCompactNotice(id: string): void {
   if (!autoCompactPendingNotice.has(id)) return;
   autoCompactPendingNotice.delete(id);
   const before = autoCompactBefore.get(id);
-  if (autoCompactCardSeen.has(id) || !contextMoved(before, get().threads[id]?.usage)) return;
-  updateThread(id, (thread) => appendNotice(thread, "Compacted automatically."));
+  if (autoCompactCardSeen.has(id)) return;
+  // The usage never proved it moved: "Compacting context…" must not stay up for ever.
+  if (!contextMoved(before, get().threads[id]?.usage)) {
+    updateThread(id, (thread) => settleCompaction(thread, null));
+    return;
+  }
+  updateThread(id, (thread) => settleCompaction(thread, compactedNotice()));
+}
+
+/** The quiet row an automatic compaction leaves when its harness sent no card. */
+function compactedNotice() {
+  return {
+    kind: "notice",
+    id: localId("compaction"),
+    text: "Compacted automatically.",
+    tone: "info",
+  } as const;
 }
 
 function runAutoCompact(id: string): void {
@@ -4165,7 +4239,7 @@ function runAutoCompact(id: string): void {
         return;
       }
       if (contextMoved(before, get().threads[id]?.usage)) {
-        updateThread(id, (thread) => appendNotice(thread, "Compacted automatically."));
+        updateThread(id, (thread) => settleCompaction(thread, compactedNotice()));
         return;
       }
       // The harness may send its usage just after the prompt returns: wait for
@@ -4353,12 +4427,17 @@ export function settleThread(id: string): void {
  * Unsettles the settled threads among `ids` (the sidebar's selection bar and
  * the selection's menu): a Review mark on the others stays Review. Quiet on
  * purpose — the toast confirms the change and offers no Undo.
+ *
+ * `quiet` is for a message sent to a settled thread: it moves back to the
+ * active list because the user wrote to it, not because they asked to unsettle
+ * anything, so the send says nothing about it.
  */
-export function unsettleThreads(ids: string[]): void {
+export function unsettleThreads(ids: string[], options: { quiet?: boolean } = {}): void {
   const state = get();
-  const settled = ids.filter((id) => statusOf(state, id) === "done");
+  const settled = ids.filter((id) => (state.statusMarks[id] ?? sessionById(state, id)?.status) === "done");
   if (!settled.length) return;
   void setThreadsStatus(settled, "idle");
+  if (options.quiet) return;
   toast(settled.length === 1 ? "Unsettled" : `Unsettled ${settled.length} threads`, "info");
 }
 
@@ -5038,39 +5117,8 @@ let plansQueued: PlansAsk[] = [];
  */
 let planPauses: PlanPauses = NO_PAUSES;
 
-/** The consent Settings › Usage keeps before Claude's sign-in is read from the Keychain. */
-export const CLAUDE_USAGE_KEY = "rustcode.claudeUsage";
-
-/** Off until the user says yes: reading the Keychain is theirs to allow. */
-export const CLAUDE_USAGE_DEFAULT = false;
-
-export function claudeUsageAllowed(): boolean {
-  const raw = stored(CLAUDE_USAGE_KEY);
-  return raw === null ? CLAUDE_USAGE_DEFAULT : raw === "1";
-}
-
-/**
- * Turns that consent on or off. Off forgets the numbers it read: the composer
- * must not keep showing a plan the user asked the app to stop reading.
- */
-export function setClaudeUsageAllowed(on: boolean): void {
-  store(CLAUDE_USAGE_KEY, on ? "1" : "0");
-  planPauses = NO_PAUSES;
-  if (on) return;
-  // Nothing waiting may read a login after the switch went off.
-  plansQueued = [];
-  // Every Claude login, the default one and each account's own row.
-  setPlanCache(
-    Object.fromEntries(Object.entries(get().planCache).filter(([key]) => !key.startsWith("claude-code"))),
-  );
-  // What a read found about a login is only kept while it is read: with the
-  // meter off nothing would clear it after the user signed in again.
-  set({
-    signedOutLogins: Object.fromEntries(
-      Object.entries(get().signedOutLogins).filter(([key]) => !key.startsWith("claude-code")),
-    ),
-  });
-}
+// Start Claude reads only after an explicit look or use of a Claude account.
+let claudePlansStarted = false;
 
 /**
  * Folds a plans answer into the cache: a signed-in harness's windows go in, one
@@ -5081,10 +5129,10 @@ export function setClaudeUsageAllowed(on: boolean): void {
  * what unpauses them.
  */
 export function commitPlansAnswer(answers: UsagePlan[], asked = false): void {
-  // A read already in flight when the switch went off still answers Claude's
-  // rows; nothing may put them back while the meter is off.
-  if (!claudeUsageAllowed()) answers = answers.filter((p) => planOf(p) !== CLAUDE_CODE);
-  if (asked) planPauses = NO_PAUSES;
+  if (asked) {
+    claudePlansStarted = true;
+    planPauses = NO_PAUSES;
+  }
   const gone = answers.filter((p) => p.status === "signedOut" || p.status === "notInstalled").map(planKey);
   const kept = forgetPlans(get().planCache, gone);
   const learned = plansToCache(answers);
@@ -5100,13 +5148,14 @@ export function commitPlansAnswer(answers: UsagePlan[], asked = false): void {
 
 /**
  * What a refresh asks the engine for: the default login and the account of the
- * thread on screen, each only with consent and while it was not paused.
+ * thread on screen, after first use and while it was not paused.
  */
 function currentPlansAsk(explicit: boolean): PlansAsk {
   const s = get();
   const threadId = s.selectedId ?? undefined;
+  if (explicit) claudePlansStarted = true;
   return plansAskFor({
-    allowed: claudeUsageAllowed(),
+    allowed: claudePlansStarted,
     harness: harnessOf(s, threadId),
     account: accountOn(s, threadId),
     pauses: planPauses,
@@ -5116,8 +5165,7 @@ function currentPlansAsk(explicit: boolean): PlansAsk {
 
 /**
  * Asks for every subscription's plan (`_rustcode/usage/plans`, no thread
- * needed) and folds the answer into the cache. Claude is asked for only with
- * consent: the default login, and the account of the thread on screen so its
+ * needed) and folds the answer into the cache. Claude is asked for after first use: the default login, and the account of the thread on screen so its
  * meter has numbers without a visit to Settings › Usage, one Keychain item at a
  * time. One request at a time: anything asked for while one is in flight runs
  * after it, coalesced, so a hover during the poll is not dropped. A failed one
@@ -5264,6 +5312,7 @@ function stopPlanPolling() {
   planResetTimer = null;
   planResetDue = 0;
   planPauses = NO_PAUSES;
+  claudePlansStarted = false;
   if (plansOnVisible) document.removeEventListener("visibilitychange", plansOnVisible);
   plansOnVisible = null;
   plansInFlight = null;

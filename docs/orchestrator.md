@@ -272,7 +272,7 @@ timed out leaves the worktree mid-state, so inspect it before rerunning.
 Rules (enforced by the client, as M1): same project unless `project` is given
 and the user approves it, or `all_projects` reads it (see the v3 note below);
 at most 8 delegates working for one thread at once by default, set to 2 to 32
-in Settings › Agents, and at most 16 delegates running at once across this app
+in Settings › Harnesses, and at most 16 delegates running at once across this app
 instance, set to 2 to 64 (a `busy` refusal names the limit it hit and the
 current count, says `links_left` and that `wait_session` on one comes first).
 The CLI and TUI start no delegates, so the total is one app's own. A message
@@ -588,7 +588,7 @@ checkout and every worktree of it, resolved by the engine from the folder
 in a worktree reaches the repository's other threads and its own worktree
 delegates; a thread it started itself is reachable wherever it runs. Reads — `list_sessions`, `search_sessions`, `read_session`,
 `list_worktrees`, `list_projects` — reach any project while **Let agents read
-threads in other projects** is on (Settings › Agents, on by default;
+threads in other projects** is on (Settings › Harnesses, on by default;
 `rustcode.readAcrossProjects`). With it off, an `all_projects: true` call and a
 `read_session` of another project's thread answer `not_allowed`. An
 `all_projects` answer names each thread's `project` path, so two threads with
@@ -611,8 +611,7 @@ sits on the harness entry for its own login (what a thread runs on with no
 `account`) and on each named account for that account's own numbers — two
 logins never share them. `as_of` and `resets_at` are ISO 8601 UTC times, and
 `as_of` is when the numbers were read (for numbers RustCode recorded before a
-login's access token lapsed, when that read was). `status` is `ok`, or
-`not_enabled` while the user keeps Claude usage reading off in Settings › Usage;
+login's access token lapsed, when that read was). `status` is `ok`;
 a login nothing was read for yet carries no `usage` at all, and a window whose
 reset passed since the read is reported as nothing used with no reset time, the
 way the composer's meter draws it (a read can be older than the window it
@@ -712,7 +711,11 @@ v5 set and `PROMPT_HINT_V5`.
 
 | Tool | Args | Answer | Approval |
 | --- | --- | --- | --- |
-| `read_activity` | `{ session_id, after?, limit? }` — `limit` 1..200 (default 50); `after` is the opaque `next` token an earlier page returned | `{ session_id, items, next, has_more }`: `operational_events`, provider attempts and harness messages merged in time order, oldest first, with `source` on each item and no payload columns. `next` encodes the last item's `(at, source, row id)` | None |
+| `read_activity` | `{ session_id, after?, limit?, order? }` — `limit` 1..200 (default 50); `order` is `oldest` (default) or `newest`; pass `next` as `after` with the same order | `{ session_id, items, next, has_more, last_provider_error }`: operational events, provider attempts and harness messages merged in time order, with `source` on each item and no payload columns. `next` encodes the last item's `(at, source, row id)` | None |
+
+Provider attempt details are recorded for the built-in harness. External harnesses
+make their own provider requests; their errors are available only when the harness
+reports them to RustCode.
 
 The app gates it like `read_session`'s reach — any project while **Let agents
 read threads in other projects** is on, this project's threads otherwise, and
@@ -784,7 +787,7 @@ out, and a v8 app has neither the code nor the engine methods.
 
 | Tool | Args | Answer | Approval |
 | --- | --- | --- | --- |
-| `thread_status` | `{ session_id? }` — omit for every delegate this thread started or messaged; at most 12 are reported (`omitted_delegates` says how many more) | `{ delegates: [{ session_id, title, status, project, worktree? { path, branch }, branch?, pull, error? }], omitted_delegates?, note? }`, newest first. `pull` is `{ number, title, state, merged, draft, url?, branch, head_sha, ci, failing, pending, passed }`: `state` is `open`, `closed` or `merged`, `ci` is `none`, `passing`, `pending` or `failing` (advisory portability jobs excluded, like the merge), and `failing` names the checks that failed. `pull: null` means no pull request for the thread's branch; an unreadable one carries `error: { code, message }` on that delegate and not on the others, and all delegates are read concurrently | None: it asks nothing; a read of this project's threads, like `read_session` |
+| `thread_status` | `{ session_id? }` — omit for every delegate this thread started or messaged; at most 12 are reported (`omitted_delegates` says how many more) | `{ delegates: [{ session_id, title, status, project, idle_ms?, last_provider_error?, worktree? { path, branch }, branch?, pull, error? }], omitted_delegates?, note? }`, newest first. `pull` is `{ number, title, state, merged, draft, url?, branch, head_sha, ci, failing, pending, passed }`: `state` is `open`, `closed` or `merged`, `ci` is `none`, `passing`, `pending` or `failing` (advisory portability jobs excluded, like the merge), and `failing` names the checks that failed. `pull: null` means no pull request for the thread's branch; an unreadable one carries `error: { code, message }` on that delegate and not on the others, and all delegates are read concurrently | None: it asks nothing; a read of this project's threads, like `read_session` |
 | `merge_when_green` | `{ session_id, timeout_ms? }` — the wait defaults to and is at most 25 minutes (a longer value is cut to it), 75 rounds of 20 s | `{ session_id, number, state, merged, url?, failing?, waited_secs, detail }`; `state` is `merged`, `failing` (with the names), `closed`, `no_checks` (there is nothing to wait for, returned after two empty rounds) or `pending` (still waiting when the time ran out) | Asked, allowed by Full access, grant `merge:<session id>:<PR number>` (a new PR asks again) |
 | `cleanup_worktree` | `{ session_id, settle? }` — `settle` is true by default | `{ session_id, removed: true, branch, branch_removed, recorded_branch?, recorded_branch_removed?, settled? }`. A refusal is `conflict`, with the reason (`dirty`, `unmerged`, `ignored_files`, `branch_changed`, `protected_branch`, `no_base` or `not_managed`) and, for unmerged commits, their subjects; `branch_changed` also names the merged-pull-request check that failed (no pull request for the branch, one that is not merged, a dirty tree, or commits not in its head). `unknown` means git could not answer and is an `unavailable` failure | Asked, allowed by Full access, grant `cleanup:<session id>` |
 

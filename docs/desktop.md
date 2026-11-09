@@ -205,16 +205,27 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   Claude Code (`PREFERRED_HARNESS`) is listed first and suggested on a
   first run, and the built-in harness is listed last as the *Local*
   harness, kept for the TUI, testing and local models.
-- **Settings › Agents.** Every harness is detected again (installed, signed in, version) each time the page opens, and on *Refresh*. *New threads start on* comes first and saves as
+- **Settings › Harnesses.** Every harness is detected again (installed, signed in, version, each account's sign-in) when the page opens and whenever the window regains focus (`useAutoDetect`, at most once in three seconds); no start of a harness is involved. *New threads start on* comes first and saves as
   it changes (no Save button); picking an external harness lists its
-  models at once (`ensureHarnessModels`). Under it, *Coding agents*: one
+  models at once (`ensureHarnessModels`). Under it, *Harnesses*: one
   card per harness with its mark, status and version, *Sign in* only until
-  the harness is known to be signed in, *Check* (lists the models, the
-  cheapest proof it runs) and the on/off switch; turning a harness on
-  checks it. The command and what it supports fold under *Details*. On a card whose
-  harness has named logins (Claude Code, Codex), *Accounts* opens with one real
-  sign-in check and lists each named login (its own `CLAUDE_CONFIG_DIR` or
-  `CODEX_HOME`) as *Signed in*, *Not signed in* or *Not checked*, with a remove
+  the harness is known to be signed in, one *Check* and the on/off switch;
+  turning a harness on checks it. *Check* (`state/harnessChecks.ts`) detects
+  the install again, reads every account's sign-in, then starts the harness
+  to list its models, and always ends in one of *Ready*, *Needs sign-in*, *Not
+  installed* or an error with the harness's own text (`state/harnessCheck.ts`);
+  it never leaves *Installed* or *Not checked* behind. The group has *Check
+  all* and *Add harness*; no Refresh sits beside them. *Add harness* opens the
+  *Local ACP command* form (`ui/AddHarness.tsx`, rules in
+  `state/harnessForm.ts`): a name, an executable, one literal argument per row
+  and environment rows. The command is started directly, never through a
+  shell. It is added turned off, checked (the ACP handshake and a model list),
+  and turned on only if that worked; a failure shows the error text in the form
+  and removes it again. A verified one lists under *Added by you*, appears in
+  the model picker like any other harness, and has *Remove* under *Details*.
+  RustCode searches no ACP registry. The command and what it supports fold under *Details*. On a card whose
+  harness has named logins (Claude Code, Codex), *Accounts* lists each named login (its own `CLAUDE_CONFIG_DIR` or
+  `CODEX_HOME`) as *Signed in*, *Not signed in* or *Unknown*, with a remove
   that says the directory stays on disk. *Add account* asks only for a name and
   its *Add and sign in* creates `~/.claude-<id>` (or `~/.codex-<id>`) and runs
   the harness's own login in Terminal under it; the row says *Waiting for
@@ -384,7 +395,14 @@ composer's keys stay outside the table.
   (`_rustcode/pulls`), shows one (`/view`: description, checks, files,
   activity) and posts a review you write (`/review`: comment, approve or
   request changes, at the head commit). "Ask the agent to review" starts a
-  thread draft naming the commit.
+  thread draft naming the commit. Each `gh` read is a process, so the answers
+  live in one store (`state/pullQueries.ts`) shared by the panel, the sidebar and
+  the review view: a list, a detail or a diff the app already holds paints at
+  once and is read again behind, and the lists and details are saved on the
+  device (8 projects, 40 details, a week) so a reload paints them too. A row
+  the pointer or the keyboard rests on for 150 ms reads its detail — the same
+  read the click makes, so nothing is wasted — and the review view's pull
+  segment reads that pull's diff the same way.
 - **Settings › Usage.** Every subscription this machine is signed in to, with
   no thread open: `_rustcode/usage/plans` (engine `acp/usage.rs`) answers
   `{plans: [{id, name, via, status, plan?, error?, reason?, windows}]}`. ChatGPT
@@ -396,9 +414,8 @@ composer's keys stay outside the table.
   path's SHA-256 for a named account — and `<config dir>/.credentials.json`,
   the copy with the freshest token winning) against
   `api.anthropic.com/api/oauth/usage` (5-hour, weekly, weekly per model),
-  read-only and never refreshed (`provider_auth/claude_usage.rs`). Claude is
-  read only after the user
-  presses **Show** once (`rustcode.claudeUsage`), since macOS may ask to
+  read-only and never refreshed (`provider_auth/claude_usage.rs`). The first
+  read happens when Usage opens or a Claude account is used; macOS may ask to
   allow Keychain access. Each source is cached a minute. Showing the page is an
   explicit look and reads every Claude login; the background reads one at a
   time, the default login and the account of the thread on screen
@@ -418,8 +435,7 @@ composer's keys stay outside the table.
   past the engine's minute of cache. What the page reads fills the same cache
   `list_harnesses` reports to an agent (`state/harnessUsage.ts`,
   `docs/orchestrator.md`), which answers without a Keychain read or a request of
-  its own and refreshes the stale named logins in the background. With Claude's
-  switch off, an answer that was already in flight commits no Claude row.
+  its own and refreshes the stale named logins in the background.
   A Claude access token lives hours and is renewed only when Claude Code runs,
   so a login nobody ran a thread on since reads as lapsed. The row then draws
   the numbers RustCode last read for that login, from `claude-usage.json` in
@@ -437,9 +453,8 @@ composer's keys stay outside the table.
   to the page, and the background poll picks it up within its three minutes. A
   `forbidden` login is not retried on its own (renewing does not fix it), nor is
   a `denied` one (that would only prompt again); Settings › Usage, Refresh and
-  Check in Settings › Agents read them again, and Refresh always forces. With
-  Claude's switch off the page asks for no Claude login at all, so even a forced
-  Refresh reads no Keychain item. Reads of one login are serialized in the
+  Check in Settings › Harnesses read them again, and Refresh always forces. Reads
+  of one login are serialized in the
   engine (`provider_auth/claude_usage.rs`), and a forced read whose login was
   read after the user asked shares that answer instead of asking macOS again. A
   Keychain refusal is remembered while the engine runs: the background reads
@@ -491,9 +506,9 @@ composer's keys stay outside the table.
   and Tauri versions, the web view (WKWebView, WebView2, WebKitGTK) and its
   version, the GPU WebGL names, display scale, `data-platform` and the
   environment that changes how WebKitGTK composites. *Harnesses*: what
-  Agents last detected, with the binary this app's `PATH` resolves. *Open
-  thread log* opens the open thread's `logs/debug.log` (also in every
-  thread's menu); the shell finds the folder with `rustcode threads path`.
+  Settings › Harnesses last detected, with the binary this app's `PATH`
+  resolves. *Open thread log* opens the open thread's `logs/debug.log` (also
+  in every thread's menu); the shell finds the folder with `rustcode threads path`.
   *Copy debug report* puts all of it, the last 200 log lines and the last 50
   `operational_events` in one Markdown block for a GitHub issue, with
   tokens, API keys, email addresses and the home folder (`~`) taken out
@@ -702,10 +717,13 @@ composer's keys stay outside the table.
   parent's, folded away when the user moves on, and a search result that is a
   delegate says `in <parent title>`. The chat's agent and thread group cards
   show the same stack.
-  The toolbar's row carries Hide sidebar, New thread, Settings and, when
-  the project has them, Pull requests, clear of the traffic lights; the
-  header's cluster holds Show sidebar, New thread and Settings while the
-  sidebar is hidden. Settled alone sits at the foot, above the update row;
+  The toolbar's row carries Hide sidebar alone, clear of the traffic lights;
+  under it Add project and New thread, and a foot row Settings, Pull requests
+  (when the project has them) and Usage; the header's cluster holds Show
+  sidebar and Settings while the sidebar is hidden. There is no search or
+  filter in the sidebar: ⌘K finds threads (by title, project, branch, pull
+  request and what was said) and holds the view options. Working, Snoozed
+  and Settled are shelves at the foot of the list, each folding on its own;
   the project is chosen per thread in the composer's footer.
 - **Title bar.** The sidebar's and header's buttons sit on the traffic
   lights' line, 14 px past the zoom button (x 92; the button ends at x 78),
@@ -726,7 +744,9 @@ composer's keys stay outside the table.
   panel toggles (details, changes) always draw after the rest, in their kept
   order, so the panel's control is the header's last, rightmost one. The order
   is kept as `rustcode.headerButtons` (`{shown, known}`), so a button added
-  in a later release shows by default.
+  in a later release shows by default. Pull requests is hidden on a fresh
+  install and after Reset (the sidebar's foot row holds it); a saved layout
+  that shows it keeps it.
 - **Settings** takes the whole window: the shell (sidebar, chat, right
   panel) stays mounted and laid out underneath, hidden and `inert`, so the
   thread comes back exactly where it was (scroll, drafts, open rows). A
@@ -892,7 +912,7 @@ composer's keys stay outside the table.
 - **Threads working for threads** ([orchestrator.md](orchestrator.md),
   M1 rules from
   [cross-session-orchestration.md](architecture/cross-session-orchestration.md)).
-  On by default (Settings › Agents turns it off). The app answers `_rustcode/orchestration`
+  On by default (Settings › Harnesses turns it off). The app answers `_rustcode/orchestration`
   (`src/state/host.ts`, rules in `src/state/orchestration.ts`):
   `list_sessions`, `read_session`, `message_session`, `wait_session`,
   `start_session` and `fan_out`. Same project only — the repository, so a main
@@ -944,7 +964,7 @@ composer's keys stay outside the table.
   the engine's reason (uncommitted changes, unpushed commits).
 - **Status and Board.** Running, Needs input, Review and Settled chips on rows
   and in the chat header (a menu marks Review or Settled). *Board* (the
-  sidebar's filter menu, or ⌘K) shows those four columns; drag a card to
+  ⌘K) shows those four columns; drag a card to
   Review or Settled.
   Marks go to `_rustcode/session/status`; on an engine without it the app
   keeps them itself. `_meta.rustcode.status` from the engine (a merged

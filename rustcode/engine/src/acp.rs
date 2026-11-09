@@ -1733,7 +1733,7 @@ fn start_pull_watching(clients: &clients::Clients) {
     });
 }
 
-/// The user started writing a message: start the deferred MCP servers now,
+/// The user started writing a message: wait for background MCP startup,
 /// so the turn the message starts does not wait for them. Answers at once;
 /// the servers start in the background, once.
 #[derive(
@@ -1956,9 +1956,9 @@ impl AcpEngine {
     /// Warm what every connection reads and start the engine's own tasks.
     pub fn start(auto_approve: bool) -> Result<Self, agent_client_protocol::Error> {
         let startup_state = crate::app::AppState::new();
-        // Servers start on the session's first turn, not here: the app attaches
-        // an engine for chats that may never run one (#2503).
+        // Connect in the background so a slow server cannot hold up startup.
         crate::mcp::defer_enabled_servers(&startup_state.config.mcp_servers);
+        tokio::spawn(crate::mcp::start_deferred_servers());
         // The thread above each delegated one, recorded once for threads older than
         // the record, before the first session list is read (`thread_parent.rs`).
         // After that first run it reads one `store_meta` row and returns.
@@ -2709,9 +2709,9 @@ async fn serve_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |_request: harnesses::CheckHarnessAccountsRequest, responder, connection| {
+            async move |request: harnesses::CheckHarnessAccountsRequest, responder, connection| {
                 connection.spawn(async move {
-                    match harnesses::check_accounts().await {
+                    match harnesses::check_accounts(request).await {
                         Ok(value) => responder.respond(value)?,
                         Err(error) => responder.respond_with_error(error)?,
                     }
@@ -6358,10 +6358,7 @@ mod tests {
             .await
             .expect("a's client")
             .expect("a's client ends cleanly");
-        a_serving
-            .await
-            .expect("a's connection")
-            .expect("a's connection ends cleanly");
+        ends_with_its_client(a_serving.await.expect("a's connection"), "a");
         assert_eq!(server.clients.count(), 0);
         assert!(
             server.clients.turn_running(&session_id),
@@ -6427,10 +6424,7 @@ mod tests {
             .await
             .expect("b's client")
             .expect("b's client ends cleanly");
-        b_serving
-            .await
-            .expect("b's connection")
-            .expect("b's connection ends cleanly");
+        ends_with_its_client(b_serving.await.expect("b's connection"), "b");
         server.shutdown().await;
     }
 

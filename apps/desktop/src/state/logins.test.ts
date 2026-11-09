@@ -90,7 +90,6 @@ describe("signed out logins", () => {
     // is not a reason to offer the harness's own sign-in again.
     const rows = usageRows([denied, plan({ id: "claude:work", account: "work" })]);
     expect(rows.plans.map((p) => p.id)).toEqual(["claude:work"]);
-    expect(rows.switchIn).toBe("claude:work");
     expect(newThreadAccountOn(claude([account("work")]), null)).toBe("work");
   });
 
@@ -293,20 +292,16 @@ describe("Settings › Usage groups", () => {
       plan({ id: "codex", name: "ChatGPT", harness: "codex", via: "Codex CLI" }),
     ]);
     expect(rows.plans.map((p) => p.id)).toEqual(["claude:work", "codex"]);
-    // The switch that lived in the dropped group moves to the first Claude group left.
-    expect(rows.switchIn).toBe("claude:work");
   });
 
   test("keeps the signed-out default login when it is the only Claude login", () => {
     const rows = usageRows([plan({ status: "signedOut" })]);
     expect(rows.plans.map((p) => p.id)).toEqual(["claude"]);
-    expect(rows.switchIn).toBe("claude");
   });
 
   test("drops it even when it is signed in, once named accounts are there", () => {
     const rows = usageRows([plan({ status: "ok" }), plan({ id: "claude:work", account: "work" })]);
     expect(rows.plans.map((p) => p.id)).toEqual(["claude:work"]);
-    expect(rows.switchIn).toBe("claude:work");
   });
 
   test("drops it whether or not it was read, while named accounts are there", () => {
@@ -317,28 +312,14 @@ describe("Settings › Usage groups", () => {
   test("keeps the own-login row while the thread on screen runs on it", () => {
     const rows = usageRows([plan({ status: "ok" }), plan({ id: "claude:work", account: "work" })], true);
     expect(rows.plans.map((p) => p.id)).toEqual(["claude", "claude:work"]);
-    expect(rows.switchIn).toBe("claude");
   });
 
   test("draws only the accounts an answer read", () => {
-    // One account at a time: the page's rows are what came back, and the
-    // switch lands in the first Claude group that is there.
+    // One account at a time: the page's rows are what came back.
     const rows = usageRows([plan({ id: "claude:work", account: "work" })]);
     expect(rows.plans.map((p) => p.id)).toEqual(["claude:work"]);
-    expect(rows.switchIn).toBe("claude:work");
     // A row the answer skipped is not reported as signed out, so nothing is dropped.
     expect(rows.plans).toHaveLength(1);
-  });
-
-  test("draws the switch once, in the first remaining Claude group", () => {
-    const rows = usageRows([
-      plan({ id: "codex", name: "ChatGPT", harness: "codex" }),
-      plan({ status: "signedOut" }),
-      plan({ id: "claude:work", account: "work" }),
-      plan({ id: "claude:home", account: "home" }),
-    ]);
-    expect(rows.switchIn).toBe("claude:work");
-    expect(rows.plans.filter((p) => p.id === rows.switchIn)).toHaveLength(1);
   });
 });
 

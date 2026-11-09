@@ -106,7 +106,6 @@ import {
   sendQueuedNow,
   setActiveTheme,
   setArchived,
-  setClaudeUsageAllowed,
   setConfigOption,
   setDefaultCwd,
   setDefaultHarness,
@@ -926,22 +925,10 @@ describe("engine controller with the mock engine", () => {
         (await answerOrchestration({ sessionId: caller, tool: "list_harnesses", args: {} }))
           .harnesses as Listed[];
       useApp.setState({ planCache: {} });
-      // Reading Claude's sign-in is the user's to allow: off, its logins say
-      // so instead of looking like accounts with nothing used.
       let harnesses = await listed();
-      expect(harnesses.find((h) => h.id === "claude-code")?.usage).toEqual({
-        status: "not_enabled",
-        windows: [],
-      });
-      expect(harnesses.find((h) => h.id === "claude-code")?.accounts?.[0]?.usage).toEqual({
-        status: "not_enabled",
-        windows: [],
-      });
-      // A login nothing was read for yet carries no usage at all.
+      expect(harnesses.find((h) => h.id === "claude-code")?.usage).toBeUndefined();
       expect(harnesses.find((h) => h.id === "rustcode")?.usage).toBeUndefined();
 
-      // Allowed, the numbers the cache holds come out as an agent reads them.
-      setClaudeUsageAllowed(true);
       const fetchedAt = Date.now();
       const resetsAt = fetchedAt + 4 * 3_600_000;
       const entry = (usedPercent: number, account: string | null): CachedPlan => ({
@@ -976,7 +963,6 @@ describe("engine controller with the mock engine", () => {
         windows: [{ label: "5-hour", used_percent: 71 }],
       });
     } finally {
-      setClaudeUsageAllowed(false);
       storage.done();
     }
   });
@@ -996,7 +982,6 @@ describe("engine controller with the mock engine", () => {
       };
       await connect(transport);
       await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
-      setClaudeUsageAllowed(true);
       const stale = Date.now() - PLAN_CACHE_POLL_MS - 1_000;
       const entry = (account: string | null, fetchedAt: number, usedPercent: number): CachedPlan => ({
         source: "claude-code",
@@ -1055,7 +1040,27 @@ describe("engine controller with the mock engine", () => {
       // The paused login was never asked for.
       expect(asked.some((p) => p.claudeAccount === "paused")).toBe(false);
     } finally {
-      setClaudeUsageAllowed(false);
+      storage.done();
+    }
+  });
+
+  test("startup does not read Claude until a user opens Usage or selects it", async () => {
+    resetForTests();
+    const storage = testStorage();
+    try {
+      const transport = new MockTransport({ delayMs: 0 });
+      const asks: { claude?: boolean }[] = [];
+      const send = transport.send.bind(transport);
+      transport.send = (line: string) => {
+        if (line.includes("_rustcode/usage/plans")) asks.push(JSON.parse(line).params);
+        return send(line);
+      };
+      await connect(transport);
+      await until(() => useApp.getState().status === "ready" && asks.length > 0);
+      expect(asks.every((ask) => !ask.claude)).toBe(true);
+      commitPlansAnswer([], true);
+      expect(backgroundPlansAsk().claude).toBe(true);
+    } finally {
       storage.done();
     }
   });
@@ -1065,12 +1070,11 @@ describe("engine controller with the mock engine", () => {
     try {
       await connect(new MockTransport({ delayMs: 0 }));
       await until(() => useApp.getState().status === "ready");
-      // Consent off: the page's tick reads no Keychain item at all.
-      expect(backgroundPlansAsk()).toEqual({ claude: false });
-      setClaudeUsageAllowed(true);
       // Consent on, nothing paused: the default login and whatever account the
       // thread on screen runs on — never `claudeAccounts`, which is the page's
       // explicit look and can read a login nobody asked about.
+      // Opening Usage enables the subsequent background reads.
+      commitPlansAnswer([], true);
       expect(backgroundPlansAsk()).toMatchObject({ claude: true });
       expect(backgroundPlansAsk().force).toBeUndefined();
       // A denied Keychain read pauses that login, and the tick follows it.
@@ -1087,7 +1091,6 @@ describe("engine controller with the mock engine", () => {
       ]);
       expect(backgroundPlansAsk()).toEqual({ claude: false });
     } finally {
-      setClaudeUsageAllowed(false);
       storage.done();
     }
   });
@@ -1290,7 +1293,7 @@ describe("engine controller with the mock engine", () => {
     await connect(new MockTransport({ delayMs: 0 }));
     await until(() => useApp.getState().features.themes === true);
     const names = useApp.getState().themes?.themes.map((t) => t.name);
-    expect(names).toEqual(["rustcode", "light", "graphite"]);
+    expect(names).toEqual(["rustcode", "oled", "light", "graphite"]);
     await setActiveTheme("light");
     expect(useApp.getState().themeActive).toBe("light");
     expect(useApp.getState().theme).toBe("light");
@@ -1638,6 +1641,56 @@ describe("engine controller with the mock engine", () => {
     useApp.setState({ links: { ...emptyBook(), links: [link], counters: { [parent]: 1 } } });
     return { parent, target, transport };
   };
+
+  test("thread status reports a running delegate's idle time and provider failure", async () => {
+    const { parent, target, transport } = await stagedMerge();
+    await openThread(target);
+    const at = Date.now() - 5000;
+    updateThread(target, (thread) => ({
+      ...thread,
+      running: true,
+      items: [{ kind: "notice", id: "last-activity", at, text: "Working", tone: "info" }],
+    }));
+    const answer = await answerOrchestration({
+      sessionId: parent,
+      tool: "thread_status",
+      args: { session_id: target },
+    });
+    const delegate = (answer.delegates as JsonObject[])[0]!;
+    expect(delegate.idle_ms).toBeGreaterThanOrEqual(5000);
+    expect(delegate.last_provider_error).toMatchObject({ status_code: 429, error_kind: "rate_limit" });
+    expect(transport.asked(Method.dataActivity)[0]?.params).toMatchObject({
+      sessionId: target,
+      order: "newest",
+    });
+    updateThread(target, (thread) => ({
+      ...thread,
+      items: [
+        { kind: "notice", id: "older-activity", at: Date.now() - 120_000, text: "Working", tone: "info" },
+      ],
+    }));
+    const updated = await answerOrchestration({
+      sessionId: parent,
+      tool: "thread_status",
+      args: { session_id: target },
+    });
+    expect((updated.delegates as JsonObject[])[0]!.idle_ms).toBeLessThan(90_000);
+  });
+
+  test("read_activity forwards newest order to the data store", async () => {
+    const { parent, target, transport } = await stagedMerge();
+    const answer = await answerOrchestration({
+      sessionId: parent,
+      tool: "read_activity",
+      args: { session_id: target, order: "newest", limit: 2 },
+    });
+    expect(answer.error).toBeUndefined();
+    expect(transport.asked(Method.dataActivity)[0]?.params).toMatchObject({
+      sessionId: target,
+      order: "newest",
+      limit: 2,
+    });
+  });
 
   test("a merge whose call is dropped while it waits for the approval never merges", async () => {
     const { parent, target, transport } = await stagedMerge();
@@ -2296,6 +2349,81 @@ describe("engine controller with the mock engine", () => {
     await setThreadStatus(id, "idle");
     expect(statusOf(useApp.getState(), id)).toBe("idle");
     expect(statusOf(useApp.getState(), "mock-thread-4")).toBe("review");
+  });
+
+  test("sending in a settled thread unsettles it without a toast", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().features.status === true);
+    const id = useApp.getState().sessions[0]!.id;
+    await setThreadStatus(id, "done");
+    selectThread(id);
+    await until(() => !!useApp.getState().threads[id]?.loaded);
+    expect(statusOf(useApp.getState(), id)).toBe("done");
+    await submit("yolo hello");
+    // Writing to it puts it back on the active list, and that is all the send has to say.
+    expect(useApp.getState().statusMarks[id]).toBeUndefined();
+    expect(useApp.getState().sessions.find((s) => s.id === id)?.status).toBe("idle");
+    expect(useApp.getState().toasts.map((t) => t.text)).not.toContain("Unsettled");
+    await until(() => useApp.getState().sessions.find((s) => s.id === id)?.status === "idle");
+    await refreshSessions();
+    expect(useApp.getState().sessions.find((s) => s.id === id)?.status).toBe("idle");
+  });
+
+  test("a queued, steered or Send now message unsettles a settled thread quietly", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().features.status === true);
+    setProjectCwd("/tmp/project");
+    // Codex in the mock steers live, so a busy thread takes both a queue and a steer.
+    switchNewThreadHarness("codex");
+    const done = submit("change the greeting");
+    await until(() => (selected()?.permissions.length ?? 0) > 0);
+    const id = selected()!.id;
+    const unsettleToasts = () =>
+      useApp
+        .getState()
+        .toasts.filter((t) => t.text.startsWith("Unsettled"))
+        .map((t) => t.text);
+    // A thread on screen reports its live turn first, so the mark is what says it is unsettled.
+    const settledAgain = async () => {
+      await setThreadStatus(id, "done");
+      expect(useApp.getState().statusMarks[id]).toBe("done");
+    };
+    const active = () => {
+      const s = useApp.getState();
+      return [s.statusMarks[id], s.sessions.find((x) => x.id === id)?.status];
+    };
+
+    // Queued behind the running turn (the send path that only waits).
+    await settledAgain();
+    expect(await submit("yolo queued")).toBe(true);
+    expect(active()).toEqual([undefined, "idle"]);
+    expect(unsettleToasts()).toEqual([]);
+    expect(selected()!.queue.map((q) => q.text)).toEqual(["yolo queued"]);
+
+    // Steered into the running turn (⌘⏎'s own route).
+    await settledAgain();
+    expect(await steerOrSubmit("steer this")).toBe(true);
+    expect(active()).toEqual([undefined, "idle"]);
+    expect(unsettleToasts()).toEqual([]);
+    expect(selected()!.items.flatMap((i) => (i.kind === "user" && i.steered ? [i.text] : []))).toEqual([
+      "steer this",
+    ]);
+
+    // The queued row's Send now, which steers it without going through either route.
+    await settledAgain();
+    expect(await sendQueuedNow(id, selected()!.queue[0]!.id)).toBe(true);
+    expect(active()).toEqual([undefined, "idle"]);
+    expect(unsettleToasts()).toEqual([]);
+    expect(selected()!.queue).toEqual([]);
+
+    // The explicit Unsettle action is the user asking, so it still says so.
+    await settledAgain();
+    unsettleThreads([id]);
+    expect(active()).toEqual([undefined, "idle"]);
+    expect(useApp.getState().toasts.at(-1)).toMatchObject({ text: "Unsettled", tone: "info" });
+
+    await cancel();
+    await done;
   });
 
   test("unsettling a mixed selection leaves the reviewed threads in review", async () => {
@@ -4010,10 +4138,8 @@ describe("plan usage cache", () => {
   let storage: ReturnType<typeof testStorage>;
   beforeEach(() => {
     storage = testStorage();
-    setClaudeUsageAllowed(true);
   });
   afterEach(() => {
-    setClaudeUsageAllowed(false);
     storage.done();
   });
 
@@ -4057,7 +4183,7 @@ describe("plan usage cache", () => {
     expect(planIsStale(plan(20, now - PLAN_CACHE_POLL_MS + 5_000), now)).toBe(true);
   });
 
-  test("a plans answer that arrives after the switch went off keeps no Claude rows", () => {
+  test("a stored off setting does not discard Claude usage", () => {
     resetForTests();
     const storage = testStorage();
     try {
@@ -4077,24 +4203,21 @@ describe("plan usage cache", () => {
         status: "ok",
         windows: [{ label: "Weekly", usedPercent: 46, minutes: 10_080 }],
       };
-      setClaudeUsageAllowed(true);
       commitPlansAnswer([claude, codex]);
       expect(useApp.getState().planCache["claude-code"]).toBeDefined();
-      // The user switches the meter off while a read is in flight; that read's
-      // answer must not put Claude's numbers back (or its sign-out record).
-      setClaudeUsageAllowed(false);
+      // A legacy stored off value must not prevent a later answer being kept.
+      localStorage.setItem("rustcode.claudeUsage", "0");
       commitPlansAnswer([
         claude,
         { ...claude, id: "claude:work", account: "work", status: "signedOut" },
         codex,
       ]);
-      expect(useApp.getState().planCache["claude-code"]).toBeUndefined();
+      expect(useApp.getState().planCache["claude-code"]).toBeDefined();
       expect(useApp.getState().planCache["claude-code#work"]).toBeUndefined();
       expect(useApp.getState().signedOutLogins["claude-code"]).toBeUndefined();
       // Every other subscription is committed as usual.
       expect(useApp.getState().planCache.codex?.windows[0]?.usedPercent).toBe(46);
     } finally {
-      setClaudeUsageAllowed(false);
       storage.done();
     }
   });
@@ -4416,7 +4539,8 @@ describe("continuing after a limit", () => {
 
 describe("a delegate whose turn failed", () => {
   const ready = async () => {
-    await connect(new MockTransport({ delayMs: 0 }));
+    const transport = new HeldSessionLoadTransport({ delayMs: 0 });
+    await connect(transport);
     await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
     const caller = useApp.getState().sessions[0]!.id;
     setPermissionMode(caller, "full");
@@ -4424,7 +4548,7 @@ describe("a delegate whose turn failed", () => {
       .getState()
       .sessions.find((x) => x.id !== caller && x.cwd === "/Users/you/code/rustcode")!.id;
     await openThread(target);
-    return { caller, target };
+    return { caller, target, transport };
   };
   const send = (caller: string, target: string, message: string) =>
     answerOrchestration({
@@ -4432,6 +4556,46 @@ describe("a delegate whose turn failed", () => {
       tool: "message_session",
       args: { session_id: target, message },
     });
+
+  test("an interrupted delegate runs the next message as a new turn", async () => {
+    const { caller, target, transport } = await ready();
+    const first = runPrompt(target, "keep working");
+    await until(() =>
+      useApp
+        .getState()
+        .threads[target]!.items.some((item) => item.kind === "tool" && item.id.startsWith("live-")),
+    );
+    const interrupted = await answerOrchestration({
+      sessionId: caller,
+      tool: "interrupt_session",
+      args: { session_id: target },
+    });
+    expect(interrupted.interrupted).toBe(true);
+    await first;
+    expect(
+      useApp.getState().threads[target]!.items.findLast((item) => item.kind === "turnEnd"),
+    ).toMatchObject({
+      outcome: "cancelled",
+    });
+    const answer = await send(caller, target, "continue after interrupt");
+    expect(answer.error).toBeUndefined();
+    expect(answer.receipt).toBe("started");
+    await until(() =>
+      useApp
+        .getState()
+        .threads[target]!.items.some(
+          (item) => item.kind === "user" && item.text.includes("continue after interrupt"),
+        ),
+    );
+    await until(
+      () =>
+        transport.requests.filter(
+          (request) =>
+            request.method === Method.sessionPrompt &&
+            (request.params as JsonObject | undefined)?.sessionId === target,
+        ).length >= 2,
+    );
+  });
 
   test("can be messaged again: the failure is no reason to refuse it", async () => {
     const { caller, target } = await ready();
@@ -4544,7 +4708,7 @@ describe("a delegate whose turn failed", () => {
     }
   });
 
-  test("settled and deliberately stopped threads return a clear refusal", async () => {
+  test("archived and settled threads return a clear refusal", async () => {
     const { caller, target } = await ready();
     setArchived(target, true);
     const archived = await send(caller, target, "archived");
@@ -4554,8 +4718,10 @@ describe("a delegate whose turn failed", () => {
     await setThreadStatus(target, "done");
     const settled = await send(caller, target, "settled");
     expect((settled.error as JsonObject).message).toContain("settled");
+  });
 
-    await setThreadStatus(target, "idle");
+  test("a stopped thread starts a new turn when messaged", async () => {
+    const { caller, target } = await ready();
     updateThread(target, (thread) => ({
       ...thread,
       items: [
@@ -4565,7 +4731,13 @@ describe("a delegate whose turn failed", () => {
       ],
     }));
     const stopped = await send(caller, target, "stopped");
-    expect((stopped.error as JsonObject).message).toContain("last turn was stopped");
+    expect(stopped.error).toBeUndefined();
+    expect(stopped.receipt).toBe("started");
+    await until(() =>
+      useApp
+        .getState()
+        .threads[target]!.items.some((item) => item.kind === "user" && item.text.includes("stopped")),
+    );
   });
 
   test("a message queued on it fails with the reason instead of staying Queued", async () => {

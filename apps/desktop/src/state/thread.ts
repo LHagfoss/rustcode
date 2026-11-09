@@ -85,7 +85,15 @@ export type TranscriptItem =
        */
       background?: "agent" | "task";
     }
-  | { kind: "notice"; id: string; text: string; tone: "warning" | "error" | "info"; resumable?: boolean }
+  | {
+      kind: "notice";
+      id: string;
+      text: string;
+      tone: "warning" | "error" | "info";
+      resumable?: boolean;
+      /** A compaction that is running: the row shows a spinner until its card replaces it. */
+      progress?: boolean;
+    }
   /**
    * A question the harness asked and the answer given, kept as a row once it resolves. The
    * engine's history has no permission events, so this is the app's own record: it stays while
@@ -635,20 +643,18 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
           : state.turnUsage;
       return { ...state, usage: update.usage, turnUsage };
     }
-    case "compaction":
-      // One quiet row, whichever harness compacted.
-      return {
-        ...state,
-        items: [
-          ...state.items,
-          {
-            kind: "notice",
-            id: localId("compaction"),
-            text: update.text.split("\n")[0] ?? update.text,
-            tone: "info",
-          },
-        ],
-      };
+    case "compaction": {
+      // One quiet row, whichever harness compacted: "Compacting context…" while it runs, which the
+      // card (or the reason it failed) then takes the place of.
+      const text = update.text.split("\n")[0] ?? update.text;
+      if (update.phase === "started") return startCompaction(state, text);
+      return settleCompaction(state, {
+        kind: "notice",
+        id: localId("compaction"),
+        text,
+        tone: update.phase === "failed" ? "error" : "info",
+      });
+    }
     case "handoff":
       return {
         ...state,
@@ -820,6 +826,25 @@ export function finishTurn(
       : item,
   );
   const elapsedMs = state.turnStartedAt !== undefined ? now - state.turnStartedAt : undefined;
+  // A compaction still "running" when its turn ends did not finish. A failed turn says why; a
+  // stopped one leaves nothing; the app's own (quiet) turn leaves it to the store, which waits for
+  // the usage that proves the context moved before it says "Compacted automatically".
+  const compactionOpen = items.some(isCompacting);
+  const compacting = !compactionOpen
+    ? items
+    : outcome === "failed"
+      ? settleCompaction(
+          { ...state, items },
+          {
+            kind: "notice",
+            id: localId("compaction"),
+            text: `Context compaction failed${error ? `: ${error}` : "."}`,
+            tone: "error",
+          },
+        ).items
+      : outcome === "cancelled" || !quiet
+        ? settleCompaction({ ...state, items }, null).items
+        : items;
   return {
     ...state,
     running: false,
@@ -836,9 +861,9 @@ export function finishTurn(
     errorDetail: undefined,
     turnUsage: undefined,
     items: quiet
-      ? items
+      ? compacting
       : [
-          ...items,
+          ...compacting,
           {
             kind: "turnEnd",
             id: localId("turn"),
@@ -856,6 +881,34 @@ export function finishTurn(
 export function finishLoad(state: ThreadState): ThreadState {
   const closed = closePendingTurn(state);
   return { ...closed, loading: false, loaded: true, items: finishAllThoughts(closed.items, Date.now()) };
+}
+
+/** The id of the one row a running compaction owns, so its card can take its place. */
+const COMPACTING_ID = "compaction-running";
+
+const isCompacting = (item: TranscriptItem) => item.kind === "notice" && item.id === COMPACTING_ID;
+
+/** "Compacting context…" as a row, once: the engine and the app may both announce the same one. */
+export function startCompaction(state: ThreadState, text = "Compacting context…"): ThreadState {
+  if (state.items.some(isCompacting)) return state;
+  return {
+    ...state,
+    items: [...state.items, { kind: "notice", id: COMPACTING_ID, text, tone: "info", progress: true }],
+  };
+}
+
+/**
+ * The compaction ended: its row (or `row`, when none was running) takes the place of the running
+ * one, wherever the thread has got to since. `null` drops it without a trace.
+ */
+export function settleCompaction(
+  state: ThreadState,
+  row: Extract<TranscriptItem, { kind: "notice" }> | null,
+): ThreadState {
+  const at = state.items.findIndex(isCompacting);
+  if (at < 0) return row ? { ...state, items: [...state.items, row] } : state;
+  const items = row ? replaceAt(state.items, at, row) : state.items.filter((_, i) => i !== at);
+  return { ...state, items };
 }
 
 /** One quiet row in the transcript, for something the app did on the thread's behalf. */
@@ -1308,11 +1361,15 @@ export function subagentTitle(name: string, task: string): string {
   return line || type || "Agent";
 }
 
-/** A leading part of a shell line that only sets up where or with what it runs: `cd x`, `export A=1`, `A=1`. */
+/**
+ * A leading part of a shell line that only sets up where or with what it runs: `cd x`, `export A=1`, `A=1`.
+ * A value is a run of quoted strings and unquoted characters, and every character can start only one
+ * of those, so a long or unterminated value cannot make the match backtrack exponentially.
+ */
 const SETUP_PART =
-  /^(?:cd\s+(?:"[^"]*"|'[^']*'|[^\s;&|]+)|(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s;&|]*)(?:\s+[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s;&|]*))*)\s*(?:&&|;|\n)\s*/;
+  /^(?:cd\s+(?:"[^"]*"|'[^']*'|[^\s;&|]+)|(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s;&|"'])*(?:\s+[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s;&|"'])*)*)\s*(?:&&|;|\n)\s*/;
 /** Environment assignments can contain spaces and secrets; remove the entire quoted value first. */
-const ENV_ASSIGNMENT = /(^|\s)[A-Za-z_][A-Za-z0-9_]*=(?:"(?:\\.|[^"])*"|'[^']*'|[^\s;&|]*)/g;
+const ENV_ASSIGNMENT = /(^|\s)[A-Za-z_][A-Za-z0-9_]*=(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s;&|"'])*/g;
 
 /** The word a reader knows a program by: `cargo`, not `/usr/local/bin/cargo`. */
 const programName = (token: string) => token.split("/").filter(Boolean).at(-1) ?? "";

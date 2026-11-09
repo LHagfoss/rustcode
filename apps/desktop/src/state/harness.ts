@@ -57,7 +57,7 @@ export function accountLoginCommand(
  * blocked, and one not looked at yet is not a reason to block. `undefined`
  * when it has no named accounts and its own `auth` speaks for it.
  */
-function accountState(h: Harness): "ok" | "needs_login" | "unknown" | undefined {
+export function accountState(h: Harness): "ok" | "needs_login" | "unknown" | undefined {
   const accounts = h.accounts ?? [];
   if (!accounts.length) return undefined;
   if (accounts.some((account) => account.auth === "ok")) return "ok";
@@ -84,7 +84,7 @@ export function harnessStatus(h: Harness): HarnessStatus {
 export function unavailableReason(h: Harness): string | undefined {
   if (!h.installed)
     return h.install_hint ? `Not installed. Install with: ${h.install_hint}` : "Not installed";
-  if (!h.enabled) return "Turned off in Settings › Agents";
+  if (!h.enabled) return "Turned off in Settings › Harnesses";
   // With named accounts, the accounts decide: point at them, never at the
   // harness's own sign-in button the card no longer shows.
   const accounts = accountState(h);

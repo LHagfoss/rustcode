@@ -11,13 +11,13 @@ pub use budget::{PreflightBudget, calculate_preflight_budget_for_projection};
 pub use compact::SUMMARY_MARKER;
 pub(crate) use compact::durable_compaction_record_message;
 pub(crate) use compact::valid_compaction_boundary;
-pub(crate) use compact::with_session_summarizer;
 #[cfg(test)]
 pub use compact::{force_compact, maybe_compact, maybe_compact_with_local_policy};
 pub use compact::{
     force_compact_with_budget, force_compact_with_budget_deterministic,
     maybe_compact_with_local_policy_and_usage, maybe_compact_with_local_policy_and_usage_mode,
 };
+pub(crate) use compact::{with_compaction_progress, with_session_summarizer};
 #[allow(unused_imports)]
 pub use memory::{
     STRUCTURED_MEMORY_MARKER, StructuredSessionMemory, compact_with_structured_memory,

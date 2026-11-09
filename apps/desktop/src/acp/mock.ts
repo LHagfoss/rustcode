@@ -334,7 +334,7 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
           },
         ],
         // Logins the engine finds on this Mac that no account names yet, so
-        // Settings › Agents' "Found on this Mac" can be seen and tried.
+        // Settings › Harnesses' "Found on this Mac" can be seen and tried.
         discovered_accounts: [
           { config_dir: "~/.claude", suggested_name: "Claude" },
           { config_dir: "~/.claude-personal", suggested_name: "Personal" },
@@ -438,6 +438,12 @@ const HARNESS_MODELS: Record<
   ],
   opencode: [{ id: "default", name: "Default", efforts: [] }],
 };
+
+/** What a hand-added command lists once it answers ACP. */
+const MOCK_CUSTOM_MODELS = [
+  { id: "fast", name: "Fast", efforts: [] },
+  { id: "deep", name: "Deep", efforts: [] },
+];
 
 const now = Date.now();
 const minutes = (n: number) => now - n * 60_000;
@@ -2801,24 +2807,28 @@ export class MockEngine {
       case "_rustcode/data/activity": {
         // The same shape engine/src/acp/data.rs answers with: summaries only.
         const at = new Date(Date.now() - 60_000).toISOString();
+        const items: JsonObject[] = [
+          { source: "event", at, type: "turn.start", fields: { tool_rounds: 0 } },
+          {
+            source: "provider_request",
+            at,
+            provider: "openai",
+            model: "gpt-6-luna",
+            status_code: 429,
+            error_kind: "rate_limit",
+            latency_ms: 412,
+            input_tokens: 1200,
+            output_tokens: 80,
+            attempt: 1,
+          },
+        ];
+        if (params.order === "newest") items.reverse();
         return {
           session_id: str(params.sessionId) ?? "",
-          items: [
-            { source: "event", at, type: "turn.start", fields: { tool_rounds: 0 } },
-            {
-              source: "provider_request",
-              at,
-              provider: "openai",
-              model: "gpt-6-luna",
-              status_code: 200,
-              latency_ms: 412,
-              input_tokens: 1200,
-              output_tokens: 80,
-              attempt: 1,
-            },
-          ],
+          items,
           next: null,
           has_more: false,
+          last_provider_error: { at, status_code: 429, error_kind: "rate_limit" },
         };
       }
       case "_rustcode/data/links/load":
@@ -3003,6 +3013,23 @@ export class MockEngine {
                 deletions: 9,
                 changedFiles: 3,
               },
+              {
+                number: 2795,
+                title: "feat(desktop): add the login form",
+                author: "LHagfoss",
+                state: "open",
+                draft: false,
+                review: "changes_requested",
+                checks: { passed: 4, failed: 1, pending: 0, skipped: 0 },
+                headRef: "feat/login-form",
+                baseRef: "main",
+                headSha: "58961fc5aa",
+                updatedAt: new Date(minutes(30)).toISOString(),
+                url: "https://github.com/LHagfoss/rustcode/pull/2795",
+                additions: 210,
+                deletions: 4,
+                changedFiles: 5,
+              },
             ],
           },
         };
@@ -3081,6 +3108,20 @@ export class MockEngine {
               },
             ],
           },
+        };
+      case "_rustcode/pulls/diff":
+        return {
+          diff: [
+            "diff --git a/apps/desktop/src/ui/Composer.tsx b/apps/desktop/src/ui/Composer.tsx",
+            "--- a/apps/desktop/src/ui/Composer.tsx",
+            "+++ b/apps/desktop/src/ui/Composer.tsx",
+            "@@ -1,4 +1,5 @@",
+            ' import { useApp } from "../state/store";',
+            '+import { compose } from "../state/compose";',
+            " ",
+            "-export const Composer = () => null;",
+            "+export const Composer = () => <div className={compose()} />;",
+          ].join("\n"),
         };
       case "_rustcode/pulls/review":
         return { review: { url: "https://github.com/LHagfoss/rustcode/pull/2788#pullrequestreview-1" } };
@@ -3337,7 +3378,10 @@ export class MockEngine {
         await this.sleep(this.delay * 6);
         if (!h.installed) throw new Error(`${h.name} is not installed (${h.command[0]} not on PATH).`);
         if (h.auth === "needs_login") throw new Error(`${h.name} needs you to sign in first.`);
-        h.models = h.builtin ? h.models : (HARNESS_MODELS[id] ?? []);
+        // A hand-added command named "broken" starts but never answers ACP.
+        if (!h.known && h.command[0] === "broken")
+          throw new Error(`${h.name} did not answer the ACP handshake (initialize timed out after 30 s).`);
+        h.models = h.builtin ? h.models : (HARNESS_MODELS[id] ?? (h.known ? [] : MOCK_CUSTOM_MODELS));
         if (h.auth === "unknown") h.auth = "ok";
         return { models: h.models as unknown as Json };
       }
@@ -3353,7 +3397,9 @@ export class MockEngine {
             known: false,
             enabled: true,
             command: arr(params.command).map(String),
-            installed: true,
+            // A command named "missing" is not on PATH.
+            installed: arr(params.command).map(String)[0] !== "missing",
+            env_names: Object.keys(obj(params.env) ?? {}),
             auth: "unknown",
             capabilities: ACP_CAPS,
             accounts: [],
@@ -3653,7 +3699,7 @@ export class MockEngine {
           : null;
     if (!tool) return null;
     if (this.orchestration < (tool === "message_session" ? 1 : 2)) {
-      return "I can't reach other threads here: turn on Settings › Agents › Threads can start and message other threads, then restart the engine.";
+      return "I can't reach other threads here: turn on Settings › Harnesses › Threads can start and message other threads, then restart the engine.";
     }
     const call = (name: string, args: JsonObject) => {
       const callId = `orch-${++this.counter}`;
@@ -3902,7 +3948,30 @@ export class MockEngine {
         });
         return done("end_turn");
       }
-      if (prompt.trim() === "/compact") {
+      // `/compact` says it is compacting while it runs, then replaces that line with its card. Two
+      // variants stage the other states: `/compact hold` keeps compacting until stopped, and
+      // `/compact fail` ends without compacting, with the reason. Neither line is history: a
+      // reopened thread replays the card only.
+      const compact = /^\/compact(?:\s+(hold|fail))?$/.exec(prompt.trim());
+      if (compact) {
+        const compacting = (phase: string, line: string) =>
+          this.notify(
+            update(sid, {
+              sessionUpdate: "agent_message_chunk",
+              content: text(line),
+              _meta: { rustcode: { kind: "compaction", phase } },
+            }),
+          );
+        compacting("started", "Compacting context…");
+        if (compact[1] === "hold") {
+          for (let i = 0; i < 600 && !run.cancelled; i++) await this.sleep(1_000);
+          return done(run.cancelled ? "cancelled" : "end_turn");
+        }
+        if (compact[1] === "fail") {
+          await this.sleep();
+          compacting("failed", "Context compaction failed: the summary request timed out.");
+          return done("end_turn");
+        }
         thread.compactions = (thread.compactions ?? 0) + 1;
         const before = 18_400;
         const after = 15_500;

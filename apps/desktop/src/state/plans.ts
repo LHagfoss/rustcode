@@ -4,7 +4,7 @@
 // Keychain: macOS may ask before an unseen item is read, so the app reads one
 // login at a time in the background — the default login, and the account of
 // the thread on screen. A login whose read was denied is left alone until the
-// user looks explicitly (Settings › Usage, Refresh, Check in Settings › Agents),
+// user looks explicitly (Settings › Usage, Refresh, Check in Settings › Harnesses),
 // since asking again would only prompt again; so is one Anthropic forbids
 // (403), since renewing the sign-in does not change that. A login whose sign-in
 // expired, or which Anthropic refused (401), is *not* paused: the user renews
@@ -46,7 +46,7 @@ export interface PlansAsk {
 
 /** What the app knows when it decides what to ask for. */
 export interface PlansAskInput {
-  /** Whether the user let Claude's sign-in be read at all (Settings › Usage's switch). */
+  /** Whether a first Claude read has been requested in this app session. */
   allowed: boolean;
   /** The harness of the thread on screen, or of the one that will start. */
   harness: string | undefined;
@@ -58,7 +58,7 @@ export interface PlansAskInput {
 }
 
 /**
- * What a refresh asks for: the default login when consent allows it and the
+ * What a refresh asks for: the default login after the first request and when the
  * last read did not stop it, and the account of the thread on screen when that
  * one was not stopped either. Only a Claude Code thread has such an account; a
  * paused default login does not keep a named account away, or the reverse.

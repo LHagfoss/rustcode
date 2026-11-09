@@ -2248,6 +2248,12 @@ mod tests {
         let ids = saved_sessions(config.path(), &[("saved", Some(project.path()))]);
         // The app had it open and quit (or crashed): the file stays, the lock does not.
         drop(open_in(config.path(), &ids[0], "app"));
+        // A concurrent fork may retain the lock until it execs.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while crate::config::session_open_by(config.path(), &ids[0]).is_some() {
+            assert!(std::time::Instant::now() < deadline, "lock stayed held");
+            tokio::task::yield_now().await;
+        }
         let hub = SessionHub::start(Default::default());
         let error = WorkspaceRouter::resume(
             &hub,

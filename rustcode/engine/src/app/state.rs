@@ -108,6 +108,13 @@ pub struct AppState {
     /// A compaction no client has been shown yet. ACP takes it to put a
     /// compaction card in the chat.
     pub(crate) pending_compaction_card: Option<crate::app::CompactionStats>,
+    /// A compaction under way, or one that failed, no client has been told
+    /// about yet. ACP takes it to show "Compacting context…" while the
+    /// summarizer runs and the error if it ends without compacting.
+    pub(crate) pending_compaction_progress: Option<crate::app::CompactionProgress>,
+    /// Why the last summarizer request failed, kept for the failure text of a
+    /// compaction that then had nothing else to fall back on.
+    pub(crate) compaction_summary_error: Option<String>,
     /// A Fast-tier notice no ACP client has been sent yet (#2608).
     pub(crate) pending_service_tier_notice: Option<String>,
     /// Whether the user was already told that Fast requests are served at
@@ -1536,6 +1543,9 @@ impl AppState {
             stats.to_session_record(at_ms),
         );
         self.pending_compaction_card = Some(stats.clone());
+        // The card says how it ended; a "compacting" or "failed" line before it is stale.
+        self.pending_compaction_progress = None;
+        self.compaction_summary_error = None;
         self.last_compaction = Some(stats);
     }
 
@@ -1546,6 +1556,8 @@ impl AppState {
             .as_ref()
             .and_then(crate::app::CompactionStats::from_session_record);
         self.pending_compaction_card = None;
+        self.pending_compaction_progress = None;
+        self.compaction_summary_error = None;
     }
 
     /// Continue with the model profile and effort recorded for the active
@@ -1693,6 +1705,8 @@ impl AppState {
             last_request_overhead_tokens: 0,
             last_compaction: None,
             pending_compaction_card: None,
+            pending_compaction_progress: None,
+            compaction_summary_error: None,
             pending_service_tier_notice: None,
             service_tier_downgrade_noticed: false,
             provider_turn_state: None,

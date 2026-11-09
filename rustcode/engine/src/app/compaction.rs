@@ -10,6 +10,20 @@
 //! one is also recorded in the session's metadata, so the count and the
 //! chat's compaction card survive a reload.
 
+/// A compaction that is running or just failed, before any card exists.
+///
+/// The card (`AppState::pending_compaction_card`) only exists once a
+/// compaction finished, so a long summary left the chat silent. This is what
+/// a frontend is told meanwhile; `record_compaction` clears it, because the
+/// card then says the rest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CompactionProgress {
+    /// The summarizer is running.
+    Started,
+    /// The compaction ended without compacting; the text says why.
+    Failed(String),
+}
+
 /// What triggered a compaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]

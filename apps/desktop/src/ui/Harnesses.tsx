@@ -1,8 +1,8 @@
 // Harness cards and the default-harness form, shared by first-run
-// onboarding and Settings › Agents (docs/harnesses.md). RustCode never
+// onboarding and Settings › Harnesses (docs/harnesses.md). RustCode never
 // signs in for a harness: "Sign in" shows the harness's own login command.
 
-import { Check, ChevronRight, Minus, Plus, RefreshCw, SquareTerminal, X } from "lucide-react";
+import { Check, ChevronRight, Minus, Plus, SquareTerminal, X } from "lucide-react";
 import { Popover } from "radix-ui";
 import { useEffect, useMemo, useState } from "react";
 import { effortLabel, type Harness, type HarnessAccount, type HarnessSnapshot } from "../acp/types";
@@ -20,6 +20,8 @@ import {
   unavailableReason,
   validateDefault,
 } from "../state/harness";
+import { CHECK_STEP_LABEL, currentResult, resultTone } from "../state/harnessCheck";
+import { runHarnessCheck, useHarnessChecks } from "../state/harnessChecks";
 import { accountToSignIn } from "../state/logins";
 import {
   accountSlug,
@@ -27,9 +29,7 @@ import {
   askConfirm,
   checkHarnessAccounts,
   ensureHarnessModels,
-  fetchHarnessModels,
   type NewThreadChoice,
-  refreshHarnesses,
   removeHarness,
   removeHarnessAccount,
   setHarnessEnabled,
@@ -104,8 +104,8 @@ function accountStatus(account: HarnessAccount): string {
   if (account.auth === "ok") return "Signed in";
   // A look found no credentials file, Keychain item or status command behind it.
   if (account.auth === "needs_login") return "Not signed in";
-  // Not looked for yet: only a Refresh probes.
-  return "Not checked";
+  // The harness could not say: Check looked and got no answer.
+  return "Unknown";
 }
 
 /** Signs the account in: the harness's own command, under the account's own directory. */
@@ -138,12 +138,8 @@ export function AccountsList({ harness }: { harness: Harness }) {
   // The account whose sign-in the app is waiting for, and one it gave up on.
   const [waiting, setWaiting] = useState<string | null>(null);
   const [gaveUp, setGaveUp] = useState<string | null>(null);
-  // One real look when the section opens: an account reads `unknown` until
-  // the Keychain is asked. It is the existence probe only: forcing a plan read
-  // here would clear the pauses a denied Keychain prompt earned and ask again.
-  useEffect(() => {
-    void checkHarnessAccounts(false);
-  }, []);
+  // The sign-in of each account is read when the page opens, when the window
+  // regains focus and by Check (`useAutoDetect`), so a row never waits to be asked.
   // The waiting row asks again every three seconds, for at most five minutes
   // while this section is mounted.
   useEffect(() => {
@@ -171,11 +167,6 @@ export function AccountsList({ harness }: { harness: Harness }) {
     setGaveUp(null);
     await signAccountIn(harness, account);
     setWaiting(account.id);
-  };
-  const refresh = async () => {
-    setBusy(true);
-    await checkHarnessAccounts();
-    setBusy(false);
   };
   const add = async () => {
     const id = accountSlug(name);
@@ -219,13 +210,7 @@ export function AccountsList({ harness }: { harness: Harness }) {
   };
   return (
     <div className="ml-11 flex flex-col gap-2 rounded-lg bg-surface-2 px-3 py-2">
-      <div className="flex items-center gap-2">
-        <span className="text-caption text-fg-muted">Accounts</span>
-        <span className="flex-1" />
-        <Action size="sm" quiet onClick={() => void refresh()} disabled={busy}>
-          {busy ? <Spinner size={11} /> : <RefreshCw size={12} />} Refresh
-        </Action>
-      </div>
+      <span className="text-caption text-fg-muted">Accounts</span>
       {/* A named Codex login is its own CODEX_HOME, so it starts without the
           Mac's own ~/.codex config.toml, AGENTS.md or MCP servers. */}
       {harness.id === "codex" && (
@@ -345,43 +330,40 @@ export function AccountsList({ harness }: { harness: Harness }) {
   );
 }
 
-/** The card's check: lists the models, which is also the cheapest proof the harness runs. */
-function useCheck(harness: Harness) {
-  const [checking, setChecking] = useState(false);
-  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
-  const check = async () => {
-    setChecking(true);
-    setResult(null);
-    try {
-      await fetchHarnessModels(harness.id);
-      const models = useApp.getState().harnesses?.harnesses.find((h) => h.id === harness.id)?.models ?? [];
-      setResult({
-        ok: true,
-        text: models.length ? `Works · ${models.length} model${models.length === 1 ? "" : "s"}` : "Works",
-      });
-    } catch (error) {
-      setResult({ ok: false, text: error instanceof Error ? error.message : String(error) });
-    } finally {
-      setChecking(false);
-    }
-  };
-  /** Detects the harness again: its install or sign-in may have changed outside the app. */
-  const recheck = async () => {
-    setChecking(true);
-    setResult(null);
-    try {
-      await refreshHarnesses();
-    } finally {
-      setChecking(false);
-    }
-  };
-  return { checking, result, check, recheck };
+/**
+ * Detects every harness again when the page opens and whenever the window
+ * regains focus, with each account's sign-in read, so Check is rarely needed.
+ * It does not start a harness: listing models is Check's.
+ */
+export function useAutoDetect() {
+  useEffect(() => {
+    let last = 0;
+    const detect = () => {
+      // A focus that follows a focus within seconds asks nothing new.
+      if (Date.now() - last < 3000) return;
+      last = Date.now();
+      const ids = useApp.getState().harnesses?.harnesses.map((h) => h.id) ?? [];
+      checkHarnessAccounts(false, ids, false).catch(() => undefined);
+    };
+    detect();
+    window.addEventListener("focus", detect);
+    return () => window.removeEventListener("focus", detect);
+  }, []);
 }
 
 export function HarnessCard({ harness }: { harness: Harness }) {
-  const { checking, result, check, recheck } = useCheck(harness);
+  const entry = useHarnessChecks((s) => s.byHarness[harness.id]);
+  const checking = !!entry && "running" in entry;
+  const result = currentResult(harness, entry);
+  const check = () => void runHarnessCheck(harness.id);
   const [open, setOpen] = useState(false);
-  const status = harnessStatus(harness);
+  // After a Check the status line says where it ended; before one, what the engine detected.
+  const status =
+    entry && "running" in entry
+      ? { tone: "off" as const, label: CHECK_STEP_LABEL[entry.running] }
+      : result
+        ? { tone: resultTone(result), label: result.state === "error" ? "Error" : result.text }
+        : harnessStatus(harness);
   const local = harness.builtin;
   // RustCode turns off only once another harness starts new threads: the engine refuses otherwise.
   const isDefault = useApp((s) => s.harnesses?.default.harness === harness.id);
@@ -392,7 +374,11 @@ export function HarnessCard({ harness }: { harness: Harness }) {
   // A harness with named accounts signs in per account, in the Accounts list;
   // its own sign-in button would be the wrong one.
   const signIn =
-    !local && harness.installed && harness.auth !== "ok" && !result?.ok && !harness.accounts?.length;
+    !local &&
+    harness.installed &&
+    harness.auth !== "ok" &&
+    result?.state !== "ready" &&
+    !harness.accounts?.length;
   return (
     <div className="flex flex-col gap-2 px-4 py-3">
       <div className="flex items-center gap-3">
@@ -416,10 +402,10 @@ export function HarnessCard({ harness }: { harness: Harness }) {
           </div>
         </div>
         {signIn && <SignIn harness={harness} />}
-        {harness.installed && harness.enabled && (
-          <Action onClick={() => void check()} disabled={checking || !!unavailableReason(harness)}>
+        {!local && (
+          <Action onClick={check} disabled={checking}>
             {checking && <Spinner size={10} />}
-            Check
+            {entry && "running" in entry ? CHECK_STEP_LABEL[entry.running] : "Check"}
           </Action>
         )}
         <Tooltip
@@ -439,7 +425,7 @@ export function HarnessCard({ harness }: { harness: Harness }) {
               onChange={(v) =>
                 // Turning a harness on checks it at once, so its models are ready to pick.
                 void setHarnessEnabled(harness.id, v).then((snap) => {
-                  if (v && snap) void check();
+                  if (v && snap) check();
                 })
               }
             />
@@ -454,20 +440,10 @@ export function HarnessCard({ harness }: { harness: Harness }) {
         </div>
       )}
       {(accountSignIn(harness) || (harness.accounts?.length ?? 0) > 0) && <AccountsList harness={harness} />}
-      {(result || harness.error) && (
-        <div
-          className={cx(
-            "selectable ml-11 flex items-start gap-1.5 text-callout",
-            result?.ok ? "text-success" : "text-warning",
-          )}
-        >
-          {result?.ok && <Check size={13} className="mt-[3px] shrink-0" />}
-          <span className="min-w-0 flex-1">{result ? result.text : harness.error}</span>
-          {!result?.ok && (
-            <Action size="sm" quiet disabled={checking} onClick={() => void recheck()}>
-              {checking ? <Spinner size={11} /> : <RefreshCw size={12} />} Check again
-            </Action>
-          )}
+      {/* A failure's own words; every other end is already the status line. */}
+      {(result ? result.state === "error" : harness.error) && !checking && (
+        <div className="selectable ml-11 text-callout text-warning">
+          {result ? result.text : harness.error}
         </div>
       )}
       <div className="ml-11">
@@ -487,6 +463,14 @@ export function HarnessCard({ harness }: { harness: Harness }) {
                 <span className="text-fg-muted">Runs</span>
                 <code className="selectable truncate font-mono text-fg-muted">
                   {commandLine(harness.command)}
+                </code>
+              </div>
+            )}
+            {!local && !!harness.env_names?.length && (
+              <div className="flex items-center gap-2 text-caption">
+                <span className="text-fg-muted">Environment</span>
+                <code className="selectable truncate font-mono text-fg-muted">
+                  {harness.env_names.join(", ")}
                 </code>
               </div>
             )}
@@ -557,9 +541,9 @@ export function HarnessList({ snapshot }: { snapshot: HarnessSnapshot }) {
       ))}
       {custom.length > 0 && (
         <div className="flex flex-wrap items-baseline gap-x-2 px-4 pt-3 pb-1">
-          <span className="font-medium text-caption text-fg-muted">Added by hand</span>
+          <span className="font-medium text-caption text-fg-muted">Added by you</span>
           <span className="text-caption text-fg-faint">
-            From <code className="font-mono">[[harnesses]]</code> in config.toml
+            Local ACP commands, also <code className="font-mono">[[harnesses]]</code> in config.toml
           </span>
         </div>
       )}

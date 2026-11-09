@@ -233,3 +233,83 @@ export function threadDiff(
   }
   return { added, removed };
 }
+
+/** The list's sections, top to bottom: Pinned and Active lead, the shelves sit at the foot. */
+export type SectionId = "pinned" | "threads" | "working" | "snoozed" | "settled";
+export const SECTION_ORDER: readonly SectionId[] = ["pinned", "threads", "working", "snoozed", "settled"];
+
+/** The sections that fold: the shelves at the foot of the list. Pinned and Active never do. */
+export type ShelfId = "working" | "snoozed" | "settled";
+export const SHELVES: readonly ShelfId[] = ["working", "snoozed", "settled"];
+
+export function isShelf(id: string): id is ShelfId {
+  return (SHELVES as readonly string[]).includes(id);
+}
+
+/** Working is open, Snoozed and Settled are shut until the user opens them. */
+export const SHELF_DEFAULT_OPEN: Record<ShelfId, boolean> = { working: true, snoozed: false, settled: false };
+
+/** The localStorage key one shelf's open state is kept under (`rustcode.sidebar.settledOpen`, …). */
+export function shelfKey(id: ShelfId): string {
+  return `rustcode.sidebar.${id}Open`;
+}
+
+/**
+ * Whether a shelf is drawn open. A search shows every match, folded shelves too; `forced` is the
+ * Settled shelf opening for the delegate chain of a thread inside it. The stored value is the
+ * user's choice, and `undefined` (never chosen) takes the shelf's default.
+ */
+export function shelfOpen(
+  id: ShelfId,
+  stored: boolean | undefined,
+  options: { searching?: boolean; forced?: boolean } = {},
+): boolean {
+  return !!options.searching || !!options.forced || (stored ?? SHELF_DEFAULT_OPEN[id]);
+}
+
+/** What the list needs to know about one thread to place it. */
+export interface Placement {
+  pinned: boolean;
+  /** The user (or the engine) settled it: its status is done. */
+  settled: boolean;
+  /** Untouched long enough to count as settled without being marked. */
+  aged: boolean;
+  /** Asleep until its wake time. */
+  snoozed: boolean;
+  /** A permission or question waits on the user. */
+  needs: boolean;
+  working: boolean;
+  /** Just finished, not seen yet. */
+  fresh: boolean;
+  showWorking: boolean;
+  byProject: boolean;
+}
+
+/**
+ * The section a thread is drawn under. A settled thread never sits under Pinned, whatever it was
+ * pinned as (the pin returns when it is unsettled); a thread that needs you or works stays out of
+ * the shelves that would hide it.
+ */
+export function placeThread(p: Placement): SectionId {
+  const busy = p.needs || p.working;
+  if (p.settled && !busy && !p.fresh) return "settled";
+  if (p.pinned) return "pinned";
+  if (p.snoozed && !busy) return "snoozed";
+  // Folders already separate the work, so grouping by project has no Working shelf.
+  if (p.showWorking && !p.byProject && p.working) return "working";
+  if ((p.settled || p.aged) && !busy && !p.fresh) return "settled";
+  return "threads";
+}
+
+/** The title-first row's trailing status, in attention order. */
+export function titleFirstTrailing(read: {
+  needs: boolean;
+  running: boolean;
+  done: boolean;
+  status: boolean;
+}): "needs" | "running" | "done" | "status" | "age" {
+  if (read.needs) return "needs";
+  if (read.running) return "running";
+  if (read.done) return "done";
+  return read.status ? "status" : "age";
+}

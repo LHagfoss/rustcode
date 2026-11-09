@@ -22,7 +22,7 @@ export const READ_BYTES = 16 * 1024;
 export const MAILBOX = 32;
 /**
  * The default number of delegates one thread may have working for it at once
- * (Settings › Agents). A message to a thread it already has a link to is a
+ * (Settings › Harnesses). A message to a thread it already has a link to is a
  * follow-up, not another slot.
  */
 export const DEFAULT_DELEGATES_PER_THREAD = 8;
@@ -30,7 +30,7 @@ export const MIN_DELEGATES_PER_THREAD = 2;
 export const MAX_DELEGATES_PER_THREAD = 32;
 /**
  * The default number of delegates that may run at once across this app
- * instance (Settings › Agents), whichever thread started them. A delegate
+ * instance (Settings › Harnesses), whichever thread started them. A delegate
  * takes one slot whether it is a child this thread started or a thread it
  * messaged.
  */
@@ -424,7 +424,7 @@ export type Call =
   | { tool: "list_pull_requests"; state: PullStateChoice }
   | { tool: "thread_usage"; since?: string; groupBy: UsageGroup; project?: string }
   | { tool: "query_data"; sql: string; limit: number }
-  | { tool: "read_activity"; target: string; after?: string; limit: number }
+  | { tool: "read_activity"; target: string; after?: string; limit: number; order?: "newest" }
   | {
       tool: "manage_queue";
       target: string;
@@ -569,12 +569,16 @@ export function parseCall(params: JsonObject): Call | Failure {
       const target = s(args.session_id) ?? "";
       if (!target) return failure("invalid", "session_id is required");
       const after = s(args.after)?.trim() || undefined;
+      if (args.order != null && args.order !== "oldest" && args.order !== "newest") {
+        return failure("invalid", "order must be oldest or newest");
+      }
       const asked = typeof args.limit === "number" ? Math.floor(args.limit) : DEFAULT_ACTIVITY_ITEMS;
       // Clamped, not refused: an agent asking for 500 items gets the 200 cap.
       return {
         tool: "read_activity",
         target,
         after,
+        ...(args.order === "newest" ? { order: "newest" as const } : {}),
         limit: Math.min(Math.max(asked, 1), MAX_ACTIVITY_ITEMS),
       };
     }
@@ -875,7 +879,7 @@ export function usageScope(
   if (asked && !sameProject(asked, own)) {
     return failure(
       "not_allowed",
-      "reading usage across projects is off; turn on “Let agents read threads in other projects” in Settings › Agents",
+      "reading usage across projects is off; turn on “Let agents read threads in other projects” in Settings › Harnesses",
     );
   }
   return { project: own, scope: "this project" };
@@ -890,7 +894,7 @@ export function checkQueryData(acrossProjects: boolean): Failure | null {
     ? null
     : failure(
         "not_allowed",
-        "SQL reads every project, so it needs “Let agents read threads in other projects” in Settings › Agents",
+        "SQL reads every project, so it needs “Let agents read threads in other projects” in Settings › Harnesses",
       );
 }
 

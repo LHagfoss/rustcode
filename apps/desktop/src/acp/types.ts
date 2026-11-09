@@ -501,14 +501,21 @@ export interface SlashCommand {
   action: string;
 }
 
+/** Where a compaction is: running, done, or ended without compacting. */
+export type CompactionPhase = "started" | "completed" | "failed";
+
 /** One `session/update`, reduced to what the transcript renders. */
 export type SessionUpdate =
   | { kind: "user"; text: string; at?: number }
   | { kind: "agent"; text: string; turn?: TurnTiming; at?: number }
   | { kind: "thought"; text: string; summary: boolean; durationMs?: number }
   | { kind: "notice"; text: string; resumable: boolean }
-  /** The harness compacted the conversation (`_meta.rustcode.kind == "compaction"`). */
-  | { kind: "compaction"; text: string }
+  /**
+   * The harness compacts the conversation (`_meta.rustcode.kind == "compaction"`): `started` while
+   * the summary is written, then `completed` (the card, the default for a harness that sends no
+   * phase) or `failed` with the reason in `text`.
+   */
+  | { kind: "compaction"; text: string; phase?: CompactionPhase }
   /** The thread moved to another harness here (`_meta.rustcode.kind == "handoff"`). */
   | { kind: "handoff"; from: string; to: string; model?: string }
   /** The thread's model or effort changed here (`_meta.rustcode.kind == "switch"`). */
@@ -597,7 +604,14 @@ export function parseSessionUpdate(params: JsonObject): SessionUpdate {
     case "user_message_chunk":
       return { kind: "user", text: contentText(update.content), at: parseDate(meta?.at) };
     case "agent_message_chunk":
-      if (str(meta?.kind) === "compaction") return { kind: "compaction", text: contentText(update.content) };
+      if (str(meta?.kind) === "compaction") {
+        const phase = str(meta?.phase);
+        return {
+          kind: "compaction",
+          text: contentText(update.content),
+          phase: phase === "started" || phase === "failed" ? phase : "completed",
+        };
+      }
       if (str(meta?.kind) === "handoff") {
         return {
           kind: "handoff",
@@ -901,6 +915,8 @@ export interface Harness {
   known: boolean;
   enabled: boolean;
   command: string[];
+  /** Names (never values) of the variables a custom harness's process is started with. */
+  env_names?: string[];
   installed: boolean;
   version?: string;
   auth: "ok" | "needs_login" | "unknown";
@@ -1060,6 +1076,11 @@ export function parseHarnessLast(value: Json | undefined): HarnessLast | null {
  */
 const LEGACY_KNOWN_HARNESSES = ["codex", "claude-code", "gemini", "opencode", "pi"];
 
+function envNames(value: Json | undefined): { env_names?: string[] } {
+  const names = arr(value).flatMap((n) => (typeof n === "string" ? [n] : []));
+  return names.length ? { env_names: names } : {};
+}
+
 export function parseHarnessSnapshot(value: Json): HarnessSnapshot {
   const root = obj(value) ?? {};
   let remembers = false;
@@ -1083,6 +1104,7 @@ export function parseHarnessSnapshot(value: Json): HarnessSnapshot {
         known: bool(o.known) ?? (builtin || LEGACY_KNOWN_HARNESSES.includes(id)),
         enabled: bool(o.enabled) ?? false,
         command: arr(o.command).flatMap((c) => (typeof c === "string" ? [c] : [])),
+        ...envNames(o.env_names),
         installed: bool(o.installed) ?? false,
         version: str(o.version),
         auth: auth === "ok" || auth === "needs_login" ? auth : "unknown",
