@@ -2738,24 +2738,28 @@ export class MockEngine {
       case "_rustcode/data/activity": {
         // The same shape engine/src/acp/data.rs answers with: summaries only.
         const at = new Date(Date.now() - 60_000).toISOString();
+        const items: JsonObject[] = [
+          { source: "event", at, type: "turn.start", fields: { tool_rounds: 0 } },
+          {
+            source: "provider_request",
+            at,
+            provider: "openai",
+            model: "gpt-6-luna",
+            status_code: 429,
+            error_kind: "rate_limit",
+            latency_ms: 412,
+            input_tokens: 1200,
+            output_tokens: 80,
+            attempt: 1,
+          },
+        ];
+        if (params.order === "newest") items.reverse();
         return {
           session_id: str(params.sessionId) ?? "",
-          items: [
-            { source: "event", at, type: "turn.start", fields: { tool_rounds: 0 } },
-            {
-              source: "provider_request",
-              at,
-              provider: "openai",
-              model: "gpt-6-luna",
-              status_code: 200,
-              latency_ms: 412,
-              input_tokens: 1200,
-              output_tokens: 80,
-              attempt: 1,
-            },
-          ],
+          items,
           next: null,
           has_more: false,
+          last_provider_error: { at, status_code: 429, error_kind: "rate_limit" },
         };
       }
       case "_rustcode/data/links/load":

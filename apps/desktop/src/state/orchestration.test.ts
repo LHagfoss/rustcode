@@ -519,6 +519,9 @@ describe("the data store", () => {
   });
 
   test("parses read_activity and clamps its page", () => {
+    expect(parseCall({ tool: "read_activity", args: { session_id: "b", order: "newest" } })).toMatchObject({
+      order: "newest",
+    });
     expect(parseCall({ tool: "read_activity", args: { session_id: "b" } })).toEqual({
       tool: "read_activity",
       target: "b",

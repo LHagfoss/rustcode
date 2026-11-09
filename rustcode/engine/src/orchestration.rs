@@ -597,6 +597,11 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
         }
         READ_ACTIVITY => {
             required_name(args, "session_id")?;
+            match args.get("order") {
+                None | Some(Value::Null) => {}
+                Some(Value::String(order)) if order == "oldest" || order == "newest" => {}
+                Some(_) => return Err("order must be oldest or newest".to_owned()),
+            }
             match args.get("after") {
                 None | Some(Value::Null) => {}
                 Some(Value::String(after)) if after.len() <= MAX_ACTIVITY_CURSOR_BYTES => {}
