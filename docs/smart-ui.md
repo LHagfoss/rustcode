@@ -109,8 +109,8 @@ in both.
 
 | Part | What the page gets |
 | --- | --- |
-| Base | A transparent body in the app's font and text color. Headings, paragraphs, tables, inputs, selects, buttons and code are already styled like the chat, so a view needs little CSS. |
-| CSS variables on `:root` | `--rc-text`, `--rc-bg`, `--rc-muted`, `--rc-faint`, `--rc-accent`, `--rc-accent-text`, `--rc-surface`, `--rc-separator`, `--rc-danger`, `--rc-success`, `--rc-warning`, `--rc-font`, `--rc-mono`, `--rc-radius`, `--rc-series-1` … `--rc-series-8`. They follow light and dark mode. |
+| Base | A transparent body in the app's font and text color. The fragment is wrapped in `#rc-root`, which spaces one block from the next by 12 px, so a view needs no margins of its own. Headings, paragraphs, tables, inputs, selects, buttons and code are already styled like the chat, so a view needs little CSS. |
+| CSS variables on `:root` | `--rc-text`, `--rc-bg`, `--rc-muted`, `--rc-faint`, `--rc-accent`, `--rc-accent-text`, `--rc-surface`, `--rc-separator`, `--rc-danger`, `--rc-success`, `--rc-warning`, `--rc-font`, `--rc-mono`; the type scale `--rc-text-size`, `--rc-text-size-sm`, `--rc-text-size-xs`, `--rc-text-size-title`, `--rc-text-size-value`; the shape `--rc-radius`, `--rc-radius-sm`, `--rc-radius-xs`, `--rc-radius-pill`; and `--rc-series-1` … `--rc-series-8`, whose first colour is the accent. All of them are read from the app's tokens on every platform (`pageTheme`), so a theme's radius, font, accent and text sizes reach the view; they follow light and dark mode. |
 | Layout classes | `.rc-row` and `.rc-col` (flex row / column, wrapping), `.rc-grid` (auto-fit grid), `.rc-gap-1` … `.rc-gap-4`, `.rc-muted`, `.rc-mono`, `.rc-num` (tabular figures, right-aligned in tables), `.rc-card` (a quiet inner group, not an outer frame), `.rc-scroll` (bounded, scrolls inside). |
 | Kit: text and numbers | `.rc-title`, `.rc-lead` (the finding, muted), `.rc-label`; `.rc-stats` (auto-fit grid) of `.rc-stat` with `.rc-stat-value`, `.rc-stat-label`, `.rc-stat-note`. |
 | Kit: status | `.rc-badge`, `.rc-callout`, tinted by `.rc-ok`, `.rc-warn`, `.rc-bad`, `.rc-info` (also on a stat, a bar, a progress bar or a line in `.rc-term`); `.rc-progress` around `<span style="width:72%">`. |
@@ -118,8 +118,8 @@ in both.
 | Kit: traces and folding | `.rc-steps` of `li.rc-step` with `.rc-done`, `.rc-active`, `.rc-failed` or `.rc-todo`; `details.rc-details` with a chevron drawn in CSS, `.rc-tree` for nested ones, `.rc-file` rows; `.rc-term`, a terminal block. |
 | Kit: actions and citations | `.rc-chip`, a pill follow-up button; `.rc-tabs`; `<span class="rc-tip" tabindex="0">1<span>Source</span></span>`, opening on hover and focus inside the page's width. |
 | Kit: behaviour, no script | One delegated listener: click, Enter or Space on a `th` of `table.rc-table[data-rc-sort]` sorts that column in place (numbers by value, otherwise the locale's collation; `data-rc-sort="text"` on a `th` forces text), `aria-sort` marks the column and its direction, and the rows are moved, not rebuilt, so ids and controls in them survive. Every `.rc-spark[data-values="1,4,2,8"]` gets an inline SVG line from its numbers (`.rc-spark-line`, `.rc-spark-area`), once, and again after a streamed update. Then: `data-rc-send="text"` calls `rustcode.send`, with the same gesture check; on a `<form data-rc-send="text">`, or on a control inside one, the form's named fields are sent after the text as `name: value` lines (a form sends when submitted, never on a click into it, and never navigates). `data-rc-copy="text"` calls `rustcode.copy`, and the element says "Copied" for 1.5 s. `<div class="rc-tabs"><div role="tablist"><button role="tab" data-rc-tab="a">A</button></div><section data-rc-panel="a">…</section></div>`: the first tab is active at load, click and arrow keys switch, and `aria-selected` and `hidden` follow. |
-| Height | The page reports its content, not the document: the body's height or its `scrollHeight`, plus its margins. The body is `position: relative`, so that also counts what is absolutely placed in it. Collapsing a `<details>` or moving to a shorter tab shrinks the frame. A page sized to the frame (`html, body { height: 100% }`) still cannot shrink, and stays at the reserved height. |
-| Chart.js | `<script src="rustcode-lib:chart.js"></script>` as before. `Chart.defaults` are themed from the variables (text, grid lines, font, the eight series colours), so agents set no colours; a page that needs one reads it with `getComputedStyle(document.documentElement).getPropertyValue('--rc-…')`. Tooltips appear on hover with a dot in each series' own colour, a bar under the pointer is a step lighter, the legend toggles a series on click, and the chart sizes to its box. A line is filled from its colour down (`.rc-chart`); under `prefers-reduced-motion` animation is off. Colour changes are applied at once rather than tweened: Chart.js tweens colours through interpolators keyed by type, and a canvas gradient is an object with none, so the animator threw `this._fn is not a function` on its first tick and the chart never drew. System colour keywords (`CanvasText`, `AccentColor`) work in CSS but not on a canvas, which draws nothing with them. |
+| Height | The page reports its content, not the document: the in-flow `#rc-root`'s height plus its margins. A hover overlay (`.rc-tip > span`, a bar's `data-rc-tip`) is `position: absolute` and only revealed with `visibility`, so it never changes that number; The document never scrolls (`html { overflow: hidden }`), so a scrollbar cannot appear, narrow the layout and re-wrap the text under the pointer; only a view past the 720 px clamp scrolls, inside the body. The page also says when the pointer is in it, and the app holds a measurement taken then until it leaves (a click or key press applies at once), so moving the pointer over a view never moves the chat below it. Collapsing a `<details>` or moving to a shorter tab shrinks the frame. A page sized to the frame (`html, body { height: 100% }`) still cannot shrink, and stays at the reserved height. |
+| Chart.js | `<script src="rustcode-lib:chart.js"></script>` as before. `Chart.defaults` are themed from the variables (text, grid lines, font, the eight series colours), so agents set no colours; a page that needs one reads it with `getComputedStyle(document.documentElement).getPropertyValue('--rc-…')`. Tooltips appear on hover with a dot in each series' own colour, a bar under the pointer is a step lighter, the legend toggles a series on click, and the chart sizes to its box (200 px, or 140/260 with `data-size=\"sm\"/\"lg\"`). A line is filled from its colour down (`.rc-chart`); under `prefers-reduced-motion` animation is off. Colour changes are applied at once rather than tweened: Chart.js tweens colours through interpolators keyed by type, and a canvas gradient is an object with none, so the animator threw `this._fn is not a function` on its first tick and the chart never drew. System colour keywords (`CanvasText`, `AccentColor`) work in CSS but not on a canvas, which draws nothing with them. |
 | `window.rustcode` | `send(text, context?)`: sends `text` as the user's next message in the thread, for follow-ups such as "Show details for X"; `context`, a JSON-serialisable object, follows the text as a fenced `json` block, so a view sends values back structured rather than in prose. The whole message is capped at 2,000 characters, and it works only inside a click or key press handler. `copy(text)`: copies to the clipboard. `theme`: `"light"` or `"dark"`. `onThemeChange(callback)`: called with the new theme. |
 
 ### Charts, presets
@@ -220,8 +220,8 @@ gained forms and charts, and lost a longer sentence about when to reach for a
 view (250 bytes before, 197 now).
 
 The `smart-ui` skill is built into the engine
-(`rustcode/engine/src/skills_builtin/smart-ui.md`, 1,552 estimated tokens
-with its front matter; a test keeps it under 1,600) and is
+(`rustcode/engine/src/skills_builtin/smart-ui.md`, 2,188 estimated tokens
+with its front matter; a test keeps it under 2,300) and is
 listed with the other skills as `<built-in>/smart-ui`. It holds the rule, the
 pick-by-question table (a trend is a line chart, parts of a whole a stacked bar
 or donut, a ranking `.rc-bars`, exact values a table, a headline number
@@ -325,7 +325,12 @@ all. It reports:
 - what the page cannot do, with the line: network loads, `fetch`,
   `XMLHttpRequest`, sockets, storage, `document.write`, `@import`, `vh` units,
   and `CanvasText`/`AccentColor` inside a script (a canvas draws nothing with a
-  system colour).
+  system colour);
+- style the kit already sets, with the line: a colour written out (hex, `rgb()`,
+  `hsl()`, or a `color`/`background`/`border-color` value that is not a
+  `var(--rc-*)`), a `font-size` or `font-family`, a fixed `height` in px, and a
+  `.rc-card` inside another `.rc-card`. A `<style>` block is fine when it holds
+  only layout and variables; its theme values are not reported.
 
 It does **not** run the page: no script errors, no fitted height, no
 screenshot. It is a lint for the mistakes agents actually make, and the

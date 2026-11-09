@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { MOCK_CHARTS, MOCK_KIT } from "../acp/mock";
+import { MOCK_CHARTS, MOCK_KIT, MOCK_VIEW } from "../acp/mock";
 import {
   AutoRun,
   claimLive,
   clearHalt,
+  HoverSize,
   haltOf,
   haltView,
   liveCount,
@@ -24,12 +25,14 @@ import {
   previewable,
   runtimeScript,
   usesChart,
+  varsCss,
 } from "./page";
 import {
   blockProblem,
   blockTitle,
   clampHeight,
   closeOpenTags,
+  MAX_HEIGHT,
   MAX_LIVE,
   splitReply,
   stripEmptyTags,
@@ -253,6 +256,99 @@ describe("smart ui", () => {
       ".rc-scroll",
     ]) {
       expect(page).toContain(name);
+    }
+  });
+
+  test("the page follows the app's radius, fonts and series, on every platform", () => {
+    const tokens: Record<string, string> = {
+      "--rc-accent": "#ff8800",
+      "--rc-radius-md": "4px",
+      "--rc-radius-sm": "3px",
+      "--radius-full": "9999px",
+      "--text-callout": "14px",
+      "--text-sub": "12px",
+      "--text-caption": "11px",
+      "--text-title3": "17px",
+      "--text-title": "26px",
+    };
+    const theme = pageTheme("dark", (name) => tokens[name] ?? "#000", {
+      sans: "Inter, sans-serif",
+      mono: "JetBrains Mono, monospace",
+    });
+    expect(theme.vars["--rc-radius"]).toBe("4px");
+    expect(theme.vars["--rc-radius-sm"]).toBe("3px");
+    expect(theme.vars["--rc-radius-pill"]).toBe("9999px");
+    expect(theme.vars["--rc-text-size"]).toBe("14px");
+    expect(theme.vars["--rc-text-size-value"]).toBe("26px");
+    expect(theme.vars["--rc-font"]).toBe("Inter, sans-serif");
+    expect(theme.vars["--rc-mono"]).toBe("JetBrains Mono, monospace");
+    // The accent leads the series, so charts follow a custom theme too.
+    expect(theme.vars["--rc-series-1"]).toBe("#ff8800");
+    expect(theme.vars["--rc-series-2"]).toBe("#ff9f0a");
+    // A theme change posts the same variables the page started with.
+    const css = varsCss(theme);
+    expect(css).toContain("--rc-radius: 4px;");
+    expect(css).toContain("--rc-font: Inter, sans-serif;");
+    expect(css).toContain("--rc-series-1: #ff8800;");
+  });
+
+  test("a hover never changes the size the app reserved", () => {
+    const theme = pageTheme("light", () => "#000");
+    const script = runtimeScript("tok", theme);
+    // Measured from the in-flow root, so an absolutely placed tip or bar label is not counted.
+    expect(script).toContain('getElementById("rc-root")');
+    expect(script).not.toContain("body.scrollHeight");
+    // The page says when the pointer is in it, and the app holds a height that moves then.
+    expect(script).toContain('type: "hover"');
+    expect(script).toContain('addEventListener("pointerout"');
+    const page = buildPage("<p>x</p>", "tok", theme);
+    expect(page).toContain('<div id="rc-root"><p>x</p></div>');
+    // A reveal, not a layout change: no scrollbar and no display swap under the pointer.
+    expect(BASE_CSS).toContain("html { overflow: hidden; }");
+    expect(BASE_CSS).toContain("#rc-root > * + * { margin-top: 12px; }");
+    expect(BASE_CSS).toContain(
+      ".rc-tip:hover > span, .rc-tip:focus > span { visibility: visible; opacity: 1; }",
+    );
+    expect(BASE_CSS).toContain(".rc-bar[data-rc-tip]:hover::after { visibility: visible; opacity: 1; }");
+    expect(BASE_CSS).not.toContain(".rc-tip > span { display: none");
+  });
+
+  test("a height measured under the pointer waits for it to leave", () => {
+    const gate = new HoverSize(300);
+    expect(gate.measure(300)).toBe(300);
+    gate.hover(true);
+    // A tip near the bottom opens: not drawn until the pointer is gone.
+    expect(gate.measure(360)).toBeNull();
+    expect(gate.measure(340)).toBeNull();
+    expect(gate.value).toBe(300);
+    // Moving to another tip still does not move the chat below.
+    expect(gate.hover(true)).toBeNull();
+    expect(gate.hover(false)).toBe(340);
+    expect(gate.value).toBe(340);
+    // A click may legitimately open a panel under the pointer.
+    gate.hover(true);
+    expect(gate.measure(420, true)).toBe(420);
+    expect(gate.value).toBe(420);
+  });
+
+  test("one type scale and one chart height", () => {
+    // A view past the app's clamp still scrolls, inside the body, where the app stops growing it.
+    expect(BASE_CSS).toContain(`max-height: ${MAX_HEIGHT}px; overflow-y: auto;`);
+    expect(BASE_CSS).toContain("var(--rc-text-size-value)");
+    expect(BASE_CSS).toContain("var(--rc-text-size-xs)");
+    expect(BASE_CSS).toContain(".rc-chart { position: relative; height: 200px; }");
+    expect(BASE_CSS).toContain(".rc-chart[data-size=sm]");
+    expect(BASE_CSS).toContain(".rc-chart[data-size=lg]");
+  });
+
+  test("the mock's views are kit only, on the theme and the rhythm", () => {
+    for (const lines of [MOCK_VIEW, MOCK_KIT, MOCK_CHARTS]) {
+      const source = splitReply(lines.join(""))
+        .filter((p) => p.kind === "ui")
+        .map((p) => p.source)
+        .join("");
+      expect(source).not.toMatch(/style="[^"]*(color|font-size|font-family|height)/i);
+      expect(source).not.toMatch(/#[0-9a-f]{3,6}\b/i);
     }
   });
 
