@@ -58,6 +58,43 @@ export function matches(text: string, query: string): boolean {
     .every((w) => hay.includes(w));
 }
 
+/** Every word of the query starts a word of the title: what the action is called, not a hidden word. */
+export function titleMatches(title: string, query: string): boolean {
+  const words = title
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean);
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((q) => words.some((w) => w.startsWith(q)));
+}
+
+/**
+ * How well an action answers the query: one named by it first, then one whose title only holds the
+ * query inside it, then one found by its extra words alone.
+ */
+export function rankOf(a: PaletteAction, query: string): number {
+  if (!query.trim()) return 0;
+  if (titleMatches(a.label, query)) return 0;
+  return matches(a.label, query) ? 1 : 2;
+}
+
+/**
+ * The actions in the order a query deserves: the one it names first (and the shortest of them: Open
+ * Usage before Settings: Usage), then the ones whose title holds it, then the ones only its extra
+ * words find. Ties keep the order they were listed in.
+ */
+export function ranked(actions: PaletteAction[], query: string): PaletteAction[] {
+  if (!query.trim()) return actions;
+  const rank = (a: PaletteAction) => rankOf(a, query);
+  return [...actions].sort((a, b) => {
+    const r = rank(a) - rank(b);
+    return r || (rank(a) === 0 ? a.label.length - b.label.length : 0);
+  });
+}
+
 /** A thread's pull request, from the projects' saved reads (state/pulls.ts), if it has one. */
 export function pullOfThread(s: SessionSummary): PullRequest | undefined {
   return pullForBranch(cachedPulls(s.worktree?.repo || s.cwd), s.worktree?.branch);
@@ -95,27 +132,27 @@ export function sidebarActions(now = Date.now()): PaletteAction[] {
   return [
     {
       id: "add-project",
-      label: "Add project",
+      label: "Add project folder",
       detail: "Open a folder and start a thread in it",
       icon: FolderPlus,
-      words: "open folder directory workspace",
+      words: "open add folder directory workspace project",
       run: () => void pickFolder(s.projectCwd || undefined).then((p) => p && startNewThread(p)),
     },
     {
       id: "pulls",
-      label: "Pull requests",
-      detail: "Of this project",
+      label: "Open Git",
+      detail: "Pull requests of this project",
       icon: GitPullRequest,
-      words: "pr github review merge",
+      words: "open git pull requests pr github review merge changes",
       disabled: s.agent?.pullRequests ? undefined : "Not available with this harness",
       run: () => setPanel("pulls"),
     },
     {
       id: "usage",
-      label: "Usage",
+      label: "Open Usage",
       detail: "Plan limits and what each harness reported",
       icon: Gauge,
-      words: "limits quota plan tokens",
+      words: "open settings limits quota plan tokens",
       run: () => openSettings("usage"),
     },
     {

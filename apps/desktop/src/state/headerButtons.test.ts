@@ -11,7 +11,7 @@ import {
 const ids = (...list: string[]) => list as HeaderButtonId[];
 
 describe("header buttons sanitising", () => {
-  test("pull requests are hidden by default: the sidebar's foot row holds that button", () => {
+  test("pull requests are hidden by default: ⌘K holds that action", () => {
     expect(DEFAULT_HEADER_BUTTONS).not.toContain("pulls");
     expect(DEFAULT_HEADER_BUTTONS).toEqual(ids("status", "plan", "terminal", "details", "changes"));
     // Still a button the setting lists, so it can be shown.
