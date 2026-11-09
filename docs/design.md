@@ -192,18 +192,25 @@ card. A tip adds only its inset and width: `tipSurface`
 ## Glass
 
 One translucency, one recipe, for every floating surface: popovers, menus,
-tooltips, dialogs, toasts, the composer and the lightbox. Two tokens tune all of it:
-`--rc-glass-alpha` (72%, how much of the surface shows through) and
-`--rc-glass-filter` (`saturate(1.15) blur(9px)`). The fills are steps off the
-same alpha — `--rc-glass-bg` (`surface-2` at `--rc-glass-alpha`),
+tooltips, dialogs, toasts, the composer and the lightbox. `--rc-glass-alpha`
+(72%, how much of the surface shows through) is the one token. The fills are
+steps off it — `--rc-glass-bg` (`surface-2` at `--rc-glass-alpha`),
 `--rc-glass-bg-strong` at `--rc-glass-alpha-strong` (84%) for popovers, menus
 and floating pills, `--rc-glass-faint-bg` at `--rc-glass-alpha-faint` (24%) for
-a new thread's cards. Use `.rc-glass` or the `elevated` utility, never a
+a new thread's cards. The filter is not a token: `saturate(1.15) blur(9px)` is
+written once, literally, in the `glass-filter` utility, and every surface that
+blurs takes it with `@apply glass-filter`. WebKit's prefixed
+`backdrop-filter` ignores CSS variables and paints no blur for one (WebKit bug
+289800), its unprefixed property is behind a flag, and Linux's WebKitGTK is
+that engine: a `var()` there left the glass translucent with nothing blurred
+behind it (#3328). Both properties are written, the prefixed one being the one
+WebKit paints with. Use `.rc-glass` or the `elevated` utility, never a
 hand-made `backdrop-filter`. Reduce transparency (the media query, or the
-system setting the shell reads) turns the pair solid. Headers use the same
-filter tinted with the pane instead of a surface (`--rc-glass-pane`, `bg` at
-78%; 52% with `.rc-frost` over a new thread's banner), through
-`.rc-header-glass`. Panes, cards, rows and the sidebar stay opaque.
+system setting the shell reads) turns the fill solid and takes the filter away.
+Headers use the same filter tinted with the pane instead of a surface
+(`--rc-glass-pane`, `bg` at 78%; 52% with `.rc-frost` over a new thread's
+banner), through `.rc-header-glass`. Panes, cards, rows and the sidebar stay
+opaque.
 
 The one other use of that filter is the scrim a narrow window's side sheet opens
 over, `.rc-scrim`: `bg` at 52%, blurred, with what it covers opaque behind it
@@ -437,9 +444,15 @@ the macOS look is the base rules alone. To look at one in the mock, set
 
 - Linux has the same in-app glass as the others; Tauri cannot ask a Linux
   compositor to blur behind the window, so there is no window material.
-  Where the web view has no `backdrop-filter` at all, the page takes the
-  Reduce-transparency tokens by itself (`lib/transparency.ts`): a translucent
-  surface without its blur is text over text.
+  WebKitGTK paints the shared filter with the GPU's compositor, which the
+  switches set to get past a driver or Wayland bug take away
+  (`WEBKIT_DISABLE_COMPOSITING_MODE`; Settings › Diagnostics lists them). A web
+  view like that still answers `CSS.supports("backdrop-filter", …)` with yes,
+  so the shell answers instead: `webview_blur` (`src-tauri/src/webview.rs`)
+  says no, and the page takes the Reduce-transparency tokens by itself
+  (`lib/transparency.ts`). The same happens where the web view has no
+  `backdrop-filter` at all: a translucent surface without its blur is text over
+  text.
 - Windows 11: the shell applies Mica when it builds the window
   (`src-tauri/src/webview.rs`; the window is `transparent` in
   `tauri.windows.conf.json`) and `window_material` tells the page, which sets

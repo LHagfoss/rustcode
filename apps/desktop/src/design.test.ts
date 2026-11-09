@@ -206,7 +206,12 @@ describe("design system", () => {
     const reduced = block(css.indexOf(":root.reduce-transparency {"));
     expect(reduced).toContain("--rc-scrim-bg: var(--rc-bg);");
     expect(reduced).toContain("--rc-lightbox-scrim-bg: var(--rc-bg);");
-    expect(reduced).toContain("--rc-glass-filter: none;");
+    // The solid fallback takes the shared filter away with the translucency: a blur behind an
+    // opaque fill is a compositing layer for nothing. Both paths do it: the media query (the first
+    // frame, before lib/transparency.ts has run) and the class.
+    const solid = [...css.matchAll(/:root(?:\.reduce-transparency)?\s+:is\([^)]*\)[^{]*\{([^}]*)\}/g)];
+    expect(solid).toHaveLength(2);
+    for (const rule of solid) expect(rule[1]).toContain("backdrop-filter: none;");
     expect(block(css.indexOf(".rc-scrim {"))).toContain("background: var(--rc-scrim-bg);");
     expect(block(css.indexOf(".rc-lightbox-scrim {"))).toContain(
       "background-color: var(--rc-lightbox-scrim-bg);",
@@ -221,15 +226,38 @@ describe("design system", () => {
 
   test("every translucent surface draws the shared filter, and nothing animates a blur", () => {
     const css = readFileSync(join(SRC, "index.css"), "utf8");
-    // One filter for the lot: the composer, popovers, menus, dialogs, toasts, the header pane and
-    // the overview's cards all read `--rc-glass-filter`, so one edit tunes them together.
-    const filters = [...css.matchAll(/^\s*(?:-webkit-)?backdrop-filter:\s*([^;]+);/gm)];
-    expect(filters.length).toBeGreaterThan(6);
-    for (const match of filters) expect(match[1]?.trim()).toBe("var(--rc-glass-filter)");
+    const block = (start: number) => {
+      expect(start).toBeGreaterThanOrEqual(0);
+      return start < 0 ? "" : css.slice(start, css.indexOf("}", start));
+    };
+    // One filter for the lot, written in one place as a literal: a `var()` here is no blur on
+    // WebKit, whose prefixed `backdrop-filter` ignores custom properties (WebKit bug 289800), and
+    // the `-webkit-` twin is the one it paints with.
+    const FILTER = "saturate(1.15) blur(9px)";
+    const filters = [...css.matchAll(/^\s*(?:-webkit-)?backdrop-filter:\s*([^;]+);/gm)].map((match) =>
+      match[1]?.trim(),
+    );
+    expect(new Set(filters)).toEqual(new Set([FILTER, "none"]));
     // The composer keeps the sidebar's hue and takes the shared alpha and filter in every theme.
     expect(css).not.toContain("--rc-composer-filter");
     for (const alpha of ["--rc-glass-bg", "--rc-glass-bg-strong", "--rc-glass-faint-bg"])
       expect(css).toContain(`${alpha}: color-mix(in srgb, var(--rc-surface-2) var(--rc-glass-alpha`);
+    // Every surface that draws glass takes the one filter; none names a token of its own.
+    for (const surface of [
+      ".rc-glass {",
+      ".rc-glass-faint {",
+      ".rc-scrim {",
+      ".rc-lightbox-scrim {",
+      ".rc-glass-overlay {",
+      ".rc-composer {",
+      ".rc-composer-footer {",
+      ".rc-header-glass::before {",
+      "@utility elevated {",
+    ])
+      expect(block(css.indexOf(surface)), surface).toContain("@apply glass-filter;");
+    expect(css).toContain(
+      ".rc-composer,\n.rc-toast {\n  background: var(--rc-glass-bg);\n  @apply glass-filter;",
+    );
     // A `backdrop-filter` under an element that fades or slides samples an empty group, so the blur
     // drops for the length of the motion and snaps back at its end (#3299). Nothing that draws the
     // glass carries an animation, and the overview's keyframes animate only what a card can afford.
@@ -237,7 +265,8 @@ describe("design system", () => {
     for (const match of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
       const selector = match[1] ?? "";
       const body = match[2] ?? "";
-      if (body.includes("backdrop-filter") && body.includes("animation")) animated.push(selector.trim());
+      const glass = body.includes("backdrop-filter") || body.includes("@apply glass-filter");
+      if (glass && body.includes("animation")) animated.push(selector.trim());
     }
     expect(animated).toEqual([]);
     // The motion may only be claimed by what is inside a card: the fade and rise by the body, the

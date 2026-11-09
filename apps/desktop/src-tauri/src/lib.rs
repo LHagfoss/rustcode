@@ -113,6 +113,7 @@ pub fn run() {
             updater::release_notes,
             webview::display_info,
             webview::window_material,
+            webview::webview_blur,
         ])
         .setup(|app| {
             // The engine starts with the app, in parallel with the webview loading the UI.

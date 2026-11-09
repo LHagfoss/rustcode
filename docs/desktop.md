@@ -633,7 +633,7 @@ composer's keys stay outside the table.
   pick up the wallpaper through the window's material (`windowEffects` is
   still set in `tauri.conf.json` but nothing shows it). What floats (the
   composer, popovers, menus, tooltips, dialogs, toasts, the lightbox)
-  shares one glass, `--rc-glass-bg` + `--rc-glass-filter` on every OS; Reduce transparency (Settings › Appearance, the media query, or the system setting
+  shares one glass, `--rc-glass-bg` + the shared `glass-filter` on every OS; Reduce transparency (Settings › Appearance, the media query, or the system setting
   read by the shell's `reduce_transparency`) makes them solid. Windows 11 lets Mica show through the sidebar alone (design.md › Platforms). Hover is
   colour only, in 60 ms and out 120 ms; focus rings show for the keyboard
   only; scrollbars are thin and appear on hover, with a stable gutter on
