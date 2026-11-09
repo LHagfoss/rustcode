@@ -25,7 +25,10 @@ rustcode server connect   # ACP on stdin/stdout, relayed to the server
   30 seconds for it. When stdin closes it still relays what the server owes,
   then exits once the server closes the connection.
 - `rustcode --acp` is unchanged: a standalone engine with exactly one client,
-  which ends with it.
+  which ends with it. While it runs it also publishes where another local
+  process can open ACP on that same engine (`run/engine.json`), so the remote
+  gateway relays a paired desktop to the threads the app shows without a
+  server behind it (`docs/remote.md` › Desktop ACP channel).
 
 ## Where it lives
 
@@ -39,6 +42,7 @@ server); its log is `<config dir>/logs/server.log` (see
 | `server.lock` | Held (advisory lock) for the server's life; one server per user and config directory. The OS releases it however the process ends. |
 | `server.json` | `pid`, `version`, `endpoint`, `started_at` of the running server, removed when it stops. A crash can leave it behind; clients only trust a connection. |
 | `server.sock` | The Unix socket (macOS, Linux). |
+| `engine.json` | Same fields for an engine started by a client (`rustcode --acp`, the app's engine) that no server runs behind, with the `engine-<pid>.sock` it listens on. Removed when it stops; a crash can leave it behind, so the reader connects to decide. |
 
 On Windows the endpoint is a named pipe, `\\.\pipe\rustcode-server-<random>`,
 published only in `server.json`.

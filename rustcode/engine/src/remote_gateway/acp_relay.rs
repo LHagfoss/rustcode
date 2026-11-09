@@ -108,10 +108,13 @@ fn allowed(method: &str) -> bool {
             .any(|prefix| method.starts_with(prefix))
 }
 
-/// Connect only to an already running server. The caller keeps revocation and
-/// gateway shutdown cancellation active for the lifetime of this future.
+/// Connect to the first engine that answers, and relay between it and the
+/// device. A description left behind by an engine that has since ended is
+/// logged and skipped, then the next endpoint is tried. The caller keeps
+/// revocation and gateway shutdown cancellation active for the lifetime of
+/// this future.
 pub(super) async fn relay(
-    endpoint: &str,
+    endpoints: &[String],
     writer: &mut SplitSink<Socket, Message>,
     reader: &mut SplitStream<Socket>,
     control: Arc<ConnectionControl>,
@@ -119,11 +122,13 @@ pub(super) async fn relay(
     ping_interval: Duration,
     idle_timeout: Duration,
 ) -> Option<ErrorCode> {
-    let stream =
-        match tokio::time::timeout(write_timeout, crate::server::listen::connect(endpoint)).await {
-            Ok(Ok(stream)) => stream,
-            _ => return Some(ErrorCode::Internal),
-        };
+    let Some(stream) = connect_first(endpoints, write_timeout).await else {
+        eprintln!(
+            "remote ACP: no local RustCode engine accepted a connection (tried {})",
+            endpoints.join(", ")
+        );
+        return Some(ErrorCode::Internal);
+    };
     if !matches!(
         tokio::time::timeout(
             write_timeout,
@@ -220,6 +225,30 @@ pub(super) async fn relay(
         }
     };
     tokio::select! { result = produce => result, result = consume => result }
+}
+
+/// The first endpoint that accepts a connection. Which endpoints exist is
+/// only a description (`server.json`, `engine.json`); connecting tells which
+/// engine is really running.
+async fn connect_first(
+    endpoints: &[String],
+    write_timeout: Duration,
+) -> Option<crate::server::listen::ClientStream> {
+    for endpoint in endpoints {
+        match tokio::time::timeout(write_timeout, crate::server::listen::connect(endpoint)).await {
+            Ok(Ok(stream)) => {
+                crate::dbg_log!("remote ACP: relaying to {endpoint}");
+                return Some(stream);
+            }
+            Ok(Err(error)) => {
+                crate::dbg_log!("remote ACP: {endpoint} did not accept a connection: {error}")
+            }
+            Err(_) => crate::dbg_log!(
+                "remote ACP: {endpoint} did not accept a connection within {write_timeout:?}"
+            ),
+        }
+    }
+    None
 }
 
 #[cfg(test)]

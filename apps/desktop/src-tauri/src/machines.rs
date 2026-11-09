@@ -368,9 +368,12 @@ async fn supervise(
     loop {
         set_state(&machines, &id, MachineState::Connecting, None, None);
         let started = Instant::now();
-        match relay_once(&machines, &config_dir, &id, &channel, &mut inbox).await {
+        // Why this attempt did not stay up, in the words the row shows. The
+        // countdown is the chip (`retryInSecs`), never the detail, so a reason
+        // is not replaced by "Retrying in N s" (#3341).
+        let reason = match relay_once(&machines, &config_dir, &id, &channel, &mut inbox).await {
             End::Removed => return,
-            End::Closed => {}
+            End::Closed => "The machine closed the connection.".to_owned(),
             End::Failed(error) => {
                 let message = format!("{error:#}");
                 if needs_pairing(&error) {
@@ -388,8 +391,9 @@ async fn supervise(
                     &channel,
                     format!("desktop: {} is not reachable: {message}", machine.name),
                 );
+                message
             }
-        }
+        };
         // A connection that worked for a while deserves a fresh schedule.
         if started.elapsed() >= STABLE_AFTER {
             attempt = 0;
@@ -401,7 +405,7 @@ async fn supervise(
             &machines,
             &id,
             MachineState::Offline,
-            Some(format!("Not connected. Retrying in {secs} s.")),
+            Some(reason),
             Some(secs),
         );
         emit_closed(&channel, &format!("Waiting {secs} s before trying again."));

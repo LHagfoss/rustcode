@@ -10,7 +10,13 @@
 //! `rustcode server connect` is a client: it relays its stdin and stdout to
 //! the server, starting one in the background first if none runs, so
 //! anything that spoke ACP to `rustcode --acp` can speak it to the server.
+//!
+//! An engine started by a client (`rustcode --acp`, the desktop app's) is not
+//! a server, but it publishes where a local relay can reach it
+//! (`engine_endpoint.rs`), so a paired device opens the threads the app shows
+//! without a server running behind it.
 
+pub(crate) mod engine_endpoint;
 pub(crate) mod listen;
 mod lock;
 mod peer;
@@ -19,7 +25,7 @@ pub use lock::ServerInfo;
 
 use crate::acp::{AcpEngine, KillHarnesses};
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// How long `connect` waits for a server it started to listen.
@@ -39,6 +45,27 @@ pub fn run_dir() -> io::Result<PathBuf> {
 /// another one runs.)
 pub fn running() -> Option<ServerInfo> {
     lock::read_info(&run_dir().ok()?)
+}
+
+/// Every local endpoint a relay can open ACP on in `config_directory`, best
+/// first: an engine started by a client (`rustcode --acp`, the app's engine,
+/// `engine_endpoint.rs`) and then a shared server (`server.json`). Either may
+/// be a dead description — a crashed process leaves it behind — so connecting
+/// decides. An empty list means no engine described itself.
+pub(crate) fn relay_endpoints(config_directory: &Path) -> Vec<String> {
+    let run = config_directory.join("run");
+    let mut endpoints: Vec<String> = Vec::with_capacity(2);
+    // The app's own engine first: it holds the threads the user is looking at,
+    // so a device opens those rather than a shared server's view of the store.
+    if let Some(published) = engine_endpoint::published(&run) {
+        endpoints.push(published.endpoint);
+    }
+    if let Some(info) = lock::read_info(&run)
+        && !endpoints.contains(&info.endpoint)
+    {
+        endpoints.push(info.endpoint);
+    }
+    endpoints
 }
 
 /// How `server run` ended.
@@ -113,7 +140,7 @@ async fn serve(
 /// build, deeper than a runtime worker's stack: like `rustcode --acp`, which
 /// serves its client on the main thread, each client gets a thread of its
 /// own. What a handler spawns, a turn first, outlives the client.
-fn serve_client<S>(engine: AcpEngine, stream: S)
+pub(crate) fn serve_client<S>(engine: AcpEngine, stream: S)
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static,
 {

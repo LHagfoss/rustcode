@@ -497,10 +497,24 @@ async fn pump(
                         }
                         // Stop hub pushes before switching to raw ACP frames.
                         shared.router.disconnected(&connection.context);
-                        let Some(endpoint) = crate::server::listen::running_endpoint(&shared.lifecycle.config_directory()) else {
+                        // An app-spawned engine publishes its own endpoint; a
+                        // shared server publishes `run/server.json`. Either
+                        // description can be a dead process's, so relaying
+                        // tries each in turn (#3341).
+                        let endpoints = crate::server::relay_endpoints(
+                            &shared.lifecycle.config_directory(),
+                        );
+                        if endpoints.is_empty() {
+                            eprintln!(
+                                "remote ACP: no RustCode engine is running to relay to; \
+                                 keep the app open on this machine, or run `rustcode server run`"
+                            );
+                            crate::dbg_log!(
+                                "remote ACP: no engine described itself in run/ (no engine.json, no server.json)"
+                            );
                             return Some(ErrorCode::Internal);
-                        };
-                        return super::acp_relay::relay(&endpoint, writer, reader, Arc::clone(&connection.control), limits.write_timeout, limits.ping_interval, limits.idle_timeout).await;
+                        }
+                        return super::acp_relay::relay(&endpoints, writer, reader, Arc::clone(&connection.control), limits.write_timeout, limits.ping_interval, limits.idle_timeout).await;
                     }
                     if thread_names {
                         let text = wire_names::to_session_names(text.as_str());
@@ -539,6 +553,7 @@ fn close_message(code: ErrorCode) -> &'static str {
         ErrorCode::IdleTimeout => "the connection was idle for too long",
         ErrorCode::FrameTooLarge => "frame is too large",
         ErrorCode::InvalidFrame => "frames must be JSON text",
+        ErrorCode::Internal => "the relay to this machine's engine could not be opened",
         ErrorCode::ShuttingDown => "the gateway is shutting down",
         _ => "connection closed",
     }
