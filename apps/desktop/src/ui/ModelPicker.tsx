@@ -1,12 +1,13 @@
-// The composer's model pill and its card. The card opens on the effort, because that is what is
-// changed most: the current level and the model's name on one header row with Fast mode and the
-// reset at its end, a slider over the levels that model itself lists, and the harness's logins
-// below. The model name swaps the card for the searchable list of every harness's models (one
-// harness on top, the current model checked), and picking one comes back to the slider with the
-// effort clamped to the new model's levels. What the thread's harness cannot do is greyed out with
-// the reason, from capability flags.
+// The composer's model pill and its card. The card opens on the searchable list of every harness's
+// models (one harness on top, the current model checked), in one box of a fixed height: a view that
+// is longer scrolls inside it and a shorter one does not shrink it, so the card never jumps while
+// the user moves around it. Behind the list is the effort: the current level and the model's name on
+// one header row with Fast mode and the reset at its end, a short slider over the levels that model
+// itself lists, and the harness's logins as chips at the card's foot. Picking a model comes back to
+// the slider with the effort clamped to the new model's levels. What the thread's harness cannot do
+// is greyed out with the reason, from capability flags.
 
-import { Check, ChevronLeft, ChevronRight, ChevronUp, Lock, RotateCcw, Zap } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, ChevronUp, Lock, RotateCcw, UserRound, Zap } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   type ConfigOption,
@@ -62,6 +63,13 @@ const EFFORT_ORDER = ["off", "none", "default", "minimal", "low", "medium", "hig
  * The `size-6` class and this number move together.
  */
 const THUMB = 24;
+
+/**
+ * The card's one height, shared by the model list and the effort behind it: a view that is longer
+ * scrolls inside and a shorter one leaves the card as it is, so nothing jumps under the pointer.
+ * The window's own room caps it, and 430 is what it is on a screen with space to spare.
+ */
+const CARD_HEIGHT = "min(430px, var(--radix-popper-available-height, 430px))";
 
 /**
  * Where a point on the track sits from the pill's left edge, as a length: the thumb's radius at 0,
@@ -304,9 +312,10 @@ function EffortSlider({
 }
 
 /**
- * The card's first view: one header row with the effort and the model's name, Fast mode and the
- * reset at its end, then the slider, then the harness's logins. No effort control on the harness,
- * and the slider's place says why.
+ * The card's effort view: one header row with the effort and the model's name, Fast mode and the
+ * reset at its end, then the short slider, then the harness's logins at the card's foot. No effort
+ * control on the harness, and the slider's place says why. It fills the card's fixed height, so the
+ * logins sit on the bottom edge rather than floating under a short track.
  */
 function EffortCard({
   levels,
@@ -348,7 +357,7 @@ function EffortCard({
   const name = model ?? "Default model";
   const showEffort = effortsShown(levels, effort);
   return (
-    <div className="flex flex-col pb-0.5">
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-0.5">
       <div className="flex items-center gap-1 px-1.5 pt-1 pb-0.5">
         <div className="flex min-w-0 flex-1 items-center gap-1">
           <button
@@ -394,70 +403,64 @@ function EffortCard({
           </button>
         </Tooltip>
       </div>
-      {showEffort && <span className="px-3 pt-1 text-callout text-fg-muted">{effortLabel(effort!)}</span>}
       <div className="px-1.5">
         {effortReason ? (
           <p className="flex items-start gap-1.5 px-2 py-1.5 text-caption text-fg-faint">
             <Lock size={10} className="mt-[2px] shrink-0" />
             <span>{effortReason}</span>
           </p>
-        ) : levels.length > 1 && effort ? (
-          <EffortSlider levels={levels} value={effort} onChange={onEffort} />
-        ) : null}
+        ) : (
+          // A short track under its level's name, centred: the card is as wide as the model list's
+          // two panes, and a slider stretched across all of it reads as a different control.
+          <div className="mx-auto w-full max-w-[260px]">
+            {showEffort && (
+              <span className="block px-2 pt-1 text-callout text-fg-muted">{effortLabel(effort!)}</span>
+            )}
+            {levels.length > 1 && effort && (
+              <EffortSlider levels={levels} value={effort} onChange={onEffort} />
+            )}
+          </div>
+        )}
       </div>
       {blocked && <p className="px-3 pb-1 text-caption text-fg-faint">{blocked}</p>}
       {accounts.length > 0 && (
-        <div className="mt-0.5 border-border border-t px-1.5 pt-1">
+        <div className="mt-auto border-border border-t px-1.5 pt-1">
           <div className="flex items-baseline gap-1.5 px-1 pb-0.5 text-caption text-fg-faint">
             <span>Account</span>
             {accountsDisabled && <span className="ms-auto">Stop the turn to switch</span>}
           </div>
-          {accounts.length > 3 ? (
-            <Select
-              label="Account"
-              value={accounts.findIndex((chip) => chip.selected).toString()}
-              disabled={accountsDisabled}
-              options={accounts.map((chip, index) => ({
-                value: String(index),
-                label: chip.name,
-                disabled: chip.gone || chip.signedOut,
-              }))}
-              onChange={(value) => {
-                const chip = accounts[Number(value)];
-                if (chip && chip.id !== undefined) onPickAccount(chip.id);
-              }}
-            />
-          ) : (
-            <div className="flex gap-1 rounded-md bg-fill-subtle p-1">
-              {accounts.map((chip) => (
-                <button
-                  key={chip.id ?? chip.name}
-                  type="button"
-                  aria-pressed={chip.selected}
-                  disabled={accountsDisabled || chip.gone || chip.signedOut}
-                  title={chip.signedOut ? "This account is not signed in" : undefined}
-                  aria-label={chip.signedOut ? `${chip.name} (not signed in)` : undefined}
-                  onClick={() => {
-                    if (chip.id === undefined) return;
-                    onPickAccount(chip.id);
-                  }}
-                  className={cx(
-                    "flex h-6 min-w-0 flex-1 items-center gap-1 rounded-md px-2 text-left text-callout",
-                    chip.selected
-                      ? "bg-fill font-medium text-fg"
-                      : "text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg",
-                    chip.signedOut && !chip.selected && "text-fg-faint",
-                    (accountsDisabled || chip.gone) && "opacity-40",
-                    chip.gone && "italic",
-                  )}
-                >
-                  <span className="min-w-0 flex-1 truncate">{chip.name}</span>
-                  {chip.signedOut && <span className="shrink-0 text-caption text-fg-faint">Signed out</span>}
-                  {chip.selected && <Check size={12} strokeWidth={2.5} className="shrink-0 text-accent" />}
-                </button>
-              ))}
-            </div>
-          )}
+          {/* Each login is a chip as wide as its own name and mark, wrapped onto another row when
+              the card runs out: two logins read as two choices, not as two halves of one control. */}
+          <div className="flex flex-wrap gap-1">
+            {accounts.map((chip) => (
+              <button
+                key={chip.id ?? chip.name}
+                type="button"
+                aria-pressed={chip.selected}
+                disabled={accountsDisabled || chip.gone || chip.signedOut}
+                title={chip.signedOut ? "This account is not signed in" : undefined}
+                aria-label={chip.signedOut ? `${chip.name} (not signed in)` : undefined}
+                onClick={() => {
+                  if (chip.id === undefined) return;
+                  onPickAccount(chip.id);
+                }}
+                className={cx(
+                  "inline-flex h-6 max-w-full min-w-0 items-center gap-1 rounded-full px-2 text-left text-callout",
+                  chip.selected
+                    ? "bg-fill font-medium text-fg"
+                    : "bg-fill-subtle text-fg-muted enabled:hover:bg-fill enabled:hover:text-fg",
+                  chip.signedOut && !chip.selected && "text-fg-faint",
+                  (accountsDisabled || chip.gone) && "opacity-40",
+                  chip.gone && "italic",
+                )}
+              >
+                <UserRound size={12} strokeWidth={1.75} className="shrink-0" />
+                <span className="min-w-0 truncate">{chip.name}</span>
+                {chip.signedOut && <span className="shrink-0 text-caption text-fg-faint">Signed out</span>}
+                {chip.selected && <Check size={12} strokeWidth={2.5} className="shrink-0 text-accent" />}
+              </button>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -754,7 +757,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   // The first open thread's config options: stable while a reply streams, so the picker does not re-render per chunk.
   const knownConfig = useApp((s) => firstConfig(s.threads));
   const [open, setOpen] = useState(false);
-  const [page, setPage] = useState<Page>("effort");
+  const [page, setPage] = useState<Page>("models");
   // A swap plays the drill motion; only after the user moved between the two views.
   const [swapped, setSwapped] = useState(false);
   // `/model` asks the picker to open (store.runCommandAction).
@@ -767,11 +770,12 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     setPage("models");
     setOpen(true);
   }, [ask]);
-  // Every open starts on the effort, the view changed most; a close leaves nothing behind.
+  // Every open starts on the model list, the view picked most, in the same box the effort is;
+  // a close leaves nothing behind.
   useEffect(() => {
     if (open) return;
     setSwapped(false);
-    setPage("effort");
+    setPage("models");
   }, [open]);
   const turnPage = (next: Page) => {
     setSwapped(true);
@@ -955,13 +959,14 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
       onOpenChange={setOpen}
       role="dialog"
       label="Model and effort"
-      // The card focuses its own control (the slider, or the search field from `/model`) so the
-      // arrow keys act on what the card is for the moment it opens.
+      // The card focuses its own control (the search field, or the slider once the user drills
+      // back to the effort) so the arrow keys act on what the card is for the moment it opens.
       onOpenAutoFocus={(event) => event.preventDefault()}
-      // One width for both views: the effort card is small, and the model list lives in the same
-      // box, so swapping between them never resizes the card.
-      className="w-[min(480px,calc(100vw-32px))] p-0"
-      style={{ maxHeight: "min(430px, var(--radix-popper-available-height, 430px))" }}
+      // One box for every view: the card keeps this height while the user moves between the model
+      // list and the effort, the view inside scrolls instead of the card resizing, and it never
+      // reaches past the room the window has under the pill.
+      className="flex w-[min(480px,calc(100vw-32px))] flex-col p-0"
+      style={{ height: CARD_HEIGHT, maxHeight: CARD_HEIGHT }}
       trigger={
         <button
           type="button"
