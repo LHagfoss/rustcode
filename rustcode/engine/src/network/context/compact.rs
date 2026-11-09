@@ -504,7 +504,8 @@ pub async fn maybe_compact_with_local_policy_and_usage_mode(
         return structured;
     }
 
-    let summary_ok = force_compact_internal(
+    report_summary_started().await;
+    let summary = force_compact_internal(
         client,
         url,
         model,
@@ -514,8 +515,11 @@ pub async fn maybe_compact_with_local_policy_and_usage_mode(
         Some(cancel_token),
         &archival_source,
     )
-    .await
-    .is_ok();
+    .await;
+    if let Err(error) = &summary {
+        report_summary_failed(&error.to_string()).await;
+    }
+    let summary_ok = summary.is_ok();
 
     if summary_ok {
         emit_compaction_metrics(raw_tokens, budget, "ai_summary", true, history.len());
@@ -1307,6 +1311,38 @@ pub(crate) async fn with_session_summarizer<F: Future>(
     SUMMARY_SESSION.scope(session, compaction).await
 }
 
+tokio::task_local! {
+    /// The session an automatic compaction reports its progress to: the
+    /// summarizer is the slow step, and the chat says so while it runs.
+    static PROGRESS_SESSION: std::sync::Arc<tokio::sync::Mutex<crate::app::AppState>>;
+}
+
+/// Run a compaction that tells `session` when its summarizer starts, and why
+/// a summary failed (`AppState::pending_compaction_progress`).
+pub(crate) async fn with_compaction_progress<F: Future>(
+    session: std::sync::Arc<tokio::sync::Mutex<crate::app::AppState>>,
+    compaction: F,
+) -> F::Output {
+    PROGRESS_SESSION.scope(session, compaction).await
+}
+
+/// The summarizer is about to run: the session's frontends show it.
+async fn report_summary_started() {
+    if let Ok(session) = PROGRESS_SESSION.try_with(std::sync::Arc::clone) {
+        let mut state = session.lock().await;
+        state.compaction_summary_error = None;
+        state.pending_compaction_progress = Some(crate::app::CompactionProgress::Started);
+    }
+}
+
+/// The summarizer failed; the compaction falls back to the local record, and
+/// the reason is kept in case that has nothing to compact either.
+async fn report_summary_failed(error: &str) {
+    if let Ok(session) = PROGRESS_SESSION.try_with(std::sync::Arc::clone) {
+        session.lock().await.compaction_summary_error = Some(error.to_owned());
+    }
+}
+
 /// A plan model streams and may reason first; a summary gets longer than a
 /// plain request's 25 seconds.
 const SESSION_SUMMARY_TIMEOUT: Duration = Duration::from_secs(120);
@@ -1443,6 +1479,27 @@ mod preserved_user_request_tests {
         ] {
             assert!(compaction_pass_did_work(path), "{path}");
         }
+    }
+
+    /// The summarizer tells the session it began, and why it failed; outside a
+    /// scoped compaction (`/compact`, tests) nobody is told.
+    #[tokio::test]
+    async fn the_summarizer_reports_to_the_scoped_session() {
+        let state = std::sync::Arc::new(tokio::sync::Mutex::new(crate::app::AppState::new()));
+        report_summary_started().await;
+        assert!(state.lock().await.pending_compaction_progress.is_none());
+
+        with_compaction_progress(std::sync::Arc::clone(&state), async {
+            report_summary_started().await;
+            report_summary_failed("timed out").await;
+        })
+        .await;
+        let state = state.lock().await;
+        assert_eq!(
+            state.pending_compaction_progress,
+            Some(crate::app::CompactionProgress::Started)
+        );
+        assert_eq!(state.compaction_summary_error.as_deref(), Some("timed out"));
     }
 
     #[tokio::test]

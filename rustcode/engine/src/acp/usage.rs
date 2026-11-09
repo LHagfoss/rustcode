@@ -160,6 +160,7 @@ pub(crate) fn compaction_card(
         serde_json::json!({
             "kind": "compaction",
             "version": COMPACTION_META_VERSION,
+            "phase": "completed",
             "trigger": stats.map(|stats| stats.trigger),
             "mode": stats.map(|stats| stats.mode),
             "beforeTokens": stats.map(|stats| stats.before_tokens),
@@ -167,6 +168,37 @@ pub(crate) fn compaction_card(
             "reclaimedTokens": stats.map(|stats| stats.reclaimed_tokens),
             "count": stats.map(|stats| stats.count),
             "summary": summary,
+        }),
+    );
+    SessionUpdate::AgentMessageChunk(
+        ContentChunk::new(ContentBlock::Text(TextContent::new(text))).meta(meta),
+    )
+}
+
+/// Where a compaction is, before there is a card: running, or ended without
+/// compacting. The client shows `Compacting context…` for `started` and
+/// replaces it with the completed card (`phase: "completed"`) or, for
+/// `failed`, an error line saying why. A client that does not know `phase`
+/// reads this as a compaction card with the text, as before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompactionPhase {
+    Started,
+    Failed,
+}
+
+pub(crate) fn compaction_progress_card(phase: CompactionPhase, text: String) -> SessionUpdate {
+    use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, TextContent};
+    let phase = match phase {
+        CompactionPhase::Started => "started",
+        CompactionPhase::Failed => "failed",
+    };
+    let mut meta = serde_json::Map::new();
+    meta.insert(
+        "rustcode".to_owned(),
+        serde_json::json!({
+            "kind": "compaction",
+            "version": COMPACTION_META_VERSION,
+            "phase": phase,
         }),
     );
     SessionUpdate::AgentMessageChunk(
@@ -836,6 +868,34 @@ mod tests {
         assert_eq!(meta["outputTokens"], 500);
         assert_eq!(meta["cachedTokens"], 400);
         assert_eq!(meta["responses"], 2);
+    }
+
+    #[test]
+    fn compaction_progress_is_a_compaction_chunk_with_a_phase() {
+        use super::{CompactionPhase, compaction_progress_card};
+        let started = serde_json::to_value(compaction_progress_card(
+            CompactionPhase::Started,
+            "Compacting context…".into(),
+        ))
+        .unwrap();
+        assert_eq!(started["sessionUpdate"], "agent_message_chunk");
+        assert_eq!(started["content"]["text"], "Compacting context…");
+        assert_eq!(started["_meta"]["rustcode"]["kind"], "compaction");
+        assert_eq!(started["_meta"]["rustcode"]["phase"], "started");
+
+        let failed = serde_json::to_value(compaction_progress_card(
+            CompactionPhase::Failed,
+            "Context compaction failed: timed out".into(),
+        ))
+        .unwrap();
+        assert_eq!(failed["_meta"]["rustcode"]["phase"], "failed");
+        assert_eq!(
+            failed["content"]["text"],
+            "Context compaction failed: timed out"
+        );
+
+        let done = serde_json::to_value(compaction_card(None, None, None)).unwrap();
+        assert_eq!(done["_meta"]["rustcode"]["phase"], "completed");
     }
 
     #[test]

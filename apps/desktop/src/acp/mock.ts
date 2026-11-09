@@ -3857,7 +3857,30 @@ export class MockEngine {
         }
         return done("end_turn");
       }
-      if (prompt.trim() === "/compact") {
+      // `/compact` says it is compacting while it runs, then replaces that line with its card. Two
+      // variants stage the other states: `/compact hold` keeps compacting until stopped, and
+      // `/compact fail` ends without compacting, with the reason. Neither line is history: a
+      // reopened thread replays the card only.
+      const compact = /^\/compact(?:\s+(hold|fail))?$/.exec(prompt.trim());
+      if (compact) {
+        const compacting = (phase: string, line: string) =>
+          this.notify(
+            update(sid, {
+              sessionUpdate: "agent_message_chunk",
+              content: text(line),
+              _meta: { rustcode: { kind: "compaction", phase } },
+            }),
+          );
+        compacting("started", "Compacting context…");
+        if (compact[1] === "hold") {
+          for (let i = 0; i < 600 && !run.cancelled; i++) await this.sleep(1_000);
+          return done(run.cancelled ? "cancelled" : "end_turn");
+        }
+        if (compact[1] === "fail") {
+          await this.sleep();
+          compacting("failed", "Context compaction failed: the summary request timed out.");
+          return done("end_turn");
+        }
         thread.compactions = (thread.compactions ?? 0) + 1;
         const before = 18_400;
         const after = 15_500;

@@ -266,4 +266,52 @@ describe("quiet automatic compaction", () => {
     // The read answer was not flagged again by the compaction.
     expect(id in useApp.getState().finished).toBe(false);
   });
+
+  const compactionRows = (id: string) =>
+    useApp.getState().threads[id]!.items.filter((item) => item.kind === "notice");
+
+  test("it shows Compacting context… from the start and the card takes the row's place", async () => {
+    const id = await openClaudeThread();
+    endedTurn(id, Date.now(), 30_000);
+    const before = useApp.getState().threads[id]!.items.length;
+    // The mock finishes in a few ticks: watch every state rather than poll.
+    let shown = false;
+    const stop = useApp.subscribe((state) => {
+      const items = state.threads[id]?.items ?? [];
+      if (items.some((item) => item.kind === "notice" && item.progress)) {
+        shown = state.threads[id]?.running === true;
+      }
+    });
+    scheduleAutoCompact(id);
+    await until(() => compacted(id));
+    stop();
+    expect(shown).toBe(true);
+    const rows = compactionRows(id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).not.toHaveProperty("progress");
+    expect(useApp.getState().threads[id]!.items.length).toBe(before + 1);
+  });
+
+  test("a compaction that fails leaves an error row, not Compacted automatically", async () => {
+    const id = await openClaudeThread();
+    await runPrompt(id, "/compact fail", emptyExtras, { automatic: true, autoCompact: true });
+    await settle(80);
+    const rows = compactionRows(id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      tone: "error",
+      text: "Context compaction failed: the summary request timed out.",
+    });
+    expect(compacted(id)).toBe(false);
+  });
+
+  test("stopping a compaction takes its row away", async () => {
+    const id = await openClaudeThread();
+    const running = runPrompt(id, "/compact hold", emptyExtras, { automatic: true, autoCompact: true });
+    await until(() => compactionRows(id).some((item) => item.kind === "notice" && item.progress));
+    await cancel(id);
+    await running;
+    expect(compactionRows(id)).toHaveLength(0);
+    expect(useApp.getState().threads[id]!.running).toBe(false);
+  });
 });

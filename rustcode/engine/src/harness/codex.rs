@@ -1236,6 +1236,17 @@ fn translate(state: &Mutex<State>, method: &str, params: &Value) -> Vec<SessionU
             if str_field(item, "type") == Some("collabAgentToolCall") {
                 return collab_updates(state, params, item, false);
             }
+            // Codex compacts on its own inside a turn, and says when it begins:
+            // the chat shows it until the completed item replaces the line.
+            if str_field(item, "type") == Some("contextCompaction") {
+                if is_agent_thread(state, params) {
+                    return Vec::new();
+                }
+                return vec![crate::acp::usage::compaction_progress_card(
+                    crate::acp::usage::CompactionPhase::Started,
+                    "Compacting context…".to_owned(),
+                )];
+            }
             tool_call_for(item)
                 .map(|call| SessionUpdate::ToolCall(fold_under_agent(state, params, call)))
                 .into_iter()

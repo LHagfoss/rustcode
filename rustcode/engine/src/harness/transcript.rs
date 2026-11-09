@@ -61,6 +61,15 @@ pub(crate) struct Transcript {
     pub usage: Option<serde_json::Value>,
 }
 
+/// Whether a message chunk is a compaction that is running or failed, shown
+/// while it happens and never kept (`acp/usage.rs` › `compaction_progress_card`).
+fn live_compaction_line(meta: Option<&Meta>) -> bool {
+    meta.and_then(|meta| meta.get("rustcode"))
+        .filter(|rustcode| rustcode.get("kind").and_then(Value::as_str) == Some("compaction"))
+        .and_then(|rustcode| rustcode.get("phase")?.as_str())
+        .is_some_and(|phase| matches!(phase, "started" | "failed"))
+}
+
 impl Transcript {
     pub(crate) fn new(history: Vec<ChatMessage>) -> Self {
         Self {
@@ -72,6 +81,11 @@ impl Transcript {
     pub(crate) fn observe(&mut self, update: &SessionUpdate) {
         match update {
             SessionUpdate::AgentMessageChunk(chunk) => {
+                // "Compacting context…" and a compaction failure are live lines
+                // (`_meta.rustcode.phase`), not part of the reply.
+                if live_compaction_line(chunk.meta.as_ref()) {
+                    return;
+                }
                 if let ContentBlock::Text(text) = &chunk.content {
                     self.reply.push_str(&text.text);
                 }
@@ -617,6 +631,22 @@ mod tests {
         assert_eq!(back.entries.len(), 3);
         assert_eq!(back.entries[1].status, PlanEntryStatus::InProgress);
         assert_eq!(back.entries[2].content, "Ship");
+    }
+
+    #[test]
+    fn a_compaction_shown_while_it_runs_is_not_recorded_in_the_reply() {
+        let mut transcript = Transcript::default();
+        transcript.push_user("go");
+        transcript.observe(&crate::acp::usage::compaction_progress_card(
+            crate::acp::usage::CompactionPhase::Started,
+            "Compacting context…".to_owned(),
+        ));
+        transcript.observe(&crate::acp::usage::compaction_progress_card(
+            crate::acp::usage::CompactionPhase::Failed,
+            "Context compaction failed: x".to_owned(),
+        ));
+        transcript.end_reply();
+        assert_eq!(transcript.history.len(), 1, "{:?}", transcript.history);
     }
 
     fn tool_update(fields: ToolCallUpdateFields) -> SessionUpdate {

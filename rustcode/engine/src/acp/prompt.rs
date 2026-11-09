@@ -393,6 +393,18 @@ pub(crate) async fn run_prompt(
                 prompt
             }
             Some(command) => {
+                // `/compact` can take a while: the chat says so until its
+                // card (or the reason it did not compact) replaces this line.
+                if compacting {
+                    send_updates(
+                        &clients,
+                        &session_id,
+                        vec![super::usage::compaction_progress_card(
+                            super::usage::CompactionPhase::Started,
+                            "Compacting context…".to_owned(),
+                        )],
+                    )?;
+                }
                 let reply = super::commands::run(
                     command,
                     &state,
@@ -434,6 +446,15 @@ pub(crate) async fn run_prompt(
                     (Some((stats, summary)), _, _) => {
                         super::usage::compaction_card(Some(&stats), summary.as_deref(), Some(reply))
                     }
+                    // It did not compact (too short, stale, the summary
+                    // failed): the reason ends the "Compacting" line.
+                    (None, _, _) if compacting => super::usage::compaction_progress_card(
+                        super::usage::CompactionPhase::Failed,
+                        reply
+                            .trim_start_matches("**Compact**")
+                            .trim_start()
+                            .to_owned(),
+                    ),
                     (None, SessionUpdate::AgentMessageChunk(chunk), Some(meta)) => {
                         SessionUpdate::AgentMessageChunk(chunk.meta(meta))
                     }

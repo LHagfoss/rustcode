@@ -863,6 +863,8 @@ pub fn project_event(
         | AgentUiEvent::ReasoningSource { .. }
         | AgentUiEvent::RoundCompleted { .. }
         | AgentUiEvent::Compacted { .. }
+        | AgentUiEvent::CompactionStarted
+        | AgentUiEvent::CompactionFailed { .. }
         | AgentUiEvent::ProviderError { .. }
         | AgentUiEvent::Notice { .. } => Vec::new(),
         AgentUiEvent::ToolFinished { id, result } => vec![

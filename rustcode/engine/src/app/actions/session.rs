@@ -350,6 +350,8 @@ pub(crate) fn reset_active_session_state(s: &mut AppState) {
     s.current_token_usage = None;
     s.last_compaction = None;
     s.pending_compaction_card = None;
+    s.pending_compaction_progress = None;
+    s.compaction_summary_error = None;
     s.response_time = None;
     s.generation_start_time = None;
     s.history_index = None;

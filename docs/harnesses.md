@@ -612,6 +612,17 @@ the engine's compaction card (`_meta.rustcode.kind = "compaction"`), which
 the desktop app shows as one quiet "Context compacted" row. The context
 panel has *Compact now*, which sends `/compact`.
 
+A compaction shows while it runs, not only after (#3251). The same chunk
+carries `_meta.rustcode.phase`: `started` ("Compacting context…") when the
+summarizer begins, then `completed` (the card; the default when a harness sends
+no phase) or `failed` with the reason as its text. The desktop app draws one
+row for it and the card or the failure takes that row's place. The built-in
+harness sends `started` for `/compact` and for its automatic compaction, and
+`failed` when a summary ends without compacting; Codex's `item/started`
+`contextCompaction` is `started`. No start notice from Claude Code or another ACP agent is mapped (their
+adapters send none that RustCode reads), so for them the row comes from the
+app's own `/compact`, shown the moment the app sends it.
+
 The desktop app can also decide to compact on its own (#3170): after a turn
 above its size threshold, and in the minute after a prompt cache is due to
 expire (about 4.5 minutes after a turn) when the context is above 60k. It

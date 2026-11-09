@@ -779,6 +779,21 @@ async fn codex_auto_compaction_inside_a_turn_does_not_end_the_turn() {
     );
 }
 
+#[test]
+fn a_codex_compaction_shows_while_it_runs_then_as_the_card() {
+    let state = Mutex::new(State::default());
+    let item = json!({"type": "contextCompaction", "id": "c1"});
+    let started = notified(&state, "item/started", item_event("t1", item.clone()));
+    assert_eq!(started.len(), 1);
+    assert_eq!(started[0]["content"]["text"], "Compacting context…");
+    assert_eq!(started[0]["_meta"]["rustcode"]["kind"], "compaction");
+    assert_eq!(started[0]["_meta"]["rustcode"]["phase"], "started");
+
+    let done = notified(&state, "item/completed", item_event("t1", item));
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0]["_meta"]["rustcode"]["phase"], "completed");
+}
+
 fn tool_approval(server: &str) -> Value {
     json!({
         "threadId": "t1",

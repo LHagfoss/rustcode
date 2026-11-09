@@ -584,6 +584,96 @@ describe("compaction", () => {
     });
   });
 
+  const phase = (phase: string, text: string) =>
+    parseSessionUpdate({
+      sessionId: "s",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text },
+        _meta: { rustcode: { kind: "compaction", phase } },
+      },
+    });
+
+  test("a compaction shows while it runs and its card takes the row's place", () => {
+    const started = phase("started", "Compacting context…");
+    expect(started).toEqual({ kind: "compaction", text: "Compacting context…", phase: "started" });
+    // A card with no phase is a finished compaction, as before.
+    expect(
+      parseSessionUpdate({
+        sessionId: "s",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "Done" },
+          _meta: { rustcode: { kind: "compaction" } },
+        },
+      }),
+    ).toMatchObject({ phase: "completed" });
+
+    const running = apply([{ kind: "user", text: "go" }], emptyThread("s", "/p"));
+    const during = applyUpdate(running, started);
+    expect(during.items.at(-1)).toMatchObject({
+      kind: "notice",
+      tone: "info",
+      text: "Compacting context…",
+      progress: true,
+    });
+    // Announced twice (the engine and the app both do), it is one row.
+    expect(applyUpdate(during, started).items).toHaveLength(during.items.length);
+
+    // Text that arrives meanwhile goes below it; the card still takes the row's place.
+    const later = applyUpdate(during, { kind: "agent", text: "More." });
+    const done = applyUpdate(
+      later,
+      phase("completed", "History compacted: reduced context from 9 to 3 tokens."),
+    );
+    expect(done.items.map((item) => item.kind)).toEqual(later.items.map((item) => item.kind));
+    expect(done.items.some((item) => item.kind === "notice" && item.progress)).toBe(false);
+    expect(done.items.find((item) => item.kind === "notice")).toMatchObject({
+      tone: "info",
+      text: "History compacted: reduced context from 9 to 3 tokens.",
+    });
+  });
+
+  test("a compaction that failed says why, in the row that was running", () => {
+    const during = applyUpdate(emptyThread("s", "/p"), phase("started", "Compacting context…"));
+    const failed = applyUpdate(during, phase("failed", "Context compaction failed: timed out"));
+    expect(failed.items).toHaveLength(1);
+    expect(failed.items[0]).toMatchObject({
+      kind: "notice",
+      tone: "error",
+      text: "Context compaction failed: timed out",
+    });
+    expect(failed.items[0]).not.toHaveProperty("progress");
+    // A failure nobody announced still shows.
+    expect(applyUpdate(emptyThread("s", "/p"), phase("failed", "Nothing to compact.")).items).toHaveLength(1);
+  });
+
+  test("a running compaction does not outlive its turn", () => {
+    const during = applyUpdate(
+      { ...emptyThread("s", "/p"), running: true },
+      phase("started", "Compacting context…"),
+    );
+    const stopped = finishTurn(during, "cancelled", 2_000);
+    expect(stopped.items.some((item) => item.kind === "notice")).toBe(false);
+    const completed = finishTurn(during, "completed", 2_000);
+    expect(completed.items.some((item) => item.kind === "notice")).toBe(false);
+    const failed = finishTurn(during, "failed", 2_000, "The provider refused");
+    expect(failed.items.find((item) => item.kind === "notice")).toMatchObject({
+      tone: "error",
+      text: "Context compaction failed: The provider refused",
+    });
+    // The app's own turn leaves the row to the store, which knows whether the context moved.
+    expect(finishTurn(during, "completed", 2_000, undefined, true).items.at(-1)).toMatchObject({
+      progress: true,
+    });
+    // No compaction, no row: a failed turn adds nothing about one.
+    expect(
+      finishTurn({ ...emptyThread("s", "/p"), running: true }, "failed", 2_000, "x").items.some(
+        (i) => i.kind === "notice",
+      ),
+    ).toBe(false);
+  });
+
   /** A thread whose last turn wrote an answer and ended. */
   const answered = () =>
     finishTurn(
