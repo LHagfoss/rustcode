@@ -79,6 +79,7 @@ pub fn run() {
             native::git_changes,
             native::project_files,
             native::read_image,
+            native::clipboard_image,
             native::thread_image,
             native::open_terminal_at,
             native::reduce_transparency,

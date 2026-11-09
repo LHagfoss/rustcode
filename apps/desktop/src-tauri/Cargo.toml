@@ -39,6 +39,12 @@ reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 tokio = { version = "1", features = ["net", "time", "sync"] }
 # The workspace terminal (src/pty.rs).
 portable-pty = "0.9"
+# The picture on the system clipboard (src/native.rs `clipboard_image`): WebKitGTK on Linux shows a
+# copied screenshot to no paste event at all, so the composer asks the shell for it. Wayland needs
+# its data-control protocol; without it the read goes through X11.
+arboard = { version = "3.6", features = ["wayland-data-control"] }
+# A clipboard image arrives as raw RGBA and attaches as PNG (src/native.rs).
+png = "0.18"
 
 # The web view's frame-rate preference (src/webview.rs); the versions tauri/wry already use.
 [target.'cfg(target_os = "macos")'.dependencies]
