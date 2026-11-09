@@ -1,9 +1,10 @@
 import { fileManagerName, primaryModifier } from "../lib/platform";
 // The sidebar: a toolbar clear of the traffic lights (the sidebar toggle only),
-// then one list: pinned threads first, then every active thread (by project when
-// asked), then the Working, Snoozed and Settled shelves at the foot, each folding
-// on its own header. Threads are searched from ⌘K, which also holds the buttons
-// that used to sit here (new thread, add project, settings, pull requests, usage).
+// the app's brand under it (its mark, name and version), then one list: pinned
+// threads first, then every active thread (by project when asked), then the
+// Working, Snoozed and Settled shelves at the foot, each folding on its own
+// header. Threads are searched from ⌘K, which also holds the buttons that used
+// to sit here (new thread, add project, settings, pull requests, usage).
 // A row is one 32px line: the mark of where it runs, its title, and one trailing
 // slot — `Needs you`, `Working 2m`, `Waiting`, `Failed`, `Review`, the time it
 // wakes, or its age (state/sidebarRows.ts `rowStatus`). A thread with a branch,
@@ -146,6 +147,7 @@ import { formatClock, idleSettled, shortAge } from "../state/thread";
 import { openChain, parentOf as parentOfThread, type SubRow, topLevel } from "../state/topLevel";
 import { useWaiting, useWaitingIds, waitingLabel, waitingTitle } from "../state/waiting";
 import { AgentStack } from "./AgentStack";
+import { BrandHeader } from "./BrandHeader";
 import { CustomSnooze } from "./CustomSnooze";
 import { HarnessIcon } from "./HarnessIcon";
 import { NeedsYouRow } from "./Inbox";
@@ -2215,6 +2217,7 @@ export function Sidebar() {
             </ClusterButton>
           </Cluster>
         </TitlebarRow>
+        <BrandHeader />
         <NeedsYouRow />
         <nav
           ref={list}
