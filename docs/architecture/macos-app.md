@@ -165,8 +165,8 @@ For behavior in the real window, drive the debug build with `DebugDriver`
 `RustCodeKit`: the ACP client and process, the transcript model, scroll and
 follow math (`ChatFollow`, `ChatScrollMap`, `TranscriptWindow`), find, tool
 folding, preview access policy, and session paging. The terminal is its own
-target. There is no second consumer of these targets today (the iOS app in
-`ios/` is a separate project), so extracting more as a standalone package
+target. There is no second consumer of these targets today (the phone app is
+a separate Expo project), so extracting more as a standalone package
 would add release overhead without reuse.
 
 **Large files, kept as they are.** `ContentView.swift` (~2,950 lines: window

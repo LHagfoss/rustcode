@@ -89,8 +89,8 @@ instructions for work in this repository.
     `CARGO_TARGET_DIR` rather than building a second full tree.
   - `cargo clean --release` drops only release artifacts; use it after a
     local release build instead of keeping both profiles around.
-- The iOS app in `ios/` is a reference only (no CI, no release assets); see
-  `ios/AGENTS.md` and `docs/mobile.md`.
+- The phone app is an Expo app in its own repository, `rustcode-mobile`;
+  see `docs/mobile.md`.
 - For releases, load `~/.agents/skills/release-automation/SKILL.md`;
   use `scripts/release.sh` as the source of truth. Draft the notes with
   `scripts/release-notes.sh > notes.md` (each PR's `## Changelog` line, else
