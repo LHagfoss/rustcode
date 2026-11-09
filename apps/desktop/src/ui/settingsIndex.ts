@@ -78,6 +78,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     title: "Discord Rich Presence",
     keywords: "rich presence status shared project",
   },
+  {
+    section: "general",
+    title: "Tab moves focus between controls",
+    keywords: "keyboard navigation accessibility focus",
+  },
   { section: "general", title: "Trackpad haptics", keywords: "haptic tap feedback force touch" },
 
   // ------------------------------------------------------------ Chat
