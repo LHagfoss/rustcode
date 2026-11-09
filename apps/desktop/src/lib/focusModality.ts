@@ -20,8 +20,14 @@ export function setTabMovesFocus(value: boolean): void {
     /* Storage unavailable. */
   }
 }
-export function shouldBlockTab(key: string, enabled: boolean, protectedContext: boolean): boolean {
-  return key === "Tab" && !enabled && !protectedContext;
+/** A bare Tab or Shift+Tab; Ctrl, Cmd and Alt with Tab belong to shortcuts and the system. */
+export function shouldBlockTab(
+  key: string,
+  enabled: boolean,
+  protectedContext: boolean,
+  modified = false,
+): boolean {
+  return key === "Tab" && !enabled && !protectedContext && !modified;
 }
 
 export const KEYBOARD_NAV = "data-keyboard-nav";
@@ -35,15 +41,15 @@ export function installFocusModality(
   enabled: () => boolean = tabMovesFocus,
 ): () => void {
   const keyboard = (event: Event) => {
-    const key = (event as KeyboardEvent).key;
+    const { key, ctrlKey, metaKey, altKey } = event as KeyboardEvent;
     const element = event.target;
     const protectedContext =
       typeof Element !== "undefined" &&
       element instanceof Element &&
       !!element.closest(
-        'input, textarea, select, [contenteditable]:not([contenteditable="false"]), form, dialog, [role="dialog"], [role="menu"], [role="menuitem"], [role="listbox"], [data-radix-popper-content-wrapper]',
+        'input, textarea, select, [contenteditable]:not([contenteditable="false"]), form, dialog, [role="dialog"], [role="alertdialog"], [aria-modal="true"], [role="menu"], [role="menuitem"], [role="listbox"], [data-radix-popper-content-wrapper]',
       );
-    if (shouldBlockTab(key, enabled(), protectedContext)) {
+    if (shouldBlockTab(key, enabled(), protectedContext, ctrlKey || metaKey || altKey)) {
       event.preventDefault();
       root.removeAttribute(KEYBOARD_NAV);
     } else if (key === "Tab") root.setAttribute(KEYBOARD_NAV, "");

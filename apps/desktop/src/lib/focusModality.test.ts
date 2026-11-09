@@ -96,4 +96,19 @@ test("Tab is blocked only outside protected contexts when disabled", async () =>
   expect(shouldBlockTab("Tab", false, true)).toBe(false);
   expect(shouldBlockTab("Tab", true, false)).toBe(false);
   expect(shouldBlockTab("Enter", false, false)).toBe(false);
+  expect(shouldBlockTab("Tab", true, false)).toBe(false);
+  expect(shouldBlockTab("Tab", false, false, true)).toBe(false);
+});
+
+test("with the setting off a bare Tab is cancelled and shows no rings; Ctrl+Tab is left alone", () => {
+  const root = fakeRoot();
+  const target = new EventTarget();
+  installFocusModality(root, target, () => false);
+  const tab = Object.assign(new Event("keydown", { cancelable: true }), { key: "Tab", shiftKey: true });
+  target.dispatchEvent(tab);
+  expect(tab.defaultPrevented).toBe(true);
+  expect(root.attrs.has(KEYBOARD_NAV)).toBe(false);
+  const chord = Object.assign(new Event("keydown", { cancelable: true }), { key: "Tab", ctrlKey: true });
+  target.dispatchEvent(chord);
+  expect(chord.defaultPrevented).toBe(false);
 });
