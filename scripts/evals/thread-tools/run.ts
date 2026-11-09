@@ -3,7 +3,7 @@
 // lists (with their real descriptions) as stand-ins, and nothing else. A case
 // passes when the agent called every tool it must and none it must not.
 //
-//   bun evals/thread-tools/run.ts [--model <model>] [--case <id>] [--samples <n>] [--concurrency <n>]
+//   bun scripts/evals/thread-tools/run.ts [--model <model>] [--case <id>] [--samples <n>] [--concurrency <n>]
 //
 // No app, no engine socket, no real effects: every call is answered from a
 // canned result and appended to a log. See README.md.
@@ -22,7 +22,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, "../..");
+const ROOT = resolve(HERE, "../../..");
 const CASES = join(HERE, "cases.jsonl");
 const EXTENSION = join(HERE, "extension.ts");
 const RUNS = join(HERE, "runs");
@@ -186,7 +186,7 @@ function parseArgs(argv: string[]) {
       options.concurrency = Math.max(1, Number(value) || 1);
       i++;
     } else if (arg === "--help" || arg === "-h") {
-      console.log("usage: bun evals/thread-tools/run.ts [--model <model>] [--case <id>] [--samples <n>] [--concurrency <n>]");
+      console.log("usage: bun scripts/evals/thread-tools/run.ts [--model <model>] [--case <id>] [--samples <n>] [--concurrency <n>]");
       process.exit(0);
     } else {
       console.error(`unknown argument: ${arg}`);

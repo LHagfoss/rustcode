@@ -14,7 +14,7 @@ A case passes when the agent called every tool in `must` and none in
 
 ```sh
 cargo build -p rustcode-tui --bin rustcode
-bun evals/thread-tools/run.ts
+bun scripts/evals/thread-tools/run.ts
 ```
 
 Options: `--model <model>` (default `deepseek/deepseek-flash:high`),

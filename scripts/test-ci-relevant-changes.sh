@@ -56,6 +56,8 @@ expect_irrelevant "remote protocol prose skips code CI" 'docs/remote-protocol/RE
 expect_relevant "build configuration runs code CI" 'Cargo.lock'
 expect_relevant "workflow changes run code CI" '.github/workflows/ci.yml'
 expect_irrelevant "documentation-only changes skip code CI" 'README.md'
+expect_irrelevant "manual eval changes skip code CI" 'scripts/evals/thread-tools/run.ts'
+expect_relevant "an eval change beside a script still runs code CI" $'scripts/evals/thread-tools/cases.jsonl\nscripts/pr-merge.sh'
 expect_irrelevant "library README changes skip code CI" 'rustcode/core/rustcode-core/README.md'
 expect_irrelevant "library documentation changes skip code CI" 'rustcode/core/rustcode-core/docs/usage.md'
 expect_irrelevant "image-only changes skip code CI" 'images/header.png'

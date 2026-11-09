@@ -44,4 +44,4 @@ docs/superpowers/
 /apps/desktop/src-tauri/gen-icon/
 
 # Thread-tools eval transcripts (each run writes one).
-/evals/thread-tools/runs/
+/scripts/evals/thread-tools/runs/
