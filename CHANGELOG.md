@@ -1,3 +1,13 @@
+## [v1.27.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.27.0) - 2026-11-09
+
+### Fixes
+- Connecting another desktop to this machine works again: a paired desktop relays to the engine the app runs, and the Machines page says why a connection failed instead of only retrying. (#3350)
+- Other machines and phones can find this one with "Look for machines" again: the network announcement survives Wi-Fi changes, sleep and startup, and macOS asks for Local Network access. (#3349)
+- The sidebar shows running and idle threads in one Threads list that never stays folded, with roomier rows by default (Compact is an option). (#3345)
+- The sidebar's brand and the window's title bar are one row, and Windows gets its own minimize, maximize and close buttons instead of the native title bar. (#3348)
+- The model picker shows effort and account beside the model list, with no second page. (#3347)
+- Toggle switches use the same thick white knob as the effort slider. (#3344)
+- No blur on Windows and Linux: solid surfaces there, macOS unchanged. (#3346)
 ## [v1.26.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.26.0) - 2026-11-09
 
 ### Features
