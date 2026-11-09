@@ -9,6 +9,11 @@ export function setShellTransport(transport: Transport | null) {
   current = transport;
 }
 
+/** The transport the app is using, for code that needs to know how it is hosted. */
+export function activeTransport(): Transport | null {
+  return current;
+}
+
 /** Whether a native helper can answer here at all. */
 export function hasShell(): boolean {
   return isTauri() || !!current?.call;

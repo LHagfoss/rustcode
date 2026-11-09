@@ -211,6 +211,39 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     keywords: "not shared held back refused limit 32 most recently used why",
   },
 
+  // ------------------------------------------------------------ Machines
+  {
+    section: "machines",
+    title: "Machines",
+    keywords:
+      "this computer this mac this pc local server runs here main machine route lan tailscale vpn unencrypted encrypted connected offline retrying pairing expired revoked last seen threads remove forget pair again",
+  },
+  {
+    section: "machines",
+    title: "No other computers yet",
+    keywords: "add machine computer remote other pair empty",
+  },
+  {
+    section: "machines",
+    title: "Add machine",
+    keywords: "add machine pair pairing computer other network nearby",
+  },
+  {
+    section: "machines",
+    title: "Machines on this network",
+    keywords: "bonjour discover find look network lan nearby machine add",
+  },
+  {
+    section: "machines",
+    title: "Enter an address",
+    keywords: "address ip host port tailscale vpn overlay add machine connect ask lan unencrypted encrypted",
+  },
+  {
+    section: "machines",
+    title: "Enter the code",
+    keywords: "code eight digit pairing digits type pair machine accept",
+  },
+
   // ------------------------------------------------------------ Appearance
   { section: "appearance", title: "Light or dark", keywords: "mode theme system" },
   {

@@ -12,7 +12,7 @@ export type TransportEvent =
   | { type: "log"; line: string };
 
 export interface Transport {
-  readonly name: "tauri" | "websocket" | "mock";
+  readonly name: "tauri" | "websocket" | "mock" | "machine";
   /** Start (or restart) the engine and deliver its events. */
   start(onEvent: (event: TransportEvent) => void): Promise<void>;
   send(line: string): void;
@@ -55,6 +55,78 @@ export class TauriTransport implements Transport {
   async stop(): Promise<void> {
     const { invoke } = await import("@tauri-apps/api/core");
     await invoke("engine_stop");
+  }
+}
+
+/**
+ * Another computer this app is paired with (Settings › Machines). The shell
+ * holds the supervisor, the connection and the pairing token; this relays the
+ * machine's ACP frames to the page the way [`TauriTransport`] relays the local
+ * engine's, so one client class serves both.
+ *
+ * Without the app's shell (`dev:web`, or `?transport=mock`) the answer comes
+ * from whichever transport is running: the mock speaks for the machine in
+ * process, and the dev bridge has no machines at all.
+ */
+export class MachineTransport implements Transport {
+  readonly name = "machine";
+  private onEvent: ((event: TransportEvent) => void) | null = null;
+  /** `?transport=mock`: the canned machine answers its own lines. */
+  private mock: { receive(line: string): string[] } | null = null;
+
+  constructor(
+    /** The machine's `host_id`, which every shell command takes. */
+    readonly machineId: string,
+    /** What the machine is called, for a log line and the page. */
+    readonly label: string,
+  ) {}
+
+  async start(onEvent: (event: TransportEvent) => void): Promise<void> {
+    this.onEvent = onEvent;
+    if (isTauri()) {
+      const { Channel, invoke } = await import("@tauri-apps/api/core");
+      const channel = new Channel<TransportEvent>();
+      channel.onmessage = onEvent;
+      await invoke("machine_connect", { id: this.machineId, onEvent: channel });
+      return;
+    }
+    // Loaded here, not at the top: lib/shell.ts reads isTauri from this module.
+    const { activeTransport, shellCall } = await import("../lib/shell");
+    const answer = await shellCall<{ connected?: boolean } | null>("machine_connect", {
+      id: this.machineId,
+    });
+    if (answer?.connected === false) return;
+    if (activeTransport()?.name === "mock") {
+      const { MockMachine } = await import("./mock");
+      this.mock = new MockMachine(this.label);
+    }
+    onEvent({ type: "open", engine: this.label });
+  }
+
+  send(line: string): void {
+    if (isTauri()) {
+      void import("@tauri-apps/api/core").then(({ invoke }) =>
+        invoke("machine_send", { id: this.machineId, line }),
+      );
+      return;
+    }
+    // Deferred: an answer must arrive after the client has registered the request it answers.
+    for (const reply of this.mock?.receive(line) ?? []) {
+      queueMicrotask(() => this.onEvent?.({ type: "line", line: reply }));
+    }
+  }
+
+  async restart(): Promise<void> {
+    const onEvent = this.onEvent;
+    await this.stop();
+    if (onEvent) await this.start(onEvent);
+  }
+
+  async stop(): Promise<void> {
+    this.mock = null;
+    if (!isTauri()) return;
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("machine_disconnect", { id: this.machineId });
   }
 }
 
@@ -182,6 +254,8 @@ export async function defaultTransport(): Promise<Transport> {
       ),
       // Remote access states the happy path does not reach (`?remote=disconnected|expired|connect`).
       remote: (["disconnected", "expired", "connect"] as const).find((f) => f === q.get("remote")),
+      // This app paired with other computers (`?machines=paired|connect|offline|revoked`).
+      machines: (["paired", "connect", "offline", "revoked"] as const).find((f) => f === q.get("machines")),
     });
   }
   const port = import.meta.env.VITE_BRIDGE_PORT ?? "1421";

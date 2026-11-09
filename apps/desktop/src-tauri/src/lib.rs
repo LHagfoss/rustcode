@@ -7,6 +7,7 @@ mod banner;
 mod diagnostics;
 mod engine;
 mod links;
+mod machines;
 mod native;
 mod notify;
 mod process;
@@ -50,6 +51,7 @@ pub fn run() {
         // Notifications for a thread that needs the user (src/notify.rs).
         .plugin(tauri_plugin_notification::init())
         .manage(Arc::new(Engine::default()) as EngineState)
+        .manage(Arc::new(machines::Machines::default()))
         .manage(links::LinkCache::default())
         .manage(pty::Ptys::default())
         .manage(smartui::SmartUiPages::default())
@@ -61,6 +63,16 @@ pub fn run() {
             engine_send,
             engine_restart,
             engine_stop,
+            machines::machines_list,
+            machines::machines_discover,
+            machines::machines_ask,
+            machines::machines_pair,
+            machines::machines_cancel,
+            machines::machines_remove,
+            machines::machines_set_main,
+            machines::machine_connect,
+            machines::machine_send,
+            machines::machine_disconnect,
             native::open_url,
             native::reveal_path,
             native::open_login_terminal,
