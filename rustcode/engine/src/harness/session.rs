@@ -133,6 +133,8 @@ fn launch_env(
         },
         _ => Vec::new(),
     };
+    // A custom harness's own variables go first, so an account's login directory wins.
+    env.splice(0..0, harness.env.iter().cloned());
     let mut remove: Vec<&'static str> = Vec::new();
     let account = options
         .account
@@ -1797,6 +1799,7 @@ pub(crate) mod test_support {
             name: id.to_owned(),
             kind,
             command: vec![id.to_owned()],
+            env: Vec::new(),
             enabled: true,
             known: None,
         }

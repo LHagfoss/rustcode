@@ -510,6 +510,7 @@ mod tests {
             name: "Ghost".into(),
             kind: HarnessKind::Acp,
             command: vec!["rustcode-no-such-harness-binary".into()],
+            env: Vec::new(),
             enabled: true,
             known: None,
         };
@@ -869,6 +870,7 @@ mod tests {
             name: "Fixture".into(),
             kind: HarnessKind::Acp,
             command: vec!["sh".into()],
+            env: Vec::new(),
             enabled: false,
             known: Some(&FIXTURE),
         };

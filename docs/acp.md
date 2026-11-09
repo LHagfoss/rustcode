@@ -137,9 +137,10 @@ contract is in [harnesses.md](harnesses.md); the requests are:
 
 - `_rustcode/harnesses` (`{}`): every harness with its detection,
   capabilities and models, the defaults and `onboarded`.
-- `_rustcode/harnesses/models` (`{"harness"}`): `{"models": [...]}`,
-  starting the harness briefly when its models are not known yet.
-- `_rustcode/harnesses/set` (`{"id", "enabled"?, "command"?, "name"?,
+- `_rustcode/harnesses/models` (`{"harness", "refresh"?}`): `{"models": [...]}`,
+  starting the harness briefly when its models are not known yet, or always
+  with `refresh`.
+- `_rustcode/harnesses/set` (`{"id", "enabled"?, "command"?, "env"?, "name"?,
   "kind"?}`): turn a harness on or off, override its command, or add a
   custom ACP harness.
 - `_rustcode/harnesses/remove` (`{"id"}`): remove a custom harness.

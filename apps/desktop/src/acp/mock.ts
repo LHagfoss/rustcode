@@ -439,6 +439,12 @@ const HARNESS_MODELS: Record<
   opencode: [{ id: "default", name: "Default", efforts: [] }],
 };
 
+/** What a hand-added command lists once it answers ACP. */
+const MOCK_CUSTOM_MODELS = [
+  { id: "fast", name: "Fast", efforts: [] },
+  { id: "deep", name: "Deep", efforts: [] },
+];
+
 const now = Date.now();
 const minutes = (n: number) => now - n * 60_000;
 
@@ -3299,7 +3305,10 @@ export class MockEngine {
         await this.sleep(this.delay * 6);
         if (!h.installed) throw new Error(`${h.name} is not installed (${h.command[0]} not on PATH).`);
         if (h.auth === "needs_login") throw new Error(`${h.name} needs you to sign in first.`);
-        h.models = h.builtin ? h.models : (HARNESS_MODELS[id] ?? []);
+        // A hand-added command named "broken" starts but never answers ACP.
+        if (!h.known && h.command[0] === "broken")
+          throw new Error(`${h.name} did not answer the ACP handshake (initialize timed out after 30 s).`);
+        h.models = h.builtin ? h.models : (HARNESS_MODELS[id] ?? (h.known ? [] : MOCK_CUSTOM_MODELS));
         if (h.auth === "unknown") h.auth = "ok";
         return { models: h.models as unknown as Json };
       }
@@ -3315,7 +3324,9 @@ export class MockEngine {
             known: false,
             enabled: true,
             command: arr(params.command).map(String),
-            installed: true,
+            // A command named "missing" is not on PATH.
+            installed: arr(params.command).map(String)[0] !== "missing",
+            env_names: Object.keys(obj(params.env) ?? {}),
             auth: "unknown",
             capabilities: ACP_CAPS,
             accounts: [],

@@ -205,16 +205,27 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   Claude Code (`PREFERRED_HARNESS`) is listed first and suggested on a
   first run, and the built-in harness is listed last as the *Local*
   harness, kept for the TUI, testing and local models.
-- **Settings › Agents.** Every harness is detected again (installed, signed in, version) each time the page opens, and on *Refresh*. *New threads start on* comes first and saves as
+- **Settings › Agents.** Every harness is detected again (installed, signed in, version, each account's sign-in) when the page opens and whenever the window regains focus (`useAutoDetect`, at most once in three seconds); no start of a harness is involved. *New threads start on* comes first and saves as
   it changes (no Save button); picking an external harness lists its
-  models at once (`ensureHarnessModels`). Under it, *Coding agents*: one
+  models at once (`ensureHarnessModels`). Under it, *Harnesses*: one
   card per harness with its mark, status and version, *Sign in* only until
-  the harness is known to be signed in, *Check* (lists the models, the
-  cheapest proof it runs) and the on/off switch; turning a harness on
-  checks it. The command and what it supports fold under *Details*. On a card whose
-  harness has named logins (Claude Code, Codex), *Accounts* opens with one real
-  sign-in check and lists each named login (its own `CLAUDE_CONFIG_DIR` or
-  `CODEX_HOME`) as *Signed in*, *Not signed in* or *Not checked*, with a remove
+  the harness is known to be signed in, one *Check* and the on/off switch;
+  turning a harness on checks it. *Check* (`state/harnessChecks.ts`) detects
+  the install again, reads every account's sign-in, then starts the harness
+  to list its models, and always ends in one of *Ready*, *Needs sign-in*, *Not
+  installed* or an error with the harness's own text (`state/harnessCheck.ts`);
+  it never leaves *Installed* or *Not checked* behind. The group has *Check
+  all* and *Add harness*; no Refresh sits beside them. *Add harness* opens the
+  *Local ACP command* form (`ui/AddHarness.tsx`, rules in
+  `state/harnessForm.ts`): a name, an executable, one literal argument per row
+  and environment rows. The command is started directly, never through a
+  shell. It is added turned off, checked (the ACP handshake and a model list),
+  and turned on only if that worked; a failure shows the error text in the form
+  and removes it again. A verified one lists under *Added by you*, appears in
+  the model picker like any other harness, and has *Remove* under *Details*.
+  RustCode searches no ACP registry. The command and what it supports fold under *Details*. On a card whose
+  harness has named logins (Claude Code, Codex), *Accounts* lists each named login (its own `CLAUDE_CONFIG_DIR` or
+  `CODEX_HOME`) as *Signed in*, *Not signed in* or *Unknown*, with a remove
   that says the directory stays on disk. *Add account* asks only for a name and
   its *Add and sign in* creates `~/.claude-<id>` (or `~/.codex-<id>`) and runs
   the harness's own login in Terminal under it; the row says *Waiting for
