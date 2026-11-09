@@ -2957,6 +2957,8 @@ export class MockEngine {
           },
         };
       }
+      case "_rustcode/pulls/merge/cancel":
+        return { cancelled: false };
       case "_rustcode/pulls/merge":
         return {
           merge: {

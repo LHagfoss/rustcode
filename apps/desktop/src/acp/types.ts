@@ -45,6 +45,8 @@ export const Method = {
   telemetrySet: "_rustcode/config/telemetry/set",
   pullState: "_rustcode/pulls/state",
   pullMerge: "_rustcode/pulls/merge",
+  /** Ends the merge started under a `mergeId` before it merges (its call was dropped). */
+  pullMergeCancel: "_rustcode/pulls/merge/cancel",
   pullView: "_rustcode/pulls/view",
   pullDiff: "_rustcode/pulls/diff",
   pullReview: "_rustcode/pulls/review",

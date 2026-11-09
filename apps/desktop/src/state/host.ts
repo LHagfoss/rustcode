@@ -340,6 +340,29 @@ const HANDED_KEPT = 16;
 
 const holdKey = (caller: string, link: string) => `${caller}\n${link}`;
 
+/**
+ * A call the engine can drop that waits on more than a link: `merge_when_green`
+ * waits for the user's approval and then for the checks, and a call the harness
+ * (or the MCP server, which answers `pending` at its deadline) gave up on must
+ * never merge afterwards. Each step checks `dropped`, and `onDrop` ends what is
+ * waiting right now: the approval card, the engine's merge loop.
+ */
+interface Droppable {
+  caller: string;
+  dropped: boolean;
+  onDrop: Set<() => void>;
+}
+const droppable = new Map<string, Droppable>();
+
+const trackCall = (callId: string, caller: string): Droppable => {
+  const call: Droppable = { caller, dropped: false, onDrop: new Set() };
+  droppable.set(callId, call);
+  return call;
+};
+
+const droppedFailure = (): Failure =>
+  failure("cancelled", "the call was dropped before it finished, so nothing was merged");
+
 /** The timer that re-checks a coalescing window; one at a time. */
 let wakeTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -386,12 +409,17 @@ function ruleThread(s: AppState, id: string): RuleThread | undefined {
 let resolveAsk: ((choice: GrantChoice) => void) | null = null;
 
 /** Ask once; a second request while one waits is refused, and the agent can try again. */
-function ask(question: GrantAsk): Promise<GrantChoice> | Failure {
+function ask(question: GrantAsk, call?: Droppable): Promise<GrantChoice> | Failure {
   if (useApp.getState().grant) return failure("busy", "another thread's request is waiting for the user");
   // The grant dialog names the caller and the request; a toast under it would repeat them.
   return new Promise((resolve) => {
+    const id = localId("grant");
     resolveAsk = resolve;
-    useApp.setState({ grant: { ...question, id: localId("grant") } });
+    useApp.setState({ grant: { ...question, id } });
+    // A call that was dropped takes its own card away, and only its own.
+    call?.onDrop.add(() => {
+      if (useApp.getState().grant?.id === id) resolveGrant("deny");
+    });
   });
 }
 
@@ -456,7 +484,13 @@ const ALLOWED_NOTICE: Record<GrantAsk["kind"], string> = {
   cleanup: "Cleaned up a delegate's worktree",
 };
 
-async function permitted(caller: RuleThread, key: string, question: GrantAsk): Promise<Failure | null> {
+async function permitted(
+  caller: RuleThread,
+  key: string,
+  question: GrantAsk,
+  call?: Droppable,
+): Promise<Failure | null> {
+  if (call?.dropped) return droppedFailure();
   if (hasGrant(book(), caller.id, key)) return null;
   // The thread's access level answers for the user where it already allows the work: the same
   // policy that answers the harness's own approvals, so a Full-access thread is not re-asked here.
@@ -483,9 +517,12 @@ async function permitted(caller: RuleThread, key: string, question: GrantAsk): P
     // The call's row and its notice above are the record; no toast repeats an allowed call.
     return null;
   }
-  const asked = ask(question);
+  const asked = ask(question, call);
   if (isFailure(asked)) return asked;
   const choice = await asked;
+  // Answered after the call was dropped: the card is gone or was answered too late, and neither
+  // allows anything, nor is an "always" kept for a call nobody is waiting on.
+  if (call?.dropped) return droppedFailure();
   if (choice === "deny") return failure("denied", `the user did not allow this thread to ${verb(question)}`);
   if (choice === "always") setBook((b) => grant(b, caller.id, key));
   return null;
@@ -1115,12 +1152,26 @@ async function mergeWhenGreen(
   caller: RuleThread,
   call: Extract<ReturnType<typeof parseCall>, { tool: "merge_when_green" }>,
 ): Promise<JsonObject> {
+  const tracked = call.callId ? trackCall(call.callId, caller.id) : undefined;
+  try {
+    return await mergeTracked(caller, call, tracked);
+  } finally {
+    if (call.callId && droppable.get(call.callId) === tracked) droppable.delete(call.callId);
+  }
+}
+
+async function mergeTracked(
+  caller: RuleThread,
+  call: Extract<ReturnType<typeof parseCall>, { tool: "merge_when_green" }>,
+  tracked: Droppable | undefined,
+): Promise<JsonObject> {
   const target = manageTarget(caller, call.target);
   if (isFailure(target)) return failureJson(target);
   if (target.id === caller.id) {
     return failureJson(failure("not_allowed", "a thread merges a delegate's pull request, not its own"));
   }
   const state = await delegatePull(target);
+  if (tracked?.dropped) return failureJson(droppedFailure());
   if (state.error) return failureJson(state.error);
   const pull = state.pull;
   if (!pull) {
@@ -1137,14 +1188,27 @@ async function mergeWhenGreen(
       ...(pull.url ? { url: pull.url } : {}),
     };
   }
-  const no = await permitted(caller, `merge:${target.id}:${pull.number}`, {
-    kind: "merge",
-    caller: caller.id,
-    callerTitle: caller.title,
-    target: target.title,
-    detail: `It would wait for pull request #${pull.number}'s checks and squash-merge it once every one passes, then delete its branch. A failing check stops it and reports the names.`,
-  });
+  const no = await permitted(
+    caller,
+    `merge:${target.id}:${pull.number}`,
+    {
+      kind: "merge",
+      caller: caller.id,
+      callerTitle: caller.title,
+      target: target.title,
+      detail: `It would wait for pull request #${pull.number}'s checks and squash-merge it once every one passes, then delete its branch. A failing check stops it and reports the names.`,
+    },
+    tracked,
+  );
   if (no) return failureJson(no);
+  // Nothing merges for a call that was dropped while it waited for the approval.
+  if (tracked?.dropped) return failureJson(droppedFailure());
+  // The engine's merge loop runs under the call's id, so a drop ends it before it merges.
+  const mergeId = call.callId;
+  const stopMerge = () => {
+    if (mergeId) void request(Method.pullMergeCancel, { mergeId }, 10_000).catch(() => {});
+  };
+  if (tracked) tracked.onDrop.add(stopMerge);
   let result: Json;
   try {
     result = await request(
@@ -1154,11 +1218,16 @@ async function mergeWhenGreen(
         number: pull.number,
         ...(state.branch ? { branch: state.branch } : {}),
         timeoutMs: call.timeoutMs,
+        ...(mergeId ? { mergeId } : {}),
       },
       call.timeoutMs + 120_000,
     );
   } catch (error) {
+    // The app gives up on the answer, so the loop must not go on to merge unseen.
+    stopMerge();
     return failureJson(failure("failed", `the merge did not answer: ${errorText(error)}`));
+  } finally {
+    tracked?.onDrop.delete(stopMerge);
   }
   const error = parsePullError(result);
   if (error) return failureJson(pullFailure(error));
@@ -2359,6 +2428,12 @@ export function orchestrationCallDropped(params: JsonObject): void {
   const callId = typeof params.callId === "string" ? params.callId : "";
   if (!callId) return;
   const session = typeof params.sessionId === "string" ? params.sessionId : undefined;
+  const pending = droppable.get(callId);
+  if (pending && (session === undefined || pending.caller === session)) {
+    pending.dropped = true;
+    for (const stop of [...pending.onDrop]) stop();
+    return;
+  }
   const live = calls.get(callId);
   if (live && (session === undefined || live.caller === session)) {
     live.ended = "dropped";

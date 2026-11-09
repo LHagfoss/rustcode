@@ -116,20 +116,22 @@ pub const MAX_SQL_BYTES: usize = 8 * 1024;
 pub const MAX_ACTIVITY_CURSOR_BYTES: usize = 128;
 /// The longest title a new thread takes.
 pub const MAX_TITLE_CHARS: usize = 200;
-/// How long `merge_when_green` waits for checks by default, and at most: under
-/// an hour, so the wait plus the engine's deadline fits inside an external
-/// harness's MCP call timeout (Codex's `tool_timeout_sec` is 61 minutes).
-pub const DEFAULT_MERGE_WAIT_MS: u64 = 55 * 60 * 1000;
-pub const MAX_MERGE_WAIT_MS: u64 = DEFAULT_MERGE_WAIT_MS;
+/// How long `merge_when_green` waits for checks by default, and at most: 25
+/// minutes, like `wait_session`. An MCP client aborts a call that sends nothing
+/// for about half an hour (Claude Code), so a call never blocks longer than
+/// this; a longer wait is another call (`pending` says the checks still run).
+pub const DEFAULT_MERGE_WAIT_MS: u64 = MAX_WAIT_MS;
+pub const MAX_MERGE_WAIT_MS: u64 = MAX_WAIT_MS;
 
 /// The most text a message or a prompt carries: 32 KiB.
 pub const MAX_MESSAGE_BYTES: usize = 32 * 1024;
 /// The most an engine-rendered answer carries before it is a safety cut: one
 /// `read_session` page with worst-case JSON escaping stays under it.
 pub const MAX_OUTPUT_BYTES: usize = 128 * 1024;
-/// How long `wait_session` waits by default, and at most.
+/// How long `wait_session` waits by default, and at most: 25 minutes. A longer
+/// `timeout_ms` is cut to this on the server, not refused.
 pub const DEFAULT_WAIT_MS: u64 = 60_000;
-pub const MAX_WAIT_MS: u64 = 3_600_000;
+pub const MAX_WAIT_MS: u64 = 25 * 60 * 1000;
 /// How long the client may take on a list or a message: a message can wait
 /// for the user to answer the grant.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -638,16 +640,9 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             required_name(args, "session_id")?;
             match args.get("timeout_ms") {
                 None | Some(Value::Null) => Ok(()),
-                Some(timeout)
-                    if timeout
-                        .as_u64()
-                        .is_some_and(|ms| (1..=MAX_MERGE_WAIT_MS).contains(&ms)) =>
-                {
-                    Ok(())
-                }
-                Some(_) => Err(format!(
-                    "timeout_ms must be 1 to {MAX_MERGE_WAIT_MS} milliseconds"
-                )),
+                // A wait over the cap is cut to it (see `timeout`), not refused.
+                Some(timeout) if timeout.as_u64().is_some_and(|ms| ms >= 1) => Ok(()),
+                Some(_) => Err("timeout_ms must be a positive number of milliseconds".to_owned()),
             }
         }
         CLEANUP_WORKTREE => {
@@ -722,28 +717,42 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
     }
 }
 
+/// The wait a `wait_session` or `merge_when_green` call asked for, cut to the
+/// cap; `None` for any other tool.
+pub fn requested_wait(name: &str, args: &Value) -> Option<Duration> {
+    let (default, max) = match name {
+        WAIT_SESSION => (DEFAULT_WAIT_MS, MAX_WAIT_MS),
+        MERGE_WHEN_GREEN => (DEFAULT_MERGE_WAIT_MS, MAX_MERGE_WAIT_MS),
+        _ => return None,
+    };
+    let wait = args
+        .get("timeout_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(default)
+        .clamp(1, max);
+    Some(Duration::from_millis(wait))
+}
+
+/// How long the client has to answer after a `wait_session` wait ends.
+pub const WAIT_ANSWER_GRACE: Duration = Duration::from_secs(30);
+/// How long the MCP server itself lets a `wait_session` run past its wait
+/// before it answers `timeout` on its own, whatever the app is doing.
+pub const WAIT_SERVER_GRACE: Duration = Duration::from_secs(5);
+/// How long the client has to answer after a `merge_when_green` wait ends: it
+/// merges once its own wait ends, re-reads the pull request, and answers; the
+/// loop's tail can outlast the wait by a poll and a second quiet round.
+pub const MERGE_ANSWER_GRACE: Duration = Duration::from_secs(180);
+
 /// How long to wait for the client's answer to `name`.
 pub fn timeout(name: &str, args: &Value) -> Duration {
     if name == START_SESSION || name == FAN_OUT {
         START_TIMEOUT
-    } else if name == WAIT_SESSION {
-        let wait = args
-            .get("timeout_ms")
-            .and_then(Value::as_u64)
-            .unwrap_or(DEFAULT_WAIT_MS)
-            .clamp(1, MAX_WAIT_MS);
-        // Room for the client to answer after its own wait ends.
-        Duration::from_millis(wait) + Duration::from_secs(30)
-    } else if name == MERGE_WHEN_GREEN {
-        // The client merges once its own wait ends, re-reads the pull request,
-        // and answers; the loop's tail can outlast the wait by a poll and a
-        // second quiet round, so give it a full three minutes.
-        let wait = args
-            .get("timeout_ms")
-            .and_then(Value::as_u64)
-            .unwrap_or(DEFAULT_MERGE_WAIT_MS)
-            .clamp(1, MAX_MERGE_WAIT_MS);
-        Duration::from_millis(wait) + Duration::from_secs(180)
+    } else if let Some(wait) = requested_wait(name, args) {
+        wait + if name == WAIT_SESSION {
+            WAIT_ANSWER_GRACE
+        } else {
+            MERGE_ANSWER_GRACE
+        }
     } else {
         REQUEST_TIMEOUT
     }
@@ -1114,7 +1123,8 @@ mod tests {
             MERGE_WHEN_GREEN,
             json!({"session_id": "d1", "timeout_ms": 0})
         ));
-        assert!(!ok(
+        // Over the cap is cut to it by `timeout`, not refused.
+        assert!(ok(
             MERGE_WHEN_GREEN,
             json!({"session_id": "d1", "timeout_ms": MAX_MERGE_WAIT_MS + 1})
         ));
@@ -1132,11 +1142,19 @@ mod tests {
             CLEANUP_WORKTREE,
             json!({"session_id": "d1", "settle": "yes"})
         ));
-        // The merge waits under an hour and the engine outlasts the loop's tail,
-        // still inside the external harness's 61-minute MCP timeout.
+        // The merge waits 25 minutes and the engine outlasts the loop's tail,
+        // still inside the external harness's MCP timeout.
         let deadline = timeout(MERGE_WHEN_GREEN, &json!({"session_id": "d1"}));
         assert!(deadline >= Duration::from_millis(MAX_MERGE_WAIT_MS) + Duration::from_secs(170));
-        assert!(deadline < Duration::from_secs(61 * 60));
+        assert!(deadline < Duration::from_secs(hub::TOOL_TIMEOUT_SECS));
+        // A longer ask is cut to the cap.
+        assert_eq!(
+            timeout(
+                MERGE_WHEN_GREEN,
+                &json!({"session_id": "d1", "timeout_ms": 3_300_000})
+            ),
+            deadline
+        );
     }
 
     #[test]
@@ -1715,6 +1733,16 @@ mod tests {
             timeout(WAIT_SESSION, &json!({"timeout_ms": 9_999_999})),
             Duration::from_millis(MAX_WAIT_MS) + Duration::from_secs(30)
         );
+        assert_eq!(MAX_WAIT_MS, 25 * 60 * 1000);
+        assert_eq!(
+            requested_wait(WAIT_SESSION, &json!({"timeout_ms": 1_950_000})),
+            Some(Duration::from_millis(MAX_WAIT_MS))
+        );
+        assert_eq!(
+            requested_wait(WAIT_SESSION, &json!({"timeout_ms": 5_000})),
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(requested_wait(LIST_SESSIONS, &json!({})), None);
     }
 
     #[test]

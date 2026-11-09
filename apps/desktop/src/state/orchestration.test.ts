@@ -242,7 +242,7 @@ describe("orchestration rules", () => {
       ),
     ).toBe(true);
     const wait = parseCall({ tool: "wait_session", args: { link_id: "a/1", timeout_ms: 9e9 } });
-    expect(!isFailure(wait) && wait.tool === "wait_session" && wait.timeoutMs).toBe(3_600_000);
+    expect(!isFailure(wait) && wait.tool === "wait_session" && wait.timeoutMs).toBe(1_500_000);
     // The engine's name for the call rides along, so a dropped call can end its wait.
     expect(
       parseCall({ tool: "wait_session", callId: "call-7", args: { link_id: "a/1", timeout_ms: 5 } }),
