@@ -4877,6 +4877,8 @@ export class MockTransport implements Transport {
       return { name: path.split("/").pop(), mimeType: "image/svg+xml", data: btoa(svg) };
     }
     if (command === "skill_create") return `~/.config/rustcode/skills/${String(args.name)}/SKILL.md`;
+    // The mock window has no system clipboard to paste from, and no picture to stand in for.
+    if (command === "clipboard_image") return null;
     throw new Error(`The mock does not run ${command}.`);
   }
 

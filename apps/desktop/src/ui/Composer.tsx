@@ -46,6 +46,8 @@ import { folderRows, matchSpans, middleEllipsis } from "../lib/folderList";
 import { haptic } from "../lib/haptics";
 import {
   canOpenTerminal,
+  clipboardImage,
+  type ImageFile,
   onFileDrop,
   openPath,
   openTerminalAt,
@@ -54,7 +56,7 @@ import {
   projectFiles,
   readImage,
 } from "../lib/native";
-import { isLongPaste } from "../lib/paste";
+import { isLongPaste, pastedImages } from "../lib/paste";
 import { observeSize } from "../lib/resize";
 import { fadeClearedField } from "../lib/sendFlight";
 import {
@@ -423,6 +425,23 @@ export const Composer = memo(function Composer({
   const attach = (more: Attachment[]) => {
     if (more.length) change((e) => ({ ...e, attachments: [...e.attachments, ...more] }));
   };
+  // A picture WebKitGTK keeps to the native clipboard (Linux): the shell reads it as the PNG an
+  // attachment carries, and a harness that does not take images refuses it as it does a dropped one.
+  const pasteFromClipboard = async () => {
+    let image: ImageFile | null;
+    try {
+      image = await clipboardImage();
+    } catch (error) {
+      toast(`Could not paste the image: ${error instanceof Error ? error.message : String(error)}`, "error");
+      return;
+    }
+    if (!image) return;
+    if (!images) {
+      toast(`${harnessName} does not take images`, "info");
+      return;
+    }
+    attach([{ id: localId("image"), kind: "image", ...image }]);
+  };
 
   // Files dropped on the app window arrive as paths from the shell.
   const dropped = useRef<(paths: string[]) => void>(() => undefined);
@@ -510,7 +529,10 @@ export const Composer = memo(function Composer({
   };
 
   const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = [...e.clipboardData.files];
+    // A picture comes as a file, as an item, or not at all: macOS fills `files`, WebKitGTK on Linux
+    // can list it only as an item, and sometimes keeps it to the native clipboard (lib/paste.ts,
+    // lib/native.ts).
+    const files = pastedImages(e.clipboardData);
     if (files.length) {
       e.preventDefault();
       void attachmentsFromFiles(files, images, harnessName).then(attach);
@@ -525,6 +547,12 @@ export const Composer = memo(function Composer({
       return;
     }
     // A pasted link stays where it was pasted, as text; the sent message shows it as a chip.
+    if (text) return;
+    // The web view saw nothing to paste, which is how a copied screenshot reaches Linux: the shell
+    // reads the picture from the native clipboard instead. Nothing there either leaves the paste
+    // empty, as it would have been.
+    e.preventDefault();
+    void pasteFromClipboard();
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {

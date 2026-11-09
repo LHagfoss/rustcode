@@ -133,6 +133,23 @@ export async function threadImage(path: string, roots: string[]): Promise<ImageF
 }
 
 /**
+ * The picture on the system clipboard, read by the shell (PNG, at most 20 MB).
+ * WebKitGTK on Linux can keep a copied screenshot to the native clipboard and
+ * hand a paste event nothing, so the composer asks for it when the paste is
+ * empty. Null when the clipboard holds no picture, or in the browser.
+ */
+export async function clipboardImage(): Promise<ImageFile | null> {
+  if (!hasShell()) return null;
+  try {
+    return await invoke<ImageFile | null>("clipboard_image");
+  } catch (error) {
+    // The dev bridge and a shell older than the command answer it no such thing: nothing to paste.
+    if (/Unknown command|does not run/.test(String(error))) return null;
+    throw error;
+  }
+}
+
+/**
  * Files dropped on the window. The Tauri webview takes file drops itself and
  * reports paths; the browser delivers them as DOM drop events instead.
  */
