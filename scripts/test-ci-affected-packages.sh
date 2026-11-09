@@ -16,8 +16,9 @@ check() {
 
 check 'TUI only' 'rustcode/tui/src/ui.rs' '-p rustcode-tui '
 check 'engine only' 'rustcode/engine/src/lib.rs' '-p rustcode '
-check 'remote protocol contract' 'docs/remote-protocol/v1/frame.schema.json' '-p rustcode '
-check 'remote protocol prose' 'docs/remote-protocol/README.md' ''
+check 'remote protocol contract' 'docs/remote-protocol/v1/frame.schema.json' '-p rustcode -p rustcode-client '
+check 'remote protocol prose' 'docs/remote-protocol/README.md' '-p rustcode -p rustcode-client '
+check 'remote gateway change runs the client contract' 'rustcode/engine/src/remote_gateway/handshake.rs' '-p rustcode -p rustcode-client '
 check 'machine client only' 'rustcode/client/src/lib.rs' '-p rustcode-client '
 check 'machine client and TUI' $'rustcode/client/tests/gateway_round_trip.rs\nrustcode/tui/src/ui.rs' '-p rustcode-tui -p rustcode-client '
 check 'core only' 'rustcode/core/rustcode-tools/src/lib.rs' '-p rustcode-tools '

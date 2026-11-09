@@ -1,11 +1,17 @@
 //! Device tokens, kept in the operating system's credential store.
 //!
-//! A pairing hands this client one token, shown once. It is a credential for
-//! everything that machine shows the app, so it belongs in the OS keychain
-//! (Keychain, Credential Manager, Secret Service), and never in
-//! `credentials.json` or `provider-accounts.json`: those belong to model
-//! providers, and mixing the two would put a machine token in whatever
-//! exports those files.
+//! A pairing hands this client one durable token, shown once: the static
+//! device token, or, for a device that rotates its tokens, a refresh token
+//! that every accepted reconnect replaces. It is a credential for everything
+//! that machine shows the app, so it belongs in the OS keychain (Keychain,
+//! Credential Manager, Secret Service), and never in `credentials.json` or
+//! `provider-accounts.json`: those belong to model providers, and mixing the
+//! two would put a machine token in whatever exports those files.
+//!
+//! A rotating machine also hands out a short-lived access token. It is kept in
+//! memory only ([`Access`]): the machine forgets its access tokens when its
+//! gateway restarts, and the refresh token is what reconnects then. Nothing
+//! here writes an access token anywhere.
 //!
 //! One keychain service holds one entry per machine per *profile*: the
 //! account is `<install id>/<host id>`, where the install id is the random
@@ -23,6 +29,7 @@
 use crate::protocol::Secret;
 use crate::registry::write_private_json;
 use anyhow::{Context, Result, bail, ensure};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -41,6 +48,49 @@ pub const TOKEN_STORE_ENV: &str = "RUSTCODE_MACHINE_TOKEN_STORE";
 
 const MAX_TOKENS_BYTES: u64 = 128 * 1024;
 const MAX_TOKENS: usize = 256;
+
+/// A short-lived access token and when the machine stops accepting it.
+///
+/// Unlike the refresh token it is never written anywhere: it lives as long as
+/// this process does, so a restart simply reconnects with the refresh token.
+/// The machine treats every access token it did not mint in its current run as
+/// expired, so an old one is a wasted attempt at best.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Access {
+    token: Secret,
+    expires_at: DateTime<Utc>,
+}
+
+impl Access {
+    pub fn new(token: Secret, expires_at: DateTime<Utc>) -> Self {
+        Self { token, expires_at }
+    }
+
+    /// The token to present.
+    pub fn token(&self) -> &Secret {
+        &self.token
+    }
+
+    pub fn expires_at(&self) -> DateTime<Utc> {
+        self.expires_at
+    }
+
+    /// Whether the machine should still take it at `now`.
+    pub fn is_valid_at(&self, now: DateTime<Utc>) -> bool {
+        now < self.expires_at
+    }
+}
+
+/// Where and when, never what: a token in a `Debug` line is a token in a log.
+impl fmt::Debug for Access {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Access")
+            .field("token", &"<redacted>")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
+}
 
 enum Backend {
     /// The OS credential store, under `KEYCHAIN_SERVICE`. `profile` is this
@@ -85,6 +135,10 @@ impl fmt::Debug for Backend {
 #[derive(Debug)]
 pub struct TokenStore {
     backend: Backend,
+    /// Access tokens, in memory only, keyed by `host_id`. Dropped by a new
+    /// refresh token, a re-pairing and a removal, because each of those makes
+    /// the access token the machine minted before it worthless.
+    access: std::sync::Mutex<BTreeMap<String, Access>>,
 }
 
 impl TokenStore {
@@ -106,6 +160,7 @@ impl TokenStore {
                 )?;
                 Ok(Self {
                     backend: Backend::Keychain { profile },
+                    access: std::sync::Mutex::new(BTreeMap::new()),
                 })
             }
             Some(other) => {
@@ -127,6 +182,7 @@ impl TokenStore {
                 path,
                 tokens: std::sync::Mutex::new(tokens),
             },
+            access: std::sync::Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -140,6 +196,8 @@ impl TokenStore {
         }
     }
 
+    /// The durable token of `host_id`: a refresh token for a device that
+    /// rotates its tokens, or the static token of a pairing that does not.
     pub fn get(&self, host_id: &str) -> Result<Option<Secret>> {
         match &self.backend {
             Backend::Keychain { profile } => {
@@ -159,22 +217,37 @@ impl TokenStore {
         }
     }
 
+    /// Replace the durable token of `host_id`.
+    ///
+    /// The access token this process holds for the machine goes with it: a new
+    /// refresh token comes from a rotation or a pairing, and the access token
+    /// minted before either is no longer the live one. Rotation therefore
+    /// calls this first and [`Self::keep_access`] after it.
     pub fn set(&self, host_id: &str, token: &Secret) -> Result<()> {
         match &self.backend {
             Backend::Keychain { profile } => {
                 keyring::Entry::new(KEYCHAIN_SERVICE, &keychain_account(profile, host_id))
                     .and_then(|entry| entry.set_password(token.expose()))
-                    .map_err(|error| keyring_error("store", host_id, error))
+                    .map_err(|error| keyring_error("store", host_id, error))?;
             }
             Backend::File { path, tokens } => {
                 let mut tokens = tokens.lock().expect("token map is not poisoned");
-                tokens.insert(host_id.to_owned(), token.expose().to_owned());
-                write_tokens(path, &tokens)
+                // Disk first: the map in memory changes only once the write
+                // landed, so a failed write leaves the previous token in both
+                // places and the rotation it belongs to is never acknowledged.
+                let mut candidate = tokens.clone();
+                candidate.insert(host_id.to_owned(), token.expose().to_owned());
+                write_tokens(path, &candidate)?;
+                *tokens = candidate;
             }
         }
+        // Only a stored token makes the access token before it stale.
+        self.forget_access(host_id);
+        Ok(())
     }
 
     pub fn remove(&self, host_id: &str) -> Result<()> {
+        self.forget_access(host_id);
         match &self.backend {
             Backend::Keychain { profile } => {
                 match keyring::Entry::new(KEYCHAIN_SERVICE, &keychain_account(profile, host_id))
@@ -186,12 +259,43 @@ impl TokenStore {
             }
             Backend::File { path, tokens } => {
                 let mut tokens = tokens.lock().expect("token map is not poisoned");
-                if tokens.remove(host_id).is_none() {
+                if !tokens.contains_key(host_id) {
                     return Ok(());
                 }
-                write_tokens(path, &tokens)
+                let mut candidate = tokens.clone();
+                candidate.remove(host_id);
+                write_tokens(path, &candidate)?;
+                *tokens = candidate;
+                Ok(())
             }
         }
+    }
+
+    /// The access token this process holds for `host_id`, if any. Never read
+    /// from disk: it is gone after a restart, which is what the machine
+    /// expects.
+    pub fn access(&self, host_id: &str) -> Option<Access> {
+        self.access
+            .lock()
+            .expect("access token map is not poisoned")
+            .get(host_id)
+            .cloned()
+    }
+
+    /// Keep `access` in memory for the next reconnect. Nothing is written.
+    pub fn keep_access(&self, host_id: &str, access: Access) {
+        self.access
+            .lock()
+            .expect("access token map is not poisoned")
+            .insert(host_id.to_owned(), access);
+    }
+
+    /// Drop the access token of `host_id`, keeping its durable token.
+    pub fn forget_access(&self, host_id: &str) {
+        self.access
+            .lock()
+            .expect("access token map is not poisoned")
+            .remove(host_id);
     }
 }
 
@@ -319,6 +423,77 @@ mod tests {
         std::fs::write(&path, vec![b' '; (MAX_TOKENS_BYTES + 1) as usize]).unwrap();
         let error = TokenStore::in_file(dir.path()).unwrap_err();
         assert!(format!("{error:#}").contains("larger than"), "{error:#}");
+    }
+
+    /// The access token lives in this process only: a second store on the same
+    /// directory is a restart and has none, and everything that makes the
+    /// durable token new makes the access token before it worthless.
+    #[test]
+    fn an_access_token_is_memory_only_and_goes_with_the_durable_one() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let at = Utc::now() + chrono::Duration::minutes(15);
+        let store = TokenStore::in_file(dir.path()).unwrap();
+        store.set("gw-a", &Secret::new("refresh-1")).unwrap();
+        store.keep_access("gw-a", Access::new(Secret::new("access-1"), at));
+        let kept = store.access("gw-a").expect("kept in memory");
+        assert_eq!(kept.token().expose(), "access-1");
+        assert_eq!(kept.expires_at(), at);
+        assert!(
+            TokenStore::in_file(dir.path())
+                .unwrap()
+                .access("gw-a")
+                .is_none(),
+            "a restart keeps no access token"
+        );
+        // A rotation or a pairing writes a new durable token; the access token
+        // the machine minted before it is not the live one.
+        store.set("gw-a", &Secret::new("refresh-2")).unwrap();
+        assert!(store.access("gw-a").is_none());
+        // Removing the machine drops both.
+        store.keep_access("gw-a", Access::new(Secret::new("access-2"), at));
+        store.remove("gw-a").unwrap();
+        assert!(store.access("gw-a").is_none());
+        assert!(store.get("gw-a").unwrap().is_none());
+        // And it never reaches the file.
+        let bytes = std::fs::read(file_path(dir.path())).unwrap_or_default();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(!text.contains("access-2"), "{text}");
+    }
+
+    /// A write that fails changes nothing: the token stays what it was in
+    /// memory as well as on disk, so a rotation that could not be stored is
+    /// never acknowledged on the strength of a token only this process knows.
+    #[test]
+    fn a_failed_write_keeps_the_previous_token_and_access() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let store = TokenStore::in_file(dir.path()).unwrap();
+        store.set("gw-a", &Secret::new("refresh-1")).unwrap();
+        let at = Utc::now() + chrono::Duration::minutes(15);
+        store.keep_access("gw-a", Access::new(Secret::new("access-1"), at));
+        // A directory with a file in it where the token file goes: the atomic
+        // replace cannot succeed, as on an unwritable or full disk.
+        let path = file_path(dir.path());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("blocker"), b"x").unwrap();
+
+        let error = store
+            .set("gw-a", &Secret::new("refresh-2"))
+            .expect_err("the write cannot land");
+        assert!(!format!("{error:#}").contains("refresh-2"), "{error:#}");
+        assert_eq!(store.get("gw-a").unwrap().unwrap().expose(), "refresh-1");
+        assert!(
+            store.access("gw-a").is_some(),
+            "nothing rotated, so the access token is still the live one"
+        );
+        store
+            .set("gw-b", &Secret::new("other"))
+            .expect_err("a new machine fails the same way");
+        assert!(store.get("gw-b").unwrap().is_none());
+        store
+            .remove("gw-a")
+            .expect_err("a removal that cannot be written is not forgotten");
+        assert_eq!(store.get("gw-a").unwrap().unwrap().expose(), "refresh-1");
     }
 
     /// `Debug` names where the tokens are, never what they are.

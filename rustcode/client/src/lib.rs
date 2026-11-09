@@ -7,7 +7,8 @@
 //! - [`registry`]: saved machines keyed by `host_id`, with their routes, in
 //!   `machines.json` (`0600` on Unix).
 //! - [`tokens`]: the device token in the operating system credential store,
-//!   never in the provider credential files.
+//!   never in the provider credential files, and the rotating pairing's
+//!   short-lived access token in memory only.
 //! - [`transport`]: the WebSocket to a machine's gateway, its handshake and
 //!   the ACP channel it becomes.
 //! - [`machine`]: the ask-to-connect pairing flow, route selection and the one
@@ -33,9 +34,9 @@ pub use machine::{
     machine_from_pairing, platform,
 };
 pub use protocol::{
-    AcpClientFrame, AcpServerFrame, ErrorCode, HandshakeRequest, HandshakeResponse,
-    PAIRING_CODE_DIGITS, Secret,
+    AcpClientFrame, AcpServerFrame, CAPABILITY_TOKEN_ROTATION, ErrorCode, HandshakeRequest,
+    HandshakeResponse, PAIRING_CODE_DIGITS, Secret,
 };
 pub use registry::{Machine, MachineRegistry, Route, RouteKind};
-pub use tokens::TokenStore;
+pub use tokens::{Access, TokenStore};
 pub use transport::{AcpChannel, DEFAULT_PORT, MAX_FRAME_BYTES};
