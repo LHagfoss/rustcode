@@ -494,13 +494,13 @@ export function Switch({
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cx(
-        "relative inline-flex h-5 w-10 shrink-0 items-center rounded-full transition-[background-color] duration-200 ease-snappy disabled:opacity-40",
+        "relative inline-flex h-4 w-11 shrink-0 items-center rounded-full transition-[background-color] duration-200 ease-snappy disabled:opacity-40",
         checked ? "bg-accent" : "bg-fill-strong",
       )}
     >
       <span
         className={cx(
-          "absolute top-1/2 left-0 size-6 -translate-y-1/2 rounded-full bg-knob shadow-knob transition-transform duration-200 ease-snappy",
+          "absolute top-1/2 left-0 h-5 w-7 -translate-y-1/2 rounded-full bg-knob shadow-knob transition-transform duration-200 ease-snappy",
           checked ? "translate-x-4" : "translate-x-0",
         )}
       />

@@ -205,7 +205,11 @@ export const UserRow = memo(function UserRow({
         <Tooltip label={item.at ? new Date(item.at).toLocaleString() : undefined}>
           <span className="truncate tabular">{messageTime(item.at)}</span>
         </Tooltip>
-        <CopyButton text={item.text} iconOnly label="Copy message" />
+        {/* The actions show on hover only, all three together: a steer holds the line open for its
+            badge and time, and must not leave Copy showing alone beside them. */}
+        <span className="inline-flex opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+          <CopyButton text={item.text} iconOnly label="Copy message" />
+        </span>
         {threadId && (
           <>
             <Tooltip
