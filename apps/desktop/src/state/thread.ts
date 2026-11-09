@@ -1308,11 +1308,15 @@ export function subagentTitle(name: string, task: string): string {
   return line || type || "Agent";
 }
 
-/** A leading part of a shell line that only sets up where or with what it runs: `cd x`, `export A=1`, `A=1`. */
+/**
+ * A leading part of a shell line that only sets up where or with what it runs: `cd x`, `export A=1`, `A=1`.
+ * A value is a run of quoted strings and unquoted characters, and every character can start only one
+ * of those, so a long or unterminated value cannot make the match backtrack exponentially.
+ */
 const SETUP_PART =
-  /^(?:cd\s+(?:"[^"]*"|'[^']*'|[^\s;&|]+)|(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s;&|]*)(?:\s+[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s;&|]*))*)\s*(?:&&|;|\n)\s*/;
+  /^(?:cd\s+(?:"[^"]*"|'[^']*'|[^\s;&|]+)|(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s;&|"'])*(?:\s+[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s;&|"'])*)*)\s*(?:&&|;|\n)\s*/;
 /** Environment assignments can contain spaces and secrets; remove the entire quoted value first. */
-const ENV_ASSIGNMENT = /(^|\s)[A-Za-z_][A-Za-z0-9_]*=(?:"(?:\\.|[^"])*"|'[^']*'|[^\s;&|]*)/g;
+const ENV_ASSIGNMENT = /(^|\s)[A-Za-z_][A-Za-z0-9_]*=(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s;&|"'])*/g;
 
 /** The word a reader knows a program by: `cargo`, not `/usr/local/bin/cargo`. */
 const programName = (token: string) => token.split("/").filter(Boolean).at(-1) ?? "";

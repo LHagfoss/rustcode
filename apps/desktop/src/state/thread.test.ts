@@ -1044,6 +1044,14 @@ describe("a subagent row's text", () => {
     expect(agentStepLabel(short)).toBe("Running bun test …");
   });
 
+  test("a shell step with a long or unterminated quoted value is labelled quickly", () => {
+    const started = performance.now();
+    expect(shortCommand(`A="${"\\!".repeat(5000)}`)).toBe("");
+    expect(shortCommand(`A= A=${'"" A='.repeat(5000)}`)).toBe("");
+    expect(shortCommand(`TOKEN="a \\"quoted\\" secret" B=x"y z"w cargo test`)).toBe("cargo test");
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
   test("a shell step never shows a raw line with its variables and paths", () => {
     expect(shortCommand("F=/private/tmp/rc-1234/out.txt; cargo test -p rustcode-engine > $F")).toBe(
       "cargo test …",
