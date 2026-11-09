@@ -50,7 +50,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { ContextMenu, Dialog, DropdownMenu } from "radix-ui";
+import { ContextMenu, DropdownMenu } from "radix-ui";
 import {
   Fragment,
   memo,
@@ -136,6 +136,7 @@ import { formatClock, idleSettled, shortAge } from "../state/thread";
 import { openChain, parentOf as parentOfThread, type SubRow, topLevel } from "../state/topLevel";
 import { useWaiting, waitingLabel, waitingTitle } from "../state/waiting";
 import { AgentStack } from "./AgentStack";
+import { CustomSnooze } from "./CustomSnooze";
 import { HarnessIcon } from "./HarnessIcon";
 import { NeedsYouRow } from "./Inbox";
 import { LinkBadge } from "./Links";
@@ -146,7 +147,6 @@ import {
   ClusterButton,
   ContextMenuSurface,
   cx,
-  inputClass,
   MenuContent,
   MenuSearchField,
   menuItem,
@@ -189,53 +189,6 @@ function useSidebarWidth() {
     }
   }, [width]);
   return [width, setWidth] as const;
-}
-
-/** Choose a wake time when no preset fits. */
-function CustomSnooze() {
-  const id = useApp((s) => s.snoozeAsk);
-  const [value, setValue] = useState("");
-  const at = value ? new Date(value).getTime() : Number.NaN;
-  const valid = at > Date.now();
-  return (
-    <Dialog.Root
-      open={!!id}
-      onOpenChange={(open) => {
-        if (!open) askCustomSnooze(null);
-      }}
-    >
-      <Dialog.Portal>
-        <Dialog.Overlay className="rc-overlay fixed inset-0 z-50 bg-bg/60" />
-        <Dialog.Content
-          aria-describedby={undefined}
-          className="elevated fixed top-1/2 left-1/2 z-50 flex w-[min(360px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 flex-col gap-3 p-5 rc-in"
-        >
-          <Dialog.Title className="font-semibold text-body">Snooze until</Dialog.Title>
-          <input
-            type="datetime-local"
-            aria-label="Wake time"
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            className={inputClass}
-          />
-          <div className="flex justify-end gap-2">
-            <Pill onClick={() => askCustomSnooze(null)}>Cancel</Pill>
-            <Pill
-              prominent
-              disabled={!valid}
-              onClick={() => {
-                if (id && valid) snoozeThread(id, at);
-                setValue("");
-                askCustomSnooze(null);
-              }}
-            >
-              Snooze
-            </Pill>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
-  );
 }
 
 function ThreadMenuItems({
