@@ -1854,7 +1854,24 @@ mod tests {
             .into_iter()
             .map(|handle| handle.join().unwrap())
             .collect::<Vec<_>>();
-        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        // Creation is idempotent: a caller that arrives after the winner has
+        // finished resumes the same workspace, so how many succeed depends on
+        // timing. Every success is the one workspace; every other caller met
+        // the creation lock.
+        let created = results
+            .iter()
+            .filter_map(|result| result.as_ref().ok())
+            .collect::<Vec<_>>();
+        assert!(!created.is_empty(), "no caller created it: {results:?}");
+        for descriptor in &created {
+            assert_eq!(descriptor.id, created[0].id);
+            assert_eq!(descriptor.workspace_path, created[0].workspace_path);
+        }
+        for result in &results {
+            if let Err(error) = result {
+                assert!(matches!(error, WorkspaceError::Busy(_)), "{error:?}");
+            }
+        }
         assert_eq!(
             manager
                 .find_by_owner(
