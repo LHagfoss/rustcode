@@ -15,6 +15,7 @@ import {
   claimLive,
   clearHalt,
   frameToken,
+  HoverSize,
   haltOf,
   haltView,
   releaseLive,
@@ -44,13 +45,12 @@ const HIDDEN_TIMEOUT = 30_000;
 const SEEN_MARGIN = "200px";
 
 function currentTheme() {
-  // The app's fonts only off macOS: there the page keeps its own stack, as it always has.
-  const platform = document.documentElement.dataset.platform;
-  const fonts =
-    platform === "windows" || platform === "linux"
-      ? { sans: cssVar("--font-sans"), mono: cssVar("--font-mono") }
-      : {};
-  return pageTheme(isDark() ? "dark" : "light", cssVar, fonts);
+  // The app's fonts on every platform, macOS included: a theme that sets one is
+  // the theme the view's text follows (issue 3304).
+  return pageTheme(isDark() ? "dark" : "light", cssVar, {
+    sans: cssVar("--font-sans"),
+    mono: cssVar("--font-mono"),
+  });
 }
 
 /** Where a page is served from in the app: its own scheme, with its own CSP (src-tauri/src/smartui.rs). */
@@ -115,9 +115,18 @@ export function SmartUIView({
     stream?: boolean;
   } | null>(null);
   const [inView, setInView] = useState(false);
+  // The frame's own colour scheme, so its native pieces (a scrollbar, a control) and
+  // a canvas fall back to the mode the app is in, not the system's.
+  const [mode, setMode] = useState<"light" | "dark">(() => (isDark() ? "dark" : "light"));
   const [, haltChanged] = useReducer((n: number) => n + 1, 0);
   const frame = useRef<HTMLIFrameElement>(null);
   const box = useRef<HTMLDivElement>(null);
+  // The height the frame is drawn at, with the hover hold (`HoverSize`).
+  const sizes = useRef<HoverSize | null>(null);
+  const sizeGate = useCallback(
+    () => (sizes.current ??= new HoverSize(rememberedHeight(source) ?? MIN_HEIGHT)),
+    [source],
+  );
 
   const syncFrameFocusModality = useCallback(() => {
     if (!page) return;
@@ -211,7 +220,11 @@ export function SmartUIView({
       },
       () => autoRun.current.inView,
     );
-    setHeight((now) => rememberedHeight(source) ?? now);
+    const remembered = rememberedHeight(source);
+    if (remembered !== undefined) {
+      sizeGate().set(remembered);
+      setHeight(remembered);
+    }
     if (isTauri()) {
       try {
         const id = await shellCall<string>("smartui_page", { html });
@@ -223,7 +236,7 @@ export function SmartUIView({
     } else {
       show({ token, srcdoc: html });
     }
-  }, [source, threadId, tearDown, haltWith]);
+  }, [source, threadId, tearDown, haltWith, sizeGate]);
 
   const pressRun = () => {
     clearHalt(haltKey);
@@ -342,17 +355,33 @@ export function SmartUIView({
           // The preview frame can take the fragment now, including the part it was built after.
           pump.current?.push(closeOpenTags(latest.current));
           break;
+        case "hover": {
+          // Not from a click: show a held height only once the pointer is gone.
+          const next = sizeGate().hover(data.over === true);
+          if (next !== null) {
+            rememberHeight(source, next);
+            setHeight(next);
+          }
+          break;
+        }
         case "size": {
           const elements = Number(data.elements);
           const measured = clampHeight(Number(data.height) || MIN_HEIGHT);
           if (page.stream) {
             // Never shrink while streaming, so the chat does not jump as the fragment grows.
-            setHeight((now) => Math.max(now, measured));
+            const next = Math.max(sizeGate().value, measured);
+            sizeGate().set(next);
+            setHeight(next);
           } else if (elements > MAX_ELEMENTS)
             haltWith(`The view built more than ${MAX_ELEMENTS.toLocaleString()} elements.`);
           else {
-            rememberHeight(source, measured);
-            setHeight(measured);
+            // A hover overlay may have moved the content; a click or key may open a panel.
+            const interacted = navigator.userActivation?.isActive ?? false;
+            const next = sizeGate().measure(measured, interacted);
+            if (next !== null) {
+              rememberHeight(source, next);
+              setHeight(next);
+            }
           }
           break;
         }
@@ -402,6 +431,7 @@ export function SmartUIView({
     // The app's appearance changed: the page's variables follow.
     const unTheme = onAppThemeChange(() => {
       const theme = currentTheme();
+      setMode(theme.mode);
       frame.current?.contentWindow?.postMessage(
         { rc: page.token, type: "theme", css: varsCss(theme), mode: theme.mode },
         "*",
@@ -412,7 +442,7 @@ export function SmartUIView({
       clearInterval(watch);
       unTheme();
     };
-  }, [page, threadId, source, haltWith]);
+  }, [page, threadId, source, haltWith, sizeGate]);
 
   // Out of sight for 30 s: torn down; it runs again when it comes back.
   useEffect(() => {
@@ -443,7 +473,7 @@ export function SmartUIView({
             src={page.src}
             srcDoc={page.srcdoc}
             className="block w-full border-0 bg-transparent"
-            style={{ height, colorScheme: "normal" }}
+            style={{ height, colorScheme: mode }}
           />
         ) : (
           <div className="flex h-[48px] items-center text-callout">
@@ -480,7 +510,7 @@ export function SmartUIView({
           src={page.src}
           srcDoc={page.srcdoc}
           className="block w-full border-0 bg-transparent"
-          style={{ height, colorScheme: "normal" }}
+          style={{ height, colorScheme: mode }}
         />
       ) : halt ? (
         <div className="flex min-h-[44px] items-center gap-2 text-callout">

@@ -5,7 +5,7 @@
 // with the engine's `smart-ui` skill (docs/smart-ui.md, "Runtime").
 
 import { KIT_SCRIPT } from "./kit";
-import { stripEmptyTags } from "./parse";
+import { MAX_HEIGHT, stripEmptyTags } from "./parse";
 
 export const PAGE_CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; " +
@@ -13,18 +13,24 @@ export const PAGE_CSP =
 
 export type ThemeMode = "light" | "dark";
 
-/** The eight series colours, Apple's system palette in each mode. */
+/**
+ * The series ramp after the first colour, which is the app's accent (below): fixed
+ * hues tuned to the mode, so a chart stays legible whatever the accent is.
+ */
 const SERIES: Record<ThemeMode, string[]> = {
   light: ["#007aff", "#ff9500", "#34c759", "#ff3b30", "#af52de", "#30b0c7", "#ffcc00", "#ff2d55"],
   dark: ["#0a84ff", "#ff9f0a", "#30d158", "#ff453a", "#bf5af2", "#40c8e0", "#ffd60a", "#ff375f"],
 };
+
+/** A colour a canvas can parse: the accent leads the ramp, when the theme sets a plain hex. */
+const HEX = /^#[0-9a-f]{3,8}$/i;
 
 export interface PageTheme {
   mode: ThemeMode;
   vars: Record<string, string>;
 }
 
-/** The macOS faces, for a page drawn without the app's own (`fonts` below). */
+/** The faces a page falls back to when it is drawn without the app's own (`fonts` below). */
 const MAC_FONTS = {
   sans: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif',
   mono: '"SF Mono", ui-monospace, Menlo, monospace',
@@ -53,9 +59,22 @@ export function pageTheme(
     "--rc-warning": token("--rc-warning"),
     "--rc-font": fonts.sans || MAC_FONTS.sans,
     "--rc-mono": fonts.mono || MAC_FONTS.mono,
-    "--rc-radius": "10px",
+    // The app's own radius and type scale, so a view matches the chrome around it
+    // (docs/themes.md, docs/design.md). A view with nothing else still reads.
+    "--rc-radius": token("--rc-radius-md") || "10px",
+    "--rc-radius-sm": token("--rc-radius-sm") || "8px",
+    "--rc-radius-xs": token("--rc-radius-xs") || "6px",
+    "--rc-radius-pill": token("--radius-full") || "999px",
+    "--rc-text-size": token("--text-callout") || "13px",
+    "--rc-text-size-sm": token("--text-sub") || "12px",
+    "--rc-text-size-xs": token("--text-caption") || "11px",
+    "--rc-text-size-title": token("--text-title3") || "16px",
+    "--rc-text-size-value": token("--text-title") || "23px",
   };
-  SERIES[mode].forEach((c, i) => {
+  const accent = token("--rc-accent");
+  const ramp = SERIES[mode];
+  const series = [HEX.test(accent) ? accent : ramp[0]!, ...ramp.slice(1)];
+  series.forEach((c, i) => {
     vars[`--rc-series-${i + 1}`] = c;
   });
   return { mode, vars };
@@ -74,40 +93,48 @@ export function varsCss(theme: PageTheme): string {
 }
 
 export const BASE_CSS = `
+/* The document itself never scrolls, so no scrollbar can appear, narrow the layout and
+   re-wrap the text under the pointer. Only a view past the app's 720 px clamp scrolls,
+   inside the body, where that scrollbar is the one that lets it be read. */
+html { overflow: hidden; }
 html, body { margin: 0; background: transparent; }
-body { position: relative; color: var(--rc-text); font: 13px/20px var(--rc-font); padding: 1px 0 2px; overflow-wrap: anywhere;
-  -webkit-font-smoothing: antialiased; }
+body { position: relative; max-height: ${MAX_HEIGHT}px; overflow-y: auto; color: var(--rc-text); font: var(--rc-text-size)/1.5 var(--rc-font);
+  padding: 1px 0 2px; overflow-wrap: anywhere; -webkit-font-smoothing: antialiased; }
 * { box-sizing: border-box; }
 :focus { outline: none; }
 :root[data-keyboard-nav] :focus-visible { outline: 2px solid color-mix(in srgb, var(--rc-accent) 60%, transparent); outline-offset: 1px; }
-h1, h2, h3, h4 { margin: 0 0 6px; font-weight: 600; line-height: 1.3; }
-h1 { font-size: 17px; } h2 { font-size: 15px; } h3, h4 { font-size: 13px; }
-p { margin: 0 0 8px; } p:last-child { margin-bottom: 0; }
+/* One vertical rhythm for whatever the view writes, kit block or bare tag: the gaps
+   between blocks are the page's, not each class's own. */
+#rc-root > * + * { margin-top: 12px; }
+#rc-stream > * + * { margin-top: 12px; }
+h1, h2, h3, h4 { margin: 0; font-size: var(--rc-text-size); font-weight: 600; line-height: 1.3; }
+h1 { font-size: var(--rc-text-size-title); }
+p { margin: 0; } p + p { margin-top: 8px; }
 small, .rc-muted { color: var(--rc-muted); }
 a { color: var(--rc-accent); }
-table { border-collapse: collapse; width: 100%; font-size: 12px; }
+table { border-collapse: collapse; width: 100%; font-size: var(--rc-text-size-sm); }
 th { text-align: left; font-weight: 600; color: var(--rc-muted); padding: 5px 8px;
   border-bottom: 1px solid var(--rc-separator); }
 td { padding: 5px 8px; border-bottom: 1px solid var(--rc-separator); vertical-align: top; }
 tr:last-child td { border-bottom: 0; }
 input, select, textarea { font: inherit; color: inherit; background: var(--rc-surface);
-  border: 1px solid var(--rc-separator); border-radius: 8px; padding: 4px 8px; outline: none; }
+  border: 1px solid var(--rc-separator); border-radius: var(--rc-radius-sm); padding: 4px 8px; outline: none; }
 :root[data-keyboard-nav] :is(input, select, textarea):focus-visible { border-color: var(--rc-accent); outline: none;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--rc-accent) 22%, transparent); }
 input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(--rc-accent); }
 button { font: inherit; font-weight: 500; color: var(--rc-text); background: var(--rc-surface);
-  border: 1px solid var(--rc-separator); border-radius: 999px; padding: 3px 12px; cursor: pointer; }
+  border: 1px solid var(--rc-separator); border-radius: var(--rc-radius-pill); padding: 3px 12px; cursor: pointer; }
 button:hover { background: color-mix(in srgb, var(--rc-text) 9%, transparent); }
 button:active { opacity: 0.75; }
 button.primary, button[data-primary] { background: var(--rc-accent); color: var(--rc-accent-text); border-color: transparent; }
 button:disabled { opacity: 0.45; cursor: default; }
-code, kbd, pre { font-family: var(--rc-mono); font-size: 12px; }
-pre { background: var(--rc-surface); padding: 8px 10px; border-radius: var(--rc-radius); overflow: auto; margin: 0 0 8px; }
-hr { border: 0; border-top: 1px solid var(--rc-separator); margin: 10px 0; }
+code, kbd, pre { font-family: var(--rc-mono); font-size: var(--rc-text-size-sm); }
+pre { background: var(--rc-surface); padding: 8px 10px; border-radius: var(--rc-radius); overflow: auto; margin: 0; }
+hr { border: 0; border-top: 1px solid var(--rc-separator); margin: 0; }
 canvas { max-width: 100%; }
 .rc-row { display: flex; flex-wrap: wrap; align-items: center; }
 .rc-col { display: flex; flex-direction: column; }
-.rc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+.rc-grid, .rc-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
 .rc-gap-1 { gap: 4px; } .rc-gap-2 { gap: 8px; } .rc-gap-3 { gap: 12px; } .rc-gap-4 { gap: 16px; }
 .rc-mono { font-family: var(--rc-mono); }
 .rc-num { font-variant-numeric: tabular-nums; }
@@ -115,56 +142,53 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 .rc-card { background: var(--rc-surface); border-radius: var(--rc-radius); padding: 10px 12px; }
 .rc-scroll { max-height: 320px; overflow: auto; }
 
-.rc-title { font-size: 15px; font-weight: 600; line-height: 20px; margin: 0 0 2px; }
-.rc-lead { color: var(--rc-muted); margin: 0 0 12px; }
-.rc-label { font-size: 11px; line-height: 16px; color: var(--rc-muted); }
+.rc-title { font-size: var(--rc-text-size-title); font-weight: 600; line-height: 1.3; margin: 0; }
+.rc-lead { color: var(--rc-muted); margin: 0; }
+.rc-label { font-size: var(--rc-text-size-xs); line-height: 1.45; color: var(--rc-muted); }
 .rc-ok { --rc-tint: var(--rc-success); } .rc-warn { --rc-tint: var(--rc-warning); }
 .rc-bad { --rc-tint: var(--rc-danger); } .rc-info { --rc-tint: var(--rc-accent); }
 
-.rc-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); gap: 8px; margin-bottom: 12px; }
-.rc-stats:last-child { margin-bottom: 0; }
+.rc-stats { gap: 8px; }
 .rc-stat { display: flex; flex-direction: column; min-width: 0; padding: 10px 12px;
   border: 1px solid var(--rc-separator); border-radius: var(--rc-radius); }
-.rc-stat-label { order: -1; font-size: 12px; line-height: 16px; color: var(--rc-muted); }
-.rc-stat-value { font-size: 24px; line-height: 30px; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
-.rc-stat-note { font-size: 11px; line-height: 16px; color: var(--rc-tint, var(--rc-muted)); }
+.rc-stat-label { order: -1; font-size: var(--rc-text-size-xs); line-height: 1.45; color: var(--rc-muted); }
+.rc-stat-value { font-size: var(--rc-text-size-value); line-height: 1.25; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.rc-stat-note { font-size: var(--rc-text-size-xs); line-height: 1.45; color: var(--rc-tint, var(--rc-muted)); }
 
-.rc-badge { display: inline-block; padding: 0 7px; font-size: 11px; line-height: 18px; font-weight: 500; white-space: nowrap;
-  border-radius: 999px; color: var(--rc-tint, var(--rc-muted));
+.rc-badge { display: inline-block; padding: 0 7px; font-size: var(--rc-text-size-xs); line-height: 18px; font-weight: 500; white-space: nowrap;
+  border-radius: var(--rc-radius-pill); color: var(--rc-tint, var(--rc-muted));
   background: color-mix(in srgb, var(--rc-tint, var(--rc-text)) 13%, transparent); }
-.rc-callout { padding: 8px 12px; margin-bottom: 12px; border-radius: var(--rc-radius);
+.rc-callout { padding: 8px 12px; border-radius: var(--rc-radius);
   background: color-mix(in srgb, var(--rc-tint, var(--rc-text)) 10%, transparent); }
-.rc-callout:last-child { margin-bottom: 0; }
-.rc-chip { padding: 2px 10px; font-size: 12px; line-height: 18px; font-weight: 400; color: var(--rc-muted); cursor: pointer;
-  background: transparent; border: 1px solid var(--rc-separator); border-radius: 999px; }
+.rc-chip { padding: 2px 10px; font-size: var(--rc-text-size-sm); line-height: 18px; font-weight: 400; color: var(--rc-muted); cursor: pointer;
+  background: transparent; border: 1px solid var(--rc-separator); border-radius: var(--rc-radius-pill); }
 .rc-chip:hover { color: var(--rc-text); }
 [data-rc-send], [data-rc-copy] { cursor: pointer; }
 
-.rc-progress { height: 6px; overflow: hidden; border-radius: 999px; background: color-mix(in srgb, var(--rc-text) 10%, transparent); }
+.rc-progress { height: 6px; overflow: hidden; border-radius: var(--rc-radius-pill); background: color-mix(in srgb, var(--rc-text) 10%, transparent); }
 .rc-progress > span { display: block; height: 100%; border-radius: inherit; background: var(--rc-tint, var(--rc-accent)); }
 
 .rc-bars { display: grid; grid-template-columns: fit-content(40%) minmax(32px, 1fr) max-content; gap: 6px 10px; align-items: center; }
 .rc-bar { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; position: relative;
-  font-size: 12px; line-height: 16px; }
-.rc-bar::before { content: ""; grid-area: 1 / 2; height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--rc-text) 10%, transparent); }
+  font-size: var(--rc-text-size-sm); line-height: 16px; }
+.rc-bar::before { content: ""; grid-area: 1 / 2; height: 6px; border-radius: var(--rc-radius-pill); background: color-mix(in srgb, var(--rc-text) 10%, transparent); }
 .rc-bar > span { grid-area: 1 / 1; color: var(--rc-muted); }
-.rc-bar > i { grid-area: 1 / 2; justify-self: start; min-width: 2px; height: 6px; border-radius: 999px; background: var(--rc-tint, var(--rc-accent)); }
+.rc-bar > i { grid-area: 1 / 2; justify-self: start; min-width: 2px; height: 6px; border-radius: var(--rc-radius-pill); background: var(--rc-tint, var(--rc-accent)); }
 .rc-bar > b { grid-area: 1 / 3; font-weight: 500; font-variant-numeric: tabular-nums; text-align: right; }
 .rc-bar:hover::before { background: color-mix(in srgb, var(--rc-text) 16%, transparent); }
 .rc-bar:hover > span, .rc-bar:hover > b { color: var(--rc-text); }
 .rc-bar:hover > i { background: color-mix(in srgb, var(--rc-tint, var(--rc-accent)) 82%, var(--rc-text)); }
+/* Hover text is laid out all along and only revealed, so it never changes the page's size. */
 .rc-bar[data-rc-tip]::after { content: attr(data-rc-tip); display: block; position: absolute; right: 0; bottom: calc(100% + 2px);
-  z-index: 2; max-width: 100%; padding: 3px 8px; font-size: 11px; line-height: 15px; color: var(--rc-text);
-  background: var(--rc-surface); border: 1px solid var(--rc-separator); border-radius: 8px; pointer-events: none;
-  opacity: 0; transition: opacity 80ms ease-out; }
-.rc-bar[data-rc-tip]:hover::after { opacity: 1; }
+  z-index: 2; max-width: 100%; padding: 3px 8px; font-size: var(--rc-text-size-xs); line-height: 15px; color: var(--rc-text);
+  background: var(--rc-surface); border: 1px solid var(--rc-separator); border-radius: var(--rc-radius-sm); pointer-events: none;
+  visibility: hidden; opacity: 0; transition: opacity 80ms ease-out; }
+.rc-bar[data-rc-tip]:hover::after { visibility: visible; opacity: 1; }
 
 .rc-table { overflow-wrap: normal; font-variant-numeric: tabular-nums; }
-.rc-bars, .rc-list, .rc-steps, .rc-tabs, .rc-table-box { margin-bottom: 12px; }
-.rc-bars:last-child, .rc-list:last-child, .rc-steps:last-child, .rc-tabs:last-child, .rc-table-box:last-child { margin-bottom: 0; }
 .rc-table .rc-num { white-space: nowrap; }
 .rc-table-box { overflow-x: auto; }
-.rc-table th { position: sticky; top: 0; z-index: 1; font-size: 12px; font-weight: 500; white-space: nowrap; background: var(--rc-bg);
+.rc-table th { position: sticky; top: 0; z-index: 1; font-size: var(--rc-text-size-sm); font-weight: 500; white-space: nowrap; background: var(--rc-bg);
   border-bottom: 0; box-shadow: inset 0 -1px var(--rc-separator); }
 .rc-table tbody tr:hover > td { background: color-mix(in srgb, var(--rc-text) 4.5%, transparent); }
 .rc-table[data-rc-sort] th { cursor: pointer; user-select: none; }
@@ -178,13 +202,15 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
    box of the same size says "a chart lands here" instead of an empty one. */
 #rc-stream .rc-chart { border-radius: var(--rc-radius); background: color-mix(in srgb, var(--rc-text) 4%, transparent); }
 #rc-stream .rc-chart > canvas { visibility: hidden; }
-.rc-chart { position: relative; height: 200px; margin-bottom: 12px; }
-.rc-chart:last-child { margin-bottom: 0; }
+/* One chart height, from one class: data-size steps it instead of an inline height. */
+.rc-chart { position: relative; height: 200px; }
+.rc-chart[data-size=sm] { height: 140px; }
+.rc-chart[data-size=lg] { height: 260px; }
 .rc-chart > canvas { display: block; }
 .rc-donut-total { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
   pointer-events: none; font-variant-numeric: tabular-nums; }
-.rc-donut-total > b { font-size: 20px; line-height: 24px; font-weight: 600; letter-spacing: -0.01em; }
-.rc-donut-total > span { font-size: 11px; line-height: 14px; color: var(--rc-muted); }
+.rc-donut-total > b { font-size: var(--rc-text-size-value); line-height: 1.25; font-weight: 600; letter-spacing: -0.01em; }
+.rc-donut-total > span { font-size: var(--rc-text-size-xs); line-height: 14px; color: var(--rc-muted); }
 
 .rc-spark { display: inline-block; width: 64px; height: 20px; color: var(--rc-tint, var(--rc-accent)); vertical-align: middle; }
 .rc-spark > svg { display: block; width: 100%; height: 100%; overflow: visible; }
@@ -227,31 +253,32 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 .rc-details > :not(summary) { margin-bottom: 8px; }
 .rc-tree .rc-details { border-bottom: 0; }
 .rc-tree .rc-details > :not(summary) { margin: 0 0 0 5px; padding-left: 12px; border-left: 1px solid var(--rc-separator); }
-.rc-file { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; font: 12px/18px var(--rc-mono); }
+.rc-file { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; font: var(--rc-text-size-sm)/18px var(--rc-mono); }
 .rc-file > :last-child:not(:first-child) { flex: none; color: var(--rc-muted); }
 
-.rc-term { padding: 10px 12px; margin-bottom: 12px; overflow-x: auto; font: 12px/18px var(--rc-mono); background: var(--rc-surface);
+.rc-term { padding: 10px 12px; overflow-x: auto; font: var(--rc-text-size-sm)/18px var(--rc-mono); background: var(--rc-surface);
   border-radius: var(--rc-radius); }
-.rc-term:last-child { margin-bottom: 0; }
 .rc-term > * { display: block; white-space: pre-wrap; }
 pre.rc-term { white-space: pre-wrap; }
 .rc-term .rc-ok, .rc-term .rc-warn, .rc-term .rc-bad, .rc-term .rc-info { color: var(--rc-tint); }
 
 .rc-tabs [role=tablist] { display: inline-flex; max-width: 100%; gap: 2px; padding: 2px; overflow-x: auto;
-  background: var(--rc-surface); border-radius: 8px; }
-.rc-tabs [role=tab] { flex: none; padding: 1px 10px; font-size: 12px; line-height: 20px; color: var(--rc-muted);
-  background: transparent; border: 0; border-radius: 6px; }
+  background: var(--rc-surface); border-radius: var(--rc-radius-sm); }
+.rc-tabs [role=tab] { flex: none; padding: 1px 10px; font-size: var(--rc-text-size-sm); line-height: 20px; color: var(--rc-muted);
+  background: transparent; border: 0; border-radius: var(--rc-radius-xs); }
 .rc-tabs [role=tab]:hover { color: var(--rc-text); background: transparent; }
 .rc-tabs [role=tab][aria-selected=true] { color: var(--rc-text); background: var(--rc-bg); }
 .rc-tabs [data-rc-panel] { margin-top: 10px; }
 .rc-tabs [data-rc-panel][hidden] { display: none; }
 
-.rc-tip { padding: 0 5px; font-size: 10px; line-height: 14px; font-weight: 500; color: var(--rc-muted); cursor: help; vertical-align: 1px;
-  border-radius: 999px; background: color-mix(in srgb, var(--rc-text) 9%, transparent); }
-.rc-tip > span { display: none; position: absolute; left: 0; right: 0; z-index: 2; width: fit-content; max-width: min(320px, 100%);
-  margin: 18px auto 0; padding: 6px 10px; font-size: 12px; line-height: 16px; font-weight: 400; color: var(--rc-text);
-  background: var(--rc-surface); border: 1px solid var(--rc-separator); border-radius: 8px; }
-.rc-tip:hover > span, .rc-tip:focus > span { display: inline-block; }
+.rc-tip { padding: 0 5px; font-size: var(--rc-text-size-xs); line-height: 14px; font-weight: 500; color: var(--rc-muted); cursor: help; vertical-align: 1px;
+  border-radius: var(--rc-radius-pill); background: color-mix(in srgb, var(--rc-text) 9%, transparent); }
+/* Laid out all along and only revealed: a tip that shows must never grow the page. */
+.rc-tip > span { position: absolute; left: 0; right: 0; z-index: 2; width: fit-content; max-width: min(320px, 100%);
+  margin: 18px auto 0; padding: 6px 10px; font-size: var(--rc-text-size-sm); line-height: 1.4; font-weight: 400; color: var(--rc-text);
+  background: var(--rc-surface); border: 1px solid var(--rc-separator); border-radius: var(--rc-radius-sm);
+  visibility: hidden; opacity: 0; transition: opacity 80ms ease-out; }
+.rc-tip:hover > span, .rc-tip:focus > span { visibility: visible; opacity: 1; }
 @media (prefers-reduced-motion: reduce) { .rc-details > summary::before, .rc-bar[data-rc-tip]::after { transition: none; } }
 `;
 
@@ -318,14 +345,16 @@ export function runtimeScript(token: string, theme: PageTheme): string {
   const pointer = () => setKeyboardNav(false);
   window.addEventListener("pointerdown", pointer, true);
   window.addEventListener("mousedown", pointer, true);
-  // The content, not the document: the root's scrollHeight is never below the frame's own height,
-  // so a frame could only grow. The body is positioned (BASE_CSS), so its scrollHeight also counts
-  // what is absolutely placed in it.
+  // The content, not the document: the root holds what the view wrote, in flow, and a
+  // hover overlay (a tip, a bar's label) is placed out of it, so revealing one never
+  // changes the size the app reserves (issue 3304).
   const contentHeight = () => {
-    const body = document.body;
-    const style = getComputedStyle(body);
-    return Math.max(body.getBoundingClientRect().height, body.scrollHeight) +
-      (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0);
+    const root = document.getElementById("rc-root") || document.body;
+    const style = getComputedStyle(root);
+    const body = getComputedStyle(document.body);
+    return root.getBoundingClientRect().height +
+      (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0) +
+      (parseFloat(body.paddingTop) || 0) + (parseFloat(body.paddingBottom) || 0);
   };
   let parsed = false;
   let last = "";
@@ -339,6 +368,16 @@ export function runtimeScript(token: string, theme: PageTheme): string {
   };
   // A heartbeat, so the app can tell a busy loop from a quiet page.
   setInterval(() => { post({ type: "alive" }); report(); }, 500);
+  // Whether the pointer is in this page at all: the app holds a height that changes
+  // under the pointer until it leaves, in case a hover overlay moved it.
+  let hovering = false;
+  const setHovering = (next) => {
+    if (next === hovering) return;
+    hovering = next;
+    post({ type: "hover", over: next });
+  };
+  document.addEventListener("pointerover", () => setHovering(true), true);
+  document.addEventListener("pointerout", (event) => { if (!event.relatedTarget) setHovering(false); }, true);
 
   // The kit's behaviour, so a view needs no script for it (docs/smart-ui.md).
   const own = (group, selector) => Array.from(group.querySelectorAll(selector)).filter((el) => el.closest(".rc-tabs") === group);
@@ -516,6 +555,8 @@ ${KIT_SCRIPT}
     const observer = new ResizeObserver(report);
     observer.observe(document.documentElement);
     observer.observe(document.body);
+    const root = document.getElementById("rc-root");
+    if (root) observer.observe(root);
     // The frame can take a fragment from here on.
     post({ type: "stream-ready" });
   });
@@ -702,7 +743,7 @@ function pageAt(body: string, token: string, theme: PageTheme): string {
     `<style>${BASE_CSS}</style>`,
     `<script>${runtimeScript(token, theme)}</script>`,
     "</head><body>",
-    body,
+    `<div id="rc-root">${body}</div>`,
     "</body></html>",
   ].join("");
 }

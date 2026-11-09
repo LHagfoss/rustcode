@@ -189,6 +189,128 @@ fn kit_problems(line: &str) -> Vec<String> {
     problems
 }
 
+/// The values of every `property: value` declaration on one line, without the
+/// quotes or `;` around them.
+fn declaration_values<'a>(line: &'a str, property: &str) -> Vec<&'a str> {
+    let lower = line.to_ascii_lowercase();
+    let mut values = Vec::new();
+    for (at, _) in lower.match_indices(property) {
+        // The property must start a word: `color` is not the one in `border-color`.
+        if lower[..at]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '-')
+        {
+            continue;
+        }
+        let Some(rest) = line[at + property.len()..].trim_start().strip_prefix(':') else {
+            continue;
+        };
+        let value = rest.trim_start();
+        let end = value
+            .find(|c: char| matches!(c, ';' | '"' | '\'' | '}' | '<'))
+            .unwrap_or(value.len());
+        values.push(value[..end].trim());
+    }
+    values
+}
+
+/// A hex colour written out, `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`.
+fn has_hex_colour(lower: &str) -> bool {
+    lower.match_indices('#').any(|(at, _)| {
+        let digits = lower[at + 1..]
+            .chars()
+            .take_while(char::is_ascii_hexdigit)
+            .count();
+        matches!(digits, 3 | 4 | 6 | 8)
+    })
+}
+
+/// A value that follows the theme: a `--rc-*` variable (with any fallback), a
+/// colour mixed from one, or one of the keywords that is not a colour.
+fn themed(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.starts_with("var(")
+        || lower.starts_with("color-mix(")
+        || matches!(
+            lower.as_str(),
+            "inherit" | "currentcolor" | "transparent" | "none" | "unset" | "initial"
+        )
+}
+
+/// Style the kit already sets from the app theme (issue #3304). A colour, font or
+/// fixed height written out is what makes two views of the same kind look unlike
+/// each other, so it is reported with what to use instead.
+fn style_problems(line: &str) -> Vec<String> {
+    let lower = line.to_ascii_lowercase();
+    let mut problems = Vec::new();
+    let mut colour = ["rgb(", "rgba(", "hsl(", "hsla("]
+        .iter()
+        .any(|call| lower.contains(call))
+        || (lower.contains('#') && has_hex_colour(&lower));
+    for property in ["color", "background", "background-color", "border-color"] {
+        if declaration_values(line, property)
+            .iter()
+            .any(|value| !themed(value))
+        {
+            colour = true;
+        }
+    }
+    if colour {
+        problems.push(
+            "a colour of its own: colours come from the theme, as a tint class (`.rc-ok`, `.rc-warn`, `.rc-bad`, `.rc-info`) or `var(--rc-*)`".to_owned(),
+        );
+    }
+    for property in ["font-size", "font-family"] {
+        if !declaration_values(line, property).is_empty() {
+            problems.push(format!(
+                "`{property}`: the type scale is the theme's (`--rc-text-size`, `--rc-text-size-sm`, `--rc-text-size-xs`, `--rc-text-size-value`), and the kit already sets it"
+            ));
+        }
+    }
+    if declaration_values(line, "height")
+        .iter()
+        .any(|value| value.to_ascii_lowercase().contains("px"))
+    {
+        problems.push(
+            "a fixed `height`: the view sizes to its content, and a chart takes `data-size=\"sm|md|lg\"` instead".to_owned(),
+        );
+    }
+    problems
+}
+
+/// A `.rc-card` inside a `.rc-card`: the outer one is already the card, and the
+/// inner one adds a second frame of padding and radius. `open` is the stack of
+/// open `<div>`s and whether each is a card, kept across lines.
+fn card_problems(line: &str, open: &mut Vec<bool>) -> Vec<String> {
+    let lower = line.to_ascii_lowercase();
+    let mut problems = Vec::new();
+    let mut at = 0;
+    while let Some(found) = lower[at..].find('<') {
+        let pos = at + found;
+        let rest = &lower[pos..];
+        if rest.starts_with("</div") {
+            open.pop();
+            at = pos + 5;
+        } else if rest.starts_with("<div")
+            && rest[4..].starts_with(|c: char| c.is_whitespace() || c == '>')
+        {
+            let tag = tag_at(line, pos).to_ascii_lowercase();
+            let card = tag.contains("rc-card");
+            if card && open.iter().any(|card| *card) {
+                problems.push(
+                    "a `.rc-card` inside a `.rc-card`: one card is enough, and the inner one doubles its padding and radius".to_owned(),
+                );
+            }
+            open.push(card);
+            at = pos + 4;
+        } else {
+            at = pos + 1;
+        }
+    }
+    problems
+}
+
 /// A static check of one block: its size, the elements it builds, the
 /// libraries it names and everything the sandbox will refuse, each with its
 /// line. It does not run the page, so it reports no script errors and no
@@ -207,6 +329,8 @@ pub(crate) fn check(args: &Value) -> ToolExecutionOutput {
     let mut problems: Vec<String> = Vec::new();
     let (mut elements, mut scripts, mut styles) = (0usize, 0i32, 0i32);
     let mut in_script = false;
+    let mut in_style = false;
+    let mut divs: Vec<bool> = Vec::new();
     for (index, line) in html.lines().enumerate() {
         let lower = line.to_ascii_lowercase();
         if let Some(problem) = line_problem(line, in_script) {
@@ -214,6 +338,17 @@ pub(crate) fn check(args: &Value) -> ToolExecutionOutput {
         }
         for problem in kit_problems(line) {
             problems.push(format!("line {}: {problem}", index + 1));
+        }
+        for problem in card_problems(line, &mut divs) {
+            problems.push(format!("line {}: {problem}", index + 1));
+        }
+        // A style is where a colour, font or height can be written out; a script sets
+        // what it needs in code, and the text of a view is not a declaration at all.
+        let styled = in_style || lower.contains("<style") || lower.contains("style=");
+        if styled && !in_script && !lower.contains("<script") {
+            for problem in style_problems(line) {
+                problems.push(format!("line {}: {problem}", index + 1));
+            }
         }
         // Only the bundled library loads; any other name stays as written and is blocked.
         for (at, _) in lower.match_indices("rustcode-lib:") {
@@ -235,6 +370,12 @@ pub(crate) fn check(args: &Value) -> ToolExecutionOutput {
         scripts +=
             lower.matches("<script").count() as i32 - lower.matches("</script").count() as i32;
         styles += lower.matches("<style").count() as i32 - lower.matches("</style").count() as i32;
+        if lower.contains("<style") && !lower.contains("</style") {
+            in_style = true;
+        }
+        if lower.contains("</style") {
+            in_style = false;
+        }
         if lower.contains("<script") && !lower.contains("</script") {
             in_script = true;
         }
@@ -744,6 +885,43 @@ mod tests {
         assert!(text.contains("at least two numbers"), "{text}");
         assert!(text.contains("line 4:"), "{text}");
         assert!(text.contains("nothing sorts"), "{text}");
+    }
+
+    #[test]
+    fn the_check_catches_the_style_the_kit_already_sets() {
+        let output = checked(
+            "<title>Runs</title>\n\
+             <div style=\"color:#ff0000\">red</div>\n\
+             <style>.x { font-size: 20px; }</style>\n\
+             <div style=\"height:180px\">tall</div>\n\
+             <div class=\"rc-card\"><div class=\"rc-card\">inner</div></div>\n\
+             <div class=\"rc-card\"><span class=\"rc-label\">fine</span></div>",
+        );
+        let text = &output.content;
+        assert!(text.contains("line 2:"), "{text}");
+        assert!(text.contains("a colour of its own"), "{text}");
+        assert!(text.contains("line 3:"), "{text}");
+        assert!(text.contains("font-size"), "{text}");
+        assert!(text.contains("line 4:"), "{text}");
+        assert!(text.contains("fixed `height`"), "{text}");
+        assert!(text.contains("line 5:"), "{text}");
+        assert!(text.contains("inside a `.rc-card`"), "{text}");
+        assert!(!text.contains("line 6:"), "{text}");
+
+        // The theme's own values are what the kit asks for, not a problem.
+        let fine = checked(
+            "<title>Runs</title>\n\
+             <style>p { color: var(--rc-muted); }</style>\n\
+             <div class=\"rc-bars\"><div class=\"rc-bar\"><span>auth</span>\
+             <i style=\"width:25%\"></i><b>10.5 s</b></div></div>\n\
+             <div class=\"rc-chart\" data-size=\"sm\"><canvas></canvas></div>\n\
+             <p>Fixed in #1234.</p>",
+        );
+        assert!(
+            fine.content.starts_with("No problems found"),
+            "{}",
+            fine.content
+        );
     }
 
     #[test]
