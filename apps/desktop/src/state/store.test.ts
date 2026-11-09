@@ -102,7 +102,6 @@ import {
   sendQueuedNow,
   setActiveTheme,
   setArchived,
-  setClaudeUsageAllowed,
   setConfigOption,
   setDefaultCwd,
   setDefaultHarness,
@@ -922,22 +921,10 @@ describe("engine controller with the mock engine", () => {
         (await answerOrchestration({ sessionId: caller, tool: "list_harnesses", args: {} }))
           .harnesses as Listed[];
       useApp.setState({ planCache: {} });
-      // Reading Claude's sign-in is the user's to allow: off, its logins say
-      // so instead of looking like accounts with nothing used.
       let harnesses = await listed();
-      expect(harnesses.find((h) => h.id === "claude-code")?.usage).toEqual({
-        status: "not_enabled",
-        windows: [],
-      });
-      expect(harnesses.find((h) => h.id === "claude-code")?.accounts?.[0]?.usage).toEqual({
-        status: "not_enabled",
-        windows: [],
-      });
-      // A login nothing was read for yet carries no usage at all.
+      expect(harnesses.find((h) => h.id === "claude-code")?.usage).toBeUndefined();
       expect(harnesses.find((h) => h.id === "rustcode")?.usage).toBeUndefined();
 
-      // Allowed, the numbers the cache holds come out as an agent reads them.
-      setClaudeUsageAllowed(true);
       const fetchedAt = Date.now();
       const resetsAt = fetchedAt + 4 * 3_600_000;
       const entry = (usedPercent: number, account: string | null): CachedPlan => ({
@@ -972,7 +959,6 @@ describe("engine controller with the mock engine", () => {
         windows: [{ label: "5-hour", used_percent: 71 }],
       });
     } finally {
-      setClaudeUsageAllowed(false);
       storage.done();
     }
   });
@@ -992,7 +978,6 @@ describe("engine controller with the mock engine", () => {
       };
       await connect(transport);
       await until(() => useApp.getState().status === "ready" && !!useApp.getState().harnesses);
-      setClaudeUsageAllowed(true);
       const stale = Date.now() - PLAN_CACHE_POLL_MS - 1_000;
       const entry = (account: string | null, fetchedAt: number, usedPercent: number): CachedPlan => ({
         source: "claude-code",
@@ -1051,7 +1036,27 @@ describe("engine controller with the mock engine", () => {
       // The paused login was never asked for.
       expect(asked.some((p) => p.claudeAccount === "paused")).toBe(false);
     } finally {
-      setClaudeUsageAllowed(false);
+      storage.done();
+    }
+  });
+
+  test("startup does not read Claude until a user opens Usage or selects it", async () => {
+    resetForTests();
+    const storage = testStorage();
+    try {
+      const transport = new MockTransport({ delayMs: 0 });
+      const asks: { claude?: boolean }[] = [];
+      const send = transport.send.bind(transport);
+      transport.send = (line: string) => {
+        if (line.includes("_rustcode/usage/plans")) asks.push(JSON.parse(line).params);
+        return send(line);
+      };
+      await connect(transport);
+      await until(() => useApp.getState().status === "ready" && asks.length > 0);
+      expect(asks.every((ask) => !ask.claude)).toBe(true);
+      commitPlansAnswer([], true);
+      expect(backgroundPlansAsk().claude).toBe(true);
+    } finally {
       storage.done();
     }
   });
@@ -1061,12 +1066,11 @@ describe("engine controller with the mock engine", () => {
     try {
       await connect(new MockTransport({ delayMs: 0 }));
       await until(() => useApp.getState().status === "ready");
-      // Consent off: the page's tick reads no Keychain item at all.
-      expect(backgroundPlansAsk()).toEqual({ claude: false });
-      setClaudeUsageAllowed(true);
       // Consent on, nothing paused: the default login and whatever account the
       // thread on screen runs on — never `claudeAccounts`, which is the page's
       // explicit look and can read a login nobody asked about.
+      // Opening Usage enables the subsequent background reads.
+      commitPlansAnswer([], true);
       expect(backgroundPlansAsk()).toMatchObject({ claude: true });
       expect(backgroundPlansAsk().force).toBeUndefined();
       // A denied Keychain read pauses that login, and the tick follows it.
@@ -1083,7 +1087,6 @@ describe("engine controller with the mock engine", () => {
       ]);
       expect(backgroundPlansAsk()).toEqual({ claude: false });
     } finally {
-      setClaudeUsageAllowed(false);
       storage.done();
     }
   });
@@ -3930,10 +3933,8 @@ describe("plan usage cache", () => {
   let storage: ReturnType<typeof testStorage>;
   beforeEach(() => {
     storage = testStorage();
-    setClaudeUsageAllowed(true);
   });
   afterEach(() => {
-    setClaudeUsageAllowed(false);
     storage.done();
   });
 
@@ -3977,7 +3978,7 @@ describe("plan usage cache", () => {
     expect(planIsStale(plan(20, now - PLAN_CACHE_POLL_MS + 5_000), now)).toBe(true);
   });
 
-  test("a plans answer that arrives after the switch went off keeps no Claude rows", () => {
+  test("a stored off setting does not discard Claude usage", () => {
     resetForTests();
     const storage = testStorage();
     try {
@@ -3997,24 +3998,21 @@ describe("plan usage cache", () => {
         status: "ok",
         windows: [{ label: "Weekly", usedPercent: 46, minutes: 10_080 }],
       };
-      setClaudeUsageAllowed(true);
       commitPlansAnswer([claude, codex]);
       expect(useApp.getState().planCache["claude-code"]).toBeDefined();
-      // The user switches the meter off while a read is in flight; that read's
-      // answer must not put Claude's numbers back (or its sign-out record).
-      setClaudeUsageAllowed(false);
+      // A legacy stored off value must not prevent a later answer being kept.
+      localStorage.setItem("rustcode.claudeUsage", "0");
       commitPlansAnswer([
         claude,
         { ...claude, id: "claude:work", account: "work", status: "signedOut" },
         codex,
       ]);
-      expect(useApp.getState().planCache["claude-code"]).toBeUndefined();
+      expect(useApp.getState().planCache["claude-code"]).toBeDefined();
       expect(useApp.getState().planCache["claude-code#work"]).toBeUndefined();
       expect(useApp.getState().signedOutLogins["claude-code"]).toBeUndefined();
       // Every other subscription is committed as usual.
       expect(useApp.getState().planCache.codex?.windows[0]?.usedPercent).toBe(46);
     } finally {
-      setClaudeUsageAllowed(false);
       storage.done();
     }
   });

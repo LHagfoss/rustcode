@@ -24,7 +24,7 @@ const paused = (claude: boolean, ...accounts: string[]): PlanPauses => ({
   accounts: new Set(accounts),
 });
 
-/** A thread on a named Claude account, with the switch on. */
+/** A thread on a named Claude account, after the first read. */
 const onAccount = (over: Partial<Parameters<typeof plansAskFor>[0]> = {}) =>
   plansAskFor({
     allowed: true,
@@ -43,10 +43,9 @@ describe("what a refresh asks for", () => {
     expect(onAccount({ account: "home" })).toEqual({ claude: true, account: "home" });
   });
 
-  test("nothing without consent, not even a forced look", () => {
+  test("nothing before the first read is requested", () => {
     expect(onAccount({ allowed: false })).toEqual({ claude: false });
-    // Refresh while Claude's sign-in is switched off must not reach the
-    // Keychain, whatever the page asks the engine.
+    // An unstarted background read does not reach the Keychain.
     expect(onAccount({ allowed: false, explicit: true, pauses: paused(true, "work") })).toEqual({
       claude: false,
     });

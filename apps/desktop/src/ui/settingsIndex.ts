@@ -304,11 +304,6 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   // ------------------------------------------------------------ Usage
   {
     section: "usage",
-    title: "Show Claude usage in the composer",
-    keywords: "plan keychain limits windows read composer usage",
-  },
-  {
-    section: "usage",
     title: "Each account's plan",
     keywords: "claude account login plan usage windows separate limits",
   },
