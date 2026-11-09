@@ -941,7 +941,7 @@ function AppearancePage() {
       <Group title="Sidebar">
         <Row
           title="Thread row layout"
-          subtitle="Compact is one line per thread, with a second only for a branch, a diff or a pull request."
+          subtitle="Comfortable puts the branch and the counts under the title; Compact is one line per thread, with a second only for a branch, a diff or a pull request."
         >
           <Choice
             label="Thread row layout"

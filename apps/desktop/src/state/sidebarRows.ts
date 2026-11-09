@@ -241,17 +241,18 @@ export function threadDiff(
 }
 
 /**
- * How the list stacks its threads. `top` is the default: the threads that work lead the list, so
- * running work is the first thing in it. `shelf` is the layout before that one, where Working folds
- * away at the foot with Snoozed and Settled (the `workingSection` preference turns it on).
+ * How the list stacks its threads. `top` is the default: one Threads list, with the threads that
+ * work first, so running work is the first thing in it. `shelf` is the layout before that one,
+ * where Working folds away at the foot with Snoozed and Settled (the `workingSection` preference
+ * turns it on).
  */
 export type SidebarLayout = "top" | "shelf";
 
-/** The list's sections: Working leads the default layout, the shelves sit at the foot. */
-export type SectionId = "working" | "pinned" | "needs" | "threads" | "snoozed" | "settled";
+/** The list's sections: Pinned above the one Threads list in the default layout, shelves at the foot. */
+export type SectionId = "working" | "pinned" | "threads" | "snoozed" | "settled";
 
 const ORDER: Record<SidebarLayout, readonly SectionId[]> = {
-  top: ["working", "pinned", "needs", "threads", "snoozed", "settled"],
+  top: ["pinned", "threads", "snoozed", "settled"],
   shelf: ["pinned", "threads", "working", "snoozed", "settled"],
 };
 
@@ -260,7 +261,7 @@ export function sectionsOf(layout: SidebarLayout): readonly SectionId[] {
   return ORDER[layout];
 }
 
-/** The sections that fold: the shelves at the foot of the list. Pinned, Needs you and Active never do. */
+/** The sections that fold: the shelves at the foot of the list. Pinned and Threads never do. */
 export type ShelfId = "working" | "snoozed" | "settled";
 
 const SHELVES: Record<SidebarLayout, readonly ShelfId[]> = {
@@ -274,6 +275,26 @@ export function shelvesOf(layout: SidebarLayout): readonly ShelfId[] {
 
 export function isShelf(id: string, layout: SidebarLayout): id is ShelfId {
   return (SHELVES[layout] as readonly string[]).includes(id);
+}
+
+/**
+ * The folds the list still honours: a project's own folder (`project:<path>`). A section header
+ * never folds, and older releases stored section ids here (`working`, `threads`) that would shut a
+ * list with no control to open it, so those are dropped once on mount (`ui/Sidebar.tsx`).
+ */
+export function cleanFolds(folded: readonly string[]): string[] {
+  return folded.filter((id) => id.startsWith("project:"));
+}
+
+/**
+ * Whether a drawn section shows its quiet heading. The shelves always do; Pinned always does while
+ * it has rows; Threads does only when another list (Pinned) is drawn above it, so a lone list is
+ * the whole sidebar and needs no name of its own.
+ */
+export function sectionLabelled(id: SectionId, drawn: readonly SectionId[], layout: SidebarLayout): boolean {
+  if (isShelf(id, layout)) return true;
+  if (id === "pinned") return true;
+  return drawn.filter((other) => !isShelf(other, layout)).length > 1;
 }
 
 /** Working is open, Snoozed and Settled are shut until the user opens them. */
@@ -320,19 +341,21 @@ export interface Placement {
  * pinned as (the pin returns when it is unsettled); a thread that needs you or works stays out of
  * the shelves that would hide it.
  *
- * Pinned wins over Needs you and over Working, so a pinned thread stays where the user put it and
- * says what it is doing in its chip, rather than being drawn twice. Everything that asks you or
- * works leaves Snoozed and Settled at once, and comes back when it is answered or done.
+ * Pinned wins over what asks you and over Working, so a pinned thread stays where the user put it
+ * and says what it is doing in its chip, rather than being drawn twice. Everything that asks you
+ * or works leaves Snoozed and Settled at once, and comes back when it is answered or done.
+ *
+ * The default layout draws one Threads list, so what works and what asks you stay in it and the
+ * row's chip is the whole of either state. The shelf layout still gives Working its own shelf at
+ * the foot, which folds.
  */
 export function placeThread(p: Placement): SectionId {
   const busy = p.needs || p.working;
   if (p.settled && !busy && !p.fresh) return "settled";
   if (p.pinned) return "pinned";
-  // The layout before the default one has no Needs you section: the row's chip is the whole of it,
-  // and the thread stays in Active.
-  if (p.needs) return p.layout === "top" ? "needs" : "threads";
+  if (p.needs) return "threads";
   if (p.snoozed && !busy) return "snoozed";
-  if (p.working) return "working";
+  if (p.working) return p.layout === "shelf" ? "working" : "threads";
   if ((p.settled || p.aged) && !busy && !p.fresh) return "settled";
   return "threads";
 }
@@ -350,6 +373,10 @@ export interface OrderKey {
   backAt: number;
   /** A finish or failure the user has not seen yet. */
   unseen?: boolean;
+  /** A turn of its own runs, or it waits on work it handed out (the Threads list leads with these). */
+  running?: boolean;
+  /** An approval or a question waits on the user (the Threads list puts these after the running ones). */
+  needs?: boolean;
   /** Its place in the pin order, 0 first. */
   pinRank?: number;
   /** When its snooze ends. */
@@ -360,10 +387,12 @@ export interface OrderKey {
 const LAST = Number.MAX_SAFE_INTEGER;
 
 /**
- * A section's own order, which the rows nobody arranged keep (`ui/Sidebar.tsx`): Working puts the
- * thread the user last sent work to first, Needs you the request that has waited longest, Active
- * the thread that last came back to them with what they have not seen yet ahead of it, Snoozed the
- * soonest wake, and Pinned the pin order. Settled keeps the order the engine gave it.
+ * A section's own order, which the rows nobody arranged keep (`ui/Sidebar.tsx`): the Threads list
+ * leads with what works (the thread the user last sent work to first), then what asks you (the
+ * request that has waited longest first), then the rest by what last came back to them with what
+ * they have not seen yet ahead of it. The Working shelf puts the thread the user last sent work to
+ * first, Snoozed the soonest wake, Pinned the pin order, and Settled keeps the order the engine
+ * gave it.
  *
  * Only marks are read, so the order cannot change as a turn streams or under a row being dragged,
  * and a row the user arranged still keeps its place over this order
@@ -381,16 +410,21 @@ function compare(section: SectionId, a: OrderKey, b: OrderKey): number {
     case "working":
       // The thread they sent work to last, first.
       return (b.sentAt ?? b.backAt) - (a.sentAt ?? a.backAt);
-    case "needs":
-      // The request that has waited longest, first: it is the one blocking someone the longest.
-      return (a.askedAt ?? a.backAt) - (b.askedAt ?? b.backAt);
     case "pinned":
       return (a.pinRank ?? LAST) - (b.pinRank ?? LAST);
     case "snoozed":
       return (a.wakeAt ?? LAST) - (b.wakeAt ?? LAST);
-    default:
-      // What came back unseen leads, and stays at the top of Active until it is opened.
+    default: {
+      // One Threads list: what runs first, then what asks you, then the rest. Within each, the
+      // order that section always had.
+      const rank = (k: OrderKey) => (k.running ? 0 : k.needs ? 1 : 2);
+      const rankOf = rank(a) - rank(b);
+      if (rankOf) return rankOf;
+      if (a.running && b.running) return (b.sentAt ?? b.backAt) - (a.sentAt ?? a.backAt);
+      if (a.needs && b.needs) return (a.askedAt ?? a.backAt) - (b.askedAt ?? b.backAt);
+      // What came back unseen leads, and stays at the top until it is opened.
       return Number(!!b.unseen) - Number(!!a.unseen) || b.backAt - a.backAt;
+    }
   }
 }
 

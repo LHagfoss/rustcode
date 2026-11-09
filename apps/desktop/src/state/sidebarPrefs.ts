@@ -5,14 +5,14 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 
 /**
- * How a thread row is drawn: `compact` is one 32px line, with a quiet second line only when the
- * thread has a branch, a diff, a pull request or a stack to show; `comfortable` is the two-line
- * row the sidebar had before (title first, then where it runs and what its branch carries).
+ * How a thread row is drawn: `comfortable` is the two-line row with room for the project's mark,
+ * its title and the branch under it; `compact` is one 32px line, with a quiet second line only
+ * when the thread has a branch, a diff, a pull request or a stack to show.
  */
 export type RowLayout = "compact" | "comfortable";
 
-/** One line per thread unless the user asked for the two-line rows. */
-export const DEFAULT_ROW_LAYOUT: RowLayout = "compact";
+/** The roomy two-line rows by default; Compact is the opt-in under Settings › Appearance. */
+export const DEFAULT_ROW_LAYOUT: RowLayout = "comfortable";
 
 export const PREF = {
   rowLayout: "rustcode.sidebar.rowLayout",
@@ -49,10 +49,10 @@ export function readPref<T>(key: string, initial: T): T {
 }
 
 /**
- * The row layout a stored value means, including the two this release retires: `current` (the
- * meta line above the title) and `title-first` (the title above it) were both two-line rows, and
- * only a user who picked one in Settings ever wrote them, so both keep that row as `comfortable`.
- * A store with no value at all was never chosen, and takes the new one-line default.
+ * The row layout a stored value means, including the two an earlier release retired: `current`
+ * (the meta line above the title) and `title-first` (the title above it) were both two-line rows,
+ * and only a user who picked one in Settings ever wrote them, so both keep that row as
+ * `comfortable`. A store with no value at all was never chosen, and takes the roomy default.
  */
 export function rowLayoutOf(stored: unknown): RowLayout {
   if (stored === "compact" || stored === "comfortable") return stored;

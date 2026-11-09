@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { FileDiff } from "../acp/types";
 import {
+  cleanFolds,
   contextRow,
   isShelf,
   keepListed,
@@ -15,6 +16,7 @@ import {
   rowMeta,
   rowStatus,
   SHELF_DEFAULT_OPEN,
+  sectionLabelled,
   sectionsOf,
   shelfKey,
   shelfOpen,
@@ -337,18 +339,18 @@ describe("which section a thread is drawn under", () => {
   };
   const place = (over: Partial<Placement>) => placeThread({ ...base, ...over });
 
-  test("the default layout leads with Working, then Pinned, Needs you and Active", () => {
-    expect(sectionsOf("top")).toEqual(["working", "pinned", "needs", "threads", "snoozed", "settled"]);
-    // The layout before it keeps Working as a shelf at the foot, between Active and Snoozed.
+  test("the default layout is Pinned above one Threads list, then the shelves", () => {
+    expect(sectionsOf("top")).toEqual(["pinned", "threads", "snoozed", "settled"]);
+    // The layout before it keeps Working as a shelf at the foot, between Threads and Snoozed.
     expect(sectionsOf("shelf")).toEqual(["pinned", "threads", "working", "snoozed", "settled"]);
   });
 
-  test("an idle thread is Active, a pinned one Pinned", () => {
+  test("an idle thread is in Threads, a pinned one in Pinned", () => {
     expect(place({})).toBe("threads");
     expect(place({ pinned: true })).toBe("pinned");
   });
 
-  test("a pinned thread that works stays Pinned, never under Working", () => {
+  test("a pinned thread that works stays Pinned, never in Working", () => {
     expect(place({ pinned: true, working: true })).toBe("pinned");
     expect(place({ pinned: true, working: true, layout: "shelf" })).toBe("pinned");
   });
@@ -360,29 +362,31 @@ describe("which section a thread is drawn under", () => {
     expect(place({ pinned: true, settled: true, working: true })).toBe("pinned");
   });
 
-  test("running threads go under Working, in either layout, and above Pinned in the default one", () => {
-    expect(place({ working: true })).toBe("working");
+  test("running threads join the Threads list, which the shelf layout still gives its own shelf", () => {
+    expect(place({ working: true })).toBe("threads");
     expect(place({ working: true, layout: "shelf" })).toBe("working");
   });
 
-  test("an approval or a question moves the thread into Needs you, at once", () => {
-    expect(place({ needs: true })).toBe("needs");
-    expect(place({ needs: true, working: true })).toBe("needs");
-    expect(place({ needs: true, aged: true })).toBe("needs");
-    expect(place({ needs: true, snoozed: true })).toBe("needs");
-    expect(place({ needs: true, settled: true, fresh: true })).toBe("needs");
+  test("an approval or a question keeps the thread in Threads, with its chip", () => {
+    expect(place({ needs: true })).toBe("threads");
+    expect(place({ needs: true, working: true })).toBe("threads");
+    expect(place({ needs: true, aged: true })).toBe("threads");
+    expect(place({ needs: true, snoozed: true })).toBe("threads");
+    expect(place({ needs: true, settled: true, fresh: true })).toBe("threads");
+    expect(place({ needs: true, layout: "shelf" })).toBe("threads");
   });
 
   test("a snoozed thread sleeps until it needs you or works", () => {
     expect(place({ snoozed: true })).toBe("snoozed");
-    expect(place({ snoozed: true, needs: true })).toBe("needs");
-    expect(place({ snoozed: true, working: true })).toBe("working");
+    expect(place({ snoozed: true, needs: true })).toBe("threads");
+    expect(place({ snoozed: true, working: true })).toBe("threads");
+    expect(place({ snoozed: true, working: true, layout: "shelf" })).toBe("working");
   });
 
   test("a thread untouched for days is Settled, a freshly finished one is not", () => {
     expect(place({ aged: true })).toBe("settled");
     expect(place({ aged: true, fresh: true })).toBe("threads");
-    expect(place({ aged: true, needs: true })).toBe("needs");
+    expect(place({ aged: true, needs: true })).toBe("threads");
   });
 
   test("every section id a thread can be placed in is one the layout draws", () => {
@@ -401,12 +405,32 @@ describe("which section a thread is drawn under", () => {
     }
   });
 
-  test("the shelf layout draws no Needs you section: the chip is the whole of it", () => {
-    expect(sectionsOf("shelf")).not.toContain("needs");
-    // So a thread that asks you something stays in Active there: it is never placed where nothing
-    // is drawn.
-    expect(place({ needs: true, layout: "shelf" })).toBe("threads");
-    expect(place({ needs: true, snoozed: true, layout: "shelf" })).toBe("threads");
+  test("neither layout draws a separate Needs you section: the chip is the whole of it", () => {
+    expect(sectionsOf("top") as readonly string[]).not.toContain("needs");
+    expect(sectionsOf("shelf") as readonly string[]).not.toContain("needs");
+  });
+});
+
+describe("the headings the list draws", () => {
+  test("the shelves always name themselves, and Pinned names itself while it has rows", () => {
+    expect(sectionLabelled("snoozed", ["threads", "snoozed"] as const, "top")).toBe(true);
+    expect(sectionLabelled("pinned", ["pinned"] as const, "top")).toBe(true);
+  });
+
+  test("Threads names itself only while Pinned is drawn above it", () => {
+    expect(sectionLabelled("threads", ["pinned", "threads"] as const, "top")).toBe(true);
+    expect(sectionLabelled("threads", ["threads", "settled"] as const, "top")).toBe(false);
+    expect(sectionLabelled("threads", ["threads"] as const, "top")).toBe(false);
+  });
+});
+
+describe("the folds the list keeps", () => {
+  test("a stale section id is dropped and a project's own folder stays", () => {
+    expect(cleanFolds(["working", "threads", "project:/code/app", "needs", "settled"])).toEqual([
+      "project:/code/app",
+    ]);
+    expect(cleanFolds(["project:/one", "project:/two"])).toEqual(["project:/one", "project:/two"]);
+    expect(cleanFolds([])).toEqual([]);
   });
 });
 
@@ -434,25 +458,33 @@ describe("the order a section keeps", () => {
     expect(order("working", list)).toEqual(["waiting", "sent"]);
   });
 
-  test("Needs you puts the request that has waited longest first", () => {
+  test("Threads leads with what runs, then what asks you, then the rest", () => {
     const list = rows([
-      ["recent", { backAt: 10, askedAt: 900 }],
-      ["oldest", { backAt: 20, askedAt: 100 }],
-      ["middle", { backAt: 30, askedAt: 500 }],
+      ["idle", { backAt: 100 }],
+      ["asking-recent", { backAt: 10, askedAt: 900, needs: true }],
+      ["running-earlier", { backAt: 5, sentAt: 200, running: true }],
+      ["asking-oldest", { backAt: 20, askedAt: 100, needs: true }],
+      ["running-latest", { backAt: 1, sentAt: 300, running: true }],
     ]);
-    expect(order("needs", list)).toEqual(["oldest", "middle", "recent"]);
+    expect(order("threads", list)).toEqual([
+      "running-latest",
+      "running-earlier",
+      "asking-oldest",
+      "asking-recent",
+      "idle",
+    ]);
   });
 
   test("a request with no recorded arrival reads by how recently it moved", () => {
     const list = rows([
       ["quiet", { backAt: 10 }],
-      ["asking", { backAt: 20, askedAt: 5 }],
+      ["asking", { backAt: 20, askedAt: 5, needs: true }],
       ["fresh", { backAt: 30 }],
     ]);
-    expect(order("needs", list)).toEqual(["asking", "quiet", "fresh"]);
+    expect(order("threads", list)).toEqual(["asking", "fresh", "quiet"]);
   });
 
-  test("Active is the last one back first, with what came back unseen above it all", () => {
+  test("the rest of Threads is the last one back first, with what came back unseen above it all", () => {
     const list = rows([
       ["read-hours-ago", { backAt: 100 }],
       ["unseen-yesterday", { backAt: 50, unseen: true }],

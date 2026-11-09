@@ -684,45 +684,50 @@ composer's keys stay outside the table.
   A thread merely marked for review does not count, and the row's count is the
   inbox's own list. With nothing waiting there is no row at all, so no empty
   heading stands over the thread rows, and the inbox stays reachable from ⌘⇧I
-  and the palette. One list, top to bottom: Working, Pinned, Asking you,
-  Active, then Snoozed and Settled as shelves at the foot. **Working** leads
-  with the threads whose turn runs and the threads still waiting on work they
-  handed out — always open, the thread you last sent work to first; a pinned
-  thread that works stays in Pinned and says so in its chip, so no row is
-  drawn twice. **Asking you** holds the threads waiting on an approval or an
-  answer, the one that has waited longest first, and draws nothing when
-  nothing waits; it is not called *Needs you* because the inbox row is one row
-  per item (a failed turn is not a thread) while this is one row per thread.
-  **Active** is every other live thread, the one that last came
-  back to you first, with the completions and failures you have not opened
-  above the rest. A section sorts itself from marks the app already keeps, so
-  it never reorders as a turn streams; a row you dragged keeps the place you
-  put it, in any section. With Sidebar: Working at the top off (⌘K) the list
-  is what it was: Pinned and Active lead, and Working folds into the shelf at
-  the foot beside Snoozed and Settled. Settled holds the threads marked Settled
-  and threads untouched for three days unless they wait
-  for review (`idleSettled`), folded by default, 5 at a time then *Show
-  25 more*. A thread that works, waits or needs you stays in the list and
-  says so in its row. A row is one 32px line: the 14px mark of where it runs,
-  its title, and one slot at the right, as wide as what it says — the age
-  (`5m`, `3h`), the running turn's spinner and clock, *Waiting*, *Needs you*
-  (with the request under the title), *Failed* (red), *Completed* (green, until
-  you open the thread) or *Review* (accent), the hour a snoozed thread wakes;
-  a turn that ended while you looked elsewhere keeps its row at full strength
-  until you open the thread (`finished`/`failed` in the store; *Mark Unread* in
-  the menu brings it back). The project's name is not repeated on the rows: the
-  mark carries it, and the hover card and the project's heading spell it out.
-  A thread with a branch, a pull request or a stack of delegates adds one quiet
-  second line for them, with what the branch changed (48px); a diff on its own
-  rides in the slot rather than opening a line for one number, so a plain chat
-  thread is one line. What wants you reads in medium weight; what works, waits
-  or is settled recedes.
+  and the palette. One list, top to bottom: Pinned, then one **Threads** list,
+  then Snoozed and Settled as shelves at the foot. **Threads** leads with the
+  threads whose turn runs and the threads still waiting on work they handed
+  out, the thread you last sent work to first, then the threads waiting on an
+  approval or an answer, the one that has waited longest first, then the rest,
+  the one that last came back to you first with the completions and failures
+  you have not opened above them. A pinned thread that works or needs you
+  stays in Pinned and says so in its chip, so no row is drawn twice; a thread
+  that asks you something is not a section of its own, the chip is the whole
+  of it. A section sorts itself from marks the app already keeps, so it never
+  reorders as a turn streams; a row you dragged keeps the place you put it, in
+  any section. Only Pinned names itself when it is there; Threads carries a
+  heading only while Pinned is drawn above it, and a lone list needs none.
+  Section headers never fold and are always open, and a stale `working` or
+  `threads` id in `rustcode.sidebar.folded` is dropped on mount so an older
+  release cannot shut a list with no control to open it. With Sidebar: Working
+  at the top off (⌘K) the list is what it was: Pinned and Threads lead, and
+  Working folds into the shelf at the foot beside Snoozed and Settled.
+  Settled holds the threads marked Settled and threads untouched for three
+  days unless they wait for review (`idleSettled`), folded by default, 5 at a
+  time then *Show 25 more*. A thread that works, waits or needs you stays in
+  the list and says so in its row. The default row is the roomy two-line one,
+  `py-2` with `rounded-xl` and 2px between rows: the 14px mark of where it
+  runs, its title, and one slot at the right, as wide as what it says — the
+  age (`5m`, `3h`), the running turn's spinner and clock, *Waiting*, *Needs
+  you* (with the request under the title), *Failed* (red), *Completed* (green,
+  until you open the thread) or *Review* (accent), the hour a snoozed thread
+  wakes; a turn that ended while you looked elsewhere keeps its row at full
+  strength until you open the thread (`finished`/`failed` in the store; *Mark
+  Unread* in the menu brings it back). The project's name is not repeated on
+  the rows: the mark carries it, and the hover card and the project's heading
+  spell it out. The line under the title holds a branch, a pull request or a
+  stack of delegates, with what the branch changed (48px); a diff on its own
+  rides in the slot rather than opening a line for one number. What wants you
+  reads in medium weight; what works, waits or is settled recedes. Section and
+  project headers are one 32px line of 14px `text-body`, with 14px folder
+  icons.
   Hovering swaps the slot for Pin, Settle (or Unsettle) and the menu, drawn
   over the row's right end on the row's own fill while the line fades out under
   them, so nothing shifts and the title keeps its width, each on a 24px target.
-  Settings › Appearance › Thread row
-  layout keeps the older two-line row as *Comfortable*; *Compact* is the
-  default and a value stored by an earlier release migrates to *Comfortable*.
+  Settings › Appearance › Thread row layout offers *Comfortable* (the default
+  roomy two-line row) and *Compact* (one 32px line, with a second only for a
+  branch, a diff or a pull request); a value stored by an earlier release
+  migrates to *Comfortable*.
   ↑ ↓ move through the rows without opening them, ⏎ opens the
   one the keyboard is on, and P pins (or unpins) it while D settles (or
   unsettles) it — the picked rows when there are several — with the same
@@ -738,8 +743,8 @@ composer's keys stay outside the table.
   filter button by the search groups Threads by project (off by default; each
   project folds and has New thread on hover; a worktree thread sits under
   its repository), keeps to the current project, and opens the Board. Working
-  and Asking you stay above the folders, and a folded folder's dot says what it
-  hides.
+  stays above the folders when it has a shelf of its own, and a folded
+  folder's dot says what it hides.
   Search matches titles and folders at once, and from three characters
   also what was said: the engine's SQLite index (`index.sqlite`,
   `_rustcode/threads/search`) adds threads whose messages match, with the
