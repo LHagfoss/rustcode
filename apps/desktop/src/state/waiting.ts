@@ -93,3 +93,75 @@ export function useWaiting(threadId: string): Waiting | undefined {
     [threadId, running, commands, links],
   );
 }
+
+/** What {@link waitingIds} reads of the app: one {@link waitingOn} for every thread at once. */
+export interface WaitingIdsRead {
+  /** The threads the list draws a row for. */
+  ids: Iterable<string>;
+  /** The threads whose own turn runs: they work, and are not waiting. */
+  running: ReadonlySet<string>;
+  /** How many commands each thread's last turn parked on (state/thread.ts `waiting`). */
+  parked: ReadonlyMap<string, number>;
+  links: readonly Link[];
+  state: (link: Link) => LinkState;
+  quiet: (target: string) => boolean;
+}
+
+/**
+ * Every thread waiting on background work, by the rule one row reads ({@link waitingOn}), asked of
+ * the whole list in one pass: the sidebar draws these under Working with the threads that run, so a
+ * thread that handed work out is not lost among the idle ones. The links are grouped by the thread
+ * that handed them out, so a long book costs one pass rather than one per thread.
+ */
+export function waitingIds(read: WaitingIdsRead): Set<string> {
+  const byParent = new Map<string, Link[]>();
+  for (const link of read.links) {
+    const list = byParent.get(link.orchestrator);
+    if (list) list.push(link);
+    else byParent.set(link.orchestrator, [link]);
+  }
+  const waiting = new Set<string>();
+  for (const id of read.ids) {
+    if (read.running.has(id)) continue;
+    const links = byParent.get(id) ?? [];
+    const live = links.some((link) => isActive(read.state(link)) || !read.quiet(link.target));
+    if (live || (read.parked.get(id) ?? 0) > 0) waiting.add(id);
+  }
+  return waiting;
+}
+
+/**
+ * {@link waitingIds} over the whole app, read once for the list rather than once per row: the
+ * turns that run and the commands parked on are read as strings, so a streamed chunk changes
+ * neither and the set keeps its identity.
+ */
+export function useWaitingIds(ids: readonly string[]): ReadonlySet<string> {
+  const turns = useApp((s) =>
+    Object.keys(s.threads)
+      .filter((id) => s.threads[id]!.running)
+      .join(" "),
+  );
+  const running = useMemo(() => new Set(turns.split(" ")), [turns]);
+  const parked = useApp((s) =>
+    Object.keys(s.threads)
+      .flatMap((id) => (s.threads[id]!.waiting ? [`${id}:${s.threads[id]!.waiting}`] : []))
+      .join(" "),
+  );
+  const links = useApp((s) => s.links.links);
+  return useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const row of parked.split(" ")) {
+      if (!row) continue;
+      const at = row.indexOf(":");
+      counts.set(row.slice(0, at), Number(row.slice(at + 1)));
+    }
+    return waitingIds({
+      ids,
+      running,
+      parked: counts,
+      links,
+      state: (link) => stateOf(useApp.getState(), link),
+      quiet: subtreeQuiet,
+    });
+  }, [ids, running, parked, links]);
+}

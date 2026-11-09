@@ -3,6 +3,7 @@
 // (ui/Sidebar.tsx).
 
 import type { SessionSummary } from "../acp/types";
+import type { RowLayout } from "./sidebarPrefs";
 import { diffCounts, type TranscriptItem } from "./thread";
 
 /** A row the list draws: a top-level thread, or the open delegate's indented row. */
@@ -128,12 +129,12 @@ export function opensRowMenu(e: { key: string; shiftKey?: boolean }): boolean {
 }
 
 /** What a row's one status chip says: the states worth words rather than an age. */
-export type RowStatusKind = "needs" | "working" | "waiting" | "failed" | "review";
+export type RowStatusKind = "needs" | "working" | "waiting" | "failed" | "completed" | "review";
 
 /** The chip a row's first line ends with (`ui/Sidebar.tsx` draws it). */
 export interface RowStatus {
   kind: RowStatusKind;
-  /** The chip's words: `Needs you`, `Working`, `Waiting`, `Failed`, `Review`. */
+  /** The chip's words: `Needs you`, `Working`, `Waiting`, `Failed`, `Completed`, `Review`. */
   label: string;
   /** What the chip says on hover, when its words leave something out. */
   title?: string;
@@ -151,15 +152,18 @@ export interface RowStatusRead {
   waiting?: { label: string; title: string };
   /** Its last turn failed while the row was not open. */
   failed?: boolean;
+  /** Its last turn finished while the row was not open, and it has not been opened since. */
+  fresh?: boolean;
   /** The thread is listed as waiting for review. */
   review?: boolean;
 }
 
 /**
  * The one chip a row shows. One state at a time, in the order the reader needs it: what it asks of
- * you, then that it works, then that it waits on work it handed out, then a failure, then a review.
- * Nothing when it is idle or settled: the row then shows how long ago it moved, as it always has.
- * The clock beside `Working` is the running turn's own, so a row ticks in exactly one place.
+ * you, then that it works, then that it waits on work it handed out, then a failure, then a
+ * completion you have not seen, then a review. Nothing when it is idle or settled: the row then
+ * shows how long ago it moved, as it always has. The clock beside `Working` is the running turn's
+ * own, so a row ticks in exactly one place.
  */
 export function rowStatus(read: RowStatusRead): RowStatus | undefined {
   const request = read.request;
@@ -181,6 +185,8 @@ export function rowStatus(read: RowStatusRead): RowStatus | undefined {
     };
   }
   if (read.failed) return { kind: "failed", label: "Failed", title: "Its last turn failed" };
+  if (read.fresh)
+    return { kind: "completed", label: "Completed", title: "It finished while you were elsewhere" };
   if (read.review) return { kind: "review", label: "Review", title: "It waits for your review" };
   return undefined;
 }
@@ -234,16 +240,40 @@ export function threadDiff(
   return { added, removed };
 }
 
-/** The list's sections, top to bottom: Pinned and Active lead, the shelves sit at the foot. */
-export type SectionId = "pinned" | "threads" | "working" | "snoozed" | "settled";
-export const SECTION_ORDER: readonly SectionId[] = ["pinned", "threads", "working", "snoozed", "settled"];
+/**
+ * How the list stacks its threads. `top` is the default: the threads that work lead the list, so
+ * running work is the first thing in it. `shelf` is the layout before that one, where Working folds
+ * away at the foot with Snoozed and Settled (the `workingSection` preference turns it on).
+ */
+export type SidebarLayout = "top" | "shelf";
 
-/** The sections that fold: the shelves at the foot of the list. Pinned and Active never do. */
+/** The list's sections: Working leads the default layout, the shelves sit at the foot. */
+export type SectionId = "working" | "pinned" | "needs" | "threads" | "snoozed" | "settled";
+
+const ORDER: Record<SidebarLayout, readonly SectionId[]> = {
+  top: ["working", "pinned", "needs", "threads", "snoozed", "settled"],
+  shelf: ["pinned", "threads", "working", "snoozed", "settled"],
+};
+
+/** The sections a layout draws, in the order it draws them; one with no rows draws nothing. */
+export function sectionsOf(layout: SidebarLayout): readonly SectionId[] {
+  return ORDER[layout];
+}
+
+/** The sections that fold: the shelves at the foot of the list. Pinned, Needs you and Active never do. */
 export type ShelfId = "working" | "snoozed" | "settled";
-export const SHELVES: readonly ShelfId[] = ["working", "snoozed", "settled"];
 
-export function isShelf(id: string): id is ShelfId {
-  return (SHELVES as readonly string[]).includes(id);
+const SHELVES: Record<SidebarLayout, readonly ShelfId[]> = {
+  top: ["snoozed", "settled"],
+  shelf: ["working", "snoozed", "settled"],
+};
+
+export function shelvesOf(layout: SidebarLayout): readonly ShelfId[] {
+  return SHELVES[layout];
+}
+
+export function isShelf(id: string, layout: SidebarLayout): id is ShelfId {
+  return (SHELVES[layout] as readonly string[]).includes(id);
 }
 
 /** Working is open, Snoozed and Settled are shut until the user opens them. */
@@ -281,24 +311,112 @@ export interface Placement {
   working: boolean;
   /** Just finished, not seen yet. */
   fresh: boolean;
-  showWorking: boolean;
-  byProject: boolean;
+  /** The layout the list is drawn in: the default leads with the threads that work. */
+  layout: SidebarLayout;
 }
 
 /**
  * The section a thread is drawn under. A settled thread never sits under Pinned, whatever it was
  * pinned as (the pin returns when it is unsettled); a thread that needs you or works stays out of
  * the shelves that would hide it.
+ *
+ * Pinned wins over Needs you and over Working, so a pinned thread stays where the user put it and
+ * says what it is doing in its chip, rather than being drawn twice. Everything that asks you or
+ * works leaves Snoozed and Settled at once, and comes back when it is answered or done.
  */
 export function placeThread(p: Placement): SectionId {
   const busy = p.needs || p.working;
   if (p.settled && !busy && !p.fresh) return "settled";
   if (p.pinned) return "pinned";
+  // The layout before the default one has no Needs you section: the row's chip is the whole of it,
+  // and the thread stays in Active.
+  if (p.needs) return p.layout === "top" ? "needs" : "threads";
   if (p.snoozed && !busy) return "snoozed";
-  // Folders already separate the work, so grouping by project has no Working shelf.
-  if (p.showWorking && !p.byProject && p.working) return "working";
+  if (p.working) return "working";
   if ((p.settled || p.aged) && !busy && !p.fresh) return "settled";
   return "threads";
+}
+
+/**
+ * What a section's own order reads of one thread: marks the app already keeps, never a running
+ * clock, a hover or a streamed chunk, so the order cannot change under a reader's pointer.
+ */
+export interface OrderKey {
+  /** When the user last sent it work: its running turn's start, else the last thing recorded. */
+  sentAt?: number;
+  /** When the request that waits on the user reached the app. */
+  askedAt?: number;
+  /** When it last came back to the user: a finish or failure mark, else its last update. */
+  backAt: number;
+  /** A finish or failure the user has not seen yet. */
+  unseen?: boolean;
+  /** Its place in the pin order, 0 first. */
+  pinRank?: number;
+  /** When its snooze ends. */
+  wakeAt?: number;
+}
+
+/** After every real time: a thread with no mark of its own sorts behind the ones that have one. */
+const LAST = Number.MAX_SAFE_INTEGER;
+
+/**
+ * A section's own order, which the rows nobody arranged keep (`ui/Sidebar.tsx`): Working puts the
+ * thread the user last sent work to first, Needs you the request that has waited longest, Active
+ * the thread that last came back to them with what they have not seen yet ahead of it, Snoozed the
+ * soonest wake, and Pinned the pin order. Settled keeps the order the engine gave it.
+ *
+ * Only marks are read, so the order cannot change as a turn streams or under a row being dragged,
+ * and a row the user arranged still keeps its place over this order
+ * (`state/sidebarOrder.ts` `applyOrder`).
+ */
+export function sortSection<T>(section: SectionId, items: readonly T[], key: (item: T) => OrderKey): T[] {
+  if (section === "settled") return [...items];
+  const keyed = items.map((item) => ({ item, at: key(item) }));
+  keyed.sort((a, b) => compare(section, a.at, b.at));
+  return keyed.map((row) => row.item);
+}
+
+function compare(section: SectionId, a: OrderKey, b: OrderKey): number {
+  switch (section) {
+    case "working":
+      // The thread they sent work to last, first.
+      return (b.sentAt ?? b.backAt) - (a.sentAt ?? a.backAt);
+    case "needs":
+      // The request that has waited longest, first: it is the one blocking someone the longest.
+      return (a.askedAt ?? a.backAt) - (b.askedAt ?? b.backAt);
+    case "pinned":
+      return (a.pinRank ?? LAST) - (b.pinRank ?? LAST);
+    case "snoozed":
+      return (a.wakeAt ?? LAST) - (b.wakeAt ?? LAST);
+    default:
+      // What came back unseen leads, and stays at the top of Active until it is opened.
+      return Number(!!b.unseen) - Number(!!a.unseen) || b.backAt - a.backAt;
+  }
+}
+
+/** What a row has besides its title, for {@link rowMeta}: the caller resolves each flag. */
+export interface RowMetaRead {
+  /** It works in a worktree, so it has a branch to name. */
+  branch?: boolean;
+  /** Its branch carries a pull request. */
+  pull?: boolean;
+  /** A stack of the threads it started, or the mark of the harness it runs on. */
+  badge?: boolean;
+  /** What its calls changed, when the app has read them ({@link threadDiff}). */
+  diff?: { added: number; removed: number } | null;
+  /** The row's layout: the two-line one has the width for a diff of its own. */
+  layout: RowLayout;
+}
+
+/**
+ * Where a row puts what it has besides its title: `line` draws the quiet second line that holds it,
+ * `trailing` keeps the row on one line and lets the diff ride in its trailing slot, and `none`
+ * draws no line at all. A whole second line is never opened for a diff alone in the compact row,
+ * where it would be a line of its own for `+1`; a branch, a pull request or a stack is worth one.
+ */
+export function rowMeta(read: RowMetaRead): "line" | "trailing" | "none" {
+  if (read.branch || read.pull || read.badge || (read.layout === "comfortable" && !!read.diff)) return "line";
+  return read.diff ? "trailing" : "none";
 }
 
 /** The title-first row's trailing status, in attention order. */

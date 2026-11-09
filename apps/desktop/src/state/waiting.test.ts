@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Link, LinkState } from "./orchestration";
-import { type Waiting, waitingLabel, waitingOn, waitingTitle } from "./waiting";
+import { type Waiting, waitingIds, waitingLabel, waitingOn, waitingTitle } from "./waiting";
 
 const link = (id: string, orchestrator: string, target: string, state: LinkState): Link => ({
   id,
@@ -84,5 +84,40 @@ describe("waiting on background work", () => {
     expect(waitingTitle(one([link("p/1", "p", "a", "working"), link("p/2", "p", "b", "working")]))).toBe(
       "Thread a, Thread b",
     );
+  });
+});
+
+describe("the threads the list draws with the ones that work", () => {
+  const ids = ["p", "q", "r"];
+  const wait = (
+    links: Link[],
+    rest: { running?: string[]; parked?: Record<string, number>; quiet?: string[] } = {},
+  ) => [
+    ...waitingIds({
+      ids,
+      running: new Set(rest.running ?? []),
+      parked: new Map(Object.entries(rest.parked ?? {})),
+      links,
+      state: (l) => l.state,
+      quiet: (target) => !(rest.quiet ?? []).includes(target),
+    }),
+  ];
+
+  test("a thread waiting on a link it handed out is one, a thread that runs is not", () => {
+    const links = [link("p/1", "p", "a", "working"), link("q/1", "q", "b", "working")];
+    expect(wait(links)).toEqual(["p", "q"]);
+    // A turn of its own: it works, and is drawn as working, not as waiting.
+    expect(wait(links, { running: ["q"] })).toEqual(["p"]);
+  });
+
+  test("a settled link whose subtree still works keeps its parent waiting, a quiet one does not", () => {
+    const links = [link("p/1", "p", "a", "done"), link("q/1", "q", "b", "done")];
+    expect(wait(links, { quiet: ["a"] })).toEqual(["p"]);
+  });
+
+  test("commands a thread parked on count on their own, and idle threads are not waiting", () => {
+    expect(wait([], { parked: { r: 2 } })).toEqual(["r"]);
+    expect(wait([], { parked: { p: 0 } })).toEqual([]);
+    expect(wait([link("p/1", "p", "a", "done")])).toEqual([]);
   });
 });
