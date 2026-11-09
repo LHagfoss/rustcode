@@ -14,6 +14,7 @@ import { formatBinding } from "../lib/keys";
 
 import { Eye, EyeOff, GripVertical, type LucideIcon } from "lucide-react";
 import { type KeyboardEvent, type PointerEvent, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   DEFAULT_HEADER_BUTTONS,
   HEADER_BUTTON_IDS,
@@ -286,10 +287,12 @@ export function HeaderButtonsSetting() {
         </div>
       </div>
       {drag &&
+        // In the body: the settings page sits in a size container, which would make
+        // `fixed` relative to it instead of the window.
         (() => {
           const entry = HEADER_BUTTONS[drag.id];
           const Icon = entry.icon;
-          return (
+          return createPortal(
             <div
               ref={preview}
               aria-hidden
@@ -302,7 +305,8 @@ export function HeaderButtonsSetting() {
               <span className="px-2 text-caption text-fg-muted">
                 {drag.from === "shown" ? "Hide" : "Show"}
               </span>
-            </div>
+            </div>,
+            document.body,
           );
         })()}
     </>
