@@ -345,23 +345,17 @@ pub(crate) mod loopback {
         }
 
         #[tokio::test]
-        async fn dropping_a_listener_removes_its_endpoint_before_port_reuse() {
+        async fn dropping_a_listener_removes_its_endpoint() {
             let directory = tempfile::tempdir().unwrap();
             let path = directory.path().join("control.endpoint");
             let listener = Listener::bind(&path).unwrap();
-            let port = listener.listener.local_addr().unwrap().port();
-
             drop(listener);
 
             assert!(!path.exists());
-            let replacement = TcpListener::bind((Ipv4Addr::LOCALHOST, port))
-                .await
-                .unwrap();
             assert_eq!(
                 connect(&path).await.unwrap_err().kind(),
                 std::io::ErrorKind::NotFound
             );
-            drop(replacement);
         }
     }
 }

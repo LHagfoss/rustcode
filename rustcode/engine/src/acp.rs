@@ -6343,10 +6343,7 @@ mod tests {
             .await
             .expect("a's client")
             .expect("a's client ends cleanly");
-        a_serving
-            .await
-            .expect("a's connection")
-            .expect("a's connection ends cleanly");
+        ends_with_its_client(a_serving.await.expect("a's connection"), "a");
         assert_eq!(server.clients.count(), 0);
         assert!(
             server.clients.turn_running(&session_id),
@@ -6412,10 +6409,7 @@ mod tests {
             .await
             .expect("b's client")
             .expect("b's client ends cleanly");
-        b_serving
-            .await
-            .expect("b's connection")
-            .expect("b's connection ends cleanly");
+        ends_with_its_client(b_serving.await.expect("b's connection"), "b");
         server.shutdown().await;
     }
 

@@ -351,7 +351,18 @@ mod tests {
         let busy = lock_private_file(&directory, "owner.lock", "test").unwrap_err();
         assert!(is_lock_busy(&busy), "{busy:#}");
         drop(held);
-        lock_private_file(&directory, "owner.lock", "test").unwrap();
+        // A concurrent fork can retain the open file description until exec,
+        // even though the descriptor is close-on-exec. Wait for that release.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match lock_private_file(&directory, "owner.lock", "test") {
+                Ok(_lock) => break,
+                Err(error) if is_lock_busy(&error) && std::time::Instant::now() < deadline => {
+                    std::thread::yield_now();
+                }
+                Err(error) => panic!("lock was not released: {error:#}"),
+            }
+        }
     }
 
     #[test]
