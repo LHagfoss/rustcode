@@ -4462,7 +4462,7 @@ describe("a delegate whose turn failed", () => {
     }
   });
 
-  test("settled and deliberately stopped threads return a clear refusal", async () => {
+  test("archived and settled threads return a clear refusal", async () => {
     const { caller, target } = await ready();
     setArchived(target, true);
     const archived = await send(caller, target, "archived");
@@ -4472,8 +4472,10 @@ describe("a delegate whose turn failed", () => {
     await setThreadStatus(target, "done");
     const settled = await send(caller, target, "settled");
     expect((settled.error as JsonObject).message).toContain("settled");
+  });
 
-    await setThreadStatus(target, "idle");
+  test("a stopped thread starts a new turn when messaged", async () => {
+    const { caller, target } = await ready();
     updateThread(target, (thread) => ({
       ...thread,
       items: [
@@ -4483,7 +4485,13 @@ describe("a delegate whose turn failed", () => {
       ],
     }));
     const stopped = await send(caller, target, "stopped");
-    expect((stopped.error as JsonObject).message).toContain("last turn was stopped");
+    expect(stopped.error).toBeUndefined();
+    expect(stopped.receipt).toBe("started");
+    await until(() =>
+      useApp
+        .getState()
+        .threads[target]!.items.some((item) => item.kind === "user" && item.text.includes("stopped")),
+    );
   });
 
   test("a message queued on it fails with the reason instead of staying Queued", async () => {
