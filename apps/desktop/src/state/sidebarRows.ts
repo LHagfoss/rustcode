@@ -134,7 +134,7 @@ export type RowStatusKind = "needs" | "working" | "waiting" | "failed" | "comple
 /** The chip a row's first line ends with (`ui/Sidebar.tsx` draws it). */
 export interface RowStatus {
   kind: RowStatusKind;
-  /** The chip's words: `Needs you`, `Working`, `Waiting`, `Failed`, `Completed`, `Review`. */
+  /** The chip's words: `Needs you`, `Working`, `Waiting`, `Failed`, `Done`, `Review`. */
   label: string;
   /** What the chip says on hover, when its words leave something out. */
   title?: string;
@@ -185,8 +185,7 @@ export function rowStatus(read: RowStatusRead): RowStatus | undefined {
     };
   }
   if (read.failed) return { kind: "failed", label: "Failed", title: "Its last turn failed" };
-  if (read.fresh)
-    return { kind: "completed", label: "Completed", title: "It finished while you were elsewhere" };
+  if (read.fresh) return { kind: "completed", label: "Done", title: "It finished while you were elsewhere" };
   if (read.review) return { kind: "review", label: "Review", title: "It waits for your review" };
   return undefined;
 }
@@ -458,17 +457,4 @@ export function rowMeta(read: RowMetaRead): "line" | "trailing" | "none" {
   // The two-line row has the width, and its line carries the diff beside the badges.
   if (read.layout === "comfortable" && read.diff) return "line";
   return read.diff || read.harness ? "trailing" : "none";
-}
-
-/** The title-first row's trailing status, in attention order. */
-export function titleFirstTrailing(read: {
-  needs: boolean;
-  running: boolean;
-  done: boolean;
-  status: boolean;
-}): "needs" | "running" | "done" | "status" | "age" {
-  if (read.needs) return "needs";
-  if (read.running) return "running";
-  if (read.done) return "done";
-  return read.status ? "status" : "age";
 }

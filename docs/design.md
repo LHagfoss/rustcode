@@ -617,16 +617,10 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   stays an error card over the composer. No banners.
 - **Sidebar brand:** the app's title row is one row, 52px, and the brand is its
   leading content: past the traffic lights' 92px the 18px `public/icon.png` mark
-  (rounded like every other app mark) and `RustCode` on one baseline, in
-  `text-callout` at weight 500, with the running app's version after them as
-  `v1.25.0` in `text-caption` `fg-faint`, tabular so an update does not shift
-  it. The version is the shell's own package version (`system_info`), never a
-  literal, and it is left out when the shell cannot answer. The sidebar's toggle
-  ends the row, so the name truncates before it reaches the toggle; the version
-  is inline while the row has 130px for the brand (a sidebar about 280px wide
-  and up) and otherwise stays in the name's tooltip, because a 256px sidebar
-  leaves the lights' 92px, the mark and the name no room for it
-  (`ui/Titlebar.tsx`, `ui/Brand.tsx`).
+  alone (rounded like every other app mark), and the sidebar's toggle ends the
+  row. The name and the running app's version (the shell's own package version,
+  `system_info`, never a literal) are on the mark's tooltip and in Settings ›
+  About, not spelled out in the header (`ui/Titlebar.tsx`, `ui/Brand.tsx`).
 - **Sidebar sections:** one Threads list, always open, under Pinned when
   anything is pinned, then the Snoozed and Settled shelves at the foot, under
   one hairline, each a one-line header with its count and a chevron that folds
@@ -696,10 +690,15 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   row's right edge, so the title never moves and a narrow sidebar keeps as much
   of it as a wide one. The hover card is the rest. The row layout preference
   (`rustcode.sidebar.rowLayout`) is `comfortable` unless the user chose
-  `compact`: the two-line row described above, with the project's mark before
-  the title and the branch and the counts on the line under it, drawn only when
-  it has something to put there (the retired `current` and `title-first` values
-  migrate to it). Logic: `state/sidebarRows.ts` `rowStatus` and `rowMeta`,
+  `compact`: a card of up to three lines. The first is the project's mark and
+  name in `text-sub` `fg-muted` (the harness under a project heading), ending
+  with the state as an icon and a word in its tone (`Working` with its clock in
+  `accent`, `Needs you` in `warning`, `Waiting` muted, `Failed` in `danger`,
+  `Done` in `success` until the thread is opened, `Review` in `accent`) or else
+  the age, where the hover actions are drawn. The second is the title. The
+  third, drawn only when it has something to put there, is the branch, the diff,
+  the pull request and the stack (the retired `current` and `title-first`
+  values migrate to it). Logic: `state/sidebarRows.ts` `rowStatus` and `rowMeta`,
   `state/sidebarPrefs.ts` `rowLayoutOf`.
 - **Delegated threads:** a thread an agent started has no row of its own while
   its parent exists, and it is nested from its first frame: the parent
