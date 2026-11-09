@@ -38,7 +38,7 @@ threads carries out the calls, not an engine-side `SessionOrchestrator`.
   queued or running links are `interrupted` and nothing restarts.
 - Stopping the orchestrator's turn stops the link turns it started and drops
   its queued messages. Turns the user started in the target keep running.
-- Settings ▸ Agents ▸ *Threads can start and message other threads*. The
+- Settings ▸ Harnesses ▸ *Threads can start and message other threads*. The
   engine learns it at `initialize`, so a change applies after the engine
   restarts.
 - UI: rows above the composer for the threads this one delegated to (state,
@@ -216,7 +216,7 @@ Decisions:
 - `interrupt: true` is allowed only for a turn the same link started, as with
   `followup_task`.
 - The orchestrator may have at most 8 distinct target threads active by
-  default (2–32 in Settings › Agents; a follow-up takes no slot), with at most
+  default (2–32 in Settings › Harnesses; a follow-up takes no slot), with at most
   16 running across this app instance (2–64; the CLI and TUI start no
   delegates), and the engine at most 8 orchestrated turns running at once;
   further turns queue, and waiting yields the orchestrator's slot as

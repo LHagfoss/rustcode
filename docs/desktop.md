@@ -205,7 +205,7 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   Claude Code (`PREFERRED_HARNESS`) is listed first and suggested on a
   first run, and the built-in harness is listed last as the *Local*
   harness, kept for the TUI, testing and local models.
-- **Settings › Agents.** Every harness is detected again (installed, signed in, version, each account's sign-in) when the page opens and whenever the window regains focus (`useAutoDetect`, at most once in three seconds); no start of a harness is involved. *New threads start on* comes first and saves as
+- **Settings › Harnesses.** Every harness is detected again (installed, signed in, version, each account's sign-in) when the page opens and whenever the window regains focus (`useAutoDetect`, at most once in three seconds); no start of a harness is involved. *New threads start on* comes first and saves as
   it changes (no Save button); picking an external harness lists its
   models at once (`ensureHarnessModels`). Under it, *Harnesses*: one
   card per harness with its mark, status and version, *Sign in* only until
@@ -453,7 +453,7 @@ composer's keys stay outside the table.
   to the page, and the background poll picks it up within its three minutes. A
   `forbidden` login is not retried on its own (renewing does not fix it), nor is
   a `denied` one (that would only prompt again); Settings › Usage, Refresh and
-  Check in Settings › Agents read them again, and Refresh always forces. Reads
+  Check in Settings › Harnesses read them again, and Refresh always forces. Reads
   of one login are serialized in the
   engine (`provider_auth/claude_usage.rs`), and a forced read whose login was
   read after the user asked shares that answer instead of asking macOS again. A
@@ -506,9 +506,9 @@ composer's keys stay outside the table.
   and Tauri versions, the web view (WKWebView, WebView2, WebKitGTK) and its
   version, the GPU WebGL names, display scale, `data-platform` and the
   environment that changes how WebKitGTK composites. *Harnesses*: what
-  Agents last detected, with the binary this app's `PATH` resolves. *Open
-  thread log* opens the open thread's `logs/debug.log` (also in every
-  thread's menu); the shell finds the folder with `rustcode threads path`.
+  Settings › Harnesses last detected, with the binary this app's `PATH`
+  resolves. *Open thread log* opens the open thread's `logs/debug.log` (also
+  in every thread's menu); the shell finds the folder with `rustcode threads path`.
   *Copy debug report* puts all of it, the last 200 log lines and the last 50
   `operational_events` in one Markdown block for a GitHub issue, with
   tokens, API keys, email addresses and the home folder (`~`) taken out
@@ -912,7 +912,7 @@ composer's keys stay outside the table.
 - **Threads working for threads** ([orchestrator.md](orchestrator.md),
   M1 rules from
   [cross-session-orchestration.md](architecture/cross-session-orchestration.md)).
-  On by default (Settings › Agents turns it off). The app answers `_rustcode/orchestration`
+  On by default (Settings › Harnesses turns it off). The app answers `_rustcode/orchestration`
   (`src/state/host.ts`, rules in `src/state/orchestration.ts`):
   `list_sessions`, `read_session`, `message_session`, `wait_session`,
   `start_session` and `fan_out`. Same project only — the repository, so a main

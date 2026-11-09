@@ -272,7 +272,7 @@ timed out leaves the worktree mid-state, so inspect it before rerunning.
 Rules (enforced by the client, as M1): same project unless `project` is given
 and the user approves it, or `all_projects` reads it (see the v3 note below);
 at most 8 delegates working for one thread at once by default, set to 2 to 32
-in Settings › Agents, and at most 16 delegates running at once across this app
+in Settings › Harnesses, and at most 16 delegates running at once across this app
 instance, set to 2 to 64 (a `busy` refusal names the limit it hit and the
 current count, says `links_left` and that `wait_session` on one comes first).
 The CLI and TUI start no delegates, so the total is one app's own. A message
@@ -565,7 +565,7 @@ checkout and every worktree of it, resolved by the engine from the folder
 in a worktree reaches the repository's other threads and its own worktree
 delegates; a thread it started itself is reachable wherever it runs. Reads — `list_sessions`, `search_sessions`, `read_session`,
 `list_worktrees`, `list_projects` — reach any project while **Let agents read
-threads in other projects** is on (Settings › Agents, on by default;
+threads in other projects** is on (Settings › Harnesses, on by default;
 `rustcode.readAcrossProjects`). With it off, an `all_projects: true` call and a
 `read_session` of another project's thread answer `not_allowed`. An
 `all_projects` answer names each thread's `project` path, so two threads with

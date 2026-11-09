@@ -84,7 +84,7 @@ export function harnessStatus(h: Harness): HarnessStatus {
 export function unavailableReason(h: Harness): string | undefined {
   if (!h.installed)
     return h.install_hint ? `Not installed. Install with: ${h.install_hint}` : "Not installed";
-  if (!h.enabled) return "Turned off in Settings › Agents";
+  if (!h.enabled) return "Turned off in Settings › Harnesses";
   // With named accounts, the accounts decide: point at them, never at the
   // harness's own sign-in button the card no longer shows.
   const accounts = accountState(h);

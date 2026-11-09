@@ -334,7 +334,7 @@ function initialHarnesses(onboarded: boolean): HarnessSnapshot {
           },
         ],
         // Logins the engine finds on this Mac that no account names yet, so
-        // Settings › Agents' "Found on this Mac" can be seen and tried.
+        // Settings › Harnesses' "Found on this Mac" can be seen and tried.
         discovered_accounts: [
           { config_dir: "~/.claude", suggested_name: "Claude" },
           { config_dir: "~/.claude-personal", suggested_name: "Personal" },
@@ -3626,7 +3626,7 @@ export class MockEngine {
           : null;
     if (!tool) return null;
     if (this.orchestration < (tool === "message_session" ? 1 : 2)) {
-      return "I can't reach other threads here: turn on Settings › Agents › Threads can start and message other threads, then restart the engine.";
+      return "I can't reach other threads here: turn on Settings › Harnesses › Threads can start and message other threads, then restart the engine.";
     }
     const call = (name: string, args: JsonObject) => {
       const callId = `orch-${++this.counter}`;

@@ -286,7 +286,7 @@ CLI read that directory's `config.toml`, `AGENTS.md` and `[mcp_servers]`
 instead of `~/.codex`'s. So a new account starts without the user's profiles,
 model providers and MCP servers, and RustCode copies and links nothing: what an
 account should have goes in its directory by hand. `~/.codex` itself, registered
-or not, is never written to. Settings › Agents' Codex Accounts section says
+or not, is never written to. Settings › Harnesses' Codex Accounts section says
 "Each account has its own Codex settings." for the same reason.
 The section is read from the user config only: a checked-out project cannot
 choose where a thread signs in.
@@ -304,7 +304,7 @@ and replay their history, and only their next prompt reports the missing
 account (they can be moved to another named account, or to the harness's own
 sign-in when it has none left). `auth` for an account is `ok` when its own
 sign-in is there, `needs_login` when a look found none, and `unknown` when it
-was not looked for. `check` (Settings › Agents' look when the page opens, when
+was not looked for. `check` (Settings › Harnesses' look when the page opens, when
 the window regains focus, and on Check) runs the harness's own cheap status command
 with the account's directory and with the variables a thread on that account
 would drop (`codex login status`, `claude auth status --json`), then falls back
@@ -394,7 +394,7 @@ is what renews the token.
 A read that a denied
 Keychain prompt stops pauses that one login (a signed-out login is not read
 again in the background either); Settings › Usage, Refresh and
-Check in Settings › Agents read it again. A Keychain item macOS refused whose
+Check in Settings › Harnesses read it again. A Keychain item macOS refused whose
 credentials-file fallback holds an expired sign-in, or whose request to Anthropic
 does not succeed, is reported as `denied` rather than as `expired`, `refused` or
 `transient`, so the retry policy cannot turn a refusal into a prompt on every

@@ -392,7 +392,7 @@ for an agent in a thread, forwarded through the app like `list_sessions`:
 | `read_activity` | `{ session_id, after?, limit? }` — `limit` 1..200 (default 50); `after` is the opaque `next` token an earlier page returned | `{ session_id, items, next, has_more }`, one merged time-ordered list: `{ source: "event", at, type, fields }`, `{ source: "provider_request", at, provider, model, status_code, latency_ms, error_kind, input_tokens, output_tokens, cached_tokens, attempt }` and `{ source: "rpc_message", at, direction, kind, method, latency_ms, byte_size }`. Items are ordered by `(at, source, row id)`; `next` encodes the last one, so pages join with no gap and no repeat. Payload columns (`request_payload_json`, `response_summary_json`, `payload_json`) are never selected |
 
 They are reads, so none asks the user. They follow **Let agents read threads
-in other projects** (Settings › Agents, on by default), because the store
+in other projects** (Settings › Harnesses, on by default), because the store
 crosses projects and holds thread titles and paths:
 
 - With it on, `thread_usage` covers every project, or the one `project` names.
