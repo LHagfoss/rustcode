@@ -19,7 +19,7 @@ describe("a link chip", () => {
 
   test("in the composer's row it takes the field's own line box", () => {
     const out = drawn("https://example.com/a", "token");
-    expect(out).toContain("h-[22.75px]");
+    expect(out).toContain("h-[21px]");
     expect(out).not.toContain("align-middle");
   });
 

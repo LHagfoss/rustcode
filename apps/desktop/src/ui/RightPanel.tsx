@@ -1,5 +1,5 @@
 // The right panel (docs/design.md, Right panel): one card docked at the window's
-// right edge for the thread's side views (Details, Changes, Pull requests,
+// right edge for the thread's side views (Overview, Changes, Pull requests,
 // Thread). It is a sibling of the chat column inside the chat view's row, so the
 // chat keeps its place on the left and narrows by the card's width; the lane
 // re-centres in the room that is left (ui/ChatView.tsx). The card runs from the
@@ -328,7 +328,9 @@ export function RightPanel() {
   }, [open, sheet]);
 
   const tabs: { value: Kind; label: string }[] = [
-    { value: "details", label: "Details" },
+    // The panel's first view is the overview: Properties, pulls, deliverables,
+    // the execution log and the rest of the details in one column (ui/ThreadDetails.tsx).
+    { value: "details", label: "Overview" },
     { value: "changes", label: "Changes" },
     ...(pullsOn ? [{ value: "pulls" as const, label: "Pull requests" }] : []),
     ...(peekOn ? [{ value: "peek" as const, label: peekIsSideChat ? "Side chat" : "Thread" }] : []),
