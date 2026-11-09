@@ -2382,6 +2382,7 @@ export class MockEngine {
       qrRows: mockQrRows(),
       code: str(stored.code) ?? "",
       address: str(stored.address) ?? "",
+      alternates: arr(stored.alternates),
       expiresInSecs: Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000)),
       loopbackOnly: stored.loopbackOnly === true,
       gatewayId: str(stored.gatewayId) ?? "",
@@ -2472,6 +2473,7 @@ export class MockEngine {
   /** A fresh pairing challenge: the QR payload carries the credential, the code is typed by hand. */
   private issueRemoteOffer() {
     const address = "192.168.1.24:17879";
+    const alternates = ["100.90.16.237:17879"];
     this.remote.gateway = this.remoteGateway();
     this.remote.offer = {
       qrPayload: JSON.stringify({
@@ -2480,9 +2482,11 @@ export class MockEngine {
         gateway_id: "9f2c1d0b4a6e8c7d5b3a1908f7e6d5c4",
         credential: "jH8sK2mQ9xT4vLpR6nB1yC3fW7gZ0aE5uI2oP8sD4qX",
         host_name: "Mock MacBook Pro",
+        alternates,
       }),
       code: "4927-3318",
       address,
+      alternates,
       expiresAt: Date.now() + (this.options.remote === "expired" ? -1_000 : 120_000),
       loopbackOnly: false,
       gatewayId: "9f2c1d0b4a6e8c7d5b3a1908f7e6d5c4",

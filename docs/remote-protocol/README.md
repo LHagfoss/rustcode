@@ -253,12 +253,20 @@ reconnect <15m  → authenticate {device_id, access_token: A2}
 The pairing QR code encodes this JSON, as one line:
 
 ```json
-{"protocol_version": 1, "address": "100.92.13.44:17879", "gateway_id": "…", "credential": "…", "host_name": "studio"}
+{"protocol_version": 1, "address": "100.92.13.44:17879", "gateway_id": "…", "credential": "…", "host_name": "studio", "alternates": ["192.168.1.20:17879"]}
 ```
 
 `address` is `host:port` to dial. `host_name` is optional and cut to 24
 characters. Send `credential` as the `secret` of a `pair` frame with
 `"method": "credential"`.
+
+`alternates` is optional: other `host:port` addresses of the same listener,
+best first, at most four (IPv6 in brackets, `[2001:db8::1]:17879`). Dial
+`address` first; when it cannot be reached, try each alternate in order and
+pair with the same `credential` on the first that connects. Every address
+reaches the same gateway, so `gateway_id` is the same whichever answered.
+It is absent when the gateway listens on one specific address, and a client
+that does not know it ignores it.
 
 ### The bare `error` frame
 

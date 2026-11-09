@@ -333,11 +333,11 @@ pub fn format_offer(offer: &OfferDetails, style: QrStyle) -> String {
              even this code is refused until then."
         ));
     }
-    let by_hand = format!(
-        "  address:  {}\n  code:     {}",
-        offer.advertised_address,
-        offer.code.expose()
-    );
+    let mut by_hand = format!("  address:  {}", offer.advertised_address);
+    if !offer.alternates.is_empty() {
+        by_hand.push_str(&format!("\n  also at:  {}", offer.alternates.join(", ")));
+    }
+    by_hand.push_str(&format!("\n  code:     {}", offer.code.expose()));
     match code {
         Some(code) if panel => {
             blocks.push(format!("{lifetime}\n{by_hand}"));
@@ -953,6 +953,12 @@ mod tests {
         assert!(local.contains("rustcode remote serve"));
         assert!(local.contains("[remote]"));
         assert!(local.contains("QR payload: "));
+
+        let mut mesh = offer("100.90.16.237");
+        mesh.alternates = vec!["192.168.1.20:17879".to_owned()];
+        let mesh = format_offer(&mesh, QrStyle::Text);
+        assert!(mesh.contains("  also at:  192.168.1.20:17879"), "{mesh}");
+        assert!(!lan.contains("also at:"));
     }
 
     #[test]

@@ -150,6 +150,8 @@ export interface RemoteOffer {
   /** The eight-digit code for typing by hand. */
   code: string;
   address: string;
+  /** Other addresses the gateway answers on (also in the QR payload), best first. */
+  alternates?: string[];
   /** Seconds the challenge has left when the engine answered. */
   expiresInSecs: number;
   loopbackOnly: boolean;
@@ -310,6 +312,7 @@ function parseOffer(value: Json | undefined): RemoteOffer | undefined {
     qrRows: names(offer.qrRows),
     code,
     address: str(offer.address) ?? "",
+    alternates: names(offer.alternates),
     expiresInSecs: num(offer.expiresInSecs) ?? 0,
     loopbackOnly: bool(offer.loopbackOnly) ?? false,
     gatewayId: str(offer.gatewayId) ?? "",

@@ -397,6 +397,7 @@ pub fn golden_qr_payload() -> QrPayload {
         gateway_id: GATEWAY.to_owned(),
         credential: Secret::new("q0lYc1o3bXJ3T2d5d0l2Rk5kU2tqeTZqZ0Z2ZUo0V2s"),
         host_name: Some("studio".to_owned()),
+        alternates: vec!["192.168.1.20:17879".to_owned()],
     }
 }
 

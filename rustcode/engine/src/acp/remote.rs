@@ -496,6 +496,8 @@ struct PairingOffer {
     qr_payload: String,
     code: String,
     address: String,
+    /// Other addresses the listener answers on, also in the QR payload.
+    alternates: Vec<String>,
     loopback_only: bool,
     gateway_id: String,
     instance_id: Option<String>,
@@ -511,6 +513,7 @@ impl PairingOffer {
             qr_payload: offer.qr_payload.expose().to_owned(),
             code: offer.code.expose().to_owned(),
             address: offer.advertised_address,
+            alternates: offer.alternates,
             loopback_only: offer.loopback_only,
             gateway_id: offer.gateway_id,
             instance_id: offer.instance_id,
@@ -1403,6 +1406,7 @@ fn offer_json(offer: &PairingOffer, now: Instant) -> Value {
         "qrRows": crate::remote_gateway::qr::bitmap(&offer.qr_payload),
         "code": offer.code,
         "address": offer.address,
+        "alternates": offer.alternates,
         "expiresInSecs": offer.expires_at.saturating_duration_since(now).as_secs(),
         "loopbackOnly": offer.loopback_only,
         "gatewayId": offer.gateway_id,
@@ -2841,11 +2845,13 @@ mod tests {
             expires_in_secs: 300,
             challenge: Some(7),
             locked_for_secs: None,
+            alternates: vec!["100.64.0.4:8787".to_owned()],
             qr_payload: Secret::new("payload"),
         });
         assert_eq!(offer.code, "1234-5678");
         assert_eq!(offer.qr_payload, "payload");
         assert_eq!(offer.address, "192.168.1.4:8787");
+        assert_eq!(offer.alternates, ["100.64.0.4:8787"]);
         assert!(offer.expires_at > Instant::now());
     }
 }

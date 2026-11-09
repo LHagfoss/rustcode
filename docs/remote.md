@@ -269,6 +269,13 @@ name and uses the listener's port.
 - `0.0.0.0` and `::` are never advertised. Binding a wildcard requires
   `--advertise` unless exactly one interface address is a candidate; the
   error lists the candidates.
+- A wildcard bind also lists the listener's other addresses in the pairing
+  details and the QR code (`alternates`), so a phone that cannot reach the
+  advertised address (say, a mesh address on a phone without the mesh VPN)
+  tries the LAN instead: private IPv4 on Wi-Fi/Ethernet first, then mesh
+  addresses in 100.64.0.0/10, then global IPv6, at most four. The advertised
+  address, loopback, link-local and container/VM bridges are left out. A bind
+  to one address has none.
 - The `[remote]` section is read from the user configuration only. A project's
   `.rustcode/config.toml` cannot choose the interface your sessions are
   exposed on.
@@ -279,7 +286,8 @@ A pairing challenge (from `/remote` or `rustcode remote pair`) has two
 representations:
 
 - a QR code. It encodes compact JSON with `protocol_version`, `address`,
-  `gateway_id`, a 256-bit `credential` and the host's name;
+  `gateway_id`, a 256-bit `credential`, the host's name and, on a wildcard
+  bind, `alternates` (see Addresses);
 - the advertised address plus an eight-digit code, for typing by hand.
 
 The code is drawn with half-block characters in explicit black on white with a

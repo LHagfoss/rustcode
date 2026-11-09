@@ -272,6 +272,10 @@ pub struct OfferDetails {
     /// redeemed, not even with the right code, until the lockout ends.
     #[serde(default)]
     pub locked_for_secs: Option<u64>,
+    /// Other `host:port` addresses the listener answers on, also in the QR
+    /// payload; see [`pairing::QrPayload::alternates`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternates: Vec<String>,
     /// The exact string a pairing QR code encodes.
     pub qr_payload: Secret,
 }
@@ -281,6 +285,18 @@ impl OfferDetails {
         address: &AdvertisedAddress,
         gateway_id: &str,
         host_name: Option<&str>,
+        offer: PairingOffer,
+    ) -> Self {
+        Self::with_alternates(address, gateway_id, host_name, Vec::new(), offer)
+    }
+
+    /// [`Self::new`] for a listener that also answers on `alternates`
+    /// ([`super::address::alternate_addresses`]).
+    pub fn with_alternates(
+        address: &AdvertisedAddress,
+        gateway_id: &str,
+        host_name: Option<&str>,
+        alternates: Vec<String>,
         offer: PairingOffer,
     ) -> Self {
         Self {
@@ -293,7 +309,9 @@ impl OfferDetails {
                 gateway_id,
                 &offer.credential,
                 host_name,
+                &alternates,
             )),
+            alternates,
             credential: offer.credential,
             code: offer.code,
             expires_in_secs: offer.lifetime.as_secs(),
