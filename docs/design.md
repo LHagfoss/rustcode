@@ -614,12 +614,11 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   action), not to repeat what the screen already shows (no pin, archive,
   theme, harness-switch or steering notice); an error about a thread's turn
   stays an error card over the composer. No banners.
-- **Sidebar brand:** the app's title row is one row, 52px, and the brand is its
-  leading content: past the traffic lights' 92px the 18px `public/icon.png` mark
-  alone (rounded like every other app mark), and the sidebar's toggle ends the
-  row. The name and the running app's version (the shell's own package version,
-  `system_info`, never a literal) are on the mark's tooltip and in Settings ›
-  About, not spelled out in the header (`ui/Titlebar.tsx`, `ui/Brand.tsx`).
+- **Title row:** the window's title row is one 36px row with no brand in it:
+  the traffic lights (`trafficLightPosition` y 22, centred on the row) and the
+  sidebar's toggle at its trailing edge; the main column's header shares its
+  height and line (`ui/Titlebar.tsx`). The app's name and version live in
+  Settings › About.
 - **Sidebar sections:** one Threads list, always open, under Pinned when
   anything is pinned, then the Snoozed and Settled shelves at the foot, under
   one hairline, each a one-line header with its count and a chevron that folds

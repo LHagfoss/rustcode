@@ -149,7 +149,6 @@ import { formatClock, idleSettled, shortAge } from "../state/thread";
 import { openChain, parentOf as parentOfThread, type SubRow, topLevel } from "../state/topLevel";
 import { useWaiting, useWaitingIds, waitingLabel, waitingTitle } from "../state/waiting";
 import { AgentStack } from "./AgentStack";
-import { Brand } from "./Brand";
 import { CustomSnooze } from "./CustomSnooze";
 import { HarnessIcon } from "./HarnessIcon";
 import { NeedsYouRow } from "./Inbox";
@@ -179,7 +178,7 @@ import { LIGHTS_INSET, TitlebarRow } from "./Titlebar";
 import { UpdateRow } from "./Updates";
 
 // The title row starts past the traffic lights and ends in the sidebar's toggle, so the sidebar
-// cannot be narrower than that row: the lights' inset, then a readable name and the toggle.
+// cannot be narrower than that row: the lights' inset, then room for the toggle.
 const MIN = LIGHTS_INSET + 144;
 const MAX = 460;
 /** What the sidebar is wide before it is dragged, and what a double-click on its edge puts back. */
@@ -2261,9 +2260,8 @@ export function Sidebar() {
         )}
         style={{ width, minWidth: width }}
       >
-        {/* One row: the brand, then the toggle at its trailing edge (docs/design.md › Sidebar brand). */}
-        <TitlebarRow className="gap-2 pr-3">
-          <Brand className="flex-1" />
+        {/* One row: the traffic lights, then the toggle at its trailing edge (docs/design.md › Title row). */}
+        <TitlebarRow className="justify-end pr-3">
           <Cluster className="shrink-0">
             <ClusterButton
               label="Hide sidebar"

@@ -1,7 +1,6 @@
-// The window's title row, shared by the sidebar (its brand and toggle) and the
-// main column's header, so the two line up on one line through the traffic
-// lights. It is the only row the window has: the brand sits in it rather than
-// under it (docs/design.md › Sidebar brand). `trafficLightPosition` in
+// The window's title row, shared by the sidebar (its toggle) and the main
+// column's header, so the two line up on one line through the traffic lights.
+// It is the only row the window has (docs/design.md › Title row). `trafficLightPosition` in
 // tauri.conf.json puts the lights' centre on this row's centre. In full screen
 // the lights are gone, so the row starts at the edge instead of leaving their
 // room empty, and on Windows the shell draws its own controls (ui/WindowControls.tsx).
@@ -22,10 +21,11 @@ export const LIGHTS_INSET = 92;
 /**
  * The title row's height, on every platform: the window's drag strip, the
  * traffic lights and the main column's header all sit on this one line.
- * `trafficLightPosition.y` is 38 so the lights' centre (tao sizes their bar to
- * the close button's height plus y and centres them in it) lands on 26.
+ * `trafficLightPosition.y` is 22 so the lights' centre (tao sizes their bar to
+ * the close button's height plus y and centres them in it) lands on 18, where
+ * they sat before the row grew to hold a brand.
  */
-export const TITLEBAR_HEIGHT = 52;
+export const TITLEBAR_HEIGHT = 36;
 
 let fullscreen = false;
 const listeners = new Set<(v: boolean) => void>();

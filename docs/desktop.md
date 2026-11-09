@@ -759,8 +759,8 @@ composer's keys stay outside the table.
   parent's, folded away when the user moves on, and a search result that is a
   delegate says `in <parent title>`. The chat's agent and thread group cards
   show the same stack.
-  The title row carries the brand and Hide sidebar, clear of the traffic lights
-  (docs/design.md › Sidebar brand); it used to sit over Add project and New
+  The title row carries Hide sidebar, clear of the traffic lights
+  (docs/design.md › Title row); it used to sit over Add project and New
   thread buttons and above a foot row of Settings, Pull requests and Usage, all
   gone so the thread list takes the rest of the column; the header's cluster
   holds Show sidebar and Settings while the sidebar is hidden. There is no search or
