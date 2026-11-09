@@ -20,9 +20,30 @@ export function currentPlatform(): Platform {
   return platformFor(navigator.userAgent, "__TAURI_INTERNALS__" in window);
 }
 
+/**
+ * The platform the page was set up as: `data-platform` on <html> (applyPlatform), which a
+ * browser's macOS look does not override, so the shell's own chrome follows it.
+ */
+export function appPlatform(): Platform {
+  const set = typeof document === "undefined" ? undefined : document.documentElement.dataset.platform;
+  if (set === "mac" || set === "windows" || set === "linux") return set;
+  return currentPlatform();
+}
+
+/**
+ * A dev build's `?platform=mac|windows|linux`: the mock window has no web view of its own, so
+ * this is how the shell's Windows chrome is looked at. Nothing, in a built app or for an
+ * unknown name.
+ */
+export function platformOverride(search: string, dev: boolean): Platform | null {
+  if (!dev) return null;
+  const name = new URLSearchParams(search).get("platform");
+  return name === "mac" || name === "windows" || name === "linux" ? name : null;
+}
+
 /** Sets `data-platform` on <html>; call before the first render, so nothing paints in the wrong look. */
 export function applyPlatform(): Platform {
-  const platform = currentPlatform();
+  const platform = platformOverride(window.location.search, import.meta.env.DEV) ?? currentPlatform();
   document.documentElement.dataset.platform = platform;
   return platform;
 }

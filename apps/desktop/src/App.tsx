@@ -19,6 +19,7 @@ import { Sidebar } from "./ui/Sidebar";
 import { Toaster } from "./ui/Toaster";
 import { WhatsNewDialog } from "./ui/Updates";
 import { useAwayWatch } from "./ui/WhileAway";
+import { WindowControls } from "./ui/WindowControls";
 
 const Onboarding = lazy(() => import("./ui/Onboarding").then((m) => ({ default: m.Onboarding })));
 const TerminalPanel = lazy(() => import("./ui/TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
@@ -165,6 +166,13 @@ export function App() {
         open rows) in one frame.
       */}
       <div className="relative h-full w-full overflow-hidden">
+        {/*
+          The window's own controls on Windows, at its top right over the main column's top row:
+          they belong to the window, not to a view, so they stay with the sidebar hidden and
+          whatever view is open (ui/WindowControls.tsx). macOS's traffic lights and Linux's
+          native title bar draw themselves.
+        */}
+        <WindowControls className="absolute top-0 right-0 z-20" />
         <div className="flex h-full w-full overflow-hidden bg-sidebar-glass" inert={settings}>
           <Sidebar />
           <div className="relative flex min-w-0 flex-1 bg-bg">

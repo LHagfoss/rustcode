@@ -334,9 +334,24 @@ describe("design system", () => {
     const config = (name: string) =>
       JSON.parse(readFileSync(join(SRC, `../src-tauri/${name}`), "utf8")).app.windows[0];
     expect(config("tauri.windows.conf.json").transparent).toBe(true);
-    expect(config("tauri.windows.conf.json").decorations).toBe(true);
     expect(config("tauri.linux.conf.json").transparent).toBe(false);
+    // Windows draws its own title bar (ui/WindowControls.tsx), so it has no native decorations
+    // and no native title; Linux keeps both.
+    expect(config("tauri.windows.conf.json").decorations).toBe(false);
+    expect(config("tauri.windows.conf.json").titleBarStyle).toBeUndefined();
+    expect(config("tauri.windows.conf.json").hiddenTitle).toBeUndefined();
     expect(config("tauri.linux.conf.json").decorations).toBe(true);
+    // The page can drive the window it draws: drag its title row, and minimize, maximize and close.
+    const capabilities = JSON.parse(readFileSync(join(SRC, "../src-tauri/capabilities/default.json"), "utf8"))
+      .permissions as string[];
+    for (const permission of [
+      "core:window:allow-start-dragging",
+      "core:window:allow-minimize",
+      "core:window:allow-toggle-maximize",
+      "core:window:allow-is-maximized",
+      "core:window:allow-close",
+    ])
+      expect(capabilities).toContain(permission);
   });
 
   test("index.css's built-in themes match lib/themes.ts", () => {

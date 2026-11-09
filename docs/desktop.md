@@ -758,25 +758,34 @@ composer's keys stay outside the table.
   parent's, folded away when the user moves on, and a search result that is a
   delegate says `in <parent title>`. The chat's agent and thread group cards
   show the same stack.
-  The toolbar's row carries Hide sidebar alone, clear of the traffic lights;
-  it used to sit over Add project and New thread buttons and above a foot row
-  of Settings, Pull requests and Usage, all gone so the thread list takes the
-  rest of the column; the header's cluster holds Show
-  sidebar and Settings while the sidebar is hidden. There is no search or
+  The title row carries the brand and Hide sidebar, clear of the traffic lights
+  (docs/design.md › Sidebar brand); it used to sit over Add project and New
+  thread buttons and above a foot row of Settings, Pull requests and Usage, all
+  gone so the thread list takes the rest of the column; the header's cluster
+  holds Show sidebar and Settings while the sidebar is hidden. There is no search or
   filter in the sidebar: ⌘K finds threads (by title, project, branch, pull
   request and what was said) and holds those five as New thread, Add project
   folder, Open Settings, Open Git and Open Usage, with their shortcuts, and
   the view options. Snoozed and Settled are the shelves at the foot of the
   list, each folding on its own;
   the project is chosen per thread in the composer's footer.
-- **Title bar.** The sidebar's and header's buttons sit on the traffic
-  lights' line, 14 px past the zoom button (x 92; the button ends at x 78),
-  the gap the SwiftUI app leaves (`src/ui/Titlebar.tsx`); in full screen,
-  where the lights hide, the rows start at the edge.
+- **Title bar.** One row, 52 px on every platform, is the window's title bar
+  and holds the sidebar's brand and toggle with the main header beside it
+  (`src/ui/Titlebar.tsx`; `src-tauri/tauri.conf.json` › `trafficLightPosition`
+  centres the traffic lights on it). The sidebar's and header's content starts
+  14 px past the zoom button (x 92; the button ends at x 78), the gap the
+  SwiftUI app leaves; in full screen, where the lights hide, the rows start at
+  the edge. On Windows the window has no native decorations
+  (`src-tauri/tauri.windows.conf.json`): the page draws minimize,
+  maximize/restore and close at the window's top right
+  (`src/ui/WindowControls.tsx`, 46 × 52 px each, the close one red under the
+  pointer), the row drags the window, and a double-click on it maximizes.
+  macOS keeps its traffic lights and Linux its native title bar.
 - **One shell.** The sidebar and the main header (`src/ui/MainHeader.tsx`)
   stay mounted for every view. The header floats in glass over its view
   (the chat, new or open), with a soft fade at its foot, and content
-  scrolls under it; views leave `HEADER_HEIGHT` (42 px) at their top.
+  scrolls under it; views leave `HEADER_HEIGHT` (the title row's 52 px) at
+  their top.
 - **Thread header buttons.** The chat header's buttons come from one
   registry (`ui/ChatView.tsx`, ids in `state/headerButtons.ts`): status,
   plan, pull requests, terminal, details, changes. Settings › Chat › Thread

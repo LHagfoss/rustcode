@@ -1,7 +1,7 @@
-// The sidebar's brand line: the version it prints under RustCode.
+// The sidebar's brand row: the version it prints after RustCode.
 
 import { describe, expect, test } from "bun:test";
-import { versionLabel } from "./BrandHeader";
+import { versionLabel } from "./Brand";
 
 describe("the brand's version line", () => {
   test("a release says v and its number", () => {

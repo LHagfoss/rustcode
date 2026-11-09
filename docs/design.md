@@ -432,11 +432,15 @@ The design is drawn on macOS; Windows (WebView2) and Linux (WebKitGTK) get the
 same layout with their own type, Windows with Mica behind the sidebar. `lib/platform.ts`
 sets `data-platform="mac|windows|linux"` on `<html>` from the web view's user
 agent before the first render (`main.tsx`); a browser (the mock, `dev:web`)
-is always `mac`. Every rule for another platform is a token override under
+is always `mac`, or the one a dev build's `?platform=windows` asks for. Every
+rule for another platform is a token override under
 `:root[data-platform=…]` at the end of `index.css`, never a per-component
 branch, and nothing applies to `mac` or to a page without the attribute, so
-the macOS look is the base rules alone. To look at one in the mock, set
-`document.documentElement.dataset.platform` in the page.
+the macOS look is the base rules alone. The few controls that are not a token
+override — the window's own title bar and its buttons — ask `appPlatform()`,
+which reads that attribute. To look at Windows in the mock, open it at
+`/?platform=windows` (`bun run mock-window open "/?platform=windows"`), so the
+first render is already that platform.
 
 | | macOS | Windows | Linux |
 |---|---|---|---|
@@ -466,8 +470,10 @@ the macOS look is the base rules alone. To look at one in the mock, set
   shell behind it) 72% of its colour, and the body transparent, so the material
   shows through the sidebar and nowhere else; the chat pane stays opaque.
   Windows 10 has no Mica (Acrylic drags and resizes badly, so it is not the
-  fallback): the sidebar stays solid. The native title bar from the window's
-  decorations is unchanged. `window_material` reports the material's own result
+  fallback): the sidebar stays solid. Windows has no native decorations
+  (`tauri.windows.conf.json`), so the shell draws the window's own minimize,
+  maximize/restore and close at its top right (ui/WindowControls.tsx); Linux
+  keeps its native title bar. `window_material` reports the material's own result
   (`window_vibrancy::apply_mica`), because tauri's `set_effects` returns `Ok`
   even where the platform refused: a wrong `mica` there would paint a
   see-through sidebar over a window whose backdrop is the desktop.
@@ -611,15 +617,18 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   action), not to repeat what the screen already shows (no pin, archive,
   theme, harness-switch or steering notice); an error about a thread's turn
   stays an error card over the composer. No banners.
-- **Sidebar brand:** the row under the toolbar names the app: the 18px
-  `public/icon.png` mark (rounded like every other app mark), `RustCode` in
-  `text-callout` at weight 500, and the running app's version under it as
-  `v1.25.0` in `text-caption` `fg-muted`, tabular so an update does not shift
+- **Sidebar brand:** the app's title row is one row, 52px, and the brand is its
+  leading content: past the traffic lights' 92px the 18px `public/icon.png` mark
+  (rounded like every other app mark) and `RustCode` on one baseline, in
+  `text-callout` at weight 500, with the running app's version after them as
+  `v1.25.0` in `text-caption` `fg-faint`, tabular so an update does not shift
   it. The version is the shell's own package version (`system_info`), never a
-  literal, and the line is left out when the shell cannot answer. It sits under
-  the title bar's row rather than in it: the traffic lights own that row's left
-  92px, and the brand keeps the list's 12px edge at every width and on every
-  platform. One 39px row (`ui/BrandHeader.tsx`).
+  literal, and it is left out when the shell cannot answer. The sidebar's toggle
+  ends the row, so the name truncates before it reaches the toggle; the version
+  is inline while the row has 130px for the brand (a sidebar about 280px wide
+  and up) and otherwise stays in the name's tooltip, because a 256px sidebar
+  leaves the lights' 92px, the mark and the name no room for it
+  (`ui/Titlebar.tsx`, `ui/Brand.tsx`).
 - **Sidebar sections:** one Threads list, always open, under Pinned when
   anything is pinned, then the Snoozed and Settled shelves at the foot, under
   one hairline, each a one-line header with its count and a chevron that folds
@@ -774,12 +783,14 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   spinner with "Loading…". A container of skeletons has `role="status"`
   and a label. Long waits on something that is not content (the engine
   starting) get a toast after 2s instead.
-- **Header:** `MainHeader`, 42px, `.rc-header-glass` floating over its
+- **Header:** `MainHeader`, the sidebar's 52px title row's height, so the two
+  are one line through the traffic lights, `.rc-header-glass` floating over its
   view (`absolute`, z 10): the view starts its content `HEADER_HEIGHT`
   down and scrolls under it, and the glass fades out over 24px below the
   header's edge, as the transcript fades above the composer. Every view
   that has a header uses this one (the chat, new or open); the Settings
-  panel brings its own.
+  panel brings its own. On Windows it keeps the window's own controls
+  (`ui/WindowControls.tsx`) their room at the window's right edge.
 - **Settings:** a floating panel over the app, not a page of it: a centred
   `max-w-[80rem] max-h-[60rem]` panel inside `p-1 sm:p-6 lg:p-10` (about a
   hundred px in from the sides at 1512×945, a small inset in a narrow
