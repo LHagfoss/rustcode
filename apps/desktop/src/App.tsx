@@ -172,7 +172,7 @@ export function App() {
           whatever view is open (ui/WindowControls.tsx). macOS's traffic lights and Linux's
           native title bar draw themselves.
         */}
-        <WindowControls className="absolute top-0 right-0 z-20" />
+        <WindowControls className="absolute top-0 right-0 z-40" />
         <div className="flex h-full w-full overflow-hidden bg-sidebar-glass" inert={settings}>
           <Sidebar />
           <div className="relative flex min-w-0 flex-1 bg-bg">

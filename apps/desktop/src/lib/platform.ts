@@ -48,6 +48,11 @@ export function applyPlatform(): Platform {
   return platform;
 }
 
+/** Whether the platform paints blur at all: Windows and Linux are solid, decorative blur included. */
+export function paintsBlur(platform: Platform = currentPlatform()): boolean {
+  return platform === "mac";
+}
+
 /** The system file browser name in actions. */
 export function fileManagerName(platform: Platform = currentPlatform()): string {
   return platform === "mac" ? "Finder" : platform === "windows" ? "Explorer" : "file manager";

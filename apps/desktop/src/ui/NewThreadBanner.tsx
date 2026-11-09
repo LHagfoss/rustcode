@@ -6,6 +6,7 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { asciiDrawing, blurScale, charWidth, type Drawing, LINE_HEIGHT, loadBanner } from "../lib/banner";
+import { paintsBlur } from "../lib/platform";
 import { observeSize } from "../lib/resize";
 import { cx } from "./primitives";
 
@@ -40,7 +41,8 @@ export function NewThreadBanner({
   name: string;
   style: "ascii" | "picture";
   height: number;
-  /** Blur radius in px; the picture grows a little so the soft edge falls outside the pane. */
+  /** Blur radius in px (macOS only: Windows and Linux paint none); the picture grows a little so
+   * the soft edge falls outside the pane. */
   blur?: number;
   className?: string;
 }) {
@@ -87,6 +89,9 @@ export function NewThreadBanner({
 
   const ready = style === "picture" ? !!image : !!art;
   const scale = art ? Math.max(width / art.width, height / art.height) : 1;
+  // Windows and Linux paint no blur, the glow included (docs/design.md › Platforms).
+  const blurred = paintsBlur();
+  const painted = blurred ? blur : 0;
 
   const layer = (glow: boolean) =>
     style === "picture" && image ? (
@@ -122,12 +127,12 @@ export function NewThreadBanner({
         className="absolute inset-0 transition-opacity duration-[250ms] ease-out"
         style={{
           opacity: ready ? 1 : 0,
-          ...(blur > 0
-            ? { filter: `blur(${blur}px)`, transform: `scale(${blurScale(blur, width, height)})` }
+          ...(painted > 0
+            ? { filter: `blur(${painted}px)`, transform: `scale(${blurScale(painted, width, height)})` }
             : undefined),
         }}
       >
-        {layer(true)}
+        {blurred && layer(true)}
         {layer(false)}
       </div>
     </div>

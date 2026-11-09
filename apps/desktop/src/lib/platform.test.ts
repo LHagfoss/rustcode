@@ -56,3 +56,9 @@ test("keeps Ctrl-wheel pinch zoom working on macOS", () => {
   expect(zoomGestureModifier?.({ metaKey: false, ctrlKey: true }, "windows")).toBe(true);
   expect(zoomGestureModifier?.({ metaKey: true, ctrlKey: false }, "windows")).toBe(false);
 });
+
+test("only macOS paints blur", () => {
+  expect(platform.paintsBlur("mac")).toBe(true);
+  expect(platform.paintsBlur("windows")).toBe(false);
+  expect(platform.paintsBlur("linux")).toBe(false);
+});

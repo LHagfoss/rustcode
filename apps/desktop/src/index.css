@@ -41,7 +41,7 @@
   --color-inherit: inherit;
   --color-bg: var(--rc-bg);
   --color-sidebar: var(--rc-sidebar);
-  /* The shell's own sidebar fill (`bg-sidebar-glass`): see-through where the window has a material. */
+  /* The shell's own sidebar fill (`bg-sidebar-glass`): opaque everywhere, like every surface. */
   --color-sidebar-glass: var(--rc-sidebar-bg);
   --color-surface: var(--rc-surface);
   --color-surface-2: var(--rc-surface-2);
@@ -1368,33 +1368,13 @@
   animation: rc-fade 400ms ease-out;
 }
 
-/* Drilling into a panel's page and back. */
-@keyframes rc-drill {
-  from {
-    opacity: 0;
-    transform: translateX(12px);
-  }
-}
-@keyframes rc-drill-back {
-  from {
-    opacity: 0;
-    transform: translateX(-12px);
-  }
-}
-.rc-drill {
-  animation: rc-drill 220ms var(--ease-snappy);
-}
-.rc-drill-back {
-  animation: rc-drill-back 220ms var(--ease-snappy);
-}
-
 /*
- * Reduce transparency: glass turns solid. The media query where the web
- * view has it, else the `reduce-transparency` class (lib/transparency.ts):
- * on for Settings › Appearance › Reduce transparency, the system's request
- * (macOS reads it through the shell), and a web view with no
- * `backdrop-filter` at all, where translucency without the blur leaves text
- * over text. Every platform takes this path alike (Platforms, below).
+ * Glass turns solid. The media query where the web view has it, else the
+ * `reduce-transparency` class (lib/transparency.ts): on for Settings ›
+ * Appearance › Reduce transparency, the system's request (macOS reads it
+ * through the shell), and a web view with no `backdrop-filter` at all, where
+ * translucency without the blur leaves text over text. Windows and Linux take
+ * the same solid tokens always: they paint no blur (Platforms, below).
  */
 @media (prefers-reduced-transparency: reduce) {
   :root {
@@ -1436,7 +1416,7 @@
     -webkit-backdrop-filter: none;
   }
 }
-:root.reduce-transparency {
+:root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"]) {
   --rc-sidebar-bg: var(--rc-sidebar);
   --rc-glass-bg: var(--rc-surface-2);
   --rc-glass-bg-strong: var(--rc-surface-2);
@@ -1447,12 +1427,12 @@
   --rc-composer-bg-focus: var(--rc-sidebar);
   --rc-composer-bg-over: var(--rc-sidebar);
 }
-:root.reduce-transparency .rc-composer:focus-within {
+:root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"]) .rc-composer:focus-within {
   background: var(--rc-composer-bg-focus);
 }
 /* No filter behind an opaque fill (see the query above): the surfaces keep their solid tokens and
    drop the layer the blur would cost. */
-:root.reduce-transparency
+:root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"])
   :is(
     .rc-glass,
     .rc-glass-faint,
@@ -1465,29 +1445,22 @@
     .elevated,
     .glass-filter
   ),
-:root.reduce-transparency .rc-header-glass::before {
+:root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"]) .rc-header-glass::before {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
-:root.reduce-transparency,
-:root.reduce-transparency .rc-header-glass.rc-frost::before {
+:root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"]),
+:root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"])
+  .rc-header-glass.rc-frost::before {
   --rc-glass-pane: var(--rc-bg);
 }
 
 /*
  * Platforms (docs/design.md › Platforms): `data-platform` on <html> (lib/platform.ts) fits the
  * macOS design to the other web views. Nothing here applies to `mac` or to a page without the
- * attribute, so the macOS look is the rules above alone. Glass is the same on every platform:
- * WebView2 (Chromium) and WebKitGTK draw the shared `backdrop-filter` themselves (literal, see
- * `glass-filter`: WebKit paints none from a custom property), and Reduce transparency (above) is
- * the solid fallback on all of them — which Linux also takes when WebKitGTK's compositing is off
- * (lib/transparency.ts, `webview_blur`).
- *
- * Windows 11 also shows Mica (the window's material, applied by the shell; `data-material` on
- * <html>, lib/material.ts) through the sidebar: its fill is 72% of the sidebar colour, which keeps
- * the labels' contrast whatever the wallpaper tints the material, and the pane beside it stays
- * opaque. Without the material (Windows 10) or under Reduce transparency it is the solid colour.
- * Linux has no window blur: Tauri cannot ask the compositor for one.
+ * attribute, so the macOS look is the rules above alone. Glass is macOS alone: Windows (WebView2)
+ * and Linux (WebKitGTK) paint no blur at all, in-app or behind the window, and take the solid
+ * tokens and the missing filter above (see the shared selector with `reduce-transparency`).
  *
  * Type: each OS's own UI face, since SF Pro is not there to find and the macOS names in the stack
  * fall through to whatever the font config aliases them to. There is no rounded face elsewhere, so
@@ -1507,20 +1480,12 @@
 :root:is([data-platform="windows"], [data-platform="linux"]) body {
   -webkit-font-smoothing: auto;
 }
-/* Mica after the type rules, so the more specific body rule comes last. */
-:root[data-platform="windows"][data-material="mica"]:not(.reduce-transparency) {
-  --rc-sidebar-bg: color-mix(in srgb, var(--rc-sidebar) 72%, transparent);
-}
-/* The body's pane colour would hide the material under the sidebar; the chat paints its own. */
-:root[data-platform="windows"][data-material="mica"]:not(.reduce-transparency) body {
-  background: transparent;
-}
 
 /*
  * Motion on Linux: WebKitGTK often composites in software, so a `filter` or a `scale` repaints
- * the text on every frame. The streaming reveal fades without its blur, and what opened by
- * scaling (popovers, toasts, What's New) fades and slides instead. Durations stay the design's;
- * reduced motion still turns all of it off (its rules are `!important` or collapse durations).
+ * the text on every frame. What opened by scaling (popovers, toasts, What's New) fades and slides
+ * instead. Durations stay the design's; reduced motion still turns all of it off (its rules are
+ * `!important` or collapse durations).
  */
 @keyframes rc-toast-in-flat {
   from {
@@ -1528,7 +1493,8 @@
     transform: translateY(-10px);
   }
 }
-:root[data-platform="linux"] .rc-reveal {
+/* Windows and Linux paint no blur, decorative ones included: the reveal fades without its 4px. */
+:root:is([data-platform="windows"], [data-platform="linux"]) .rc-reveal {
   animation-name: rc-fade;
   animation-duration: 180ms;
 }
