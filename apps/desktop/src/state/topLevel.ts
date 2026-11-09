@@ -71,6 +71,8 @@ export function topLevel(
   // A thread older releases started has only its parent's title: it is still
   // delegated, and still not a top-level thread.
   if (!parent && !thread.parent) return "shown";
+  // A relationship a later engine wrote is not one this app knows how to nest: it keeps a row.
+  if (thread.parent?.relationship === "other") return "shown";
   // A side chat is always asked beside its parent: writing in it does not make it a thread of its
   // own. A delegate or a fork the user writes in is theirs now.
   if (thread.pinned || (thread.messaged && thread.parent?.relationship !== "side_chat")) return "shown";

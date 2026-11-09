@@ -451,8 +451,9 @@ export function Transcript({
   const wait = useWaiting(thread.id);
   // What the threads below this one wait on: answered here, in the same cards their own chat shows.
   const childRequests = useChildRequests(thread.id);
-  const sessions = useApp((s) => s.sessions);
-  const branches = useMemo(() => branchesOf(sessions, thread.id), [sessions, thread.id]);
+  // The branches as a string, so a status change elsewhere in the list does not rebuild the rows.
+  const branchKey = useApp((s) => JSON.stringify(branchesOf(s.sessions, thread.id)));
+  const branches = useMemo<Branch[]>(() => JSON.parse(branchKey), [branchKey]);
   const started = useMemo(
     () =>
       startedLinks(

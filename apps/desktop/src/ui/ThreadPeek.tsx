@@ -8,6 +8,7 @@ import { ExternalLink, MessageSquareQuote } from "lucide-react";
 import { useCallback } from "react";
 import { modelName, relationshipOf } from "../acp/types";
 import { cancel, runPrompt, selectThread, setDraft, useApp } from "../state/store";
+import { PermissionMenu } from "./Composer";
 import { HarnessIcon } from "./HarnessIcon";
 import { Pill, Spinner } from "./primitives";
 import { Transcript } from "./Transcript";
@@ -46,7 +47,8 @@ function SideChatField({ id }: { id: string }) {
         }}
         className="selectable w-full resize-none rounded-lg bg-fill-subtle px-3 py-2 text-body outline-none placeholder:text-fg-faint"
       />
-      <div className="mt-1 flex items-center justify-end gap-2">
+      <div className="mt-1 flex items-center justify-between gap-2">
+        <PermissionMenu threadId={id} compact />
         {running ? (
           <Pill onClick={() => void cancel(id)}>Stop</Pill>
         ) : (

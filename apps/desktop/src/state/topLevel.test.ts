@@ -21,6 +21,21 @@ const child = (over: Partial<DelegatedThread> = {}): DelegatedThread => ({
 /** Every thread the app knows, not the filtered list. */
 const known = (...ids: string[]) => new Set(ids);
 
+describe("a fork's and a side chat's place", () => {
+  test("a relationship this app does not know keeps a row of its own", () => {
+    const other = child({ parent: { id: "parent", relationship: "other" } });
+    expect(topLevel(other, [], known("parent", "child"))).toBe("shown");
+  });
+
+  test("a side chat stays nested when written in; a fork and a delegate become the user's", () => {
+    const at = (relationship: "side_chat" | "fork" | "delegate") =>
+      child({ messaged: true, parent: { id: "parent", relationship } });
+    expect(topLevel(at("side_chat"), [], known("parent", "child"))).toBe("nested");
+    expect(topLevel(at("fork"), [], known("parent", "child"))).toBe("shown");
+    expect(topLevel(at("delegate"), [], known("parent", "child"))).toBe("shown");
+  });
+});
+
 describe("a delegated thread's place", () => {
   test("a known parent keeps it nested, with no row of its own", () => {
     expect(topLevel(child(), [], known("parent", "child"))).toBe("nested");

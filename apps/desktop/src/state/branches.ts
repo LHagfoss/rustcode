@@ -74,3 +74,52 @@ export function branchLine(branch: Pick<Branch, "kind" | "title">): { label: str
 export function originLine(origin: Pick<Origin, "kind" | "title">): { label: string; title: string } {
   return { label: origin.kind === "fork" ? "Forked from" : "Side chat on", title: origin.title };
 }
+
+/** One fork or side chat drawn under a row, and how far in. */
+export interface BranchRow {
+  session: SessionSummary;
+  /** 1 for a branch of the row itself; a branch of a branch is one deeper. */
+  depth: number;
+}
+
+/** The deepest a branch of a branch is indented; anything below shares the last level. */
+const MAX_BRANCH_DEPTH = 4;
+
+/**
+ * The forks and side chats to draw under the row of `rootId`: every branch below it, however it is
+ * reached — a fork of a fork, a side chat of a side chat, or one opened from a delegate the list
+ * does not draw (its row is the root's). `childrenOf` is the nested children of a thread; `skip`
+ * holds the rows drawn another way (the open chain). Past `max` the newest stay (ids sort by age)
+ * and `more` counts the rest. A loop in the records is cut by the seen set.
+ */
+export function branchRows(
+  rootId: string,
+  childrenOf: (id: string) => readonly SessionSummary[],
+  skip: ReadonlySet<string>,
+  max: number,
+): { rows: BranchRow[]; more: number } {
+  const all: BranchRow[] = [];
+  const seen = new Set<string>([rootId]);
+  const walk = (id: string, depth: number) => {
+    for (const child of childrenOf(id)) {
+      if (seen.has(child.id)) continue;
+      seen.add(child.id);
+      if (isBranch(child) && !skip.has(child.id)) {
+        all.push({ session: child, depth });
+        walk(child.id, Math.min(depth + 1, MAX_BRANCH_DEPTH));
+      } else {
+        // A delegate (or the open row) has no row here: what hangs below it is drawn at this level.
+        walk(child.id, depth);
+      }
+    }
+  };
+  walk(rootId, 1);
+  if (all.length <= max) return { rows: all, more: 0 };
+  const newest = new Set(
+    all
+      .map((row) => row.session.id)
+      .sort((a, b) => b.localeCompare(a))
+      .slice(0, max),
+  );
+  return { rows: all.filter((row) => newest.has(row.session.id)), more: all.length - max };
+}

@@ -277,6 +277,9 @@ function ReplyForkButton({ threadId }: { threadId: string }) {
 
 /** "Ask in a side chat" on a finished turn: a thread beside this one, seeded with the reply. */
 function ReplySideChatButton({ threadId, reply }: { threadId: string; reply: string }) {
+  // Only an engine that records the relationship can open one (`AgentInfo.lineage`).
+  const supported = useApp((s) => !!s.agent?.lineage);
+  if (!supported) return null;
   return (
     <Tooltip label="Ask in a side chat: a thread beside this one, with this reply quoted">
       <button

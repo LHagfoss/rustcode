@@ -2511,6 +2511,7 @@ export class MockEngine {
                 sessionMove: 1,
                 sessionRepair: 1,
                 checkpoints: 2,
+                lineage: 1,
               },
             },
           },

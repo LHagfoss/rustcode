@@ -39,8 +39,9 @@ pub(crate) struct Report {
 
 /// The parent `session/new` named in `_meta.rustcode.parent`, when it is a
 /// usable session id, and how the new thread relates to it
-/// (`_meta.rustcode.relationship`; a delegate when absent or unknown, which is
-/// what every caller before the field was).
+/// (`_meta.rustcode.relationship`). Absent is a delegate, which is what every
+/// caller before the field was; a name this release does not know is `Other`,
+/// kept as a child but never given a delegate's powers.
 pub(crate) fn requested(
     meta: Option<&serde_json::Map<String, Value>>,
 ) -> Option<(String, SessionRelationship)> {
@@ -50,11 +51,10 @@ pub(crate) fn requested(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|id| rustcode_session::valid_session_id(id))?;
-    let relationship = rustcode
-        .get("relationship")
-        .and_then(Value::as_str)
-        .and_then(SessionRelationship::parse)
-        .unwrap_or(SessionRelationship::Delegate);
+    let relationship = match rustcode.get("relationship").and_then(Value::as_str) {
+        None => SessionRelationship::Delegate,
+        Some(name) => SessionRelationship::parse(name).unwrap_or(SessionRelationship::Other),
+    };
     Some((id.to_owned(), relationship))
 }
 
@@ -227,7 +227,7 @@ mod tests {
     }
 
     #[test]
-    fn the_relationship_named_by_session_new_is_read_and_defaults_to_a_delegate() {
+    fn the_relationship_named_by_session_new_is_read_and_an_unknown_one_is_never_a_delegate() {
         let id = "018d6b28-0000-7000-8000-000000000002";
         let relationship = |name: Value| {
             let meta = serde_json::Map::from_iter([(
@@ -241,9 +241,15 @@ mod tests {
             relationship(json!("side_chat")),
             Some(SessionRelationship::SideChat)
         );
-        // A name this release does not know is a delegate, as before the field.
+        // A name this release does not know is never a delegate.
         assert_eq!(
             relationship(json!("mirror")),
+            Some(SessionRelationship::Other)
+        );
+        // No relationship at all is what every caller before the field sent.
+        let meta = serde_json::Map::from_iter([("rustcode".to_owned(), json!({ "parent": id }))]);
+        assert_eq!(
+            requested(Some(&meta)).map(|(_, relationship)| relationship),
             Some(SessionRelationship::Delegate)
         );
     }

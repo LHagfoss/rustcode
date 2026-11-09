@@ -3842,6 +3842,28 @@ describe("forks and side chats", () => {
     expect(topLevel(fork, [], listed)).toBe("shown");
   });
 
+  test("a side chat is never broader than the thread it was asked from", async () => {
+    const parent = await ready();
+    useApp.setState({ defaultPermissionMode: "full" });
+    setPermissionMode(parent, "ask");
+    const narrow = (await openSideChat(parent, "A reply"))!;
+    expect(permissionModeOf(useApp.getState(), narrow)).toBe("ask");
+    // A parent on Full access with the default on Auto-edit: the default stands.
+    useApp.setState({ defaultPermissionMode: "edits" });
+    setPermissionMode(parent, "full");
+    const same = (await openSideChat(parent, "Another"))!;
+    expect(permissionModeOf(useApp.getState(), same)).toBe("edits");
+  });
+
+  test("an engine that does not record the relationship opens no side chat", async () => {
+    const parent = await ready();
+    const before = useApp.getState().sessions.length;
+    useApp.setState((s) => ({ peekId: null, agent: s.agent && { ...s.agent, lineage: false } }));
+    expect(await openSideChat(parent, "A reply")).toBeUndefined();
+    expect(useApp.getState().sessions).toHaveLength(before);
+    expect(useApp.getState().peekId).toBeNull();
+  });
+
   test("a side chat of nothing is not opened", async () => {
     await ready();
     expect(await openSideChat("no-such-thread", "text")).toBeUndefined();

@@ -100,6 +100,11 @@ export interface AgentInfo {
    * checkpoint, so the attempt it leaves can be returned to.
    */
   checkpointAttempts: boolean;
+  /**
+   * `session/new` records `_meta.rustcode.relationship` and `session/list` returns it. An older
+   * engine ignores the key and would list a side chat as a delegate, so none is opened there.
+   */
+  lineage: boolean;
 }
 
 export function parseAgentInfo(result: Json): AgentInfo {
@@ -129,6 +134,7 @@ export function parseAgentInfo(result: Json): AgentInfo {
     sessionMove: num(meta?.sessionMove) !== undefined,
     sessionRepair: num(meta?.sessionRepair) !== undefined,
     checkpointAttempts: (num(meta?.checkpoints) ?? 0) >= 2,
+    lineage: num(meta?.lineage) !== undefined,
   };
 }
 

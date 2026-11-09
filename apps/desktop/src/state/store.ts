@@ -169,7 +169,7 @@ import {
   MIN_DELEGATES_TOTAL,
 } from "./orchestration";
 import { clearPageCache } from "./pageCache";
-import { autoAnswer, type PermissionMode, parsePermissionMode } from "./permissions";
+import { autoAnswer, effectiveMode, type PermissionMode, parsePermissionMode } from "./permissions";
 import { NO_PAUSES, type PlanPauses, type PlansAsk, pausesAfter, plansAskFor, queueAsks } from "./plans";
 import {
   nextQueued,
@@ -2611,6 +2611,11 @@ export function quoteMessage(text: string): string {
 export async function openSideChat(parentId: string, message: string): Promise<string | undefined> {
   const parent = get().threads[parentId];
   if (!parent || !message.trim()) return undefined;
+  // An engine that predates the relationship ignores it and would list the side chat as a delegate.
+  if (!get().agent?.lineage) {
+    toast("Side chats need a newer RustCode engine. Update RustCode and restart.", "error");
+    return undefined;
+  }
   const choice = (configId: string) => parent.configOptions.find((o) => o.id === configId)?.current;
   const title = sessionById(get(), parentId)?.title || parent.title;
   try {
@@ -2625,6 +2630,8 @@ export async function openSideChat(parentId: string, message: string): Promise<s
       relationship: "side_chat",
       title: title ? `Side chat: ${title}` : "Side chat",
     });
+    // Never broader than the thread it was asked from, as for a delegate (state/permissions.ts).
+    setPermissionMode(id, effectiveMode(permissionModeOf(get(), parentId), get().defaultPermissionMode));
     setDraft(id, quoteMessage(message));
     peekThread(id);
     return id;

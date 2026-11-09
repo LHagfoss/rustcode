@@ -134,6 +134,9 @@ fn server_capabilities() -> AgentCapabilities {
                 "worktrees": 1,
                 "checkpoints": 2,
                 "threadStatus": 1,
+                // `_meta.rustcode.relationship` on `session/new`, and the same in
+                // `session/list`: a client that opens forks and side chats checks it.
+                "lineage": 1,
             }),
         )]))
 }

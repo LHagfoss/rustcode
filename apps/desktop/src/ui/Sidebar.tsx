@@ -71,7 +71,7 @@ import { formatBinding, listCommandFor } from "../lib/keys";
 import { openTerminalAt, openThreadLog, pickFolder, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { liveSubagents, type StackAgent } from "../state/agentStack";
-import { branchKindOf, isBranch } from "../state/branches";
+import { type BranchRow, branchKindOf, branchRows } from "../state/branches";
 import { type ChildInfo, childInfo } from "../state/children";
 import {
   cachedPulls,
@@ -1142,6 +1142,41 @@ function OpenChild({ row, deeper }: { row: React.ReactNode | null; deeper: React
 /** The most forks and side chats drawn under one thread's row. */
 const MAX_BRANCH_ROWS = 6;
 
+/** The forks and side chats under a row, each indented by how deep it is, then "+N more". */
+function BranchRows({
+  under,
+  render,
+  onMore,
+}: {
+  under: { rows: BranchRow[]; more: number };
+  render: (session: SessionSummary) => React.ReactNode;
+  onMore: () => void;
+}) {
+  return (
+    <>
+      {under.rows.map(({ session, depth }) => (
+        <div key={session.id} className="relative" style={{ paddingLeft: depth * 16 }}>
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-y-1 w-px bg-border"
+            style={{ left: (depth - 1) * 16 + 6 }}
+          />
+          {render(session)}
+        </div>
+      ))}
+      {under.more > 0 && (
+        <button
+          type="button"
+          onClick={onMore}
+          className="ml-4 rounded-sm px-2 py-1 text-left text-caption text-fg-muted hover:text-fg"
+        >
+          +{under.more} more
+        </button>
+      )}
+    </>
+  );
+}
+
 type HiddenKind = "needs" | "working" | "finished";
 
 /** The dot a folded group shows for what it hides. */
@@ -1602,15 +1637,21 @@ export function Sidebar() {
     return map;
   }, [filtered, parentOf]);
 
-  // The forks and side chats opened from a thread, drawn as indented rows under it so they can be
-  // found again (a delegate is not: it is the agent's, and shows as its parent's stack). The open
-  // one is drawn by the chain, and the list is capped so a thread forked many times stays a few rows.
-  const branchKids = useCallback(
-    (parentId: string, chainChild?: string): SessionSummary[] =>
-      (childrenByParent[parentId] ?? [])
-        .filter((c) => isBranch(c) && c.id !== chainChild)
-        .slice(0, MAX_BRANCH_ROWS),
-    [childrenByParent],
+  // The forks and side chats below a row, drawn as indented rows so they can be found again (a
+  // delegate is not drawn: it is the agent's, and shows as its parent's stack). Branches of
+  // branches and of delegates come too, and the open one is drawn by the chain. Capped to the
+  // newest few, with a "+N more" row that opens the rest.
+  const [allBranches, setAllBranches] = useState<ReadonlySet<string>>(new Set());
+  const chainIds = useMemo(() => new Set(chain.map((c) => c.id)), [chain]);
+  const branchesUnder = useCallback(
+    (rootId: string) =>
+      branchRows(
+        rootId,
+        (id) => childrenByParent[id] ?? [],
+        chainIds,
+        allBranches.has(rootId) ? Number.POSITIVE_INFINITY : MAX_BRANCH_ROWS,
+      ),
+    [childrenByParent, chainIds, allBranches],
   );
 
   // The projects whose branches a pull request could name: a thread in a worktree has one to look
@@ -1877,7 +1918,7 @@ export function Sidebar() {
         const sub = subOf.get(s.id);
         const child = sub && depth < 8 ? byId.get(sub.id) : undefined;
         if (child) add(child, depth + 1);
-        if (depth === 0) for (const kid of branchKids(s.id, sub?.id)) rows.push({ id: kid.id });
+        if (depth === 0) for (const kid of branchesUnder(s.id).rows) rows.push({ id: kid.session.id });
       };
       for (const s of items) add(s, 0);
       return rows;
@@ -1899,7 +1940,7 @@ export function Sidebar() {
             limit: section.id === "settled" && !query.trim() ? settledLimit : undefined,
           },
     );
-  }, [branchKids, byId, folded, query, sections, settledLimit, subOf]);
+  }, [branchesUnder, byId, folded, query, sections, settledLimit, subOf]);
   const orderIds = useMemo(() => visibleRows(order), [order]);
 
   // The row the keyboard is on: where it was left, else the open thread, else the first row. A
@@ -2143,12 +2184,11 @@ export function Sidebar() {
             rowFor(s, grouped)
           )}
           {openBelow(s.id, grouped)}
-          {branchKids(s.id, subOf.get(s.id)?.id).map((kid) => (
-            <div key={kid.id} className="relative pl-4">
-              <span aria-hidden className="pointer-events-none absolute inset-y-1 left-1.5 w-px bg-border" />
-              {rowFor(kid, grouped, false)}
-            </div>
-          ))}
+          <BranchRows
+            under={branchesUnder(s.id)}
+            render={(kid) => rowFor(kid, grouped, false)}
+            onMore={() => setAllBranches((prev) => new Set(prev).add(s.id))}
+          />
         </Fragment>
       ))}
     </div>
