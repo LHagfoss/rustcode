@@ -236,12 +236,11 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   `account_login_command`), so the app holds no per-harness copy of them.
   *Found on this Mac* lists the logins the engine found for that harness
   (`~/.claude`, `~/.claude-personal`; `~/.codex`, `~/.codex-paral`), each added
-  by its own path. RustCode never reads or copies those tokens. Every harness's sticky header in the
-  model picker shows its named accounts as chips, so all of them are visible
-  without the thread already running on that harness: a chip starts a new
-  thread on it, moves an idle thread with the conversation so far as a
-  summary, and a running thread shows the chips disabled with *Stop the turn
-  to switch account*. A thread from before accounts shows its own login as
+  by its own path. RustCode never reads or copies those tokens. The effort pill
+  beside the model pill lists the harness's named accounts while it has more
+  than one: a row starts a new thread on it, moves an idle thread with the
+  conversation so far as a summary, and a running thread shows the rows
+  disabled with *Stop the turn to switch*. A thread from before accounts shows its own login as
   *Original login*. The composer's model pill names the account whenever the
   harness has any. The composer's plan meter shows one meter per account: a
   thread's meter never shows another login's numbers, for Claude Code or
@@ -570,10 +569,10 @@ composer's keys stay outside the table.
   answer above it stays the last answer and one row under it says
   *Compacted automatically*, and the context inspector compares the context
   before and after it.
-- **Model picker.** After `ModelEffortPanel`: *Fast mode* (when the thread's
-  model has the `fast` option) and the model with its effort on one line;
-  the model's name drills into the list. Effort is a slider with a dot per
-  level: drag (snaps on release), click, or ←→/Home/End. Each model keeps the
+- **Model picker.** The model pill opens a narrow card (a harness icon rail
+  and a searchable model list); the effort pill beside it opens a menu with
+  the model's levels, *Reset to default*, *Fast mode* (when the thread's
+  model has the `fast` option) and the harness's logins. Each model keeps the
   effort it was last left on (one record per harness, which its logins share),
   so picking the model again returns to that level; a level the model no longer
   offers falls back to its default. The harness row shows only when more than

@@ -1,17 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { BUILTIN_CAPABILITIES, type ConfigOption, type Harness } from "../acp/types";
 import {
-  chosenLevel,
   clampEffort,
-  dockedEffort,
   filterModelRows,
   modelThreadWrites,
-  modelThreadWritesAt,
   movePickerIndex,
   orderEfforts,
+  panelHeight,
   pickerModels,
   pillLabel,
   shownAccounts,
+  traitsLabel,
   writeModelPick,
 } from "./ModelPicker";
 
@@ -165,24 +164,6 @@ describe("a model picked in a thread", () => {
     ]);
   });
 
-  test("a level moved in the dock is written with the model it belongs to", () => {
-    // The docked slider belongs to the highlighted row, so its level lands with that model.
-    expect(modelThreadWritesAt(astra, "gpt-6-astra", "max", "medium", null, true)).toEqual([
-      { configId: "model", value: "gpt-6-astra" },
-      { configId: "effort", value: "max" },
-    ]);
-    // A level the model does not list falls back to the level it keeps.
-    expect(modelThreadWritesAt(astra, "gpt-6-astra", "low", "medium", null, true)).toEqual([
-      { configId: "model", value: "gpt-6-astra" },
-      { configId: "effort", value: "high" },
-    ]);
-  });
-
-  test("the chosen level keeps a listed one and clamps the rest", () => {
-    expect(chosenLevel(astra, "max", ["off", "high", "max"], "high", null)).toBe("max");
-    expect(chosenLevel(astra, "minimal", ["off", "high", "max"], "high", null)).toBe("high");
-  });
-
   test("the level is written after the model, so memory files it under the model now run", async () => {
     const writes = modelThreadWrites(astra, "gpt-6-astra", "medium", null, false);
     const seen: string[] = [];
@@ -197,76 +178,50 @@ describe("a model picked in a thread", () => {
   });
 });
 
-describe("the docked effort column", () => {
-  const [luna, astra] = twoModels().models;
+describe("the effort pill", () => {
+  const chip = (name: string, selected: boolean) => ({ id: name, name, selected });
 
-  test("a highlighted model brings its own levels and the level it keeps", () => {
-    const docked = dockedEffort({
-      entry: astra,
-      levels: [],
-      effort: "medium",
-      defaultLevel: "medium",
-      current: false,
-      sameHarness: false,
-    });
-    expect(docked.levels).toEqual(["off", "high", "max"]);
-    expect(docked.effort).toBe("high");
-    expect(docked.defaultLevel).toBe("high");
+  test("names the level the model runs at", () => {
+    expect(traitsLabel({ levels: ["low", "high"], effort: "high", accounts: [], fast: false })).toBe("High");
   });
 
-  test("the level it was last left on wins on a highlighted model", () => {
-    const docked = dockedEffort({
-      entry: astra,
-      levels: [],
-      effort: "medium",
-      defaultLevel: "medium",
-      current: false,
-      sameHarness: false,
-      remembered: "max",
-    });
-    expect(docked.effort).toBe("max");
+  test("a harness that sets its own effort names the login instead", () => {
+    const accounts = [chip("Paral", false), chip("Work", true)];
+    expect(
+      traitsLabel({
+        levels: ["low", "high"],
+        effort: "high",
+        effortReason: "Codex sets it",
+        accounts,
+        fast: false,
+      }),
+    ).toBe("Work");
   });
 
-  test("inside one harness the level the thread runs stays while the model lists it", () => {
-    const docked = dockedEffort({
-      entry: astra,
-      levels: [],
-      effort: "high",
-      defaultLevel: "medium",
-      current: false,
-      sameHarness: true,
-    });
-    expect(docked.effort).toBe("high");
+  test("a model with no levels keeps the pill for its logins or Fast mode", () => {
+    expect(
+      traitsLabel({ levels: [], effort: null, accounts: [chip("A", false), chip("B", false)], fast: false }),
+    ).toBe("Account");
+    expect(traitsLabel({ levels: [], effort: null, accounts: [], fast: true })).toBe("Fast mode");
   });
 
-  test("the model the thread runs keeps the picker's own levels and effort", () => {
-    // The thread's config options can list levels the snapshot does not, so the picker's own
-    // list and effort are the ones shown, not the harness entry's.
-    const docked = dockedEffort({
-      entry: luna,
-      levels: ["off", "low", "medium", "high"],
-      effort: "off",
-      defaultLevel: "medium",
-      current: true,
-      sameHarness: true,
-    });
-    expect(docked.levels).toEqual(["off", "low", "medium", "high"]);
-    expect(docked.effort).toBe("off");
-    expect(docked.defaultLevel).toBe("medium");
+  test("with nothing to choose there is no pill", () => {
+    expect(traitsLabel({ levels: [], effort: null, accounts: [], fast: false })).toBeNull();
+    expect(traitsLabel({ levels: ["low"], effort: null, accounts: [], fast: false })).toBeNull();
+  });
+});
+
+describe("the card's height", () => {
+  test("follows the longest harness's list, so moving along the rail does not resize it", () => {
+    const groups = [{ models: [1, 2] }, { models: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] }];
+    expect(panelHeight(groups)).toBe(panelHeight([{ models: groups[1]!.models }, { models: [] }]));
+    expect(panelHeight(groups)).toBeGreaterThan(panelHeight([{ models: [1, 2] }, { models: [] }]));
   });
 
-  test("a highlighted model with no levels offers no slider", () => {
-    const docked = dockedEffort({
-      entry: undefined,
-      levels: ["low", "high"],
-      effort: "low",
-      defaultLevel: "low",
-      current: false,
-      sameHarness: false,
-    });
-    expect(docked.levels).toEqual([]);
-    expect(docked.effort).toBeNull();
-    expect(docked.defaultLevel).toBeNull();
+  test("a harness with no models still leaves room for a line, and the rail is never cut", () => {
+    expect(panelHeight([{ models: [] }])).toBeGreaterThan(0);
+    const rail = Array.from({ length: 12 }, () => ({ models: [] }));
+    expect(panelHeight(rail)).toBeGreaterThan(panelHeight([{ models: [] }]));
   });
 });
 
@@ -353,7 +308,8 @@ describe("model picker navigation", () => {
   test("clamps keyboard movement and displays the catalog label", () => {
     expect(movePickerIndex(0, -1, 3)).toBe(0);
     expect(movePickerIndex(2, 1, 3)).toBe(2);
-    expect(pillLabel("Sonnet 5.5", "medium")).toEqual({ name: "Sonnet 5.5", effort: "medium" });
-    expect(pillLabel(null, null).name).toBe("Default model");
+    expect(pillLabel("Sonnet 5.5")).toBe("Sonnet 5.5");
+    expect(pillLabel(null)).toBe("Default model");
+    expect(pillLabel("claude-sonnet-5-5-long", true)).toBe("claude-sonnet…");
   });
 });

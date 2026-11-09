@@ -150,7 +150,6 @@ own fill marks the range or the state the control is off in (`bg-fill`, or
 `accent` for a switch that is on); the accent never fills the knob. Left out of
 this: pressed icon buttons (`bg-fill-strong`), primary actions (`bg-fg
 text-bg`) and native checkboxes, whose check is the mark rather than a knob.
-The model picker's effort slider takes the same knob.
 
 Every knob is 24 px. A switch's is the slider's, on a 40×20 px track: centred
 vertically so it overhangs the track by 2 px top and bottom, travelling 0 →
@@ -872,24 +871,24 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   on the send circle's own diameter, so the row's two ends read as one pair)
   at its start, then the working agents, the model and send/queue/stop
   at its end, with no divider above it — the air between the field and the row,
-  and the row's own `pt-1`, separate them. The model reads as its own name and
-  effort, plain on the card, `bg-fill-strong` only while its popover is open;
-  the **+** rests on `bg-fill-subtle` (`bg-fill` on hover). The popover opens
-  on the searchable list of every harness's models: the harness column on the
-  left, the models in the middle with the current one checked, and a docked
-  column on the right for the row the list highlights — its name with Fast mode
-  and the reset on one header row, a 20px pill track with one dot per level
-  that model itself lists, the part up to a 24px round thumb filled in the
-  accent (a press or a drag lands on the nearest dot, ←/→ step one, a hover
-  names it), and the harness's logins straight under it while it has more than
-  one to choose. The thumb is `bg-knob` with `shadow-knob` (white in every
-  theme), because a theme may draw dark `accent-text` on a light accent; the
-  dots it has passed keep that contrast colour. The card is as tall as what it
-  holds, up to the room the window has under the pill, and only the model list
-  scrolls; a narrow card stacks the docked column under the list. The search
-  has focus on open, ↑/↓ move the highlight so the dock follows it, ⏎ picks the
-  model, → moves to the slider and ← back to the search, and picking a model
-  takes that model's own level without closing the card.
+  and the row's own `pt-1`, separate them. The model reads as its harness's
+  icon and its name, plain on the card, `bg-fill-strong` only while its popover
+  is open; beside it a second, quieter pill names the effort (or, for a harness
+  that sets its own, the login it runs on) and opens a small menu: the model's
+  levels from lowest to highest with its default marked and the current one
+  checked, *Reset to default*, Fast mode as a switch when the model has it, and
+  the harness's logins while it has more than one. The **+** rests on
+  `bg-fill-subtle` (`bg-fill` on hover). The model popover is 360px wide: a
+  rail of harness icons on the left (a tooltip names each, the browsed one is
+  filled with a 2px accent mark on its edge, an unavailable one is dimmed and its
+  tooltip says why), and beside it a search over that harness's models with the
+  current one checked; typing searches every harness, each row then led by its
+  harness's icon. The card is as tall as the longest harness's list (so moving
+  along the rail never resizes it), up to the room the window has under the
+  pill, and only the list scrolls. The search has focus on open, ↑/↓ move the
+  highlight (the current model until the user moves), ⏎ picks the model and
+  closes the card, ← at the start of the search moves to the rail, where ↑/↓
+  move between harnesses and → returns to the search.
 - **New thread screen:** a centred heading and a rotating tip above the field and its strip, with optional cards below.
   The project name in the heading opens the folder picker; there is no path line or starter prompts.
   Neither the heading nor the tip sits in a pill: over a chosen picture both take

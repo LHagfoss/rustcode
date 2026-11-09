@@ -53,9 +53,11 @@ const PILL_ALLOWED: [file: string, part: string, why: string][] = [
   ["ui/Review.tsx", "aria-current={selected === path", "a file row in the review pane"],
   ["ui/TurnChanges.tsx", "bg-fill-subtle", "the changes pill is a popover trigger"],
   ["ui/TurnTrace.tsx", "bg-fill-subtle", "the trace pill is a popover trigger"],
-  ["ui/ModelPicker.tsx", 'role="switch"', "the fast-mode switch"],
-  ["ui/ModelPicker.tsx", "Model and effort", "the model pill is a trigger, and not in this pass"],
-  ["ui/ModelPicker.tsx", "aria-pressed={chip.selected}", "an account chip, whose fill is its state"],
+  [
+    "ui/ModelPicker.tsx",
+    "aria-pressed={selected}",
+    "a harness in the model card's rail; its fill marks the one browsed",
+  ],
   ["ui/Settings.tsx", 'role="option"', "a settings result row"],
   ["ui/ShortcutSettings.tsx", "recording ?", "the keycap button; its fill marks recording"],
   [
