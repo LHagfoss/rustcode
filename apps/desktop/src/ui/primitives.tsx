@@ -470,9 +470,8 @@ export function Kbd({ children }: { children: ReactNode }) {
 }
 
 /**
- * A switch: the effort slider's knob on a short track (docs/design.md › Active controls). The
- * knob overhangs the track's top and bottom, so the button's own box stays the track's 20 px and
- * the row it sits in does not grow.
+ * A switch: a pill knob as tall as its track (docs/design.md › Active controls), so the
+ * button's own box is the track's 20 px and the row it sits in does not grow.
  */
 export function Switch({
   checked,
@@ -494,13 +493,13 @@ export function Switch({
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cx(
-        "relative inline-flex h-4 w-11 shrink-0 items-center rounded-full transition-[background-color] duration-200 ease-snappy disabled:opacity-40",
+        "relative inline-flex h-5 w-11 shrink-0 items-center rounded-full transition-[background-color] duration-200 ease-snappy disabled:opacity-40",
         checked ? "bg-accent" : "bg-fill-strong",
       )}
     >
       <span
         className={cx(
-          "absolute top-1/2 left-0 h-5 w-7 -translate-y-1/2 rounded-full bg-knob shadow-knob transition-transform duration-200 ease-snappy",
+          "absolute inset-y-0 left-0 w-7 rounded-full bg-knob shadow-knob transition-transform duration-200 ease-snappy",
           checked ? "translate-x-4" : "translate-x-0",
         )}
       />
