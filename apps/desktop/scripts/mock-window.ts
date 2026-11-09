@@ -1,12 +1,14 @@
-// `bun run mock-window <open [path] | eval "<js>" | click "<css>" [--at <x>,<y>] |
+// `bun run mock-window <open [path] [--show] | eval "<js>" | click "<css>" [--at <x>,<y>] |
 //   dblclick "<css>" [--at <x>,<y>] | hover "<css>" [--at <x>,<y>] [--wait <ms>] |
 //   drag "<from css>" "<to css>" [--from <x>,<y>] [--to <x>,<y>] [--steps <n>] |
 //   scroll "<css>" <dy> | move <x>,<y> |
 //   type "<text>" | press <key> [--shift] [--ctrl] [--alt] [--meta] |
 //   screenshot <file.png> | close>`:
-// one shared, visible Chrome window on the mock dev server at native scale, so UI
-// checks look like the app and agents do not each launch their own browser.
-// `open` leaves the server and window running detached; `close` stops only those
+// one shared headless Chrome on the mock dev server at native scale, so UI checks
+// look like the app, agents do not each launch their own browser, and no window
+// ever steals the user's focus. `open --show` opens a visible window instead, for
+// a person who wants to watch; an already open window is reused in whichever mode
+// it started. `open` leaves the server and window running detached; `close` stops only those
 // two. `scripts/perf.ts` stays headless: it measures performance, not appearance.
 // `MOCK_WINDOW_CDP_PORT` and `MOCK_WINDOW_PROFILE` move this helper to another
 // port and profile, for testing the helper itself; UI checks share the one window.
@@ -50,7 +52,7 @@ const HOVER_WAIT = 700;
 const DRAG_STEPS = 12;
 
 const USAGE =
-  'Usage: bun run mock-window <open [path] | eval "<js>" | click "<css>" [--at <x>,<y>] | ' +
+  'Usage: bun run mock-window <open [path] [--show] | eval "<js>" | click "<css>" [--at <x>,<y>] | ' +
   'dblclick "<css>" [--at <x>,<y>] | hover "<css>" [--at <x>,<y>] [--wait <ms>] | ' +
   'drag "<from css>" "<to css>" [--from <x>,<y>] [--to <x>,<y>] [--steps <n>] | ' +
   'scroll "<css>" <dy> | move <x>,<y> | type "<text>" | ' +
@@ -200,7 +202,7 @@ async function ensureServer() {
 }
 
 /** Reuses the window on 9223 if it is up, so there is only ever one. */
-async function ensureChrome() {
+async function ensureChrome(show: boolean) {
   if (await answers(`${cdp}/json/version`)) {
     if (ourChrome(listener())) return;
     throw new Error(
@@ -215,6 +217,8 @@ async function ensureChrome() {
     `--remote-debugging-port=${CDP_PORT}`,
     `--user-data-dir=${profile}`,
     "--window-size=1512,945",
+    // Headless has no display to take a scale from; pin the retina one a visible window gets.
+    ...(show ? [] : ["--headless=new", "--force-device-scale-factor=2", "--hide-scrollbars"]),
     "about:blank",
   ];
   detach([chromePath, ...flags]);
@@ -661,15 +665,16 @@ async function press(name: string, modifiers: number) {
 async function main() {
   const [command, ...rest] = process.argv.slice(2);
   if (command === "open") {
+    const { words, flags } = parseArgs(rest);
     const base = await ensureServer();
-    await ensureChrome();
-    const url = new URL(rest[0] ?? "", base).href;
+    await ensureChrome(flags.has("--show"));
+    const url = new URL(words, base).href;
     await withPage(
       base,
       async (send) => {
         await send("Page.enable");
         await send("Page.navigate", { url });
-        await send("Page.bringToFront");
+        if (flags.has("--show")) await send("Page.bringToFront");
         // Let the app paint, but never block on it.
         await waitFor(async () => {
           const state = await send("Runtime.evaluate", { expression: "document.readyState" }).catch(

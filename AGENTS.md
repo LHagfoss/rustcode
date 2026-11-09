@@ -136,9 +136,12 @@ instructions for work in this repository.
 
 - Look at UI changes in the mock: it needs no engine and no model turns. Run
   `bun run mock-window open` in `apps/desktop`: it starts the mock dev server
-  (`VITE_TRANSPORT=mock`) and one visible Chrome window at 1512×945 and native
-  scale, and reuses both on the next call, so there is one shared window rather
-  than one browser per agent. Then `bun run mock-window eval "<js>"` evaluates
+  (`VITE_TRANSPORT=mock`) and one headless Chrome at 1512×945 and native scale
+  (2x), and reuses both on the next call, so there is one shared browser rather
+  than one per agent. It is headless on purpose: a visible window steals the
+  user's focus on every launch, so agents never pass `open --show` (that is for
+  a person who wants to watch). An already open window is reused in whichever
+  mode it started. Then `bun run mock-window eval "<js>"` evaluates
   in the page, `bun run mock-window screenshot <file.png>` saves a PNG of it,
   and `bun run mock-window close` stops only that window and server. For
   anything a user does, prefer `click "<css>"` (with `--at <x>,<y>` for a
