@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import type { SessionSummary } from "../acp/types";
 import { PREF, readPref, writePref } from "../state/sidebarPrefs";
 import { shelfKey } from "../state/sidebarRows";
-import { useApp } from "../state/store";
+import { shortcutHint, useApp } from "../state/store";
+import { baseActions } from "./CommandPalette";
 import { matches, sidebarActions, threadHaystack } from "./paletteActions";
 
 const thread = (over: Partial<SessionSummary> = {}): SessionSummary =>
@@ -15,6 +16,11 @@ const thread = (over: Partial<SessionSummary> = {}): SessionSummary =>
   }) as SessionSummary;
 
 const ids = () => sidebarActions().map((a) => a.id);
+
+/** Every action ⌘K lists, as it builds them. */
+const actions = () => baseActions();
+const found = (a: { label: string; words?: string; detail?: string }) =>
+  `${a.label} ${a.words ?? ""} ${a.detail ?? ""}`;
 
 describe("finding a thread", () => {
   test("by its title and its project", () => {
@@ -37,6 +43,68 @@ describe("finding a thread", () => {
 
   test("every word has to match", () => {
     expect(matches(threadHaystack(thread(), undefined), "composer zzz")).toBe(false);
+  });
+});
+
+describe("the buttons the sidebar's header and foot lost to ⌘K", () => {
+  beforeEach(() => {
+    useApp.setState({
+      selectedId: null,
+      sessions: [],
+      pinned: [],
+      snoozed: {},
+      projectCwd: "/code/rustcode",
+    });
+  });
+
+  test("all five are listed under the name the issue gives them", () => {
+    const labels = actions().map((a) => a.label);
+    expect(labels).toEqual(
+      expect.arrayContaining(["New thread", "Add project folder", "Open Settings", "Open Git", "Open Usage"]),
+    );
+  });
+
+  test("each is found by the words the issue uses for it", () => {
+    for (const [id, query] of [
+      ["new", "new thread"],
+      ["add-project", "add project folder"],
+      ["settings-general", "open settings"],
+      ["pulls", "open git"],
+      ["usage", "open usage"],
+    ] as const) {
+      const action = actions().find((a) => a.id === id);
+      expect(action).toBeDefined();
+      expect(matches(found(action!), query)).toBe(true);
+    }
+  });
+
+  test("the two with a shortcut show it, and the other three show none", () => {
+    const byId = (id: string) => actions().find((a) => a.id === id)!;
+    expect(byId("new").keys).toBe(shortcutHint("new-thread"));
+    expect(byId("new").keys).not.toBe("");
+    expect(byId("settings-general").keys).toBe(shortcutHint("settings"));
+    expect(byId("settings-general").keys).not.toBe("");
+    // The other three never had one, so they show none rather than a made-up key.
+    for (const id of ["add-project", "pulls", "usage"]) expect(byId(id).keys).toBeUndefined();
+  });
+
+  test("open settings, git and usage open those places", () => {
+    const byId = (id: string) => actions().find((a) => a.id === id)!;
+    byId("settings-general").run();
+    expect(useApp.getState().settings).toBe("general");
+    byId("usage").run();
+    expect(useApp.getState().settings).toBe("usage");
+    byId("pulls").run();
+    expect(useApp.getState().panel).toBe("pulls");
+    expect(useApp.getState().switcherOpen).toBe(false);
+  });
+
+  test("new thread clears what the sidebar had open and shows the composer", () => {
+    useApp.setState({ settings: "usage" });
+    actions()
+      .find((a) => a.id === "new")!
+      .run();
+    expect(useApp.getState().settings).toBeNull();
   });
 });
 

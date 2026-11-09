@@ -566,11 +566,13 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   and Settled shut); a shut shelf still shows its count and the dot for a
   thread that needs you or works. Working holds the threads running now (off
   from ⌘K, or when grouping by project). A settled thread never sits under
-  Pinned. The sidebar has no search field or filter menu: threads are found
-  with ⌘K, which also holds the view options (group by project, the Working
-  shelf, one project), Add project, Pull requests, Usage and Statistics. The
-  sidebar's own buttons are two icons under the toggle (Add project, New
-  thread) and a small foot row (Settings, Pull requests, Usage). A snoozed row shows when it wakes where the age goes.
+  Pinned. The sidebar has no search field or filter menu, and none of the
+  buttons it used to carry past the toggle in its toolbar: no Add project or
+  New thread row above the list, no Settings, Pull requests or Usage row at
+  its foot. Threads are found with ⌘K, which also holds the view options
+  (group by project, the Working shelf, one project), New thread, Add project
+  folder, Open Settings, Open Git, Open Usage and Statistics, each with the
+  shortcut it has. A snoozed row shows when it wakes where the age goes.
   Snooze (presets, or Custom…) is a submenu of the row's menu; a thread comes
   back on time, marked unread, or sooner when it needs you, works or is messaged.
   A row's second line reads the worktree branch, then what the thread's calls

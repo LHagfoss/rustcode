@@ -1,11 +1,10 @@
 import { fileManagerName, primaryModifier } from "../lib/platform";
-// The sidebar: a toolbar clear of the traffic lights (the sidebar toggle only), a
-// row with the two buttons that make a project or a thread, then one list:
-// pinned threads first, then every active thread (by project when asked), then
-// the Working, Snoozed and Settled shelves at the foot, each folding on its own
-// header. Settings, pull requests and usage are a small row at the very foot;
-// threads are searched from ⌘K. A row
-// runs two lines: where it runs, its branch and what the branch's pull request
+// The sidebar: a toolbar clear of the traffic lights (the sidebar toggle only),
+// then one list: pinned threads first, then every active thread (by project when
+// asked), then the Working, Snoozed and Settled shelves at the foot, each folding
+// on its own header. Threads are searched from ⌘K, which also holds the buttons
+// that used to sit here (new thread, add project, settings, pull requests, usage).
+// A row runs two lines: where it runs, its branch and what the branch's pull request
 // became, above its title and the threads it works with. One status chip
 // (`Working 57:13`, `Waiting`, `Needs you`, `Failed`, `Review`) ends the top
 // line, the threads it started end the second as a stack of marks, and a row
@@ -27,13 +26,10 @@ import {
   FileText,
   Folder,
   FolderOpen,
-  FolderPlus,
   FolderX,
-  Gauge,
   GitBranch,
   GitFork,
   GitMerge,
-  GitPullRequest,
   GitPullRequestArrow,
   GitPullRequestClosed,
   GitPullRequestDraft,
@@ -67,7 +63,7 @@ import type { PullRequest, SubagentInfo } from "../acp/rustcode";
 import { modelName, projectName, type SessionSummary } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
 import { formatBinding, listCommandFor } from "../lib/keys";
-import { openTerminalAt, openThreadLog, pickFolder, revealPath } from "../lib/native";
+import { openTerminalAt, openThreadLog, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { liveSubagents, type StackAgent } from "../state/agentStack";
 import { type BranchRow, branchKindOf, branchRows } from "../state/branches";
@@ -117,13 +113,11 @@ import {
   errorText,
   featureMissing,
   markUnread,
-  openSettings,
   removeWorktree,
   renameThread,
   repairThread,
   selectThread,
   setAutoCompactForThread,
-  setPanel,
   setPinned,
   setSectionOrder,
   setThreadStatus,
@@ -151,7 +145,6 @@ import { CustomSnooze } from "./CustomSnooze";
 import { HarnessIcon } from "./HarnessIcon";
 import { NeedsYouRow } from "./Inbox";
 import { LinkBadge } from "./Links";
-import { SettingsButton } from "./MainHeader";
 import { ProjectMark } from "./ProjectMark";
 import {
   Cluster,
@@ -1368,7 +1361,6 @@ export function Sidebar() {
   const hidden = useApp((s) => s.sidebarHidden);
   const shortcuts = useApp((s) => s.shortcuts);
   const toggleKey = useShortcutHint("toggle-sidebar");
-  const newKey = useShortcutHint("new-thread");
   // The row marks' keys, from the same table: they follow a remap and show on the row's tooltips.
   const pinKey = useShortcutHint("pin-thread");
   const settleKey = useShortcutHint("settle-thread");
@@ -1377,9 +1369,6 @@ export function Sidebar() {
   const layout = useApp((s) => s.sidebarOrder);
   // Each thread's branch's pull request, from the projects' one read (state/pulls.ts).
   const pullsOn = useApp((s) => !!s.agent?.pullRequests);
-  // The titlebar's icon buttons open the same places the header's do.
-  const panel = useApp((s) => s.panel);
-  const usageOpen = useApp((s) => s.settings === "usage");
   // The cache's version: a landed read re-renders the rows that read it.
   useSyncExternalStore(subscribePulls, pullsVersion);
   // By state, with the project on each row; grouping by project is an option.
@@ -2104,23 +2093,6 @@ export function Sidebar() {
             </ClusterButton>
           </Cluster>
         </TitlebarRow>
-        {/* Threads are found with ⌘K; the two buttons here make a project or a thread. */}
-        <div className="mx-3 mt-2 mb-2 flex shrink-0 items-center justify-end gap-0.5">
-          <ClusterButton
-            label="Add project"
-            tooltip="Add a project folder"
-            onClick={() => void pickFolder(projectCwd || undefined).then((p) => p && startNewThread(p))}
-          >
-            <FolderPlus size={14} />
-          </ClusterButton>
-          <ClusterButton
-            label="New thread"
-            tooltip={`New thread (${newKey})`}
-            onClick={() => startNewThread()}
-          >
-            <SquarePen size={14} />
-          </ClusterButton>
-        </div>
         <NeedsYouRow />
         <nav
           ref={list}
@@ -2276,30 +2248,6 @@ export function Sidebar() {
             </Pill>
           </div>
         )}
-        {/* Settings-level places: a small row at the foot, each with a tooltip (all also in ⌘K). */}
-        <div className="flex shrink-0 items-center px-3 pb-2">
-          <Cluster>
-            <SettingsButton />
-            {pullsOn && (
-              <ClusterButton
-                label="Pull requests"
-                tooltip="Pull requests of this project"
-                on={panel === "pulls"}
-                onClick={() => setPanel("pulls")}
-              >
-                <GitPullRequest size={14} />
-              </ClusterButton>
-            )}
-            <ClusterButton
-              label="Usage"
-              tooltip={usageOpen ? "Close Usage (Esc)" : "Usage"}
-              on={usageOpen}
-              onClick={() => openSettings(usageOpen ? null : "usage")}
-            >
-              <Gauge size={14} />
-            </ClusterButton>
-          </Cluster>
-        </div>
         <UpdateRow />
       </div>
       <CustomSnooze />

@@ -531,8 +531,7 @@ composer's keys stay outside the table.
   a stacked bar and each category's tokens from the `usage_update`'s
   `_meta.rustcode.context` (the conversation in accent shades, the fixed
   overhead in greys), then the thread's in/out/cached totals. Clicking the
-  bar opens Settings › Usage (the page's entry in the app now that the
-  sidebar's footer has no Usage button). Hovering the
+  bar opens Settings › Usage (Open Usage in ⌘K). Hovering the
   bar opens every window at once with a bar, quarter ticks and the time to
   its reset. The plan numbers refresh on hover, when a thread is selected,
   when a turn in it ends, every 3 minutes while the app is in front and just
@@ -718,11 +717,14 @@ composer's keys stay outside the table.
   delegate says `in <parent title>`. The chat's agent and thread group cards
   show the same stack.
   The toolbar's row carries Hide sidebar alone, clear of the traffic lights;
-  under it Add project and New thread, and a foot row Settings, Pull requests
-  (when the project has them) and Usage; the header's cluster holds Show
+  it used to sit over Add project and New thread buttons and above a foot row
+  of Settings, Pull requests and Usage, all gone so the thread list takes the
+  rest of the column; the header's cluster holds Show
   sidebar and Settings while the sidebar is hidden. There is no search or
   filter in the sidebar: ⌘K finds threads (by title, project, branch, pull
-  request and what was said) and holds the view options. Working, Snoozed
+  request and what was said) and holds those five as New thread, Add project
+  folder, Open Settings, Open Git and Open Usage, with their shortcuts, and
+  the view options. Working, Snoozed
   and Settled are shelves at the foot of the list, each folding on its own;
   the project is chosen per thread in the composer's footer.
 - **Title bar.** The sidebar's and header's buttons sit on the traffic
@@ -745,7 +747,7 @@ composer's keys stay outside the table.
   order, so the panel's control is the header's last, rightmost one. The order
   is kept as `rustcode.headerButtons` (`{shown, known}`), so a button added
   in a later release shows by default. Pull requests is hidden on a fresh
-  install and after Reset (the sidebar's foot row holds it); a saved layout
+  install and after Reset (Open Git in ⌘K holds it); a saved layout
   that shows it keeps it.
 - **Settings** takes the whole window: the shell (sidebar, chat, right
   panel) stays mounted and laid out underneath, hidden and `inert`, so the

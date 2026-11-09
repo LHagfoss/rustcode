@@ -80,7 +80,7 @@ export function registerPaletteActions(provider: () => PaletteAction[]) {
   extra.push(provider);
 }
 
-function baseActions(): PaletteAction[] {
+export function baseActions(): PaletteAction[] {
   const s = useApp.getState();
   const harnesses = (s.harnesses?.harnesses ?? []).filter((h) => h.enabled);
   return [
@@ -205,10 +205,12 @@ function baseActions(): PaletteAction[] {
     ...SETTINGS.map(
       ([id, label]): PaletteAction => ({
         id: `settings-${id}`,
-        label: `Settings: ${label}`,
+        // The page the sidebar's Settings button opened (its Escape closes it) is named for what
+        // that button did; the rest are the pages inside Settings.
+        label: id === "general" ? "Open Settings" : `Settings: ${label}`,
         icon: Gear,
         keys: id === "general" ? shortcutHint("settings") : undefined,
-        words: "preferences",
+        words: id === "general" ? "open preferences general" : "preferences",
         run: () => openSettings(id),
       }),
     ),

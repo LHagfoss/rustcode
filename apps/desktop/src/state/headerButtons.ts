@@ -14,7 +14,7 @@ export type HeaderButtonId = (typeof HEADER_BUTTON_IDS)[number];
 
 /**
  * What a fresh install and a reset start from: every button in registry order but Pull requests,
- * which the sidebar's foot row already holds (still one click away in Settings › Chat › Thread
+ * which ⌘K holds ("Open Git"; still one click away in Settings › Chat › Thread
  * header buttons). A layout the user saved is never touched by this: `sanitizeHeaderButtons` keeps
  * what was stored, so a user who shows the button keeps it.
  */
