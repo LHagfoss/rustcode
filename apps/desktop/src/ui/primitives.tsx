@@ -469,7 +469,11 @@ export function Kbd({ children }: { children: ReactNode }) {
   );
 }
 
-/** A switch styled like the macOS one, small. */
+/**
+ * A switch: the effort slider's knob on a short track (docs/design.md › Active controls). The
+ * knob overhangs the track's top and bottom, so the button's own box stays the track's 20 px and
+ * the row it sits in does not grow.
+ */
 export function Switch({
   checked,
   onChange,
@@ -490,14 +494,14 @@ export function Switch({
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cx(
-        "relative inline-flex h-[18px] w-8 shrink-0 items-center rounded-full disabled:opacity-40",
+        "relative inline-flex h-5 w-10 shrink-0 items-center rounded-full transition-[background-color] duration-200 ease-snappy disabled:opacity-40",
         checked ? "bg-accent" : "bg-fill-strong",
       )}
     >
       <span
         className={cx(
-          "absolute top-[2px] size-[14px] rounded-full bg-knob shadow-knob transition-transform duration-150 ease-snappy",
-          checked ? "translate-x-[16px]" : "translate-x-[2px]",
+          "absolute top-1/2 left-0 size-6 -translate-y-1/2 rounded-full bg-knob shadow-knob transition-transform duration-200 ease-snappy",
+          checked ? "translate-x-4" : "translate-x-0",
         )}
       />
     </button>
