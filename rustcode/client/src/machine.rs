@@ -373,6 +373,11 @@ impl Connector {
         else {
             return Err(handshake_failure("authenticate", answer));
         };
+        // Who answered is checked before anything it sent is kept: a different
+        // endpoint on this address must not replace the saved credential or be
+        // told the rotation landed. Dropping the connection leaves the stored
+        // token untouched.
+        check_identity(machine, &gateway_id, &device_id)?;
         if let Some(refresh) = &refresh_token {
             // Durable first: until this write lands, the answer is not
             // acknowledged and the token before it stays valid at the machine.
@@ -765,21 +770,7 @@ impl Session {
     /// Check that this address really is the machine we saved: same `host_id`,
     /// and the device record the token belongs to.
     pub fn check(&self, machine: &Machine) -> Result<()> {
-        if self.welcome.gateway_id != machine.host_id {
-            bail!(
-                "that address answers as {} ({}), not {}",
-                self.welcome.machine_name(),
-                self.welcome.gateway_id,
-                machine.name
-            );
-        }
-        if self.welcome.device_id != machine.device_id {
-            bail!(
-                "{} replaced this computer's device record; pair with it again",
-                machine.name
-            );
-        }
-        Ok(())
+        check_identity(machine, &self.welcome.gateway_id, &self.welcome.device_id)
     }
 
     /// Switch the connection to ACP.
@@ -823,6 +814,25 @@ fn handshake_failure(step: &str, answer: HandshakeResponse) -> anyhow::Error {
         }),
         other => anyhow::anyhow!("the machine answered {step} with {other:?}"),
     }
+}
+
+/// Whether an `authenticated` frame names the machine we saved and our device
+/// record there.
+fn check_identity(machine: &Machine, gateway_id: &str, device_id: &str) -> Result<()> {
+    if gateway_id != machine.host_id {
+        bail!(
+            "that address answers as {gateway_id}, not {} ({})",
+            machine.name,
+            machine.host_id
+        );
+    }
+    if device_id != machine.device_id {
+        bail!(
+            "{} replaced this computer's device record; pair with it again",
+            machine.name
+        );
+    }
+    Ok(())
 }
 
 /// The `authenticate` frame that reconnects with an access token: no

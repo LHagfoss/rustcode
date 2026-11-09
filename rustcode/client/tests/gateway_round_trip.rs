@@ -646,3 +646,93 @@ async fn an_older_gateway_reads_the_static_token_after_the_refresh_form() {
     drop(session);
     server.abort();
 }
+
+/// An endpoint on a saved machine's address that answers as another gateway,
+/// and hands out a refresh token of its own, must not replace the saved
+/// credential or be told the rotation landed: the identity is checked before
+/// anything it sent is stored or acknowledged.
+#[tokio::test]
+async fn a_spoofed_gateway_cannot_overwrite_the_saved_token_or_get_an_ack() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    const HOST_ID: &str = "gw-real-00112233";
+    const DEVICE_ID: &str = "0011223344556677";
+    for (gateway_id, device_id) in [
+        ("gw-attacker-9988", DEVICE_ID),
+        (HOST_ID, "ffffffffffffffff"),
+    ] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (seen_tx, seen_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let Some(Ok(Message::Text(_))) = socket.next().await else {
+                panic!("the client sends a handshake frame first");
+            };
+            socket
+                .send(Message::text(
+                    serde_json::json!({
+                        "type": "authenticated",
+                        "protocol_version": 1,
+                        "gateway_id": gateway_id,
+                        "instance_id": "inst-1",
+                        "device_id": device_id,
+                        "device_name": "PC",
+                        "refresh_token": "attacker-refresh",
+                        "access_token": "attacker-access",
+                        "access_expires_at": "2099-01-01T00:00:00Z",
+                        "rotation_id": "5be1c4a07d2e9f63",
+                    })
+                    .to_string(),
+                ))
+                .await
+                .unwrap();
+            // What follows from the client: a closed socket, not a `token_ack`.
+            let next = tokio::time::timeout(Duration::from_secs(5), socket.next()).await;
+            let acked =
+                matches!(next, Ok(Some(Ok(Message::Text(frame)))) if frame.contains("token_ack"));
+            let _ = seen_tx.send(acked);
+        });
+
+        let config = tempfile::tempdir_in("/tmp").unwrap();
+        let connector = Connector::new(config.path(), ClientKind::Cli).unwrap();
+        let machine = Machine::new(
+            HOST_ID,
+            "Studio",
+            "macos",
+            DEVICE_ID,
+            Route::new(addr.to_string()),
+            chrono::Utc::now(),
+        );
+        let tokens = TokenStore::in_file(config.path()).unwrap();
+        tokens
+            .set(&machine.host_id, &Secret::new("the-real-refresh"))
+            .unwrap();
+
+        let error = connector
+            .connect(&machine, &tokens)
+            .await
+            .expect_err("a mismatched identity is not a connection");
+        let message = format!("{error:#}");
+        assert!(
+            !message.contains("attacker-refresh") && !message.contains("attacker-access"),
+            "{message}"
+        );
+        assert_eq!(
+            tokens.get(&machine.host_id).unwrap().unwrap().expose(),
+            "the-real-refresh",
+            "the saved credential is untouched ({gateway_id}, {device_id})"
+        );
+        assert!(
+            tokens.access(&machine.host_id).is_none(),
+            "the endpoint's access token is not kept"
+        );
+        assert!(
+            !seen_rx.await.unwrap(),
+            "no token_ack goes to an endpoint that is not the machine"
+        );
+        server.abort();
+    }
+}

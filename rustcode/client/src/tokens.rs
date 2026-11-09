@@ -224,19 +224,26 @@ impl TokenStore {
     /// minted before either is no longer the live one. Rotation therefore
     /// calls this first and [`Self::keep_access`] after it.
     pub fn set(&self, host_id: &str, token: &Secret) -> Result<()> {
-        self.forget_access(host_id);
         match &self.backend {
             Backend::Keychain { profile } => {
                 keyring::Entry::new(KEYCHAIN_SERVICE, &keychain_account(profile, host_id))
                     .and_then(|entry| entry.set_password(token.expose()))
-                    .map_err(|error| keyring_error("store", host_id, error))
+                    .map_err(|error| keyring_error("store", host_id, error))?;
             }
             Backend::File { path, tokens } => {
                 let mut tokens = tokens.lock().expect("token map is not poisoned");
-                tokens.insert(host_id.to_owned(), token.expose().to_owned());
-                write_tokens(path, &tokens)
+                // Disk first: the map in memory changes only once the write
+                // landed, so a failed write leaves the previous token in both
+                // places and the rotation it belongs to is never acknowledged.
+                let mut candidate = tokens.clone();
+                candidate.insert(host_id.to_owned(), token.expose().to_owned());
+                write_tokens(path, &candidate)?;
+                *tokens = candidate;
             }
         }
+        // Only a stored token makes the access token before it stale.
+        self.forget_access(host_id);
+        Ok(())
     }
 
     pub fn remove(&self, host_id: &str) -> Result<()> {
@@ -252,10 +259,14 @@ impl TokenStore {
             }
             Backend::File { path, tokens } => {
                 let mut tokens = tokens.lock().expect("token map is not poisoned");
-                if tokens.remove(host_id).is_none() {
+                if !tokens.contains_key(host_id) {
                     return Ok(());
                 }
-                write_tokens(path, &tokens)
+                let mut candidate = tokens.clone();
+                candidate.remove(host_id);
+                write_tokens(path, &candidate)?;
+                *tokens = candidate;
+                Ok(())
             }
         }
     }
@@ -447,6 +458,42 @@ mod tests {
         let bytes = std::fs::read(file_path(dir.path())).unwrap_or_default();
         let text = String::from_utf8_lossy(&bytes);
         assert!(!text.contains("access-2"), "{text}");
+    }
+
+    /// A write that fails changes nothing: the token stays what it was in
+    /// memory as well as on disk, so a rotation that could not be stored is
+    /// never acknowledged on the strength of a token only this process knows.
+    #[test]
+    fn a_failed_write_keeps_the_previous_token_and_access() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let store = TokenStore::in_file(dir.path()).unwrap();
+        store.set("gw-a", &Secret::new("refresh-1")).unwrap();
+        let at = Utc::now() + chrono::Duration::minutes(15);
+        store.keep_access("gw-a", Access::new(Secret::new("access-1"), at));
+        // A directory with a file in it where the token file goes: the atomic
+        // replace cannot succeed, as on an unwritable or full disk.
+        let path = file_path(dir.path());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("blocker"), b"x").unwrap();
+
+        let error = store
+            .set("gw-a", &Secret::new("refresh-2"))
+            .expect_err("the write cannot land");
+        assert!(!format!("{error:#}").contains("refresh-2"), "{error:#}");
+        assert_eq!(store.get("gw-a").unwrap().unwrap().expose(), "refresh-1");
+        assert!(
+            store.access("gw-a").is_some(),
+            "nothing rotated, so the access token is still the live one"
+        );
+        store
+            .set("gw-b", &Secret::new("other"))
+            .expect_err("a new machine fails the same way");
+        assert!(store.get("gw-b").unwrap().is_none());
+        store
+            .remove("gw-a")
+            .expect_err("a removal that cannot be written is not forgotten");
+        assert_eq!(store.get("gw-a").unwrap().unwrap().expose(), "refresh-1");
     }
 
     /// `Debug` names where the tokens are, never what they are.
