@@ -23,7 +23,6 @@ import {
   shelvesOf,
   sortSection,
   threadDiff,
-  titleFirstTrailing,
   visibleRows,
 } from "./sidebarRows";
 import type { TranscriptItem } from "./thread";
@@ -237,7 +236,7 @@ describe("a row's one status chip", () => {
     });
     expect(rowStatus({ running: false, fresh: true, review: true })).toEqual({
       kind: "completed",
-      label: "Completed",
+      label: "Done",
       title: "It finished while you were elsewhere",
     });
     expect(rowStatus({ running: false, review: true })).toEqual({
@@ -570,15 +569,5 @@ describe("where a row puts what it has besides its title", () => {
     expect(meta({ diff: null })).toBe("none");
     expect(meta({ harness: false, diff: null })).toBe("none");
     expect(meta({ layout: "comfortable" })).toBe("none");
-  });
-});
-
-describe("titleFirstTrailing", () => {
-  test("prioritizes attention, running, done, status, then age", () => {
-    expect(titleFirstTrailing({ needs: true, running: true, done: true, status: true })).toBe("needs");
-    expect(titleFirstTrailing({ needs: false, running: true, done: true, status: true })).toBe("running");
-    expect(titleFirstTrailing({ needs: false, running: false, done: true, status: true })).toBe("done");
-    expect(titleFirstTrailing({ needs: false, running: false, done: false, status: true })).toBe("status");
-    expect(titleFirstTrailing({ needs: false, running: false, done: false, status: false })).toBe("age");
   });
 });

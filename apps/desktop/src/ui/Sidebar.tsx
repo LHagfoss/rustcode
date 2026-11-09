@@ -110,7 +110,6 @@ import {
   shelfOpen,
   sortSection,
   threadDiff,
-  titleFirstTrailing,
   visibleRows,
 } from "../state/sidebarRows";
 import { snoozePresets, wakeLabel } from "../state/snooze";
@@ -438,51 +437,50 @@ function Elapsed({ since }: { since: number }) {
   return <>{formatClock(now - since)}</>;
 }
 
-/** The tint a row's status chip takes, by what it says: the page's own tone tokens, never a new one. */
-const CHIP_TINT: Record<RowStatusKind, string> = {
-  needs: "bg-warning/14 text-warning",
-  working: "bg-accent/12 text-accent",
-  waiting: "bg-fill-subtle text-fg-muted",
-  failed: "bg-danger/12 text-danger",
-  completed: "bg-success/12 text-success",
-  review: "bg-accent/16 text-accent",
+/** The tone a row's status takes, by what it says: the page's own tone tokens, never a new one. */
+const STATUS_TINT: Record<RowStatusKind, string> = {
+  needs: "text-warning",
+  working: "text-accent",
+  waiting: "text-fg-muted",
+  failed: "text-danger",
+  completed: "text-success",
+  review: "text-accent",
 };
 
 /**
- * The one chip a row's first line ends with: what the thread is doing, or why it waits. Its
- * spinner is the row's only one, and the clock beside `Working` is the running turn's own; a row
- * that shows its age instead has no chip at all (state/sidebarRows.ts `rowStatus`).
+ * What the roomy row's first line ends with: an icon and a word in the state's tone — `Working`
+ * with the running turn's clock, `Needs you`, `Waiting`, `Failed`, `Done` until you open it, or
+ * `Review`. A row that shows its age instead has none (state/sidebarRows.ts `rowStatus`).
  */
-function RowStatusChip({ status, startedAt }: { status: RowStatus; startedAt?: number }) {
+function RowStatusLabel({ status, startedAt }: { status: RowStatus; startedAt?: number }) {
   const kind = status.kind;
   return (
     <span
       // The long form goes in the title, which the app reads out as the row's label
-      // (lib/quietNative.ts); the words in the chip are what the eye gets.
+      // (lib/quietNative.ts); the words are what the eye gets.
       title={status.title}
-      className={cx(
-        "inline-flex h-[18px] shrink-0 items-center gap-1 rounded-full px-1.5 font-medium text-caption",
-        CHIP_TINT[kind],
-      )}
+      className={cx("inline-flex shrink-0 items-center gap-1 font-medium", STATUS_TINT[kind])}
     >
       {kind === "working" ? (
-        <Spinner size={9} />
+        <Spinner size={10} />
       ) : kind === "needs" ? (
         status.approval ? (
-          <ShieldQuestion size={10} />
+          <ShieldQuestion size={13} />
         ) : (
-          <MessageCircleQuestion size={10} />
+          <MessageCircleQuestion size={13} />
         )
+      ) : kind === "waiting" ? (
+        <Clock size={12} />
       ) : kind === "failed" ? (
-        <CircleAlert size={10} />
+        <CircleAlert size={13} />
       ) : kind === "completed" ? (
-        <Check size={10} />
-      ) : kind === "review" ? (
-        <Eye size={10} />
-      ) : null}
+        <CircleCheck size={13} />
+      ) : (
+        <Eye size={13} />
+      )}
       <span>{status.label}</span>
       {kind === "working" && startedAt !== undefined && (
-        <span className="tabular">
+        <span className="font-normal text-fg-muted tabular">
           <Elapsed since={startedAt} />
         </span>
       )}
@@ -700,6 +698,7 @@ const ThreadRow = memo(function ThreadRow({
     running,
     waiting: wait && { label: waitingLabel(wait), title: waitingTitle(wait) },
     failed,
+    fresh,
     review: status === "review",
   });
   const [renaming, setRenaming] = useState(false);
@@ -741,7 +740,6 @@ const ThreadRow = memo(function ThreadRow({
     );
   }
   const done = status === "done";
-  const trailing = titleFirstTrailing({ needs: !!request, running, done, status: !!chip });
   // A fork or a side chat says so with a small glyph, whether it is nested or a row of its own.
   const branch = session.parent ? branchKindOf(session.parent) : undefined;
   // The open thread is a delegated one with no row of its own: its parent stands in as the context.
@@ -832,33 +830,25 @@ const ThreadRow = memo(function ThreadRow({
   ) : (
     age
   );
-  const twoLineState =
-    trailing === "needs" && request ? (
-      request.question ? (
-        <MessageCircleQuestion size={13} />
-      ) : (
-        <ShieldQuestion size={13} />
-      )
-    ) : trailing === "running" ? (
-      <>
-        <Spinner size={9} />
-        {startedAt !== undefined && <Elapsed since={startedAt} />}
-      </>
-    ) : trailing === "done" ? (
-      <Check size={13} />
-    ) : chip ? (
-      <RowStatusChip status={chip} startedAt={startedAt} />
-    ) : (
-      age
-    );
+  // The roomy row: the state in words, else the age, with a settled thread's check before it.
+  const cardState = chip ? (
+    <RowStatusLabel status={chip} startedAt={startedAt} />
+  ) : done ? (
+    <span className="flex min-w-0 items-center gap-1">
+      <Check size={12} className="shrink-0" />
+      {age}
+    </span>
+  ) : (
+    age
+  );
   const stateSlot = (pill: boolean) => (
     <span title={chip?.title} className={cx(TRAILING_SLOT, HIDDEN_ON_HOVER)}>
       {/* What the row has no line for: the harness it runs on, then the diff. */}
-      {meta === "trailing" && external && (
+      {!pill && meta === "trailing" && external && (
         <HarnessIcon id={session.harness!} name={harness?.name} size={12} className="shrink-0" />
       )}
-      {meta === "trailing" && diff && <DiffStat diff={diff} />}
-      {pill ? twoLineState : compactState}
+      {!pill && meta === "trailing" && diff && <DiffStat diff={diff} />}
+      {pill ? cardState : compactState}
     </span>
   );
   return (
@@ -970,28 +960,65 @@ const ThreadRow = memo(function ThreadRow({
                   )}
                 </>
               ) : (
-                <span className={cx("title-first-row relative block w-full min-w-0", FADE_UNDER_ACTIONS)}>
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    {!grouped && <ProjectMark name={project} size={14} className={markTint} />}
-                    {glyphs}
-                    <span className={titleTint}>{session.title || "New thread"}</span>
+                <span
+                  className={cx(
+                    "title-first-row relative flex w-full min-w-0 flex-col gap-0.5",
+                    FADE_UNDER_ACTIONS,
+                  )}
+                >
+                  {/* A card of up to three lines. The first says where it runs and what it is doing:
+                      the project's mark and name (under a project heading, the harness instead),
+                      and the state or age at its end, where the hover actions are drawn. */}
+                  <span className="flex h-5 min-w-0 items-center gap-1.5 text-sub text-fg-muted">
+                    {grouped ? (
+                      external && (
+                        <HarnessIcon
+                          id={session.harness!}
+                          name={harness?.name}
+                          size={13}
+                          className="shrink-0"
+                        />
+                      )
+                    ) : (
+                      <ProjectMark name={project} size={14} className={markTint} />
+                    )}
+                    <span className="min-w-0 flex-1 truncate">{grouped ? (harnessName ?? "") : project}</span>
                     {stateSlot(true)}
                   </span>
-                  {/* The line under the title, only when it has something besides the mark that now
-                      sits before the title: the branch, its pull request, and who else works beside
-                      it. A diff, or the harness mark alone, is in the trailing slot above. */}
+                  {/* The title, in the weight of what the thread wants. */}
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    {glyphs}
+                    <span className={titleTint}>{session.title || "New thread"}</span>
+                    {!grouped && meta !== "line" && external && (
+                      <HarnessIcon
+                        id={session.harness!}
+                        name={harness?.name}
+                        size={13}
+                        className="shrink-0"
+                      />
+                    )}
+                  </span>
+                  {/* The third line, only when it has something to say: the branch, what it changed,
+                      its pull request, and who works beside it. */}
                   {meta === "line" && (
-                    <span className="flex min-w-0 items-center gap-1 text-sub text-fg-muted">
-                      {worktree && (
-                        <span className="title-first-branch min-w-0 flex-1 truncate font-mono text-[10px]">
-                          <GitBranch size={9} className="mr-0.5 inline" />
-                          {worktree.branch}
+                    <span className="flex min-w-0 items-center gap-1.5 text-sub text-fg-muted">
+                      {worktree ? (
+                        <span className="title-first-branch flex min-w-0 flex-1 items-center gap-1">
+                          <GitBranch size={10} className="shrink-0" />
+                          <span className="min-w-0 truncate font-mono text-[10px]" title={worktree.branch}>
+                            {worktree.branch}
+                          </span>
                         </span>
+                      ) : (
+                        <span className="flex-1" />
                       )}
-                      <span className="title-first-badges ml-auto flex shrink-0 items-center gap-1">
+                      <span className="title-first-badges ml-auto flex shrink-0 items-center gap-1.5">
+                        {diff && <DiffStat diff={diff} />}
+                        {pull && <PullMark pull={pull} />}
                         {stack?.length ? (
                           <AgentStack agents={stack} />
                         ) : (
+                          !grouped &&
                           external && (
                             <HarnessIcon
                               id={session.harness!}
@@ -1001,15 +1028,7 @@ const ThreadRow = memo(function ThreadRow({
                             />
                           )
                         )}
-                        {diff && <DiffStat diff={diff} />}
-                        {pull && <PullMark pull={pull} />}
                       </span>
-                    </span>
-                  )}
-                  {worktree && (
-                    <span className="title-first-branch-wrap hidden truncate font-mono text-[10px] text-fg-muted">
-                      <GitBranch size={9} className="mr-0.5 inline" />
-                      {worktree.branch}
                     </span>
                   )}
                 </span>
