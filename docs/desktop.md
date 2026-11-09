@@ -69,8 +69,8 @@ sessions to an execution graph:
 [architecture/execution-graph.md](architecture/execution-graph.md) records that
 decision, the current → target mapping and the migration order (#2879).
 
-Checking UI: `bun run mock-window open` in `apps/desktop`, one shared, visible
-Chrome window on the mock at native scale (`eval`, `click`, `dblclick`, `hover`,
+Checking UI: `bun run mock-window open` in `apps/desktop`, one shared, headless
+Chrome on the mock at native scale (`open --show` for a visible window) (`eval`, `click`, `dblclick`, `hover`,
 `drag`, `scroll`, `move`, `type`, `press`, `screenshot`, `close`), never a
 browser pane in the user's terminal; WebKit
 (the app) can differ from Chrome, so check alignment-sensitive changes in the
@@ -1049,7 +1049,7 @@ Settings › Chat › Smart UI is on (default), else 0; the engine reads it at
 In dev builds `window.__rustcode` exposes the store and its actions, so an
 agent can drive and inspect the UI (as `DebugDriver` does for the SwiftUI
 app), for example from a headless browser over the Chrome DevTools Protocol.
-In `apps/desktop`, `bun run mock-window open` is the shared, visible window for
+In `apps/desktop`, `bun run mock-window open` is the shared, headless browser for
 that; see AGENTS.md › Checking desktop app behavior.
 
 ## Checks
