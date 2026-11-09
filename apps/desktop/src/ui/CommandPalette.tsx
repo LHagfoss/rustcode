@@ -52,7 +52,14 @@ import {
   useApp,
 } from "../state/store";
 import { relativeAge } from "../state/thread";
-import { matches, type PaletteAction, pullOfThread, sidebarActions, threadHaystack } from "./paletteActions";
+import {
+  matches,
+  type PaletteAction,
+  pullOfThread,
+  ranked,
+  sidebarActions,
+  threadHaystack,
+} from "./paletteActions";
 import { cx, Kbd } from "./primitives";
 
 export type { PaletteAction };
@@ -295,9 +302,12 @@ export function CommandPalette() {
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: actions read live state when the palette opens
   const results = useMemo<Result[]>(() => {
-    const actions = [...baseActions(), ...extra.flatMap((p) => p())]
-      .filter((a) => !q || matches(`${a.label} ${a.words ?? ""} ${a.detail ?? ""}`, q))
-      .map((action): Result => ({ kind: "action", action }));
+    const actions = ranked(
+      [...baseActions(), ...extra.flatMap((p) => p())].filter(
+        (a) => !q || matches(`${a.label} ${a.words ?? ""} ${a.detail ?? ""}`, q),
+      ),
+      q,
+    ).map((action): Result => ({ kind: "action", action }));
     if (actionsOnly) return actions;
     const threads = sessions
       .filter((s) => scope === "all" || s.cwd === projectCwd)

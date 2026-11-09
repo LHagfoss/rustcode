@@ -4,7 +4,7 @@ import { PREF, readPref, writePref } from "../state/sidebarPrefs";
 import { shelfKey } from "../state/sidebarRows";
 import { shortcutHint, useApp } from "../state/store";
 import { baseActions } from "./CommandPalette";
-import { matches, sidebarActions, threadHaystack } from "./paletteActions";
+import { matches, ranked, sidebarActions, threadHaystack } from "./paletteActions";
 
 const thread = (over: Partial<SessionSummary> = {}): SessionSummary =>
   ({
@@ -105,6 +105,23 @@ describe("the buttons the sidebar's header and foot lost to ⌘K", () => {
       .find((a) => a.id === "new")!
       .run();
     expect(useApp.getState().settings).toBeNull();
+  });
+
+  test("what the query names ranks above what only hides it in extra words", () => {
+    const order = (query: string) =>
+      ranked(
+        actions().filter((a) => matches(found(a), query)),
+        query,
+      ).map((a) => a.label);
+    // "Thread details" carries "usage" only in its extra words; Open Usage names it, and is the
+    // shorter of the two that do.
+    expect(order("usage")[0]).toBe("Open Usage");
+    expect(order("usage").indexOf("Thread details")).toBeGreaterThan(order("usage").indexOf("Open Usage"));
+    // The settings pages hold "settings" in their titles too, but Open Settings is what it opens.
+    expect(order("settings")[0]).toBe("Open Settings");
+    expect(order("git")[0]).toBe("Open Git");
+    // Nothing typed keeps the order the palette lists: the actions as the app draws them.
+    expect(ranked(actions(), "").map((a) => a.id)).toEqual(actions().map((a) => a.id));
   });
 });
 
