@@ -5,9 +5,12 @@
 //
 // Answered rows do not vanish from the view: the row a click or a key answered is
 // remembered (`foldDecided`) and shown in a faded "Decided" section until the app
-// is left. Nothing is written to disk, so a reload starts the inbox clean.
+// is left. Nothing of that is written to disk, so a reload starts the inbox clean;
+// a row put away by hand is the one thing that outlives the window
+// (state/inboxDismissed.ts).
 
 import { type PermissionRequest, projectName, type SessionSummary } from "../acp/types";
+import { type InboxDismissals, isDismissed } from "./inboxDismissed";
 import type { Link } from "./orchestration";
 
 /** What a row is. `delegate` is a link that asks for the user without a request in the app yet. */
@@ -55,6 +58,8 @@ export interface InboxRead {
   archived?: Readonly<Record<string, number>>;
   /** The link book, for delegates that ask for the user. */
   links: readonly Link[];
+  /** Rows put away by hand, which stay away until their thread asks again. */
+  dismissed?: InboxDismissals;
 }
 
 /** The title a thread is known by, when the app has one. */
@@ -181,7 +186,10 @@ export function deriveInbox(read: InboxRead, now = Date.now()): InboxItem[] {
     });
   }
 
-  return items.sort((a, b) => b.at - a.at);
+  // A row the user put away is not one to answer: it leaves the list, and with it the
+  // sidebar's count, until the thread asks again (state/inboxDismissed.ts).
+  const dismissed = read.dismissed ?? {};
+  return items.filter((item) => !isDismissed(dismissed, item)).sort((a, b) => b.at - a.at);
 }
 
 /** Consecutive rows from one thread, under the header that names it once. */
@@ -210,11 +218,11 @@ export function groupInbox(items: readonly InboxItem[]): InboxGroup[] {
   return groups;
 }
 
-/** A row that left the list because it was answered, retried or opened. */
+/** A row that left the list because it was answered, retried, opened or put away. */
 export interface DecidedItem extends InboxItem {
   /** When it left the list. */
   decidedAt: number;
-  /** What the user did: `Approved`, `Declined`, `Answered`, `Retried`, `Opened`. */
+  /** What the user did: `Approved`, `Declined`, `Answered`, `Retried`, `Opened`, `Dismissed`. */
   label: string;
 }
 
@@ -223,9 +231,10 @@ export const DECIDED_MAX = 12;
 
 /**
  * The decided section after a change: rows the inbox had and no longer has are
- * folded in, newest first, capped at {@link DECIDED_MAX}. A first render (nothing
- * seen yet) decides nothing, so opening the view does not fold a history it never
- * showed.
+ * folded in, newest first, capped at {@link DECIDED_MAX}. A row that is back in the
+ * list — an undone dismissal — is not decided, so it leaves the section. A first
+ * render (nothing seen yet) decides nothing, so opening the view does not fold a
+ * history it never showed.
  */
 export function foldDecided(
   previous: readonly InboxItem[],
@@ -233,18 +242,18 @@ export function foldDecided(
   decided: readonly DecidedItem[],
   opts: { now?: number; labels?: Readonly<Record<string, string>> } = {},
 ): DecidedItem[] {
-  if (!previous.length) return [...decided];
-  const now = opts.now ?? Date.now();
   const live = new Set(next.map((item) => item.key));
+  const kept = decided.filter((item) => !live.has(item.key));
+  if (!previous.length) return kept;
+  const now = opts.now ?? Date.now();
   const gone = previous.filter((item) => !live.has(item.key));
-  if (!gone.length) return [...decided];
+  if (!gone.length) return kept;
   const folded = gone.map((item) => ({
     ...item,
     decidedAt: now,
     label: opts.labels?.[item.key] ?? "Handled",
   }));
-  const seen = new Set(folded.map((item) => item.key));
-  return [...folded, ...decided.filter((item) => !seen.has(item.key))].slice(0, DECIDED_MAX);
+  return [...folded, ...kept].slice(0, DECIDED_MAX);
 }
 
 /**

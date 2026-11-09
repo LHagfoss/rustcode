@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { type FieldGauge, measuredFieldHeight } from "./fieldHeight";
 
-const MIN = 58;
+const MIN = 33;
 const MAX = 208;
 
 /** A twin textarea: one line per newline plus its padding, whatever box it is in. */
-function gaugeOf(line = 22.75, padding = 12): FieldGauge {
+function gaugeOf(line = 21, padding = 12): FieldGauge {
   const gauge: FieldGauge = {
     value: "",
     style: { width: "", height: "" },
@@ -22,7 +22,7 @@ describe("measured field height", () => {
   });
 
   test("a draft grows the field a line at a time, padding included", () => {
-    expect(measuredFieldHeight(gaugeOf(), { value: "a\nb\nc", width: 500 }, MIN, MAX)).toBe(80.25);
+    expect(measuredFieldHeight(gaugeOf(), { value: "a\nb\nc", width: 500 }, MIN, MAX)).toBe(75);
   });
 
   test("past the last line the field stops at its maximum and scrolls", () => {
@@ -45,7 +45,7 @@ describe("measured field height", () => {
 
   test("the twin carries the draft being measured, and nothing of the last one", () => {
     const gauge = gaugeOf();
-    expect(measuredFieldHeight(gauge, { value: "a\nb\nc", width: 500 }, MIN, MAX)).toBe(80.25);
+    expect(measuredFieldHeight(gauge, { value: "a\nb\nc", width: 500 }, MIN, MAX)).toBe(75);
     // The field that shrank reports its own box, not its text; the twin still reports the text.
     expect(measuredFieldHeight(gauge, { value: "a", width: 500 }, MIN, MAX)).toBe(MIN);
   });
