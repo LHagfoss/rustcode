@@ -9,11 +9,13 @@ import { setShellTransport } from "../lib/shell";
 import {
   askMachine,
   cancelPairing,
+  codeCheckOverdue,
   codeComplete,
   codeDigits,
   lastSeen,
   type Machine,
   machineLine,
+  PAIR_DEADLINE_MS,
   pairMachine,
   platformName,
   refreshMachines,
@@ -220,6 +222,48 @@ describe("machines page state", () => {
     expect(useMachines.getState().ready).toBe(true);
     expect(useMachines.getState().error).toContain("Only the app can do this.");
   });
+
+  test("checking a code never waits for ever: past the deadline the page says so", async () => {
+    const asked = Date.now();
+    useMachines.setState({
+      pairing: {
+        stage: "pairing",
+        address: "192.168.1.31:17879",
+        host: "Lars's MacBook Pro",
+        askId: "ask-test-1",
+        since: asked,
+      },
+      pairingError: null,
+    });
+    const pairing = useMachines.getState().pairing;
+    expect(codeCheckOverdue(pairing, asked + 1000)).toBe(false);
+    expect(codeCheckOverdue(pairing, asked + PAIR_DEADLINE_MS - 1)).toBe(false);
+    expect(codeCheckOverdue(pairing, asked + PAIR_DEADLINE_MS + 1)).toBe(true);
+    // The other stages wait on something else: the owner's answer, or a code yet
+    // to be typed, and are bounded by the shell and the code's own lifetime.
+    expect(
+      codeCheckOverdue(
+        { stage: "waiting", address: "a", host: "b", askId: "c", since: asked },
+        asked + 10 * PAIR_DEADLINE_MS,
+      ),
+    ).toBe(false);
+    expect(codeCheckOverdue(null, asked)).toBe(false);
+  });
+
+  test("the pairing stage is cancelled by its own ask id", async () => {
+    await askMachine("192.168.1.31:17879", "Lars's Linux box");
+    const pairing = useMachines.getState().pairing;
+    if (pairing?.stage !== "code") throw new Error("the code stage never arrived");
+    const pairing_ = pairMachine("48219034");
+    expect(useMachines.getState().pairing?.stage).toBe("pairing");
+    cancelPairing();
+    expect(shell.command("machines_cancel")).toEqual({ askId: pairing.askId });
+    expect(useMachines.getState().pairing).toBeNull();
+    await pairing_;
+    // The shell still paired it: the machine is listed, and the page only
+    // stopped waiting for the answer.
+    expect(useMachines.getState().machines[0]?.name).toBe("Lars's Linux box");
+  });
 });
 
 describe("machines rows", () => {
@@ -228,7 +272,7 @@ describe("machines rows", () => {
     expect(stateLabel({ state: "connecting", retryInSecs: null })).toBe("Connecting");
     expect(stateLabel({ state: "offline", retryInSecs: 4 })).toBe("Offline · retrying in 4 s");
     expect(stateLabel({ state: "offline", retryInSecs: null })).toBe("Offline");
-    expect(stateLabel({ state: "needsPairing", retryInSecs: null })).toBe("Pairing expired");
+    expect(stateLabel({ state: "needsPairing", retryInSecs: null })).toBe("Needs pairing");
     expect(stateLabel({ state: "stopped", retryInSecs: null })).toBe("Not connected");
     expect(stateTone({ state: "connected" })).toBe("ok");
     expect(stateTone({ state: "needsPairing" })).toBe("bad");

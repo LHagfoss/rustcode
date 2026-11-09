@@ -67,12 +67,30 @@ export interface AskView {
 /**
  * Where the Add machine flow stands. `askId` is this page's own name for the
  * request, made before anything is dialled, so Cancel can drop it at any
- * point — even while the other machine's owner is still deciding.
+ * point — even while the other machine's owner is still deciding. `since` is
+ * when the stage began, so the page can say when nothing is coming back.
  */
 export type Pairing =
-  | { stage: "waiting"; address: string; host: string; askId: string }
-  | { stage: "code"; address: string; host: string; askId: string; codeLength: number; expiresAt: number }
-  | { stage: "pairing"; address: string; host: string; askId: string };
+  | { stage: "waiting"; address: string; host: string; askId: string; since: number }
+  | {
+      stage: "code";
+      address: string;
+      host: string;
+      askId: string;
+      codeLength: number;
+      expiresAt: number;
+    }
+  | { stage: "pairing"; address: string; host: string; askId: string; since: number };
+
+/**
+ * How long the shell may take to check the code with the machine before the
+ * page says it did not hear back. The exchange itself is bounded in the shell
+ * (`CONNECT_TIMEOUT`, ten seconds) and so is the token write after it (ten
+ * seconds more), so this is longer than the worst case that answers; a command
+ * that never returns — a credential store waiting for an unlock, a shell that
+ * went away — must not leave the page on a spinner (issue 3325).
+ */
+export const PAIR_DEADLINE_MS = 30_000;
 
 interface MachinesStore {
   /** The first `machines_list` came back (or failed). */
@@ -110,7 +128,7 @@ export function stateLabel(machine: Pick<Machine, "state" | "retryInSecs">): str
     case "connecting":
       return "Connecting";
     case "needsPairing":
-      return "Pairing expired";
+      return "Needs pairing";
     case "offline":
       return machine.retryInSecs ? `Offline · retrying in ${machine.retryInSecs} s` : "Offline";
     case "stopped":
@@ -213,6 +231,11 @@ export function threadCount(machine: Machine, counts: Record<string, number>): n
 export function threadLabel(count: number | undefined): string | undefined {
   if (count === undefined) return undefined;
   return `${count} ${count === 1 ? "thread" : "threads"}`;
+}
+
+/** Whether the code on screen is being checked with a machine that has gone quiet. */
+export function codeCheckOverdue(pairing: Pairing | null, now = Date.now()): boolean {
+  return pairing?.stage === "pairing" && now - pairing.since > PAIR_DEADLINE_MS;
 }
 
 // ---------------------------------------------------------------- code input
@@ -377,7 +400,7 @@ export async function askMachine(address: string, name?: string): Promise<void> 
   if (useMachines.getState().pairing) cancelPairing();
   const host = name?.trim() || target;
   const askId = newAskId();
-  const asked = { address: target, host, askId };
+  const asked = { address: target, host, askId, since: Date.now() };
   useMachines.setState({ pairing: { stage: "waiting", ...asked }, pairingError: null });
   const current = () => useMachines.getState().pairing?.askId === askId;
   const waiting = (event: PairingEvent) => {
@@ -442,7 +465,10 @@ export function cancelPairing(): void {
 export async function pairMachine(code: string): Promise<void> {
   const pairing = useMachines.getState().pairing;
   if (pairing?.stage !== "code") return;
-  useMachines.setState({ pairing: { ...pairing, stage: "pairing" }, pairingError: null });
+  useMachines.setState({
+    pairing: { ...pairing, stage: "pairing", since: Date.now() },
+    pairingError: null,
+  });
   try {
     const machine = await shellCall<Machine>("machines_pair", {
       askId: pairing.askId,

@@ -278,7 +278,13 @@ async fn add(
         }
     };
     let connector = Connector::new(config_dir, ClientKind::Desktop)?;
-    let tokens = TokenStore::open(config_dir)?;
+    // The credential store is opened before the machine is asked: a store that
+    // cannot answer has to stop the pairing at this end, not after the other
+    // machine has accepted the request and enrolled this computer (#3325).
+    let tokens = std::sync::Arc::new(
+        rustcode_client::tokens::open_bounded(config_dir, rustcode_client::tokens::STORE_TIMEOUT)
+            .await?,
+    );
     // Refuse a mistyped `--code` before asking the machine: the code has
     // eight digits, and the frame that reports its length arrives only after
     // the owner has accepted.
@@ -310,9 +316,14 @@ async fn add(
     let machine = rustcode_client::machine_from_pairing(&welcome, Route::new(address), name);
     // Token first: a saved machine without one would only ever say "pair
     // again", while a token whose machine was not saved is unreachable.
-    tokens
-        .set(&machine.host_id, &paired.secret)
-        .context("the machine is paired but its token could not be stored")?;
+    rustcode_client::tokens::set_bounded(
+        std::sync::Arc::clone(&tokens),
+        machine.host_id.clone(),
+        paired.secret.clone(),
+        rustcode_client::tokens::STORE_TIMEOUT,
+    )
+    .await
+    .context("the machine is paired but its token could not be stored")?;
     let mut registry = MachineRegistry::load(config_dir)?;
     if let Err(error) = registry.insert(machine.clone()) {
         let _ = tokens.remove(&machine.host_id);

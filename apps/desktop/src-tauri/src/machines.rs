@@ -15,6 +15,7 @@
 use crate::engine::EngineEvent;
 use anyhow::Error;
 use rustcode_client::machine::{machine_from_pairing, normalize_code, Connector};
+use rustcode_client::tokens::{self as token_store, STORE_TIMEOUT};
 use rustcode_client::{
     browse_async, Approved, ClientKind, DiscoveredMachine, Machine, MachineRegistry, Route,
     TokenStore, Unreachable,
@@ -207,11 +208,19 @@ fn chain(error: anyhow::Error) -> String {
 }
 
 impl Machines {
-    fn tokens(&self, config_dir: &Path) -> Result<Arc<TokenStore>, String> {
+    /// The machine token store, opened once. Every call that reaches it blocks on
+    /// the operating system's IPC (a Secret Service prompt, a keychain unlock),
+    /// so it runs off the runtime with a deadline: a store that never answers is
+    /// a message to show, not a command that never returns.
+    async fn tokens(self: &Arc<Self>, config_dir: &Path) -> Result<Arc<TokenStore>, String> {
         if let Some(tokens) = self.tokens.lock().unwrap().as_ref() {
             return Ok(Arc::clone(tokens));
         }
-        let tokens = Arc::new(TokenStore::open(config_dir).map_err(chain)?);
+        let tokens = Arc::new(
+            rustcode_client::tokens::open_bounded(config_dir, STORE_TIMEOUT)
+                .await
+                .map_err(chain)?,
+        );
         *self.tokens.lock().unwrap() = Some(Arc::clone(&tokens));
         Ok(tokens)
     }
@@ -418,7 +427,7 @@ async fn relay_once(
         },
         Err(error) => return End::Failed(error),
     };
-    let tokens = match machines.tokens(config_dir) {
+    let tokens = match machines.tokens(config_dir).await {
         Ok(tokens) => tokens,
         Err(error) => return End::Failed(anyhow::anyhow!(error)),
     };
@@ -623,6 +632,11 @@ async fn ask_machine(
 ) -> Result<AskView, String> {
     let config_dir = config_dir()?;
     let connector = Machines::connector(&config_dir)?;
+    // Open the credential store before anything is dialled: a store that cannot
+    // answer would otherwise surface only after the other machine's owner has
+    // accepted the request and enrolled this computer — the pairing would look
+    // hung, and the machine there would list a device that never arrives (#3325).
+    machines.tokens(&config_dir).await?;
     let label = name.clone().unwrap_or_else(|| address.to_owned());
     let ask = connector
         .ask(address)
@@ -738,13 +752,25 @@ pub async fn machines_pair(
     let machine = machine_from_pairing(&welcome, Route::new(pending.address), pending.name);
     let config_dir = config_dir()?;
     // The token first: a saved machine without one would only ever say "pair
-    // again", while a token whose machine was not saved is unreachable.
-    let tokens = machines.tokens(&config_dir)?;
-    tokens
-        .set(&machine.host_id, &paired.secret)
-        .map_err(|error| {
-            format!("The machine is paired, but its token could not be stored: {error:#}")
-        })?;
+    // again", while a token whose machine was not saved is unreachable. The
+    // store was opened before the request was sent, so this is the write, and a
+    // write that does not land in time says so instead of waiting for ever.
+    let tokens = machines.tokens(&config_dir).await?;
+    token_store::set_bounded(
+        Arc::clone(&tokens),
+        machine.host_id.clone(),
+        paired.secret.clone(),
+        STORE_TIMEOUT,
+    )
+    .await
+    .map_err(|error| {
+        format!(
+            "{} accepted this computer, but its pairing token could not be stored: {error:#}. \
+             It now lists this computer as a device; pair again once the store answers, or remove \
+             this computer on {} first.",
+            machine.name, machine.name
+        )
+    })?;
     let mut registry = MachineRegistry::load(&config_dir).map_err(chain)?;
     if let Err(error) = registry.insert(machine.clone()) {
         let _ = tokens.remove(&machine.host_id);
@@ -782,8 +808,8 @@ pub fn machines_cancel(
 /// The credential goes first: a machine whose token could not be deleted stays
 /// listed, with a plain reason, instead of becoming a row that can never pair
 /// again. (A machine left without a token is re-paired, which works.)
-#[tauri::command(async)]
-pub fn machines_remove(
+#[tauri::command]
+pub async fn machines_remove(
     machines: tauri::State<'_, Arc<Machines>>,
     id: String,
 ) -> Result<(), String> {
@@ -793,8 +819,13 @@ pub fn machines_remove(
         .get(&id)
         .ok_or("That machine is no longer saved.")?
         .clone();
-    let tokens = machines.tokens(&config_dir)?;
-    tokens.remove(&machine.host_id).map_err(|error| {
+    let tokens = machines.tokens(&config_dir).await?;
+    let host_id = machine.host_id.clone();
+    token_store::bounded("deleting the pairing token", STORE_TIMEOUT, move || {
+        tokens.remove(&host_id)
+    })
+    .await
+    .map_err(|error| {
         format!(
             "Could not delete {}'s pairing token: {error:#}",
             machine.name
