@@ -18,7 +18,8 @@ use rustcode::remote_gateway::hub::{HubLimits, SessionHub};
 use rustcode::remote_gateway::lifecycle::RemoteLifecycle;
 use rustcode_client::machine::machine_from_pairing;
 use rustcode_client::{
-    ClientKind, Connector, MachineRegistry, Route, RouteKind, TokenStore, transport,
+    Access, ClientKind, Connector, Machine, MachineRegistry, Paired, Route, RouteKind, Secret,
+    TokenStore, transport,
 };
 
 const WAIT: Duration = Duration::from_secs(15);
@@ -385,4 +386,353 @@ fn a_wss_address_is_refused() {
         format!("{error:#}").contains("no TLS listener"),
         "{error:#}"
     );
+}
+
+/// Pair this client with the host the way the app does: ask, take the code the
+/// owner reads off the machine, then keep what the pairing handed out.
+async fn pair(
+    host: &Host,
+    connector: &Connector,
+    config_dir: &Path,
+) -> (Machine, TokenStore, Paired) {
+    let ask = connector
+        .ask(&host.address())
+        .await
+        .expect("the request is taken");
+    let code = host.accept_connect_request().await;
+    let approved = ask
+        .wait(WAIT)
+        .await
+        .expect("the owner answers in time")
+        .expect("the request was approved");
+    let paired = approved.pair(&code).await.expect("the code is accepted");
+    let machine = machine_from_pairing(paired.session.welcome(), Route::new(host.address()), None);
+    let tokens = TokenStore::in_file(config_dir).unwrap();
+    paired
+        .keep(&tokens, &machine.host_id)
+        .expect("the pairing tokens are stored");
+    (machine, tokens, paired)
+}
+
+/// The rotating pairing, end to end against the real gateway: the access token
+/// reconnects without rotating, an expired access token and one the machine
+/// answers `access_expired` for both fall back to the refresh token, every
+/// rotation is stored before it is acknowledged, and the refresh token the
+/// pairing issued is a replay afterwards.
+#[tokio::test]
+async fn a_rotating_pairing_reconnects_with_access_then_rotates() {
+    let host = Host::start().await;
+    let config = tempfile::tempdir_in("/tmp").unwrap();
+    let connector = Connector::new(config.path(), ClientKind::Desktop).unwrap();
+    let (machine, tokens, paired) = pair(&host, &connector, config.path()).await;
+
+    // The client asked for rotation, so it got a refresh token and a
+    // short-lived access token instead of the static token, and no 30-day
+    // expiry: the pairing lasts until it is revoked.
+    assert!(
+        paired.session.welcome().expires_at.is_none(),
+        "a rotating pairing never expires"
+    );
+    let access = paired.access().expect("an access token comes with it");
+    let first_access = access.token().expose().to_owned();
+    let first_refresh = tokens
+        .get(&machine.host_id)
+        .unwrap()
+        .expect("the refresh token is stored durably");
+    assert_eq!(first_refresh.expose(), paired.secret.expose());
+    assert!(host.lifecycle.devices().unwrap()[0].rotates());
+
+    // 1. Inside the access token's 15 minutes, a reconnect presents it and
+    //    rotates nothing.
+    let (session, _) = connector
+        .connect(&machine, &tokens)
+        .await
+        .expect("the access token reconnects");
+    assert_eq!(
+        tokens.get(&machine.host_id).unwrap().unwrap().expose(),
+        first_refresh.expose(),
+        "an access-token reconnect replaces no refresh token"
+    );
+    assert_eq!(
+        session.access().expect("still valid").token().expose(),
+        first_access
+    );
+    drop(session);
+
+    // 2. An access token whose expiry has passed is not presented at all: the
+    //    refresh token reconnects, the new one is stored, and the rotation is
+    //    acknowledged before this call returns (the next connect below would
+    //    otherwise present the unacknowledged token and get the same answer).
+    tokens.keep_access(
+        &machine.host_id,
+        Access::new(
+            Secret::new(first_access.clone()),
+            chrono::Utc::now() - chrono::Duration::seconds(1),
+        ),
+    );
+    let (session, _) = connector
+        .connect(&machine, &tokens)
+        .await
+        .expect("the refresh token reconnects");
+    let second_refresh = tokens.get(&machine.host_id).unwrap().unwrap();
+    assert_ne!(
+        second_refresh.expose(),
+        first_refresh.expose(),
+        "every accepted refresh token rotates"
+    );
+    assert_ne!(
+        session
+            .access()
+            .expect("a rotation issues one")
+            .token()
+            .expose(),
+        first_access
+    );
+    drop(session);
+
+    // 3. An access token the machine no longer takes is answered
+    //    `access_expired`; the client falls back to the refresh token on the
+    //    same route rather than pairing again.
+    tokens.keep_access(
+        &machine.host_id,
+        Access::new(
+            Secret::new("an-access-token-this-machine-never-minted"),
+            chrono::Utc::now() + chrono::Duration::minutes(10),
+        ),
+    );
+    let (session, _) = connector
+        .connect(&machine, &tokens)
+        .await
+        .expect("access_expired falls back to the refresh token");
+    let third_refresh = tokens.get(&machine.host_id).unwrap().unwrap();
+    assert_ne!(third_refresh.expose(), second_refresh.expose());
+    assert!(session.access().is_some());
+    drop(session);
+
+    // 4. The refresh token the pairing issued was retired when its rotation was
+    //    acknowledged: presenting it again is a replay, and the machine revokes
+    //    the pairing. The client drops the dead token and says to pair again.
+    tokens.set(&machine.host_id, &first_refresh).unwrap();
+    assert!(
+        tokens.access(&machine.host_id).is_none(),
+        "a replaced durable token takes the access token with it"
+    );
+    let error = connector
+        .connect(&machine, &tokens)
+        .await
+        .expect_err("a retired refresh token is a replay");
+    let message = format!("{error:#}");
+    assert!(message.contains("token_replayed"), "{message}");
+    assert!(message.contains("pairing revoked"), "{message}");
+    assert!(
+        tokens.get(&machine.host_id).unwrap().is_none(),
+        "the client drops a token the machine revoked"
+    );
+
+    host.stop().await;
+}
+
+/// A device the machine revoked is told to pair again rather than to keep
+/// retrying a token it will never accept.
+#[tokio::test]
+async fn a_revoked_device_is_told_to_pair_again() {
+    let host = Host::start().await;
+    let config = tempfile::tempdir_in("/tmp").unwrap();
+    let connector = Connector::new(config.path(), ClientKind::Desktop).unwrap();
+    let (machine, tokens, _paired) = pair(&host, &connector, config.path()).await;
+
+    let revoked = host
+        .lifecycle
+        .revoke(&machine.device_id)
+        .await
+        .expect("the owner revokes the device");
+    assert_eq!(revoked.device_id, machine.device_id);
+
+    let error = connector
+        .connect(&machine, &tokens)
+        .await
+        .expect_err("a revoked device is refused");
+    let message = format!("{error:#}");
+    assert!(message.contains("unauthorized"), "{message}");
+    assert!(message.contains("pair with the machine again"), "{message}");
+
+    host.stop().await;
+}
+
+/// A gateway from before rotating tokens does not know the `refresh_token`
+/// field and answers `invalid_frame`. The static token of a pairing made
+/// before this client learned to rotate then reconnects with the old form, so
+/// an existing pairing keeps working until it is paired again.
+#[tokio::test]
+async fn an_older_gateway_reads_the_static_token_after_the_refresh_form() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    const HOST_ID: &str = "gw-static-00112233";
+    const DEVICE_ID: &str = "0011223344556677";
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        // The rotating form first: this gateway cannot read it, exactly as one
+        // from before rotating tokens answers it.
+        {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let Some(Ok(Message::Text(frame))) = socket.next().await else {
+                panic!("the client sends a handshake frame first");
+            };
+            assert!(frame.contains("\"refresh_token\""), "{frame}");
+            assert!(frame.contains("\"token_rotation\""), "{frame}");
+            socket
+                .send(Message::text(
+                    serde_json::json!({
+                        "type": "error",
+                        "code": "invalid_frame",
+                        "message": "first frame must be a pair or authenticate request",
+                    })
+                    .to_string(),
+                ))
+                .await
+                .unwrap();
+        }
+        // The pre-rotation form, which it is the gateway to read.
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        let Some(Ok(Message::Text(frame))) = socket.next().await else {
+            panic!("the client sends a handshake frame first");
+        };
+        assert!(frame.contains("\"token\""), "{frame}");
+        assert!(!frame.contains("refresh_token"), "{frame}");
+        assert!(!frame.contains("capabilities"), "{frame}");
+        socket
+            .send(Message::text(
+                serde_json::json!({
+                    "type": "authenticated",
+                    "protocol_version": 1,
+                    "gateway_id": HOST_ID,
+                    "instance_id": "inst-1",
+                    "device_id": DEVICE_ID,
+                    "device_name": "PC",
+                })
+                .to_string(),
+            ))
+            .await
+            .unwrap();
+        // Hold the connection the way a gateway that keeps it open does.
+        while let Some(Ok(_)) = socket.next().await {}
+    });
+
+    let config = tempfile::tempdir_in("/tmp").unwrap();
+    let connector = Connector::new(config.path(), ClientKind::Cli).unwrap();
+    let machine = Machine::new(
+        HOST_ID,
+        "Studio",
+        "macos",
+        DEVICE_ID,
+        Route::new(addr.to_string()),
+        chrono::Utc::now(),
+    );
+    let tokens = TokenStore::in_file(config.path()).unwrap();
+    tokens
+        .set(&machine.host_id, &Secret::new("a-static-device-token"))
+        .unwrap();
+
+    let (session, _) = connector
+        .connect(&machine, &tokens)
+        .await
+        .expect("the static token still authenticates");
+    assert_eq!(session.welcome().gateway_id, HOST_ID);
+    assert_eq!(session.welcome().device_id, DEVICE_ID);
+    drop(session);
+    server.abort();
+}
+
+/// An endpoint on a saved machine's address that answers as another gateway,
+/// and hands out a refresh token of its own, must not replace the saved
+/// credential or be told the rotation landed: the identity is checked before
+/// anything it sent is stored or acknowledged.
+#[tokio::test]
+async fn a_spoofed_gateway_cannot_overwrite_the_saved_token_or_get_an_ack() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    const HOST_ID: &str = "gw-real-00112233";
+    const DEVICE_ID: &str = "0011223344556677";
+    for (gateway_id, device_id) in [
+        ("gw-attacker-9988", DEVICE_ID),
+        (HOST_ID, "ffffffffffffffff"),
+    ] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (seen_tx, seen_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let Some(Ok(Message::Text(_))) = socket.next().await else {
+                panic!("the client sends a handshake frame first");
+            };
+            socket
+                .send(Message::text(
+                    serde_json::json!({
+                        "type": "authenticated",
+                        "protocol_version": 1,
+                        "gateway_id": gateway_id,
+                        "instance_id": "inst-1",
+                        "device_id": device_id,
+                        "device_name": "PC",
+                        "refresh_token": "attacker-refresh",
+                        "access_token": "attacker-access",
+                        "access_expires_at": "2099-01-01T00:00:00Z",
+                        "rotation_id": "5be1c4a07d2e9f63",
+                    })
+                    .to_string(),
+                ))
+                .await
+                .unwrap();
+            // What follows from the client: a closed socket, not a `token_ack`.
+            let next = tokio::time::timeout(Duration::from_secs(5), socket.next()).await;
+            let acked =
+                matches!(next, Ok(Some(Ok(Message::Text(frame)))) if frame.contains("token_ack"));
+            let _ = seen_tx.send(acked);
+        });
+
+        let config = tempfile::tempdir_in("/tmp").unwrap();
+        let connector = Connector::new(config.path(), ClientKind::Cli).unwrap();
+        let machine = Machine::new(
+            HOST_ID,
+            "Studio",
+            "macos",
+            DEVICE_ID,
+            Route::new(addr.to_string()),
+            chrono::Utc::now(),
+        );
+        let tokens = TokenStore::in_file(config.path()).unwrap();
+        tokens
+            .set(&machine.host_id, &Secret::new("the-real-refresh"))
+            .unwrap();
+
+        let error = connector
+            .connect(&machine, &tokens)
+            .await
+            .expect_err("a mismatched identity is not a connection");
+        let message = format!("{error:#}");
+        assert!(
+            !message.contains("attacker-refresh") && !message.contains("attacker-access"),
+            "{message}"
+        );
+        assert_eq!(
+            tokens.get(&machine.host_id).unwrap().unwrap().expose(),
+            "the-real-refresh",
+            "the saved credential is untouched ({gateway_id}, {device_id})"
+        );
+        assert!(
+            tokens.access(&machine.host_id).is_none(),
+            "the endpoint's access token is not kept"
+        );
+        assert!(
+            !seen_rx.await.unwrap(),
+            "no token_ack goes to an endpoint that is not the machine"
+        );
+        server.abort();
+    }
 }

@@ -71,6 +71,8 @@ const SETTINGS: [SettingsSection, string][] = [
   ["agents", "Agents: harnesses, models and orchestration"],
   ["connections", "Connections"],
   ["capabilities", "Capabilities: skills and MCP servers"],
+  ["remote", "Remote access: phones and paired devices"],
+  ["machines", "Machines: other computers to run threads on"],
   ["appearance", "Appearance"],
   ["keyboard", "Keyboard"],
   ["usage", "Usage"],

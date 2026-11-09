@@ -581,10 +581,10 @@ pub async fn for_branch(cwd: &Path, branch: &str) -> Result<Option<DelegatePull>
 }
 
 /// How often a merge re-reads the checks, and how long it waits for them. The
-/// cap is under an hour so the wait fits inside an external harness's MCP call
-/// timeout (Codex's `tool_timeout_sec` is 61 minutes).
+/// cap is 25 minutes, like `wait_session`: an MCP client aborts a call that
+/// stays silent for about half an hour, and `pending` lets the caller ask again.
 pub const MERGE_POLL_SECS: u64 = 20;
-pub const MAX_MERGE_WAIT_SECS: u64 = 55 * 60;
+pub const MAX_MERGE_WAIT_SECS: u64 = 25 * 60;
 
 /// The `gh pr merge` arguments: squash and delete the remote branch, with
 /// `--repo` so gh leaves the local branch (checked out in the delegate's
@@ -683,15 +683,66 @@ impl MergePoll {
     }
 }
 
+/// The merges running now, by the id their caller gave (the orchestration call
+/// id): a call that was dropped (the harness stopped waiting, the MCP server
+/// answered `pending`) cancels its merge, so one that was reported as not
+/// merged can never merge afterwards.
+static MERGES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, tokio_util::sync::CancellationToken>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Start tracking a merge under `id`; the returned token ends it.
+pub fn register_merge(id: &str) -> tokio_util::sync::CancellationToken {
+    let token = tokio_util::sync::CancellationToken::new();
+    MERGES
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(id.to_owned(), token.clone());
+    token
+}
+
+/// Stop the merge tracked under `id`, if any is still running.
+pub fn cancel_merge(id: &str) -> bool {
+    let token = MERGES
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .get(id)
+        .cloned();
+    token.inspect(|token| token.cancel()).is_some()
+}
+
+/// Forgets a merge when it ends, however it ends.
+pub struct MergeGuard(pub Option<String>);
+
+impl Drop for MergeGuard {
+    fn drop(&mut self) {
+        if let Some(id) = self.0.take() {
+            MERGES
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .remove(&id);
+        }
+    }
+}
+
+fn cancelled() -> PullError {
+    PullError {
+        code: "cancelled",
+        message: "the call that asked for this merge was dropped; nothing was merged".to_owned(),
+    }
+}
+
 /// Wait for every check except the advisory ones, then squash-merge and delete
 /// the branch, as `scripts/pr-merge.sh` does. Two quiet rounds in a row are
 /// needed, so a path-filtered job that registers late is still caught. A
 /// failing check stops it before anything merges, and so does a pull request
-/// with no checks at all.
+/// with no checks at all. `cancel` ends it with a `cancelled` error at any
+/// point before `gh pr merge` starts.
 pub async fn merge_when_green(
     cwd: &Path,
     number: u64,
     wait: Duration,
+    cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<MergeOutcome, PullError> {
     let started = std::time::Instant::now();
     let wait = wait.clamp(
@@ -700,7 +751,14 @@ pub async fn merge_when_green(
     );
     let mut poll = MergePoll::default();
     loop {
-        let value = watch_view(cwd, number).await?;
+        if cancel.is_cancelled() {
+            return Err(cancelled());
+        }
+        let value = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(cancelled()),
+            value = watch_view(cwd, number) => value?,
+        };
         let Some(detail) = detail(&value) else {
             return Err(PullError {
                 code: "failed",
@@ -749,6 +807,10 @@ pub async fn merge_when_green(
         }
         match poll.observe(&checks) {
             PollAction::Merge => {
+                // The last point to stop: once `gh pr merge` runs it lands.
+                if cancel.is_cancelled() {
+                    return Err(cancelled());
+                }
                 let repository = repository_of(&detail.summary.url);
                 let args = merge_args(number, repository.as_deref());
                 let args: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -812,7 +874,11 @@ pub async fn merge_when_green(
                 message: format!("checks were still pending after {} s", elapsed.as_secs()),
             });
         }
-        tokio::time::sleep(Duration::from_secs(MERGE_POLL_SECS)).await;
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(cancelled()),
+            _ = tokio::time::sleep(Duration::from_secs(MERGE_POLL_SECS)) => {}
+        }
     }
 }
 
@@ -1015,6 +1081,27 @@ pub(crate) fn detail(value: &Value) -> Option<PullDetail> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn a_cancelled_merge_stops_before_it_asks_github_or_merges() {
+        let token = register_merge("call-merge-test");
+        assert!(cancel_merge("call-merge-test"));
+        // `gh` is never run: a cancelled merge returns before its first look.
+        let outcome = merge_when_green(
+            Path::new("/nonexistent"),
+            1,
+            Duration::from_secs(60),
+            &token,
+        )
+        .await;
+        let error = outcome.expect_err("a cancelled merge is not an outcome");
+        assert_eq!(error.code, "cancelled");
+        drop(MergeGuard(Some("call-merge-test".to_owned())));
+        assert!(
+            !cancel_merge("call-merge-test"),
+            "a finished merge is forgotten"
+        );
+    }
 
     fn pull() -> Value {
         json!({

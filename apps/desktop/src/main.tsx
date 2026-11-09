@@ -13,6 +13,7 @@ import {
   setSystemReduceTransparency,
   setUserReduceTransparency,
 } from "./lib/transparency";
+import { startMachines } from "./state/machines";
 import * as store from "./state/store";
 import { Recoverable } from "./ui/Recover";
 
@@ -69,7 +70,12 @@ if (catalog) {
 if (import.meta.env.DEV || new URLSearchParams(window.location.search).get("transport") === "perf")
   Object.assign(window, { __rustcode: store });
 
-if (!catalog) void defaultTransport().then(store.connect);
+if (!catalog)
+  void defaultTransport().then(async (transport) => {
+    await store.connect(transport);
+    // The other computers this app is paired with (Settings › Machines): their own supervisors.
+    await startMachines();
+  });
 
 // `?queuePreview` in a dev browser with the mock: a thread's queue, for screenshots (state/queuePreview.ts).
 if (import.meta.env.DEV) void import("./state/queuePreview").then((m) => m.installQueuePreview());

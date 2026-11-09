@@ -13,10 +13,13 @@ while IFS= read -r path; do
     case "$path" in
         Cargo.toml|Cargo.lock|rust-toolchain*|.cargo/*)
             all=true ;;
+        # The committed contract and the engine's gateway handshake are what the
+        # client's frames are mirrored against: a wire change on either side
+        # must run the client's golden-contract tests too (#3240).
+        docs/remote-protocol/*|rustcode/engine/src/remote_gateway/*)
+            engine=true
+            client=true ;;
         rustcode/engine/src/*|rustcode/engine/tests/*|rustcode/engine/build.rs|src/*|tests/*|build.rs)
-            engine=true ;;
-        # Generated from the engine's wire types; its tests detect drift.
-        docs/remote-protocol/v1/*)
             engine=true ;;
         rustcode/tui/Cargo.toml|rustcode/tui/build.rs|rustcode/tui/src/*|rustcode/tui/tests/*|rustcode/tui/benches/*|rustcode/tui/examples/*)
             tui=true ;;

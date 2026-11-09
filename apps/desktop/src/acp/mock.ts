@@ -54,6 +54,14 @@ export interface MockOptions {
    * starts idle.
    */
   remote?: "disconnected" | "expired" | "connect";
+  /**
+   * The machines this app is paired with (`?machines=`): `paired` is a machine
+   * saved just now, `connect` starts with none saved so the Add machine flow
+   * can be walked, `offline` a machine the shell keeps retrying, and `revoked`
+   * one whose pairing the machine ended. The default is the paired, connected
+   * machine the happy path shows.
+   */
+  machines?: "paired" | "connect" | "offline" | "revoked";
 }
 
 interface MockConnectRequest {
@@ -3017,6 +3025,8 @@ export class MockEngine {
           },
         };
       }
+      case "_rustcode/pulls/merge/cancel":
+        return { cancelled: false };
       case "_rustcode/pulls/merge":
         return {
           merge: {
@@ -4496,12 +4506,174 @@ export function mockLinkMeta(url: string): JsonObject | null {
   return { title: host, icon: svgIcon("#435c6e", host.charAt(0).toUpperCase() || "?") };
 }
 
+// ---------------------------------------------------------------- machines
+
+/**
+ * The machine this app is paired with in the mock: a Linux box with three
+ * threads, which is what `Lars's Linux box` is on the machine network plan.
+ */
+const MOCK_MACHINE = {
+  id: "gw-7c1d9e4f2a8b6d30",
+  name: "Lars's Linux box",
+  platform: "linux",
+  host: "ubuntu-1.local",
+  route: "192.168.1.31:17879",
+  threads: 3,
+};
+
+/** One saved machine as `machines_list` reports it (`src-tauri/src/machines.rs`). */
+function mockMachine(state: "connected" | "offline" | "needsPairing", addedAt: number): JsonObject {
+  return {
+    id: MOCK_MACHINE.id,
+    name: MOCK_MACHINE.name,
+    platform: MOCK_MACHINE.platform,
+    main: false,
+    routes: [{ kind: "lan", address: MOCK_MACHINE.route, encrypted: false }],
+    route: { kind: "lan", address: MOCK_MACHINE.route, encrypted: false },
+    state,
+    detail:
+      state === "offline"
+        ? "Not connected. Retrying in 4 s."
+        : state === "needsPairing"
+          ? "Lars's Linux box ended this computer's pairing. Pair it again to see its threads."
+          : null,
+    retryInSecs: state === "offline" ? 4 : null,
+    addedAt: new Date(addedAt).toISOString(),
+    lastConnectedAt: state === "connected" ? new Date().toISOString() : new Date(addedAt).toISOString(),
+  };
+}
+
+/** The saved machines `?machines=` starts with. */
+function mockMachineList(option: MockOptions["machines"]): JsonObject[] {
+  const savedAt = Date.now() - 1000 * 60 * 60 * 24 * 6;
+  switch (option) {
+    case "connect":
+      return [];
+    case "offline":
+      return [mockMachine("offline", savedAt)];
+    case "revoked":
+      return [mockMachine("needsPairing", savedAt)];
+    case "paired":
+      // Saved during this session: the row says "just now".
+      return [mockMachine("connected", Date.now())];
+    default:
+      return [mockMachine("connected", savedAt)];
+  }
+}
+
+/**
+ * Whether an address is on the public internet, by the same rule
+ * `rustcode-client` applies (`registry::classify_address`): a private, loopback
+ * or link-local address is LAN, CGNAT and `.ts.net` are an overlay, a bare name
+ * or `.local` is LAN, and anything else is public. The client refuses a public
+ * address because the gateway has no TLS.
+ */
+function mockIsPublic(address: string): boolean {
+  const withoutScheme = address.trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
+  const endpoint = withoutScheme.split("/")[0] ?? withoutScheme;
+  const host = (endpoint.split(":")[0] ?? endpoint).replace(/^\[|\]$/g, "").toLowerCase();
+  if (!host) return false;
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+    const [a, b] = host.split(".").map(Number) as [number, number];
+    if (a === 10 || a === 127) return false;
+    if (a === 192 && b === 168) return false;
+    if (a === 172 && b >= 16 && b <= 31) return false;
+    if (a === 169 && b === 254) return false;
+    // 100.64.0.0/10 is CGNAT, which Tailscale and other overlays hand out.
+    if (a === 100 && b >= 64 && b <= 127) return false;
+    return true;
+  }
+  // IPv6: loopback, unique-local and link-local are private; the rest are not.
+  if (host.includes(":")) return !(host === "::1" || host.startsWith("fd") || host.startsWith("fe80"));
+  if (host.endsWith(".local") || host.endsWith(".ts.net")) return false;
+  return host.includes(".");
+}
+
+/** The machines Bonjour finds in the mock, one of them already saved. */
+function mockDiscovered(saved: JsonObject[]): JsonObject[] {
+  const known = saved.some((machine) => machine.id === MOCK_MACHINE.id);
+  return [
+    {
+      name: MOCK_MACHINE.name,
+      address: MOCK_MACHINE.route,
+      addresses: ["192.168.1.31"],
+      gatewayId: MOCK_MACHINE.id,
+      saved: known,
+    },
+    {
+      name: "Studio",
+      address: "192.168.1.20:17879",
+      addresses: ["192.168.1.20"],
+      gatewayId: "gw-8e1f4b7a5c2d4e6f",
+      saved: saved.some((machine) => machine.id === "gw-8e1f4b7a5c2d4e6f"),
+    },
+  ];
+}
+
+/**
+ * One saved machine's ACP, answered in process for `?machines=`: the app's own
+ * shell dials the real machine over its gateway, so this exists only where
+ * there is no shell to dial with. It answers `initialize` and `session/list`,
+ * which is what the app reads of a connected machine in this step.
+ */
+export class MockMachine {
+  constructor(
+    private readonly name: string,
+    private readonly threads = MOCK_MACHINE.threads,
+  ) {}
+
+  /** The frames this machine sends back for one line the page wrote. */
+  receive(line: string): string[] {
+    let frame: JsonObject;
+    try {
+      const parsed = JSON.parse(line) as Json;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+      frame = parsed;
+    } catch {
+      return [];
+    }
+    const id = frame.id;
+    if (typeof id !== "number") return [];
+    if (frame.method === "initialize")
+      return [JSON.stringify({ jsonrpc: "2.0", id, result: { protocolVersion: 1, agentCapabilities: {} } })];
+    if (frame.method === "session/list")
+      return [JSON.stringify({ jsonrpc: "2.0", id, result: { sessions: this.sessions() } })];
+    return [
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        error: {
+          code: -32601,
+          message: `${this.name} does not answer ${String(frame.method)}.`,
+        },
+      }),
+    ];
+  }
+
+  private sessions(): JsonObject[] {
+    const titles = ["Run the tests", "Fix the flaky CI job", "Draft the release notes"];
+    const now = Date.now();
+    return titles.slice(0, this.threads).map((title, index) => ({
+      sessionId: `mock-linux-${index + 1}`,
+      cwd: "/home/lars/code/rustcode",
+      title,
+      updatedAt: now - index * 60_000,
+      harness: "claude",
+      model: "sonnet-5.5",
+    }));
+  }
+}
+
 export class MockTransport implements Transport {
   readonly name = "mock";
   private engine: MockEngine | null = null;
   private onEvent: ((event: TransportEvent) => void) | null = null;
+  /** The machines this app is paired with, as `machines_list` reports them. */
+  private machineList: JsonObject[];
 
-  constructor(private readonly options: MockOptions = {}) {}
+  constructor(private readonly options: MockOptions = {}) {
+    this.machineList = mockMachineList(options.machines);
+  }
 
   async start(onEvent: (event: TransportEvent) => void): Promise<void> {
     this.onEvent = onEvent;
@@ -4560,6 +4732,44 @@ export class MockTransport implements Transport {
   }
 
   async call(command: string, args: Record<string, unknown>): Promise<unknown> {
+    if (command === "machines_list") return this.machineList;
+    if (command === "machines_discover") return mockDiscovered(this.machineList);
+    if (command === "machines_ask") {
+      const address = String(args.address ?? "");
+      if (!address) throw new Error("Enter a machine address first.");
+      if (mockIsPublic(address))
+        throw new Error(
+          `refusing to dial ${address}: it is a public address and the gateway has no TLS listener, so the pairing code and the device token would travel in the clear. Dial a LAN, Tailscale or VPN address instead; encrypted transport is tracked in #2651`,
+        );
+      // Asked, then accepted on the machine: the code is what comes next. The
+      // ask id is the page's own, and it names the request for `machines_pair`.
+      return { askId: String(args.askId ?? ""), codeLength: 8, expiresInSecs: 120 };
+    }
+    if (command === "machines_cancel") return null;
+    if (command === "machines_pair") {
+      const code = String(args.code ?? "");
+      if (!/^\d{8}$/.test(code))
+        throw new Error("A pairing code is exactly 8 digits. Ask the machine again for a new code.");
+      const paired = mockMachine("connected", Date.now());
+      this.machineList = [...this.machineList.filter((machine) => machine.id !== paired.id), paired];
+      return { ...paired, state: "connecting" };
+    }
+    if (command === "machines_remove") {
+      this.machineList = this.machineList.filter((machine) => machine.id !== String(args.id));
+      return null;
+    }
+    if (command === "machines_set_main") {
+      this.machineList = this.machineList.map((machine) => ({
+        ...machine,
+        main: machine.id === String(args.id),
+      }));
+      return null;
+    }
+    // A machine's own channel is opened in process (`MachineTransport` hands it a MockMachine).
+    if (command === "machine_connect" || command === "machine_send" || command === "machine_disconnect") {
+      const machine = this.machineList.find((saved) => saved.id === String(args.id));
+      return { connected: machine?.state !== "offline" && machine?.state !== "needsPairing" };
+    }
     if (command === "link_meta") return mockLinkMeta(String(args.url));
     if (command === "server_status") return this.serverStatus();
     if (command === "system_info") return MOCK_SYSTEM_INFO;

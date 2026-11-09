@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
@@ -18,6 +19,13 @@ use super::hub::{CallAnswer, CallRequest};
 /// The MCP revisions this server speaks; it answers with the client's when
 /// it is one of these.
 const PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
+
+/// How often a pending call reports progress. A call can block for minutes
+/// (`wait_session`, `merge_when_green`), and an MCP client stops a call that
+/// sends neither an answer nor progress (Claude Code aborts a silent one after
+/// about half an hour), so a client that sent a `progressToken` gets this
+/// heartbeat until the answer arrives.
+const PROGRESS_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Where calls go: the parent engine's socket, or a stand-in in tests.
 pub trait Forward: Send + Sync + 'static {
@@ -104,12 +112,39 @@ pub async fn run(session_id: String, socket: PathBuf, token: String) -> Result<(
 /// Serve newline-delimited JSON-RPC from `input`, answering on `output`.
 pub async fn serve<R, W>(
     input: R,
-    mut output: W,
+    output: W,
     identity: Identity,
     forward: Arc<dyn Forward>,
     // The client's orchestration version: which tools and hint it can answer.
     orchestration: u8,
     smart_ui: bool,
+) -> Result<(), String>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
+    serve_every(
+        input,
+        output,
+        identity,
+        forward,
+        orchestration,
+        smart_ui,
+        PROGRESS_INTERVAL,
+    )
+    .await
+}
+
+/// [`serve`], with the interval a pending call reports progress at.
+async fn serve_every<R, W>(
+    input: R,
+    mut output: W,
+    identity: Identity,
+    forward: Arc<dyn Forward>,
+    orchestration: u8,
+    smart_ui: bool,
+    // How often a pending call reports progress; 0 disables it.
+    progress_every: Duration,
 ) -> Result<(), String>
 where
     R: AsyncRead + Unpin,
@@ -199,14 +234,53 @@ where
                 in_flight.insert(
                     key,
                     calls.spawn(async move {
-                        let answer = call(
+                        let token = progress_token(&params);
+                        let mut ticker =
+                            token
+                                .as_ref()
+                                .filter(|_| !progress_every.is_zero())
+                                .map(|_| {
+                                    let mut ticker = tokio::time::interval(progress_every);
+                                    // A slow call must not make the next ticks fire in a burst.
+                                    ticker.set_missed_tick_behavior(
+                                        tokio::time::MissedTickBehavior::Delay,
+                                    );
+                                    ticker
+                                });
+                        let tool = params.get("name").and_then(Value::as_str).unwrap_or("");
+                        let message = progress_message(tool, &params);
+                        let waiting = call(
                             forward.as_ref(),
                             &identity,
                             &params,
                             orchestration,
                             smart_ui,
-                        )
-                        .await;
+                        );
+                        tokio::pin!(waiting);
+                        let answer = match ticker.as_mut() {
+                            Some(ticker) => {
+                                // The first tick of an interval is immediate: a call
+                                // answered at once is not worth a notification.
+                                ticker.tick().await;
+                                let mut sent = 0u64;
+                                loop {
+                                    tokio::select! {
+                                        answer = &mut waiting => break answer,
+                                        _ = ticker.tick() => {
+                                            sent += 1;
+                                            if let Some(token) = token.as_ref() {
+                                                let _ = sender.send(progress_notification(
+                                                    token,
+                                                    sent,
+                                                    &message,
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            None => waiting.await,
+                        };
                         let _ = sender.send(result(
                             id,
                             json!({
@@ -284,18 +358,168 @@ async fn call(
             ),
         };
     }
-    forward
-        .call(CallRequest {
-            session_id: identity.session_id.clone(),
-            token: identity.token.clone(),
-            tool: tool.to_owned(),
-            args,
+    let limit = super::requested_wait(tool, &args).map(|wait| {
+        wait + if tool == super::WAIT_SESSION {
+            super::WAIT_SERVER_GRACE
+        } else {
+            super::MERGE_ANSWER_GRACE
+        }
+    });
+    let waiting = forward.call(CallRequest {
+        session_id: identity.session_id.clone(),
+        token: identity.token.clone(),
+        tool: tool.to_owned(),
+        args,
+    });
+    let Some(limit) = limit else {
+        return waiting.await;
+    };
+    // The app answers a wait at its own deadline, but nothing makes it: a slow
+    // or suspended app would leave the harness waiting until its own abort.
+    // Dropping the forwarded call closes the socket, which ends it in the app.
+    match bounded(limit, waiting).await {
+        Some(answer) => answer,
+        None => CallAnswer {
+            success: true,
+            content: timed_out_answer(tool),
+        },
+    }
+}
+
+/// How often a bounded call checks the clock that keeps counting in sleep. The
+/// runtime's timers stop while the machine sleeps; that clock does not.
+const CLOCK_CHECK: Duration = Duration::from_secs(5);
+
+/// Time from an arbitrary point that keeps counting while the machine sleeps
+/// and never runs backwards: `CLOCK_MONOTONIC` on macOS (which, unlike
+/// `std::time::Instant`'s `CLOCK_UPTIME_RAW`, includes sleep) and
+/// `CLOCK_BOOTTIME` on Linux. Elsewhere the wall clock, which can be set back.
+fn suspend_aware_now() -> Duration {
+    #[cfg(unix)]
+    {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        const CLOCK: libc::clockid_t = libc::CLOCK_BOOTTIME;
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        const CLOCK: libc::clockid_t = libc::CLOCK_MONOTONIC;
+        let mut now = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: `now` is a valid timespec for the call to fill.
+        if unsafe { libc::clock_gettime(CLOCK, &mut now) } == 0 {
+            return Duration::new(
+                now.tv_sec.max(0) as u64,
+                now.tv_nsec.clamp(0, 999_999_999) as u32,
+            );
+        }
+    }
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+}
+
+/// Whether `limit` has passed between two readings of that clock. A reading
+/// that went backwards (a wall clock set back) cannot show how long it was, so
+/// it counts as passed: a wait that ends early is told to call again, a wait
+/// that never ends is aborted by the harness.
+fn deadline_passed(started: Duration, now: Duration, limit: Duration) -> bool {
+    now.checked_sub(started)
+        .is_none_or(|elapsed| elapsed >= limit)
+}
+
+/// `future`'s output, or `None` once `limit` has passed on the runtime's timer
+/// or on the clock that counts through sleep, whichever comes first.
+async fn bounded<T>(limit: Duration, future: impl std::future::Future<Output = T>) -> Option<T> {
+    let started = suspend_aware_now();
+    tokio::pin!(future);
+    let timer = tokio::time::sleep(limit);
+    tokio::pin!(timer);
+    let mut clock = tokio::time::interval(CLOCK_CHECK.min(limit.max(Duration::from_millis(1))));
+    clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            output = &mut future => return Some(output),
+            _ = &mut timer => return None,
+            _ = clock.tick() => {
+                if deadline_passed(started, suspend_aware_now(), limit) {
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+/// What a wait says when the app did not answer in time: the same shape as the
+/// app's own timeout, so the caller reads it the same way.
+fn timed_out_answer(tool: &str) -> String {
+    let answer = if tool == super::MERGE_WHEN_GREEN {
+        json!({
+            "state": "pending",
+            "merged": false,
+            "detail": "The app did not answer in time, so nothing is known about the checks. Call thread_status for the pull request, then call merge_when_green again to keep waiting.",
         })
-        .await
+    } else {
+        json!({
+            "status": "timeout",
+            "links": [],
+            "note": "The app did not answer in time. Call wait_session again to keep waiting; anything that settles also comes as a wake, so do not poll.",
+        })
+    };
+    answer.to_string()
 }
 
 /// The MCP notification a harness sends to stop waiting for a call.
 const CANCEL_NOTIFICATION: &str = "notifications/cancelled";
+/// The notification that keeps a pending call alive.
+const PROGRESS_NOTIFICATION: &str = "notifications/progress";
+
+/// The `progressToken` a `tools/call` carried, when it carried one: only then
+/// may the server send progress for it, and only then does a client that
+/// listens for progress know the call is still running.
+fn progress_token(params: &Value) -> Option<Value> {
+    params.get("_meta")?.get("progressToken").cloned()
+}
+
+/// What a pending call's progress notification says: the threads it waits on
+/// when it named them, else that it is still waiting.
+fn progress_message(tool: &str, params: &Value) -> String {
+    let args = params.get("arguments");
+    match tool {
+        super::WAIT_SESSION => {
+            let links = args
+                .and_then(|args| args.get("link_ids"))
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len)
+                + args
+                    .and_then(|args| args.get("link_id"))
+                    .and_then(Value::as_str)
+                    .map_or(0, |_| 1);
+            match links {
+                0 => "still waiting".to_owned(),
+                1 => "still waiting on 1 thread".to_owned(),
+                n => format!("still waiting on {n} threads"),
+            }
+        }
+        super::MERGE_WHEN_GREEN => args
+            .and_then(|args| args.get("session_id"))
+            .and_then(Value::as_str)
+            .map_or_else(
+                || "still waiting for the checks".to_owned(),
+                |thread| format!("still waiting for the checks of {thread}"),
+            ),
+        other => format!("still waiting on {other}"),
+    }
+}
+
+/// One `notifications/progress`: `progress` must rise with every notification
+/// for the same token, so it counts the heartbeats sent for this call.
+fn progress_notification(token: &Value, progress: u64, message: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "method": PROGRESS_NOTIFICATION,
+        "params": { "progressToken": token, "progress": progress, "message": message },
+    })
+}
 
 /// A request id as a map key: `1` and `"1"` are the same call to a harness.
 fn request_key(id: &Value) -> String {
@@ -661,6 +885,197 @@ mod tests {
         );
         client_write.shutdown().await.unwrap();
         server.await.unwrap().unwrap();
+    }
+
+    /// A call the app answers after `delay`, or never when it is `None`.
+    struct Slow(Option<Duration>);
+
+    impl Forward for Slow {
+        fn call(
+            &self,
+            _request: CallRequest,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = CallAnswer> + Send + '_>> {
+            let delay = self.0;
+            Box::pin(async move {
+                match delay {
+                    Some(delay) => {
+                        tokio::time::sleep(delay).await;
+                        CallAnswer {
+                            success: true,
+                            content: "{\"status\":\"done\"}".to_owned(),
+                        }
+                    }
+                    None => std::future::pending().await,
+                }
+            })
+        }
+    }
+
+    /// Everything the server writes for one `tools/call` until its result,
+    /// with the virtual time the call took.
+    async fn run_slow(params: Value, app: Slow) -> (Vec<Value>, Duration) {
+        let (client, server_side) = tokio::io::duplex(64 * 1024);
+        let (server_read, server_write) = tokio::io::split(server_side);
+        let (client_read, mut client_write) = tokio::io::split(client);
+        let server = tokio::spawn(serve_every(
+            server_read,
+            server_write,
+            Identity {
+                session_id: "thread-1".into(),
+                token: "t".into(),
+            },
+            Arc::new(app),
+            super::super::VERSION,
+            false,
+            PROGRESS_INTERVAL,
+        ));
+        let call = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params});
+        let started = tokio::time::Instant::now();
+        client_write
+            .write_all(format!("{call}\n").as_bytes())
+            .await
+            .unwrap();
+        let mut lines = BufReader::new(client_read).lines();
+        let mut seen = Vec::new();
+        loop {
+            let line = lines.next_line().await.unwrap().expect("a line");
+            let message = serde_json::from_str::<Value>(&line).unwrap();
+            let done = message.get("id").is_some();
+            seen.push(message);
+            if done {
+                break;
+            }
+        }
+        let took = started.elapsed();
+        client_write.shutdown().await.unwrap();
+        server.await.unwrap().unwrap();
+        (seen, took)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_pending_call_reports_progress_until_its_answer() {
+        let params = json!({"name": "wait_session",
+                            "arguments": {"link_ids": ["a/1", "a/2"], "timeout_ms": 600_000},
+                            "_meta": {"progressToken": "tok-1"}});
+        let (seen, took) = run_slow(params, Slow(Some(Duration::from_secs(100)))).await;
+        assert_eq!(took, Duration::from_secs(100));
+        let (result, progress) = seen.split_last().unwrap();
+        assert_eq!(result["id"], 7);
+        assert_eq!(result["result"]["isError"], false, "{result}");
+        // 30, 60 and 90 s: a heartbeat each, none for the instant start.
+        assert_eq!(progress.len(), 3, "{progress:?}");
+        let mut last = 0;
+        for note in progress {
+            assert_eq!(note["method"], "notifications/progress");
+            assert!(note.get("id").is_none());
+            assert_eq!(note["params"]["progressToken"], "tok-1");
+            let now = note["params"]["progress"].as_u64().unwrap();
+            assert!(now > last, "progress rises: {note}");
+            last = now;
+            assert_eq!(note["params"]["message"], "still waiting on 2 threads");
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn any_pending_call_reports_progress_and_a_quick_one_does_not() {
+        let params = json!({"name": "merge_when_green", "arguments": {"session_id": "d1"},
+                            "_meta": {"progressToken": 5}});
+        let (seen, _) = run_slow(params, Slow(Some(Duration::from_secs(45)))).await;
+        assert_eq!(seen.len(), 2, "{seen:?}");
+        assert_eq!(seen[0]["params"]["progressToken"], 5);
+        assert_eq!(
+            seen[0]["params"]["message"],
+            "still waiting for the checks of d1"
+        );
+
+        let params = json!({"name": "wait_session", "arguments": {"link_id": "a/1"},
+                            "_meta": {"progressToken": "t"}});
+        let (seen, _) = run_slow(params, Slow(Some(Duration::from_secs(1)))).await;
+        assert_eq!(
+            seen.len(),
+            1,
+            "an instant answer sends no progress: {seen:?}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_call_without_a_progress_token_stays_silent() {
+        let params = json!({"name": "wait_session",
+                            "arguments": {"link_id": "a/1", "timeout_ms": 600_000}});
+        let (seen, took) = run_slow(params, Slow(Some(Duration::from_secs(100)))).await;
+        assert_eq!(took, Duration::from_secs(100));
+        assert_eq!(seen.len(), 1, "only the result: {seen:?}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_wait_answers_its_timeout_even_when_the_app_never_does() {
+        // 5 s asked: the answer is out within a few seconds of it.
+        let params = json!({"name": "wait_session",
+                            "arguments": {"link_id": "a/1", "timeout_ms": 5_000}});
+        let (seen, took) = run_slow(params, Slow(None)).await;
+        assert!(took >= Duration::from_secs(5), "{took:?}");
+        assert!(
+            took <= Duration::from_secs(5) + Duration::from_secs(10),
+            "{took:?}"
+        );
+        let result = &seen[0]["result"];
+        assert_eq!(result["isError"], false, "{result}");
+        let text: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(text["status"], "timeout");
+        assert!(text["note"].as_str().unwrap().contains("again"));
+    }
+
+    #[test]
+    fn a_clock_that_ran_backwards_counts_as_the_deadline_passed() {
+        let at = Duration::from_secs;
+        let limit = at(30);
+        assert!(!deadline_passed(at(100), at(100), limit));
+        assert!(!deadline_passed(at(100), at(129), limit));
+        assert!(deadline_passed(at(100), at(130), limit));
+        // Set back by an hour: no way to tell how long it was, so it is over.
+        assert!(deadline_passed(at(10_000), at(6_400), limit));
+        assert!(deadline_passed(at(100), at(99), limit));
+    }
+
+    #[test]
+    fn the_suspend_aware_clock_never_runs_backwards() {
+        let a = suspend_aware_now();
+        std::thread::sleep(Duration::from_millis(5));
+        let b = suspend_aware_now();
+        assert!(b > a, "{a:?} then {b:?}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_wait_over_the_cap_is_cut_to_it() {
+        // The 1 500 000 ms the live call asked for is the cap itself; 3 600 000 is cut to it.
+        for asked in [1_500_000u64, 3_600_000] {
+            let params = json!({"name": "wait_session",
+                                "arguments": {"link_id": "a/1", "timeout_ms": asked}});
+            let (_, took) = run_slow(params, Slow(None)).await;
+            let cap = Duration::from_millis(super::super::MAX_WAIT_MS);
+            assert!(
+                took >= cap && took <= cap + Duration::from_secs(10),
+                "{asked}: {took:?}"
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_merge_that_got_no_answer_says_it_is_pending() {
+        let params = json!({"name": "merge_when_green",
+                            "arguments": {"session_id": "d1", "timeout_ms": 3_300_000}});
+        let (seen, took) = run_slow(params, Slow(None)).await;
+        let cap = Duration::from_millis(super::super::MAX_MERGE_WAIT_MS);
+        assert!(
+            took >= cap && took <= cap + Duration::from_secs(190),
+            "{took:?}"
+        );
+        let text: Value =
+            serde_json::from_str(seen[0]["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(text["state"], "pending");
+        assert_eq!(text["merged"], false);
     }
 
     #[tokio::test]

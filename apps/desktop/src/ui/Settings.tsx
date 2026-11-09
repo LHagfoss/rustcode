@@ -18,6 +18,7 @@ import {
   Info,
   Keyboard,
   KeyRound,
+  Laptop,
   Layers,
   MessageSquare,
   Palette,
@@ -123,6 +124,7 @@ import { CapabilitiesPage } from "./Capabilities";
 import { DiagnosticsPage } from "./DiagnosticsPage";
 import { DefaultsForm, HarnessList } from "./Harnesses";
 import { HeaderButtonsSetting } from "./HeaderButtonsSetting";
+import { MachinesPage } from "./MachinesPage";
 import { NewThreadBanner } from "./NewThreadBanner";
 import { ChromeButton, cx, Kbd, Spinner, Switch } from "./primitives";
 import { RemoteAccessPage } from "./RemoteAccessPage";
@@ -170,6 +172,7 @@ const NAV: { heading?: string; pages: Page[] }[] = [
       { id: "connections", label: "Connections", icon: KeyRound },
       { id: "capabilities", label: "Capabilities", icon: Blocks },
       { id: "remote", label: "Remote access", icon: Smartphone },
+      { id: "machines", label: "Machines", icon: Laptop },
     ],
   },
   {
@@ -1623,6 +1626,7 @@ export function Settings() {
                   {section === "connections" && <ConnectionsPage />}
                   {section === "capabilities" && <CapabilitiesPage />}
                   {section === "remote" && <RemoteAccessPage />}
+                  {section === "machines" && <MachinesPage />}
                   {section === "appearance" && <AppearancePage />}
                   {section === "keyboard" && <ShortcutsPage />}
                   {section === "usage" && <UsagePage />}

@@ -1,3 +1,23 @@
+## [v1.24.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.24.0) - 2026-11-09
+
+### Features
+### Machines
+- Pair this computer with the other computers running RustCode: Settings › Machines lists this computer and each paired machine with its state, the route in use (LAN unencrypted or VPN encrypted), last seen and thread count, and adds machines through Bonjour or an address, ask to connect and an eight-digit code. (#3241)
+- `rustcode machines add|list|remove|discover` does the same from the command line. (#3238)
+- Pairings no longer expire after 30 days: apps that support it exchange rotating refresh tokens, and a replayed old token revokes the pairing. The CLI and desktop app rotate their tokens and say when a pairing must be made again. (#3237, #3244)
+
+### Desktop
+- The new thread screen keeps its tip when the overview is open, drops the pill behind its heading and tip (a soft shadow keeps them readable over a picture), the composer has no border, and the header's fade no longer covers the right panel. (#3231)
+- Rearrange sidebar threads by dragging a row (or ⌥↑/↓), double-click the sidebar's edge to reset its width, and hover a row to preview its project, harness, status, branch and last message. (#3233)
+- A delegated thread's chip says what last happened to it (started, message sent, asked you, answered with its time, failed, merged), and its tip lists the whole delegation. (#3232)
+
+### Orchestration
+- `list_harnesses` takes `harness` and `model` filters and leads with the models in use, so its answer is about a fifth of the size. (#3236)
+- `wait_session` and `merge_when_green` send progress while they wait and return within 25 minutes, so long waits are no longer cut off by the agent's client; a dropped merge can no longer merge later. (#3245)
+- `cleanup_worktree` cleans up a delegate's worktree after it renamed its branch. (#3239)
+
+### Fixes and dependencies
+- Upgrade jsonwebtoken to 10, zip to 9 and rustls to 0.23.46. (#3234, #3230)
 ## [v1.23.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.23.0) - 2026-11-08
 
 ### Features

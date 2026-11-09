@@ -63,7 +63,7 @@ export const effectivePerThreadLimit = (limits: DelegateLimits): number =>
  */
 export const MAX_DEPTH = 2;
 export const DEFAULT_WAIT_MS = 60_000;
-export const MAX_WAIT_MS = 3_600_000;
+export const MAX_WAIT_MS = 25 * 60 * 1000;
 export const MAX_LAST_TURNS = 10;
 /** How long a settled child waits for its siblings before the parent hears about them. */
 export const WAKE_COALESCE_MS = 3_000;
@@ -435,7 +435,7 @@ export type Call =
       text?: string;
     }
   | { tool: "thread_status"; target?: string }
-  | { tool: "merge_when_green"; target: string; timeoutMs: number }
+  | { tool: "merge_when_green"; target: string; timeoutMs: number; callId?: string }
   | { tool: "cleanup_worktree"; target: string; settle: boolean };
 
 /** What `update_session` may set a thread's status to. */
@@ -462,9 +462,9 @@ export const MAX_QUEUE_ITEMS = 50;
 /** How much of a queued message a list shows: enough to know which one it is. */
 export const QUEUE_PREVIEW_CHARS = 200;
 
-/** How long `merge_when_green` waits for checks by default, and at most: under an hour, inside an external harness's MCP call timeout. */
-export const DEFAULT_MERGE_MS = 55 * 60 * 1000;
-export const MAX_MERGE_MS = DEFAULT_MERGE_MS;
+/** How long `merge_when_green` waits for checks by default, and at most: 25 minutes a call, like `wait_session`. */
+export const DEFAULT_MERGE_MS = MAX_WAIT_MS;
+export const MAX_MERGE_MS = MAX_WAIT_MS;
 
 /** Pull requests listed, and projects: an agent's context pays for each. */
 export const MAX_PULL_REQUESTS = 30;
@@ -552,6 +552,7 @@ export function parseCall(params: JsonObject): Call | Failure {
         tool: "merge_when_green",
         target,
         timeoutMs: Math.min(Math.max(asked, 1), MAX_MERGE_MS),
+        callId: s(params.callId),
       };
     }
     case "cleanup_worktree": {

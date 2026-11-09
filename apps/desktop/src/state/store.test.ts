@@ -1588,6 +1588,96 @@ describe("engine controller with the mock engine", () => {
     expect(linkOf()?.notifiedAt).toBeUndefined();
   });
 
+  /** Records what the app asks the engine, and holds the answer to a merge until released. */
+  class MergeTransport extends MockTransport {
+    readonly requests: JsonObject[] = [];
+    held: string | undefined;
+    override send(line: string): void {
+      const request = JSON.parse(line) as JsonObject;
+      this.requests.push(request);
+      if (request.method === Method.pullMerge) {
+        this.held = line;
+        return;
+      }
+      super.send(line);
+    }
+    release(): void {
+      const line = this.held;
+      this.held = undefined;
+      if (line) super.send(line);
+    }
+    asked(method: string): JsonObject[] {
+      return this.requests.filter((r) => r.method === method);
+    }
+  }
+
+  const stagedMerge = async () => {
+    setOrchestration(true);
+    const transport = new MergeTransport({ delayMs: 0 });
+    await connect(transport);
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    const [parent, target] = useApp.getState().sessions.map((x) => x.id) as [string, string];
+    // One project: a merge reaches only this project's threads.
+    useApp.setState((st) => ({
+      sessions: st.sessions.map((x) => ({ ...x, cwd: "/Users/you/code/rustcode" })),
+    }));
+    selectThread(parent);
+    await until(() => selected()?.loaded === true);
+    updateThread(parent, (t) => ({ ...t, running: true, cwd: "/Users/you/code/rustcode" }));
+    updateThread(target, (t) => ({ ...t, cwd: "/Users/you/code/rustcode" }));
+    const link: Link = {
+      id: `${parent}/1`,
+      orchestrator: parent,
+      target,
+      orchestratorTitle: "Parent",
+      targetTitle: "Child",
+      message: "do it",
+      state: "working",
+      createdAt: Date.now(),
+    };
+    useApp.setState({ links: { ...emptyBook(), links: [link], counters: { [parent]: 1 } } });
+    return { parent, target, transport };
+  };
+
+  test("a merge whose call is dropped while it waits for the approval never merges", async () => {
+    const { parent, target, transport } = await stagedMerge();
+    const merged = answerOrchestration({
+      sessionId: parent,
+      tool: "merge_when_green",
+      callId: "call-m1",
+      args: { session_id: target },
+    });
+    await until(() => useApp.getState().grant !== null, 3000);
+    // The MCP server told the agent "pending" and dropped the call: its card goes with it.
+    orchestrationCallDropped({ sessionId: parent, callId: "call-m1" });
+    expect(useApp.getState().grant).toBeNull();
+    const answer = (await merged) as { error?: { code?: string } };
+    expect(answer.error?.code).toBe("cancelled");
+    // A late click on a card that is gone changes nothing: no merge was ever asked for.
+    resolveGrant("once");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(transport.asked(Method.pullMerge)).toHaveLength(0);
+  });
+
+  test("a merge whose call is dropped while the engine waits for checks is cancelled there", async () => {
+    const { parent, target, transport } = await stagedMerge();
+    const merged = answerOrchestration({
+      sessionId: parent,
+      tool: "merge_when_green",
+      callId: "call-m2",
+      args: { session_id: target },
+    });
+    await until(() => useApp.getState().grant !== null, 3000);
+    resolveGrant("once");
+    await until(() => transport.asked(Method.pullMerge).length === 1, 3000);
+    expect((transport.asked(Method.pullMerge)[0]!.params as JsonObject).mergeId).toBe("call-m2");
+    orchestrationCallDropped({ sessionId: parent, callId: "call-m2" });
+    await until(() => transport.asked(Method.pullMergeCancel).length === 1, 3000);
+    expect((transport.asked(Method.pullMergeCancel)[0]!.params as JsonObject).mergeId).toBe("call-m2");
+    transport.release();
+    await merged;
+  });
+
   test("a finished link records its harness and how long its turn worked", async () => {
     const { link, target, linkOf } = await stagedWait();
     linkStarted(link.id);

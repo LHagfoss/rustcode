@@ -326,7 +326,7 @@ pub const MESSAGE_SESSION: Tool = Tool {
 
 pub const WAIT_SESSION: Tool = Tool {
     name: crate::orchestration::WAIT_SESSION,
-    description: "Wait for the turn message_session started and return its status and final answer (at most 8 KiB); with link_ids, the first to finish. needs_user means that thread waits for the user. When the answer was cut, it says answer_truncated: true and gives the session_id: read the rest with read_session, which pages. The app also wakes this thread when its children finish or ask, so call this when you need an answer now; do not poll with sleeps. A timeout says how long each child has been idle (idle_ms), its last tool and its turns.",
+    description: "Wait for the turn message_session started and return its status and final answer (at most 8 KiB); with link_ids, the first to finish. Waits at most 25 minutes per call; call again to keep waiting. needs_user means that thread waits for the user. When the answer was cut, it says answer_truncated: true and gives the session_id: read the rest with read_session, which pages. The app also wakes this thread when its children finish or ask, so call this when you need an answer now; do not poll with sleeps. A timeout says how long each child has been idle (idle_ms), its last tool and its turns.",
     arguments: r#"{"link_id": "from message_session", "timeout_ms": 60000}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -667,8 +667,8 @@ pub const THREAD_STATUS: Tool = Tool {
 
 pub const MERGE_WHEN_GREEN: Tool = Tool {
     name: crate::orchestration::MERGE_WHEN_GREEN,
-    description: "Wait for a delegate's pull request checks to pass, then squash-merge it and delete its branch, the way scripts/pr-merge.sh does: advisory portability jobs are ignored, a cancelled or superseded run does not block, a failing check stops it before anything merges (the failing names come back), and two quiet rounds catch a job that registers late. A pull request with no checks stops at once as no_checks instead of waiting. Returns merged, failing, closed, no_checks or pending (still waiting when the wait ran out). The user approves it; nothing merges without that.",
-    arguments: r#"{"session_id": "the delegate whose PR should merge", "timeout_ms": 3300000}"#,
+    description: "Wait for a delegate's pull request checks to pass, then squash-merge it and delete its branch, the way scripts/pr-merge.sh does: advisory portability jobs are ignored, a cancelled or superseded run does not block, a failing check stops it before anything merges (the failing names come back), and two quiet rounds catch a job that registers late. A pull request with no checks stops at once as no_checks instead of waiting. Returns merged, failing, closed, no_checks or pending (still waiting when the wait ran out). Waits at most 25 minutes per call; call again to keep waiting. The user approves it; nothing merges without that.",
+    arguments: r#"{"session_id": "the delegate whose PR should merge", "timeout_ms": 1500000}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
     schema: || {
@@ -676,7 +676,7 @@ pub const MERGE_WHEN_GREEN: Tool = Tool {
             "type": "object",
             "properties": {
                 "session_id": {"type": "string", "minLength": 1},
-                "timeout_ms": {"type": "integer", "minimum": 1, "maximum": crate::orchestration::MAX_MERGE_WAIT_MS, "description": "How long to wait for checks; 55 minutes at most, the default"}
+                "timeout_ms": {"type": "integer", "minimum": 1, "maximum": crate::orchestration::MAX_MERGE_WAIT_MS, "description": "How long to wait for checks; at most and by default 25 minutes per call"}
             },
             "required": ["session_id"],
             "additionalProperties": false
