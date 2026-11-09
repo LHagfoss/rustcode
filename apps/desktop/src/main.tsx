@@ -4,7 +4,6 @@ import { App } from "./App";
 import { defaultTransport, isTauri } from "./acp/transport";
 import "./index.css";
 import { installFocusModality } from "./lib/focusModality";
-import { applyMaterial } from "./lib/material";
 import { applyPlatform } from "./lib/platform";
 import { quietNativeChrome } from "./lib/quietNative";
 import { applyCachedTheme } from "./lib/themes";
@@ -36,9 +35,6 @@ if (isTauri() && platform === "mac") {
     .then(setSystemReduceTransparency)
     .catch(() => undefined);
 }
-
-// Windows 11's Mica behind the sidebar, once the shell says the window has it (lib/material.ts).
-void applyMaterial();
 
 // Focus rings only while the keyboard moves focus: on from a Tab, off at the next click.
 installFocusModality();

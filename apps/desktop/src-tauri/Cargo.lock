@@ -3628,7 +3628,7 @@ dependencies = [
 
 [[package]]
 name = "rustcode-client"
-version = "1.25.0"
+version = "1.26.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3666,7 +3666,6 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-notification",
  "tokio",
- "window-vibrancy",
 ]
 
 [[package]]

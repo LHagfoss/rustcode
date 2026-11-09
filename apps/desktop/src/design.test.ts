@@ -203,15 +203,18 @@ describe("design system", () => {
       expect(start).toBeGreaterThanOrEqual(0);
       return start < 0 ? "" : css.slice(start, css.indexOf("}", start));
     };
-    const reduced = block(css.indexOf(":root.reduce-transparency {"));
+    const reduced = block(
+      css.indexOf(':root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"]) {'),
+    );
     expect(reduced).toContain("--rc-scrim-bg: var(--rc-bg);");
     expect(reduced).toContain("--rc-lightbox-scrim-bg: var(--rc-bg);");
     // The solid fallback takes the shared filter away with the translucency: a blur behind an
-    // opaque fill is a compositing layer for nothing. Both paths do it: the media query (the first
-    // frame, before lib/transparency.ts has run) and the class.
-    const solid = [...css.matchAll(/:root(?:\.reduce-transparency)?\s+:is\([^)]*\)[^{]*\{([^}]*)\}/g)];
-    expect(solid).toHaveLength(2);
-    for (const rule of solid) expect(rule[1]).toContain("backdrop-filter: none;");
+    // opaque fill is a compositing layer for nothing. The media query covers the first frame,
+    // before lib/transparency.ts has run; the shared rule after it covers the class and the two
+    // platforms that paint no blur at all.
+    const media = [...css.matchAll(/:root\s+:is\([^)]*\)[^{]*\{([^}]*)\}/g)];
+    expect(media).toHaveLength(1);
+    for (const rule of media) expect(rule[1]).toContain("backdrop-filter: none;");
     expect(block(css.indexOf(".rc-scrim {"))).toContain("background: var(--rc-scrim-bg);");
     expect(block(css.indexOf(".rc-lightbox-scrim {"))).toContain(
       "background-color: var(--rc-lightbox-scrim-bg);",
@@ -300,40 +303,56 @@ describe("design system", () => {
     }
   });
 
-  test("Linux keeps the glass; Reduce transparency is the solid fallback on every platform", () => {
+  test("Windows and Linux paint no blur, and no window has a material", () => {
     const css = readFileSync(join(SRC, "index.css"), "utf8");
-    // No rule hands Linux (or Windows) the solid glass tokens: only the class and the media query do.
-    for (const platform of ["linux", "windows"]) {
-      const rules = [
-        ...css.matchAll(new RegExp(`:root\\[data-platform="${platform}"\\][^{]*\\{([^}]*)\\}`, "g")),
-      ];
-      expect(rules.length).toBeGreaterThan(0);
-      for (const [, body] of rules) {
-        expect(body).not.toContain("--rc-glass-filter");
-        expect(body).not.toContain("--rc-glass-bg");
-        expect(body).not.toContain("--rc-scrim-bg");
-      }
-    }
-    // The solid fallback reaches the sidebar too, so nothing shows a material under Reduce transparency.
-    const reduced = css.slice(css.indexOf(":root.reduce-transparency {"));
-    expect(reduced.slice(0, reduced.indexOf("}"))).toContain("--rc-sidebar-bg: var(--rc-sidebar);");
-  });
-
-  test("Windows shows Mica through the sidebar only, and only when the shell has it", () => {
-    const css = readFileSync(join(SRC, "index.css"), "utf8");
-    const mica = ':root[data-platform="windows"][data-material="mica"]:not(.reduce-transparency)';
-    const rule = css.slice(css.indexOf(`${mica} {`));
-    const body = rule.slice(0, rule.indexOf("}"));
-    expect(body).toContain("--rc-sidebar-bg: color-mix(in srgb, var(--rc-sidebar) 72%, transparent);");
-    // The body is cleared for the material and nothing else is: the chat pane keeps its opaque colour.
-    expect(css).toContain(`${mica} body {\n  background: transparent;`);
-    expect(css).toContain("--color-sidebar-glass: var(--rc-sidebar-bg);");
-    // The base sidebar fill is the solid colour, so a platform without the material is unchanged.
-    expect(css).toContain("--rc-sidebar-bg: var(--rc-sidebar);");
-    // The window is transparent where the shell can give it a material, and nowhere else.
+    // Windows and Linux take the same solid fallback as Reduce transparency, on every frame.
+    const solid = ':root:is(.reduce-transparency, [data-platform="windows"], [data-platform="linux"])';
+    const block = (selector: string) => {
+      const start = css.indexOf(selector);
+      expect(start).toBeGreaterThanOrEqual(0);
+      return css.slice(start, css.indexOf("}", start));
+    };
+    // Opaque fills: surface-2 for the glass and popovers, sidebar for the composer, bg for scrims.
+    const tokens = block(`${solid} {`);
+    for (const token of [
+      "--rc-sidebar-bg: var(--rc-sidebar);",
+      "--rc-glass-bg: var(--rc-surface-2);",
+      "--rc-glass-bg-strong: var(--rc-surface-2);",
+      "--rc-glass-faint-bg: var(--rc-surface-2);",
+      "--rc-scrim-bg: var(--rc-bg);",
+      "--rc-lightbox-scrim-bg: var(--rc-bg);",
+      "--rc-composer-bg: var(--rc-sidebar);",
+    ])
+      expect(tokens, token).toContain(token);
+    // Both filters are taken away, the header's pseudo-element included, on every surface that
+    // would otherwise draw the glass.
+    const surfaces = css.slice(css.indexOf(`${solid}\n  :is(`));
+    const fallback = surfaces.slice(0, surfaces.indexOf("}"));
+    expect(fallback).toContain("backdrop-filter: none;");
+    expect(fallback).toContain("-webkit-backdrop-filter: none;");
+    for (const surface of [
+      ".rc-glass",
+      ".rc-glass-faint",
+      ".rc-glass-overlay",
+      ".rc-composer",
+      ".rc-toast",
+      ".rc-composer-footer",
+      ".rc-scrim",
+      ".rc-lightbox-scrim",
+      ".elevated",
+      ".glass-filter",
+    ])
+      expect(fallback, surface).toContain(surface);
+    expect(css).toContain(`${solid} .rc-header-glass::before {`);
+    // The decorative blurs go too: the streaming reveal, and the banner's own (ui/NewThreadBanner.tsx).
+    expect(block(':root:is([data-platform="windows"], [data-platform="linux"]) .rc-reveal')).toContain(
+      "animation-name: rc-fade;",
+    );
+    // Nothing lets a window material show through the page, and no window asks for one.
+    expect(css).not.toContain("data-material");
     const config = (name: string) =>
       JSON.parse(readFileSync(join(SRC, `../src-tauri/${name}`), "utf8")).app.windows[0];
-    expect(config("tauri.windows.conf.json").transparent).toBe(true);
+    expect(config("tauri.windows.conf.json").transparent).toBe(false);
     expect(config("tauri.windows.conf.json").decorations).toBe(true);
     expect(config("tauri.linux.conf.json").transparent).toBe(false);
     expect(config("tauri.linux.conf.json").decorations).toBe(true);
