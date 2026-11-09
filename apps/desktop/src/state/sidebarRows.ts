@@ -300,3 +300,16 @@ export function placeThread(p: Placement): SectionId {
   if ((p.settled || p.aged) && !busy && !p.fresh) return "settled";
   return "threads";
 }
+
+/** The title-first row's trailing status, in attention order. */
+export function titleFirstTrailing(read: {
+  needs: boolean;
+  running: boolean;
+  done: boolean;
+  status: boolean;
+}): "needs" | "running" | "done" | "status" | "age" {
+  if (read.needs) return "needs";
+  if (read.running) return "running";
+  if (read.done) return "done";
+  return read.status ? "status" : "age";
+}

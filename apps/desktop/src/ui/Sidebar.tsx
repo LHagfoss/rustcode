@@ -102,6 +102,7 @@ import {
   shelfKey,
   shelfOpen,
   threadDiff,
+  titleFirstTrailing,
   visibleRows,
 } from "../state/sidebarRows";
 import { snoozePresets, wakeLabel } from "../state/snooze";
@@ -621,6 +622,7 @@ const ThreadRow = memo(function ThreadRow({
   settleKey?: string;
   onClearSelection?: () => void;
 }) {
+  const [rowLayout] = usePref(PREF.rowLayout, "current");
   const request = useApp((s) => s.threads[session.id]?.permissions[0]);
   const running = useApp((s) => s.threads[session.id]?.running ?? false);
   const startedAt = useApp((s) => s.threads[session.id]?.turnStartedAt);
@@ -694,6 +696,7 @@ const ThreadRow = memo(function ThreadRow({
     );
   }
   const done = status === "done";
+  const trailing = titleFirstTrailing({ needs: !!request, running, done, status: !!chip });
   // The open thread is a delegated one with no row of its own: its parent stands in as the context.
   const lit = selected || !!context;
   return (
@@ -752,79 +755,159 @@ const ThreadRow = memo(function ThreadRow({
               className="relative flex w-full flex-col justify-center gap-0.5 rounded-xl py-2 pr-2 pl-2 text-left"
             >
               <RowFill selected={lit} picked={picked} radius="rounded-xl" />
-              {/* Where it runs, what its branch carries, and what it is doing. The hovered row's
+              {rowLayout === "title-first" ? (
+                <span className="title-first-row relative block w-full min-w-0">
+                  <span className={cx("flex min-w-0 items-center gap-1.5", ACTIONS_CLEAR)}>
+                    {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
+                    <span
+                      className={cx(
+                        "min-w-0 flex-1 truncate text-body font-medium",
+                        request || fresh || failed || lit || picked ? "text-fg" : "text-fg/75",
+                      )}
+                    >
+                      {session.title || "New thread"}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1 text-sub text-fg-muted tabular group-hover:invisible group-has-[:focus-visible]:invisible group-has-[[data-state=open]]:invisible">
+                      {trailing === "needs" && request ? (
+                        request.question ? (
+                          <MessageCircleQuestion size={13} />
+                        ) : (
+                          <ShieldQuestion size={13} />
+                        )
+                      ) : trailing === "running" ? (
+                        <>
+                          <Spinner size={9} />
+                          {startedAt !== undefined && <Elapsed since={startedAt} />}
+                        </>
+                      ) : trailing === "done" ? (
+                        <Check size={13} />
+                      ) : chip ? (
+                        <RowStatusChip status={chip} startedAt={startedAt} />
+                      ) : wake ? (
+                        wakeLabel(wake, now)
+                      ) : (
+                        shortAge(session.updatedAt, now)
+                      )}
+                    </span>
+                  </span>
+                  <span className="flex min-w-0 items-center gap-1 text-sub text-fg-muted">
+                    <ProjectMark name={project} />
+                    <span className="min-w-0 max-w-[45%] shrink truncate">{project}</span>
+                    {worktree && (
+                      <span className="title-first-branch min-w-0 flex-1 truncate font-mono text-[10px]">
+                        <GitBranch size={9} className="mr-0.5 inline" />
+                        {worktree.branch}
+                      </span>
+                    )}
+                    <span className="title-first-badges ml-auto flex shrink-0 items-center gap-1">
+                      <LinkBadge threadId={session.id} />
+                      {stack?.length ? (
+                        <AgentStack agents={stack} />
+                      ) : (
+                        external && (
+                          <HarnessIcon
+                            id={session.harness!}
+                            name={harness?.name}
+                            size={13}
+                            className="shrink-0"
+                          />
+                        )
+                      )}
+                      {diff && (
+                        <span className="font-mono text-[10px] tabular">
+                          {diff.added > 0 && <span className="text-success">+{diff.added}</span>}
+                          {diff.removed > 0 && <span className="text-danger">−{diff.removed}</span>}
+                        </span>
+                      )}
+                      {pull && <PullMark pull={pull} />}
+                    </span>
+                  </span>
+                  {worktree && (
+                    <span className="title-first-branch-wrap hidden truncate font-mono text-[10px] text-fg-muted">
+                      <GitBranch size={9} className="mr-0.5 inline" />
+                      {worktree.branch}
+                    </span>
+                  )}
+                </span>
+              ) : (
+                <>
+                  {/* Where it runs, what its branch carries, and what it is doing. The hovered row's
                 actions take the right slot's place, so this line keeps exactly their room clear:
                 Pin, Settle or Unsettle and the menu, 26px each plus the 6px they sit in from
                 the row's edge. */}
-              <span className={cx("relative flex h-[17px] w-full min-w-0 items-center gap-1", ACTIONS_CLEAR)}>
-                {!grouped && (
-                  <>
-                    <ProjectMark name={project} />
-                    {/* The name keeps its room; the branch, the counts and the pull request give way. */}
-                    <span className="min-w-0 max-w-[50%] shrink-0 truncate text-fg-muted text-sub">
-                      {project}
+                  <span
+                    className={cx("relative flex h-[17px] w-full min-w-0 items-center gap-1", ACTIONS_CLEAR)}
+                  >
+                    {!grouped && (
+                      <>
+                        <ProjectMark name={project} />
+                        {/* The name keeps its room; the branch, the counts and the pull request give way. */}
+                        <span className="min-w-0 max-w-[50%] shrink-0 truncate text-fg-muted text-sub">
+                          {project}
+                        </span>
+                      </>
+                    )}
+                    {worktree && (
+                      <span className="flex min-w-0 shrink items-center gap-0.5 rounded-xs bg-fill-subtle px-1 font-mono text-[10px] text-fg-muted">
+                        <GitBranch size={9} className="shrink-0" />
+                        <span className="truncate">{worktree.branch}</span>
+                      </span>
+                    )}
+                    {diff && (
+                      <span className="shrink-0 font-mono text-[10px] tabular">
+                        {diff.added > 0 && <span className="text-success">+{diff.added}</span>}
+                        {diff.added > 0 && diff.removed > 0 && " "}
+                        {diff.removed > 0 && <span className="text-danger">−{diff.removed}</span>}
+                      </span>
+                    )}
+                    {pull && <PullMark pull={pull} />}
+                    <span className="ml-auto flex shrink-0 items-center gap-1 text-sub tabular group-hover:invisible group-has-[:focus-visible]:invisible group-has-[[data-state=open]]:invisible">
+                      {chip ? (
+                        <RowStatusChip status={chip} startedAt={startedAt} />
+                      ) : (
+                        <span className="text-fg-muted">
+                          {wake ? wakeLabel(wake, now) : shortAge(session.updatedAt, now)}
+                        </span>
+                      )}
                     </span>
-                  </>
-                )}
-                {worktree && (
-                  <span className="flex min-w-0 shrink items-center gap-0.5 rounded-xs bg-fill-subtle px-1 font-mono text-[10px] text-fg-muted">
-                    <GitBranch size={9} className="shrink-0" />
-                    <span className="truncate">{worktree.branch}</span>
                   </span>
-                )}
-                {diff && (
-                  <span className="shrink-0 font-mono text-[10px] tabular">
-                    {diff.added > 0 && <span className="text-success">+{diff.added}</span>}
-                    {diff.added > 0 && diff.removed > 0 && " "}
-                    {diff.removed > 0 && <span className="text-danger">−{diff.removed}</span>}
-                  </span>
-                )}
-                {pull && <PullMark pull={pull} />}
-                <span className="ml-auto flex shrink-0 items-center gap-1 text-sub tabular group-hover:invisible group-has-[:focus-visible]:invisible group-has-[[data-state=open]]:invisible">
-                  {chip ? (
-                    <RowStatusChip status={chip} startedAt={startedAt} />
-                  ) : (
-                    <span className="text-fg-muted">
-                      {wake ? wakeLabel(wake, now) : shortAge(session.updatedAt, now)}
+                  {/* Its title, and the harness that runs it. */}
+                  <span className="relative flex w-full min-w-0 items-center gap-1.5">
+                    {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
+                    <span
+                      className={cx(
+                        "min-w-0 flex-1 truncate text-body",
+                        // What wants you reads strong; what works, waits or has been read recedes.
+                        lit || picked || request || fresh || failed
+                          ? "font-medium text-fg"
+                          : done || running || wait
+                            ? "font-normal text-fg/75 group-hover:text-fg"
+                            : "font-medium text-fg",
+                      )}
+                    >
+                      {session.title || "New thread"}
                     </span>
-                  )}
-                </span>
-              </span>
-              {/* Its title, and the harness that runs it. */}
-              <span className="relative flex w-full min-w-0 items-center gap-1.5">
-                {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
-                <span
-                  className={cx(
-                    "min-w-0 flex-1 truncate text-body",
-                    // What wants you reads strong; what works, waits or has been read recedes.
-                    lit || picked || request || fresh || failed
-                      ? "font-medium text-fg"
-                      : done || running || wait
-                        ? "font-normal text-fg/75 group-hover:text-fg"
-                        : "font-medium text-fg",
-                  )}
-                >
-                  {session.title || "New thread"}
-                </span>
-                {/* Who else it is working with, and where: one cluster, ending on the same right
+                    {/* Who else it is working with, and where: one cluster, ending on the same right
                   edge as the chip above. The ↳ (it works for another thread) leads it, and a row
                   with no delegates keeps its harness mark alone instead. */}
-                <span className="flex min-w-0 shrink-0 items-center gap-1">
-                  <LinkBadge threadId={session.id} />
-                  {stack?.length ? (
-                    <AgentStack agents={stack} />
-                  ) : (
-                    external && (
-                      <HarnessIcon
-                        id={session.harness!}
-                        name={harness?.name}
-                        size={13}
-                        className="shrink-0 text-fg-muted"
-                      />
-                    )
-                  )}
-                </span>
-              </span>
+                    <span className="flex min-w-0 shrink-0 items-center gap-1">
+                      <LinkBadge threadId={session.id} />
+                      {stack?.length ? (
+                        <AgentStack agents={stack} />
+                      ) : (
+                        external && (
+                          <HarnessIcon
+                            id={session.harness!}
+                            name={harness?.name}
+                            size={13}
+                            className="shrink-0 text-fg-muted"
+                          />
+                        )
+                      )}
+                    </span>
+                  </span>
+                </>
+              )}
               {/* What it asks of you, or which thread a delegated one without a parent row above it
                 belongs under. */}
               {(request || hint) && (

@@ -1491,3 +1491,23 @@
   /* design-lint: allow (shadow alpha, not a colour) */
   box-shadow: -2px 0 4px -1px #00000059;
 }
+
+.title-first-row {
+  container-type: inline-size;
+}
+@container (max-width: 270px) {
+  .title-first-branch {
+    display: none;
+  }
+  .title-first-branch-wrap {
+    display: block;
+  }
+}
+@container (max-width: 190px) {
+  .title-first-branch-wrap {
+    display: none;
+  }
+  .title-first-badges {
+    display: none;
+  }
+}

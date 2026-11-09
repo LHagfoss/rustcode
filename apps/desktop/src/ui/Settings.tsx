@@ -73,6 +73,7 @@ import {
 } from "../state/orchestration";
 import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
 import { RECAP_HOUR_OPTIONS } from "../state/recap";
+import { PREF, usePref } from "../state/sidebarPrefs";
 import {
   APP_VERSION,
   createTheme,
@@ -922,6 +923,7 @@ function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
 }
 
 function AppearancePage() {
+  const [rowLayout, setRowLayout] = usePref<"current" | "title-first">(PREF.rowLayout, "current");
   const mode = useApp((s) => s.theme);
   const roundedFont = useApp((s) => s.roundedFont);
   const animateStreaming = useApp((s) => s.animateStreaming);
@@ -936,6 +938,19 @@ function AppearancePage() {
     "~/.config/rustcode/themes";
   return (
     <>
+      <Group title="Sidebar">
+        <Row title="Thread row layout" subtitle="Choose what appears first in sidebar thread rows.">
+          <Choice
+            label="Thread row layout"
+            value={rowLayout}
+            onChange={setRowLayout}
+            options={[
+              { value: "current", label: "Current" },
+              { value: "title-first", label: "Title first" },
+            ]}
+          />
+        </Row>
+      </Group>
       <Group title="Mode">
         <Row
           title="Light or dark"
