@@ -3341,12 +3341,18 @@ export async function refreshHarnesses(): Promise<HarnessSnapshot | null> {
   }
 }
 
-async function harnessCall(method: string, params: JsonObject): Promise<HarnessSnapshot | null> {
+/** `report: false` lets the caller word the failure itself, so no toast says it twice. */
+async function harnessCall(
+  method: string,
+  params: JsonObject,
+  report = true,
+): Promise<HarnessSnapshot | null> {
   try {
     const snapshot = parseHarnessSnapshot(await engine().request(method, params, 15_000));
     set({ harnesses: snapshot });
     return snapshot;
   } catch (error) {
+    if (!report) throw error;
     toast(errorText(error), "error");
     return null;
   }
@@ -3430,8 +3436,14 @@ export const removeHarnessAccount = (harness: string, id: string) =>
  * read). `readPlans` also re-reads the Claude plan rows, which a 3-second
  * wait for a sign-in does not need: that would force a Keychain read each time.
  */
-export async function checkHarnessAccounts(readPlans = true): Promise<HarnessSnapshot | null> {
-  const snapshot = await harnessCall(Method.harnessAccountCheck, {});
+export async function checkHarnessAccounts(
+  readPlans = true,
+  /** Harnesses detected again instead of read from the engine's last-minute detection. */
+  redetect: string[] = [],
+  /** False throws a failure instead of a toast. */
+  report = true,
+): Promise<HarnessSnapshot | null> {
+  const snapshot = await harnessCall(Method.harnessAccountCheck, { redetect }, report);
   // Claude Code signs in with its own credentials, which that snapshot does not
   // report (`auth_probe: None`), and its plan read pauses once it finds the
   // default login signed out or cannot read it (a denied Keychain prompt), so
@@ -3443,6 +3455,25 @@ export async function checkHarnessAccounts(readPlans = true): Promise<HarnessSna
 }
 
 export const removeHarness = (id: string) => harnessCall(Method.harnessRemove, { id });
+
+/**
+ * Registers a custom ACP harness from a local command (`_rustcode/harnesses/set`): the command is
+ * launched directly, one argument per entry, never through a shell. Off until it is verified.
+ * Throws the engine's refusal so the form can show it.
+ */
+export async function addCustomHarness(request: {
+  id: string;
+  name: string;
+  command: string[];
+  env: Record<string, string>;
+}): Promise<void> {
+  await harnessCall(Method.harnessSet, { ...request, kind: "acp", enabled: false }, false);
+}
+
+/** Turns a verified custom harness on, or takes an unverified one out again; a failure throws. */
+export const enableCustomHarness = (id: string) =>
+  harnessCall(Method.harnessSet, { id, enabled: true }, false);
+export const discardCustomHarness = (id: string) => harnessCall(Method.harnessRemove, { id }, false);
 /**
  * The Settings default: it is also where a new thread starts, so a draft the new-thread screen
  * kept for the session is dropped once the engine took the change, or the new default would never
@@ -3463,8 +3494,13 @@ export const completeOnboarding = async () => {
 };
 
 /** "Test": ask the harness for its models. Throws the harness's error so the card can show it. */
-export async function fetchHarnessModels(id: string): Promise<void> {
-  const result = (await engine().request(Method.harnessModels, { harness: id }, 60_000)) as JsonObject | null;
+export async function fetchHarnessModels(id: string, refresh = false): Promise<number> {
+  // `refresh` starts the harness again even when its models are known: a Check.
+  const result = (await engine().request(
+    Method.harnessModels,
+    refresh ? { harness: id, refresh } : { harness: id },
+    60_000,
+  )) as JsonObject | null;
   const models = parseHarnessModels(result?.models as Json);
   set((s) =>
     s.harnesses
@@ -3479,7 +3515,9 @@ export async function fetchHarnessModels(id: string): Promise<void> {
       : s,
   );
   // The engine may have learned more (auth, version); take its snapshot too.
-  void refreshHarnesses();
+  if (refresh) await refreshHarnesses();
+  else void refreshHarnesses();
+  return models.length;
 }
 
 /** Model listings in flight (ensureHarnessModels), one per harness. */
@@ -3500,6 +3538,7 @@ export function ensureHarnessModels(id: string): Promise<void> {
   let asked = modelsAsked.get(id);
   if (!asked) {
     asked = fetchHarnessModels(id)
+      .then(() => undefined)
       .catch(() => undefined)
       .finally(() => modelsAsked.delete(id));
     modelsAsked.set(id, asked);

@@ -159,9 +159,11 @@ settings cannot decide a harness-wide answer.
 Errors (an unknown id, an invalid command, removing a known harness) are
 `invalid_params` with a message for the user.
 
-### `_rustcode/harnesses/models` `{ "harness": "codex" }` → `{ "models": [...] }`
+### `_rustcode/harnesses/models` `{ "harness": "codex", "refresh"?: true }` → `{ "models": [...] }`
 
-Starts the harness briefly if needed to list its models. Codex answers from
+Starts the harness briefly if needed to list its models. `refresh` starts it
+even when its models are known, which is what Settings' Check sends: a Check
+proves the harness runs now, not that it once did. Codex answers from
 `model/list` (hidden models left out, efforts per model). An ACP harness is
 started in the system temp directory and one session is opened there to read
 its `model` and thought-level options, then killed; no thread's process is
@@ -205,7 +207,11 @@ models people use.
 ```
 
 Adds a custom ACP harness when `id` is new (`kind` defaults to `acp`; pass
-`name`, `kind`, `command`). `command` and `name` are optional on existing ones.
+`name`, `kind`, `command`, and `env` for variables the process starts with).
+`command` is the program then one argument per entry, started directly with no
+shell. `command`, `name` and `env` are optional on existing ones; `env`
+replaces the old map and an empty one clears it. The snapshot lists a
+harness's variable names as `env_names`, never their values.
 
 ### `_rustcode/harnesses/remove` `{ "id": "my-agent" }` → `HarnessSnapshot`
 
@@ -289,7 +295,7 @@ choose where a thread signs in.
 | --- | --- |
 | `_rustcode/harnesses/accounts/add` `{ "harness": "claude-code", "id": "paral-2", "name": "Paral 2", "config_dir": "~/.claude-paral-2" }` | `HarnessSnapshot` |
 | `_rustcode/harnesses/accounts/remove` `{ "harness": "claude-code", "id": "paral-2" }` | `HarnessSnapshot` |
-| `_rustcode/harnesses/accounts/check` `{}` | `HarnessSnapshot`, each account's `auth` read again |
+| `_rustcode/harnesses/accounts/check` `{ "redetect"?: ["codex"] }` | `HarnessSnapshot`, each account's `auth` read again; `redetect` names harnesses whose install is detected again instead of read from the last minute |
 
 *Remove* drops the config entry only: the directory, with the login and the
 conversations in it, stays on disk, and the request is refused while a live
@@ -298,8 +304,8 @@ and replay their history, and only their next prompt reports the missing
 account (they can be moved to another named account, or to the harness's own
 sign-in when it has none left). `auth` for an account is `ok` when its own
 sign-in is there, `needs_login` when a look found none, and `unknown` when it
-was not looked for. `check` (Settings › Agents' own look when its Accounts
-section opens, and its Refresh) runs the harness's own cheap status command
+was not looked for. `check` (Settings › Agents' look when the page opens, when
+the window regains focus, and on Check) runs the harness's own cheap status command
 with the account's directory and with the variables a thread on that account
 would drop (`codex login status`, `claude auth status --json`), then falls back
 to the marker file by name (`<dir>/.credentials.json`, Codex's
@@ -643,6 +649,7 @@ id = "my-agent"
 name = "My agent"
 kind = "acp"
 command = ["my-agent", "--acp"]
+env = { MY_AGENT_PROFILE = "work" }   # optional; added to the process's environment
 enabled = true
 
 # A named login of a harness, each its own config directory

@@ -112,8 +112,9 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "agents",
-    title: "Coding agents",
-    keywords: "agent harness install sign in check enable disable local remove",
+    title: "Harnesses",
+    keywords:
+      "agent harness install sign in check check all detect add harness custom acp command executable argument environment variable enable disable local remove",
   },
   {
     section: "agents",

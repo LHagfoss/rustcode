@@ -294,6 +294,8 @@ pub(crate) struct ResolvedHarness {
     pub name: String,
     pub kind: HarnessKind,
     pub command: Vec<String>,
+    /// Extra environment of a custom harness's process.
+    pub env: Vec<(String, String)>,
     pub enabled: bool,
     pub known: Option<&'static KnownHarness>,
 }
@@ -304,6 +306,7 @@ fn builtin_resolved() -> ResolvedHarness {
         name: "RustCode".to_owned(),
         kind: HarnessKind::Builtin,
         command: Vec::new(),
+        env: Vec::new(),
         enabled: true,
         known: None,
     }
@@ -341,6 +344,7 @@ pub(crate) fn resolve_all(entries: &[config::HarnessEntry]) -> Vec<ResolvedHarne
                         .map(|part| (*part).to_owned())
                         .collect()
                 }),
+            env: Vec::new(),
             enabled: entry.is_some_and(config::HarnessEntry::is_enabled),
             known: Some(known),
         });
@@ -360,6 +364,12 @@ pub(crate) fn resolve_all(entries: &[config::HarnessEntry]) -> Vec<ResolvedHarne
                 _ => HarnessKind::Acp,
             },
             command,
+            env: entry
+                .env
+                .iter()
+                .flatten()
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect(),
             enabled: entry.is_enabled(),
             known: None,
         });
@@ -689,6 +699,8 @@ fn snapshot_entry(
         "known": builtin || harness.known.is_some(),
         "enabled": harness.enabled,
         "command": harness.command,
+        // Names only: a value may be a secret.
+        "env_names": harness.env.iter().map(|(name, _)| name).collect::<Vec<_>>(),
         "installed": detection.installed,
         "version": detection.version,
         "auth": detection.auth,
@@ -907,8 +919,12 @@ pub(crate) fn remove_account(harness: &str, id: &str) -> Result<(), String> {
 
 /// The snapshot with each account's sign-in looked up in its own credentials
 /// (`_rustcode/harnesses/accounts/check`, the Accounts list's Refresh).
-pub(crate) async fn check_accounts() -> Result<Value, String> {
+pub(crate) async fn check_accounts(redetect: &[String]) -> Result<Value, String> {
     let dir = config::config_dir()?;
+    // A Check looks again at the install itself, not at a detection up to a minute old.
+    for id in redetect {
+        detect::forget(id.trim());
+    }
     snapshot_in_with(&dir, true).await
 }
 
@@ -1076,12 +1092,18 @@ fn fetch_lock(id: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
 /// from another harness version is answered at once and listed again in the
 /// background. A failed listing is not remembered, so the next call tries
 /// again.
-pub(crate) async fn models(id: &str) -> Result<Vec<HarnessModel>, String> {
+pub(crate) async fn models(id: &str, refresh: bool) -> Result<Vec<HarnessModel>, String> {
     let dir = config::config_dir()?;
     let (_, entries) = config::load_in(&dir);
     let harness = resolve(&entries, id).ok_or_else(|| format!("unknown harness '{id}'"))?;
     if harness.kind == HarnessKind::Builtin {
         return Ok(builtin_models());
+    }
+    if refresh {
+        // A Check: start the harness now rather than answer from memory.
+        let lock = fetch_lock(id);
+        let _listing = lock.lock().await;
+        return list_and_learn(&harness, true).await;
     }
     if let Some(models) = learned_for(id).models {
         refresh_if_stale(harness);

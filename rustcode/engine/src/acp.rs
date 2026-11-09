@@ -2696,9 +2696,9 @@ async fn serve_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |_request: harnesses::CheckHarnessAccountsRequest, responder, connection| {
+            async move |request: harnesses::CheckHarnessAccountsRequest, responder, connection| {
                 connection.spawn(async move {
-                    match harnesses::check_accounts().await {
+                    match harnesses::check_accounts(request).await {
                         Ok(value) => responder.respond(value)?,
                         Err(error) => responder.respond_with_error(error)?,
                     }

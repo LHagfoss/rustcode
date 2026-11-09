@@ -57,7 +57,7 @@ export function accountLoginCommand(
  * blocked, and one not looked at yet is not a reason to block. `undefined`
  * when it has no named accounts and its own `auth` speaks for it.
  */
-function accountState(h: Harness): "ok" | "needs_login" | "unknown" | undefined {
+export function accountState(h: Harness): "ok" | "needs_login" | "unknown" | undefined {
   const accounts = h.accounts ?? [];
   if (!accounts.length) return undefined;
   if (accounts.some((account) => account.auth === "ok")) return "ok";

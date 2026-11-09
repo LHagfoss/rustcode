@@ -869,6 +869,8 @@ export interface Harness {
   known: boolean;
   enabled: boolean;
   command: string[];
+  /** Names (never values) of the variables a custom harness's process is started with. */
+  env_names?: string[];
   installed: boolean;
   version?: string;
   auth: "ok" | "needs_login" | "unknown";
@@ -1028,6 +1030,11 @@ export function parseHarnessLast(value: Json | undefined): HarnessLast | null {
  */
 const LEGACY_KNOWN_HARNESSES = ["codex", "claude-code", "gemini", "opencode", "pi"];
 
+function envNames(value: Json | undefined): { env_names?: string[] } {
+  const names = arr(value).flatMap((n) => (typeof n === "string" ? [n] : []));
+  return names.length ? { env_names: names } : {};
+}
+
 export function parseHarnessSnapshot(value: Json): HarnessSnapshot {
   const root = obj(value) ?? {};
   let remembers = false;
@@ -1051,6 +1058,7 @@ export function parseHarnessSnapshot(value: Json): HarnessSnapshot {
         known: bool(o.known) ?? (builtin || LEGACY_KNOWN_HARNESSES.includes(id)),
         enabled: bool(o.enabled) ?? false,
         command: arr(o.command).flatMap((c) => (typeof c === "string" ? [c] : [])),
+        ...envNames(o.env_names),
         installed: bool(o.installed) ?? false,
         version: str(o.version),
         auth: auth === "ok" || auth === "needs_login" ? auth : "unknown",

@@ -5,6 +5,7 @@
 
 use super::HarnessKind;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -100,6 +101,10 @@ pub struct HarnessEntry {
     pub kind: Option<HarnessKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<Vec<String>>,
+    /// Extra environment for a custom harness's process, set with the
+    /// command and never expanded by a shell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<BTreeMap<String, String>>,
     /// An entry that leaves it out is on: listing a harness means wanting it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
@@ -179,6 +184,9 @@ pub struct HarnessChange {
     pub enabled: Option<bool>,
     #[serde(default)]
     pub command: Option<Vec<String>>,
+    /// Replaces the harness's environment; an empty map clears it.
+    #[serde(default)]
+    pub env: Option<BTreeMap<String, String>>,
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
@@ -227,9 +235,21 @@ pub(crate) fn apply_change(
     {
         return Err("command must name a program".to_owned());
     }
+    if let Some(command) = &change.command
+        && command.iter().any(|part| part.contains('\0'))
+    {
+        return Err("the command cannot contain a NUL character".to_owned());
+    }
+    if let Some(env) = &change.env {
+        for (name, value) in env {
+            if name.trim().is_empty() || name.contains(['=', '\0']) || value.contains('\0') {
+                return Err(format!("invalid environment variable '{name}'"));
+            }
+        }
+    }
     let known = super::known(&id);
     if id == super::BUILTIN_ID {
-        if change.command.is_some() || change.kind.is_some() {
+        if change.command.is_some() || change.kind.is_some() || change.env.is_some() {
             return Err("the built-in RustCode harness has no command".to_owned());
         }
         // Turned off, it leaves the app's pickers; the engine itself stays, as it runs every
@@ -267,6 +287,9 @@ pub(crate) fn apply_change(
             if let Some(command) = change.command {
                 entry.command = Some(command);
             }
+            if let Some(env) = change.env {
+                entry.env = (!env.is_empty()).then_some(env);
+            }
             if let Some(name) = change.name.filter(|name| !name.trim().is_empty()) {
                 entry.name = Some(name);
             }
@@ -289,6 +312,7 @@ pub(crate) fn apply_change(
                     Some(change.kind.unwrap_or(HarnessKind::Acp))
                 },
                 command: change.command,
+                env: change.env.filter(|env| !env.is_empty()),
                 enabled: Some(change.enabled.unwrap_or(true)),
                 ..Default::default()
             });
@@ -803,6 +827,53 @@ mod tests {
 
         edit_in(dir.path(), |_, harnesses| remove(harnesses, "my-agent")).unwrap();
         assert_eq!(load_in(dir.path()).1.len(), 1);
+    }
+
+    #[test]
+    fn a_custom_harness_keeps_its_environment() {
+        let mut harnesses = Vec::new();
+        let env = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .collect::<BTreeMap<_, _>>()
+        };
+        let add = |env| HarnessChange {
+            id: "dsh".into(),
+            command: Some(vec!["dsh".into(), "--profile".into(), "acp".into()]),
+            env: Some(env),
+            ..Default::default()
+        };
+        apply_change(&mut harnesses, add(env(&[("DSH_PROFILE", "work")]))).unwrap();
+        assert_eq!(harnesses[0].env, Some(env(&[("DSH_PROFILE", "work")])));
+        // A change that leaves env out keeps it; an empty map clears it.
+        apply_change(
+            &mut harnesses,
+            HarnessChange {
+                id: "dsh".into(),
+                enabled: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(harnesses[0].env, Some(env(&[("DSH_PROFILE", "work")])));
+        apply_change(
+            &mut harnesses,
+            HarnessChange {
+                id: "dsh".into(),
+                env: Some(BTreeMap::new()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(harnesses[0].env, None);
+        for bad in [
+            env(&[("", "x")]),
+            env(&[("A=B", "x")]),
+            env(&[("A", "x\0")]),
+        ] {
+            assert!(apply_change(&mut Vec::new(), add(bad)).is_err());
+        }
     }
 
     #[test]

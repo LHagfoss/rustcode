@@ -24,7 +24,6 @@ import {
   MessageSquare,
   Palette,
   Plus,
-  RefreshCw,
   RotateCcw,
   Search,
   Smartphone,
@@ -62,6 +61,7 @@ import { BUILTIN_THEMES, cssName, type Theme, TOKENS } from "../lib/themes";
 import { canUpdate } from "../lib/updater";
 import { AUTO_COMPACT_DEFAULT_THRESHOLD, AUTO_COMPACT_MODES } from "../state/autoCompact";
 import { validateDefault } from "../state/harness";
+import { runAllHarnessChecks, useHarnessChecks } from "../state/harnessChecks";
 import {
   activeDelegates,
   busiestThreadDelegates,
@@ -79,7 +79,6 @@ import {
   errorText,
   type NewThreadChoice,
   openSettings,
-  refreshHarnesses,
   request,
   restartEngine,
   SETTINGS_DEFAULTS,
@@ -121,9 +120,10 @@ import {
   showWhatsNew,
   useUpdates,
 } from "../state/updates";
+import { AddHarnessForm } from "./AddHarness";
 import { CapabilitiesPage } from "./Capabilities";
 import { DiagnosticsPage } from "./DiagnosticsPage";
-import { DefaultsForm, HarnessList } from "./Harnesses";
+import { DefaultsForm, HarnessList, useAutoDetect } from "./Harnesses";
 import { HeaderButtonsSetting } from "./HeaderButtonsSetting";
 import { MachinesPage } from "./MachinesPage";
 import { NewThreadBanner } from "./NewThreadBanner";
@@ -534,17 +534,10 @@ function ChatPage() {
 function AgentsPage() {
   const snapshot = useApp((s) => s.harnesses);
   const [saved, setSaved] = useState(false);
-  const [rechecking, setRechecking] = useState(false);
-  // Installed, signed in, versions: detected again each time the page opens, and on Refresh.
-  const recheck = async () => {
-    setRechecking(true);
-    await refreshHarnesses();
-    setRechecking(false);
-  };
-  // biome-ignore lint/correctness/useExhaustiveDependencies: once per visit to the page
-  useEffect(() => {
-    void recheck();
-  }, []);
+  const [adding, setAdding] = useState(false);
+  const checking = useHarnessChecks((s) => Object.values(s.byHarness).some((e) => "running" in e));
+  // Installed, signed in, versions: detected again each time the page opens and the window is back.
+  useAutoDetect();
   // An unsaved choice stays here while it is not valid yet (a harness that still lists models).
   const [choice, setChoice] = useState<NewThreadChoice | null>(null);
   if (!snapshot) return <Loading error={null} />;
@@ -584,15 +577,22 @@ function AgentsPage() {
         </Group>
       )}
       <Group
-        title="Coding agents"
+        title="Harnesses"
         action={
-          <Action quiet size="sm" onClick={() => void recheck()} disabled={rechecking}>
-            <RefreshCw size={11} />
-            {rechecking ? "Checking…" : "Refresh"}
-          </Action>
+          <div className="flex items-center gap-1">
+            <Action quiet size="sm" onClick={() => void runAllHarnessChecks()} disabled={checking}>
+              {checking && <Spinner size={11} />}
+              Check all
+            </Action>
+            <Action size="sm" onClick={() => setAdding(true)} disabled={adding}>
+              <Plus size={11} />
+              Add harness
+            </Action>
+          </div>
         }
-        footer="Each agent signs in on its own; RustCode never stores its credentials. Advanced runs setup again."
+        footer="Each harness signs in on its own; RustCode never stores its credentials. Check starts a harness to confirm it runs and lists its models."
       >
+        {adding && <AddHarnessForm onClose={() => setAdding(false)} />}
         <HarnessList snapshot={snapshot} />
       </Group>
       <OrchestrationGroup />
