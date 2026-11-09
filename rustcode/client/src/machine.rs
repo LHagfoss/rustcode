@@ -6,9 +6,17 @@
 //! 1. [`Connector::ask`] sends `connect_request`. The machine's owner answers
 //!    on the machine; this end waits on the same socket ([`Ask`]).
 //! 2. [`Approved::pair`] sends the eight-digit code and receives the device
-//!    token, shown once ([`Paired`]).
-//! 3. [`Connector::authenticate`] presents that token on later connections,
+//!    token, shown once ([`Paired`]). A machine that takes
+//!    [`CAPABILITY_TOKEN_ROTATION`] hands out a refresh token and a short-lived
+//!    access token instead of the static token.
+//! 3. [`Connector::authenticate`] presents those tokens on later connections,
 //!    after which the socket speaks ACP ([`Session::acp`]).
+//!
+//! A rotating pairing reconnects with its access token while the machine still
+//! accepts it, and with the refresh token otherwise. Every accepted refresh
+//! token is replaced: the new one is written to [`TokenStore`] *before* the
+//! rotation is acknowledged, so a crash between the two leaves the previous
+//! token valid as the retry the machine makes idempotent.
 //!
 //! A machine can be reached by several routes. [`Connector::connect`] tries
 //! them in the saved order and takes the first that authenticates as the
@@ -16,13 +24,14 @@
 //! routes are the machine network's step 1.8.
 
 use crate::protocol::{
-    DEVICE_KIND_CLI, DEVICE_KIND_DESKTOP, HANDSHAKE_PROTOCOL_VERSION, HandshakeRequest,
-    HandshakeResponse, PairingMethod, Secret,
+    CAPABILITY_TOKEN_ROTATION, DEVICE_KIND_CLI, DEVICE_KIND_DESKTOP, HANDSHAKE_PROTOCOL_VERSION,
+    HandshakeRequest, HandshakeResponse, PairingMethod, Secret,
 };
 use crate::registry::{Machine, Route, may_send_secrets, plain_ws_refusal, write_private_json};
-use crate::tokens::TokenStore;
+use crate::tokens::{Access, TokenStore};
 use crate::transport::{AcpChannel, Connection};
 use anyhow::{Context, Result, bail, ensure};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -234,37 +243,172 @@ impl Connector {
         }
     }
 
-    /// Authenticate with a saved machine's token on `address`.
+    /// Authenticate with a saved machine's tokens on `address`.
     ///
-    /// The token is never sent to a public address on plain `ws`: that would
-    /// hand it to the network before the machine could prove who it is. See
+    /// The tokens are never sent to a public address on plain `ws`: that would
+    /// hand them to the network before the machine could prove who it is. See
     /// [`crate::registry::may_send_secrets`] and #2651.
     ///
-    /// When rotating refresh tokens land (#3237) this frame carries the
-    /// refresh token, and the new pair the machine answers with must be
-    /// written before the rotation is acknowledged. [`TokenStore::set`] is
-    /// the only place a token is written, so that ordering has one home.
+    /// A rotating device reconnects with the access token in memory while the
+    /// machine still takes it, rotating nothing; otherwise it presents the
+    /// durable refresh token, and the answer replaces it. The new refresh token
+    /// is stored before the rotation is acknowledged ([`crate::tokens`]). A
+    /// gateway that predates rotating tokens does not know the `refresh_token`
+    /// field and answers `invalid_frame`; the static form saved by an older
+    /// pairing is tried once after that.
     pub async fn authenticate(
         &self,
         address: &str,
         machine: &Machine,
-        token: &Secret,
+        tokens: &TokenStore,
     ) -> Result<Session> {
         if !may_send_secrets(address) {
             return Err(plain_ws_refusal(address));
         }
-        let mut connection = Connection::open_with_timeout(address, self.route_timeout).await?;
-        connection
-            .send_handshake(&HandshakeRequest::Authenticate {
-                protocol_version: HANDSHAKE_PROTOCOL_VERSION,
-                device_id: machine.device_id.clone(),
-                token: token.clone(),
-                wire_names: None,
-            })
+        let stored = tokens.get(&machine.host_id)?.with_context(|| {
+            format!("{} has no pairing token; pair with it again", machine.name)
+        })?;
+
+        // 1. The access token from the last connection, while it is valid. A
+        //    reconnect inside its 15 minutes rotates nothing.
+        if let Some(access) = tokens
+            .access(&machine.host_id)
+            .filter(|access| access.is_valid_at(Utc::now()))
+        {
+            let (connection, answer) = self
+                .exchange(address, &authenticate_access(machine, access.token()))
+                .await?;
+            match answer {
+                HandshakeResponse::Error {
+                    code: crate::protocol::ErrorCode::AccessExpired,
+                    ..
+                } => {
+                    // Expired, replaced or minted before a restart: the refresh
+                    // token is the one that never expires. Fall through once,
+                    // on this route.
+                    tokens.forget_access(&machine.host_id);
+                }
+                HandshakeResponse::Authenticated { .. } => {
+                    return self
+                        .accept(machine, tokens, connection, answer, Some(access))
+                        .await;
+                }
+                other => return Err(handshake_failure("authenticate", other)),
+            }
+        }
+
+        // 2. The durable token. A rotating device names the capability again
+        //    on this frame; the machine tied the pairing to it at `pair` time.
+        //    The same frame is how a static pairing of a gateway this client
+        //    paired with before rotation keeps working: the machine answers a
+        //    refresh credential for a non-rotating record with that record.
+        let (connection, answer) = self
+            .exchange(address, &authenticate_refresh(machine, &stored))
             .await?;
-        let answer = connection.next_handshake(self.timeout).await?;
+        if let HandshakeResponse::Error {
+            code: crate::protocol::ErrorCode::InvalidFrame,
+            ..
+        } = answer
+        {
+            // A gateway from before rotating tokens does not know
+            // `refresh_token`; the static form is what it reads.
+            let (connection, answer) = self
+                .exchange(address, &authenticate_static(machine, &stored))
+                .await?;
+            return match answer {
+                HandshakeResponse::Authenticated { .. } => {
+                    self.accept(machine, tokens, connection, answer, None).await
+                }
+                other => Err(handshake_failure("authenticate", other)),
+            };
+        }
         match answer {
-            HandshakeResponse::Authenticated {
+            HandshakeResponse::Authenticated { .. } => {
+                self.accept(machine, tokens, connection, answer, None).await
+            }
+            other => Err(handshake_failure("authenticate", other)),
+        }
+    }
+
+    /// Send one handshake frame on a fresh socket and read the answer. Error
+    /// frames come back as the frame, not as an error, so the caller can read
+    /// the code and try the next credential.
+    async fn exchange(
+        &self,
+        address: &str,
+        frame: &HandshakeRequest,
+    ) -> Result<(Connection, HandshakeResponse)> {
+        let mut connection = Connection::open_with_timeout(address, self.route_timeout).await?;
+        connection.send_handshake(frame).await?;
+        let answer = connection.next_handshake(self.timeout).await?;
+        Ok((connection, answer))
+    }
+
+    /// Turn an accepted `authenticated` frame into a [`Session`], storing what
+    /// the machine handed out. The new refresh token is durable before the
+    /// rotation is acknowledged; the acknowledgement goes on the same socket,
+    /// which is still speaking remote protocol frames.
+    async fn accept(
+        &self,
+        machine: &Machine,
+        tokens: &TokenStore,
+        mut connection: Connection,
+        answer: HandshakeResponse,
+        presented: Option<Access>,
+    ) -> Result<Session> {
+        let HandshakeResponse::Authenticated {
+            gateway_id,
+            instance_id,
+            device_id,
+            device_name,
+            host_name,
+            expires_at,
+            refresh_token,
+            access_token,
+            access_expires_at,
+            rotation_id,
+            wire_names,
+            ..
+        } = answer
+        else {
+            return Err(handshake_failure("authenticate", answer));
+        };
+        if let Some(refresh) = &refresh_token {
+            // Durable first: until this write lands, the answer is not
+            // acknowledged and the token before it stays valid at the machine.
+            tokens.set(&machine.host_id, refresh).with_context(|| {
+                format!(
+                    "{} replaced this computer's refresh token, but it could not be stored, \
+                     so the rotation was not acknowledged; the token this computer already has \
+                     stays valid until a later connection stores the new one",
+                    machine.name
+                )
+            })?;
+        }
+        let access = match (access_token, parse_expiry(access_expires_at.as_deref())) {
+            // A rotation hands out a new access token and its expiry.
+            (Some(token), Some(expires_at)) => Some(Access::new(token, expires_at)),
+            // An access reconnect hands out only the expiry: the token this
+            // client presented keeps working until then.
+            (None, Some(expires_at)) => {
+                presented.map(|access| Access::new(access.token().clone(), expires_at))
+            }
+            (Some(_), None) | (None, None) => None,
+        };
+        match &access {
+            Some(access) => tokens.keep_access(&machine.host_id, access.clone()),
+            // Nothing to time: do not present it again.
+            None => tokens.forget_access(&machine.host_id),
+        }
+        if let (Some(rotation_id), true) = (rotation_id, refresh_token.is_some()) {
+            connection
+                .send_handshake(&HandshakeRequest::TokenAck { rotation_id })
+                .await
+                .context("acknowledge the rotated refresh token")?;
+        }
+        Ok(Session {
+            connection,
+            welcome: Welcome {
                 gateway_id,
                 instance_id,
                 device_id,
@@ -272,21 +416,9 @@ impl Connector {
                 host_name,
                 expires_at,
                 wire_names,
-                ..
-            } => Ok(Session {
-                connection,
-                welcome: Welcome {
-                    gateway_id,
-                    instance_id,
-                    device_id,
-                    device_name,
-                    host_name,
-                    expires_at,
-                    wire_names,
-                },
-            }),
-            other => Err(handshake_failure("authenticate", other)),
-        }
+            },
+            access,
+        })
     }
 
     /// Connect to `machine` over the first route that authenticates as it.
@@ -299,15 +431,12 @@ impl Connector {
         machine: &Machine,
         tokens: &TokenStore,
     ) -> Result<(Session, Route)> {
-        let token = tokens.get(&machine.host_id)?.with_context(|| {
-            format!("{} has no pairing token; pair with it again", machine.name)
-        })?;
         ensure!(
             !machine.routes.is_empty(),
             "{} has no route to try; add one",
             machine.name
         );
-        // A public route would carry the token in the clear; it is not tried
+        // A public route would carry the tokens in the clear; it is not tried
         // at all, and a machine reachable only that way says why (#2651).
         let routes: Vec<&Route> = machine
             .routes
@@ -320,7 +449,7 @@ impl Connector {
         let mut attempts = Vec::new();
         let mut refused = None;
         for route in routes {
-            let result = match self.authenticate(&route.address, machine, &token).await {
+            let result = match self.authenticate(&route.address, machine, tokens).await {
                 Ok(session) => session.check(machine).map(|()| session),
                 Err(error) => Err(error),
             };
@@ -329,6 +458,14 @@ impl Connector {
                 Err(error) => {
                     if let Some(refusal) = error.downcast_ref::<Refusal>() {
                         refused = Some(refusal.code);
+                        if refusal.code.revoked_pairing() {
+                            // The machine revoked this pairing (or a token it
+                            // retired came back): the saved token is worthless,
+                            // and keeping it would only present it again.
+                            let _ = tokens.remove(&machine.host_id);
+                            attempts.push(format!("{}: {error:#}", route.address));
+                            break;
+                        }
                     }
                     attempts.push(format!("{}: {error:#}", route.address));
                 }
@@ -471,6 +608,9 @@ impl Approved {
             device_kind: device_kind.clone(),
             platform: Some(platform.clone()),
             host_id: host_id.clone(),
+            // Ask for a refresh token instead of the static token: the pairing
+            // then lasts until it is revoked, and reconnect does not expire.
+            capabilities: Some(vec![CAPABILITY_TOKEN_ROTATION.to_owned()]),
         };
         self.connection.send_handshake(&request).await?;
         let answer = self
@@ -486,32 +626,85 @@ impl Approved {
                 token,
                 host_name,
                 expires_at,
+                refresh_token,
+                access_token,
+                access_expires_at,
                 wire_names,
                 ..
-            } => Ok(Paired {
-                secret: token,
-                session: Session {
-                    connection: self.connection,
-                    welcome: Welcome {
-                        gateway_id,
-                        instance_id,
-                        device_id,
-                        device_name,
-                        host_name,
-                        expires_at,
-                        wire_names,
+            } => {
+                // A gateway that takes the capability sends a refresh token;
+                // an older one ignores it and sends the static token, which is
+                // presented as the refresh token from then on.
+                let secret = refresh_token.or(token).context(
+                    "the machine accepted the pairing but sent no device token; pair again",
+                )?;
+                let access = access_token
+                    .zip(parse_expiry(access_expires_at.as_deref()))
+                    .map(|(token, expires_at)| Access::new(token, expires_at));
+                Ok(Paired {
+                    secret,
+                    access,
+                    session: Session {
+                        connection: self.connection,
+                        welcome: Welcome {
+                            gateway_id,
+                            instance_id,
+                            device_id,
+                            device_name,
+                            host_name,
+                            expires_at,
+                            wire_names,
+                        },
+                        access: None,
                     },
-                },
-            }),
+                })
+            }
             other => Err(handshake_failure("pair", other)),
         }
     }
 }
 
-/// A successful pairing: the token, and the authenticated connection.
+/// A successful pairing: the durable token, and the authenticated connection.
 pub struct Paired {
+    /// What [`TokenStore::set`] keeps: the refresh token of a machine that
+    /// rotates its tokens, or the static token of one that does not.
     pub secret: Secret,
+    /// The access token this pairing was given, in memory only. It reconnects
+    /// without rotating anything until it expires.
+    pub access: Option<Access>,
     pub session: Session,
+}
+
+impl Paired {
+    /// Keep what the pairing handed out: the durable token through
+    /// [`TokenStore::set`], then the access token in memory for the next
+    /// [`Connector::connect`].
+    pub fn keep(&self, tokens: &TokenStore, host_id: &str) -> Result<()> {
+        tokens.set(host_id, &self.secret)?;
+        if let Some(access) = &self.access {
+            tokens.keep_access(host_id, access.clone());
+        }
+        Ok(())
+    }
+
+    /// The access token the machine minted for this connection, if it handed
+    /// one out.
+    pub fn access(&self) -> Option<&Access> {
+        self.access.as_ref()
+    }
+}
+
+impl std::fmt::Debug for Paired {
+    /// Never the token: a pairing credential in a log is a pairing credential
+    /// in a log.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Paired")
+            .field("secret", &"<redacted>")
+            .field("rotates", &self.access.is_some())
+            .field("session", &self.session)
+            .finish()
+    }
 }
 
 /// The machine's answer when a pairing is accepted.
@@ -543,6 +736,8 @@ impl Welcome {
 pub struct Session {
     connection: Connection,
     welcome: Welcome,
+    /// The access token this connection presented or was given, in memory only.
+    access: Option<Access>,
 }
 
 impl std::fmt::Debug for Session {
@@ -552,6 +747,7 @@ impl std::fmt::Debug for Session {
             .debug_struct("Session")
             .field("gateway_id", &self.welcome.gateway_id)
             .field("device_id", &self.welcome.device_id)
+            .field("access", &self.access)
             .finish_non_exhaustive()
     }
 }
@@ -559,6 +755,11 @@ impl std::fmt::Debug for Session {
 impl Session {
     pub fn welcome(&self) -> &Welcome {
         &self.welcome
+    }
+
+    /// The access token this connection reconnects with, until it expires.
+    pub fn access(&self) -> Option<&Access> {
+        self.access.as_ref()
     }
 
     /// Check that this address really is the machine we saved: same `host_id`,
@@ -624,6 +825,59 @@ fn handshake_failure(step: &str, answer: HandshakeResponse) -> anyhow::Error {
     }
 }
 
+/// The `authenticate` frame that reconnects with an access token: no
+/// capability, because nothing is asked for and nothing rotates.
+fn authenticate_access(machine: &Machine, token: &Secret) -> HandshakeRequest {
+    HandshakeRequest::Authenticate {
+        protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+        device_id: machine.device_id.clone(),
+        token: None,
+        refresh_token: None,
+        access_token: Some(token.clone()),
+        wire_names: None,
+        capabilities: None,
+    }
+}
+
+/// The `authenticate` frame that exchanges the durable token for a new pair.
+/// It is the refresh token of a rotating device, and the static token of a
+/// pairing the machine does not rotate.
+fn authenticate_refresh(machine: &Machine, token: &Secret) -> HandshakeRequest {
+    HandshakeRequest::Authenticate {
+        protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+        device_id: machine.device_id.clone(),
+        token: None,
+        refresh_token: Some(token.clone()),
+        access_token: None,
+        wire_names: None,
+        capabilities: Some(vec![CAPABILITY_TOKEN_ROTATION.to_owned()]),
+    }
+}
+
+/// The pre-rotation form of `authenticate`: the token under `token` and no
+/// capability, which a gateway from before rotating tokens understands.
+fn authenticate_static(machine: &Machine, token: &Secret) -> HandshakeRequest {
+    HandshakeRequest::Authenticate {
+        protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+        device_id: machine.device_id.clone(),
+        token: Some(token.clone()),
+        refresh_token: None,
+        access_token: None,
+        wire_names: None,
+        capabilities: None,
+    }
+}
+
+/// An RFC 3339 UTC instant from the machine, or `None` when it is absent or
+/// not one: an access token whose expiry cannot be read is not kept, and the
+/// next connection presents the refresh token instead.
+fn parse_expiry(value: Option<&str>) -> Option<DateTime<Utc>> {
+    let value = value?;
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|instant| instant.with_timezone(&Utc))
+}
+
 /// The machine answered and refused: the gateway's error code, as a type, so
 /// a caller can tell "pair again" from "offline" without reading a message.
 #[derive(Debug, Clone)]
@@ -637,7 +891,9 @@ pub struct Refusal {
 
 impl std::fmt::Display for Refusal {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let hint = if self.code.needs_new_pairing() {
+        let hint = if self.code.revoked_pairing() {
+            "; pairing revoked — pair with the machine again"
+        } else if self.code.needs_new_pairing() {
             "; pair with the machine again"
         } else if matches!(self.code, crate::protocol::ErrorCode::UnauthorizedAccess) {
             "; on that machine, run `rustcode remote devices allow <device>`"
@@ -739,14 +995,14 @@ mod tests {
             chrono::Utc::now(),
         );
         let token = Secret::new("token");
+        let tokens = TokenStore::in_file(dir.path()).unwrap();
+        tokens.set(&machine.host_id, &token).unwrap();
         let error = connector
-            .authenticate(public, &machine, &token)
+            .authenticate(public, &machine, &tokens)
             .await
             .unwrap_err();
         assert!(format!("{error:#}").contains("#2651"), "{error:#}");
 
-        let tokens = TokenStore::in_file(dir.path()).unwrap();
-        tokens.set(&machine.host_id, &token).unwrap();
         let error = connector.connect(&machine, &tokens).await.unwrap_err();
         assert!(
             format!("{error:#}").contains("#2651"),
@@ -768,8 +1024,10 @@ mod tests {
             Route::with_kind(crate::registry::RouteKind::Public, "127.0.0.1:1"),
             chrono::Utc::now(),
         );
+        let tokens = TokenStore::in_file(dir.path()).unwrap();
+        tokens.set(&machine.host_id, &Secret::new("token")).unwrap();
         let error = connector
-            .authenticate("127.0.0.1:1", &machine, &Secret::new("token"))
+            .authenticate("127.0.0.1:1", &machine, &tokens)
             .await
             .unwrap_err();
         assert!(
@@ -784,6 +1042,61 @@ mod tests {
         assert_eq!(normalize_code(" 4821 9034 "), "48219034");
         assert_eq!(normalize_code("48219034"), "48219034");
         assert_eq!(normalize_code("nothing"), "");
+    }
+
+    /// The three `authenticate` frames are the shapes the contract documents:
+    /// an access token asks for nothing, a refresh token names the capability,
+    /// and the pre-rotation form puts the token under `token`.
+    #[test]
+    fn the_authenticate_frames_are_the_ones_the_contract_documents() {
+        let machine = Machine::new(
+            "gw-a",
+            "A",
+            "macos",
+            "0011223344556677",
+            Route::new("10.0.0.2"),
+            chrono::Utc::now(),
+        );
+        let expected = |credential: &str, capability: bool| {
+            let mut frame = serde_json::json!({
+                "type": "authenticate",
+                "protocol_version": 1,
+                "device_id": "0011223344556677",
+            });
+            frame[credential] = serde_json::json!("the-token");
+            if capability {
+                frame["capabilities"] = serde_json::json!([CAPABILITY_TOKEN_ROTATION]);
+            }
+            frame
+        };
+        let token = Secret::new("the-token");
+        assert_eq!(
+            serde_json::to_value(authenticate_access(&machine, &token)).unwrap(),
+            expected("access_token", false)
+        );
+        assert_eq!(
+            serde_json::to_value(authenticate_refresh(&machine, &token)).unwrap(),
+            expected("refresh_token", true)
+        );
+        assert_eq!(
+            serde_json::to_value(authenticate_static(&machine, &token)).unwrap(),
+            expected("token", false)
+        );
+    }
+
+    /// Only a real future instant is an expiry: an absent or unreadable one
+    /// means the access token is not kept, and the refresh token reconnects.
+    #[test]
+    fn an_access_expiry_is_read_leniently() {
+        assert!(parse_expiry(None).is_none());
+        assert!(parse_expiry(Some("soon")).is_none());
+        assert!(parse_expiry(Some("2026-08-22")).is_none());
+        let instant = parse_expiry(Some("2026-08-22T09:15:00Z")).expect("RFC 3339");
+        assert_eq!(instant.to_rfc3339(), "2026-08-22T09:15:00+00:00");
+        let access = Access::new(Secret::new("a1"), instant);
+        assert!(access.is_valid_at(instant - chrono::Duration::seconds(1)));
+        assert!(!access.is_valid_at(instant));
+        assert!(!format!("{access:?}").contains("a1"));
     }
 
     #[test]
