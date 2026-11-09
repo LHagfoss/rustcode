@@ -403,9 +403,8 @@ composer's keys stay outside the table.
   path's SHA-256 for a named account — and `<config dir>/.credentials.json`,
   the copy with the freshest token winning) against
   `api.anthropic.com/api/oauth/usage` (5-hour, weekly, weekly per model),
-  read-only and never refreshed (`provider_auth/claude_usage.rs`). Claude is
-  read only after the user
-  presses **Show** once (`rustcode.claudeUsage`), since macOS may ask to
+  read-only and never refreshed (`provider_auth/claude_usage.rs`). The first
+  read happens when Usage opens or a Claude account is used; macOS may ask to
   allow Keychain access. Each source is cached a minute. Showing the page is an
   explicit look and reads every Claude login; the background reads one at a
   time, the default login and the account of the thread on screen
@@ -425,8 +424,7 @@ composer's keys stay outside the table.
   past the engine's minute of cache. What the page reads fills the same cache
   `list_harnesses` reports to an agent (`state/harnessUsage.ts`,
   `docs/orchestrator.md`), which answers without a Keychain read or a request of
-  its own and refreshes the stale named logins in the background. With Claude's
-  switch off, an answer that was already in flight commits no Claude row.
+  its own and refreshes the stale named logins in the background.
   A Claude access token lives hours and is renewed only when Claude Code runs,
   so a login nobody ran a thread on since reads as lapsed. The row then draws
   the numbers RustCode last read for that login, from `claude-usage.json` in
@@ -444,9 +442,8 @@ composer's keys stay outside the table.
   to the page, and the background poll picks it up within its three minutes. A
   `forbidden` login is not retried on its own (renewing does not fix it), nor is
   a `denied` one (that would only prompt again); Settings › Usage, Refresh and
-  Check in Settings › Agents read them again, and Refresh always forces. With
-  Claude's switch off the page asks for no Claude login at all, so even a forced
-  Refresh reads no Keychain item. Reads of one login are serialized in the
+  Check in Settings › Agents read them again, and Refresh always forces. Reads
+  of one login are serialized in the
   engine (`provider_auth/claude_usage.rs`), and a forced read whose login was
   read after the user asked shares that answer instead of asking macOS again. A
   Keychain refusal is remembered while the engine runs: the background reads
@@ -709,10 +706,13 @@ composer's keys stay outside the table.
   parent's, folded away when the user moves on, and a search result that is a
   delegate says `in <parent title>`. The chat's agent and thread group cards
   show the same stack.
-  The toolbar's row carries Hide sidebar, New thread, Settings and, when
-  the project has them, Pull requests, clear of the traffic lights; the
-  header's cluster holds Show sidebar, New thread and Settings while the
-  sidebar is hidden. Settled alone sits at the foot, above the update row;
+  The toolbar's row carries Hide sidebar alone, clear of the traffic lights;
+  under it Add project and New thread, and a foot row Settings, Pull requests
+  (when the project has them) and Usage; the header's cluster holds Show
+  sidebar and Settings while the sidebar is hidden. There is no search or
+  filter in the sidebar: ⌘K finds threads (by title, project, branch, pull
+  request and what was said) and holds the view options. Working, Snoozed
+  and Settled are shelves at the foot of the list, each folding on its own;
   the project is chosen per thread in the composer's footer.
 - **Title bar.** The sidebar's and header's buttons sit on the traffic
   lights' line, 14 px past the zoom button (x 92; the button ends at x 78),
@@ -733,7 +733,9 @@ composer's keys stay outside the table.
   panel toggles (details, changes) always draw after the rest, in their kept
   order, so the panel's control is the header's last, rightmost one. The order
   is kept as `rustcode.headerButtons` (`{shown, known}`), so a button added
-  in a later release shows by default.
+  in a later release shows by default. Pull requests is hidden on a fresh
+  install and after Reset (the sidebar's foot row holds it); a saved layout
+  that shows it keeps it.
 - **Settings** takes the whole window: the shell (sidebar, chat, right
   panel) stays mounted and laid out underneath, hidden and `inert`, so the
   thread comes back exactly where it was (scroll, drafts, open rows). A
@@ -948,7 +950,7 @@ composer's keys stay outside the table.
   the engine's reason (uncommitted changes, unpushed commits).
 - **Status and Board.** Running, Needs input, Review and Settled chips on rows
   and in the chat header (a menu marks Review or Settled). *Board* (the
-  sidebar's filter menu, or ⌘K) shows those four columns; drag a card to
+  ⌘K) shows those four columns; drag a card to
   Review or Settled.
   Marks go to `_rustcode/session/status`; on an engine without it the app
   keeps them itself. `_meta.rustcode.status` from the engine (a merged

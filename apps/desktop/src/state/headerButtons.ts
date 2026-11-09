@@ -12,8 +12,15 @@ export const HEADER_BUTTON_IDS = ["status", "plan", "pulls", "terminal", "detail
 
 export type HeaderButtonId = (typeof HEADER_BUTTON_IDS)[number];
 
-/** Every button, shown, in registry order: what a fresh install and a reset start from. */
-export const DEFAULT_HEADER_BUTTONS: readonly HeaderButtonId[] = HEADER_BUTTON_IDS;
+/**
+ * What a fresh install and a reset start from: every button in registry order but Pull requests,
+ * which the sidebar's foot row already holds (still one click away in Settings › Chat › Thread
+ * header buttons). A layout the user saved is never touched by this: `sanitizeHeaderButtons` keeps
+ * what was stored, so a user who shows the button keeps it.
+ */
+export const DEFAULT_HEADER_BUTTONS: readonly HeaderButtonId[] = HEADER_BUTTON_IDS.filter(
+  (id) => id !== "pulls",
+);
 
 /** What `rustcode.headerButtons` holds. */
 export interface StoredHeaderButtons {
@@ -34,8 +41,8 @@ export function sameHeaderButtons(a: readonly HeaderButtonId[], b: readonly Head
  * The shown ids a stored value means, in order: unknown ids and duplicates
  * dropped, an empty list kept (every button hidden is a valid choice), and a
  * button this build knows but the saved value did not appended at the end. No
- * usable value at all (nothing stored, or not JSON of that shape) shows every
- * button.
+ * usable value at all (nothing stored, or not JSON of that shape) shows the
+ * defaults.
  */
 export function sanitizeHeaderButtons(raw: unknown): HeaderButtonId[] {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [...DEFAULT_HEADER_BUTTONS];

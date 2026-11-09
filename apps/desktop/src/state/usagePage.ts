@@ -1,10 +1,21 @@
 // What Settings › Usage draws, whether opening it reads again, and its own
 // refresh loop. The whole answer is kept in the page cache
-// (`state/pageCache.ts`); this decides what of it to show, with Claude's
-// numbers dropped the moment consent is off, and when it reads on its own.
+// (`state/pageCache.ts`); this decides what to show and when to read again.
 
 import { planKey, planOf, type UsagePlan } from "../acp/rustcode";
 import { type PageAnswer, pageIsFresh } from "./pageCache";
+
+/** Keep each harness's account rows together in their original order. */
+export function groupPlans(plans: UsagePlan[]): { harness: string; plans: UsagePlan[] }[] {
+  const groups = new Map<string, UsagePlan[]>();
+  for (const plan of plans) {
+    const harness = planOf(plan);
+    const group = groups.get(harness) ?? [];
+    group.push(plan);
+    groups.set(harness, group);
+  }
+  return Array.from(groups, ([harness, plans]) => ({ harness, plans }));
+}
 
 /** The cache key of the page's own answer: every subscription, every login. */
 export const USAGE_PLANS_KEY = "settings/usage/plans";
@@ -14,9 +25,8 @@ export interface UsageAnswer {
   plans: UsagePlan[];
   /**
    * Whether the read asked for every Claude login, which is the page's explicit
-   * look (opening it, Refresh) with consent on. A background read answers part
-   * of that, so the next open reads the logins again, and a read made with the
-   * switch off is not fresh for it either.
+   * look (opening it, Refresh). A background read answers part of that, so the
+   * next open reads the logins again.
    */
   asked: boolean;
 }
@@ -38,8 +48,7 @@ export interface UsageView {
 
 /**
  * What the page shows and whether it reads. A last answer is shown at once,
- * with Claude's numbers dropped when consent is off; a read is skipped only when
- * it was made for the same consent and is under 30 seconds old, so flipping
+ * A read is skipped only when it was complete and is under 30 seconds old, so flipping
  * between pages costs nothing and cannot raise a Keychain prompt.
  * A failed read keeps the shown numbers in the foot's note, and is the page
  * only when there is nothing else to show.
@@ -49,16 +58,15 @@ export interface UsageView {
  */
 export function usageView(
   answer: PageAnswer<UsageAnswer> | null,
-  allowed: boolean,
   error: string | null,
   now = Date.now(),
 ): UsageView {
-  const plans = answer ? (allowed ? answer.data.plans : withoutClaudeData(answer.data.plans)) : null;
+  const plans = answer?.data.plans ?? null;
   const force = plans?.some(retryable) ?? false;
   return {
     plans,
     readAt: answer?.readAt ?? null,
-    fetch: force || !answer || answer.data.asked !== allowed || !pageIsFresh(answer, now),
+    fetch: force || !answer || !answer.data.asked || !pageIsFresh(answer, now),
     force,
     fatal: plans === null ? error : null,
     note: plans === null ? null : error,
@@ -128,11 +136,9 @@ export function refreshBackoff(everyMs: number, failures: number): number {
 /**
  * One page read at a time, without losing an explicit one. A background read
  * (the page's own interval) that finds a read in flight is dropped: the next
- * tick reads. An explicit look (opening the page, turning Claude's switch on,
- * Refresh) is kept instead and runs as soon as the read in flight ends, the
+ * tick reads. An explicit look (opening the page or Refresh) is kept instead and runs as soon as the read in flight ends, the
  * newest one only; dropping it would leave Claude's rows unread until the next
- * tick, three minutes later, after the switch was turned on during a tick's
- * read. A kept look answers true at once: it has not failed.
+ * tick, three minutes later. A kept look answers true at once: it has not failed.
  */
 export function oneReadAtATime<A>(read: (args: A) => Promise<boolean>): {
   run: (args: A, explicit: boolean) => Promise<boolean>;
@@ -271,34 +277,8 @@ export function failureText(plan: UsagePlan): { title: string; subtitle?: string
 }
 
 /**
- * Claude's rows without their numbers once consent is off, with the one row
- * that carries the switch kept (as `notAsked`, which draws no plan windows):
- * the switch to turn the meter back on must stay reachable. Named accounts
- * add no other row here.
- */
-function withoutClaudeData(plans: UsagePlan[]): UsagePlan[] {
-  const claude = plans.find((p) => planOf(p) === "claude-code");
-  if (!claude) return plans;
-  return plans.flatMap((p) => {
-    if (planOf(p) !== "claude-code") return [p];
-    if (p !== claude) return [];
-    return [
-      {
-        ...claude,
-        status: "notAsked" as const,
-        plan: undefined,
-        error: undefined,
-        reason: undefined,
-        windows: [],
-      },
-    ];
-  });
-}
-
-/**
  * The list the page keeps after a read. Its own whole read (`claude` and every
- * account) replaces the list. A partial answer — consent off, or a background
- * read of one account — says nothing about the rows it did not ask (`notAsked`
+ * account) replaces the list. A partial answer — a background read of one account — says nothing about the rows it did not ask (`notAsked`
  * or absent), so they stay as shown instead of being wiped.
  */
 export function answeredPlans(shown: UsagePlan[], answer: UsagePlan[], full: boolean): UsagePlan[] {

@@ -2,13 +2,21 @@ import { describe, expect, test } from "bun:test";
 import type { FileDiff } from "../acp/types";
 import {
   contextRow,
+  isShelf,
   keepListed,
   listedPicks,
   nextRow,
   opensRowMenu,
+  type Placement,
+  placeThread,
   rangeRows,
   rowKeyAction,
   rowStatus,
+  SECTION_ORDER,
+  SHELF_DEFAULT_OPEN,
+  SHELVES,
+  shelfKey,
+  shelfOpen,
   threadDiff,
   visibleRows,
 } from "./sidebarRows";
@@ -257,5 +265,103 @@ describe("a thread's diff totals", () => {
     expect(threadDiff(undefined)).toBeNull();
     expect(threadDiff([])).toBeNull();
     expect(threadDiff([tool("1")])).toBeNull();
+  });
+});
+
+describe("the shelves' fold state", () => {
+  test("Working starts open, Snoozed and Settled shut", () => {
+    expect(shelfOpen("working", undefined)).toBe(true);
+    expect(shelfOpen("snoozed", undefined)).toBe(false);
+    expect(shelfOpen("settled", undefined)).toBe(false);
+    expect(SHELF_DEFAULT_OPEN).toEqual({ working: true, snoozed: false, settled: false });
+  });
+
+  test("every shelf folds and unfolds on the user's choice, not only Settled", () => {
+    for (const id of SHELVES) {
+      expect(shelfOpen(id, true)).toBe(true);
+      expect(shelfOpen(id, false)).toBe(false);
+    }
+  });
+
+  test("a search shows every shelf, and the delegate chain opens the shelf it hangs in", () => {
+    expect(shelfOpen("snoozed", false, { searching: true })).toBe(true);
+    expect(shelfOpen("settled", false, { forced: true })).toBe(true);
+    expect(shelfOpen("working", false, {})).toBe(false);
+  });
+
+  test("each shelf keeps its own key, Settled's the one older releases wrote", () => {
+    expect(shelfKey("settled")).toBe("rustcode.sidebar.settledOpen");
+    expect(new Set(SHELVES.map(shelfKey)).size).toBe(SHELVES.length);
+  });
+
+  test("only the shelves fold", () => {
+    expect(SHELVES.every(isShelf)).toBe(true);
+    expect(isShelf("pinned")).toBe(false);
+    expect(isShelf("threads")).toBe(false);
+    expect(isShelf("project:/code/app")).toBe(false);
+  });
+});
+
+describe("which section a thread is drawn under", () => {
+  const base: Placement = {
+    pinned: false,
+    settled: false,
+    aged: false,
+    snoozed: false,
+    needs: false,
+    working: false,
+    fresh: false,
+    showWorking: true,
+    byProject: false,
+  };
+  const place = (over: Partial<Placement>) => placeThread({ ...base, ...over });
+
+  test("Pinned and Active lead, the shelves follow at the foot", () => {
+    expect(SECTION_ORDER).toEqual(["pinned", "threads", "working", "snoozed", "settled"]);
+  });
+
+  test("an idle thread is Active, a pinned one Pinned", () => {
+    expect(place({})).toBe("threads");
+    expect(place({ pinned: true })).toBe("pinned");
+  });
+
+  test("a pinned thread that works stays Pinned, never under Working", () => {
+    expect(place({ pinned: true, working: true })).toBe("pinned");
+  });
+
+  test("a settled thread is never under Pinned", () => {
+    expect(place({ pinned: true, settled: true })).toBe("settled");
+    // …unless it needs you or works again: then it is shown where it can be seen.
+    expect(place({ pinned: true, settled: true, needs: true })).toBe("pinned");
+    expect(place({ pinned: true, settled: true, working: true })).toBe("pinned");
+  });
+
+  test("running threads go under Working, unless it is off or the list is grouped by project", () => {
+    expect(place({ working: true })).toBe("working");
+    expect(place({ working: true, showWorking: false })).toBe("threads");
+    expect(place({ working: true, byProject: true })).toBe("threads");
+  });
+
+  test("a snoozed thread sleeps until it needs you or works", () => {
+    expect(place({ snoozed: true })).toBe("snoozed");
+    expect(place({ snoozed: true, needs: true })).toBe("threads");
+    expect(place({ snoozed: true, working: true })).toBe("working");
+  });
+
+  test("a thread untouched for days is Settled, a freshly finished one is not", () => {
+    expect(place({ aged: true })).toBe("settled");
+    expect(place({ aged: true, fresh: true })).toBe("threads");
+    expect(place({ aged: true, needs: true })).toBe("threads");
+  });
+
+  test("every section id a thread can be placed in is one the list draws", () => {
+    const placed = [
+      place({}),
+      place({ pinned: true }),
+      place({ working: true }),
+      place({ snoozed: true }),
+      place({ settled: true }),
+    ];
+    for (const id of placed) expect(SECTION_ORDER).toContain(id);
   });
 });

@@ -14,7 +14,6 @@ import {
   parsePlanUsage,
   planHarness,
   planKey,
-  planOf,
   type SubagentInfo,
   type UsagePlan,
   type UsageWindow,
@@ -1676,6 +1675,7 @@ export function selectThread(id: string | null) {
     settings: null,
     view: { kind: "chat" },
   }));
+  if (id && harnessOf(get(), id) === CLAUDE_CODE) claudePlansStarted = true;
   // The account this thread runs on may never have been read: its meter has no
   // numbers until it is, and it appears without a visit to Settings › Usage.
   // The list's summary names the account before the thread itself is opened.
@@ -1783,6 +1783,10 @@ export function openThread(id: string): Promise<string | null> {
         harness: parseSessionHarness(result) ?? t.harness,
       }));
       const opened = get().threads[id];
+      if (id === get().selectedId && opened?.harness?.id === CLAUDE_CODE) {
+        claudePlansStarted = true;
+        void refreshPlanCache();
+      }
       if (opened && lacksModels(opened)) void ensureHarnessModels(opened.harness!.id);
       void refreshPlanUsage(id);
       void refreshCheckpoints(id);
@@ -2525,7 +2529,10 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
     cancelEdit(id);
     const later = messagesAfter(thread, edit.itemId);
     const go = async () => {
-      if (await rewindTo(id!, edit.itemId, edit.original)) void runPrompt(id!, trimmed, extras);
+      if (await rewindTo(id!, edit.itemId, edit.original)) {
+        unsettleThreads([id!]);
+        void runPrompt(id!, trimmed, extras);
+      }
     };
     if (later > 0) {
       askConfirm({
@@ -2538,6 +2545,7 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
     } else void go();
     return true;
   }
+  if (trimmed !== "/fork" || hasExtras(extras)) unsettleThreads([id]);
   if (thread.running) {
     updateThread(id, (t) => ({
       ...t,
@@ -2601,6 +2609,7 @@ export async function steerOrSubmit(text: string, extras: ComposeExtras = emptyE
     if (next) return sendQueuedNow(id, next.id);
     return submit(text, extras);
   }
+  unsettleThreads([id]);
   const verdict = sendDecisionFor(thread, extras);
   if (verdict.action === "steer" && (await steer(id, trimmed, extras))) return true;
   if (verdict.action === "interruptRestart") return restartWith(id, text, extras);
@@ -3390,6 +3399,7 @@ export function accountSlug(name: string): string {
 /** The user picked an account for new threads on the current harness. */
 export function pickNewThreadAccount(account: string | null) {
   const harness = newThreadChoice(get())?.harness;
+  if (harness === CLAUDE_CODE) claudePlansStarted = true;
   set({ newThreadAccount: account });
   if (harness) storeAccount(harness, account);
   // The login picked may never have been read: its own meter numbers come now.
@@ -3402,6 +3412,7 @@ export function pickNewThreadAccount(account: string | null) {
  * model and effort it was last left on.
  */
 export function pickNewThreadAccountOn(harness: string, account: string) {
+  if (harness === CLAUDE_CODE) claudePlansStarted = true;
   storeAccount(harness, account);
   if (newThreadChoice(get())?.harness !== harness) switchNewThreadHarness(harness);
   set({ newThreadAccount: account });
@@ -3431,7 +3442,7 @@ export async function checkHarnessAccounts(readPlans = true): Promise<HarnessSna
   // neither asks again and again. An explicit check is the user asking to look
   // now: read the default login again, or it would stay as it was found after
   // signing in or out.
-  if (readPlans && claudeUsageAllowed()) void refreshPlanCache(true);
+  if (readPlans) void refreshPlanCache(true);
   return snapshot;
 }
 
@@ -3632,6 +3643,7 @@ export function switchNewThreadHarness(harness: string) {
     // A harness with named accounts never starts on its own sign-in.
     newThreadAccount: newThreadAccountOn(next, remembered, get().signedOutLogins),
   });
+  if (harness === CLAUDE_CODE) claudePlansStarted = true;
   // Another harness means another login, whose meter may have no numbers yet.
   void refreshPlanCache();
 }
@@ -3670,6 +3682,7 @@ export async function switchThreadAccount(id: string, account: string | null): P
       "success",
     );
     void refreshPlanUsage(id);
+    if (harness === CLAUDE_CODE) claudePlansStarted = true;
     // The account switched to may never have been read: its meter numbers come now.
     void refreshPlanCache();
     return true;
@@ -3718,6 +3731,7 @@ export async function switchThreadHarness(
         x.id === id ? { ...x, harness, account: next?.account ?? account ?? undefined } : x,
       ),
     }));
+    if (harness === CLAUDE_CODE) claudePlansStarted = true;
     const opened = get().threads[id];
     if (opened && lacksModels(opened)) void ensureHarnessModels(harness);
     void refreshPlanUsage(id);
@@ -4316,7 +4330,7 @@ export function settleThread(id: string): void {
  */
 export function unsettleThreads(ids: string[]): void {
   const state = get();
-  const settled = ids.filter((id) => statusOf(state, id) === "done");
+  const settled = ids.filter((id) => (state.statusMarks[id] ?? sessionById(state, id)?.status) === "done");
   if (!settled.length) return;
   void setThreadsStatus(settled, "idle");
   toast(settled.length === 1 ? "Unsettled" : `Unsettled ${settled.length} threads`, "info");
@@ -4998,39 +5012,8 @@ let plansQueued: PlansAsk[] = [];
  */
 let planPauses: PlanPauses = NO_PAUSES;
 
-/** The consent Settings › Usage keeps before Claude's sign-in is read from the Keychain. */
-export const CLAUDE_USAGE_KEY = "rustcode.claudeUsage";
-
-/** Off until the user says yes: reading the Keychain is theirs to allow. */
-export const CLAUDE_USAGE_DEFAULT = false;
-
-export function claudeUsageAllowed(): boolean {
-  const raw = stored(CLAUDE_USAGE_KEY);
-  return raw === null ? CLAUDE_USAGE_DEFAULT : raw === "1";
-}
-
-/**
- * Turns that consent on or off. Off forgets the numbers it read: the composer
- * must not keep showing a plan the user asked the app to stop reading.
- */
-export function setClaudeUsageAllowed(on: boolean): void {
-  store(CLAUDE_USAGE_KEY, on ? "1" : "0");
-  planPauses = NO_PAUSES;
-  if (on) return;
-  // Nothing waiting may read a login after the switch went off.
-  plansQueued = [];
-  // Every Claude login, the default one and each account's own row.
-  setPlanCache(
-    Object.fromEntries(Object.entries(get().planCache).filter(([key]) => !key.startsWith("claude-code"))),
-  );
-  // What a read found about a login is only kept while it is read: with the
-  // meter off nothing would clear it after the user signed in again.
-  set({
-    signedOutLogins: Object.fromEntries(
-      Object.entries(get().signedOutLogins).filter(([key]) => !key.startsWith("claude-code")),
-    ),
-  });
-}
+// Start Claude reads only after an explicit look or use of a Claude account.
+let claudePlansStarted = false;
 
 /**
  * Folds a plans answer into the cache: a signed-in harness's windows go in, one
@@ -5041,10 +5024,10 @@ export function setClaudeUsageAllowed(on: boolean): void {
  * what unpauses them.
  */
 export function commitPlansAnswer(answers: UsagePlan[], asked = false): void {
-  // A read already in flight when the switch went off still answers Claude's
-  // rows; nothing may put them back while the meter is off.
-  if (!claudeUsageAllowed()) answers = answers.filter((p) => planOf(p) !== CLAUDE_CODE);
-  if (asked) planPauses = NO_PAUSES;
+  if (asked) {
+    claudePlansStarted = true;
+    planPauses = NO_PAUSES;
+  }
   const gone = answers.filter((p) => p.status === "signedOut" || p.status === "notInstalled").map(planKey);
   const kept = forgetPlans(get().planCache, gone);
   const learned = plansToCache(answers);
@@ -5060,13 +5043,14 @@ export function commitPlansAnswer(answers: UsagePlan[], asked = false): void {
 
 /**
  * What a refresh asks the engine for: the default login and the account of the
- * thread on screen, each only with consent and while it was not paused.
+ * thread on screen, after first use and while it was not paused.
  */
 function currentPlansAsk(explicit: boolean): PlansAsk {
   const s = get();
   const threadId = s.selectedId ?? undefined;
+  if (explicit) claudePlansStarted = true;
   return plansAskFor({
-    allowed: claudeUsageAllowed(),
+    allowed: claudePlansStarted,
     harness: harnessOf(s, threadId),
     account: accountOn(s, threadId),
     pauses: planPauses,
@@ -5076,8 +5060,7 @@ function currentPlansAsk(explicit: boolean): PlansAsk {
 
 /**
  * Asks for every subscription's plan (`_rustcode/usage/plans`, no thread
- * needed) and folds the answer into the cache. Claude is asked for only with
- * consent: the default login, and the account of the thread on screen so its
+ * needed) and folds the answer into the cache. Claude is asked for after first use: the default login, and the account of the thread on screen so its
  * meter has numbers without a visit to Settings › Usage, one Keychain item at a
  * time. One request at a time: anything asked for while one is in flight runs
  * after it, coalesced, so a hover during the poll is not dropped. A failed one
@@ -5224,6 +5207,7 @@ function stopPlanPolling() {
   planResetTimer = null;
   planResetDue = 0;
   planPauses = NO_PAUSES;
+  claudePlansStarted = false;
   if (plansOnVisible) document.removeEventListener("visibilitychange", plansOnVisible);
   plansOnVisible = null;
   plansInFlight = null;

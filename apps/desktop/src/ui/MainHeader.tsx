@@ -1,12 +1,12 @@
 // The main column's header, shared by the chat, Settings and the other
 // views, so switching between them keeps the bar where it is: the sidebar's
-// buttons when the sidebar is hidden (clear of the traffic lights), the
+// toggle (and Settings) when the sidebar is hidden (clear of the traffic lights), the
 // view's title and its own controls. It floats in glass over its view (the
 // view leaves HEADER_HEIGHT at its top), so content scrolls under it.
 
-import { Settings as Gear, PanelLeft, SquarePen } from "lucide-react";
+import { Settings as Gear, PanelLeft } from "lucide-react";
 import type { ReactNode } from "react";
-import { openSettings, startNewThread, toggleSidebar, useApp, useShortcutHint } from "../state/store";
+import { openSettings, toggleSidebar, useApp, useShortcutHint } from "../state/store";
 import { Cluster, ClusterButton, cx } from "./primitives";
 import { useLightsInset } from "./Titlebar";
 
@@ -43,7 +43,6 @@ export function MainHeader({
 }) {
   const sidebarHidden = useApp((s) => s.sidebarHidden);
   const toggleKey = useShortcutHint("toggle-sidebar");
-  const newKey = useShortcutHint("new-thread");
   const lightsInset = useLightsInset();
   const underLights = lights || sidebarHidden;
   return (
@@ -61,13 +60,6 @@ export function MainHeader({
         <Cluster>
           <ClusterButton label="Show sidebar" tooltip={`Show sidebar (${toggleKey})`} onClick={toggleSidebar}>
             <PanelLeft size={14} />
-          </ClusterButton>
-          <ClusterButton
-            label="New thread"
-            tooltip={`New thread (${newKey})`}
-            onClick={() => startNewThread()}
-          >
-            <SquarePen size={14} />
           </ClusterButton>
           <SettingsButton />
         </Cluster>

@@ -6,7 +6,7 @@ const NOW = 1_762_500_000_000;
 const iso = (ms: number) => new Date(ms).toISOString();
 
 /** A login's block as an agent reads it at `NOW`, whatever the real clock says. */
-const at = (plan: Parameters<typeof usageOf>[0], readable = true) => usageOf(plan, readable, NOW);
+const at = (plan: Parameters<typeof usageOf>[0]) => usageOf(plan, NOW);
 
 /** A login's cached plan as a plans answer leaves it. */
 const cached = (over: Partial<CachedPlan> = {}): CachedPlan => ({
@@ -43,14 +43,6 @@ describe("a login's usage as an agent reads it", () => {
   test("nothing read for the login yet says nothing at all", () => {
     expect(at(undefined)).toBeUndefined();
     expect(at(cached({ windows: [] }))).toBeUndefined();
-  });
-
-  test("Claude's logins say reading is off rather than look idle", () => {
-    // Even a cache entry from before the switch was turned off draws nothing.
-    expect(at(cached(), false)).toEqual({ status: "not_enabled", windows: [] });
-    expect(at(undefined, false)).toEqual({ status: "not_enabled", windows: [] });
-    // A harness whose plan RustCode reads without consent is unaffected.
-    expect(at(cached({ harness: "codex" }))?.status).toBe("ok");
   });
 
   test("a window whose reset passed reports nothing used, as the composer draws it", () => {

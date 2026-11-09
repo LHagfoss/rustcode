@@ -124,7 +124,6 @@ import {
 import {
   type AppState,
   cancel,
-  claudeUsageAllowed,
   createSession,
   effortMemory,
   ensureHarnessModels,
@@ -892,10 +891,8 @@ async function listHarnesses(
   // cache holds now.
   const cache = useApp.getState().planCache;
   if (planCacheStale(cache)) refreshReadPlanLogins();
-  const claudeReadable = claudeUsageAllowed();
-  // Claude's plan comes from its own sign-in, which the user opts into reading.
   const usage = (harness: string, account?: string | null) =>
-    usageOf(cache[harnessPlanKey(harness, account)], harness !== "claude-code" || claudeReadable);
+    usageOf(cache[harnessPlanKey(harness, account)]);
   return {
     current: { harness: caller.harness ?? "rustcode", ...ranWith(caller.id) },
     harnesses: listed.map((h) => {
