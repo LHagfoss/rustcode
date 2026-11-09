@@ -1,16 +1,18 @@
 import { fileManagerName, primaryModifier } from "../lib/platform";
 // The sidebar: a toolbar clear of the traffic lights (the sidebar toggle only),
-// then one list: pinned threads first, then every active thread (by project when
-// asked), then the Working, Snoozed and Settled shelves at the foot, each folding
-// on its own header. Threads are searched from ⌘K, which also holds the buttons
-// that used to sit here (new thread, add project, settings, pull requests, usage).
+// the app's brand under it (its mark, name and version), then one list: pinned
+// threads first, then every active thread (by project when asked), then the
+// Working, Snoozed and Settled shelves at the foot, each folding on its own
+// header. Threads are searched from ⌘K, which also holds the buttons that used
+// to sit here (new thread, add project, settings, pull requests, usage).
 // A row is one 32px line: the mark of where it runs, its title, and one trailing
 // slot — `Needs you`, `Working 2m`, `Waiting`, `Failed`, `Review`, the time it
-// wakes, or its age (state/sidebarRows.ts `rowStatus`). A thread with a branch,
-// a diff, a pull request or a stack of delegates adds one quiet second line for
-// them (48px); a request from the thread adds its words under the title. The row
-// layout preference (Settings › Appearance) keeps the older two-line row as
-// `comfortable`, which puts the title first and the branch under it.
+// wakes, or its age (state/sidebarRows.ts `rowStatus`), with the harness mark and
+// a lone diff beside it. A thread with a branch, a diff, a pull request or a stack
+// of delegates adds one quiet second line for them (48px); a request from the
+// thread adds its words under the title. The row layout preference (Settings ›
+// Appearance) keeps the older two-line row as `comfortable`, which puts the title
+// first and the branch under it.
 
 import {
   Check,
@@ -87,6 +89,7 @@ import {
   keepListed,
   listedPicks,
   nextRow,
+  type OrderKey,
   type OrderRow,
   type OrderSection,
   opensRowMenu,
@@ -95,12 +98,15 @@ import {
   type RowStatusKind,
   rangeRows,
   rowKeyAction,
+  rowMeta,
   rowStatus,
-  SECTION_ORDER,
   type SectionId,
   type ShelfId,
+  type SidebarLayout,
+  sectionsOf,
   shelfKey,
   shelfOpen,
+  sortSection,
   threadDiff,
   titleFirstTrailing,
   visibleRows,
@@ -140,8 +146,9 @@ import {
 } from "../state/store";
 import { formatClock, idleSettled, shortAge } from "../state/thread";
 import { openChain, parentOf as parentOfThread, type SubRow, topLevel } from "../state/topLevel";
-import { useWaiting, waitingLabel, waitingTitle } from "../state/waiting";
+import { useWaiting, useWaitingIds, waitingLabel, waitingTitle } from "../state/waiting";
 import { AgentStack } from "./AgentStack";
+import { BrandHeader } from "./BrandHeader";
 import { CustomSnooze } from "./CustomSnooze";
 import { HarnessIcon } from "./HarnessIcon";
 import { NeedsYouRow } from "./Inbox";
@@ -435,6 +442,7 @@ const CHIP_TINT: Record<RowStatusKind, string> = {
   working: "bg-accent/12 text-accent",
   waiting: "bg-fill-subtle text-fg-muted",
   failed: "bg-danger/12 text-danger",
+  completed: "bg-success/12 text-success",
   review: "bg-accent/16 text-accent",
 };
 
@@ -465,6 +473,8 @@ function RowStatusChip({ status, startedAt }: { status: RowStatus; startedAt?: n
         )
       ) : kind === "failed" ? (
         <CircleAlert size={10} />
+      ) : kind === "completed" ? (
+        <Check size={10} />
       ) : kind === "review" ? (
         <Eye size={10} />
       ) : null}
@@ -509,16 +519,46 @@ function RowAction({
 }
 
 /**
- * The room a row keeps clear of its hover actions: Pin, Settle (or Unsettle) and the menu, three
- * 24px buttons that sit 8px in from the row's end. The compact row's trailing slot is exactly this
- * wide, so the actions replace the state in place instead of pushing the title aside.
+ * The room a row gives its trailing state: the mark of the harness it runs on and the diff when
+ * they have nowhere else to go, and the state itself — the age, a chip, or the running turn's
+ * clock. It is as wide as what it says, so the title takes every pixel the row does not need, and
+ * it keeps that width on hover (invisible) while the actions are drawn over it, so nothing reflows.
+ * It never wraps: its parts sit side by side on the row's one line, so a second glyph never drops
+ * under the state and reads as a line of its own.
  */
-const ACTIONS_CLEAR =
-  "group-hover:pr-20 group-has-[:focus-visible]:pr-20 group-has-[[data-state=open]]:pr-20";
+const TRAILING_SLOT =
+  "flex shrink-0 flex-nowrap items-center justify-end gap-1.5 whitespace-nowrap text-sub text-fg-muted tabular";
 
-/** What the hover actions are drawn over: the state whose slot they take. */
+/**
+ * Hovering swaps the row's trailing state for its actions — Pin, Settle (or Unsettle) and the menu,
+ * three 24px buttons 8px in from the row's end. They are drawn over the right end rather than in
+ * their own room, so the title never moves: the line fades out under them instead. The fade is
+ * taken from the row's right edge in pixels, so a narrow sidebar does not lose more of a title than
+ * a wide one, and the actions' 88px is what it covers.
+ */
+const FADE_UNDER_ACTIONS = cx(
+  "group-hover:[mask-image:linear-gradient(to_right,black_calc(100%_-_96px),transparent_calc(100%_-_84px))]",
+  "group-hover:[-webkit-mask-image:linear-gradient(to_right,black_calc(100%_-_96px),transparent_calc(100%_-_84px))]",
+  "group-has-[:focus-visible]:[mask-image:linear-gradient(to_right,black_calc(100%_-_96px),transparent_calc(100%_-_84px))]",
+  "group-has-[:focus-visible]:[-webkit-mask-image:linear-gradient(to_right,black_calc(100%_-_96px),transparent_calc(100%_-_84px))]",
+  "group-has-[[data-state=open]]:[mask-image:linear-gradient(to_right,black_calc(100%_-_96px),transparent_calc(100%_-_84px))]",
+  "group-has-[[data-state=open]]:[-webkit-mask-image:linear-gradient(to_right,black_calc(100%_-_96px),transparent_calc(100%_-_84px))]",
+);
+
+/** What the hover actions are drawn over: the state whose place they take. */
 const HIDDEN_ON_HOVER =
   "group-hover:invisible group-has-[:focus-visible]:invisible group-has-[[data-state=open]]:invisible";
+
+/** What a thread's calls changed, small enough for the row's second line or its trailing slot. */
+function DiffStat({ diff }: { diff: { added: number; removed: number } }) {
+  return (
+    <span className="shrink-0 font-mono text-[10px] tabular">
+      {diff.added > 0 && <span className="text-success">+{diff.added}</span>}
+      {diff.added > 0 && diff.removed > 0 && " "}
+      {diff.removed > 0 && <span className="text-danger">−{diff.removed}</span>}
+    </span>
+  );
+}
 
 /**
  * A row's fill, drawn as its own child under the row's content.
@@ -705,16 +745,119 @@ const ThreadRow = memo(function ThreadRow({
   // The open thread is a delegated one with no row of its own: its parent stands in as the context.
   const lit = selected || !!context;
   // One line by default (Settings › Appearance): the second is for a row that has something to put
-  // there. What it carries is the branch, what the branch changed, its pull request, and who else
-  // works beside it; a plain chat thread has none of it.
+  // there. What it carries is the branch, its pull request, and who else works beside it; a plain
+  // chat thread has none of it, and a diff or the mark of its harness alone rides in the trailing
+  // slot rather than opening a line for one glyph (state/sidebarRows.ts `rowMeta`).
   const compact = rowLayout === "compact";
-  const hasMeta = !!(worktree || diff || pull || stack?.length);
+  const meta = rowMeta({
+    branch: !!worktree,
+    pull: !!pull,
+    stack: !!stack?.length,
+    harness: external,
+    diff,
+    layout: rowLayout,
+  });
   // What wants you reads strong; what works, waits or has been read recedes until hovered.
   const wantsYou = !!request || fresh || failed || lit || picked;
   const recedes = !wantsYou && (running || !!wait || done);
   const markTint = cx(
     "transition-opacity duration-150 ease-snappy",
     wantsYou ? "opacity-100" : "opacity-60 group-hover:opacity-100",
+  );
+  // The title's own weight: what wants you is medium and full; what works, waits or is settled
+  // recedes to regular at 75% until hovered.
+  const titleTint = cx(
+    "min-w-0 flex-1 truncate text-body",
+    wantsYou
+      ? "font-medium text-fg"
+      : recedes
+        ? "font-normal text-fg/75 group-hover:text-fg"
+        : "font-medium text-fg",
+  );
+  // A fork or a side chat, and a thread that works for another one: the glyphs before the title.
+  const glyphs = (
+    <>
+      {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
+      {branch && (
+        <span title={branch === "fork" ? "A fork" : "A side chat"} className="shrink-0 text-fg-faint">
+          {branch === "fork" ? <GitFork size={11} /> : <MessageSquareQuote size={11} />}
+        </span>
+      )}
+      <LinkBadge threadId={session.id} />
+    </>
+  );
+  // The one thing a row says at its end: what its branch changed when it has no line of its own for
+  // it, and what the thread is doing, else the hour a snoozed one wakes, else its age. The two-line
+  // row draws a chip as a pill and a settled check bare; the compact row keeps one icon and word,
+  // so a column of rows reads as one line of glyphs.
+  const age = (
+    <span className="min-w-0 truncate">{wake ? wakeLabel(wake, now) : shortAge(session.updatedAt, now)}</span>
+  );
+  const compactState = chip ? (
+    chip.kind === "needs" ? (
+      request?.question ? (
+        <MessageCircleQuestion size={13} />
+      ) : (
+        <ShieldQuestion size={13} />
+      )
+    ) : chip.kind === "working" ? (
+      <span className="flex items-center gap-1">
+        <Spinner size={9} />
+        {startedAt !== undefined && <Elapsed since={startedAt} />}
+      </span>
+    ) : chip.kind === "waiting" ? (
+      <span className="flex items-center gap-1">
+        <Clock size={11} className="shrink-0" />
+        {chip.label}
+      </span>
+    ) : (
+      <span
+        className={cx(
+          "flex items-center gap-1",
+          chip.kind === "failed" ? "text-danger" : chip.kind === "completed" ? "text-success" : "text-accent",
+        )}
+      >
+        {chip.kind === "failed" ? (
+          <CircleAlert size={11} />
+        ) : chip.kind === "completed" ? (
+          <Check size={11} />
+        ) : (
+          <Eye size={11} />
+        )}
+        {chip.label}
+      </span>
+    )
+  ) : (
+    age
+  );
+  const twoLineState =
+    trailing === "needs" && request ? (
+      request.question ? (
+        <MessageCircleQuestion size={13} />
+      ) : (
+        <ShieldQuestion size={13} />
+      )
+    ) : trailing === "running" ? (
+      <>
+        <Spinner size={9} />
+        {startedAt !== undefined && <Elapsed since={startedAt} />}
+      </>
+    ) : trailing === "done" ? (
+      <Check size={13} />
+    ) : chip ? (
+      <RowStatusChip status={chip} startedAt={startedAt} />
+    ) : (
+      age
+    );
+  const stateSlot = (pill: boolean) => (
+    <span title={chip?.title} className={cx(TRAILING_SLOT, HIDDEN_ON_HOVER)}>
+      {/* What the row has no line for: the harness it runs on, then the diff. */}
+      {meta === "trailing" && external && (
+        <HarnessIcon id={session.harness!} name={harness?.name} size={12} className="shrink-0" />
+      )}
+      {meta === "trailing" && diff && <DiffStat diff={diff} />}
+      {pill ? twoLineState : compactState}
+    </span>
   );
   return (
     <ContextMenu.Root
@@ -772,7 +915,11 @@ const ThreadRow = memo(function ThreadRow({
               className={cx(
                 "relative flex w-full flex-col justify-center gap-0.5 text-left",
                 compact ? "rounded-lg px-2" : "rounded-xl py-2 pr-2 pl-2",
-                compact && (hasMeta || request || hint) ? "min-h-12" : compact ? "min-h-8" : undefined,
+                compact && (meta === "line" || request || hint)
+                  ? "min-h-12"
+                  : compact
+                    ? "min-h-8"
+                    : undefined,
               )}
             >
               <RowFill selected={lit} picked={picked} radius={compact ? "rounded-lg" : "rounded-xl"} />
@@ -781,76 +928,17 @@ const ThreadRow = memo(function ThreadRow({
                   {/* One line: the mark of where it runs, its title, and the one thing it says at
                       the end. The project's name is not repeated here, since the mark carries it
                       and the hover card and the folder's heading spell it out. */}
-                  <span className="relative flex w-full min-w-0 items-center gap-2">
+                  <span className={cx("relative flex w-full min-w-0 items-center gap-2", FADE_UNDER_ACTIONS)}>
                     {!grouped && <ProjectMark name={project} size={14} className={markTint} />}
-                    {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
-                    {branch && (
-                      <span
-                        title={branch === "fork" ? "A fork" : "A side chat"}
-                        className="shrink-0 text-fg-faint"
-                      >
-                        {branch === "fork" ? <GitFork size={11} /> : <MessageSquareQuote size={11} />}
-                      </span>
-                    )}
-                    <span
-                      className={cx(
-                        "min-w-0 flex-1 truncate text-body",
-                        wantsYou
-                          ? "font-medium text-fg"
-                          : recedes
-                            ? "font-normal text-fg/75 group-hover:text-fg"
-                            : "font-medium text-fg",
-                      )}
-                    >
-                      {session.title || "New thread"}
-                    </span>
-                    {/* The row's one trailing slot, 80px wide: the state sits at its end and the
-                        hover actions take exactly the same room, so the title never moves. */}
-                    <span
-                      title={chip?.title}
-                      className={cx(
-                        "flex w-20 shrink-0 items-center justify-end gap-1 text-sub text-fg-muted tabular",
-                        HIDDEN_ON_HOVER,
-                      )}
-                    >
-                      {chip ? (
-                        chip.kind === "needs" ? (
-                          request?.question ? (
-                            <MessageCircleQuestion size={13} />
-                          ) : (
-                            <ShieldQuestion size={13} />
-                          )
-                        ) : chip.kind === "working" ? (
-                          <span className="flex items-center gap-1">
-                            <Spinner size={9} />
-                            {startedAt !== undefined && <Elapsed since={startedAt} />}
-                          </span>
-                        ) : chip.kind === "waiting" ? (
-                          <span className="flex items-center gap-1">
-                            <Clock size={11} className="shrink-0" />
-                            {chip.label}
-                          </span>
-                        ) : (
-                          <span
-                            className={cx(
-                              "flex items-center gap-1",
-                              chip.kind === "failed" ? "text-danger" : "text-accent",
-                            )}
-                          >
-                            {chip.kind === "failed" ? <CircleAlert size={11} /> : <Eye size={11} />}
-                            {chip.label}
-                          </span>
-                        )
-                      ) : (
-                        <span className="min-w-0 truncate">
-                          {wake ? wakeLabel(wake, now) : shortAge(session.updatedAt, now)}
-                        </span>
-                      )}
-                    </span>
+                    {glyphs}
+                    <span className={titleTint}>{session.title || "New thread"}</span>
+                    {stateSlot(false)}
                   </span>
                   {/* The second line, only when there is something to say: the branch it works in,
-                      what the branch changed, its pull request, and who else works beside it. */}
-                  {hasMeta && (
+                      its pull request, and who else works beside it. The harness mark is not on it
+                      unless those are: alone it would be a 12px glyph on an empty line, so it rides
+                      in the trailing slot instead. */}
+                  {meta === "line" && (
                     <span className="relative flex w-full min-w-0 items-center gap-2 text-sub text-fg-muted">
                       {worktree && (
                         <span className="flex min-w-0 items-center gap-1">
@@ -860,16 +948,9 @@ const ThreadRow = memo(function ThreadRow({
                           </span>
                         </span>
                       )}
-                      {diff && (
-                        <span className="shrink-0 font-mono text-[10px] tabular">
-                          {diff.added > 0 && <span className="text-success">+{diff.added}</span>}
-                          {diff.added > 0 && diff.removed > 0 && " "}
-                          {diff.removed > 0 && <span className="text-danger">−{diff.removed}</span>}
-                        </span>
-                      )}
+                      {diff && <DiffStat diff={diff} />}
                       {pull && <PullMark pull={pull} />}
                       <span className="ml-auto flex shrink-0 items-center gap-1">
-                        <LinkBadge threadId={session.id} />
                         {stack?.length ? (
                           <AgentStack agents={stack} />
                         ) : (
@@ -887,88 +968,42 @@ const ThreadRow = memo(function ThreadRow({
                   )}
                 </>
               ) : (
-                <span className="title-first-row relative block w-full min-w-0">
-                  <span className={cx("flex min-w-0 items-center gap-1.5", ACTIONS_CLEAR)}>
-                    {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
-                    {branch && (
-                      <span
-                        title={branch === "fork" ? "A fork" : "A side chat"}
-                        className="shrink-0 text-fg-faint"
-                      >
-                        {branch === "fork" ? <GitFork size={11} /> : <MessageSquareQuote size={11} />}
-                      </span>
-                    )}
-                    <span
-                      className={cx(
-                        "min-w-0 flex-1 truncate text-body",
-                        wantsYou
-                          ? "font-medium text-fg"
-                          : recedes
-                            ? "font-normal text-fg/75 group-hover:text-fg"
-                            : "font-medium text-fg",
-                      )}
-                    >
-                      {session.title || "New thread"}
-                    </span>
-                    <span
-                      className={cx(
-                        "flex shrink-0 items-center gap-1 text-sub text-fg-muted tabular",
-                        HIDDEN_ON_HOVER,
-                      )}
-                    >
-                      {trailing === "needs" && request ? (
-                        request.question ? (
-                          <MessageCircleQuestion size={13} />
-                        ) : (
-                          <ShieldQuestion size={13} />
-                        )
-                      ) : trailing === "running" ? (
-                        <>
-                          <Spinner size={9} />
-                          {startedAt !== undefined && <Elapsed since={startedAt} />}
-                        </>
-                      ) : trailing === "done" ? (
-                        <Check size={13} />
-                      ) : chip ? (
-                        <RowStatusChip status={chip} startedAt={startedAt} />
-                      ) : wake ? (
-                        wakeLabel(wake, now)
-                      ) : (
-                        shortAge(session.updatedAt, now)
-                      )}
-                    </span>
-                  </span>
-                  <span className="flex min-w-0 items-center gap-1 text-sub text-fg-muted">
+                <span className={cx("title-first-row relative block w-full min-w-0", FADE_UNDER_ACTIONS)}>
+                  <span className="flex min-w-0 items-center gap-1.5">
                     {!grouped && <ProjectMark name={project} size={14} className={markTint} />}
-                    {worktree && (
-                      <span className="title-first-branch min-w-0 flex-1 truncate font-mono text-[10px]">
-                        <GitBranch size={9} className="mr-0.5 inline" />
-                        {worktree.branch}
-                      </span>
-                    )}
-                    <span className="title-first-badges ml-auto flex shrink-0 items-center gap-1">
-                      <LinkBadge threadId={session.id} />
-                      {stack?.length ? (
-                        <AgentStack agents={stack} />
-                      ) : (
-                        external && (
-                          <HarnessIcon
-                            id={session.harness!}
-                            name={harness?.name}
-                            size={13}
-                            className="shrink-0"
-                          />
-                        )
-                      )}
-                      {diff && (
-                        <span className="font-mono text-[10px] tabular">
-                          {diff.added > 0 && <span className="text-success">+{diff.added}</span>}
-                          {diff.removed > 0 && <span className="text-danger">−{diff.removed}</span>}
+                    {glyphs}
+                    <span className={titleTint}>{session.title || "New thread"}</span>
+                    {stateSlot(true)}
+                  </span>
+                  {/* The line under the title, only when it has something besides the mark that now
+                      sits before the title: the branch, its pull request, and who else works beside
+                      it. A diff, or the harness mark alone, is in the trailing slot above. */}
+                  {meta === "line" && (
+                    <span className="flex min-w-0 items-center gap-1 text-sub text-fg-muted">
+                      {worktree && (
+                        <span className="title-first-branch min-w-0 flex-1 truncate font-mono text-[10px]">
+                          <GitBranch size={9} className="mr-0.5 inline" />
+                          {worktree.branch}
                         </span>
                       )}
-                      {pull && <PullMark pull={pull} />}
+                      <span className="title-first-badges ml-auto flex shrink-0 items-center gap-1">
+                        {stack?.length ? (
+                          <AgentStack agents={stack} />
+                        ) : (
+                          external && (
+                            <HarnessIcon
+                              id={session.harness!}
+                              name={harness?.name}
+                              size={13}
+                              className="shrink-0"
+                            />
+                          )
+                        )}
+                        {diff && <DiffStat diff={diff} />}
+                        {pull && <PullMark pull={pull} />}
+                      </span>
                     </span>
-                  </span>
+                  )}
                   {worktree && (
                     <span className="title-first-branch-wrap hidden truncate font-mono text-[10px] text-fg-muted">
                       <GitBranch size={9} className="mr-0.5 inline" />
@@ -1084,14 +1119,10 @@ const PendingRow = memo(function PendingRow({
         <span className="relative flex w-full min-w-0 items-center gap-2">
           <ProjectMark name={project} size={14} className="opacity-60 group-hover:opacity-100" />
           <span className="min-w-0 flex-1 truncate text-body font-medium text-fg">{pending.title}</span>
-          {/* The same 80px slot a thread's row has, so the state lands on the same edge. */}
-          {/* Dismiss sits in the slot's end when the setup failed, so the words keep its room. */}
-          <span
-            className={cx(
-              "flex w-20 shrink-0 items-center justify-end gap-1 text-sub text-fg-muted tabular",
-              failure && "pr-6",
-            )}
-          >
+          {/* The same trailing slot a thread's row has, as wide as what it says, so the state
+              lands on the same edge and the title keeps the rest. Dismiss sits over the slot's end
+              when the setup failed, so the words keep its room. */}
+          <span className={cx(TRAILING_SLOT, failure && "pr-6")}>
             {failure ? (
               <>
                 <CircleAlert size={11} className="text-danger" />
@@ -1141,11 +1172,14 @@ function useNow() {
   return now;
 }
 
-/** Pinned and Active are the list itself; the shelves have a header that folds them. */
+/** The list's sections by name: Working leads the default layout, and the shelves close it. */
 const LABELS: Record<SectionId, string> = {
-  pinned: "Pinned",
-  threads: "Active",
   working: "Working",
+  pinned: "Pinned",
+  // The threads that ask for an approval or an answer. Not "Needs you": that is the inbox row
+  // above, which is one row per item (a failure is not a thread) and opens the page for all of them.
+  needs: "Asking you",
+  threads: "Active",
   snoozed: "Snoozed",
   settled: "Settled",
 };
@@ -1408,8 +1442,34 @@ export function Sidebar() {
       .map((t) => (t.permissions.length ? `${t.id}:n` : t.running ? `${t.id}:w` : ""))
       .join(" "),
   );
+  // When each request reached the app and each running turn started, as one string for the same
+  // reason: the Needs you and Working sections order by them (state/sidebarRows.ts `sortSection`).
+  const clocked = useApp((s) =>
+    Object.values(s.threads)
+      .flatMap((t) => {
+        const asked = t.permissions[0]?.at;
+        const sent = t.turnStartedAt;
+        return asked === undefined && sent === undefined ? [] : [`${t.id}:${asked ?? ""}:${sent ?? ""}`];
+      })
+      .join(" "),
+  );
+  const timings = useMemo(() => {
+    const askedAt = new Map<string, number>();
+    const sentAt = new Map<string, number>();
+    for (const row of clocked.split(" ")) {
+      if (!row) continue;
+      // A thread id never holds a colon: the two times follow the first one.
+      const at = row.indexOf(":");
+      const id = at < 0 ? row : row.slice(0, at);
+      const [asked, sent] = row.slice(at + 1).split(":");
+      if (asked) askedAt.set(id, Number(asked));
+      if (sent) sentAt.set(id, Number(sent));
+    }
+    return { askedAt, sentAt };
+  }, [clocked]);
   const marks = useApp((s) => s.statusMarks ?? NO_MARKS);
   const finished = useApp((s) => s.finished);
+  const failed = useApp((s) => s.failed);
   const projectCwd = useApp((s) => s.projectCwd);
   const hidden = useApp((s) => s.sidebarHidden);
   const shortcuts = useApp((s) => s.shortcuts);
@@ -1427,7 +1487,10 @@ export function Sidebar() {
   // By state, with the project on each row; grouping by project is an option.
   // The view options are changed from ⌘K (ui/CommandPalette.tsx), so they are shared, not local.
   const [byProject] = usePref(PREF.groupByProject, false);
+  // Working leads the list, or folds into the shelf at its foot with the preference off: the layout
+  // the sidebar had before it put running work first (state/sidebarRows.ts `SidebarLayout`).
   const [showWorking] = usePref(PREF.workingSection, true);
+  const layoutMode: SidebarLayout = showWorking ? "top" : "shelf";
   const snoozed = useApp((s) => s.snoozed);
   useEffect(() => {
     wakeSnoozed();
@@ -1482,6 +1545,9 @@ export function Sidebar() {
       ),
     [sessions, onlyProject, projectCwd],
   );
+  // The threads waiting on work they handed out, though no turn of theirs runs: the Working section
+  // holds them beside the ones running (state/waiting.ts).
+  const waiting = useWaitingIds(useMemo(() => filtered.map((s) => s.id), [filtered]));
 
   const links = useApp((s) => s.links.links);
   const messaged = useApp((s) => s.messaged);
@@ -1580,10 +1646,14 @@ export function Sidebar() {
   const sections = useMemo(() => {
     const flagged = new Set(flags.split(" "));
     const isFresh = (id: string) => !!finished[id];
+    // A thread that waits on work it handed out is drawn with the ones that run, so it is not lost
+    // among the idle rows. The shelf layout keeps today's list, where it stays in Active.
+    const works = (id: string) => flagged.has(`${id}:w`) || (layoutMode === "top" && waiting.has(id));
     const placed: Record<SectionId, SessionSummary[]> = {
-      pinned: [],
-      threads: [],
       working: [],
+      pinned: [],
+      needs: [],
+      threads: [],
       snoozed: [],
       settled: [],
     };
@@ -1609,21 +1679,30 @@ export function Sidebar() {
           aged: status !== "review" && idleSettled(s.updatedAt, now),
           snoozed: !!snoozed[s.id],
           needs: flagged.has(`${s.id}:n`),
-          working: flagged.has(`${s.id}:w`),
+          working: works(s.id),
           fresh: isFresh(s.id),
-          showWorking,
-          byProject,
+          layout: layoutMode,
         })
       ].push(s);
     }
-    const { pinned: pins, threads: active, snoozed: sleeping } = placed;
-    pins.sort((a, b) => pinned.indexOf(a.id) - pinned.indexOf(b.id));
+    const { threads: active } = placed;
     if (pendingRow) active.unshift(pendingRow);
-    // The order the user arranged, per section (state/sidebarOrder.ts): a row that was dragged or
-    // ⌥↑/↓'d is drawn where it was put, and a section never arranges itself as turns stream. What
-    // the user never arranged keeps the order the section gave it.
+    // What a slot in the list reads of one thread when the user has not arranged it: the marks the
+    // app already keeps, never a running clock, so no section reorders as a turn streams.
+    const pinAt = new Map(pinned.map((id, at) => [id, at] as const));
+    const keyOf = (s: SessionSummary): OrderKey => ({
+      sentAt: timings.sentAt.get(s.id) ?? s.updatedAt,
+      askedAt: timings.askedAt.get(s.id),
+      backAt: Math.max(s.updatedAt ?? 0, finished[s.id] ?? 0, failed[s.id] ?? 0),
+      unseen: !!(finished[s.id] || failed[s.id]),
+      pinRank: pinAt.get(s.id),
+      wakeAt: snoozed[s.id],
+    });
+    // The order the user arranged comes over the section's own (state/sidebarOrder.ts): a row that
+    // was dragged or ⌥↑/↓'d is drawn where it was put, and the rows nobody arranged keep the order
+    // their section gives them (state/sidebarRows.ts `sortSection`).
     const arranged = (id: SectionId, items: SessionSummary[], project?: string) =>
-      applyOrder(items, layout[sectionOrderKey(id, project)]);
+      applyOrder(sortSection(id, items, keyOf), layout[sectionOrderKey(id, project)]);
     // The active threads by project: a worktree thread belongs to its repository.
     const byKey = new Map<string, SessionSummary[]>();
     for (const s of active) {
@@ -1642,9 +1721,9 @@ export function Sidebar() {
     for (const project of projects ?? []) {
       project.items = arranged("threads", project.items, project.key);
     }
-    sleeping.sort((a, b) => (snoozed[a.id] ?? 0) - (snoozed[b.id] ?? 0));
-    // Pinned and Active lead; the Working, Snoozed and Settled shelves follow at the foot.
-    const all: Section[] = SECTION_ORDER.map((id) => ({
+    // The sections this layout draws, in its order: Working, Pinned, Asking you and Active lead, and
+    // the shelves close the list (state/sidebarRows.ts `sectionsOf`).
+    const all: Section[] = sectionsOf(layoutMode).map((id) => ({
       id,
       label: LABELS[id],
       items: arranged(id, placed[id]),
@@ -1653,7 +1732,7 @@ export function Sidebar() {
     for (const g of all) {
       g.hidden = g.items.some((x) => flagged.has(`${x.id}:n`))
         ? "needs"
-        : g.items.some((x) => flagged.has(`${x.id}:w`))
+        : g.items.some((x) => works(x.id))
           ? "working"
           : g.items.some((x) => isFresh(x.id))
             ? "finished"
@@ -1663,14 +1742,17 @@ export function Sidebar() {
   }, [
     filtered,
     flags,
+    waiting,
+    timings,
     marks,
     finished,
+    failed,
     pinned,
     parentOf,
     byProject,
     now,
     snoozed,
-    showWorking,
+    layoutMode,
     pending,
     onlyProject,
     projectCwd,
@@ -1679,9 +1761,10 @@ export function Sidebar() {
   ]);
 
   const settledSection = sections.find((g) => g.id === "settled");
-  // The first shelf starts the foot of the list; Pinned and Active are labelled once both are there.
-  const firstShelf = sections.find((g) => isShelf(g.id))?.id;
-  const labelled = sections.filter((g) => !isShelf(g.id)).length > 1;
+  // The first shelf starts the foot of the list; the sections above it are labelled once there is
+  // more than one of them.
+  const firstShelf = sections.find((g) => isShelf(g.id, layoutMode))?.id;
+  const labelled = sections.filter((g) => !isShelf(g.id, layoutMode)).length > 1;
   // The open delegate's parent may have been settled: the shelf opens for it and its slice of the
   // shelf grows to hold the row, so the row it hangs under is reachable rather than out of sight.
   const settledAt = settledSection
@@ -1691,14 +1774,14 @@ export function Sidebar() {
       )
     : -1;
   const settledForChain = settledAt >= 0;
-  // Every shelf folds on its own header, and the choice is kept per shelf. Pinned and Active are
-  // the list itself and never fold; a project's folder (group by project) folds with `folded`.
+  // Every shelf folds on its own header, and the choice is kept per shelf. The sections above them
+  // are the list itself and never fold; a project's folder (group by project) folds with `folded`.
   const shelfIsOpen: Record<ShelfId, boolean> = {
     working: shelfOpen("working", workingStored),
     snoozed: shelfOpen("snoozed", snoozedStored),
     settled: shelfOpen("settled", settledStored, { forced: settledForChain }),
   };
-  const isOpen = (id: string) => (isShelf(id) ? shelfIsOpen[id] : !folded.includes(id));
+  const isOpen = (id: string) => (isShelf(id, layoutMode) ? shelfIsOpen[id] : !folded.includes(id));
   const toggle = (id: string) => {
     if (id === "working") setWorkingStored(!isOpen(id));
     else if (id === "snoozed") setSnoozedStored(!isOpen(id));
@@ -1851,7 +1934,7 @@ export function Sidebar() {
           }
         : {
             id: section.id,
-            shut: isShelf(section.id) && shelfShut[section.id],
+            shut: isShelf(section.id, layoutMode) && shelfShut[section.id],
             rows: toOrder(section.items),
             limit: section.id === "settled" ? settledLimit : undefined,
           },
@@ -1866,6 +1949,7 @@ export function Sidebar() {
     snoozedOpen,
     settledShelfOpen,
     subOf,
+    layoutMode,
   ]);
   const orderIds = useMemo(() => visibleRows(order), [order]);
 
@@ -2146,6 +2230,7 @@ export function Sidebar() {
             </ClusterButton>
           </Cluster>
         </TitlebarRow>
+        <BrandHeader />
         <NeedsYouRow />
         <nav
           ref={list}
@@ -2169,7 +2254,7 @@ export function Sidebar() {
           <div className="flex min-h-full flex-col">
             {sections.map((section) => {
               const open = isOpen(section.id);
-              const shelf = isShelf(section.id);
+              const shelf = isShelf(section.id, layoutMode);
               return (
                 <Fragment key={section.id}>
                   {/* The shelves sit at the foot, under one hairline, apart from Pinned and Active. */}

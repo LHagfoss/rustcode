@@ -506,6 +506,57 @@ pub fn read_image(path: String) -> Result<ImageFile, String> {
     })
 }
 
+/// The picture on the system clipboard, as a PNG the composer attaches.
+///
+/// A web view usually hands a paste event the picture it pasted, but WebKitGTK
+/// on Linux can leave `clipboardData` empty and keep a copied screenshot only on
+/// the native clipboard. Null when the clipboard holds no picture, so an
+/// ordinary Ctrl+V stays an ordinary Ctrl+V.
+#[tauri::command(async)]
+pub fn clipboard_image() -> Result<Option<ImageFile>, String> {
+    use arboard::Error;
+    use base64::Engine as _;
+
+    let mut clipboard = match arboard::Clipboard::new() {
+        Ok(clipboard) => clipboard,
+        // No clipboard to read here at all (a Wayland session without its data
+        // control protocol, a headless one): there is nothing to paste.
+        Err(Error::ClipboardNotSupported) => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let image = match clipboard.get_image() {
+        Ok(image) => image,
+        Err(Error::ContentNotAvailable | Error::ClipboardNotSupported) => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let png = rgba_as_png(image.width, image.height, &image.bytes)?;
+    if png.len() as u64 > MAX_IMAGE_BYTES {
+        return Err("Images must be 20 MB or smaller.".into());
+    }
+    Ok(Some(ImageFile {
+        name: "Pasted image".into(),
+        mime_type: "image/png".into(),
+        data: base64::engine::general_purpose::STANDARD.encode(png),
+    }))
+}
+
+/// Raw RGBA pixels (what a clipboard hands over) as a PNG, which is what an
+/// attachment carries.
+fn rgba_as_png(width: usize, height: usize, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    if width == 0 || height == 0 || rgba.is_empty() {
+        return Err("The clipboard's image is empty.".into());
+    }
+    let mut out = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut out, width as u32, height as u32);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
+        writer.write_image_data(rgba).map_err(|e| e.to_string())?;
+    }
+    Ok(out)
+}
+
 /// The MIME type of a picture a reply may show (an attachable image, or SVG).
 fn display_mime(path: &Path) -> Option<&'static str> {
     image_mime(path).or_else(|| {
@@ -954,6 +1005,29 @@ mod tests {
     fn refuses_non_web_links() {
         assert!(open_url("file:///etc/passwd".into()).is_err());
         assert!(open_url("javascript:alert(1)".into()).is_err());
+    }
+
+    #[test]
+    fn clipboard_pixels_become_a_png() {
+        // Two pixels: opaque red and transparent blue, straight through the encoder.
+        let rgba = [255, 0, 0, 255, 0, 0, 255, 0];
+        let png = rgba_as_png(2, 1, &rgba).expect("a PNG");
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+
+        let mut reader = png::Decoder::new(std::io::Cursor::new(&png[..]))
+            .read_info()
+            .expect("a readable PNG");
+        assert_eq!(reader.info().width, 2);
+        assert_eq!(reader.info().height, 1);
+        let mut out = vec![0; reader.output_buffer_size().expect("a buffer")];
+        let frame = reader.next_frame(&mut out).expect("one frame");
+        assert_eq!(&out[..frame.buffer_size()], &rgba);
+    }
+
+    #[test]
+    fn refuses_an_empty_clipboard_image() {
+        assert!(rgba_as_png(0, 0, &[]).is_err());
+        assert!(rgba_as_png(4, 4, &[]).is_err());
     }
 }
 

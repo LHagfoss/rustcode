@@ -79,6 +79,7 @@ pub fn run() {
             native::git_changes,
             native::project_files,
             native::read_image,
+            native::clipboard_image,
             native::thread_image,
             native::open_terminal_at,
             native::reduce_transparency,
@@ -112,6 +113,7 @@ pub fn run() {
             updater::release_notes,
             webview::display_info,
             webview::window_material,
+            webview::webview_blur,
         ])
         .setup(|app| {
             // The engine starts with the app, in parallel with the webview loading the UI.

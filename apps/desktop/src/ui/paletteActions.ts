@@ -173,11 +173,10 @@ export function sidebarActions(now = Date.now()): PaletteAction[] {
     },
     {
       id: "sidebar-working",
-      label: "Sidebar: Show the Working section",
-      detail: grouped ? "Off while grouped by project" : state(working),
+      label: "Sidebar: Working at the top",
+      detail: state(working),
       icon: Layers,
-      words: "view shelf running",
-      disabled: grouped ? "Grouped by project" : undefined,
+      words: "view shelf running section",
       run: () => writePref(PREF.workingSection, !working),
     },
     {

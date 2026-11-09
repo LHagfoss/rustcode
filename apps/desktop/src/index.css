@@ -98,9 +98,9 @@
   --rc-surface: #eaeaea;
   --rc-surface-2: #ffffff;
   --rc-surface-3: #e4e4e6;
-  /* The composer shares the sidebar surface, in the shared glass: the hue is the sidebar's, the
-     alpha and the blur are `--rc-glass-alpha` and `--rc-glass-filter` (Glass, below), so one edit
-     tunes it with every other translucent surface. */
+  /* The composer shares the sidebar surface, in the shared glass: the hue is the sidebar's, and the
+     alpha and the blur are `--rc-glass-alpha` and the shared `glass-filter` (Glass, below), so one
+     edit tunes it with every other translucent surface. */
   --rc-composer-bg: color-mix(in srgb, var(--rc-sidebar) var(--rc-glass-alpha), transparent);
   --rc-composer-bg-focus: color-mix(in srgb, var(--rc-sidebar) calc(var(--rc-glass-alpha) + 8%), transparent);
   /* Over a new thread's picture (`.rc-composer-over`): a panel, not another window on it. */
@@ -407,8 +407,7 @@
 /* Popovers, menus, dialogs: the raised surface, in glass. */
 @utility elevated {
   background: var(--rc-glass-bg-strong);
-  backdrop-filter: var(--rc-glass-filter);
-  -webkit-backdrop-filter: var(--rc-glass-filter);
+  @apply glass-filter;
   box-shadow: var(--rc-shadow-2);
   border-radius: var(--rc-radius-xl);
 }
@@ -1030,10 +1029,10 @@
 
 /*
  * Glass: the one translucency every floating surface shares (composer, popovers, menus, dialogs,
- * toasts, the right panel, a new thread's cards). Two tokens tune all of it: `--rc-glass-alpha`,
- * how much of the surface shows through, and `--rc-glass-filter`, how far what is behind it is
- * blurred. The steps a denser or thinner surface takes are read off the same alpha, so a change to
- * it moves them together; Reduce transparency makes the pair solid (below).
+ * toasts, the right panel, a new thread's cards). `--rc-glass-alpha`, how much of the surface shows
+ * through, is the one token: the steps a denser or thinner surface takes are read off it, so a
+ * change to it moves them together. The filter is not a token, because WebKit cannot read one (see
+ * `glass-filter` below). Reduce transparency makes the pair solid (below).
  */
 :root {
   --rc-glass-alpha: 72%;
@@ -1041,7 +1040,6 @@
      popovers, menus and floating pills, and a third of it for a new thread's cards. */
   --rc-glass-alpha-strong: calc(var(--rc-glass-alpha) + 12%);
   --rc-glass-alpha-faint: calc(var(--rc-glass-alpha) / 3);
-  --rc-glass-filter: saturate(1.15) blur(9px);
   --rc-glass-bg: color-mix(in srgb, var(--rc-surface-2) var(--rc-glass-alpha), transparent);
   --rc-glass-bg-strong: color-mix(in srgb, var(--rc-surface-2) var(--rc-glass-alpha-strong), transparent);
   --rc-glass-faint-bg: color-mix(in srgb, var(--rc-surface-2) var(--rc-glass-alpha-faint), transparent);
@@ -1049,10 +1047,23 @@
   --rc-lightbox-scrim-bg: color-mix(in oklab, var(--rc-bg) 70%, transparent);
 }
 
+/*
+ * The filter itself, and the one place it is written: a literal value, never
+ * `var(--rc-glass-filter)`. WebKit's prefixed `backdrop-filter` ignores CSS variables — it resolves
+ * the value and paints no blur (WebKit bug 289800; mdn/browser-compat-data#25914) — and its
+ * unprefixed property is behind a flag, so a filter read from a token left WebKitGTK, Linux's web
+ * view, with translucent glass and nothing blurred behind it (#3328). Both properties are written:
+ * the prefixed one is the one WebKit paints with, and the unprefixed one is what Chromium and
+ * WebView2 read. Every surface that blurs takes this with `@apply glass-filter`.
+ */
+@utility glass-filter {
+  backdrop-filter: saturate(1.15) blur(9px);
+  -webkit-backdrop-filter: saturate(1.15) blur(9px);
+}
+
 .rc-glass {
   background: var(--rc-glass-bg);
-  backdrop-filter: var(--rc-glass-filter);
-  -webkit-backdrop-filter: var(--rc-glass-filter);
+  @apply glass-filter;
 }
 
 /*
@@ -1063,8 +1074,7 @@
  */
 .rc-glass-faint {
   background: var(--rc-glass-faint-bg);
-  backdrop-filter: var(--rc-glass-filter);
-  -webkit-backdrop-filter: var(--rc-glass-filter);
+  @apply glass-filter;
 }
 
 /*
@@ -1099,11 +1109,11 @@
  */
 .rc-scrim {
   background: var(--rc-scrim-bg);
-  backdrop-filter: var(--rc-glass-filter);
-  -webkit-backdrop-filter: var(--rc-glass-filter);
+  @apply glass-filter;
 }
 .rc-lightbox-scrim {
   background-color: var(--rc-lightbox-scrim-bg);
+  @apply glass-filter;
 }
 
 /*
@@ -1121,8 +1131,7 @@
      this class never sets `position`: it would beat the `absolute` the pill needs. */
   isolation: isolate;
   background: var(--rc-glass-bg-strong);
-  backdrop-filter: var(--rc-glass-filter);
-  -webkit-backdrop-filter: var(--rc-glass-filter);
+  @apply glass-filter;
   box-shadow: var(--rc-shadow-1);
 }
 .rc-glass-overlay::after {
@@ -1149,8 +1158,7 @@
 .rc-composer,
 .rc-toast {
   background: var(--rc-glass-bg);
-  backdrop-filter: var(--rc-glass-filter);
-  -webkit-backdrop-filter: var(--rc-glass-filter);
+  @apply glass-filter;
   box-shadow:
     0 2px 8px -4px var(--rc-shadow-soft),
     0 0 0 1px var(--rc-border);
@@ -1162,8 +1170,7 @@
 /* The composer shares the sidebar surface and keeps a subtle edge. */
 .rc-composer {
   background: var(--rc-composer-bg);
-  backdrop-filter: var(--rc-glass-filter);
-  -webkit-backdrop-filter: var(--rc-glass-filter);
+  @apply glass-filter;
   box-shadow:
     0 3px 12px -4px var(--rc-shadow-soft),
     0 0 0 1px var(--rc-border);
@@ -1190,8 +1197,7 @@
 .rc-composer-footer {
   border-radius: 0 0 var(--rc-composer-radius) var(--rc-composer-radius);
   background: var(--rc-composer-footer-bg);
-  backdrop-filter: var(--rc-glass-filter);
-  -webkit-backdrop-filter: var(--rc-glass-filter);
+  @apply glass-filter;
 }
 /* A drawer is read, not looked through: the sidebar's own solid hue rather than the card's glass,
    its foot cut where the box begins. Its top corners are the box's own radius, one inset inside
@@ -1347,8 +1353,7 @@
   inset: 0 0 -24px 0;
   z-index: -1;
   background: var(--rc-glass-pane);
-  backdrop-filter: var(--rc-glass-filter);
-  -webkit-backdrop-filter: var(--rc-glass-filter);
+  @apply glass-filter;
   /* design-lint: allow (mask alpha, not a colour) */
   mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent);
   /* design-lint: allow (mask alpha, not a colour) */
@@ -1398,7 +1403,6 @@
     --rc-glass-bg: var(--rc-surface-2);
     --rc-glass-bg-strong: var(--rc-surface-2);
     --rc-glass-faint-bg: var(--rc-surface-2);
-    --rc-glass-filter: none;
     --rc-scrim-bg: var(--rc-bg);
     --rc-lightbox-scrim-bg: var(--rc-bg);
     --rc-composer-bg: var(--rc-sidebar);
@@ -1412,13 +1416,31 @@
   .rc-composer:focus-within {
     background: var(--rc-composer-bg-focus);
   }
+  /* The filter goes with the translucency: a blur behind an opaque fill is a compositing layer for
+     nothing, and this query is the fallback for the first frame, before lib/transparency.ts runs. */
+  :root
+    :is(
+      .rc-glass,
+      .rc-glass-faint,
+      .rc-glass-overlay,
+      .rc-composer,
+      .rc-toast,
+      .rc-composer-footer,
+      .rc-scrim,
+      .rc-lightbox-scrim,
+      .elevated,
+      .glass-filter
+    ),
+  :root .rc-header-glass::before {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
 }
 :root.reduce-transparency {
   --rc-sidebar-bg: var(--rc-sidebar);
   --rc-glass-bg: var(--rc-surface-2);
   --rc-glass-bg-strong: var(--rc-surface-2);
   --rc-glass-faint-bg: var(--rc-surface-2);
-  --rc-glass-filter: none;
   --rc-scrim-bg: var(--rc-bg);
   --rc-lightbox-scrim-bg: var(--rc-bg);
   --rc-composer-bg: var(--rc-sidebar);
@@ -1427,6 +1449,25 @@
 }
 :root.reduce-transparency .rc-composer:focus-within {
   background: var(--rc-composer-bg-focus);
+}
+/* No filter behind an opaque fill (see the query above): the surfaces keep their solid tokens and
+   drop the layer the blur would cost. */
+:root.reduce-transparency
+  :is(
+    .rc-glass,
+    .rc-glass-faint,
+    .rc-glass-overlay,
+    .rc-composer,
+    .rc-toast,
+    .rc-composer-footer,
+    .rc-scrim,
+    .rc-lightbox-scrim,
+    .elevated,
+    .glass-filter
+  ),
+:root.reduce-transparency .rc-header-glass::before {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 :root.reduce-transparency,
 :root.reduce-transparency .rc-header-glass.rc-frost::before {
@@ -1437,8 +1478,10 @@
  * Platforms (docs/design.md › Platforms): `data-platform` on <html> (lib/platform.ts) fits the
  * macOS design to the other web views. Nothing here applies to `mac` or to a page without the
  * attribute, so the macOS look is the rules above alone. Glass is the same on every platform:
- * WebView2 (Chromium) and WebKitGTK draw the shared `backdrop-filter` themselves, and Reduce
- * transparency (above) is the solid fallback on all of them.
+ * WebView2 (Chromium) and WebKitGTK draw the shared `backdrop-filter` themselves (literal, see
+ * `glass-filter`: WebKit paints none from a custom property), and Reduce transparency (above) is
+ * the solid fallback on all of them — which Linux also takes when WebKitGTK's compositing is off
+ * (lib/transparency.ts, `webview_blur`).
  *
  * Windows 11 also shows Mica (the window's material, applied by the shell; `data-material` on
  * <html>, lib/material.ts) through the sidebar: its fill is 72% of the sidebar colour, which keeps

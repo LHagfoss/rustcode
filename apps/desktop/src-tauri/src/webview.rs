@@ -171,6 +171,32 @@ pub fn window_material() -> &'static str {
     material_name(MATERIAL.load(std::sync::atomic::Ordering::Relaxed))
 }
 
+/// The switches that take WebKitGTK's accelerated compositing away, and with it every
+/// `backdrop-filter`. They are set to get past a driver or a Wayland session that freezes (Settings
+/// › Diagnostics lists them): a web view with one on still answers `CSS.supports("backdrop-filter",
+/// …)` with yes and paints no blur, so the page cannot tell by itself (lib/transparency.ts).
+const COMPOSITING_OFF: &[&str] = &["WEBKIT_DISABLE_COMPOSITING_MODE"];
+
+/// Whether the web view paints the glass's blur, read from its environment (`std::env::var`).
+fn blurs(env: impl Fn(&str) -> Option<String>) -> bool {
+    !COMPOSITING_OFF
+        .iter()
+        .any(|key| matches!(env(key).as_deref(), Some(value) if !value.is_empty() && value != "0"))
+}
+
+/// Whether the web view can paint the shared glass's `backdrop-filter` (index.css `glass-filter`).
+/// Only Linux can answer no: WebKitGTK draws the filter with the GPU's compositor, and a switch in
+/// its environment takes that away. Off Linux the engine draws it, and a web view that has no such
+/// property at all is `lib/transparency.ts`'s own question (`CSS.supports`).
+#[tauri::command]
+pub fn webview_blur() -> bool {
+    if cfg!(target_os = "linux") {
+        blurs(|key| std::env::var(key).ok())
+    } else {
+        true
+    }
+}
+
 /// Save the window's size on quit too, for a quit that does not come from closing the window.
 pub fn remember_size_on_exit(handle: &tauri::AppHandle) {
     remember_size(handle);
@@ -344,5 +370,23 @@ mod tests {
     fn the_material_is_only_announced_when_it_took() {
         assert_eq!(material_name(true), "mica");
         assert_eq!(material_name(false), "none");
+    }
+
+    // Linux's WebKitGTK paints `backdrop-filter` with accelerated compositing only, and these are
+    // the switches that turn it off: the page takes the solid glass instead (lib/transparency.ts).
+    #[test]
+    fn a_compositing_switch_takes_the_blur_away() {
+        assert!(blurs(|_| None));
+        assert!(blurs(|key| {
+            (key == "WEBKIT_DISABLE_COMPOSITING_MODE").then(|| "0".to_string())
+        }));
+        assert!(!blurs(|key| {
+            (key == "WEBKIT_DISABLE_COMPOSITING_MODE").then(|| "1".to_string())
+        }));
+        // Only WebKit's compositing switch counts: the DMABUF renderer falls back to another GL
+        // path and keeps compositing on.
+        assert!(blurs(|key| {
+            (key == "WEBKIT_DISABLE_DMABUF_RENDERER").then(|| "1".to_string())
+        }));
     }
 }

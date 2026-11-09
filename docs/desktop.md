@@ -633,7 +633,7 @@ composer's keys stay outside the table.
   pick up the wallpaper through the window's material (`windowEffects` is
   still set in `tauri.conf.json` but nothing shows it). What floats (the
   composer, popovers, menus, tooltips, dialogs, toasts, the lightbox)
-  shares one glass, `--rc-glass-bg` + `--rc-glass-filter` on every OS; Reduce transparency (Settings › Appearance, the media query, or the system setting
+  shares one glass, `--rc-glass-bg` + the shared `glass-filter` on every OS; Reduce transparency (Settings › Appearance, the media query, or the system setting
   read by the shell's `reduce_transparency`) makes them solid. Windows 11 lets Mica show through the sidebar alone (design.md › Platforms). Hover is
   colour only, in 60 ms and out 120 ms; focus rings show for the keyboard
   only; scrollbars are thin and appear on hover, with a stable gutter on
@@ -684,24 +684,43 @@ composer's keys stay outside the table.
   A thread merely marked for review does not count, and the row's count is the
   inbox's own list. With nothing waiting there is no row at all, so no empty
   heading stands over the thread rows, and the inbox stays reachable from ⌘⇧I
-  and the palette. One list: pinned threads first, then every
-  active thread, and Settled as a shelf at the foot: threads marked Settled
+  and the palette. One list, top to bottom: Working, Pinned, Asking you,
+  Active, then Snoozed and Settled as shelves at the foot. **Working** leads
+  with the threads whose turn runs and the threads still waiting on work they
+  handed out — always open, the thread you last sent work to first; a pinned
+  thread that works stays in Pinned and says so in its chip, so no row is
+  drawn twice. **Asking you** holds the threads waiting on an approval or an
+  answer, the one that has waited longest first, and draws nothing when
+  nothing waits; it is not called *Needs you* because the inbox row is one row
+  per item (a failed turn is not a thread) while this is one row per thread.
+  **Active** is every other live thread, the one that last came
+  back to you first, with the completions and failures you have not opened
+  above the rest. A section sorts itself from marks the app already keeps, so
+  it never reorders as a turn streams; a row you dragged keeps the place you
+  put it, in any section. With Sidebar: Working at the top off (⌘K) the list
+  is what it was: Pinned and Active lead, and Working folds into the shelf at
+  the foot beside Snoozed and Settled. Settled holds the threads marked Settled
   and threads untouched for three days unless they wait
   for review (`idleSettled`), folded by default, 5 at a time then *Show
   25 more*. A thread that works, waits or needs you stays in the list and
   says so in its row. A row is one 32px line: the 14px mark of where it runs,
-  its title, and one 80px slot on the right — the age (`5m`, `3h`), the running
-  turn's spinner and clock, *Waiting*, *Needs you* (with the request under the
-  title), *Failed* (red) or *Review* (accent), the hour a snoozed thread wakes;
+  its title, and one slot at the right, as wide as what it says — the age
+  (`5m`, `3h`), the running turn's spinner and clock, *Waiting*, *Needs you*
+  (with the request under the title), *Failed* (red), *Completed* (green, until
+  you open the thread) or *Review* (accent), the hour a snoozed thread wakes;
   a turn that ended while you looked elsewhere keeps its row at full strength
   until you open the thread (`finished`/`failed` in the store; *Mark Unread* in
   the menu brings it back). The project's name is not repeated on the rows: the
   mark carries it, and the hover card and the project's heading spell it out.
-  A thread with a branch, a diff, a pull request or a stack of delegates adds
-  one quiet second line for them (48px); a plain chat thread is one line. What
-  wants you reads in medium weight; what works, waits or is settled recedes.
-  Hovering swaps the slot for Pin, Settle (or Unsettle) and the menu, so
-  nothing shifts, each on a 24px target. Settings › Appearance › Thread row
+  A thread with a branch, a pull request or a stack of delegates adds one quiet
+  second line for them, with what the branch changed (48px); a diff on its own
+  rides in the slot rather than opening a line for one number, so a plain chat
+  thread is one line. What wants you reads in medium weight; what works, waits
+  or is settled recedes.
+  Hovering swaps the slot for Pin, Settle (or Unsettle) and the menu, drawn
+  over the row's right end on the row's own fill while the line fades out under
+  them, so nothing shifts and the title keeps its width, each on a 24px target.
+  Settings › Appearance › Thread row
   layout keeps the older two-line row as *Comfortable*; *Compact* is the
   default and a value stored by an earlier release migrates to *Comfortable*.
   ↑ ↓ move through the rows without opening them, ⏎ opens the
@@ -718,7 +737,9 @@ composer's keys stay outside the table.
   screen, and a status set by an agent or the engine never moves it. The
   filter button by the search groups Threads by project (off by default; each
   project folds and has New thread on hover; a worktree thread sits under
-  its repository), keeps to the current project, and opens the Board.
+  its repository), keeps to the current project, and opens the Board. Working
+  and Asking you stay above the folders, and a folded folder's dot says what it
+  hides.
   Search matches titles and folders at once, and from three characters
   also what was said: the engine's SQLite index (`index.sqlite`,
   `_rustcode/threads/search`) adds threads whose messages match, with the
@@ -740,8 +761,8 @@ composer's keys stay outside the table.
   filter in the sidebar: ⌘K finds threads (by title, project, branch, pull
   request and what was said) and holds those five as New thread, Add project
   folder, Open Settings, Open Git and Open Usage, with their shortcuts, and
-  the view options. Working, Snoozed
-  and Settled are shelves at the foot of the list, each folding on its own;
+  the view options. Snoozed and Settled are the shelves at the foot of the
+  list, each folding on its own;
   the project is chosen per thread in the composer's footer.
 - **Title bar.** The sidebar's and header's buttons sit on the traffic
   lights' line, 14 px past the zoom button (x 92; the button ends at x 78),

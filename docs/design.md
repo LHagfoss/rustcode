@@ -192,18 +192,25 @@ card. A tip adds only its inset and width: `tipSurface`
 ## Glass
 
 One translucency, one recipe, for every floating surface: popovers, menus,
-tooltips, dialogs, toasts, the composer and the lightbox. Two tokens tune all of it:
-`--rc-glass-alpha` (72%, how much of the surface shows through) and
-`--rc-glass-filter` (`saturate(1.15) blur(9px)`). The fills are steps off the
-same alpha — `--rc-glass-bg` (`surface-2` at `--rc-glass-alpha`),
+tooltips, dialogs, toasts, the composer and the lightbox. `--rc-glass-alpha`
+(72%, how much of the surface shows through) is the one token. The fills are
+steps off it — `--rc-glass-bg` (`surface-2` at `--rc-glass-alpha`),
 `--rc-glass-bg-strong` at `--rc-glass-alpha-strong` (84%) for popovers, menus
 and floating pills, `--rc-glass-faint-bg` at `--rc-glass-alpha-faint` (24%) for
-a new thread's cards. Use `.rc-glass` or the `elevated` utility, never a
+a new thread's cards. The filter is not a token: `saturate(1.15) blur(9px)` is
+written once, literally, in the `glass-filter` utility, and every surface that
+blurs takes it with `@apply glass-filter`. WebKit's prefixed
+`backdrop-filter` ignores CSS variables and paints no blur for one (WebKit bug
+289800), its unprefixed property is behind a flag, and Linux's WebKitGTK is
+that engine: a `var()` there left the glass translucent with nothing blurred
+behind it (#3328). Both properties are written, the prefixed one being the one
+WebKit paints with. Use `.rc-glass` or the `elevated` utility, never a
 hand-made `backdrop-filter`. Reduce transparency (the media query, or the
-system setting the shell reads) turns the pair solid. Headers use the same
-filter tinted with the pane instead of a surface (`--rc-glass-pane`, `bg` at
-78%; 52% with `.rc-frost` over a new thread's banner), through
-`.rc-header-glass`. Panes, cards, rows and the sidebar stay opaque.
+system setting the shell reads) turns the fill solid and takes the filter away.
+Headers use the same filter tinted with the pane instead of a surface
+(`--rc-glass-pane`, `bg` at 78%; 52% with `.rc-frost` over a new thread's
+banner), through `.rc-header-glass`. Panes, cards, rows and the sidebar stay
+opaque.
 
 The one other use of that filter is the scrim a narrow window's side sheet opens
 over, `.rc-scrim`: `bg` at 52%, blurred, with what it covers opaque behind it
@@ -437,9 +444,15 @@ the macOS look is the base rules alone. To look at one in the mock, set
 
 - Linux has the same in-app glass as the others; Tauri cannot ask a Linux
   compositor to blur behind the window, so there is no window material.
-  Where the web view has no `backdrop-filter` at all, the page takes the
-  Reduce-transparency tokens by itself (`lib/transparency.ts`): a translucent
-  surface without its blur is text over text.
+  WebKitGTK paints the shared filter with the GPU's compositor, which the
+  switches set to get past a driver or Wayland bug take away
+  (`WEBKIT_DISABLE_COMPOSITING_MODE`; Settings › Diagnostics lists them). A web
+  view like that still answers `CSS.supports("backdrop-filter", …)` with yes,
+  so the shell answers instead: `webview_blur` (`src-tauri/src/webview.rs`)
+  says no, and the page takes the Reduce-transparency tokens by itself
+  (`lib/transparency.ts`). The same happens where the web view has no
+  `backdrop-filter` at all: a translucent surface without its blur is text over
+  text.
 - Windows 11: the shell applies Mica when it builds the window
   (`src-tauri/src/webview.rs`; the window is `transparent` in
   `tauri.windows.conf.json`) and `window_material` tells the page, which sets
@@ -591,52 +604,84 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   action), not to repeat what the screen already shows (no pin, archive,
   theme, harness-switch or steering notice); an error about a thread's turn
   stays an error card over the composer. No banners.
-- **Sidebar sections:** Pinned and Active lead the list, each with a quiet
-  label once both are there; the Working, Snoozed and Settled shelves follow
-  at the foot, under one hairline, each a one-line header with its count and a
-  chevron that folds it. Every shelf folds on its own and the choice is kept
-  per shelf (`rustcode.sidebar.<shelf>Open`; Working open by default, Snoozed
-  and Settled shut); a shut shelf still shows its count and the dot for a
-  thread that needs you or works. Working holds the threads running now (off
-  from ⌘K, or when grouping by project). A settled thread never sits under
-  Pinned. The sidebar has no search field or filter menu, and none of the
-  buttons it used to carry past the toggle in its toolbar: no Add project or
-  New thread row above the list, no Settings, Pull requests or Usage row at
-  its foot. Threads are found with ⌘K, which also holds the view options
-  (group by project, the Working shelf, one project), New thread, Add project
-  folder, Open Settings, Open Git, Open Usage and Statistics, each with the
-  shortcut it has. A snoozed row shows when it wakes where the age goes.
-  Snooze (presets, or Custom…) is a submenu of the row's menu; a thread comes
-  back on time, marked unread, or sooner when it needs you, works or is messaged.
-  Section and project headers are one 28px line of quiet 12px type (`text-sub`
-  in `fg-muted`): the label, a dot for what a folded group hides, a count only
-  while it is folded, then the chevron.
+- **Sidebar brand:** the row under the toolbar names the app: the 18px
+  `public/icon.png` mark (rounded like every other app mark), `RustCode` in
+  `text-callout` at weight 500, and the running app's version under it as
+  `v1.25.0` in `text-caption` `fg-muted`, tabular so an update does not shift
+  it. The version is the shell's own package version (`system_info`), never a
+  literal, and the line is left out when the shell cannot answer. It sits under
+  the title bar's row rather than in it: the traffic lights own that row's left
+  92px, and the brand keeps the list's 12px edge at every width and on every
+  platform. One 39px row (`ui/BrandHeader.tsx`).
+- **Sidebar sections:** Working leads the list, always open; then Pinned,
+  Asking you and Active, each with a quiet label once there is more than one of
+  them; then the Snoozed and Settled shelves at the foot, under one hairline,
+  each a one-line header with its count and a chevron that folds it. Every
+  shelf folds on its own and the choice is kept per shelf
+  (`rustcode.sidebar.<shelf>Open`; Snoozed and Settled shut by default); a shut
+  shelf still shows its count and the dot for a thread that needs you or
+  works. Working holds the threads running now and the threads waiting on work
+  they handed out, the one the user last sent work to first; Asking you holds
+  the threads that have an approval or a question open, longest wait first, and
+  neither of them folds. Its name is not the inbox's: the row above the list is
+  "Needs you" because it counts items — an approval, a question, a failed turn,
+  a delegate — and opens the page that lists them, while this section is one row
+  per thread, and a failure never puts a thread here. Active is the rest of the
+  live threads, the one that last came back to the user first, unseen completions
+  and failures above the rest. A section sorts from marks the app already keeps,
+  so it never reorders as turns stream, and a row the user dragged keeps its
+  place. Turning Working at the top off (⌘K, `rustcode.sidebar.workingSection`)
+  gives back the layout before it: Pinned and Active lead, Working folds into the
+  foot shelf with Snoozed and Settled. A settled thread never sits under Pinned,
+  and a pinned thread that works or needs you stays in Pinned and says so in its
+  chip, never drawn twice. The sidebar has no search field or filter menu, and none
+  of the buttons it used to carry past the toggle in its toolbar: no Add
+  project or New thread row above the list, no Settings, Pull requests or
+  Usage row at its foot. Threads are found with ⌘K, which also holds the view
+  options (group by project, Working at the top, one project), New thread, Add
+  project folder, Open Settings, Open Git, Open Usage and Statistics, each
+  with the shortcut it has. A snoozed row shows when it wakes where the age
+  goes. Snooze (presets, or Custom…) is a submenu of the row's menu; a thread
+  comes back on time, marked unread, or sooner when it needs you, works or is
+  messaged. Section and project headers are one 28px line of quiet 12px type
+  (`text-sub` in `fg-muted`): the label, a dot for what a folded group hides,
+  a count only while it is folded, then the chevron.
 - **Sidebar rows:** one 32px line. A 14px `ProjectMark`, the title, and one
-  80px trailing slot on the right. The project's name is not repeated on a row:
-  the mark carries it, and the hover card and the project's heading spell it
-  out. A row under a project's heading drops the mark, so its title lines up
+  trailing slot on the right, as wide as what it says and no wider, so the title
+  takes every pixel the row does not need. The project's name is not repeated on
+  a row: the mark carries it, and the hover card and the project's heading spell
+  it out. A row under a project's heading drops the mark, so its title lines up
   under the folder's name. The slot holds one thing, by `rowStatus` — what it
   needs of you, the running turn's spinner and clock, that it waits on work it
-  handed out, a failure, a review, the time a snoozed thread wakes, else its age
-  (`5m`, `3h`) — never two, and never a second spinner. A thread with a worktree
-  branch, a diff, a pull request or a stack of delegates adds one quiet second
-  line (`text-sub`, 48px row): the branch in `font-mono`, `+N −N` in
-  `success`/`danger`, the pull request's mark, and the stack or the harness mark
-  at its end. Counts are shown only for a thread the app has already read; one
-  it has not opened shows neither, rather than a made-up zero. A plain chat
-  thread keeps its one line. What a thread asks of you, and `in <parent title>`
-  for a delegated row drawn on its own, go under the title at full strength.
+  handed out, a failure, a completion you have not opened, a review, the time a
+  snoozed thread wakes, else its age (`5m`, `3h`) — never two, and never a
+  second spinner. A thread with a worktree
+  branch, a pull request or a stack of delegates adds one quiet second line
+  (`text-sub`, 48px row): the branch in `font-mono`, `+N −N` in `success`/
+  `danger`, the pull request's mark, and the stack or the harness mark at its
+  end. Neither a diff nor the harness mark alone is worth a line: they ride in
+  the trailing slot beside the state, in that order, and the slot never wraps —
+  a 12px glyph dropped onto a second line reads as the state's own icon
+  wrapping (`state/sidebarRows.ts` `rowMeta`). Counts are shown only for a
+  thread the app has already read; one it has not opened shows neither, rather
+  than a made-up zero. A plain chat thread keeps its one line. What a thread
+  asks of you, and `in <parent title>` for a delegated row drawn on its own, go
+  under the title at full strength.
   What wants you — a request, a failure, a turn that ended while you were
   elsewhere, the open thread, a picked row — is weight 500 in full `fg`; what
   works, waits or is settled recedes to weight 400 at 75%, back to full on
   hover, with its mark at 60% so a column of marks never competes with the
   titles. Hovering swaps the slot for Pin, Settle (or Unsettle) and the menu,
-  three 24px targets in the same 80px, so the title does not move; the hover
-  card is the rest. The row layout preference (`rustcode.sidebar.rowLayout`) is
-  `compact` unless the user chose `comfortable`: the two-line row the sidebar
-  had before, title first with the project's mark, the branch and the counts on
-  the line under it (the retired `current` and `title-first` values migrate to
-  it). Logic: `state/sidebarRows.ts` `rowStatus`, `state/sidebarPrefs.ts`
+  three 24px targets drawn over the row's right end rather than given room of
+  their own: the line fades out under them through a mask measured from the
+  row's right edge, so the title never moves and a narrow sidebar keeps as much
+  of it as a wide one. The hover card is the rest. The row layout preference
+  (`rustcode.sidebar.rowLayout`) is `compact` unless the user chose
+  `comfortable`: the two-line row the sidebar had before, the project's mark
+  before the title as in the compact row and the branch and the counts on the
+  line under it, drawn only when it has something to put there (the retired
+  `current` and `title-first` values migrate to it). Logic:
+  `state/sidebarRows.ts` `rowStatus` and `rowMeta`, `state/sidebarPrefs.ts`
   `rowLayoutOf`.
 - **Delegated threads:** a thread an agent started has no row of its own while
   its parent exists, and it is nested from its first frame: the parent
