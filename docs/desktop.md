@@ -736,7 +736,9 @@ composer's keys stay outside the table.
   panel toggles (details, changes) always draw after the rest, in their kept
   order, so the panel's control is the header's last, rightmost one. The order
   is kept as `rustcode.headerButtons` (`{shown, known}`), so a button added
-  in a later release shows by default.
+  in a later release shows by default. Pull requests is hidden on a fresh
+  install and after Reset (the sidebar's foot row holds it); a saved layout
+  that shows it keeps it.
 - **Settings** takes the whole window: the shell (sidebar, chat, right
   panel) stays mounted and laid out underneath, hidden and `inert`, so the
   thread comes back exactly where it was (scroll, drafts, open rows). A
