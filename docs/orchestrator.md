@@ -354,6 +354,29 @@ does not move it.
   children it already started as they were — the grant was made when they
   started, as with every other grant in the link book.
 
+### Forks and side chats
+
+The parent record carries a `relationship`: `delegate` (an agent started the
+thread), `fork` (the user copied the conversation) or `side_chat` (a question
+asked beside the parent). A record from before the field has none and is a
+delegate. `session/new` takes it in `_meta.rustcode.relationship` beside
+`.parent` (a delegate when absent or unknown), `/fork` records `fork` itself,
+and `session/list` returns it in `_meta.rustcode.parent.relationship`. Only a
+delegate belongs to orchestration: the reach rules (`startedBy`), the
+auto-compaction guard and the Statistics roll-up (`threads.parent_id`) ignore
+forks and side chats, which are the user's own threads with their own cost.
+
+The app nests both under the parent like a delegate, with a fork or
+message glyph, and lists them as indented rows under it. Writing in a fork
+makes it a row of its own, as for a delegate; a side chat stays under its
+parent. The parent's transcript draws `Forked to ‹title›` and `Side chat
+‹title›` lines and the fork's header says `Forked from ‹title›`, all read from
+the recorded parents (`state/branches.ts`), so they survive a reload and the
+parent's history stores nothing. "Ask in a side chat" on a reply opens the
+new thread in the right panel's Thread tab (`openSideChat` in
+`state/store.ts`): same harness, model, effort and folder, no worktree, the
+reply quoted in a field of its own. Closing the panel keeps the thread.
+
 ### A delegated thread's place in the sidebar
 
 A thread an agent started is never a stray top-level row. The parent is kept in

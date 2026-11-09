@@ -1,4 +1,4 @@
-// The one action row a turn has: copy, fork and the time, at the foot of the
+// The one action row a turn has: copy, fork, a side chat and the time, at the foot of the
 // turn's final reply, always in view.
 //
 // No other row draws actions. An intermediate message, a thought or a tool row
@@ -18,6 +18,8 @@ export interface TurnActions {
   /** The reply's raw Markdown, or null when the row has no copy button. */
   copy: string | null;
   fork: boolean;
+  /** Ask about this reply in a side chat beside the thread: the same rule as the fork. */
+  sideChat: boolean;
   time: boolean;
 }
 
@@ -39,7 +41,13 @@ export function turnActions({
   threadId?: string;
 }): TurnActions {
   const copy = text?.trim() ? text : null;
-  return { row: !!copy || !!at, copy, fork: !!threadId && !!copy, time: !!at };
+  return {
+    row: !!copy || !!at,
+    copy,
+    fork: !!threadId && !!copy,
+    sideChat: !!threadId && !!copy,
+    time: !!at,
+  };
 }
 
 /**

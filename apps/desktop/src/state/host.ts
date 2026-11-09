@@ -19,7 +19,14 @@ import {
   parsePullState,
   pullErrorTitle,
 } from "../acp/rustcode";
-import { type Harness, type HarnessModel, type HarnessSnapshot, Method, projectName } from "../acp/types";
+import {
+  delegateParent,
+  type Harness,
+  type HarnessModel,
+  type HarnessSnapshot,
+  Method,
+  projectName,
+} from "../acp/types";
 import { V2Method } from "../acp/v2";
 import { hasShell, shellCall } from "../lib/shell";
 import { childTitle, titleFrom } from "../lib/title";
@@ -396,7 +403,8 @@ function ruleThread(s: AppState, id: string): RuleThread | undefined {
     folder: thread?.cwd ?? summary?.cwd ?? "",
     worktree: thread?.worktree ?? summary?.worktree,
     repo: summary?.repo,
-    parent: summary?.parent?.id,
+    // Only a thread an agent started is the orchestration's to reach; a fork or side chat is not.
+    parent: delegateParent(summary?.parent)?.id,
     updatedAt: summary?.updatedAt,
     running: thread?.running ?? false,
     harness: thread?.harness?.id ?? summary?.harness,

@@ -14,20 +14,24 @@ import {
   FileDiff,
   Folder,
   GitBranch,
+  GitFork,
   GitPullRequest,
   ListChecks,
+  MessageSquareQuote,
   SquareTerminal,
 } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import type { SubagentInfo } from "../acp/rustcode";
-import { displayPath, effortLabel, modelName, projectName } from "../acp/types";
+import { delegateParent, displayPath, effortLabel, modelName, projectName } from "../acp/types";
 import { type GitChanges, gitChanges, openTerminalAt, revealPath } from "../lib/native";
+import { branchesOf, branchLine, originLine, originOf } from "../state/branches";
 import { contextPercent, planProgress, type SubagentLine, subagentLines } from "../state/details";
 import { activeGrants, grantRemaining } from "../state/grants";
 import { stateOf } from "../state/host";
 import { threadLineage } from "../state/lineage";
 import { isActive, LINK_LABEL, type Link } from "../state/orchestration";
 import {
+  peekThread,
   refreshGrants,
   revokeGrant,
   selectThread,
@@ -273,14 +277,20 @@ export function ThreadDetails() {
   );
   const agents = useApp((s) => (s.selectedId ? (s.agents[s.selectedId] ?? NO_AGENTS) : NO_AGENTS));
   const book = useApp((s) => s.links);
+  // Only an agent's parent is lineage here; a fork's or side chat's has its own rows below.
   const parentMeta = useApp((s) =>
-    s.selectedId ? s.sessions.find((x) => x.id === s.selectedId)?.parent : undefined,
+    s.selectedId ? delegateParent(s.sessions.find((x) => x.id === s.selectedId)?.parent) : undefined,
   );
   // The metadata can name a parent whose thread is gone: then the row is a fact, not a link.
   const parentListed = useApp((s) => {
-    const parent = s.selectedId ? s.sessions.find((x) => x.id === s.selectedId)?.parent : undefined;
+    const parent = s.selectedId
+      ? delegateParent(s.sessions.find((x) => x.id === s.selectedId)?.parent)
+      : undefined;
     return !!parent?.id && s.sessions.some((x) => x.id === parent.id);
   });
+  const sessions = useApp((s) => s.sessions);
+  const origin = useMemo(() => (id ? originOf(sessions, id) : undefined), [sessions, id]);
+  const branches = useMemo(() => (id ? branchesOf(sessions, id) : []), [sessions, id]);
   const pullsOn = useApp((s) => !!s.agent?.pullRequests);
   const grants = useApp((s) => s.grants);
   const delegateLinks = useApp((s) => s.links.links);
@@ -408,6 +418,39 @@ export function ThreadDetails() {
           onClick={() => showPanel("pulls")}
           right={<ChevronRight size={13} className="shrink-0 text-fg-faint" />}
         />
+      )}
+
+      {(origin || branches.length > 0) && (
+        <>
+          {hairline}
+          <Section title="Forks and side chats" hint="Threads opened from a thread, not handed to an agent.">
+            {origin && (
+              <CardRow
+                icon={<GitFork size={16} className="shrink-0 text-fg-muted" />}
+                label={`${originLine(origin).label} ${origin.title}`}
+                title={
+                  origin.listed ? "Open the thread it came from" : "That thread is no longer in the list"
+                }
+                onClick={origin.listed && origin.id ? () => selectThread(origin.id!) : undefined}
+              />
+            )}
+            {branches.map((branch) => (
+              <CardRow
+                key={branch.id}
+                icon={
+                  branch.kind === "fork" ? (
+                    <GitFork size={16} className="shrink-0 text-fg-muted" />
+                  ) : (
+                    <MessageSquareQuote size={16} className="shrink-0 text-fg-muted" />
+                  )
+                }
+                label={`${branchLine(branch).label} ${branch.title}`}
+                title={branch.kind === "fork" ? "Open the fork" : "Open the side chat beside this thread"}
+                onClick={() => (branch.kind === "fork" ? selectThread(branch.id) : peekThread(branch.id))}
+              />
+            ))}
+          </Section>
+        </>
       )}
 
       {(lineage.parent || lineage.messagedBy || delegates > 0 || lineage.messaged.length > 0) && (

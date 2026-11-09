@@ -1457,9 +1457,12 @@ fn live_thread(turn: &TurnRow) -> ThreadRow {
                 .as_ref()
                 .map(|metadata| millis_to_rfc3339(metadata.created_at_ms as i64))
         });
+    // Only a delegate rolls up into its parent's statistics: a fork or a side
+    // chat is the user's own thread, with its own cost.
     let parent = metadata
         .as_ref()
-        .and_then(|metadata| metadata.parent.as_ref());
+        .and_then(|metadata| metadata.parent.as_ref())
+        .filter(|parent| parent.relationship() == rustcode_session::SessionRelationship::Delegate);
     ThreadRow {
         id: id.to_owned(),
         title: record
@@ -1612,7 +1615,10 @@ fn millis_to_rfc3339(millis: i64) -> String {
 fn facts(dir: &Path) -> FolderFacts {
     let harness_file: Option<HarnessFile> = read_json(&dir.join("harness.json"));
     let created: Option<CreatedFile> = read_json(&dir.join("metadata.json"));
-    let parent = created.as_ref().and_then(|file| file.parent.clone());
+    let parent = created
+        .as_ref()
+        .and_then(|file| file.parent.clone())
+        .filter(|parent| parent.relationship() == rustcode_session::SessionRelationship::Delegate);
     let workspace: Option<CwdFile> = read_json(&dir.join("workspace.json"));
     let cwd = harness_file
         .as_ref()

@@ -32,7 +32,7 @@ const row = (over: Record<string, unknown>) => ({
   ...over,
 });
 
-const session = (id: string, parent?: { id?: string; title?: string }): SessionSummary => ({
+const session = (id: string, parent?: SessionSummary["parent"]): SessionSummary => ({
   id,
   cwd: "/repo",
   title: id,
@@ -139,6 +139,54 @@ describe("thread totals including delegates", () => {
     // No thread is counted in two top-level rows.
     const shown = answer.threads.reduce((sum, thread) => sum + usedTokens(thread.total), 0);
     expect(shown).toBe(203);
+  });
+
+  test("a fork and a side chat are threads of their own, never rolled into the parent", () => {
+    const sessions = [
+      session("root"),
+      session("fork", { id: "root", relationship: "fork" }),
+      session("side", { id: "root", relationship: "side_chat" }),
+      session("delegate", { id: "root", relationship: "delegate" }),
+    ];
+    const rows = (withParents: boolean) =>
+      parseUsageReport({
+        group_by: "thread",
+        rows: [
+          row({
+            thread: "root",
+            input_tokens: 1,
+            output_tokens: 0,
+            ...(withParents ? { parent_id: null } : {}),
+          }),
+          row({
+            thread: "fork",
+            input_tokens: 5,
+            output_tokens: 0,
+            ...(withParents ? { parent_id: null } : {}),
+          }),
+          row({
+            thread: "side",
+            input_tokens: 7,
+            output_tokens: 0,
+            ...(withParents ? { parent_id: null } : {}),
+          }),
+          row({
+            thread: "delegate",
+            input_tokens: 3,
+            output_tokens: 0,
+            ...(withParents ? { parent_id: "root" } : {}),
+          }),
+        ],
+        totals: {},
+      });
+    // Whether the rows report their parents (the store) or the app reads the session list.
+    for (const withParents of [true, false]) {
+      const answer = threadReport(rows(withParents), sessions, []);
+      expect(answer.threads.map((t) => t.id).sort()).toEqual(["fork", "root", "side"]);
+      const root = answer.threads.find((t) => t.id === "root")!;
+      expect(root.total).toMatchObject({ input: 4 });
+      expect(root.delegateCount).toBe(1);
+    }
   });
 
   test("a link that started a thread stands in for metadata the book outlived", () => {

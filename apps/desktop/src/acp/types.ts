@@ -100,6 +100,11 @@ export interface AgentInfo {
    * checkpoint, so the attempt it leaves can be returned to.
    */
   checkpointAttempts: boolean;
+  /**
+   * `session/new` records `_meta.rustcode.relationship` and `session/list` returns it. An older
+   * engine ignores the key and would list a side chat as a delegate, so none is opened there.
+   */
+  lineage: boolean;
 }
 
 export function parseAgentInfo(result: Json): AgentInfo {
@@ -129,6 +134,7 @@ export function parseAgentInfo(result: Json): AgentInfo {
     sessionMove: num(meta?.sessionMove) !== undefined,
     sessionRepair: num(meta?.sessionRepair) !== undefined,
     checkpointAttempts: (num(meta?.checkpoints) ?? 0) >= 2,
+    lineage: num(meta?.lineage) !== undefined,
   };
 }
 
@@ -198,10 +204,35 @@ export interface SessionSummary {
    * The thread an agent started this one from (`_meta.rustcode.parent`), kept
    * in the thread's own metadata: the link book prunes old links, this does
    * not. `id` is absent for a thread an older release started, where only the
-   * parent's title was recovered from the first message.
+   * parent's title was recovered from the first message. `relationship` says
+   * why the parent exists: a record without one was always a delegate.
    */
-  parent?: { id?: string; title?: string };
+  parent?: ThreadParent;
 }
+
+/** Why a thread has a parent (`_meta.rustcode.parent.relationship`). */
+export type ThreadRelationship = "delegate" | "fork" | "side_chat" | "other";
+
+/** The thread above another, as the engine recorded it in the thread's own metadata. */
+export interface ThreadParent {
+  id?: string;
+  title?: string;
+  /** Absent means a delegate: every record written before the field was one. */
+  relationship?: ThreadRelationship;
+}
+
+/** The relationship a `_meta` name stands for; a record without one is a delegate. */
+export function parseRelationship(value: unknown): ThreadRelationship {
+  if (value === undefined || value === null || value === "") return "delegate";
+  return value === "delegate" || value === "fork" || value === "side_chat" ? value : "other";
+}
+
+/** How a thread relates to its parent; a record without one is a delegate. */
+export const relationshipOf = (parent: ThreadParent): ThreadRelationship => parent.relationship ?? "delegate";
+
+/** The parent of a thread an agent handed work to: the only relationship that is orchestration. */
+export const delegateParent = (parent?: ThreadParent): ThreadParent | undefined =>
+  parent && relationshipOf(parent) === "delegate" ? parent : undefined;
 
 export function parseSessionList(result: Json): { sessions: SessionSummary[]; nextCursor?: string } {
   const root = obj(result);
@@ -217,13 +248,14 @@ export function parseSessionList(result: Json): { sessions: SessionSummary[]; ne
     const parent = obj(rc?.parent);
     const parentId = str(parent?.sessionId);
     const parentTitle = str(parent?.title);
+    const relationship = parseRelationship(parent?.relationship);
     sessions.push({
       worktree: parseWorktree(rc?.worktree),
       repo: str(rc?.repo),
       status: parseStatus(rc?.status),
       pinned: bool(rc?.pinned),
       account: str(rc?.account),
-      parent: parentId || parentTitle ? { id: parentId, title: parentTitle } : undefined,
+      parent: parentId || parentTitle ? { id: parentId, title: parentTitle, relationship } : undefined,
       id,
       cwd: str(e?.cwd) ?? "",
       title: str(e?.title),

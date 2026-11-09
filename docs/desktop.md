@@ -944,7 +944,10 @@ composer's keys stay outside the table.
   link cannot turn it into a top-level row: it sits under its parent, or in
   Settled once finished when the parent is gone, and only a child that works or
   waits on you, or that you pinned or messaged, is a row of its own
-  (`state/topLevel.ts`, `docs/orchestrator.md`). Chips above the composer (state, open,
+  (`state/topLevel.ts`, `docs/orchestrator.md`). Forks (`/fork`, the fork button under a
+  reply) and side chats (the side-chat button beside it) record their parent the
+  same way with a `relationship` and nest under it with a glyph
+  (`docs/orchestrator.md`, *Forks and side chats*). Chips above the composer (state, open,
   stop), a *Working for* banner, sidebar badges. Stopping a thread stops the
   work it gave others, and theirs, in one cascade. A thread whose turn ended
   while the threads it handed work to still run says so instead of looking

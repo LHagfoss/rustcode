@@ -1403,7 +1403,7 @@ const PERMISSION_ICON: Record<PermissionMode, typeof Shield> = {
 };
 
 /** What the thread may do without asking. Full access is tinted so it is never on unnoticed. */
-function PermissionMenu({ threadId, compact }: { threadId?: string; compact?: boolean }) {
+export function PermissionMenu({ threadId, compact }: { threadId?: string; compact?: boolean }) {
   const mode = useApp((s) => permissionModeOf(s, threadId));
   const current = PERMISSION_MODES.find((m) => m.id === mode)!;
   const Icon = PERMISSION_ICON[mode];

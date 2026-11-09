@@ -14,7 +14,7 @@
 // answer.
 
 import type { UsageCounts, UsageReport, UsageRow, UsageTotals } from "../acp/rustcode";
-import type { SessionSummary } from "../acp/types";
+import { delegateParent, type SessionSummary } from "../acp/types";
 import type { Link } from "./orchestration";
 import { addCost, type CostTotals, costOf, emptyCost } from "./pricing";
 import { parentOf } from "./topLevel";
@@ -190,7 +190,7 @@ export function threadReport(
       // The store value is the snapshot's own parent; the link book is the
       // fallback for a row written before the parent was recorded there.
       const session = sessionById.get(id);
-      const above = row.parentId ?? parentOf({ id, parent: session?.parent }, links);
+      const above = row.parentId ?? parentOf({ id, parent: delegateParent(session?.parent) }, links);
       if (above && above !== id && rows.has(above)) parent.set(id, above);
       else if (!above && row.parentTitle) titleOnly.add(id);
       continue;
@@ -199,9 +199,9 @@ export function threadReport(
     // and the link book, which may be capped or newer than the usage read.
     const session = sessionById.get(id);
     const startedByLink = links.some((link) => link.started && link.target === id);
-    const above = parentOf({ id, parent: session?.parent }, links);
+    const above = parentOf({ id, parent: delegateParent(session?.parent) }, links);
     if (above && above !== id && rows.has(above)) parent.set(id, above);
-    else if (session?.parent && !session.parent.id && !startedByLink) titleOnly.add(id);
+    else if (delegateParent(session?.parent) && !session?.parent?.id && !startedByLink) titleOnly.add(id);
   }
 
   // A broken record (`a` started by `b` and `b` by `a`) must not recurse. One

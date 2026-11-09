@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Json } from "./jsonrpc";
 import {
+  delegateParent,
   displayPath,
   fallbackHarnessSnapshot,
   initializeParams,
@@ -92,10 +93,40 @@ describe("ACP types", () => {
       id: "a",
       model: "chatgpt/gpt-6-luna",
       harness: "codex",
-      parent: { id: "p", title: "Parent" },
+      parent: { id: "p", title: "Parent", relationship: "delegate" },
     });
-    expect(sessions[1]!.parent).toEqual({ id: undefined, title: "A parent that is gone" });
+    expect(sessions[1]!.parent).toEqual({
+      id: undefined,
+      title: "A parent that is gone",
+      relationship: "delegate",
+    });
     expect(sessions[0]!.updatedAt).toBeGreaterThan(0);
+  });
+
+  test("reads how a thread relates to its parent, and a record without one is a delegate", () => {
+    const listed = (relationship?: string) =>
+      parseSessionList({
+        sessions: [
+          {
+            sessionId: "c",
+            cwd: "/x",
+            _meta: {
+              rustcode: {
+                parent: { sessionId: "p", title: "Parent", ...(relationship ? { relationship } : {}) },
+              },
+            },
+          },
+        ],
+      }).sessions[0]!.parent;
+    expect(listed("fork")?.relationship).toBe("fork");
+    expect(listed("side_chat")?.relationship).toBe("side_chat");
+    expect(listed("delegate")?.relationship).toBe("delegate");
+    expect(listed(undefined)?.relationship).toBe("delegate");
+    // A name a later engine wrote is neither a delegate nor a branch.
+    expect(listed("mirror")?.relationship).toBe("other");
+    expect(delegateParent(listed("fork"))).toBeUndefined();
+    expect(delegateParent(listed(undefined))?.id).toBe("p");
+    expect(delegateParent({ id: "p" })?.id).toBe("p");
   });
 
   test("parses tool call updates with output delta, diff and exit code", () => {
