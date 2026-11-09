@@ -32,7 +32,7 @@ describe("installFocusModality", () => {
   test("Tab turns keyboard navigation on, a pointer press turns it off", () => {
     const root = fakeRoot();
     const target = new EventTarget();
-    installFocusModality(root, target);
+    installFocusModality(root, target, () => true);
     expect(root.attrs.has(KEYBOARD_NAV)).toBe(false);
     key(target, "Tab");
     expect(root.attrs.has(KEYBOARD_NAV)).toBe(true);
@@ -46,7 +46,7 @@ describe("installFocusModality", () => {
   test("Shift+Tab turns keyboard navigation on too", () => {
     const root = fakeRoot();
     const target = new EventTarget();
-    installFocusModality(root, target);
+    installFocusModality(root, target, () => true);
     key(target, "Tab", true);
     expect(root.attrs.has(KEYBOARD_NAV)).toBe(true);
   });
@@ -54,7 +54,7 @@ describe("installFocusModality", () => {
   test("other keys leave the mode as it is", () => {
     const root = fakeRoot();
     const target = new EventTarget();
-    installFocusModality(root, target);
+    installFocusModality(root, target, () => true);
     for (const name of ["Enter", "Escape", "ArrowDown", "a"]) key(target, name);
     expect(root.attrs.has(KEYBOARD_NAV)).toBe(false);
     key(target, "Tab");
@@ -65,7 +65,7 @@ describe("installFocusModality", () => {
   test("window blur clears keyboard navigation", () => {
     const root = fakeRoot();
     const target = new EventTarget();
-    installFocusModality(root, target);
+    installFocusModality(root, target, () => true);
     key(target, "Tab");
     target.dispatchEvent(new Event("blur"));
     expect(root.attrs.has(KEYBOARD_NAV)).toBe(false);
@@ -80,7 +80,7 @@ describe("installFocusModality", () => {
   test("stopping it removes the listeners", () => {
     const root = fakeRoot();
     const target = new EventTarget();
-    const stop = installFocusModality(root, target);
+    const stop = installFocusModality(root, target, () => true);
     stop();
     key(target, "Tab");
     expect(root.attrs.has(KEYBOARD_NAV)).toBe(false);
@@ -88,4 +88,12 @@ describe("installFocusModality", () => {
     target.dispatchEvent(new Event("blur"));
     expect(root.attrs.has(KEYBOARD_NAV)).toBe(true);
   });
+});
+
+test("Tab is blocked only outside protected contexts when disabled", async () => {
+  const { shouldBlockTab } = await import("./focusModality");
+  expect(shouldBlockTab("Tab", false, false)).toBe(true);
+  expect(shouldBlockTab("Tab", false, true)).toBe(false);
+  expect(shouldBlockTab("Tab", true, false)).toBe(false);
+  expect(shouldBlockTab("Enter", false, false)).toBe(false);
 });
