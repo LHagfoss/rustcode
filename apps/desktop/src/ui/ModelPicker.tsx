@@ -14,6 +14,7 @@ import {
   type Harness,
   type HarnessAccount,
   type HarnessModel,
+  modelName,
 } from "../acp/types";
 import { clip } from "../lib/clip";
 import { matchModels } from "../lib/modelSearch";
@@ -931,7 +932,9 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     turnPage("effort");
   };
 
-  const displayName = modelEntry?.name || models.find((item) => item.value === model)?.name || model;
+  // A catalog name is shown as it is; a bare id reads without its `provider/` prefix.
+  const catalogName = modelEntry?.name || models.find((item) => item.value === model)?.name;
+  const displayName = catalogName && catalogName !== model ? catalogName : modelName(model ?? undefined);
   const label = pillLabel(displayName, effortReason ? null : effort, compact);
   // The pill names the login whenever the harness has named accounts, even
   // when there is one: which subscription a thread spends is worth a word.
