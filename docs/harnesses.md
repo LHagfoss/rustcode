@@ -407,10 +407,16 @@ paused: Claude Code renews it, so the background read keeps asking and picks the
 new sign-in up without a visit to Settings. A `forbidden` one (HTTP 403) is not
 retried on its own either, since renewing it does not grant the usage read.
 `Refresh` sends `force: true`, which reads the logins again rather than answering
-from the engine's one-minute cache; with Claude's switch off no login is read,
-forced or not. One login is read once at a time: a forced read that arrives
+from the engine's cache (five minutes for numbers, a minute for a failure);
+with Claude's switch off no login is read, forced or not.
+One login is read once at a time: a forced read that arrives
 while the background poll is reading it waits, and shares an answer whose read
-began after the ask instead of reading the Keychain a second time.
+began after the ask instead of reading the Keychain a second time. A rate limit
+(HTTP 429) is paced, not retried: the engine keeps the login's last numbers on
+screen, marked with when they were read, and asks again once it has waited out
+the `Retry-After` the answer named, else a doubling wait of a minute, two, four
+and so on up to about thirty minutes. An answer ends the wait, and an explicit
+look does not shorten it.
 
 ### `_rustcode/onboarding/complete` `{}` → `HarnessSnapshot`
 

@@ -27,6 +27,14 @@
 //! only saying so the read answers with the last windows RustCode recorded for
 //! that login (`claude-usage.json`), which the app shows "as of" when they were
 //! read; the plain expiry is the answer only when there is nothing recorded yet.
+//!
+//! The endpoint rate-limits (#3300): it answered HTTP 429 while the app polled
+//! it every minute, so numbers are kept for `WINDOWS_TTL` and every login has
+//! one read in flight at most, however often a view is opened or a window comes
+//! back into focus. A 429 is honoured rather than retried: the wait it names is
+//! kept, else the wait doubles per refusal up to `BACKOFF_MAX`, and the cached
+//! numbers are served with their age until it ends, so a rate limit is never a
+//! banner the user could have done nothing about.
 
 use super::rate_limits::RateLimitWindow;
 use serde::{Deserialize, Serialize};
@@ -40,8 +48,26 @@ use std::time::{Duration, Instant};
 const DEFAULT_KEYCHAIN_ITEM: &str = "Claude Code-credentials";
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+/// How long a failed read is served from the cache: a retry is what stops it
+/// failing, and the next poll is a minute away.
 const FRESH: Duration = Duration::from_secs(60);
+/// How long the numbers are served from the cache. They move slowly — a 5-hour
+/// and a weekly window — and the endpoint rate-limits, so one request per login
+/// per interval is enough for the composer's meter and Settings › Usage.
+const WINDOWS_TTL: Duration = Duration::from_secs(300);
+/// The wait after a 429 that names no `Retry-After`, doubled for each further
+/// refusal, and the ceiling both kinds of wait are kept under.
+const BACKOFF_FIRST: Duration = Duration::from_secs(60);
+const BACKOFF_MAX: Duration = Duration::from_secs(30 * 60);
+/// A `Retry-After` shorter than this is rounded up to it: even a refusal that
+/// names a moment away is worth half a minute's quiet.
+const BACKOFF_MIN: Duration = Duration::from_secs(30);
 const TIMEOUT: Duration = Duration::from_secs(10);
+
+/// What a 429 says when there are no cached numbers to show instead. The reason
+/// is `transient`, so the app tries again — which the backoff paces.
+const RATE_LIMITED: &str =
+    "Anthropic is limiting how often plan usage is read. RustCode will wait before asking again.";
 
 /// One labelled window: `5-hour`, `Weekly`, `Weekly · Opus`.
 #[derive(Debug, Clone, PartialEq)]
@@ -144,16 +170,42 @@ static DENIED: Mutex<Option<HashSet<Option<PathBuf>>>> = Mutex::new(None);
 /// A remembered answer and when the read that gave it started.
 struct Entry {
     started: Instant,
+    /// Unix seconds when the numbers were read, for serving them later marked
+    /// with their age.
+    read_at: i64,
     usage: ClaudeUsage,
 }
 
+/// One login's wait after a 429, and how many refusals in a row it has taken:
+/// the next refusal waits twice as long.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Backoff {
+    until: Instant,
+    attempt: u32,
+}
+
+/// The logins that are waiting out a 429, in memory like the cache: a restart
+/// asks once at the most, and one login's wait never holds another's numbers
+/// back.
+static BACKOFF: Mutex<Option<HashMap<Option<PathBuf>, Backoff>>> = Mutex::new(None);
+
 /// The plan windows of the login in `config_dir` (the default login when
 /// `None`), from the cache while fresh unless `freshness` forces a read. Two
-/// accounts never share numbers, and one account is read once at a time.
+/// accounts never share numbers, and one account is read once at a time. A login
+/// Anthropic rate-limited is not asked again until its wait ends: its cached
+/// numbers are served with their age instead, and an explicit look waits too.
 pub(crate) async fn usage(config_dir: Option<&Path>, freshness: Freshness) -> ClaudeUsage {
     let key = config_dir.map(Path::to_path_buf);
     if let Some(cached) = cached(&key, freshness) {
         return cached;
+    }
+    // Anthropic refused for now and named when it would answer again: asking
+    // before then would only be refused again, so the last numbers are served
+    // with their age. An explicit look waits too — the interval is Anthropic's
+    // to set, and a press of Refresh does not shorten it.
+    if backing_off(&key) {
+        return stale_windows(config_dir)
+            .unwrap_or_else(|| ClaudeUsage::unavailable(NoUsage::Transient, RATE_LIMITED));
     }
     // When this ask was made: a read that *began* after this point saw the same
     // Keychain as one started now would, so its answer is shared instead of
@@ -240,7 +292,39 @@ fn cached(key: &Option<PathBuf>, freshness: Freshness) -> Option<ClaudeUsage> {
     }
     let cache = CACHE.lock().ok()?;
     let entry = cache.as_ref()?.get(key)?;
-    (entry.started.elapsed() < FRESH).then(|| entry.usage.clone())
+    fresh_enough(&entry.usage, entry.started.elapsed()).then(|| entry.usage.clone())
+}
+
+/// How long one cached answer is served: the numbers for `WINDOWS_TTL`, since
+/// this endpoint rate-limits, and a failure for `FRESH`, since a retry is how it
+/// stops failing.
+fn ttl(answer: &ClaudeUsage) -> Duration {
+    match answer {
+        ClaudeUsage::Windows { .. } => WINDOWS_TTL,
+        _ => FRESH,
+    }
+}
+
+/// Whether an answer read `age` ago is still the one to serve.
+fn fresh_enough(answer: &ClaudeUsage, age: Duration) -> bool {
+    age < ttl(answer)
+}
+
+/// The last numbers this login's cache holds, marked with when they were read,
+/// so the app shows their age instead of drawing them as this minute's. `None`
+/// when the cache holds no numbers for it — a failure is no stand-in.
+fn stale_windows(config_dir: Option<&Path>) -> Option<ClaudeUsage> {
+    let key = config_dir.map(Path::to_path_buf);
+    let cache = CACHE.lock().ok()?;
+    let entry = cache.as_ref()?.get(&key)?;
+    let ClaudeUsage::Windows { plan, windows, .. } = &entry.usage else {
+        return None;
+    };
+    (!windows.is_empty()).then(|| ClaudeUsage::Windows {
+        plan: plan.clone(),
+        windows: windows.clone(),
+        as_of: Some(entry.read_at),
+    })
 }
 
 /// Keeps an answer, unless a read that started later has already answered: a
@@ -255,10 +339,98 @@ fn remember(key: Option<PathBuf>, started: Instant, usage: &ClaudeUsage) {
             key,
             Entry {
                 started,
+                read_at: read_at(usage),
                 usage: usage.clone(),
             },
         );
     }
+}
+
+/// When the numbers in `usage` were read: their own `as_of` when they are ones
+/// already marked with it, else now.
+fn read_at(usage: &ClaudeUsage) -> i64 {
+    match usage {
+        ClaudeUsage::Windows {
+            as_of: Some(at), ..
+        } => *at,
+        _ => chrono::Utc::now().timestamp(),
+    }
+}
+
+/// Whether this login is waiting out a 429, clearing a wait that has ended.
+fn backing_off(key: &Option<PathBuf>) -> bool {
+    let Ok(mut state) = BACKOFF.lock() else {
+        return false;
+    };
+    let Some(state) = state.as_mut() else {
+        return false;
+    };
+    match state.get(key) {
+        Some(entry) if entry.until > Instant::now() => true,
+        Some(_) => {
+            state.remove(key);
+            false
+        }
+        None => false,
+    }
+}
+
+/// Starts, or lengthens, this login's wait after a 429.
+fn remember_backoff(config_dir: Option<&Path>, retry_after: Option<Duration>) {
+    let key = config_dir.map(Path::to_path_buf);
+    let Ok(mut state) = BACKOFF.lock() else {
+        return;
+    };
+    let state = state.get_or_insert_with(HashMap::new);
+    let attempt = state.get(&key).map_or(0, |entry| entry.attempt);
+    let wait = backoff_wait(retry_after, attempt);
+    state.insert(
+        key,
+        Backoff {
+            until: Instant::now() + wait,
+            attempt: attempt.saturating_add(1),
+        },
+    );
+}
+
+/// Ends this login's wait: an answer means Anthropic is talking to us again.
+fn forget_backoff(config_dir: Option<&Path>) {
+    let key = config_dir.map(Path::to_path_buf);
+    let Ok(mut state) = BACKOFF.lock() else {
+        return;
+    };
+    if let Some(state) = state.as_mut() {
+        state.remove(&key);
+    }
+}
+
+/// How long to wait after a 429: what its `Retry-After` asked for, else a
+/// doubling wait — a minute, two, four — that stops at `BACKOFF_MAX`. Either is
+/// kept under the ceiling, so a header that names an hour or a day is a long
+/// pause, not a dead login.
+fn backoff_wait(retry_after: Option<Duration>, attempt: u32) -> Duration {
+    match retry_after {
+        Some(after) => after.clamp(BACKOFF_MIN, BACKOFF_MAX),
+        None => BACKOFF_FIRST
+            .saturating_mul(1 << attempt.min(24))
+            .min(BACKOFF_MAX),
+    }
+}
+
+/// The wait a `Retry-After` header names: seconds, or an HTTP date. Anything
+/// else is no answer, and the wait doubles on its own schedule instead.
+fn retry_after(header: Option<&str>, now: chrono::DateTime<chrono::Utc>) -> Option<Duration> {
+    let header = header?.trim();
+    if let Ok(seconds) = header.parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    let at = chrono::DateTime::parse_from_rfc2822(header).ok()?;
+    // A date that has passed names no wait; the ceiling's floor covers it.
+    Some(
+        (at.with_timezone(&chrono::Utc) - now)
+            .to_std()
+            .unwrap_or(Duration::ZERO),
+    )
 }
 
 /// A login's stored sign-ins, and how they were reached.
@@ -352,18 +524,37 @@ async fn read(config_dir: Option<&Path>, freshness: Freshness) -> ClaudeUsage {
         chrono::Utc::now().timestamp_millis(),
         config_dir.is_some(),
     ) {
-        Ok((copy, token)) => {
-            let answered = request_failure(&stored, fetch(copy, token).await);
-            record_read(config_dir, &answered);
-            answered
-        }
+        Ok((copy, token)) => match fetch(copy, token).await {
+            Answer::Usage(answered) => {
+                // Anthropic answered, so whatever it said, the wait is over.
+                forget_backoff(config_dir);
+                let answered = request_failure(&stored, answered);
+                record_read(config_dir, &answered);
+                answered
+            }
+            Answer::RateLimited(after) => {
+                remember_backoff(config_dir, after);
+                // A 429 is not the user's to act on, and they can do nothing
+                // about it: the last numbers stand, marked with when they were
+                // read. The refusal is heard only when there are none.
+                stale_windows(config_dir)
+                    .unwrap_or_else(|| request_failure(&stored, http_failure(429)))
+            }
+        },
         Err(failure) => recorded_instead(config_dir, failure),
     }
 }
 
+/// What asking Anthropic left: the numbers, or a refusal to read them yet.
+enum Answer {
+    Usage(ClaudeUsage),
+    /// HTTP 429, with the wait its `Retry-After` named, if it named one.
+    RateLimited(Option<Duration>),
+}
+
 /// Asks Anthropic for the plan windows with `token`: the windows, or why the
 /// request did not produce them.
-async fn fetch(sign_in: &Value, token: &str) -> ClaudeUsage {
+async fn fetch(sign_in: &Value, token: &str) -> Answer {
     let plan = sign_in
         .pointer("/claudeAiOauth/subscriptionType")
         .and_then(Value::as_str)
@@ -374,7 +565,12 @@ async fn fetch(sign_in: &Value, token: &str) -> ClaudeUsage {
         .build()
     {
         Ok(client) => client,
-        Err(error) => return ClaudeUsage::unavailable(NoUsage::Transient, error.to_string()),
+        Err(error) => {
+            return Answer::Usage(ClaudeUsage::unavailable(
+                NoUsage::Transient,
+                error.to_string(),
+            ));
+        }
     };
     let response = match client
         .get(USAGE_URL)
@@ -385,14 +581,26 @@ async fn fetch(sign_in: &Value, token: &str) -> ClaudeUsage {
     {
         Ok(response) => response,
         Err(_) => {
-            return ClaudeUsage::unavailable(NoUsage::Transient, "Anthropic did not answer.");
+            return Answer::Usage(ClaudeUsage::unavailable(
+                NoUsage::Transient,
+                "Anthropic did not answer.",
+            ));
         }
     };
     let status = response.status();
-    if !status.is_success() {
-        return http_failure(status.as_u16());
+    if status.as_u16() == 429 {
+        // Read before the body: the wait is in the headers, and there is no
+        // answer to parse.
+        let header = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok());
+        return Answer::RateLimited(retry_after(header, chrono::Utc::now()));
     }
-    match response.json::<Value>().await {
+    if !status.is_success() {
+        return Answer::Usage(http_failure(status.as_u16()));
+    }
+    Answer::Usage(match response.json::<Value>().await {
         Ok(body) => ClaudeUsage::Windows {
             plan,
             windows: parse(&body),
@@ -401,7 +609,7 @@ async fn fetch(sign_in: &Value, token: &str) -> ClaudeUsage {
         Err(_) => {
             ClaudeUsage::unavailable(NoUsage::Transient, "Anthropic's answer could not be read.")
         }
-    }
+    })
 }
 
 /// What the app hears when the plan request did not succeed. A refusal macOS
@@ -421,7 +629,7 @@ fn request_failure(stored: &Stored, answered: ClaudeUsage) -> ClaudeUsage {
 /// What a non-success answer from Anthropic means for the sign-in. A 401 is
 /// the token to renew in Claude Code; a 403 is a refusal of access that
 /// renewing the same sign-in does not fix, so the app must not keep asking. Any
-/// other status is worth one more try.
+/// other status is worth one more try; a 429 is paced by the caller's backoff.
 fn http_failure(status: u16) -> ClaudeUsage {
     match status {
         401 => ClaudeUsage::unavailable(
@@ -432,6 +640,7 @@ fn http_failure(status: u16) -> ClaudeUsage {
             NoUsage::Forbidden,
             "Anthropic does not allow this sign-in to read plan usage. Press Refresh to try once more.",
         ),
+        429 => ClaudeUsage::unavailable(NoUsage::Transient, RATE_LIMITED),
         code => ClaudeUsage::unavailable(
             NoUsage::Transient,
             format!("Anthropic answered HTTP {code}."),
@@ -1528,5 +1737,217 @@ mod tests {
             settled_while_waiting(&key, Freshness::Cached, requested),
             Some(answer)
         );
+    }
+
+    /// The numbers move slowly and Anthropic rate-limits them, so they are kept
+    /// for five minutes: repeated looks at a view — and the composer's meter
+    /// asking for the same account — make one request per interval. A failure is
+    /// kept for a minute instead, since a retry is what stops it failing.
+    #[test]
+    fn numbers_are_cached_for_five_minutes_and_a_failure_for_one() {
+        let windows = ClaudeUsage::Windows {
+            plan: Some("max".into()),
+            windows: vec![labelled("5-hour", 12.0, Some(300), None)],
+            as_of: None,
+        };
+        assert_eq!(WINDOWS_TTL, Duration::from_secs(300));
+        assert_eq!(ttl(&windows), WINDOWS_TTL);
+        assert!(fresh_enough(&windows, WINDOWS_TTL - Duration::from_secs(1)));
+        assert!(!fresh_enough(&windows, WINDOWS_TTL));
+        let failed = ClaudeUsage::unavailable(NoUsage::Transient, "transient");
+        assert_eq!(ttl(&failed), FRESH);
+        assert!(fresh_enough(&failed, Duration::from_secs(59)));
+        assert!(!fresh_enough(&failed, FRESH));
+        // A login that answered is served from the cache, not read again.
+        let key = Some(PathBuf::from("/tmp/claude-ttl-windows"));
+        remember(key.clone(), Instant::now(), &windows);
+        assert_eq!(cached(&key, Freshness::Cached), Some(windows));
+        // An explicit look still reads again, however fresh the cache is.
+        assert_eq!(cached(&key, Freshness::Now), None);
+    }
+
+    /// A `Retry-After` names the wait in seconds or as an HTTP date. Anything
+    /// else is no answer, and the wait doubles on its own instead.
+    #[test]
+    fn a_429_says_how_long_to_wait() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-02T23:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert_eq!(
+            retry_after(Some("120"), now),
+            Some(Duration::from_secs(120))
+        );
+        assert_eq!(
+            retry_after(Some("Mon, 02 Nov 2026 23:01:30 GMT"), now),
+            Some(Duration::from_secs(90))
+        );
+        assert_eq!(
+            retry_after(Some("Mon, 02 Nov 2026 23:01:30 +0000"), now),
+            Some(Duration::from_secs(90))
+        );
+        // A date that has already passed names no wait, which the ceiling's
+        // floor then covers.
+        assert_eq!(
+            retry_after(Some("Mon, 02 Nov 2026 22:59:00 GMT"), now),
+            Some(Duration::ZERO)
+        );
+        for header in [Some("soon"), Some(""), None] {
+            assert_eq!(retry_after(header, now), None, "{header:?}");
+        }
+    }
+
+    /// Without a `Retry-After` each refusal doubles the wait — a minute, two,
+    /// four — up to half an hour, and a named wait is honoured within the same
+    /// ceiling.
+    #[test]
+    fn a_429_backs_off_further_each_time() {
+        assert_eq!(backoff_wait(None, 0), Duration::from_secs(60));
+        assert_eq!(backoff_wait(None, 1), Duration::from_secs(120));
+        assert_eq!(backoff_wait(None, 2), Duration::from_secs(240));
+        assert_eq!(backoff_wait(None, 3), Duration::from_secs(480));
+        assert_eq!(backoff_wait(None, 4), Duration::from_secs(960));
+        assert_eq!(backoff_wait(None, 5), BACKOFF_MAX);
+        assert_eq!(backoff_wait(None, 40), BACKOFF_MAX);
+        assert_eq!(BACKOFF_MAX, Duration::from_secs(30 * 60));
+        assert_eq!(
+            backoff_wait(Some(Duration::from_secs(600)), 5),
+            Duration::from_secs(600)
+        );
+        // A header that names hours is a long pause, not a dead login.
+        assert_eq!(
+            backoff_wait(Some(Duration::from_secs(6 * 3600)), 0),
+            BACKOFF_MAX
+        );
+        assert_eq!(backoff_wait(Some(Duration::from_secs(1)), 0), BACKOFF_MIN);
+    }
+
+    /// The wait belongs to the login that was refused: another account is read
+    /// as usual, a second refusal lengthens the wait instead of restarting it,
+    /// and an answer — or the wait running out — lets the login ask again.
+    #[test]
+    fn a_429_quiets_one_login_and_ends_with_its_wait() {
+        let key = Path::new("/tmp/claude-429-quiet");
+        let quiet = Some(key.to_path_buf());
+        let other = Some(PathBuf::from("/tmp/claude-429-other"));
+        forget_backoff(Some(key));
+        assert!(!backing_off(&quiet));
+        remember_backoff(Some(key), Some(Duration::from_secs(600)));
+        assert!(backing_off(&quiet));
+        assert!(!backing_off(&other), "one login's wait is not another's");
+        // A second refusal doubles the wait and keeps the count.
+        remember_backoff(Some(key), None);
+        let entry = BACKOFF
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .get(&quiet)
+            .copied()
+            .unwrap();
+        assert_eq!(entry.attempt, 2);
+        assert!(
+            entry.until > Instant::now() + Duration::from_secs(100),
+            "{entry:?}"
+        );
+        // A wait that has run out asks again, and is not kept.
+        BACKOFF.lock().unwrap().as_mut().unwrap().insert(
+            quiet.clone(),
+            Backoff {
+                until: Instant::now() - Duration::from_secs(1),
+                attempt: 3,
+            },
+        );
+        assert!(!backing_off(&quiet));
+        assert!(!backing_off(&quiet), "an ended wait is dropped");
+        // An answer ends it too, so the next refusal starts a minute out.
+        remember_backoff(Some(key), Some(Duration::from_secs(600)));
+        forget_backoff(Some(key));
+        assert!(!backing_off(&quiet));
+        remember_backoff(Some(key), None);
+        let entry = BACKOFF
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .get(&quiet)
+            .copied()
+            .unwrap();
+        assert_eq!(entry.attempt, 1);
+        forget_backoff(Some(key));
+    }
+
+    /// A 429 is answered with the last numbers, marked with when they were read,
+    /// so the app says how old they are instead of showing an error the user
+    /// could do nothing about. Only a login with no numbers hears the refusal.
+    #[test]
+    fn a_429_keeps_the_numbers_and_their_age() {
+        let key = Path::new("/tmp/claude-429-cached");
+        let windows = ClaudeUsage::Windows {
+            plan: Some("max".into()),
+            windows: vec![labelled("5-hour", 12.0, Some(300), Some(1_793_660_400))],
+            as_of: None,
+        };
+        let before = chrono::Utc::now().timestamp();
+        remember(Some(key.to_path_buf()), Instant::now(), &windows);
+        let kept = stale_windows(Some(key)).expect("the numbers stay");
+        let ClaudeUsage::Windows {
+            plan,
+            windows,
+            as_of,
+        } = kept.clone()
+        else {
+            panic!("{kept:?}");
+        };
+        assert_eq!(plan.as_deref(), Some("max"));
+        assert_eq!(
+            windows,
+            vec![labelled("5-hour", 12.0, Some(300), Some(1_793_660_400))]
+        );
+        let as_of = as_of.expect("served numbers say when they were read");
+        assert!((before..=chrono::Utc::now().timestamp()).contains(&as_of));
+        // Keeping them again must not make them look newer than they are: a
+        // second 429 shows the same age, not this minute's.
+        remember(Some(key.to_path_buf()), Instant::now(), &kept);
+        assert_eq!(stale_windows(Some(key)), Some(kept));
+        // A login with nothing cached hears the refusal, since there is nothing
+        // to show instead. A cached failure, or a row with no window in it, is
+        // no stand-in for numbers either.
+        assert_eq!(
+            stale_windows(Some(Path::new("/tmp/claude-429-empty"))),
+            None
+        );
+        let failed = ClaudeUsage::unavailable(NoUsage::Transient, RATE_LIMITED);
+        remember(
+            Some(PathBuf::from("/tmp/claude-429-failed")),
+            Instant::now(),
+            &failed,
+        );
+        assert_eq!(
+            stale_windows(Some(Path::new("/tmp/claude-429-failed"))),
+            None
+        );
+        let blank = ClaudeUsage::Windows {
+            plan: None,
+            windows: Vec::new(),
+            as_of: None,
+        };
+        remember(
+            Some(PathBuf::from("/tmp/claude-429-blank")),
+            Instant::now(),
+            &blank,
+        );
+        assert_eq!(
+            stale_windows(Some(Path::new("/tmp/claude-429-blank"))),
+            None
+        );
+        // The refusal it falls back to says what RustCode is doing about it, and
+        // keeps the reason the app retries on.
+        match http_failure(429) {
+            ClaudeUsage::Unavailable { reason, message } => {
+                assert_eq!(reason, NoUsage::Transient);
+                assert_eq!(message, RATE_LIMITED);
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }
