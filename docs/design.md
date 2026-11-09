@@ -622,32 +622,39 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   (`text-sub` in `fg-muted`): the label, a dot for what a folded group hides,
   a count only while it is folded, then the chevron.
 - **Sidebar rows:** one 32px line. A 14px `ProjectMark`, the title, and one
-  80px trailing slot on the right. The project's name is not repeated on a row:
-  the mark carries it, and the hover card and the project's heading spell it
-  out. A row under a project's heading drops the mark, so its title lines up
+  trailing slot on the right, as wide as what it says and no wider, so the title
+  takes every pixel the row does not need. The project's name is not repeated on
+  a row: the mark carries it, and the hover card and the project's heading spell
+  it out. A row under a project's heading drops the mark, so its title lines up
   under the folder's name. The slot holds one thing, by `rowStatus` — what it
   needs of you, the running turn's spinner and clock, that it waits on work it
   handed out, a failure, a completion you have not opened, a review, the time a
   snoozed thread wakes, else its age (`5m`, `3h`) — never two, and never a
   second spinner. A thread with a worktree
-  branch, a diff, a pull request or a stack of delegates adds one quiet second
-  line (`text-sub`, 48px row): the branch in `font-mono`, `+N −N` in
-  `success`/`danger`, the pull request's mark, and the stack or the harness mark
-  at its end. Counts are shown only for a thread the app has already read; one
-  it has not opened shows neither, rather than a made-up zero. A plain chat
-  thread keeps its one line. What a thread asks of you, and `in <parent title>`
-  for a delegated row drawn on its own, go under the title at full strength.
+  branch, a pull request or a stack of delegates adds one quiet second line
+  (`text-sub`, 48px row): the branch in `font-mono`, `+N −N` in `success`/
+  `danger`, the pull request's mark, and the stack or the harness mark at its
+  end. A diff on its own is not worth a line: it rides in the trailing slot
+  (`state/sidebarRows.ts` `rowMeta`). Counts are shown only for a thread the app
+  has already read; one it has not opened shows neither, rather than a made-up
+  zero. A plain chat thread keeps its one line. What a thread asks of you, and
+  `in <parent title>` for a delegated row drawn on its own, go under the title
+  at full strength.
   What wants you — a request, a failure, a turn that ended while you were
   elsewhere, the open thread, a picked row — is weight 500 in full `fg`; what
   works, waits or is settled recedes to weight 400 at 75%, back to full on
   hover, with its mark at 60% so a column of marks never competes with the
   titles. Hovering swaps the slot for Pin, Settle (or Unsettle) and the menu,
-  three 24px targets in the same 80px, so the title does not move; the hover
-  card is the rest. The row layout preference (`rustcode.sidebar.rowLayout`) is
-  `compact` unless the user chose `comfortable`: the two-line row the sidebar
-  had before, title first with the project's mark, the branch and the counts on
-  the line under it (the retired `current` and `title-first` values migrate to
-  it). Logic: `state/sidebarRows.ts` `rowStatus`, `state/sidebarPrefs.ts`
+  three 24px targets drawn over the row's right end rather than given room of
+  their own: the line fades out under them through a mask measured from the
+  row's right edge, so the title never moves and a narrow sidebar keeps as much
+  of it as a wide one. The hover card is the rest. The row layout preference
+  (`rustcode.sidebar.rowLayout`) is `compact` unless the user chose
+  `comfortable`: the two-line row the sidebar had before, the project's mark
+  before the title as in the compact row and the branch and the counts on the
+  line under it, drawn only when it has something to put there (the retired
+  `current` and `title-first` values migrate to it). Logic:
+  `state/sidebarRows.ts` `rowStatus` and `rowMeta`, `state/sidebarPrefs.ts`
   `rowLayoutOf`.
 - **Delegated threads:** a thread an agent started has no row of its own while
   its parent exists, and it is nested from its first frame: the parent

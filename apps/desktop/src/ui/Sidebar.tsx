@@ -96,6 +96,7 @@ import {
   type RowStatusKind,
   rangeRows,
   rowKeyAction,
+  rowMeta,
   rowStatus,
   type SectionId,
   type ShelfId,
@@ -515,16 +516,43 @@ function RowAction({
 }
 
 /**
- * The room a row keeps clear of its hover actions: Pin, Settle (or Unsettle) and the menu, three
- * 24px buttons that sit 8px in from the row's end. The compact row's trailing slot is exactly this
- * wide, so the actions replace the state in place instead of pushing the title aside.
+ * The room a row gives its trailing state: the diff when it has nowhere else to go, and the state
+ * itself — the age, a chip, or the running turn's clock. It is as wide as what it says, so the
+ * title takes every pixel the row does not need, and it keeps that width on hover (invisible)
+ * while the actions are drawn over it, so nothing reflows.
  */
-const ACTIONS_CLEAR =
-  "group-hover:pr-20 group-has-[:focus-visible]:pr-20 group-has-[[data-state=open]]:pr-20";
+const TRAILING_SLOT = "flex shrink-0 items-center justify-end gap-1.5 text-sub text-fg-muted tabular";
 
-/** What the hover actions are drawn over: the state whose slot they take. */
+/**
+ * Hovering swaps the row's trailing state for its actions — Pin, Settle (or Unsettle) and the menu,
+ * three 24px buttons 8px in from the row's end. They are drawn over the right end rather than in
+ * their own room, so the title never moves: the line fades out under them instead. The fade is
+ * taken from the row's right edge in pixels, so a narrow sidebar does not lose more of a title than
+ * a wide one, and the actions' 88px is what it covers.
+ */
+const FADE_UNDER_ACTIONS = cx(
+  "group-hover:[mask-image:linear-gradient(to_right,black_calc(100%_-_96px),transparent_calc(100%_-_84px))]",
+  "group-hover:[-webkit-mask-image:linear-gradient(to_right,black_calc(100%_-_96px),transparent_calc(100%_-_84px))]",
+  "group-has-[:focus-visible]:[mask-image:linear-gradient(to_right,black_calc(100%_-_96px),transparent_calc(100%_-_84px))]",
+  "group-has-[:focus-visible]:[-webkit-mask-image:linear-gradient(to_right,black_calc(100%_-_96px),transparent_calc(100%_-_84px))]",
+  "group-has-[[data-state=open]]:[mask-image:linear-gradient(to_right,black_calc(100%_-_96px),transparent_calc(100%_-_84px))]",
+  "group-has-[[data-state=open]]:[-webkit-mask-image:linear-gradient(to_right,black_calc(100%_-_96px),transparent_calc(100%_-_84px))]",
+);
+
+/** What the hover actions are drawn over: the state whose place they take. */
 const HIDDEN_ON_HOVER =
   "group-hover:invisible group-has-[:focus-visible]:invisible group-has-[[data-state=open]]:invisible";
+
+/** What a thread's calls changed, small enough for the row's second line or its trailing slot. */
+function DiffStat({ diff }: { diff: { added: number; removed: number } }) {
+  return (
+    <span className="shrink-0 font-mono text-[10px] tabular">
+      {diff.added > 0 && <span className="text-success">+{diff.added}</span>}
+      {diff.added > 0 && diff.removed > 0 && " "}
+      {diff.removed > 0 && <span className="text-danger">−{diff.removed}</span>}
+    </span>
+  );
+}
 
 /**
  * A row's fill, drawn as its own child under the row's content.
@@ -712,15 +740,113 @@ const ThreadRow = memo(function ThreadRow({
   const lit = selected || !!context;
   // One line by default (Settings › Appearance): the second is for a row that has something to put
   // there. What it carries is the branch, what the branch changed, its pull request, and who else
-  // works beside it; a plain chat thread has none of it.
+  // works beside it; a plain chat thread has none of it, and a diff on its own rides in the
+  // trailing slot rather than opening a line for one number (state/sidebarRows.ts `rowMeta`).
   const compact = rowLayout === "compact";
-  const hasMeta = !!(worktree || diff || pull || stack?.length);
+  const meta = rowMeta({
+    branch: !!worktree,
+    pull: !!pull,
+    badge: !!stack?.length || external,
+    diff,
+    layout: rowLayout,
+  });
   // What wants you reads strong; what works, waits or has been read recedes until hovered.
   const wantsYou = !!request || fresh || failed || lit || picked;
   const recedes = !wantsYou && (running || !!wait || done);
   const markTint = cx(
     "transition-opacity duration-150 ease-snappy",
     wantsYou ? "opacity-100" : "opacity-60 group-hover:opacity-100",
+  );
+  // The title's own weight: what wants you is medium and full; what works, waits or is settled
+  // recedes to regular at 75% until hovered.
+  const titleTint = cx(
+    "min-w-0 flex-1 truncate text-body",
+    wantsYou
+      ? "font-medium text-fg"
+      : recedes
+        ? "font-normal text-fg/75 group-hover:text-fg"
+        : "font-medium text-fg",
+  );
+  // A fork or a side chat, and a thread that works for another one: the glyphs before the title.
+  const glyphs = (
+    <>
+      {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
+      {branch && (
+        <span title={branch === "fork" ? "A fork" : "A side chat"} className="shrink-0 text-fg-faint">
+          {branch === "fork" ? <GitFork size={11} /> : <MessageSquareQuote size={11} />}
+        </span>
+      )}
+      <LinkBadge threadId={session.id} />
+    </>
+  );
+  // The one thing a row says at its end: what its branch changed when it has no line of its own for
+  // it, and what the thread is doing, else the hour a snoozed one wakes, else its age. The two-line
+  // row draws a chip as a pill and a settled check bare; the compact row keeps one icon and word,
+  // so a column of rows reads as one line of glyphs.
+  const age = (
+    <span className="min-w-0 truncate">{wake ? wakeLabel(wake, now) : shortAge(session.updatedAt, now)}</span>
+  );
+  const compactState = chip ? (
+    chip.kind === "needs" ? (
+      request?.question ? (
+        <MessageCircleQuestion size={13} />
+      ) : (
+        <ShieldQuestion size={13} />
+      )
+    ) : chip.kind === "working" ? (
+      <span className="flex items-center gap-1">
+        <Spinner size={9} />
+        {startedAt !== undefined && <Elapsed since={startedAt} />}
+      </span>
+    ) : chip.kind === "waiting" ? (
+      <span className="flex items-center gap-1">
+        <Clock size={11} className="shrink-0" />
+        {chip.label}
+      </span>
+    ) : (
+      <span
+        className={cx(
+          "flex items-center gap-1",
+          chip.kind === "failed" ? "text-danger" : chip.kind === "completed" ? "text-success" : "text-accent",
+        )}
+      >
+        {chip.kind === "failed" ? (
+          <CircleAlert size={11} />
+        ) : chip.kind === "completed" ? (
+          <Check size={11} />
+        ) : (
+          <Eye size={11} />
+        )}
+        {chip.label}
+      </span>
+    )
+  ) : (
+    age
+  );
+  const twoLineState =
+    trailing === "needs" && request ? (
+      request.question ? (
+        <MessageCircleQuestion size={13} />
+      ) : (
+        <ShieldQuestion size={13} />
+      )
+    ) : trailing === "running" ? (
+      <>
+        <Spinner size={9} />
+        {startedAt !== undefined && <Elapsed since={startedAt} />}
+      </>
+    ) : trailing === "done" ? (
+      <Check size={13} />
+    ) : chip ? (
+      <RowStatusChip status={chip} startedAt={startedAt} />
+    ) : (
+      age
+    );
+  const stateSlot = (pill: boolean) => (
+    <span title={chip?.title} className={cx(TRAILING_SLOT, HIDDEN_ON_HOVER)}>
+      {meta === "trailing" && diff && <DiffStat diff={diff} />}
+      {pill ? twoLineState : compactState}
+    </span>
   );
   return (
     <ContextMenu.Root
@@ -778,7 +904,11 @@ const ThreadRow = memo(function ThreadRow({
               className={cx(
                 "relative flex w-full flex-col justify-center gap-0.5 text-left",
                 compact ? "rounded-lg px-2" : "rounded-xl py-2 pr-2 pl-2",
-                compact && (hasMeta || request || hint) ? "min-h-12" : compact ? "min-h-8" : undefined,
+                compact && (meta === "line" || request || hint)
+                  ? "min-h-12"
+                  : compact
+                    ? "min-h-8"
+                    : undefined,
               )}
             >
               <RowFill selected={lit} picked={picked} radius={compact ? "rounded-lg" : "rounded-xl"} />
@@ -787,86 +917,15 @@ const ThreadRow = memo(function ThreadRow({
                   {/* One line: the mark of where it runs, its title, and the one thing it says at
                       the end. The project's name is not repeated here, since the mark carries it
                       and the hover card and the folder's heading spell it out. */}
-                  <span className="relative flex w-full min-w-0 items-center gap-2">
+                  <span className={cx("relative flex w-full min-w-0 items-center gap-2", FADE_UNDER_ACTIONS)}>
                     {!grouped && <ProjectMark name={project} size={14} className={markTint} />}
-                    {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
-                    {branch && (
-                      <span
-                        title={branch === "fork" ? "A fork" : "A side chat"}
-                        className="shrink-0 text-fg-faint"
-                      >
-                        {branch === "fork" ? <GitFork size={11} /> : <MessageSquareQuote size={11} />}
-                      </span>
-                    )}
-                    <span
-                      className={cx(
-                        "min-w-0 flex-1 truncate text-body",
-                        wantsYou
-                          ? "font-medium text-fg"
-                          : recedes
-                            ? "font-normal text-fg/75 group-hover:text-fg"
-                            : "font-medium text-fg",
-                      )}
-                    >
-                      {session.title || "New thread"}
-                    </span>
-                    {/* The row's one trailing slot, 80px wide: the state sits at its end and the
-                        hover actions take exactly the same room, so the title never moves. */}
-                    <span
-                      title={chip?.title}
-                      className={cx(
-                        "flex w-20 shrink-0 items-center justify-end gap-1 text-sub text-fg-muted tabular",
-                        HIDDEN_ON_HOVER,
-                      )}
-                    >
-                      {chip ? (
-                        chip.kind === "needs" ? (
-                          request?.question ? (
-                            <MessageCircleQuestion size={13} />
-                          ) : (
-                            <ShieldQuestion size={13} />
-                          )
-                        ) : chip.kind === "working" ? (
-                          <span className="flex items-center gap-1">
-                            <Spinner size={9} />
-                            {startedAt !== undefined && <Elapsed since={startedAt} />}
-                          </span>
-                        ) : chip.kind === "waiting" ? (
-                          <span className="flex items-center gap-1">
-                            <Clock size={11} className="shrink-0" />
-                            {chip.label}
-                          </span>
-                        ) : (
-                          <span
-                            className={cx(
-                              "flex items-center gap-1",
-                              chip.kind === "failed"
-                                ? "text-danger"
-                                : chip.kind === "completed"
-                                  ? "text-success"
-                                  : "text-accent",
-                            )}
-                          >
-                            {chip.kind === "failed" ? (
-                              <CircleAlert size={11} />
-                            ) : chip.kind === "completed" ? (
-                              <Check size={11} />
-                            ) : (
-                              <Eye size={11} />
-                            )}
-                            {chip.label}
-                          </span>
-                        )
-                      ) : (
-                        <span className="min-w-0 truncate">
-                          {wake ? wakeLabel(wake, now) : shortAge(session.updatedAt, now)}
-                        </span>
-                      )}
-                    </span>
+                    {glyphs}
+                    <span className={titleTint}>{session.title || "New thread"}</span>
+                    {stateSlot(false)}
                   </span>
                   {/* The second line, only when there is something to say: the branch it works in,
                       what the branch changed, its pull request, and who else works beside it. */}
-                  {hasMeta && (
+                  {meta === "line" && (
                     <span className="relative flex w-full min-w-0 items-center gap-2 text-sub text-fg-muted">
                       {worktree && (
                         <span className="flex min-w-0 items-center gap-1">
@@ -876,16 +935,9 @@ const ThreadRow = memo(function ThreadRow({
                           </span>
                         </span>
                       )}
-                      {diff && (
-                        <span className="shrink-0 font-mono text-[10px] tabular">
-                          {diff.added > 0 && <span className="text-success">+{diff.added}</span>}
-                          {diff.added > 0 && diff.removed > 0 && " "}
-                          {diff.removed > 0 && <span className="text-danger">−{diff.removed}</span>}
-                        </span>
-                      )}
+                      {diff && <DiffStat diff={diff} />}
                       {pull && <PullMark pull={pull} />}
                       <span className="ml-auto flex shrink-0 items-center gap-1">
-                        <LinkBadge threadId={session.id} />
                         {stack?.length ? (
                           <AgentStack agents={stack} />
                         ) : (
@@ -903,88 +955,42 @@ const ThreadRow = memo(function ThreadRow({
                   )}
                 </>
               ) : (
-                <span className="title-first-row relative block w-full min-w-0">
-                  <span className={cx("flex min-w-0 items-center gap-1.5", ACTIONS_CLEAR)}>
-                    {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
-                    {branch && (
-                      <span
-                        title={branch === "fork" ? "A fork" : "A side chat"}
-                        className="shrink-0 text-fg-faint"
-                      >
-                        {branch === "fork" ? <GitFork size={11} /> : <MessageSquareQuote size={11} />}
-                      </span>
-                    )}
-                    <span
-                      className={cx(
-                        "min-w-0 flex-1 truncate text-body",
-                        wantsYou
-                          ? "font-medium text-fg"
-                          : recedes
-                            ? "font-normal text-fg/75 group-hover:text-fg"
-                            : "font-medium text-fg",
-                      )}
-                    >
-                      {session.title || "New thread"}
-                    </span>
-                    <span
-                      className={cx(
-                        "flex shrink-0 items-center gap-1 text-sub text-fg-muted tabular",
-                        HIDDEN_ON_HOVER,
-                      )}
-                    >
-                      {trailing === "needs" && request ? (
-                        request.question ? (
-                          <MessageCircleQuestion size={13} />
-                        ) : (
-                          <ShieldQuestion size={13} />
-                        )
-                      ) : trailing === "running" ? (
-                        <>
-                          <Spinner size={9} />
-                          {startedAt !== undefined && <Elapsed since={startedAt} />}
-                        </>
-                      ) : trailing === "done" ? (
-                        <Check size={13} />
-                      ) : chip ? (
-                        <RowStatusChip status={chip} startedAt={startedAt} />
-                      ) : wake ? (
-                        wakeLabel(wake, now)
-                      ) : (
-                        shortAge(session.updatedAt, now)
-                      )}
-                    </span>
-                  </span>
-                  <span className="flex min-w-0 items-center gap-1 text-sub text-fg-muted">
+                <span className={cx("title-first-row relative block w-full min-w-0", FADE_UNDER_ACTIONS)}>
+                  <span className="flex min-w-0 items-center gap-1.5">
                     {!grouped && <ProjectMark name={project} size={14} className={markTint} />}
-                    {worktree && (
-                      <span className="title-first-branch min-w-0 flex-1 truncate font-mono text-[10px]">
-                        <GitBranch size={9} className="mr-0.5 inline" />
-                        {worktree.branch}
-                      </span>
-                    )}
-                    <span className="title-first-badges ml-auto flex shrink-0 items-center gap-1">
-                      <LinkBadge threadId={session.id} />
-                      {stack?.length ? (
-                        <AgentStack agents={stack} />
-                      ) : (
-                        external && (
-                          <HarnessIcon
-                            id={session.harness!}
-                            name={harness?.name}
-                            size={13}
-                            className="shrink-0"
-                          />
-                        )
-                      )}
-                      {diff && (
-                        <span className="font-mono text-[10px] tabular">
-                          {diff.added > 0 && <span className="text-success">+{diff.added}</span>}
-                          {diff.removed > 0 && <span className="text-danger">−{diff.removed}</span>}
+                    {glyphs}
+                    <span className={titleTint}>{session.title || "New thread"}</span>
+                    {stateSlot(true)}
+                  </span>
+                  {/* The line under the title, only when it has something besides the mark that now
+                      sits before the title: the branch, what it changed, its pull request, and who
+                      else works beside it. */}
+                  {meta !== "none" && (
+                    <span className="flex min-w-0 items-center gap-1 text-sub text-fg-muted">
+                      {worktree && (
+                        <span className="title-first-branch min-w-0 flex-1 truncate font-mono text-[10px]">
+                          <GitBranch size={9} className="mr-0.5 inline" />
+                          {worktree.branch}
                         </span>
                       )}
-                      {pull && <PullMark pull={pull} />}
+                      <span className="title-first-badges ml-auto flex shrink-0 items-center gap-1">
+                        {stack?.length ? (
+                          <AgentStack agents={stack} />
+                        ) : (
+                          external && (
+                            <HarnessIcon
+                              id={session.harness!}
+                              name={harness?.name}
+                              size={13}
+                              className="shrink-0"
+                            />
+                          )
+                        )}
+                        {diff && <DiffStat diff={diff} />}
+                        {pull && <PullMark pull={pull} />}
+                      </span>
                     </span>
-                  </span>
+                  )}
                   {worktree && (
                     <span className="title-first-branch-wrap hidden truncate font-mono text-[10px] text-fg-muted">
                       <GitBranch size={9} className="mr-0.5 inline" />
@@ -1100,14 +1106,10 @@ const PendingRow = memo(function PendingRow({
         <span className="relative flex w-full min-w-0 items-center gap-2">
           <ProjectMark name={project} size={14} className="opacity-60 group-hover:opacity-100" />
           <span className="min-w-0 flex-1 truncate text-body font-medium text-fg">{pending.title}</span>
-          {/* The same 80px slot a thread's row has, so the state lands on the same edge. */}
-          {/* Dismiss sits in the slot's end when the setup failed, so the words keep its room. */}
-          <span
-            className={cx(
-              "flex w-20 shrink-0 items-center justify-end gap-1 text-sub text-fg-muted tabular",
-              failure && "pr-6",
-            )}
-          >
+          {/* The same trailing slot a thread's row has, as wide as what it says, so the state
+              lands on the same edge and the title keeps the rest. Dismiss sits over the slot's end
+              when the setup failed, so the words keep its room. */}
+          <span className={cx(TRAILING_SLOT, failure && "pr-6")}>
             {failure ? (
               <>
                 <CircleAlert size={11} className="text-danger" />

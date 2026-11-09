@@ -3,6 +3,7 @@
 // (ui/Sidebar.tsx).
 
 import type { SessionSummary } from "../acp/types";
+import type { RowLayout } from "./sidebarPrefs";
 import { diffCounts, type TranscriptItem } from "./thread";
 
 /** A row the list draws: a top-level thread, or the open delegate's indented row. */
@@ -391,6 +392,31 @@ function compare(section: SectionId, a: OrderKey, b: OrderKey): number {
       // What came back unseen leads, and stays at the top of Active until it is opened.
       return Number(!!b.unseen) - Number(!!a.unseen) || b.backAt - a.backAt;
   }
+}
+
+/** What a row has besides its title, for {@link rowMeta}: the caller resolves each flag. */
+export interface RowMetaRead {
+  /** It works in a worktree, so it has a branch to name. */
+  branch?: boolean;
+  /** Its branch carries a pull request. */
+  pull?: boolean;
+  /** A stack of the threads it started, or the mark of the harness it runs on. */
+  badge?: boolean;
+  /** What its calls changed, when the app has read them ({@link threadDiff}). */
+  diff?: { added: number; removed: number } | null;
+  /** The row's layout: the two-line one has the width for a diff of its own. */
+  layout: RowLayout;
+}
+
+/**
+ * Where a row puts what it has besides its title: `line` draws the quiet second line that holds it,
+ * `trailing` keeps the row on one line and lets the diff ride in its trailing slot, and `none`
+ * draws no line at all. A whole second line is never opened for a diff alone in the compact row,
+ * where it would be a line of its own for `+1`; a branch, a pull request or a stack is worth one.
+ */
+export function rowMeta(read: RowMetaRead): "line" | "trailing" | "none" {
+  if (read.branch || read.pull || read.badge || (read.layout === "comfortable" && !!read.diff)) return "line";
+  return read.diff ? "trailing" : "none";
 }
 
 /** The title-first row's trailing status, in attention order. */

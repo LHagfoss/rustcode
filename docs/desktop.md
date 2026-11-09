@@ -702,19 +702,23 @@ composer's keys stay outside the table.
   for review (`idleSettled`), folded by default, 5 at a time then *Show
   25 more*. A thread that works, waits or needs you stays in the list and
   says so in its row. A row is one 32px line: the 14px mark of where it runs,
-  its title, and one 80px slot on the right — the age (`5m`, `3h`), the running
-  turn's spinner and clock, *Waiting*, *Needs you* (with the request under the
-  title), *Failed* (red), *Completed* (green, until you open the thread) or
-  *Review* (accent), the hour a snoozed thread wakes;
+  its title, and one slot at the right, as wide as what it says — the age
+  (`5m`, `3h`), the running turn's spinner and clock, *Waiting*, *Needs you*
+  (with the request under the title), *Failed* (red), *Completed* (green, until
+  you open the thread) or *Review* (accent), the hour a snoozed thread wakes;
   a turn that ended while you looked elsewhere keeps its row at full strength
   until you open the thread (`finished`/`failed` in the store; *Mark Unread* in
   the menu brings it back). The project's name is not repeated on the rows: the
   mark carries it, and the hover card and the project's heading spell it out.
-  A thread with a branch, a diff, a pull request or a stack of delegates adds
-  one quiet second line for them (48px); a plain chat thread is one line. What
-  wants you reads in medium weight; what works, waits or is settled recedes.
-  Hovering swaps the slot for Pin, Settle (or Unsettle) and the menu, so
-  nothing shifts, each on a 24px target. Settings › Appearance › Thread row
+  A thread with a branch, a pull request or a stack of delegates adds one quiet
+  second line for them, with what the branch changed (48px); a diff on its own
+  rides in the slot rather than opening a line for one number, so a plain chat
+  thread is one line. What wants you reads in medium weight; what works, waits
+  or is settled recedes.
+  Hovering swaps the slot for Pin, Settle (or Unsettle) and the menu, drawn
+  over the row's right end on the row's own fill while the line fades out under
+  them, so nothing shifts and the title keeps its width, each on a 24px target.
+  Settings › Appearance › Thread row
   layout keeps the older two-line row as *Comfortable*; *Compact* is the
   default and a value stored by an earlier release migrates to *Comfortable*.
   ↑ ↓ move through the rows without opening them, ⏎ opens the

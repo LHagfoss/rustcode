@@ -12,6 +12,7 @@ import {
   placeThread,
   rangeRows,
   rowKeyAction,
+  rowMeta,
   rowStatus,
   SHELF_DEFAULT_OPEN,
   sectionsOf,
@@ -499,6 +500,32 @@ describe("the order a section keeps", () => {
     const sorted = sortSection("threads", list, (r) => r.at);
     expect(sorted).toEqual([list[0]!, list[1]!]);
     expect(sorted).not.toBe(list);
+  });
+});
+
+describe("where a row puts what it has besides its title", () => {
+  const meta = (over: Partial<Parameters<typeof rowMeta>[0]>) => rowMeta({ layout: "compact", ...over });
+  const diff = { added: 1, removed: 0 };
+
+  test("a branch, a pull request or a stack is worth a second line, whatever the layout", () => {
+    for (const layout of ["compact", "comfortable"] as const) {
+      expect(meta({ layout, branch: true })).toBe("line");
+      expect(meta({ layout, pull: true })).toBe("line");
+      expect(meta({ layout, badge: true })).toBe("line");
+    }
+  });
+
+  test("a diff alone rides in the trailing slot of the compact row, never a line of its own", () => {
+    expect(meta({ diff })).toBe("trailing");
+    expect(meta({ diff, branch: true })).toBe("line");
+    // The two-line row has the width, and its line carries the diff beside the badges.
+    expect(meta({ diff, layout: "comfortable" })).toBe("line");
+  });
+
+  test("nothing to say is no line at all, so the mark is never alone on one", () => {
+    expect(meta({})).toBe("none");
+    expect(meta({ diff: null })).toBe("none");
+    expect(meta({ layout: "comfortable" })).toBe("none");
   });
 });
 
