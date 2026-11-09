@@ -2347,7 +2347,7 @@ describe("engine controller with the mock engine", () => {
     expect(statusOf(useApp.getState(), "mock-thread-4")).toBe("review");
   });
 
-  test("sending in a settled thread unsets its persisted status", async () => {
+  test("sending in a settled thread unsettles it without a toast", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
     await until(() => useApp.getState().status === "ready" && useApp.getState().features.status === true);
     const id = useApp.getState().sessions[0]!.id;
@@ -2356,9 +2356,70 @@ describe("engine controller with the mock engine", () => {
     await until(() => !!useApp.getState().threads[id]?.loaded);
     expect(statusOf(useApp.getState(), id)).toBe("done");
     await submit("yolo hello");
+    // Writing to it puts it back on the active list, and that is all the send has to say.
+    expect(useApp.getState().statusMarks[id]).toBeUndefined();
+    expect(useApp.getState().sessions.find((s) => s.id === id)?.status).toBe("idle");
+    expect(useApp.getState().toasts.map((t) => t.text)).not.toContain("Unsettled");
     await until(() => useApp.getState().sessions.find((s) => s.id === id)?.status === "idle");
     await refreshSessions();
     expect(useApp.getState().sessions.find((s) => s.id === id)?.status).toBe("idle");
+  });
+
+  test("a queued, steered or Send now message unsettles a settled thread quietly", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().features.status === true);
+    setProjectCwd("/tmp/project");
+    // Codex in the mock steers live, so a busy thread takes both a queue and a steer.
+    switchNewThreadHarness("codex");
+    const done = submit("change the greeting");
+    await until(() => (selected()?.permissions.length ?? 0) > 0);
+    const id = selected()!.id;
+    const unsettleToasts = () =>
+      useApp
+        .getState()
+        .toasts.filter((t) => t.text.startsWith("Unsettled"))
+        .map((t) => t.text);
+    // A thread on screen reports its live turn first, so the mark is what says it is unsettled.
+    const settledAgain = async () => {
+      await setThreadStatus(id, "done");
+      expect(useApp.getState().statusMarks[id]).toBe("done");
+    };
+    const active = () => {
+      const s = useApp.getState();
+      return [s.statusMarks[id], s.sessions.find((x) => x.id === id)?.status];
+    };
+
+    // Queued behind the running turn (the send path that only waits).
+    await settledAgain();
+    expect(await submit("yolo queued")).toBe(true);
+    expect(active()).toEqual([undefined, "idle"]);
+    expect(unsettleToasts()).toEqual([]);
+    expect(selected()!.queue.map((q) => q.text)).toEqual(["yolo queued"]);
+
+    // Steered into the running turn (⌘⏎'s own route).
+    await settledAgain();
+    expect(await steerOrSubmit("steer this")).toBe(true);
+    expect(active()).toEqual([undefined, "idle"]);
+    expect(unsettleToasts()).toEqual([]);
+    expect(selected()!.items.flatMap((i) => (i.kind === "user" && i.steered ? [i.text] : []))).toEqual([
+      "steer this",
+    ]);
+
+    // The queued row's Send now, which steers it without going through either route.
+    await settledAgain();
+    expect(await sendQueuedNow(id, selected()!.queue[0]!.id)).toBe(true);
+    expect(active()).toEqual([undefined, "idle"]);
+    expect(unsettleToasts()).toEqual([]);
+    expect(selected()!.queue).toEqual([]);
+
+    // The explicit Unsettle action is the user asking, so it still says so.
+    await settledAgain();
+    unsettleThreads([id]);
+    expect(active()).toEqual([undefined, "idle"]);
+    expect(useApp.getState().toasts.at(-1)).toMatchObject({ text: "Unsettled", tone: "info" });
+
+    await cancel();
+    await done;
   });
 
   test("unsettling a mixed selection leaves the reviewed threads in review", async () => {
