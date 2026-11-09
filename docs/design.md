@@ -591,6 +591,15 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   action), not to repeat what the screen already shows (no pin, archive,
   theme, harness-switch or steering notice); an error about a thread's turn
   stays an error card over the composer. No banners.
+- **Sidebar brand:** the row under the toolbar names the app: the 18px
+  `public/icon.png` mark (rounded like every other app mark), `RustCode` in
+  `text-callout` at weight 500, and the running app's version under it as
+  `v1.25.0` in `text-caption` `fg-muted`, tabular so an update does not shift
+  it. The version is the shell's own package version (`system_info`), never a
+  literal, and the line is left out when the shell cannot answer. It sits under
+  the title bar's row rather than in it: the traffic lights own that row's left
+  92px, and the brand keeps the list's 12px edge at every width and on every
+  platform. One 39px row (`ui/BrandHeader.tsx`).
 - **Sidebar sections:** Working leads the list, always open; then Pinned,
   Needs you and Active, each with a quiet label once there is more than one of
   them; then the Snoozed and Settled shelves at the foot, under one hairline,
