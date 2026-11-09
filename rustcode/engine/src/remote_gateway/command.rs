@@ -3,7 +3,7 @@
 use super::address::{candidate_addresses, plan_listen_with_preference};
 use super::control::{GatewayStatus, OfferDetails};
 use super::devices::DeviceRecord;
-use super::discovery::Advertisement;
+use super::discovery::{self, Advertisement, RECHECK_INTERVAL, Refresh, Watchdog};
 use super::gateway::{Gateway, GatewayConfig, Limits};
 use super::hub::{HubLimits, SessionHub};
 use super::lifecycle::{RemoteLifecycle, Revocation};
@@ -121,10 +121,43 @@ pub async fn serve(
             let mut bind = initial_bind;
             let mut loopback = initial_loopback;
             let mut advertisement = Advertisement::start(port, bind, loopback, &gateway_id);
+            let mut watchdog = Watchdog::new(bind);
+            let mut recheck = tokio::time::interval(RECHECK_INTERVAL);
+            // A missed interval means the machine slept; the next tick after
+            // waking is when the record needs re-announcing, so do not rush
+            // through the missed ones.
+            recheck.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            recheck.tick().await;
             loop {
                 tokio::select! {
                     changed = advertised.changed() => if changed.is_err() { break; },
                     changed = listen_address.changed() => if changed.is_err() { break; },
+                    _ = recheck.tick() => {
+                        // An app-started gateway can run before there is any
+                        // interface to announce on, and a record is lost to
+                        // sleep, a Wi-Fi or VPN change, or a responder that
+                        // stopped. Re-check both here rather than trusting the
+                        // one registration made at start.
+                        let refresh = watchdog.poll(bind);
+                        let rebuild = match advertisement.as_mut() {
+                            None => !loopback,
+                            Some(current) => {
+                                if !current.healthy() {
+                                    true
+                                } else if refresh != Refresh::Nothing {
+                                    !current.refresh(discovery::interfaces_for(bind))
+                                } else {
+                                    false
+                                }
+                            }
+                        };
+                        if rebuild {
+                            if let Some(current) = advertisement.take() {
+                                current.stop().await;
+                            }
+                            advertisement = Advertisement::retry(port, bind, loopback, &gateway_id);
+                        }
+                    }
                     _ = discovery_shutdown.cancelled() => break,
                 }
                 let next_loopback = advertised.borrow_and_update().host().is_loopback();
@@ -136,6 +169,7 @@ pub async fn serve(
                     bind = next_bind;
                     loopback = next_loopback;
                     advertisement = Advertisement::start(port, bind, loopback, &gateway_id);
+                    watchdog = Watchdog::new(bind);
                 }
             }
             if let Some(advertisement) = advertisement {

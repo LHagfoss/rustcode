@@ -6,5 +6,15 @@
 	     scripts/app-icon.ts. Without it, macOS uses CFBundleIconFile (icon.icns). -->
 	<key>CFBundleIconName</key>
 	<string>AppIcon</string>
+	<!-- Local network access, for the gateway's Bonjour advertisement and the
+	     "Look for machines" browse it answers. A macOS app that touches the
+	     local network without a usage description is denied by the privacy
+	     layer, so its _rustcode._tcp record never reaches the network. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>RustCode finds and connects to your other machines on the local network.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_rustcode._tcp</string>
+	</array>
 </dict>
 </plist>

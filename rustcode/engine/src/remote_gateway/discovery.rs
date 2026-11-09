@@ -6,9 +6,9 @@
 //! One implementation on every OS: the `mdns-sd` responder runs on its own
 //! thread inside the gateway, so neither `dns-sd` (macOS) nor Avahi (Linux)
 //! is needed, and Windows announces itself the same way.
-use mdns_sd::{IfKind, ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::{DaemonEvent, IfKind, ServiceDaemon, ServiceEvent, ServiceInfo};
 use std::net::{IpAddr, Ipv4Addr};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 /// The service type phones browse for (`_rustcode._tcp.` in `local.`).
 pub const SERVICE_TYPE: &str = "_rustcode._tcp.local.";
@@ -23,6 +23,16 @@ pub const TXT_CAPS: &str = "connect_requests,desktops";
 const FALLBACK_NAME: &str = "RustCode";
 /// How long a clean stop waits for the goodbye to go out.
 const STOP_TIMEOUT: Duration = Duration::from_secs(1);
+/// How often the announcement re-checks what it covers. A network change is
+/// picked up within this interval.
+pub(super) const RECHECK_INTERVAL: Duration = Duration::from_secs(15);
+/// A re-announcement this long after the last one keeps a record alive that
+/// went missing without anyone reporting why: a flushed cache, a dropped
+/// goodbye from a previous instance, a responder that stopped answering.
+const REANNOUNCE_INTERVAL: Duration = Duration::from_secs(10 * 60);
+/// A wall clock that moved this much further than the monotonic clock means
+/// the machine slept in between.
+const SLEEP_GAP: Duration = Duration::from_secs(30);
 
 /// The TXT record, in the order the subprocesses used to write it.
 pub fn txt_record(gateway_id: &str) -> [(&'static str, String); 3] {
@@ -80,31 +90,57 @@ fn service_info(
 pub struct Advertisement {
     daemon: Option<ServiceDaemon>,
     fullname: String,
+    instance: String,
+    port: u16,
+    gateway_id: String,
+    interfaces: Vec<IfKind>,
+    events: Option<mdns_sd::Receiver<DaemonEvent>>,
 }
 
 impl Advertisement {
     /// Announce the gateway on its listener interface, unless its advertised
     /// address is loopback-only. A failure leaves the gateway running without Bonjour.
     pub fn start(port: u16, bind: IpAddr, loopback: bool, gateway_id: &str) -> Option<Self> {
+        Self::try_start(port, bind, loopback, gateway_id, true)
+    }
+
+    /// Like [`Advertisement::start`], for the watchdog's periodic retry. A
+    /// machine with no local network interface yet would otherwise write the
+    /// same explanation into the gateway's log on every re-check.
+    pub fn retry(port: u16, bind: IpAddr, loopback: bool, gateway_id: &str) -> Option<Self> {
+        Self::try_start(port, bind, loopback, gateway_id, false)
+    }
+
+    fn try_start(
+        port: u16,
+        bind: IpAddr,
+        loopback: bool,
+        gateway_id: &str,
+        report: bool,
+    ) -> Option<Self> {
         if loopback {
             return None;
         }
         let name = super::gateway::host_name().unwrap_or_else(|| FALLBACK_NAME.into());
-        let interfaces = interfaces_for_bind(bind);
+        let interfaces = interfaces_for(bind);
         if interfaces.is_empty() {
-            eprintln!("Bonjour announcement unavailable: no suitable local network interface");
+            if report {
+                eprintln!("Bonjour announcement unavailable: no suitable local network interface");
+            }
             return None;
         }
         match Self::announce(&name, port, gateway_id, interfaces) {
             Ok(advertisement) => Some(advertisement),
             Err(error) => {
-                eprintln!("Bonjour announcement unavailable: {error}");
+                if report {
+                    eprintln!("Bonjour announcement unavailable: {error}");
+                }
                 None
             }
         }
     }
 
-    /// Test helper that announces on an explicitly selected interface set.
+    /// Announces on an explicitly selected interface set.
     fn announce(
         instance: &str,
         port: u16,
@@ -112,7 +148,8 @@ impl Advertisement {
         interfaces: Vec<IfKind>,
     ) -> mdns_sd::Result<Self> {
         let daemon = responder(interfaces.clone())?;
-        let info = service_info(instance, port, gateway_id, interfaces)?;
+        let events = daemon.monitor().ok();
+        let info = service_info(instance, port, gateway_id, interfaces.clone())?;
         let fullname = info.get_fullname().to_owned();
         if let Err(error) = daemon.register(info) {
             let _ = daemon.shutdown();
@@ -121,7 +158,64 @@ impl Advertisement {
         Ok(Self {
             daemon: Some(daemon),
             fullname,
+            instance: instance.to_owned(),
+            port,
+            gateway_id: gateway_id.to_owned(),
+            interfaces,
+            events,
         })
+    }
+
+    /// Whether the responder is still running and has not reported an error.
+    /// Drains its events: a name conflict that renamed the service instance is
+    /// adopted, so [`Advertisement::stop`] withdraws the record that exists.
+    pub fn healthy(&mut self) -> bool {
+        if self.daemon.is_none() {
+            return false;
+        }
+        let Some(events) = self.events.as_ref() else {
+            return true;
+        };
+        if events.is_disconnected() {
+            return false;
+        }
+        let mut healthy = true;
+        while let Ok(event) = events.try_recv() {
+            match event {
+                DaemonEvent::Error(_) => healthy = false,
+                DaemonEvent::NameChange(change) => {
+                    if change.original.eq_ignore_ascii_case(&self.fullname) {
+                        self.fullname = change.new_name;
+                    }
+                }
+                _ => {}
+            }
+        }
+        healthy
+    }
+
+    /// Point the responder at `interfaces` and announce again. Registering the
+    /// same instance replaces the record and sends an unsolicited response, so
+    /// a record lost to sleep, a Wi-Fi change or a stale interface list comes
+    /// back without a new responder. `false` means a fresh [`Advertisement`]
+    /// is the way back.
+    pub fn refresh(&mut self, interfaces: Vec<IfKind>) -> bool {
+        let Some(daemon) = self.daemon.as_ref() else {
+            return false;
+        };
+        if !same_interfaces(&self.interfaces, &interfaces) {
+            if daemon.disable_interface(IfKind::All).is_err()
+                || (!interfaces.is_empty() && daemon.enable_interface(interfaces.clone()).is_err())
+            {
+                return false;
+            }
+            self.interfaces = interfaces.clone();
+        }
+        let Ok(info) = service_info(&self.instance, self.port, &self.gateway_id, interfaces) else {
+            return false;
+        };
+        self.fullname = info.get_fullname().to_owned();
+        daemon.register(info).is_ok()
     }
 
     /// The full service name, `<instance>._rustcode._tcp.local.`.
@@ -172,26 +266,145 @@ fn responder(interfaces: Vec<IfKind>) -> mdns_sd::Result<ServiceDaemon> {
     Ok(daemon)
 }
 
+/// Whether two interface selections pick the same interfaces. [`IfKind`] is
+/// not comparable, so names are compared by value and every other kind by
+/// discriminant.
+fn same_interfaces(left: &[IfKind], right: &[IfKind]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| match (left, right) {
+                (IfKind::Name(left), IfKind::Name(right)) => left == right,
+                _ => std::mem::discriminant(left) == std::mem::discriminant(right),
+            })
+}
+
 /// Keep local-network discovery on the selected listener interface. This
 /// avoids publishing a LAN gateway through unrelated VPN, bridge or host-only
 /// adapters; overlay discovery has its own path.
-fn interfaces_for_bind(bind: IpAddr) -> Vec<IfKind> {
-    let candidates = super::address::discovery_candidates();
-    interface_kinds(&candidates, bind)
+pub(super) fn interfaces_for(bind: IpAddr) -> Vec<IfKind> {
+    interface_kinds(&super::address::discovery_candidates(), bind)
+}
+
+/// Candidates an announcement on `bind` covers: local network interfaces
+/// only, and the advertised address when the listener is bound to one.
+fn covered<'a>(
+    candidates: &'a [super::address::Candidate],
+    bind: IpAddr,
+) -> impl Iterator<Item = &'a super::address::Candidate> {
+    candidates.iter().filter(move |candidate| {
+        super::address::is_local_network_interface(&candidate.interface)
+            && (bind.is_unspecified() || candidate.address == bind)
+    })
 }
 
 fn interface_kinds(candidates: &[super::address::Candidate], bind: IpAddr) -> Vec<IfKind> {
-    let mut names: Vec<String> = Vec::new();
-    for candidate in candidates {
-        if !super::address::is_local_network_interface(&candidate.interface)
-            || (!bind.is_unspecified() && candidate.address != bind)
-            || names.iter().any(|name| name == &candidate.interface)
-        {
-            continue;
+    let mut names: Vec<&str> = Vec::new();
+    for candidate in covered(candidates, bind) {
+        if !names.contains(&candidate.interface.as_str()) {
+            names.push(&candidate.interface);
         }
-        names.push(candidate.interface.clone());
     }
-    names.into_iter().map(IfKind::Name).collect()
+    names
+        .into_iter()
+        .map(|name| IfKind::Name(name.to_owned()))
+        .collect()
+}
+
+/// What an announcement covers: the interface name and address of every
+/// candidate a device could reach it on. Sorted, so the same set in another
+/// order compares equal.
+pub(super) type Coverage = Vec<(String, IpAddr)>;
+
+fn coverage(candidates: &[super::address::Candidate], bind: IpAddr) -> Coverage {
+    let mut coverage: Coverage = covered(candidates, bind)
+        .map(|candidate| (candidate.interface.clone(), candidate.address))
+        .collect();
+    coverage.sort();
+    coverage.dedup();
+    coverage
+}
+
+/// Whether an announcement built for `previous` no longer covers what the
+/// machine offers now: an interface went up or down, or its address changed.
+pub(super) fn coverage_changed(previous: &Coverage, current: &Coverage) -> bool {
+    previous != current
+}
+
+/// How long the machine slept, if it did. `Instant` stops while the machine is
+/// asleep and the wall clock does not, so a wall clock that moved further than
+/// the monotonic one means sleep. A clock set backwards reports nothing.
+pub(super) fn slept(
+    monotonic_elapsed: Duration,
+    wall_elapsed: Option<Duration>,
+) -> Option<Duration> {
+    let gap = wall_elapsed?.checked_sub(monotonic_elapsed)?;
+    (gap > SLEEP_GAP).then_some(gap)
+}
+
+/// Why the announcement should be refreshed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Refresh {
+    /// Nothing worth acting on.
+    Nothing,
+    /// The interface or address set an announcement covers changed.
+    Interfaces,
+    /// The machine woke from sleep, so its record may be gone.
+    Woke,
+    /// The heartbeat interval passed since the last announcement.
+    Heartbeat,
+}
+
+/// Watches for the two things that silently invalidate an announcement, the
+/// interfaces it covers having changed and the machine having slept, plus a
+/// slow heartbeat. Polling is cheap and bounded; a change is acted on within
+/// one [`RECHECK_INTERVAL`].
+pub(super) struct Watchdog {
+    coverage: Coverage,
+    last_check: Instant,
+    last_wall: SystemTime,
+    last_announce: Instant,
+}
+
+impl Watchdog {
+    pub(super) fn new(bind: IpAddr) -> Self {
+        let now = Instant::now();
+        Self {
+            coverage: coverage(&super::address::discovery_candidates(), bind),
+            last_check: now,
+            last_wall: SystemTime::now(),
+            last_announce: now,
+        }
+    }
+
+    /// Re-check what `bind` covers now and whether the machine slept. A
+    /// returned reason other than [`Refresh::Nothing`] means the caller
+    /// announces again, which is why this also moves the heartbeat on.
+    pub(super) fn poll(&mut self, bind: IpAddr) -> Refresh {
+        let now = Instant::now();
+        let wall = SystemTime::now();
+        let elapsed = now.saturating_duration_since(self.last_check);
+        let wall_elapsed = wall.duration_since(self.last_wall).ok();
+        self.last_check = now;
+        self.last_wall = wall;
+        let current = coverage(&super::address::discovery_candidates(), bind);
+        let changed = coverage_changed(&self.coverage, &current);
+        self.coverage = current;
+        let refresh = if changed {
+            Refresh::Interfaces
+        } else if slept(elapsed, wall_elapsed).is_some() {
+            Refresh::Woke
+        } else if now.saturating_duration_since(self.last_announce) >= REANNOUNCE_INTERVAL {
+            Refresh::Heartbeat
+        } else {
+            Refresh::Nothing
+        };
+        if refresh != Refresh::Nothing {
+            self.last_announce = now;
+        }
+        refresh
+    }
 }
 
 fn is_dialable_address(address: IpAddr) -> bool {
@@ -419,6 +632,115 @@ mod tests {
         }
     }
 
+    fn candidate(interface: &str, address: &str) -> super::super::address::Candidate {
+        super::super::address::Candidate {
+            interface: interface.to_owned(),
+            address: address.parse().unwrap(),
+        }
+    }
+
+    #[test]
+    fn an_announcement_is_rebuilt_when_what_it_covers_changes() {
+        let wildcard = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+        let before = coverage(
+            &[
+                candidate("en0", "192.168.1.20"),
+                candidate("wt0", "100.90.16.237"),
+            ],
+            wildcard,
+        );
+        assert_eq!(
+            before,
+            [("en0".to_owned(), "192.168.1.20".parse().unwrap())]
+        );
+
+        // The same interfaces, announced in another order, are not a change.
+        let reordered = coverage(
+            &[
+                candidate("wt0", "100.90.16.237"),
+                candidate("en0", "192.168.1.20"),
+            ],
+            wildcard,
+        );
+        assert!(!coverage_changed(&before, &reordered));
+        assert!(!coverage_changed(&before, &before.clone()));
+
+        // An interface that came up, one that went away, and a new lease on a
+        // covered interface all need the record rebuilt.
+        let joined = coverage(
+            &[
+                candidate("en0", "192.168.1.20"),
+                candidate("en1", "10.0.0.5"),
+            ],
+            wildcard,
+        );
+        assert!(coverage_changed(&before, &joined));
+        assert!(coverage_changed(&joined, &before));
+        let moved = coverage(&[candidate("en0", "192.168.1.99")], wildcard);
+        assert!(coverage_changed(&before, &moved));
+        assert!(coverage_changed(&before, &coverage(&[], wildcard)));
+
+        // A listener bound to one address covers only that address, so a new
+        // address on another interface alone does not rebuild its record.
+        let bound = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20));
+        let only_en0 = coverage(&[candidate("en0", "192.168.1.20")], bound);
+        assert_eq!(
+            coverage(
+                &[
+                    candidate("en0", "192.168.1.20"),
+                    candidate("en1", "10.0.0.5"),
+                ],
+                bound,
+            ),
+            only_en0
+        );
+    }
+
+    #[test]
+    fn the_coverage_leaves_overlay_and_bridge_adapters_out() {
+        let wildcard = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+        let candidates = [
+            candidate("en0", "192.168.1.20"),
+            candidate("utun4", "100.90.16.237"),
+            candidate("bridge100", "192.168.64.1"),
+            candidate("vEthernet (Default Switch)", "172.24.0.1"),
+        ];
+        assert_eq!(
+            coverage(&candidates, wildcard),
+            [("en0".to_owned(), "192.168.1.20".parse().unwrap())]
+        );
+    }
+
+    #[test]
+    fn a_clock_jump_means_the_machine_slept() {
+        let secs = Duration::from_secs;
+        // Both clocks moved together: no sleep.
+        assert_eq!(slept(secs(15), Some(secs(15))), None);
+        // Drift between the clocks is not sleep either.
+        assert_eq!(slept(secs(15), Some(secs(15) + SLEEP_GAP)), None);
+        // The wall clock moved an hour further than the monotonic clock.
+        assert_eq!(slept(secs(15), Some(secs(3615))), Some(secs(3600)));
+        // A clock set back, or no wall clock at all, reports nothing.
+        assert_eq!(slept(secs(15), Some(secs(5))), None);
+        assert_eq!(slept(secs(15), None), None);
+    }
+
+    #[test]
+    fn interface_selections_compare_by_name() {
+        let en0 = vec![IfKind::Name("en0".to_owned())];
+        assert!(same_interfaces(&en0, &en0.clone()));
+        assert!(!same_interfaces(&en0, &[IfKind::Name("en1".to_owned())]));
+        assert!(!same_interfaces(&en0, &[]));
+        assert!(same_interfaces(
+            &[IfKind::All, IfKind::LoopbackV4],
+            &[IfKind::All, IfKind::LoopbackV4]
+        ));
+        assert!(!same_interfaces(
+            &[IfKind::All, IfKind::LoopbackV4],
+            &[IfKind::All, IfKind::IPv4]
+        ));
+    }
+
     #[test]
     fn discovered_addresses_exclude_unscoped_and_unroutable_values() {
         for address in [
@@ -446,7 +768,7 @@ mod tests {
     #[tokio::test]
     async fn an_announcement_starts_and_stops_cleanly() {
         let interfaces = vec![IfKind::All];
-        let Ok(advertisement) =
+        let Ok(mut advertisement) =
             Advertisement::announce("Lifecycle test", 17879, "lifecycle", interfaces.clone())
         else {
             return;
@@ -454,6 +776,17 @@ mod tests {
         assert_eq!(
             advertisement.fullname(),
             "Lifecycle test._rustcode._tcp.local."
+        );
+        // The watchdog's re-announcement: still healthy, and then accepts the
+        // same and a new interface set without a new responder.
+        assert!(advertisement.healthy());
+        assert!(advertisement.refresh(interfaces.clone()));
+        assert!(advertisement.healthy());
+        assert!(advertisement.refresh(vec![IfKind::Name("lo0".to_owned())]));
+        assert_eq!(
+            advertisement.fullname(),
+            "Lifecycle test._rustcode._tcp.local.",
+            "re-announcing keeps the instance name"
         );
         let started = Instant::now();
         advertisement.stop().await;
