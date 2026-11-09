@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { BUILTIN_CAPABILITIES, type ConfigOption, type Harness } from "../acp/types";
 import {
+  chosenLevel,
   clampEffort,
+  dockedEffort,
   filterModelRows,
   modelThreadWrites,
+  modelThreadWritesAt,
   movePickerIndex,
   orderEfforts,
   pickerModels,
@@ -162,6 +165,24 @@ describe("a model picked in a thread", () => {
     ]);
   });
 
+  test("a level moved in the dock is written with the model it belongs to", () => {
+    // The docked slider belongs to the highlighted row, so its level lands with that model.
+    expect(modelThreadWritesAt(astra, "gpt-6-astra", "max", "medium", null, true)).toEqual([
+      { configId: "model", value: "gpt-6-astra" },
+      { configId: "effort", value: "max" },
+    ]);
+    // A level the model does not list falls back to the level it keeps.
+    expect(modelThreadWritesAt(astra, "gpt-6-astra", "low", "medium", null, true)).toEqual([
+      { configId: "model", value: "gpt-6-astra" },
+      { configId: "effort", value: "high" },
+    ]);
+  });
+
+  test("the chosen level keeps a listed one and clamps the rest", () => {
+    expect(chosenLevel(astra, "max", ["off", "high", "max"], "high", null)).toBe("max");
+    expect(chosenLevel(astra, "minimal", ["off", "high", "max"], "high", null)).toBe("high");
+  });
+
   test("the level is written after the model, so memory files it under the model now run", async () => {
     const writes = modelThreadWrites(astra, "gpt-6-astra", "medium", null, false);
     const seen: string[] = [];
@@ -173,6 +194,79 @@ describe("a model picked in a thread", () => {
       else expect(model).toBe("gpt-6-astra");
     });
     expect(seen).toEqual(["model:gpt-6-astra", "effort:high"]);
+  });
+});
+
+describe("the docked effort column", () => {
+  const [luna, astra] = twoModels().models;
+
+  test("a highlighted model brings its own levels and the level it keeps", () => {
+    const docked = dockedEffort({
+      entry: astra,
+      levels: [],
+      effort: "medium",
+      defaultLevel: "medium",
+      current: false,
+      sameHarness: false,
+    });
+    expect(docked.levels).toEqual(["off", "high", "max"]);
+    expect(docked.effort).toBe("high");
+    expect(docked.defaultLevel).toBe("high");
+  });
+
+  test("the level it was last left on wins on a highlighted model", () => {
+    const docked = dockedEffort({
+      entry: astra,
+      levels: [],
+      effort: "medium",
+      defaultLevel: "medium",
+      current: false,
+      sameHarness: false,
+      remembered: "max",
+    });
+    expect(docked.effort).toBe("max");
+  });
+
+  test("inside one harness the level the thread runs stays while the model lists it", () => {
+    const docked = dockedEffort({
+      entry: astra,
+      levels: [],
+      effort: "high",
+      defaultLevel: "medium",
+      current: false,
+      sameHarness: true,
+    });
+    expect(docked.effort).toBe("high");
+  });
+
+  test("the model the thread runs keeps the picker's own levels and effort", () => {
+    // The thread's config options can list levels the snapshot does not, so the picker's own
+    // list and effort are the ones shown, not the harness entry's.
+    const docked = dockedEffort({
+      entry: luna,
+      levels: ["off", "low", "medium", "high"],
+      effort: "off",
+      defaultLevel: "medium",
+      current: true,
+      sameHarness: true,
+    });
+    expect(docked.levels).toEqual(["off", "low", "medium", "high"]);
+    expect(docked.effort).toBe("off");
+    expect(docked.defaultLevel).toBe("medium");
+  });
+
+  test("a highlighted model with no levels offers no slider", () => {
+    const docked = dockedEffort({
+      entry: undefined,
+      levels: ["low", "high"],
+      effort: "low",
+      defaultLevel: "low",
+      current: false,
+      sameHarness: false,
+    });
+    expect(docked.levels).toEqual([]);
+    expect(docked.effort).toBeNull();
+    expect(docked.defaultLevel).toBeNull();
   });
 });
 

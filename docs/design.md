@@ -343,7 +343,7 @@ that change use `tabular`.
   menus are `modal={false}`, so other rows keep answering the pointer while
   one is open.
 - Opening: popovers, menus, tooltips 160ms `--ease-snappy` (fade + 4px);
-  closing 120ms `ease-in`. Dialogs 180ms. Panel drill-in 220ms.
+  closing 120ms `ease-in`. Dialogs 180ms.
 - Nothing animates layout on hover. Height transitions only for folding
   sections, and for the composer's field, which grows and shrinks with its
   lines over 150ms `--ease-snappy` instead of jumping between them; the
@@ -865,18 +865,21 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   and the row's own `pt-1`, separate them. The model reads as its own name and
   effort, plain on the card, `bg-fill-strong` only while its popover is open;
   the **+** rests on `bg-fill-subtle` (`bg-fill` on hover). The popover opens
-  on the effort, the control changed most: the level and the model's name on
-  one header row, with Fast mode and the reset at its end, a 20px pill track
-  with one dot per level the model itself lists, the part up to a 24px round
-  thumb filled in the accent (a press or a drag lands on the nearest dot, ←/→
-  step one, a hover names it), and the harness's logins below while it has more
-  than one to choose. The thumb is `bg-knob` with `shadow-knob` (white in every
-  theme), because a theme may draw dark `accent-text` on a light accent; the dots
-  it has passed keep that contrast colour. The card opens with the slider
-  focused, so ←/→
-  change the effort at once; the model's name (Enter or a click) swaps the card
-  for the searchable list of every harness's models, and picking one comes back
-  to the track on that model's own last level.
+  on the searchable list of every harness's models: the harness column on the
+  left, the models in the middle with the current one checked, and a docked
+  column on the right for the row the list highlights — its name with Fast mode
+  and the reset on one header row, a 20px pill track with one dot per level
+  that model itself lists, the part up to a 24px round thumb filled in the
+  accent (a press or a drag lands on the nearest dot, ←/→ step one, a hover
+  names it), and the harness's logins straight under it while it has more than
+  one to choose. The thumb is `bg-knob` with `shadow-knob` (white in every
+  theme), because a theme may draw dark `accent-text` on a light accent; the
+  dots it has passed keep that contrast colour. The card is as tall as what it
+  holds, up to the room the window has under the pill, and only the model list
+  scrolls; a narrow card stacks the docked column under the list. The search
+  has focus on open, ↑/↓ move the highlight so the dock follows it, ⏎ picks the
+  model, → moves to the slider and ← back to the search, and picking a model
+  takes that model's own level without closing the card.
 - **New thread screen:** a centred heading and a rotating tip above the field and its strip, with optional cards below.
   The project name in the heading opens the folder picker; there is no path line or starter prompts.
   Neither the heading nor the tip sits in a pill: over a chosen picture both take
