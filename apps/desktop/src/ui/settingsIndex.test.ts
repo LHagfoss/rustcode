@@ -54,7 +54,8 @@ describe("settings search", () => {
   });
 
   test("a page id from an older build still opens a page", () => {
-    // Harnesses became Agents and Engine became Advanced; nothing else moved.
+    // The Harnesses page kept its old `agents` id and Engine became Advanced;
+    // nothing else moved.
     expect(settingsSection("harnesses")).toBe("agents");
     expect(settingsSection("engine")).toBe("advanced");
     expect(settingsSection("usage")).toBe("usage");

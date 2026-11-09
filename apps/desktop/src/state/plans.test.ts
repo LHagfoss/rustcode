@@ -179,7 +179,7 @@ describe("asks that arrive while one is in flight", () => {
   });
 
   test("an explicit look folded into a waiting ask still forces the read", () => {
-    // Check in Settings › Agents while the poll is in flight: the request that
+    // Check in Settings › Harnesses while the poll is in flight: the request that
     // runs next must not be answered from the engine's cache.
     expect(queueAsks([{ claude: true }], { claude: false, account: "work", force: true })).toEqual([
       { claude: true, account: "work", force: true },

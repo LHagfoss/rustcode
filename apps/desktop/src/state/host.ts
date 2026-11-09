@@ -279,7 +279,7 @@ function setBook(fn: (book: LinkBook) => LinkBook) {
 }
 
 const book = () => useApp.getState().links;
-/** The two delegate limits (Settings › Agents): one thread's own, and the machine's total. */
+/** The two delegate limits (Settings › Harnesses): one thread's own, and the machine's total. */
 const delegateLimits = (): DelegateLimits => ({
   perThread: useApp.getState().threadLimit,
   total: useApp.getState().totalLimit,
@@ -659,7 +659,7 @@ function reachRefused(): JsonObject {
   return failureJson(
     failure(
       "not_allowed",
-      "reading across projects is off; turn on “Let agents read threads in other projects” in Settings › Agents",
+      "reading across projects is off; turn on “Let agents read threads in other projects” in Settings › Harnesses",
     ),
   );
 }
@@ -1893,7 +1893,7 @@ function accountFor(caller: RuleThread, harness: Harness, asked?: string): strin
     case "signedOut":
       return failure(
         "not_allowed",
-        `${harness.name} account “${refusal.name}” (${refusal.account}) is signed out; sign it in in Settings › Agents or pick another login (${refusal.available.join(", ")})`,
+        `${harness.name} account “${refusal.name}” (${refusal.account}) is signed out; sign it in in Settings › Harnesses or pick another login (${refusal.available.join(", ")})`,
       );
     case "unknown":
       return failure(

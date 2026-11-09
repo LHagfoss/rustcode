@@ -620,7 +620,7 @@ describe("the data store", () => {
     expect(usageScope(a, false, "/repo")).toEqual({ project: "/repo", scope: "this project" });
     const refused = usageScope(a, false, "/other");
     expect(isFailure(refused) && refused.code).toBe("not_allowed");
-    expect(isFailure(refused) ? refused.message : "").toContain("Settings › Agents");
+    expect(isFailure(refused) ? refused.message : "").toContain("Settings › Harnesses");
   });
 
   test("SQL needs the setting: it cannot be scoped to one project", () => {

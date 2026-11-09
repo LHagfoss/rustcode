@@ -54,7 +54,7 @@ export interface PageInfo {
   userAgent: string;
 }
 
-/** One harness, as Agents knows it plus where this app's PATH finds its binary. */
+/** One harness, as the Harnesses page knows it plus where this app's PATH finds its binary. */
 export interface HarnessDiagnostics {
   id: string;
   name: string;

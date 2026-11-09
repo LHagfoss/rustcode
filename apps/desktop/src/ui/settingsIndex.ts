@@ -2,7 +2,7 @@
 // words people look for but that the row does not say. Pure (no React, no
 // store at runtime), so the nav's search is testable on its own.
 //
-// A few pages have no rows of their own — Agents lists cards, Connections,
+// A few pages have no rows of their own — Harnesses lists cards, Connections,
 // Advanced and Diagnostics render the server's answers — so their groups are
 // listed here; a group title is a landing target too (settingsKit.tsx).
 
@@ -104,7 +104,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
       "header buttons show hide reorder drag arrange customize toolbar status plan pull requests terminal details changes",
   },
 
-  // ------------------------------------------------------------ Agents
+  // ------------------------------------------------------------ Harnesses
   {
     section: "agents",
     title: "New threads start on",

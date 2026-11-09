@@ -5,7 +5,7 @@ import { currentPlatform } from "../lib/platform";
 // A grouped nav on the left searches every row's title and keywords
 // (settingsIndex.ts) and shows one page at a time beside it; picking a result
 // opens its page and lights the row. After SettingsView.swift.
-// Server-backed pages (Agents, Connections, Capabilities, Appearance's
+// Server-backed pages (Harnesses, Connections, Capabilities, Appearance's
 // themes, Usage, Statistics) read and write through `_rustcode/*` requests.
 // Diagnostics (DiagnosticsPage.tsx) asks the shell about the server itself.
 
@@ -170,7 +170,7 @@ const NAV: { heading?: string; pages: Page[] }[] = [
   {
     heading: "Setup",
     pages: [
-      { id: "agents", label: "Agents", icon: Layers },
+      { id: "agents", label: "Harnesses", icon: Layers },
       { id: "connections", label: "Connections", icon: KeyRound },
       { id: "capabilities", label: "Capabilities", icon: Blocks },
       { id: "remote", label: "Remote access", icon: Smartphone },
@@ -287,7 +287,7 @@ function GeneralPage() {
           </Action>
         </Row>
         <Row title="Harness, model and effort" subtitle="Which agent runs a new thread by default.">
-          <Action onClick={() => openSettings("agents")}>Agents…</Action>
+          <Action onClick={() => openSettings("agents")}>Harnesses…</Action>
         </Row>
         <Row
           title="Default access"

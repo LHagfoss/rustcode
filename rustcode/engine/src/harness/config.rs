@@ -407,7 +407,7 @@ pub(crate) fn find_account(
         .iter()
         .find(|account| account.harness == harness && account.id == id)
         .cloned()
-        .ok_or_else(|| format!("unknown {harness} account '{id}'; add it in Settings › Agents"))
+        .ok_or_else(|| format!("unknown {harness} account '{id}'; add it in Settings › Harnesses"))
 }
 
 /// The account a loaded thread names, for its `_meta` and snapshot row: the

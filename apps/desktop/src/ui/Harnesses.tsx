@@ -1,5 +1,5 @@
 // Harness cards and the default-harness form, shared by first-run
-// onboarding and Settings › Agents (docs/harnesses.md). RustCode never
+// onboarding and Settings › Harnesses (docs/harnesses.md). RustCode never
 // signs in for a harness: "Sign in" shows the harness's own login command.
 
 import { Check, ChevronRight, Minus, Plus, SquareTerminal, X } from "lucide-react";

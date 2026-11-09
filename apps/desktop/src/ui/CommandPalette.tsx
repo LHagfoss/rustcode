@@ -60,7 +60,7 @@ export type { PaletteAction };
 const SETTINGS: [SettingsSection, string][] = [
   ["general", "General"],
   ["chat", "Chat"],
-  ["agents", "Agents: harnesses, models and orchestration"],
+  ["agents", "Harnesses: install, sign in, models and orchestration"],
   ["connections", "Connections"],
   ["capabilities", "Capabilities: skills and MCP servers"],
   ["remote", "Remote access: phones and paired devices"],

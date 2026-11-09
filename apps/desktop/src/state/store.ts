@@ -263,8 +263,9 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
 ];
 
 /**
- * What an older build's section id opens: Harnesses became Agents and Engine
- * became Advanced. An id no build knows opens General.
+ * What an older build's section id opens: the Harnesses page keeps its old
+ * `agents` id, so a stored `harnesses` opens it, and Engine became Advanced.
+ * An id no build knows opens General.
  */
 const LEGACY_SECTIONS: Record<string, SettingsSection> = {
   harnesses: "agents",
@@ -422,13 +423,13 @@ export interface AppState {
     /** A second, less prominent action (e.g. "Files and conversation"). */
     alt?: { action: string; run: () => void };
   } | null;
-  /** Threads can start and message other threads (Settings › Agents); the engine learns it at initialize. */
+  /** Threads can start and message other threads (Settings › Harnesses); the engine learns it at initialize. */
   orchestration: boolean;
-  /** How many delegates one thread may run at once (Settings › Agents). */
+  /** How many delegates one thread may run at once (Settings › Harnesses). */
   threadLimit: number;
-  /** How many delegates may run at once across this app (Settings › Agents). */
+  /** How many delegates may run at once across this app (Settings › Harnesses). */
   totalLimit: number;
-  /** Agents may read threads of every project, not only the calling thread's (Settings › Agents). */
+  /** Agents may read threads of every project, not only the calling thread's (Settings › Harnesses). */
   readAcrossProjects: boolean;
   /** Threads that were running when the app quit or the engine restarted continue on their own. */
   resumeAfterRestart: boolean;

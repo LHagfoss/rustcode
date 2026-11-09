@@ -4,7 +4,7 @@
 // Keychain: macOS may ask before an unseen item is read, so the app reads one
 // login at a time in the background — the default login, and the account of
 // the thread on screen. A login whose read was denied is left alone until the
-// user looks explicitly (Settings › Usage, Refresh, Check in Settings › Agents),
+// user looks explicitly (Settings › Usage, Refresh, Check in Settings › Harnesses),
 // since asking again would only prompt again; so is one Anthropic forbids
 // (403), since renewing the sign-in does not change that. A login whose sign-in
 // expired, or which Anthropic refused (401), is *not* paused: the user renews

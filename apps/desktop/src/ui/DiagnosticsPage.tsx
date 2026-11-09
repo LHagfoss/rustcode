@@ -136,7 +136,7 @@ function Uptime({ since }: { since: number }) {
   return <>{formatDuration(now - since)}</>;
 }
 
-/** The harnesses Agents knows, with where this app's PATH finds each one's binary. */
+/** The harnesses the Harnesses page knows, with where this app's PATH finds each one's binary. */
 function useHarnessDiagnostics(): HarnessDiagnostics[] {
   const harnesses = useApp((s) => s.harnesses?.harnesses);
   const [paths, setPaths] = useState<(string | null)[]>([]);
@@ -349,7 +349,7 @@ export function DiagnosticsPage() {
 
       <Group
         title="Harnesses"
-        footer="What Settings › Agents last detected. The binary is where this app's PATH finds the command; the server may see a fuller PATH."
+        footer="What Settings › Harnesses last detected. The binary is where this app's PATH finds the command; the server may see a fuller PATH."
       >
         {harnesses.length ? (
           harnesses.map((h) => (
