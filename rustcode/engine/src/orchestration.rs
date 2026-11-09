@@ -1583,7 +1583,6 @@ mod tests {
             "window_minutes",
             "resets_at",
             "as_of",
-            "not_enabled",
         ] {
             assert!(tool.description.contains(field), "{field}");
         }
@@ -1594,7 +1593,6 @@ mod tests {
             .expect("list_harnesses for an MCP harness");
         let description = listed["description"].as_str().unwrap_or_default();
         assert!(description.contains("used_percent"), "{description}");
-        assert!(description.contains("not_enabled"), "{description}");
     }
 
     /// A harness may list hundreds of models (OpenCode, Pi), so the tool says

@@ -11,7 +11,27 @@ import {
 const ids = (...list: string[]) => list as HeaderButtonId[];
 
 describe("header buttons sanitising", () => {
-  test("nothing stored shows every button", () => {
+  test("pull requests are hidden by default: the sidebar's foot row holds that button", () => {
+    expect(DEFAULT_HEADER_BUTTONS).not.toContain("pulls");
+    expect(DEFAULT_HEADER_BUTTONS).toEqual(ids("status", "plan", "terminal", "details", "changes"));
+    // Still a button the setting lists, so it can be shown.
+    expect(HEADER_BUTTON_IDS).toContain("pulls");
+  });
+
+  test("a layout saved with Pull requests shown keeps it", () => {
+    const shown = ids("status", "pulls", "changes");
+    expect(sanitizeHeaderButtons({ shown, known: [...HEADER_BUTTON_IDS] })).toEqual(shown);
+    // Saved before `known` existed: nothing is re-added or removed.
+    expect(sanitizeHeaderButtons({ shown: ids("pulls", "plan") })).toEqual(ids("pulls", "plan"));
+  });
+
+  test("a layout saved with the old defaults keeps Pull requests, and a reset hides it", () => {
+    const old = [...HEADER_BUTTON_IDS];
+    expect(sanitizeHeaderButtons({ shown: old, known: old })).toEqual(old);
+    expect(sameHeaderButtons(old, DEFAULT_HEADER_BUTTONS)).toBe(false);
+  });
+
+  test("nothing stored shows the default buttons", () => {
     for (const raw of [null, undefined, "", "{not json", 42, [], {}]) {
       expect(sanitizeHeaderButtons(raw)).toEqual([...DEFAULT_HEADER_BUTTONS]);
     }

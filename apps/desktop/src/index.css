@@ -98,14 +98,14 @@
   --rc-surface: #eaeaea;
   --rc-surface-2: #ffffff;
   --rc-surface-3: #e4e4e6;
-  /* The composer shares the raised surface used by menus. */
-  --rc-composer-bg: var(--rc-surface-2);
-  --rc-composer-bg-focus: var(--rc-surface-2);
+  /* The composer shares the sidebar surface. */
+  --rc-composer-bg: var(--rc-sidebar);
+  --rc-composer-bg-focus: var(--rc-sidebar);
   /* Over a new thread's picture (`.rc-composer-over`): a panel, not another window on it. */
-  --rc-composer-bg-over: var(--rc-surface-2);
+  --rc-composer-bg-over: var(--rc-sidebar);
   --rc-composer-filter: none;
-  --rc-border: #0000000a;
-  --rc-border-strong: #0000001f;
+  --rc-border: #00000008;
+  --rc-border-strong: #0000001a;
   --rc-text: #171717;
   --rc-text-muted: #5c5c5c;
   --rc-text-faint: #9a9a9a;
@@ -130,13 +130,13 @@
     --rc-surface: #1d1d20;
     --rc-surface-2: #242428;
     --rc-surface-3: #2a2a2e;
-    /* Keep the composer solid and consistent with raised surfaces. */
-    --rc-composer-bg: var(--rc-surface-2);
-    --rc-composer-bg-focus: var(--rc-surface-2);
-    --rc-composer-bg-over: var(--rc-surface-2);
+    /* Keep the composer solid and consistent with the sidebar. */
+    --rc-composer-bg: var(--rc-sidebar);
+    --rc-composer-bg-focus: var(--rc-sidebar);
+    --rc-composer-bg-over: var(--rc-sidebar);
     --rc-composer-filter: none;
-    --rc-border: #ffffff0a;
-    --rc-border-strong: #ffffff1c;
+    --rc-border: #ffffff08;
+    --rc-border-strong: #ffffff18;
     --rc-text: #ededed;
     --rc-text-muted: #a1a1a1;
     --rc-text-faint: #6b6b6b;
@@ -160,12 +160,12 @@
   --rc-surface: #1d1d20;
   --rc-surface-2: #242428;
   --rc-surface-3: #2a2a2e;
-  --rc-composer-bg: var(--rc-surface-2);
-  --rc-composer-bg-focus: var(--rc-surface-2);
-  --rc-composer-bg-over: var(--rc-surface-2);
+  --rc-composer-bg: var(--rc-sidebar);
+  --rc-composer-bg-focus: var(--rc-sidebar);
+  --rc-composer-bg-over: var(--rc-sidebar);
   --rc-composer-filter: none;
-  --rc-border: #ffffff0a;
-  --rc-border-strong: #ffffff1c;
+  --rc-border: #ffffff08;
+  --rc-border-strong: #ffffff18;
   --rc-text: #ededed;
   --rc-text-muted: #a1a1a1;
   --rc-text-faint: #6b6b6b;
@@ -926,7 +926,7 @@
   outline-offset: 2px;
 }
 .rc-range::-webkit-slider-runnable-track {
-  height: 4px;
+  height: 8px;
   border-radius: 9999px;
   background: linear-gradient(
     to right,
@@ -937,27 +937,27 @@
 .rc-range::-webkit-slider-thumb {
   appearance: none;
   -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
-  margin-top: -5px;
+  width: 24px;
+  height: 16px;
+  margin-top: -4px;
   border-radius: 9999px;
   background: var(--rc-knob);
   box-shadow: var(--rc-knob-shadow);
 }
 .rc-range::-moz-range-track {
-  height: 4px;
+  height: 8px;
   border-radius: 9999px;
   background: var(--rc-fill-strong);
 }
 .rc-range::-moz-range-progress {
-  height: 4px;
+  height: 8px;
   border-radius: 9999px;
   background: var(--rc-accent);
 }
 .rc-range::-moz-range-thumb {
   box-sizing: border-box;
-  width: 14px;
-  height: 14px;
+  width: 24px;
+  height: 16px;
   border: 0;
   border-radius: 9999px;
   background: var(--rc-knob);
@@ -1104,8 +1104,7 @@
 }
 
 /*
- * The composer is one solid raised surface over the transcript, with no edge to it: the lift under
- * it alone says it floats (`--rc-shadow-soft`, and a step stronger than the cards'). Its corner is
+ * The composer shares the sidebar surface, with a subtle edge and shadow. Its corner is
  * its own step (`--rc-composer-radius`), and its drawer is the same surface, tucked behind that
  * edge, so the two read as one card. The foot and the tray are rows inside the one card, not slabs
  * beside it, and the strip under the card takes the same fill a step lifted
@@ -1124,12 +1123,14 @@
 .rc-toast {
   background: var(--rc-glass-bg-strong);
 }
-/* The composer uses a solid raised surface, carried by the lift under it and by no edge. */
+/* The composer shares the sidebar surface and keeps a subtle edge. */
 .rc-composer {
   background: var(--rc-composer-bg);
   backdrop-filter: var(--rc-composer-filter);
   -webkit-backdrop-filter: var(--rc-composer-filter);
-  box-shadow: 0 3px 12px -4px var(--rc-shadow-soft);
+  box-shadow:
+    0 3px 12px -4px var(--rc-shadow-soft),
+    0 0 0 1px var(--rc-border);
 }
 /* The box clips to its own corner, so the attachment thumbnails and a scrolled field stop at the
    curve instead of painting over it. Nothing in it opens a popover: they are portalled. */
@@ -1161,7 +1162,7 @@
    is the only edge it gets. */
 .rc-composer-drawer {
   border-radius: var(--rc-composer-radius) var(--rc-composer-radius) 0 0;
-  background: var(--rc-surface-2);
+  background: var(--rc-composer-bg);
   box-shadow: 0 3px 12px -4px var(--rc-shadow-soft);
   clip-path: inset(-1px -1px calc(1rem - 1px) -1px);
 }
@@ -1364,9 +1365,9 @@
     --rc-glass-filter: none;
     --rc-scrim-bg: var(--rc-bg);
     --rc-lightbox-scrim-bg: var(--rc-bg);
-    --rc-composer-bg: var(--rc-surface-2);
-    --rc-composer-bg-focus: var(--rc-surface-2);
-    --rc-composer-bg-over: var(--rc-surface-2);
+    --rc-composer-bg: var(--rc-sidebar);
+    --rc-composer-bg-focus: var(--rc-sidebar);
+    --rc-composer-bg-over: var(--rc-sidebar);
     --rc-composer-filter: none;
   }
   :root,
@@ -1374,7 +1375,7 @@
     --rc-glass-pane: var(--rc-bg);
   }
   .rc-composer:focus-within {
-    background: var(--rc-surface-2);
+    background: var(--rc-composer-bg-focus);
   }
 }
 :root.reduce-transparency {
@@ -1385,13 +1386,13 @@
   --rc-glass-filter: none;
   --rc-scrim-bg: var(--rc-bg);
   --rc-lightbox-scrim-bg: var(--rc-bg);
-  --rc-composer-bg: var(--rc-surface-2);
-  --rc-composer-bg-focus: var(--rc-surface-2);
-  --rc-composer-bg-over: var(--rc-surface-2);
+  --rc-composer-bg: var(--rc-sidebar);
+  --rc-composer-bg-focus: var(--rc-sidebar);
+  --rc-composer-bg-over: var(--rc-sidebar);
   --rc-composer-filter: none;
 }
 :root.reduce-transparency .rc-composer:focus-within {
-  background: var(--rc-surface-2);
+  background: var(--rc-composer-bg-focus);
 }
 :root.reduce-transparency,
 :root.reduce-transparency .rc-header-glass.rc-frost::before {

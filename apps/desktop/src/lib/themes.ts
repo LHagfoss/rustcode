@@ -67,8 +67,8 @@ const DARK: Record<Token, string> = {
   surface: "#1d1d20",
   surface_2: "#242428",
   surface_3: "#2a2a2e",
-  border: "#ffffff0a",
-  border_strong: "#ffffff1c",
+  border: "#ffffff08",
+  border_strong: "#ffffff18",
   text: "#ededed",
   text_muted: "#a1a1a1",
   text_faint: "#6b6b6b",
@@ -89,8 +89,8 @@ const LIGHT: Record<Token, string> = {
   surface: "#eaeaea",
   surface_2: "#ffffff",
   surface_3: "#e4e4e6",
-  border: "#0000000a",
-  border_strong: "#0000001f",
+  border: "#00000008",
+  border_strong: "#0000001a",
   text: "#171717",
   text_muted: "#5c5c5c",
   text_faint: "#9a9a9a",
@@ -105,6 +105,15 @@ const LIGHT: Record<Token, string> = {
   scrollbar: "#00000026",
 };
 
+const OLED: Record<Token, string> = {
+  ...DARK,
+  bg: "#000000",
+  sidebar: "#090909",
+  surface: "#141414",
+  surface_2: "#1c1c1c",
+  surface_3: "#252525",
+};
+
 /** The app's own themes: the values index.css paints before any theme is applied. */
 export const BUILTIN_THEMES: Theme[] = [
   {
@@ -113,6 +122,14 @@ export const BUILTIN_THEMES: Theme[] = [
     source: "builtin",
     mode: "dark",
     tokens: DARK,
+    radius: "default",
+  },
+  {
+    name: "oled",
+    description: "OLED black",
+    source: "builtin",
+    mode: "dark",
+    tokens: OLED,
     radius: "default",
   },
   {
@@ -183,7 +200,8 @@ export function applyTheme(theme: Theme, root: HTMLElement = document.documentEl
   const builtin = BUILTIN_THEMES.find((b) => b.name === theme.name && b.source === theme.source);
   for (const t of TOKENS) {
     // A built-in theme is index.css itself: no inline values to go stale.
-    if (builtin && builtin.tokens[t] === theme.tokens[t]) root.style.removeProperty(cssName(t));
+    if (builtin && builtin.name !== "oled" && builtin.tokens[t] === theme.tokens[t])
+      root.style.removeProperty(cssName(t));
     else root.style.setProperty(cssName(t), theme.tokens[t]);
   }
   root.dataset.radius = theme.radius;

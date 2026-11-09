@@ -5,10 +5,8 @@
 // The numbers are the ones the app already read for Settings › Usage and the
 // composer's meter. A tool call never starts a Keychain read or an Anthropic
 // request of its own: the poll (`state/store.ts` `startPlanPolling`) keeps the
-// cache current, and `as_of` says how old the answer is. Claude's logins are
-// reported `not_enabled` while the user keeps usage reading off, since nothing
-// is cached for them then (`claudeUsageAllowed`). A window whose reset passed
-// since the read is folded in the way the composer draws it, so an agent is
+// cache current, and `as_of` says how old the answer is. A window whose reset
+// passed since the read is folded as in the composer, so an agent is
 // never told an account is busy on a window that has already started over.
 
 import { type CachedPlan, shownPlan } from "./store";
@@ -28,12 +26,7 @@ export type AgentWindow = {
 
 /** A login's plan usage as `list_harnesses` reports it. */
 export type AgentUsage = {
-  /**
-   * `ok` with the windows RustCode has read, or `not_enabled` when reading
-   * Claude's sign-in is off (Settings › Usage's switch), so an agent knows why
-   * there are none rather than reading it as an idle account.
-   */
-  status: "ok" | "not_enabled";
+  status: "ok";
   /** ISO 8601, when these numbers were read; for recorded ones, when that read was. */
   as_of?: string;
   windows: AgentWindow[];
@@ -62,15 +55,9 @@ const iso = (ms: number | undefined): string | undefined =>
 
 /**
  * One login's usage block, or undefined when nothing was read for it (and it
- * may be read at all). `readable` is the user's consent for a Claude login, and
- * always true for a harness whose plan RustCode reads without one.
+ * has not yet been read).
  */
-export function usageOf(
-  plan: CachedPlan | undefined,
-  readable = true,
-  now = Date.now(),
-): AgentUsage | undefined {
-  if (!readable) return { status: "not_enabled", windows: [] };
+export function usageOf(plan: CachedPlan | undefined, now = Date.now()): AgentUsage | undefined {
   // A window whose reset passed is nothing used and no reset time, the way the
   // composer's meter draws it (`shownPlan`, then `planNow` in `state/store.ts`):
   // the numbers were read before the window started over.

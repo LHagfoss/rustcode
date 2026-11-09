@@ -1,3 +1,4 @@
+import { setTabMovesFocus, tabMovesFocus } from "../lib/focusModality";
 import { currentPlatform } from "../lib/platform";
 // Settings, a full panel inside the window: the shell stays mounted behind it,
 // hidden and inert, so closing Settings shows the thread exactly where it was.
@@ -270,6 +271,7 @@ function GeneralPage() {
   const backgroundOnly = useApp((s) => s.notificationsBackgroundOnly);
   const recap = useApp((s) => s.recapWhileAway);
   const recapHours = useApp((s) => s.recapHours);
+  const [tabFocus, setTabFocus] = useState(tabMovesFocus);
   const [haptics, setHapticsState] = useState(hapticsEnabled);
   return (
     <>
@@ -416,6 +418,19 @@ function GeneralPage() {
       </Group>
       <Group title="This computer">
         <PresenceRow />
+        <Row
+          title="Tab moves focus between controls"
+          subtitle="Use Tab and Shift+Tab to navigate controls throughout the app."
+        >
+          <Switch
+            label="Tab moves focus between controls"
+            checked={tabFocus}
+            onChange={(value) => {
+              setTabMovesFocus(value);
+              setTabFocus(value);
+            }}
+          />
+        </Row>
         {currentPlatform() === "mac" && (
           <Row
             title="Trackpad haptics"

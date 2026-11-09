@@ -4,6 +4,7 @@ import { PAGE_FRESH_MS, type PageAnswer } from "./pageCache";
 import {
   answeredPlans,
   failureText,
+  groupPlans,
   oneReadAtATime,
   PLAN_REFRESH_MAX_BACKOFF_MS,
   refreshBackoff,
@@ -42,9 +43,23 @@ const answer = (plans: UsagePlan[], asked = true, readAt = NOW): PageAnswer<Usag
   readAt,
 });
 
+test("groups interleaved accounts under their harness, including unavailable plans", () => {
+  const denied = plan({
+    id: "claude:denied",
+    account: "denied",
+    status: "unavailable",
+    reason: "denied",
+    windows: [],
+  });
+  expect(groupPlans([claude, codex, work, denied])).toEqual([
+    { harness: "claude-code", plans: [claude, work, denied] },
+    { harness: "codex", plans: [codex] },
+  ]);
+});
+
 describe("what Settings › Usage shows", () => {
   test("first open: nothing yet, so the skeleton and a read", () => {
-    expect(usageView(null, true, null, NOW)).toEqual({
+    expect(usageView(null, null, NOW)).toEqual({
       plans: null,
       readAt: null,
       fetch: true,
@@ -56,7 +71,7 @@ describe("what Settings › Usage shows", () => {
 
   test("reopen within 30 seconds: the same list at once, and no read", () => {
     const cached = answer([claude, codex], true, NOW - PAGE_FRESH_MS + 1);
-    const view = usageView(cached, true, null, NOW);
+    const view = usageView(cached, null, NOW);
     expect(view.plans).toBe(cached.data.plans);
     expect(view.readAt).toBe(cached.readAt);
     expect(view.fetch).toBe(false);
@@ -65,34 +80,22 @@ describe("what Settings › Usage shows", () => {
 
   test("reopen later: the same list at once, and a quiet read behind it", () => {
     const cached = answer([claude, codex], true, NOW - PAGE_FRESH_MS);
-    const view = usageView(cached, true, null, NOW);
+    const view = usageView(cached, null, NOW);
     expect(view.plans).toBe(cached.data.plans);
     expect(view.fetch).toBe(true);
     expect(view.readAt).toBe(cached.readAt);
   });
 
-  test("consent off: Claude's numbers go at once, and the switch's own answer is read", () => {
-    const cached = answer([claude, work, codex], true);
-    const view = usageView(cached, false, null, NOW);
-    // The one Claude row that carries the switch stays, with nothing to draw;
-    // named accounts add no row once consent is off.
-    expect(view.plans?.map((p) => p.id)).toEqual(["claude", "codex"]);
-    expect(view.plans?.[0]).toMatchObject({ id: "claude", status: "notAsked", windows: [] });
-    expect(view.fetch).toBe(true);
-    // An answer read with consent off is fresh for consent off.
-    expect(usageView(answer([codex], false), false, null, NOW).fetch).toBe(false);
-  });
-
   test("a failed read with numbers keeps them and says so quietly", () => {
     const cached = answer([claude, codex]);
-    const view = usageView(cached, true, "Keychain denied", NOW);
+    const view = usageView(cached, "Keychain denied", NOW);
     expect(view.plans).toBe(cached.data.plans);
     expect(view.fatal).toBeNull();
     expect(view.note).toBe("Keychain denied");
   });
 
   test("a failed read with nothing to show is the error page", () => {
-    const view = usageView(null, true, "Keychain denied", NOW);
+    const view = usageView(null, "Keychain denied", NOW);
     expect(view.plans).toBeNull();
     expect(view.fatal).toBe("Keychain denied");
     expect(view.note).toBeNull();
@@ -105,26 +108,12 @@ describe("what Settings › Usage shows", () => {
         true,
         NOW - 1,
       );
-      const view = usageView(cached, true, null, NOW);
+      const view = usageView(cached, null, NOW);
       // A Deny must not turn every page open into another prompt, and a 403 is
       // not fixed by asking again.
       expect(view.fetch).toBe(false);
       expect(view.force).toBe(false);
     }
-  });
-
-  test("an expired answer behind consent off never forces a Keychain read", () => {
-    // The page still holds the row it drew before the switch went off; opening
-    // it must not read the Keychain, and must not draw the old numbers.
-    const cached = answer(
-      [plan({ status: "unavailable", reason: "expired", error: "no", windows: [] }), codex],
-      false,
-    );
-    const view = usageView(cached, false, null, NOW);
-    expect(view.force).toBe(false);
-    expect(view.fetch).toBe(false);
-    expect(view.plans?.[0]).toMatchObject({ status: "notAsked", windows: [] });
-    expect(view.plans?.[0]?.reason).toBeUndefined();
   });
 
   test("an expired or refused Claude sign-in reads again at once, past the engine's cache", () => {
@@ -137,7 +126,7 @@ describe("what Settings › Usage shows", () => {
         true,
         NOW - 1,
       );
-      const view = usageView(cached, true, null, NOW);
+      const view = usageView(cached, null, NOW);
       expect(view.fetch).toBe(true);
       expect(view.force).toBe(true);
       expect(view.plans).toBe(cached.data.plans);
@@ -151,7 +140,7 @@ describe("what Settings › Usage shows", () => {
         true,
         NOW - 1,
       );
-      const view = usageView(cached, true, null, NOW);
+      const view = usageView(cached, null, NOW);
       // A Deny must not turn every page open into another prompt.
       expect(view.fetch).toBe(false);
       expect(view.force).toBe(false);
@@ -163,7 +152,7 @@ describe("what Settings › Usage shows", () => {
     // for, and the ordinary background poll refreshes them when Claude Code
     // renews the token.
     const cached = answer([{ ...work, status: "ok", asOf: NOW - 3 * 60 * 60 * 1000 }], true);
-    expect(usageView(cached, true, null, NOW)).toMatchObject({ fetch: false, force: false });
+    expect(usageView(cached, null, NOW)).toMatchObject({ fetch: false, force: false });
   });
 
   test("a named account's expired row is retried as well", () => {
@@ -171,7 +160,7 @@ describe("what Settings › Usage shows", () => {
       [claude, plan({ ...work, status: "unavailable", reason: "expired", error: "no", windows: [] })],
       true,
     );
-    expect(usageView(cached, true, null, NOW)).toMatchObject({ fetch: true, force: true });
+    expect(usageView(cached, null, NOW)).toMatchObject({ fetch: true, force: true });
   });
 });
 

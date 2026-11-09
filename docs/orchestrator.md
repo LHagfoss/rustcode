@@ -588,8 +588,7 @@ sits on the harness entry for its own login (what a thread runs on with no
 `account`) and on each named account for that account's own numbers — two
 logins never share them. `as_of` and `resets_at` are ISO 8601 UTC times, and
 `as_of` is when the numbers were read (for numbers RustCode recorded before a
-login's access token lapsed, when that read was). `status` is `ok`, or
-`not_enabled` while the user keeps Claude usage reading off in Settings › Usage;
+login's access token lapsed, when that read was). `status` is `ok`;
 a login nothing was read for yet carries no `usage` at all, and a window whose
 reset passed since the read is reported as nothing used with no reset time, the
 way the composer's meter draws it (a read can be older than the window it
