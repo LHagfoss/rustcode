@@ -106,10 +106,12 @@ import {
   serializeHarnessCommands,
 } from "./commands";
 import {
+  type Attachment,
   type ComposeExtras,
   emptyExtras,
   hasExtras,
   promptBlocks,
+  type SentAttachment,
   sentAttachments,
   splitImageMarkers,
 } from "./compose";
@@ -2176,10 +2178,11 @@ export function retryMessage(id: string, itemId: string) {
   const thread = get().threads[id];
   const item = thread?.items.find((i) => i.id === itemId);
   if (!thread || item?.kind !== "user") return;
+  const extras = { ...emptyExtras, attachments: pastesOf(item.attachments) };
   const go = async () => {
     if (canRewind(thread)) {
-      if (await rewindTo(id, itemId, item.text)) void runPrompt(id, item.text);
-    } else void submit(item.text);
+      if (await rewindTo(id, itemId, item.text)) void runPrompt(id, item.text, extras);
+    } else void submit(item.text, extras);
   };
   const later = messagesAfter(thread, itemId);
   if (later > 0 && canRewind(thread)) {
@@ -2217,12 +2220,29 @@ export async function retryThread(id: string): Promise<void> {
   selectThread(id);
 }
 
+/**
+ * The pastes a sent message kept, back in a message that is sent again: a retry or an edit must
+ * carry the log the message was about, or the model is asked about text it cannot see.
+ */
+function pastesOf(attachments: SentAttachment[] | undefined): Attachment[] {
+  return (attachments ?? []).flatMap((a) =>
+    a.kind === "text" && a.text ? [{ id: localId("paste"), kind: "text" as const, text: a.text }] : [],
+  );
+}
+
 /** Edit: the message goes back to the composer; sending it rewinds the thread to it first. */
 export function editMessage(id: string, itemId: string) {
   const thread = get().threads[id];
   const item = thread?.items.find((i) => i.id === itemId);
   if (!thread || item?.kind !== "user") return;
   const text = splitImageMarkers(item.text).text;
+  // What the message held past the text comes back with it, as the chips it was written as. The
+  // composer's own paste chips go: the draft is this message now, not the one edited before it.
+  const pastes = pastesOf(item.attachments);
+  setExtras(id, (e) => ({
+    ...e,
+    attachments: [...e.attachments.filter((a) => a.kind !== "text"), ...pastes],
+  }));
   set((s) => ({
     drafts: { ...s.drafts, [id]: text },
     editing: canRewind(thread)

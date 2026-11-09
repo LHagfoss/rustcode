@@ -38,6 +38,7 @@ import {
   backgroundPlansAsk,
   type CachedPlan,
   cancel,
+  cancelEdit,
   cancelQueuedEdit,
   closeReport,
   commandsFor,
@@ -1404,6 +1405,36 @@ describe("engine controller with the mock engine", () => {
       { path: "src/app.ts", added: 1, removed: 1 },
     ]);
     expect(turnCompletion(selected()!.items, end)?.checks[0]?.outcome).toBe("passed");
+  });
+
+  test("editing a message sent with a long paste puts the paste back in the composer", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready");
+    setProjectCwd("/tmp/project");
+    const paste = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
+    const extras = { ...emptyExtras, attachments: [{ id: "p1", kind: "text" as const, text: paste }] };
+    await submit("yolo why does this fail?", extras);
+    await until(() => selected()?.items.at(-1)?.kind === "turnEnd");
+    const thread = selected()!;
+    const first = thread.items.find((i) => i.kind === "user")!;
+    // The message keeps the paste as its own chip; the text is only what was typed around it.
+    expect(first.attachments).toEqual([{ kind: "text", name: "Pasted text · 20 lines", text: paste }]);
+    editMessage(thread.id, first.id);
+    expect(useApp.getState().drafts[thread.id]).toBe("yolo why does this fail?");
+    // Sending the edit again carries the log with it, not a question about a log it never got.
+    expect(useApp.getState().extras[thread.id]?.attachments).toEqual([
+      { id: expect.any(String), kind: "text", text: paste },
+    ]);
+    // Editing another message leaves that one's paste behind: it belongs to the message it came with.
+    cancelEdit(thread.id);
+    await submit("yolo second");
+    await until(() => selected()?.items.filter((i) => i.kind === "turnEnd").length === 2);
+    const second = selected()!
+      .items.filter((i) => i.kind === "user")
+      .at(-1)!;
+    editMessage(thread.id, second.id);
+    expect(useApp.getState().drafts[thread.id]).toBe("yolo second");
+    expect(useApp.getState().extras[thread.id]?.attachments).toEqual([]);
   });
 
   test("a turn that starts agents lists them, and their conversation reads", async () => {
