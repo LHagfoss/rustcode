@@ -511,7 +511,7 @@ describe("where a row puts what it has besides its title", () => {
     for (const layout of ["compact", "comfortable"] as const) {
       expect(meta({ layout, branch: true })).toBe("line");
       expect(meta({ layout, pull: true })).toBe("line");
-      expect(meta({ layout, badge: true })).toBe("line");
+      expect(meta({ layout, stack: true })).toBe("line");
     }
   });
 
@@ -522,9 +522,21 @@ describe("where a row puts what it has besides its title", () => {
     expect(meta({ diff, layout: "comfortable" })).toBe("line");
   });
 
+  test("the harness mark alone rides in the trailing slot beside the state, never a line", () => {
+    // One 12px glyph at the right edge of a second line reads as the state's icon wrapping.
+    for (const layout of ["compact", "comfortable"] as const) {
+      expect(meta({ layout, harness: true })).toBe("trailing");
+    }
+    expect(meta({ harness: true, diff })).toBe("trailing");
+    // It earns the line when the line already holds something that does.
+    expect(meta({ harness: true, branch: true })).toBe("line");
+    expect(meta({ harness: true, stack: true })).toBe("line");
+  });
+
   test("nothing to say is no line at all, so the mark is never alone on one", () => {
     expect(meta({})).toBe("none");
     expect(meta({ diff: null })).toBe("none");
+    expect(meta({ harness: false, diff: null })).toBe("none");
     expect(meta({ layout: "comfortable" })).toBe("none");
   });
 });

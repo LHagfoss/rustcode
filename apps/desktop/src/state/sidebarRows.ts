@@ -400,8 +400,10 @@ export interface RowMetaRead {
   branch?: boolean;
   /** Its branch carries a pull request. */
   pull?: boolean;
-  /** A stack of the threads it started, or the mark of the harness it runs on. */
-  badge?: boolean;
+  /** A stack of the threads it started: circles with a state badge, worth a line. */
+  stack?: boolean;
+  /** The mark of the harness it runs on: one 12px glyph, which the trailing slot holds. */
+  harness?: boolean;
   /** What its calls changed, when the app has read them ({@link threadDiff}). */
   diff?: { added: number; removed: number } | null;
   /** The row's layout: the two-line one has the width for a diff of its own. */
@@ -410,13 +412,18 @@ export interface RowMetaRead {
 
 /**
  * Where a row puts what it has besides its title: `line` draws the quiet second line that holds it,
- * `trailing` keeps the row on one line and lets the diff ride in its trailing slot, and `none`
- * draws no line at all. A whole second line is never opened for a diff alone in the compact row,
- * where it would be a line of its own for `+1`; a branch, a pull request or a stack is worth one.
+ * `trailing` keeps the row on one line and lets the diff and the harness mark ride in its trailing
+ * slot, and `none` draws no line at all. A whole second line is never opened for a diff alone in the
+ * compact row, where it would be a line of its own for `+1`, nor for the harness mark alone in
+ * either layout, where one 12px glyph would sit at the right edge of an otherwise empty line and
+ * read as the state's own icon wrapping onto a second line. A branch, a pull request or a stack of
+ * delegates is worth one.
  */
 export function rowMeta(read: RowMetaRead): "line" | "trailing" | "none" {
-  if (read.branch || read.pull || read.badge || (read.layout === "comfortable" && !!read.diff)) return "line";
-  return read.diff ? "trailing" : "none";
+  if (read.branch || read.pull || read.stack) return "line";
+  // The two-line row has the width, and its line carries the diff beside the badges.
+  if (read.layout === "comfortable" && read.diff) return "line";
+  return read.diff || read.harness ? "trailing" : "none";
 }
 
 /** The title-first row's trailing status, in attention order. */

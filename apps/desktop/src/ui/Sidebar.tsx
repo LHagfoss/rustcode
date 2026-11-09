@@ -7,11 +7,12 @@ import { fileManagerName, primaryModifier } from "../lib/platform";
 // to sit here (new thread, add project, settings, pull requests, usage).
 // A row is one 32px line: the mark of where it runs, its title, and one trailing
 // slot — `Needs you`, `Working 2m`, `Waiting`, `Failed`, `Review`, the time it
-// wakes, or its age (state/sidebarRows.ts `rowStatus`). A thread with a branch,
-// a diff, a pull request or a stack of delegates adds one quiet second line for
-// them (48px); a request from the thread adds its words under the title. The row
-// layout preference (Settings › Appearance) keeps the older two-line row as
-// `comfortable`, which puts the title first and the branch under it.
+// wakes, or its age (state/sidebarRows.ts `rowStatus`), with the harness mark and
+// a lone diff beside it. A thread with a branch, a diff, a pull request or a stack
+// of delegates adds one quiet second line for them (48px); a request from the
+// thread adds its words under the title. The row layout preference (Settings ›
+// Appearance) keeps the older two-line row as `comfortable`, which puts the title
+// first and the branch under it.
 
 import {
   Check,
@@ -518,12 +519,15 @@ function RowAction({
 }
 
 /**
- * The room a row gives its trailing state: the diff when it has nowhere else to go, and the state
- * itself — the age, a chip, or the running turn's clock. It is as wide as what it says, so the
- * title takes every pixel the row does not need, and it keeps that width on hover (invisible)
- * while the actions are drawn over it, so nothing reflows.
+ * The room a row gives its trailing state: the mark of the harness it runs on and the diff when
+ * they have nowhere else to go, and the state itself — the age, a chip, or the running turn's
+ * clock. It is as wide as what it says, so the title takes every pixel the row does not need, and
+ * it keeps that width on hover (invisible) while the actions are drawn over it, so nothing reflows.
+ * It never wraps: its parts sit side by side on the row's one line, so a second glyph never drops
+ * under the state and reads as a line of its own.
  */
-const TRAILING_SLOT = "flex shrink-0 items-center justify-end gap-1.5 text-sub text-fg-muted tabular";
+const TRAILING_SLOT =
+  "flex shrink-0 flex-nowrap items-center justify-end gap-1.5 whitespace-nowrap text-sub text-fg-muted tabular";
 
 /**
  * Hovering swaps the row's trailing state for its actions — Pin, Settle (or Unsettle) and the menu,
@@ -741,14 +745,15 @@ const ThreadRow = memo(function ThreadRow({
   // The open thread is a delegated one with no row of its own: its parent stands in as the context.
   const lit = selected || !!context;
   // One line by default (Settings › Appearance): the second is for a row that has something to put
-  // there. What it carries is the branch, what the branch changed, its pull request, and who else
-  // works beside it; a plain chat thread has none of it, and a diff on its own rides in the
-  // trailing slot rather than opening a line for one number (state/sidebarRows.ts `rowMeta`).
+  // there. What it carries is the branch, its pull request, and who else works beside it; a plain
+  // chat thread has none of it, and a diff or the mark of its harness alone rides in the trailing
+  // slot rather than opening a line for one glyph (state/sidebarRows.ts `rowMeta`).
   const compact = rowLayout === "compact";
   const meta = rowMeta({
     branch: !!worktree,
     pull: !!pull,
-    badge: !!stack?.length || external,
+    stack: !!stack?.length,
+    harness: external,
     diff,
     layout: rowLayout,
   });
@@ -846,6 +851,10 @@ const ThreadRow = memo(function ThreadRow({
     );
   const stateSlot = (pill: boolean) => (
     <span title={chip?.title} className={cx(TRAILING_SLOT, HIDDEN_ON_HOVER)}>
+      {/* What the row has no line for: the harness it runs on, then the diff. */}
+      {meta === "trailing" && external && (
+        <HarnessIcon id={session.harness!} name={harness?.name} size={12} className="shrink-0" />
+      )}
       {meta === "trailing" && diff && <DiffStat diff={diff} />}
       {pill ? twoLineState : compactState}
     </span>
@@ -926,7 +935,9 @@ const ThreadRow = memo(function ThreadRow({
                     {stateSlot(false)}
                   </span>
                   {/* The second line, only when there is something to say: the branch it works in,
-                      what the branch changed, its pull request, and who else works beside it. */}
+                      its pull request, and who else works beside it. The harness mark is not on it
+                      unless those are: alone it would be a 12px glyph on an empty line, so it rides
+                      in the trailing slot instead. */}
                   {meta === "line" && (
                     <span className="relative flex w-full min-w-0 items-center gap-2 text-sub text-fg-muted">
                       {worktree && (
@@ -965,9 +976,9 @@ const ThreadRow = memo(function ThreadRow({
                     {stateSlot(true)}
                   </span>
                   {/* The line under the title, only when it has something besides the mark that now
-                      sits before the title: the branch, what it changed, its pull request, and who
-                      else works beside it. */}
-                  {meta !== "none" && (
+                      sits before the title: the branch, its pull request, and who else works beside
+                      it. A diff, or the harness mark alone, is in the trailing slot above. */}
+                  {meta === "line" && (
                     <span className="flex min-w-0 items-center gap-1 text-sub text-fg-muted">
                       {worktree && (
                         <span className="title-first-branch min-w-0 flex-1 truncate font-mono text-[10px]">
@@ -1165,7 +1176,9 @@ function useNow() {
 const LABELS: Record<SectionId, string> = {
   working: "Working",
   pinned: "Pinned",
-  needs: "Needs you",
+  // The threads that ask for an approval or an answer. Not "Needs you": that is the inbox row
+  // above, which is one row per item (a failure is not a thread) and opens the page for all of them.
+  needs: "Asking you",
   threads: "Active",
   snoozed: "Snoozed",
   settled: "Settled",
@@ -1708,7 +1721,7 @@ export function Sidebar() {
     for (const project of projects ?? []) {
       project.items = arranged("threads", project.items, project.key);
     }
-    // The sections this layout draws, in its order: Working, Pinned, Needs you and Active lead, and
+    // The sections this layout draws, in its order: Working, Pinned, Asking you and Active lead, and
     // the shelves close the list (state/sidebarRows.ts `sectionsOf`).
     const all: Section[] = sectionsOf(layoutMode).map((id) => ({
       id,
