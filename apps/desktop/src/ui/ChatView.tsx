@@ -945,13 +945,18 @@ export function ChatView() {
                 <div
                   id="new-thread-overview"
                   aria-hidden={!overview}
+                  // Nothing on this box animates: it holds the cards' glass, and a fade or a slide
+                  // here would take the blur with it. The classes pick the motion their contents
+                  // play (index.css, `rc-overview`).
                   className={cx(
                     "min-h-0 w-full overflow-y-auto pb-3",
                     overviewLeaving ? "rc-overview-out" : "rc-overview-in",
                   )}
                   onAnimationEnd={(event) => {
-                    // A widget's own animation bubbles up here too; only this box's exit ends it.
-                    if (event.target !== event.currentTarget || !overviewLeaving) return;
+                    // The motion runs inside the cards, whose animation ends here (index.css,
+                    // `rc-overview`): only the exit's own end unmounts the box, and a widget's own
+                    // animation is filtered out by its name.
+                    if (!overviewLeaving || !event.animationName.startsWith("rc-overview")) return;
                     setOverviewLeaving(false);
                     setOverviewMounted(false);
                   }}

@@ -98,12 +98,13 @@
   --rc-surface: #eaeaea;
   --rc-surface-2: #ffffff;
   --rc-surface-3: #e4e4e6;
-  /* The composer shares the sidebar surface. */
-  --rc-composer-bg: var(--rc-sidebar);
-  --rc-composer-bg-focus: var(--rc-sidebar);
+  /* The composer shares the sidebar surface, in the shared glass: the hue is the sidebar's, the
+     alpha and the blur are `--rc-glass-alpha` and `--rc-glass-filter` (Glass, below), so one edit
+     tunes it with every other translucent surface. */
+  --rc-composer-bg: color-mix(in srgb, var(--rc-sidebar) var(--rc-glass-alpha), transparent);
+  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-sidebar) calc(var(--rc-glass-alpha) + 8%), transparent);
   /* Over a new thread's picture (`.rc-composer-over`): a panel, not another window on it. */
-  --rc-composer-bg-over: var(--rc-sidebar);
-  --rc-composer-filter: none;
+  --rc-composer-bg-over: color-mix(in srgb, var(--rc-sidebar) calc(var(--rc-glass-alpha) + 12%), transparent);
   --rc-border: #00000008;
   --rc-border-strong: #0000001a;
   --rc-text: #171717;
@@ -130,11 +131,18 @@
     --rc-surface: #1d1d20;
     --rc-surface-2: #242428;
     --rc-surface-3: #2a2a2e;
-    /* Keep the composer solid and consistent with the sidebar. */
-    --rc-composer-bg: var(--rc-sidebar);
-    --rc-composer-bg-focus: var(--rc-sidebar);
-    --rc-composer-bg-over: var(--rc-sidebar);
-    --rc-composer-filter: none;
+    /* The composer shares the sidebar surface, in the shared glass (see the light theme above). */
+    --rc-composer-bg: color-mix(in srgb, var(--rc-sidebar) var(--rc-glass-alpha), transparent);
+    --rc-composer-bg-focus: color-mix(
+      in srgb,
+      var(--rc-sidebar) calc(var(--rc-glass-alpha) + 8%),
+      transparent
+    );
+    --rc-composer-bg-over: color-mix(
+      in srgb,
+      var(--rc-sidebar) calc(var(--rc-glass-alpha) + 12%),
+      transparent
+    );
     --rc-border: #ffffff08;
     --rc-border-strong: #ffffff18;
     --rc-text: #ededed;
@@ -160,10 +168,9 @@
   --rc-surface: #1d1d20;
   --rc-surface-2: #242428;
   --rc-surface-3: #2a2a2e;
-  --rc-composer-bg: var(--rc-sidebar);
-  --rc-composer-bg-focus: var(--rc-sidebar);
-  --rc-composer-bg-over: var(--rc-sidebar);
-  --rc-composer-filter: none;
+  --rc-composer-bg: color-mix(in srgb, var(--rc-sidebar) var(--rc-glass-alpha), transparent);
+  --rc-composer-bg-focus: color-mix(in srgb, var(--rc-sidebar) calc(var(--rc-glass-alpha) + 8%), transparent);
+  --rc-composer-bg-over: color-mix(in srgb, var(--rc-sidebar) calc(var(--rc-glass-alpha) + 12%), transparent);
   --rc-border: #ffffff08;
   --rc-border-strong: #ffffff18;
   --rc-text: #ededed;
@@ -887,6 +894,13 @@
  * 8px into place, and goes back the same way before it unmounts, so closing reads as the card
  * leaving rather than as the screen cutting it. Both collapse under reduced motion, where the box
  * is removed at once instead.
+ *
+ * The cards are the glass, and neither their blur nor anything above it may animate: an element
+ * that fades or slides becomes a group of its own, and a `backdrop-filter` under one has nothing
+ * to sample, so the blur would drop for the length of the motion and snap back at its end (the
+ * flicker in #3299). So the animation classes sit on the overview box and reach down to what is
+ * inside a card: the card's surface stays still and fades its own fill, which is a colour and no
+ * group, while only the content moves and fades. The filter itself never changes.
  */
 @keyframes rc-overview-in {
   from {
@@ -900,11 +914,27 @@
     transform: translateY(8px);
   }
 }
-.rc-overview-in {
+@keyframes rc-overview-fill-in {
+  from {
+    background-color: transparent;
+  }
+}
+@keyframes rc-overview-fill-out {
+  to {
+    background-color: transparent;
+  }
+}
+.rc-overview-in .rc-overview-body {
   animation: rc-overview-in 220ms var(--ease-snappy);
 }
-.rc-overview-out {
+.rc-overview-out .rc-overview-body {
   animation: rc-overview-out 160ms ease-out both;
+}
+.rc-overview-in .rc-overview-card {
+  animation: rc-overview-fill-in 220ms var(--ease-snappy);
+}
+.rc-overview-out .rc-overview-card {
+  animation: rc-overview-fill-out 160ms ease-out both;
 }
 
 /*
@@ -999,17 +1029,21 @@
 }
 
 /*
- * Glass: the one translucency every floating surface shares (composer,
- * popovers, menus, dialogs, toasts, the right panel). `--rc-glass-bg` and
- * `--rc-glass-filter` are the token pair; Reduce transparency makes them
- * solid (below).
+ * Glass: the one translucency every floating surface shares (composer, popovers, menus, dialogs,
+ * toasts, the right panel, a new thread's cards). Two tokens tune all of it: `--rc-glass-alpha`,
+ * how much of the surface shows through, and `--rc-glass-filter`, how far what is behind it is
+ * blurred. The steps a denser or thinner surface takes are read off the same alpha, so a change to
+ * it moves them together; Reduce transparency makes the pair solid (below).
  */
 :root {
-  --rc-glass-bg: color-mix(in srgb, var(--rc-surface-2) 84%, transparent);
-  --rc-glass-bg-strong: color-mix(in srgb, var(--rc-surface-2) 93%, transparent);
-  --rc-glass-faint-bg: color-mix(in srgb, var(--rc-surface-2) 34%, transparent);
-  --rc-glass-filter: saturate(1.2) blur(13px);
-  --rc-scrim-bg: color-mix(in srgb, var(--rc-bg) 60%, transparent);
+  --rc-glass-alpha: 72%;
+  --rc-glass-alpha-strong: 84%;
+  --rc-glass-alpha-faint: 24%;
+  --rc-glass-filter: saturate(1.15) blur(9px);
+  --rc-glass-bg: color-mix(in srgb, var(--rc-surface-2) var(--rc-glass-alpha), transparent);
+  --rc-glass-bg-strong: color-mix(in srgb, var(--rc-surface-2) var(--rc-glass-alpha-strong), transparent);
+  --rc-glass-faint-bg: color-mix(in srgb, var(--rc-surface-2) var(--rc-glass-alpha-faint), transparent);
+  --rc-scrim-bg: color-mix(in srgb, var(--rc-bg) 52%, transparent);
   --rc-lightbox-scrim-bg: color-mix(in oklab, var(--rc-bg) 70%, transparent);
 }
 
@@ -1020,10 +1054,10 @@
 }
 
 /*
- * A new thread's cards (ui/NewThreadWidgets.tsx): a third of the surface and the shared glass
+ * A new thread's cards (ui/NewThreadWidgets.tsx): a quarter of the surface and the shared glass
  * filter, with no edge ring, so the screen's picture runs on behind them instead of stopping at a
  * slab. See-through on purpose: they are the quiet part of that screen, and the field above them is
- * the solid one.
+ * the denser one.
  */
 .rc-glass-faint {
   background: var(--rc-glass-faint-bg);
@@ -1126,8 +1160,8 @@
 /* The composer shares the sidebar surface and keeps a subtle edge. */
 .rc-composer {
   background: var(--rc-composer-bg);
-  backdrop-filter: var(--rc-composer-filter);
-  -webkit-backdrop-filter: var(--rc-composer-filter);
+  backdrop-filter: var(--rc-glass-filter);
+  -webkit-backdrop-filter: var(--rc-glass-filter);
   box-shadow:
     0 3px 12px -4px var(--rc-shadow-soft),
     0 0 0 1px var(--rc-border);
@@ -1154,15 +1188,15 @@
 .rc-composer-footer {
   border-radius: 0 0 var(--rc-composer-radius) var(--rc-composer-radius);
   background: var(--rc-composer-footer-bg);
-  backdrop-filter: var(--rc-composer-filter);
-  -webkit-backdrop-filter: var(--rc-composer-filter);
+  backdrop-filter: var(--rc-glass-filter);
+  -webkit-backdrop-filter: var(--rc-glass-filter);
 }
-/* A drawer is read, not looked through: opaque, its foot cut where the box begins. Its top
-   corners are the box's own radius, one inset inside them, and the lift it shares with the card
-   is the only edge it gets. */
+/* A drawer is read, not looked through: the sidebar's own solid hue rather than the card's glass,
+   its foot cut where the box begins. Its top corners are the box's own radius, one inset inside
+   them, and the lift it shares with the card is the only edge it gets. */
 .rc-composer-drawer {
   border-radius: var(--rc-composer-radius) var(--rc-composer-radius) 0 0;
-  background: var(--rc-composer-bg);
+  background: var(--rc-sidebar);
   box-shadow: 0 3px 12px -4px var(--rc-shadow-soft);
   clip-path: inset(-1px -1px calc(1rem - 1px) -1px);
 }
@@ -1201,12 +1235,12 @@
   outline-offset: 1px;
 }
 /*
- * A new thread draws its picture behind the whole screen, so the field there is a step more opaque
- * than its usual glass (`--rc-composer-bg-over`, 88%): it reads as the panel the screen is about,
- * while the cards under it stay see-through. Set on the shell (Composer.tsx `className`), the pair
- * the card and the strip read carries down to both, so neither needs a rule of its own. It does not
- * step on focus: it is already the solid thing on that screen, so the picture never shows through
- * mid-typing.
+ * A new thread draws its picture behind the whole screen, so the field there takes a step more of
+ * the surface than its usual glass (`--rc-composer-bg-over`): it reads as the panel the screen is
+ * about, while the cards under it stay see-through. Set on the shell (Composer.tsx `className`), the
+ * pair the card and the strip read carries down to both, so neither needs a rule of its own. It does
+ * not step on focus: it is already the densest thing on that screen, so the picture never shows
+ * through mid-typing.
  */
 .rc-composer-over {
   --rc-composer-bg: var(--rc-composer-bg-over);
@@ -1303,7 +1337,7 @@
  * every floating surface, tinted with the pane's own background.
  */
 :root {
-  --rc-glass-pane: color-mix(in srgb, var(--rc-bg) 86%, transparent);
+  --rc-glass-pane: color-mix(in srgb, var(--rc-bg) 78%, transparent);
 }
 .rc-header-glass::before {
   content: "";
@@ -1321,7 +1355,7 @@
 }
 /* Over a new thread's banner the tint is lighter, so the picture shows through. */
 .rc-header-glass.rc-frost::before {
-  --rc-glass-pane: color-mix(in srgb, var(--rc-bg) 60%, transparent);
+  --rc-glass-pane: color-mix(in srgb, var(--rc-bg) 52%, transparent);
 }
 .rc-fade-in {
   animation: rc-fade 400ms ease-out;
@@ -1368,7 +1402,6 @@
     --rc-composer-bg: var(--rc-sidebar);
     --rc-composer-bg-focus: var(--rc-sidebar);
     --rc-composer-bg-over: var(--rc-sidebar);
-    --rc-composer-filter: none;
   }
   :root,
   .rc-header-glass.rc-frost::before {
@@ -1389,7 +1422,6 @@
   --rc-composer-bg: var(--rc-sidebar);
   --rc-composer-bg-focus: var(--rc-sidebar);
   --rc-composer-bg-over: var(--rc-sidebar);
-  --rc-composer-filter: none;
 }
 :root.reduce-transparency .rc-composer:focus-within {
   background: var(--rc-composer-bg-focus);
@@ -1403,7 +1435,7 @@
  * Platforms (docs/design.md › Platforms): `data-platform` on <html> (lib/platform.ts) fits the
  * macOS design to the other web views. Nothing here applies to `mac` or to a page without the
  * attribute, so the macOS look is the rules above alone. Glass is the same on every platform:
- * WebView2 (Chromium) and WebKitGTK draw the 13px `backdrop-filter` themselves, and Reduce
+ * WebView2 (Chromium) and WebKitGTK draw the shared `backdrop-filter` themselves, and Reduce
  * transparency (above) is the solid fallback on all of them.
  *
  * Windows 11 also shows Mica (the window's material, applied by the shell; `data-material` on

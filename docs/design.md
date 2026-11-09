@@ -191,21 +191,30 @@ own `rounded-lg` recipe below.
 ## Glass
 
 One translucency, one recipe, for every floating surface: popovers, menus,
-tooltips, dialogs, toasts and the lightbox.
-`--rc-glass-bg` (`surface-2` at 84%; `--rc-glass-bg-strong` at 93% for
-popovers, menus and floating pills) with `--rc-glass-filter`
-(`saturate(1.2) blur(13px)`). Use `.rc-glass` or the `elevated` utility,
-never a hand-made `backdrop-filter`. Reduce transparency (the media query,
-or the system setting the shell reads) turns the pair solid. Headers use
-the same filter tinted with the pane instead of a surface
-(`--rc-glass-pane`, `bg` at 86%; 60% with `.rc-frost` over a new thread's
-banner), through `.rc-header-glass`. Panes, cards, rows and the sidebar
-stay opaque.
+tooltips, dialogs, toasts, the composer and the lightbox. Two tokens tune all of it:
+`--rc-glass-alpha` (72%, how much of the surface shows through) and
+`--rc-glass-filter` (`saturate(1.15) blur(9px)`). The fills are steps off the
+same alpha — `--rc-glass-bg` (`surface-2` at `--rc-glass-alpha`),
+`--rc-glass-bg-strong` at `--rc-glass-alpha-strong` (84%) for popovers, menus
+and floating pills, `--rc-glass-faint-bg` at `--rc-glass-alpha-faint` (24%) for
+a new thread's cards. Use `.rc-glass` or the `elevated` utility, never a
+hand-made `backdrop-filter`. Reduce transparency (the media query, or the
+system setting the shell reads) turns the pair solid. Headers use the same
+filter tinted with the pane instead of a surface (`--rc-glass-pane`, `bg` at
+78%; 52% with `.rc-frost` over a new thread's banner), through
+`.rc-header-glass`. Panes, cards, rows and the sidebar stay opaque.
 
 The one other use of that filter is the scrim a narrow window's side sheet opens
-over, `.rc-scrim`: `bg` at 60%, blurred, with what it covers opaque behind it
+over, `.rc-scrim`: `bg` at 52%, blurred, with what it covers opaque behind it
 (ui/RightPanel.tsx). No second filter is stacked on it: the sheet over a scrim is
 a pane, not glass.
+
+Nothing that draws the glass animates. A `backdrop-filter` under an element
+that fades or slides is sampled from an empty group: the blur drops for the
+length of the motion and snaps back at its end. So a surface that opens or
+closes keeps its filter on a stable element and moves what is inside it — a
+card's fill may fade (a colour, which no group follows) while its content
+fades and rises.
 
 What floats just above the composer is that same dense glass as one class,
 `.rc-glass-overlay` (strong glass + `shadow-1`'s edge ring): the strip of
@@ -216,19 +225,21 @@ surface and the control, so its hover is a fill layer over the glass
 rather than a `hover:bg-…` utility a class rule would beat.
 
 The composer floats over the transcript as one card: the field, and under it one control row with
-every control the send needs. Its slash and `@` menus are an opaque drawer attached to the box's top
+every control the send needs. Its slash and `@` menus are a solid drawer attached to the box's top
 edge. Everything in the card starts on one left edge: the field, the chips, the thumbnails and the
 hint rows at 20px (`px-5`); the tray at 12px (`px-3`), because its round controls carry 8px of their
 own, which puts their icons on that same edge.
 
-The composer uses solid `surface-2` in both themes, including over a new thread's
-picture, with no backdrop blur. It has no edge of its own: the lift under it
+The composer takes the shared glass in the sidebar's own hue: `--rc-glass-alpha` of
+`--rc-sidebar` behind the shared filter, a step denser while focused or over a
+new thread's picture, so what it floats over shows through instead of stopping
+at a slab. It has no edge of its own: the lift under it
 (`0 3px 12px -4px` of `--rc-shadow-soft`) says it floats, and the only rim it
 ever draws is the keyboard's focus-within ring, `focus` at 40%. The strip under
-it uses the same solid surface with a 4% lift of the text colour
+it uses the same fill with a 4% lift of the text colour
 (`--rc-composer-footer-bg`), and no ring either. The new thread's picture cards
-remain translucent (`.rc-glass-faint`) and become solid under Reduce
-transparency.
+stay the see-through step (`.rc-glass-faint`) and everything becomes solid under
+Reduce transparency.
 
 ## Spacing
 
@@ -418,7 +429,7 @@ the macOS look is the base rules alone. To look at one in the mock, set
 | Sans (`--font-sans`, `--font-rounded`) | SF Pro / SF Pro Rounded | Segoe UI Variable Text, Segoe UI | Inter, Cantarell, Ubuntu, Noto Sans |
 | Mono (`--font-mono`) | SF Mono, Menlo | Cascadia Mono, Consolas | JetBrains Mono, DejaVu Sans Mono |
 | Font smoothing | `antialiased` | system (ClearType) | system |
-| Glass | the recipe above | the recipe above (13px is the cap; nothing blurs more) | the recipe above |
+| Glass | the recipe above | the recipe above (9px is the cap; nothing blurs more) | the recipe above |
 | Window material | `sidebar` vibrancy (painted over by the solid sidebar) | Mica on Windows 11, under the sidebar | none |
 | Word reveal | fade + 4px blur | fade + 4px blur | fade only |
 | Popovers, toasts, What's New open | scale + fade | scale + fade | slide/fade, no scale |
@@ -718,7 +729,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   card's own 16px. The field itself carries 6px (`py-1.5`) above and below
   its text inside the scroller. The control row at the bottom of the card
   is `px-3 pt-1 pb-3`, its round controls carrying a few px of their own,
-  which puts their icons on the same 20px edge. The solid `surface-2` fill has
+  which puts their icons on the same 20px edge. The sidebar's hue at
+  `--rc-glass-alpha`, behind the shared filter, has
   no edge and no inner highlight, only the lift under it, and a quiet
   focus-within ring for the keyboard. The card clips to its own corner. The editor reads at
   `text-body leading-relaxed` (22.75px), two lines at rest above the control
@@ -785,13 +797,16 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   one sideways-scrolling row below it; a card with nothing to say says so in one line rather
   than collapsing. A persisted, initially closed overview toggle sits below the centred composer;
   the cards scroll in the remaining space and never move the field. Over a picture the toggle
-  takes `.rc-glass`, so its label reads whatever the picture is.
+  takes `.rc-glass`, so its label reads whatever the picture is. The cards are also the one motion
+  that happens on top of the glass: opening and closing fades each card's own fill and moves what
+  is inside it, and never touches the surface or its blur, which would drop for the length of the
+  animation and snap back at the end.
 - **Composer strip:** what the thread works in and what it is allowed to do
   hang off the card's bottom edge instead of sitting in its glass: a 36px strip
   (`.rc-composer-footer`) inset 12px each side, its top edge tucked 8px behind
   the card so the two read as one stack, its own corners round only at the
   bottom, no ring (the step in fill separates it) and `--rc-composer-footer-bg`
-  (the card's solid surface with a 4% lift of the text colour); `text-callout` in `fg-muted`, 14px icons, `gap-4`
+  (the card's fill with a 4% lift of the text colour); `text-callout` in `fg-muted`, 14px icons, `gap-4`
   between the groups. The thread's folder, its worktree toggle and its branch chip are on
   the left, the permissions mode and the usage meter on the right; every one of
   them is a pill whose panel opens off the pill itself, 8px away from it,
