@@ -104,7 +104,7 @@ export function UsageMeter({ threadId }: { threadId?: string }) {
   const own = useApp((s) => (threadId ? s.planUsage[threadId] : undefined));
   const usageOpen = useApp((s) => s.settings === "usage");
   // The one tooltip and hover-card timing (lib/hover.ts): the card reads its numbers when it opens.
-  const tip = useHoverTip();
+  const tip = useHoverTip("card");
   const open = tip.open;
   // The context as it was when Compact was pressed, so the card can compare it with what the
   // harness reports afterwards. It is a snapshot, not a second set of numbers.

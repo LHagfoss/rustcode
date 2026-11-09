@@ -51,7 +51,7 @@ export function ThreadHoverCard({
   disabled?: boolean;
   children: ReactNode;
 }) {
-  const tip = useHoverTip();
+  const tip = useHoverTip("card");
   const open = tip.open && !disabled;
   // A row being dragged shows no card, and a fresh hover is what brings one back.
   const { dismiss } = tip;

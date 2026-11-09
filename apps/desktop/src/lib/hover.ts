@@ -8,7 +8,9 @@
 // waits for a fresh pointer enter, and a click's own focus is not one.
 //
 // The tips are one store rather than one per component: only one is ever on screen, and a
-// neighbour has to be able to take the open tip's place without a round trip through React.
+// neighbour has to be able to take the open tip's place without a round trip through React. There
+// are two stores, one for tooltips and one for hover cards, so a tip inside a card (the usage
+// card's context tiles) never takes the card itself out from under the pointer.
 
 import {
   type PointerEvent as ReactPointerEvent,
@@ -74,6 +76,12 @@ export class HoverTips {
   /** Whether this tip is the one on screen. */
   isOpen(id: TipId): boolean {
     return this.#open === id;
+  }
+
+  /** Whether this tip is on screen or still waiting to be: the tip listens for its dismissals
+   * while it waits too, so a scroll during the rest never leaves one to appear behind it. */
+  isArmed(id: TipId): boolean {
+    return this.#open === id || this.#waiting === id;
   }
 
   /** The pointer or the keyboard arrived on a target. */
@@ -162,8 +170,17 @@ export class HoverTips {
   }
 }
 
-/** Every tooltip and hover card in the app shares this one. */
-export const hoverTips = new HoverTips();
+/** The two families of tip that share the timing. A tooltip and a hover card never close each
+ * other: the usage card has tooltips on its own context tiles, and a tip there must not take the
+ * card out from under the pointer. */
+export type TipTrack = "tooltip" | "card";
+
+const TRACKS: Record<TipTrack, HoverTips> = { tooltip: new HoverTips(), card: new HoverTips() };
+
+/** The tips of one track: a tooltip waits behind a tooltip, a hover card behind a hover card. */
+export function tipTrack(track: TipTrack): HoverTips {
+  return TRACKS[track];
+}
 
 /** Whether the keyboard, not a press, moved focus here (lib/focusModality.ts). A tip follows the
  * keyboard, and a click's own focus is not a reason for one: it would outlive the pointer. */
@@ -182,6 +199,7 @@ export interface HoverTip {
     onPointerLeave: () => void;
     onPointerDown: () => void;
     onPointerUp: () => void;
+    onClick: () => void;
     onFocus: () => void;
     onBlur: () => void;
   };
@@ -191,23 +209,30 @@ export interface HoverTip {
 }
 
 /** The one timing a tooltip and a hover card share (lib/hover.ts); see the top of this file. */
-export function useHoverTip(): HoverTip {
-  const [id] = useState<TipId>(() => Symbol("tip"));
+export function useHoverTip(track: TipTrack = "tooltip"): HoverTip {
+  const tips = tipTrack(track);
+  const [id] = useState<TipId>(() => Symbol(track));
   const open = useSyncExternalStore(
-    hoverTips.subscribe,
-    () => hoverTips.isOpen(id),
+    tips.subscribe,
+    () => tips.isOpen(id),
+    () => false,
+  );
+  // A tip that is still waiting listens too: a scroll or Escape during the rest dismisses it.
+  const armed = useSyncExternalStore(
+    tips.subscribe,
+    () => tips.isArmed(id),
     () => false,
   );
   // The press that focuses a target, so its own focus does not open the tip it just put away.
   const pressed = useRef(false);
-  const dismiss = useCallback(() => hoverTips.dismiss(id), [id]);
+  const dismiss = useCallback(() => tips.dismiss(id), [tips, id]);
 
-  // Nothing on screen may outlive its reason: a scroll moves the target out from under the tip, a
-  // resize does the same, Escape is the app's way out of anything floating, and the window losing
-  // focus means the pointer is somewhere else now.
+  // Nothing may outlive its reason: a scroll moves the target out from under the tip, a resize does
+  // the same, Escape is the app's way out of anything floating, and the window losing focus means
+  // the pointer is somewhere else now.
   useEffect(() => {
-    if (!open) return;
-    const close = () => hoverTips.dismiss(id);
+    if (!armed) return;
+    const close = () => tips.dismiss(id);
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") close();
     };
@@ -221,10 +246,10 @@ export function useHoverTip(): HoverTip {
       window.removeEventListener("resize", close);
       window.removeEventListener("blur", close);
     };
-  }, [open, id]);
+  }, [armed, tips, id]);
 
   // A tip whose target unmounts leaves with it instead of staying on screen over nothing.
-  useEffect(() => () => hoverTips.forget(id), [id]);
+  useEffect(() => () => tips.forget(id), [tips, id]);
 
   const triggerProps = useMemo(
     () => ({
@@ -232,37 +257,42 @@ export function useHoverTip(): HoverTip {
         // A touch has no hover: its press is the whole interaction.
         if (event.pointerType === "touch") return;
         pressed.current = false;
-        hoverTips.enter(id);
+        tips.enter(id);
       },
       onPointerLeave: () => {
         pressed.current = false;
-        hoverTips.leave(id);
+        tips.leave(id);
       },
       onPointerDown: () => {
         pressed.current = true;
-        hoverTips.dismiss(id);
+        tips.dismiss(id);
       },
       onPointerUp: () => {
         pressed.current = false;
       },
+      // Activation, by press or by Enter and Space on the keyboard: the target has done its work,
+      // and a tip left hanging over the result is the one that needed a second press to dismiss.
+      onClick: () => {
+        tips.dismiss(id);
+      },
       onFocus: () => {
         if (pressed.current || !keyboardFocus()) return;
-        hoverTips.enter(id);
+        tips.enter(id);
       },
       onBlur: () => {
         pressed.current = false;
-        hoverTips.leave(id);
+        tips.leave(id);
       },
     }),
-    [id],
+    [tips, id],
   );
 
   const contentProps = useMemo(
     () => ({
-      onPointerEnter: () => hoverTips.enter(id),
-      onPointerLeave: () => hoverTips.leave(id),
+      onPointerEnter: () => tips.enter(id),
+      onPointerLeave: () => tips.leave(id),
     }),
-    [id],
+    [tips, id],
   );
 
   return { open, dismiss, triggerProps, contentProps };

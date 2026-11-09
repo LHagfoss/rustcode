@@ -3,7 +3,14 @@
 // keeps a tip from outliving its pointer.
 
 import { describe, expect, test } from "bun:test";
-import { HOVER_CLOSE_MS, HOVER_OPEN_MS, HOVER_SWITCH_MS, type HoverTiming, HoverTips } from "./hover";
+import {
+  HOVER_CLOSE_MS,
+  HOVER_OPEN_MS,
+  HOVER_SWITCH_MS,
+  type HoverTiming,
+  HoverTips,
+  tipTrack,
+} from "./hover";
 
 /** A clock that only moves when the test says so. */
 function clock(): HoverTiming & { advance: (ms: number) => void } {
@@ -134,5 +141,20 @@ describe("hover tip timing", () => {
     expect(store.isOpen(a)).toBe(false);
     store.enter(b);
     expect(store.isOpen(b)).toBe(true);
+  });
+
+  test("a tooltip and a hover card are on their own tracks, and never close each other", () => {
+    const time = clock();
+    const tooltips = new HoverTips(time);
+    const cards = new HoverTips(time);
+    cards.enter(a);
+    time.advance(HOVER_OPEN_MS);
+    // A tip inside the open card, on the other track: the card stays where the pointer is.
+    tooltips.enter(b);
+    time.advance(HOVER_OPEN_MS);
+    expect(tooltips.isOpen(b)).toBe(true);
+    expect(cards.isOpen(a)).toBe(true);
+    // The tracks the hook hands out are two, not one.
+    expect(tipTrack("tooltip")).not.toBe(tipTrack("card"));
   });
 });

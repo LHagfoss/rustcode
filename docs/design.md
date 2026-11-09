@@ -466,6 +466,11 @@ on its own: a click's own focus is not a reason for a tip, and the next one
 waits for a fresh pointer enter. The keyboard opens tips too, under
 `data-keyboard-nav` like every focus ring.
 
+A tooltip and a hover card never close each other: they are one behaviour
+on two tracks, so a tooltip on a control inside the usage card (its context
+tiles) shows over the card instead of taking the card out from under the
+pointer. Only one tip of a track is ever on screen.
+
 Both sit on `tipSurface` (`elevated rounded-xl text-callout text-fg`, the
 `xl` radius) and share `surfaceCollisionPadding` (8px from the window's
 edges). A tooltip adds `pointer-events-none px-2 py-1 max-w-80`, opens on
