@@ -211,8 +211,10 @@ blurs takes it with `@apply glass-filter`. WebKit's prefixed
 that engine: a `var()` there left the glass translucent with nothing blurred
 behind it (#3328). Both properties are written, the prefixed one being the one
 WebKit paints with. Use `.rc-glass` or the `elevated` utility, never a
-hand-made `backdrop-filter`. Reduce transparency (the media query, or the
-system setting the shell reads) turns the fill solid and takes the filter away.
+hand-made `backdrop-filter`. The glass is macOS's alone: Windows and Linux take
+the solid tokens and no filter at all (Platforms, below), as does Reduce
+transparency (the media query, or the system setting the shell reads) on any
+platform.
 Headers use the same filter tinted with the pane instead of a surface
 (`--rc-glass-pane`, `bg` at 78%; 52% with `.rc-frost` over a new thread's
 banner), through `.rc-header-glass`. Panes, cards, rows and the sidebar stay
@@ -417,7 +419,8 @@ that change use `tabular`.
   the last block, so the text already on screen is plain text: nothing fades
   twice, and a finished reply has no spans and no animation. The blur is the
   one `filter` that animates: 280ms on a handful of words, never on a box that
-  moves. Settings › Appearance turns it off; reduced motion does too.
+  moves. Settings › Appearance turns it off; reduced motion does too, and
+  Windows and Linux never paint it (Platforms).
 - A value that changes in the Statistics tiles when the period does rolls
   instead of blinking: a count digit by digit (`RollingNumber`), a cost or a
   compact token total up into place once (`rc-roll`, 240ms, `transform` and
@@ -429,48 +432,44 @@ that change use `tabular`.
 ## Platforms
 
 The design is drawn on macOS; Windows (WebView2) and Linux (WebKitGTK) get the
-same layout with their own type, Windows with Mica behind the sidebar. `lib/platform.ts`
+same layout with their own type. `lib/platform.ts`
 sets `data-platform="mac|windows|linux"` on `<html>` from the web view's user
 agent before the first render (`main.tsx`); a browser (the mock, `dev:web`)
 is always `mac`. Every rule for another platform is a token override under
-`:root[data-platform=…]` at the end of `index.css`, never a per-component
-branch, and nothing applies to `mac` or to a page without the attribute, so
+`:root[data-platform=…]` at the end of `index.css`, not a per-component
+branch, except a value the component writes inline: the banner's blur radius
+(`ui/NewThreadBanner.tsx`, off through `paintsBlur()` in `lib/platform.ts`).
+Nothing applies to `mac` or to a page without the attribute, so
 the macOS look is the base rules alone. To look at one in the mock, set
 `document.documentElement.dataset.platform` in the page.
+
+Blur is macOS's alone. Windows and Linux paint no blur at all, in the page or
+behind the window, decorative ones included.
 
 | | macOS | Windows | Linux |
 |---|---|---|---|
 | Sans (`--font-sans`, `--font-rounded`) | SF Pro / SF Pro Rounded | Segoe UI Variable Text, Segoe UI | Inter, Cantarell, Ubuntu, Noto Sans |
 | Mono (`--font-mono`) | SF Mono, Menlo | Cascadia Mono, Consolas | JetBrains Mono, DejaVu Sans Mono |
 | Font smoothing | `antialiased` | system (ClearType) | system |
-| Glass | the recipe above | the recipe above (9px is the cap; nothing blurs more) | the recipe above |
-| Window material | `sidebar` vibrancy (painted over by the solid sidebar) | Mica on Windows 11, under the sidebar | none |
-| Word reveal | fade + 4px blur | fade + 4px blur | fade only |
+| Glass | the recipe above | none: solid `surface-2` | none: solid `surface-2` |
+| Window material | `sidebar` vibrancy (painted over by the solid sidebar) | none (opaque window) | none |
+| Word reveal | fade + 4px blur | fade only | fade only |
 | Popovers, toasts, What's New open | scale + fade | scale + fade | slide/fade, no scale |
 
-- Linux has the same in-app glass as the others; Tauri cannot ask a Linux
-  compositor to blur behind the window, so there is no window material.
-  WebKitGTK paints the shared filter with the GPU's compositor, which the
-  switches set to get past a driver or Wayland bug take away
-  (`WEBKIT_DISABLE_COMPOSITING_MODE`; Settings › Diagnostics lists them). A web
-  view like that still answers `CSS.supports("backdrop-filter", …)` with yes,
-  so the shell answers instead: `webview_blur` (`src-tauri/src/webview.rs`)
-  says no, and the page takes the Reduce-transparency tokens by itself
-  (`lib/transparency.ts`). The same happens where the web view has no
-  `backdrop-filter` at all: a translucent surface without its blur is text over
-  text.
-- Windows 11: the shell applies Mica when it builds the window
-  (`src-tauri/src/webview.rs`; the window is `transparent` in
-  `tauri.windows.conf.json`) and `window_material` tells the page, which sets
-  `data-material="mica"` (`lib/material.ts`). Only then is the sidebar (and the
-  shell behind it) 72% of its colour, and the body transparent, so the material
-  shows through the sidebar and nowhere else; the chat pane stays opaque.
-  Windows 10 has no Mica (Acrylic drags and resizes badly, so it is not the
-  fallback): the sidebar stays solid. The native title bar from the window's
-  decorations is unchanged. `window_material` reports the material's own result
-  (`window_vibrancy::apply_mica`), because tauri's `set_effects` returns `Ok`
-  even where the platform refused: a wrong `mica` there would paint a
-  see-through sidebar over a window whose backdrop is the desktop.
+- Windows and Linux take the solid fallback for every frosted surface: the
+  same tokens and `backdrop-filter: none` that Reduce transparency sets, under
+  the same selector, so one platform attribute decides it for the CSS. Glass
+  and popovers are opaque `surface-2`, the composer and the sidebar `sidebar`,
+  the header and the scrims `bg`. The streaming reveal drops its 4px blur, and
+  the new thread's banner turns its own blur and its glow off
+  (`ui/NewThreadBanner.tsx`), so nothing decorative blurs either.
+- Windows' window is opaque (`"transparent": false` in
+  `tauri.windows.conf.json`): it has no material. The shell used to apply Mica
+  when it built the window, and the page showed it through the sidebar alone;
+  both are gone, since a material behind a solid page bought nothing and the
+  transparent window only added a fallback of its own. The native title bar
+  from the window's decorations is unchanged. Linux has no window material
+  either: Tauri cannot ask a compositor to blur behind the window.
 - Settings › Appearance › Reduce transparency makes all glass solid on any
   platform (default off). The system's request does the same: the media query
   where the web view has it, the shell's `reduce_transparency` on macOS. The

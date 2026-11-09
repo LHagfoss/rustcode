@@ -10,7 +10,7 @@
         "minWidth": 640,
         "minHeight": 480,
         "decorations": true,
-        "transparent": true,
+        "transparent": false,
         "titleBarStyle": "Visible",
         "hiddenTitle": false
       }

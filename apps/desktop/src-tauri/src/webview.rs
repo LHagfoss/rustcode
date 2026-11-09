@@ -123,7 +123,6 @@ pub fn build_main_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow
         None => builder,
     };
     let window = builder.build()?;
-    apply_material(&window);
     // Closing the window (macOS keeps the app running) is the last chance to remember its size.
     let handle = app.handle().clone();
     window.on_window_event(move |event| {
@@ -132,43 +131,6 @@ pub fn build_main_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow
         }
     });
     Ok(window)
-}
-
-/// Whether the window's backdrop material (Mica) is on, for the page to let it show through.
-static MATERIAL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// Windows 11's Mica behind the sidebar (docs/design.md › Platforms). The window is transparent in
-/// `tauri.windows.conf.json`, so a failure (Windows 10 has no Mica) must leave the page opaque:
-/// the page asks `window_material` and only lets the material through when it is on. Acrylic is
-/// not the fallback: it drags and resizes badly on both Windows versions. Other systems have no
-/// window material; macOS's comes from `windowEffects` in `tauri.conf.json`.
-#[cfg(target_os = "windows")]
-fn apply_material(window: &tauri::WebviewWindow) {
-    // Not `WebviewWindow::set_effects`: tauri drops the platform's result (`let _ =` around
-    // `vibrancy::set_window_effects`, whose Windows side ignores `window_vibrancy`'s), so it returns
-    // Ok on Windows 10, where nothing was applied. The page would then paint a see-through sidebar
-    // over a window whose only backdrop is the desktop. This call's result is the real answer.
-    let applied = window_vibrancy::apply_mica(window, None).is_ok();
-    MATERIAL.store(applied, std::sync::atomic::Ordering::Relaxed);
-}
-
-/// Only Windows has a window material here; macOS's comes from `tauri.conf.json`.
-#[cfg(not(target_os = "windows"))]
-fn apply_material(_window: &tauri::WebviewWindow) {}
-
-/// What `window_material` answers: whether the window has its material.
-fn material_name(applied: bool) -> &'static str {
-    if applied {
-        "mica"
-    } else {
-        "none"
-    }
-}
-
-/// `"mica"` when the window has its material, else `"none"`.
-#[tauri::command]
-pub fn window_material() -> &'static str {
-    material_name(MATERIAL.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 /// The switches that take WebKitGTK's accelerated compositing away, and with it every
@@ -362,14 +324,6 @@ mod tests {
     #[test]
     fn a_missing_file_is_no_size() {
         assert_eq!(read_size(&temp("missing")), None);
-    }
-
-    // The page lets the window's backdrop show (transparent body, see-through sidebar) only for
-    // `mica`; every other answer has to leave it opaque (lib/material.ts).
-    #[test]
-    fn the_material_is_only_announced_when_it_took() {
-        assert_eq!(material_name(true), "mica");
-        assert_eq!(material_name(false), "none");
     }
 
     // Linux's WebKitGTK paints `backdrop-filter` with accelerated compositing only, and these are

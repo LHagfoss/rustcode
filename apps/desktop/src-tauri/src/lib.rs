@@ -112,7 +112,6 @@ pub fn run() {
             updater::update_install,
             updater::release_notes,
             webview::display_info,
-            webview::window_material,
             webview::webview_blur,
         ])
         .setup(|app| {
