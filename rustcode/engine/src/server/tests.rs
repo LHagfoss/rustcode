@@ -139,11 +139,17 @@ async fn two_clients_one_server() {
         .expect("a's report");
 
     let mut said = Vec::new();
-    for (_, received, close, client) in clients {
+    for (_, mut received, close, client) in clients {
+        let mut chunks = Vec::new();
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            while !chunks.iter().any(|(who, _)| *who == "agent") {
+                chunks.push(received.recv().await.expect("client receives the reply"));
+            }
+        })
+        .await
+        .expect("client receives the reply before the deadline");
         let _ = close.send(());
         client.await.expect("client").expect("client ends cleanly");
-        let mut received = received;
-        let mut chunks = Vec::new();
         while let Ok(chunk) = received.try_recv() {
             chunks.push(chunk);
         }
