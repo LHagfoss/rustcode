@@ -601,24 +601,27 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   92px, and the brand keeps the list's 12px edge at every width and on every
   platform. One 39px row (`ui/BrandHeader.tsx`).
 - **Sidebar sections:** Working leads the list, always open; then Pinned,
-  Needs you and Active, each with a quiet label once there is more than one of
+  Asking you and Active, each with a quiet label once there is more than one of
   them; then the Snoozed and Settled shelves at the foot, under one hairline,
   each a one-line header with its count and a chevron that folds it. Every
   shelf folds on its own and the choice is kept per shelf
   (`rustcode.sidebar.<shelf>Open`; Snoozed and Settled shut by default); a shut
   shelf still shows its count and the dot for a thread that needs you or
   works. Working holds the threads running now and the threads waiting on work
-  they handed out, the one the user last sent work to first; Needs you holds
-  what waits on an approval or an answer, longest wait first, and neither of
-  them folds. Active is the rest of the live threads, the one that last came
-  back to the user first, unseen completions and failures above the rest. A
-  section sorts from marks the app already keeps, so it never reorders as
-  turns stream, and a row the user dragged keeps its place. Turning Working at
-  the top off (⌘K, `rustcode.sidebar.workingSection`) gives back the layout
-  before it: Pinned and Active lead, Working folds into the foot shelf with
-  Snoozed and Settled. A settled thread never sits under Pinned, and a pinned
-  thread that works or needs you stays in Pinned and says so in its chip,
-  never drawn twice. The sidebar has no search field or filter menu, and none
+  they handed out, the one the user last sent work to first; Asking you holds
+  the threads that have an approval or a question open, longest wait first, and
+  neither of them folds. Its name is not the inbox's: the row above the list is
+  "Needs you" because it counts items — an approval, a question, a failed turn,
+  a delegate — and opens the page that lists them, while this section is one row
+  per thread, and a failure never puts a thread here. Active is the rest of the
+  live threads, the one that last came back to the user first, unseen completions
+  and failures above the rest. A section sorts from marks the app already keeps,
+  so it never reorders as turns stream, and a row the user dragged keeps its
+  place. Turning Working at the top off (⌘K, `rustcode.sidebar.workingSection`)
+  gives back the layout before it: Pinned and Active lead, Working folds into the
+  foot shelf with Snoozed and Settled. A settled thread never sits under Pinned,
+  and a pinned thread that works or needs you stays in Pinned and says so in its
+  chip, never drawn twice. The sidebar has no search field or filter menu, and none
   of the buttons it used to carry past the toggle in its toolbar: no Add
   project or New thread row above the list, no Settings, Pull requests or
   Usage row at its foot. Threads are found with ⌘K, which also holds the view
@@ -643,12 +646,14 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   branch, a pull request or a stack of delegates adds one quiet second line
   (`text-sub`, 48px row): the branch in `font-mono`, `+N −N` in `success`/
   `danger`, the pull request's mark, and the stack or the harness mark at its
-  end. A diff on its own is not worth a line: it rides in the trailing slot
-  (`state/sidebarRows.ts` `rowMeta`). Counts are shown only for a thread the app
-  has already read; one it has not opened shows neither, rather than a made-up
-  zero. A plain chat thread keeps its one line. What a thread asks of you, and
-  `in <parent title>` for a delegated row drawn on its own, go under the title
-  at full strength.
+  end. Neither a diff nor the harness mark alone is worth a line: they ride in
+  the trailing slot beside the state, in that order, and the slot never wraps —
+  a 12px glyph dropped onto a second line reads as the state's own icon
+  wrapping (`state/sidebarRows.ts` `rowMeta`). Counts are shown only for a
+  thread the app has already read; one it has not opened shows neither, rather
+  than a made-up zero. A plain chat thread keeps its one line. What a thread
+  asks of you, and `in <parent title>` for a delegated row drawn on its own, go
+  under the title at full strength.
   What wants you — a request, a failure, a turn that ended while you were
   elsewhere, the open thread, a picked row — is weight 500 in full `fg`; what
   works, waits or is settled recedes to weight 400 at 75%, back to full on

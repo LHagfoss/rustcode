@@ -311,6 +311,12 @@ function DecidedRow({ item }: { item: DecidedItem }) {
  * the list. Its badge rolls when the number changes (`rc-count-roll`). Drawn only
  * while something waits on the user (`showsNeedsYou`), so an empty row never
  * stands over the threads as if it headed them.
+ *
+ * It counts inbox items, not threads — an approval, a question, a failed turn, a
+ * delegate — and opens the page that lists them all, so it keeps the name; the
+ * list's own "Asking you" section (`ui/Sidebar.tsx` `LABELS`) is the threads that
+ * have one of those open, and its heading says so. The 6px under it matches the
+ * brand header's, so the row closes the top block instead of heading the list.
  */
 export function NeedsYouRow() {
   const items = useInboxItems();
@@ -318,7 +324,7 @@ export function NeedsYouRow() {
   if (!showsNeedsYou(items)) return null;
   const count = items.length;
   return (
-    <div className="shrink-0 px-2 pb-1">
+    <div className="shrink-0 px-2 pb-1.5">
       <button
         type="button"
         onClick={() => setView({ kind: "inbox" })}

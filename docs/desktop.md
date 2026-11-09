@@ -684,14 +684,16 @@ composer's keys stay outside the table.
   A thread merely marked for review does not count, and the row's count is the
   inbox's own list. With nothing waiting there is no row at all, so no empty
   heading stands over the thread rows, and the inbox stays reachable from ⌘⇧I
-  and the palette. One list, top to bottom: Working, Pinned, Needs you,
+  and the palette. One list, top to bottom: Working, Pinned, Asking you,
   Active, then Snoozed and Settled as shelves at the foot. **Working** leads
   with the threads whose turn runs and the threads still waiting on work they
   handed out — always open, the thread you last sent work to first; a pinned
   thread that works stays in Pinned and says so in its chip, so no row is
-  drawn twice. **Needs you** holds the threads waiting on an approval or an
+  drawn twice. **Asking you** holds the threads waiting on an approval or an
   answer, the one that has waited longest first, and draws nothing when
-  nothing waits. **Active** is every other live thread, the one that last came
+  nothing waits; it is not called *Needs you* because the inbox row is one row
+  per item (a failed turn is not a thread) while this is one row per thread.
+  **Active** is every other live thread, the one that last came
   back to you first, with the completions and failures you have not opened
   above the rest. A section sorts itself from marks the app already keeps, so
   it never reorders as a turn streams; a row you dragged keeps the place you
@@ -736,7 +738,7 @@ composer's keys stay outside the table.
   filter button by the search groups Threads by project (off by default; each
   project folds and has New thread on hover; a worktree thread sits under
   its repository), keeps to the current project, and opens the Board. Working
-  and Needs you stay above the folders, and a folded folder's dot says what it
+  and Asking you stay above the folders, and a folded folder's dot says what it
   hides.
   Search matches titles and folders at once, and from three characters
   also what was said: the engine's SQLite index (`index.sqlite`,
