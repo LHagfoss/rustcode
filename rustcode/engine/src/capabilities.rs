@@ -50,6 +50,7 @@ pub struct SkillEntry {
 #[serde(rename_all = "snake_case")]
 pub enum McpConnection {
     Connected,
+    Connecting,
     NotConnected,
     Disabled,
     Failed,
@@ -59,6 +60,7 @@ impl McpConnection {
     pub fn label(self) -> &'static str {
         match self {
             Self::Connected => "connected",
+            Self::Connecting => "connecting",
             Self::NotConnected => "not connected",
             Self::Disabled => "disabled",
             Self::Failed => "failed",
@@ -172,6 +174,7 @@ pub(crate) fn mcp_entries_from(
         .iter()
         .map(|server| (server.name.as_str(), server))
         .collect();
+    let failures = crate::mcp::mcp_startup_failures();
     statuses
         .iter()
         .map(|status| {
@@ -180,11 +183,19 @@ pub(crate) fn mcp_entries_from(
                 McpServerState::Running { tools } => {
                     (McpConnection::Connected, tools.clone(), None)
                 }
+                McpServerState::Connecting => (McpConnection::Connecting, Vec::new(), None),
                 McpServerState::NotRunning => (McpConnection::NotConnected, Vec::new(), None),
                 McpServerState::Disabled => (McpConnection::Disabled, Vec::new(), None),
-                McpServerState::Failed(reason) => {
-                    (McpConnection::Failed, Vec::new(), Some(reason.clone()))
-                }
+                McpServerState::Failed(reason) => (
+                    McpConnection::Failed,
+                    Vec::new(),
+                    Some(
+                        failures
+                            .get(&status.name)
+                            .cloned()
+                            .unwrap_or_else(|| reason.clone()),
+                    ),
+                ),
             };
             McpEntry {
                 name: status.name.clone(),
@@ -267,6 +278,7 @@ pub(crate) fn set_skill_enabled_in(
 /// failed rather than connected.
 pub async fn set_mcp_server_enabled(name: &str, enabled: bool) -> Result<McpEntry, String> {
     crate::config::set_mcp_server_enabled_in(&user_config_dir()?, name, enabled)?;
+    crate::mcp::start_deferred_servers().await;
     apply_mcp_toggle(name, enabled).await;
     mcp_entries()
         .into_iter()
@@ -296,6 +308,7 @@ pub async fn add_mcp_server(spec: &crate::config::McpServerSpec) -> Result<McpEn
 /// Remove a server from the user config and stop it in this process.
 pub async fn remove_mcp_server(name: &str) -> Result<(), String> {
     crate::config::remove_mcp_server_in(&user_config_dir()?, name)?;
+    crate::mcp::start_deferred_servers().await;
     crate::mcp::shutdown_server(name).await;
     Ok(())
 }
@@ -313,6 +326,7 @@ pub async fn restart_mcp_server(name: &str) -> Result<(), String> {
     if !server.enabled {
         return Err(format!("MCP server '{name}' is disabled"));
     }
+    crate::mcp::start_deferred_servers().await;
     crate::mcp::shutdown_server(name).await;
     if let Err(error) = crate::mcp::start_server_by_name_in_workspace(name, &workspace).await {
         crate::mcp::record_mcp_startup_failure(name, &error);

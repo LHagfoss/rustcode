@@ -602,6 +602,7 @@ pub(super) fn bound_by_discovery_calls(docs: &[McpToolDoc<'_>], messages: &[Valu
 pub(crate) enum McpServerState {
     Running { tools: Vec<String> },
     NotRunning,
+    Connecting,
     Disabled,
     Failed(String),
 }
@@ -617,6 +618,7 @@ impl McpServerStatus {
         match &self.state {
             McpServerState::Running { tools } => format!("running ({} tools)", tools.len()),
             McpServerState::NotRunning => "not running".to_owned(),
+            McpServerState::Connecting => "connecting".to_owned(),
             McpServerState::Disabled => "disabled".to_owned(),
             McpServerState::Failed(reason) => format!("failed: {reason}"),
         }
@@ -709,7 +711,19 @@ pub(crate) fn current_server_statuses() -> Vec<McpServerStatus> {
     let configured = crate::config::get_config_dir()
         .map(|dir| crate::config::workspace_mcp_servers_in(&dir, &super::misc::mcp_workspace(None)))
         .unwrap_or_default();
-    server_statuses(&configured, &running, &crate::mcp::mcp_startup_failures())
+    let mut statuses = server_statuses(&configured, &running, &crate::mcp::mcp_startup_failures());
+    let connecting = crate::mcp::connecting_servers();
+    for status in &mut statuses {
+        if connecting.contains(&status.name)
+            && !matches!(
+                status.state,
+                McpServerState::Disabled | McpServerState::Running { .. }
+            )
+        {
+            status.state = McpServerState::Connecting;
+        }
+    }
+    statuses
 }
 
 /// Each configured or connected server's name and state label, such as
