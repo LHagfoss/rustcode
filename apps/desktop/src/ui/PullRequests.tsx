@@ -171,7 +171,7 @@ function ReviewForm({ cwd, pull, onDone }: { cwd: string; pull: PullRequest; onD
 function PullView({ cwd, number, onBack }: { cwd: string; number: number; onBack: () => void }) {
   // The row the list already read draws the header at once; the body, the
   // files and the activity come from the detail read behind it.
-  const { detail, summary, error } = usePullDetail(cwd, number);
+  const { detail, summary, error, live } = usePullDetail(cwd, number);
   const [reviewing, setReviewing] = useState(false);
   const askAgent = (pull: PullRequest) => {
     startNewThread(cwd);
@@ -216,7 +216,9 @@ function PullView({ cwd, number, onBack }: { cwd: string; number: number; onBack
               <Pill
                 prominent
                 onClick={() => setReviewing(true)}
-                disabled={!repositoryOf(summary.url) || pullState(summary) !== "open"}
+                // A review names the head commit: it waits for a read this session,
+                // not for a row or a saved copy that may be behind the branch.
+                disabled={!live || !repositoryOf(summary.url) || pullState(summary) !== "open"}
               >
                 Review…
               </Pill>

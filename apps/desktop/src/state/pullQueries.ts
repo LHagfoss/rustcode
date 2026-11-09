@@ -17,9 +17,10 @@ import {
   parsePullDetail,
   parsePullError,
   parsePullList,
+  pullErrorTitle,
 } from "../acp/rustcode";
 import { Method } from "../acp/types";
-import { request } from "./store";
+import { request, toast } from "./store";
 
 /** The four lists the panel draws. */
 export type PullListState = "open" | "closed" | "merged" | "all";
@@ -52,6 +53,12 @@ export interface PullListAnswer {
   readAt: number;
   /** It came off the device: it paints, and it is always read again behind. */
   saved: boolean;
+  /**
+   * It is everything the state would answer: a list of that state, or a wider
+   * "All" list that was itself exhaustive. A narrowed or filtered answer still
+   * paints, but the state's own read runs behind it.
+   */
+  complete: boolean;
 }
 
 export interface PullDiffAnswer {
@@ -108,8 +115,8 @@ const details = new Map<string, DetailEntry>();
 const diffs = new Map<string, DiffEntry>();
 /** Each pull's row, from any list that carried it: the detail's header before its body. */
 const summaries = new Map<string, SummaryEntry>();
-/** Why a key's last read failed. A key that still has data does not show it. */
-const errors = new Map<string, PullError>();
+/** Why a key's last read failed, and when: a failure is remembered as long as an answer. */
+const errors = new Map<string, { error: PullError; at: number }>();
 /** The latest read started per key. */
 const reads = new Map<string, number>();
 /** The read in flight per key, so a second asker waits on the first instead of adding a process. */
@@ -168,9 +175,12 @@ function beginRead(key: string): number {
   return token;
 }
 
-function failRead(key: string, token: number, error: PullError) {
+function failRead(key: string, token: number, error: PullError, announce = false) {
   if (reads.get(key) !== token) return;
-  errors.set(key, error);
+  errors.set(key, { error, at: Date.now() });
+  // A refresh behind the panel is quiet; a reload the user asked for is not,
+  // or the click would look like nothing happened.
+  if (announce) toast(`${pullErrorTitle(error.code)}: ${error.message}`, "error");
   changed();
 }
 
@@ -203,38 +213,57 @@ function seedSummaries(cwd: string, pulls: readonly PullRequest[], readAt: numbe
   for (const pull of pulls) keepSummary(cwd, pull, readAt);
 }
 
+// ---------------------------------------------------------------- the lists
+
+/** The newest entry of a project's lists that matches, whatever its age. */
+function newestList(
+  cwd: string,
+  limit: number,
+  matches: (entry: ListEntry) => boolean,
+): { key: string; entry: ListEntry } | undefined {
+  let found: { key: string; entry: ListEntry } | undefined;
+  for (const [key, entry] of lists) {
+    if (entry.cwd !== cwd || entry.limit < limit || !matches(entry)) continue;
+    if (!found || entry.readAt > found.entry.readAt) found = { key, entry };
+  }
+  return found;
+}
+
 /**
- * The list a panel draws for a state: a list of that state, or a broader one
- * (the sidebar's "All") filtered down, whichever was read most recently. A
- * filtered answer is one the app already holds, so opening a panel costs no
- * `gh` process when the sidebar read the project a moment ago.
+ * The list a panel draws for a state, from the answer that can be that list.
+ *
+ * A list of the same state, as long or longer, answers it exactly: its first
+ * `limit` rows are the rows the state's own read would bring back. The sidebar's
+ * "All" list answers a state only by filtering, so it paints while the state's
+ * own read runs, and it counts as that state's answer only when it was itself
+ * exhaustive (`hasMore: false`) — otherwise the filter sees a truncated list and
+ * would hide pulls the state's read would find.
  */
 export function pullList(cwd: string, state: PullListState, limit = PULL_LIMIT): PullListAnswer | undefined {
   hydratePullQueries();
   const target = listKey(cwd, state, limit);
   const viewed = derived.get(target);
-  let best: ListEntry | undefined;
-  let bestKey = "";
-  for (const [key, entry] of lists) {
-    if (entry.cwd !== cwd) continue;
-    if (entry.state !== "all" && entry.state !== state) continue;
-    if (entry.limit < limit) continue;
-    if (!best || entry.readAt > best.readAt) {
-      best = entry;
-      bestKey = key;
-    }
-  }
+  // A complete answer outranks a filtered one, however old: a stand-in must not
+  // replace the state's own list.
+  const best =
+    newestList(cwd, limit, (entry) => entry.state === state) ??
+    newestList(cwd, limit, (entry) => entry.state === "all");
   if (!best) return undefined;
-  if (best.state === state && best.limit === limit) return best;
-  if (viewed && viewed.from === `${bestKey}|${best.readAt}`) return viewed.answer;
-  const pulled = best.state === state ? best.pulls : best.pulls.filter((pull) => pull.state === state);
+  const entry = best.entry;
+  const from = `${best.key}|${entry.readAt}`;
+  // One answer per ask, so a panel's rows keep their identity across renders.
+  const cached = viewed?.from === from ? viewed.answer : undefined;
+  if (cached) return cached;
+  const narrowed = entry.state === state ? entry.pulls : entry.pulls.filter((pull) => pull.state === state);
   const answer: PullListAnswer = {
-    pulls: pulled.slice(0, limit),
-    hasMore: best.state === state ? best.hasMore : false,
-    readAt: best.readAt,
-    saved: best.saved,
+    pulls: narrowed.slice(0, limit),
+    // More rows exist than are shown: the source was cut short, or the list is.
+    hasMore: entry.hasMore || narrowed.length > limit,
+    readAt: entry.readAt,
+    saved: entry.saved,
+    complete: entry.state === state || !entry.hasMore,
   };
-  derived.set(target, { from: `${bestKey}|${best.readAt}`, answer });
+  derived.set(target, { from, answer });
   return answer;
 }
 
@@ -265,8 +294,18 @@ export function pullDetailReading(cwd: string, number: number): boolean {
 }
 
 /**
- * Reads a project's list for one state, unless the answer is fresh. A read in
- * flight for the same key is joined rather than repeated.
+ * Whether a pull's detail was read here in this session, rather than painted
+ * from the device: a review posts at the commit a live read reported.
+ */
+export function pullDetailLive(cwd: string, number: number): boolean {
+  const entry = details.get(detailKey(cwd, number));
+  return !!entry && !entry.saved;
+}
+
+/**
+ * Reads a project's list for one state, unless the answer is fresh and complete:
+ * a filtered or narrowed stand-in paints, and this still reads the state's own
+ * list behind it. A read in flight for the same key is joined rather than repeated.
  */
 export function readPullList(
   cwd: string,
@@ -275,14 +314,14 @@ export function readPullList(
 ): Promise<void> {
   const limit = options.limit ?? PULL_LIMIT;
   if (!cwd) return Promise.resolve();
-  hydratePullQueries();
+  if (hydratePullQueries()) changed();
   const key = listKey(cwd, state, limit);
   const running = inflight.get(key);
   if (running && !options.force) return running;
   const known = pullList(cwd, state, limit);
   if (
     !options.force &&
-    known &&
+    known?.complete &&
     isFresh(known.readAt, known.saved, options.maxAge ?? PULL_FRESH_MS, Date.now())
   ) {
     return Promise.resolve();
@@ -291,7 +330,7 @@ export function readPullList(
     read(Method.pulls, { cwd, state, limit }, 60_000).then(
       (result) => {
         const error = parsePullError(result);
-        if (error) return void failRead(key, token, error);
+        if (error) return void failRead(key, token, error, options.force);
         if (reads.get(key) !== token) return;
         const answer = parsePullList(result);
         const readAt = Date.now();
@@ -310,7 +349,7 @@ export function readPullList(
         scheduleSave();
         changed();
       },
-      (error) => failRead(key, token, { code: "failed", message: errorText(error) }),
+      (error) => failRead(key, token, { code: "failed", message: errorText(error) }, options.force),
     ),
   );
 }
@@ -321,7 +360,7 @@ export function readPullList(
  */
 export function readPullDetail(cwd: string, number: number, options: PullReadOptions = {}): Promise<void> {
   if (!cwd || !number) return Promise.resolve();
-  hydratePullQueries();
+  if (hydratePullQueries()) changed();
   const key = detailKey(cwd, number);
   const running = inflight.get(key);
   if (running && !options.force) return running;
@@ -337,11 +376,17 @@ export function readPullDetail(cwd: string, number: number, options: PullReadOpt
     read(Method.pullView, { cwd, number }, 60_000).then(
       (result) => {
         const error = parsePullError(result);
-        if (error) return void failRead(key, token, error);
+        if (error) return void failRead(key, token, error, options.force);
         if (reads.get(key) !== token) return;
         const detail = parsePullDetail(result);
-        if (!detail)
-          return void failRead(key, token, { code: "failed", message: "The pull request came back empty." });
+        if (!detail) {
+          return void failRead(
+            key,
+            token,
+            { code: "failed", message: "The pull request came back empty." },
+            options.force,
+          );
+        }
         const readAt = Date.now();
         details.set(key, { cwd, detail, readAt, saved: false });
         errors.delete(key);
@@ -349,7 +394,7 @@ export function readPullDetail(cwd: string, number: number, options: PullReadOpt
         scheduleSave();
         changed();
       },
-      (error) => failRead(key, token, { code: "failed", message: errorText(error) }),
+      (error) => failRead(key, token, { code: "failed", message: errorText(error) }, options.force),
     ),
   );
 }
@@ -357,7 +402,7 @@ export function readPullDetail(cwd: string, number: number, options: PullReadOpt
 /** Reads a pull's diff (`/diff`), memory only: a diff is too big to keep on the device. */
 export function readPullDiff(cwd: string, number: number, options: PullReadOptions = {}): Promise<void> {
   if (!cwd || !number) return Promise.resolve();
-  hydratePullQueries();
+  if (hydratePullQueries()) changed();
   const key = diffKey(cwd, number);
   const running = inflight.get(key);
   if (running && !options.force) return running;
@@ -369,13 +414,13 @@ export function readPullDiff(cwd: string, number: number, options: PullReadOptio
     read(Method.pullDiff, { cwd, number }, 60_000).then(
       (result) => {
         const error = parsePullError(result);
-        if (error) return void failRead(key, token, error);
+        if (error) return void failRead(key, token, error, options.force);
         if (reads.get(key) !== token) return;
         diffs.set(key, { diff: str(obj(result)?.diff) ?? "", readAt: Date.now() });
         errors.delete(key);
         changed();
       },
-      (error) => failRead(key, token, { code: "failed", message: errorText(error) }),
+      (error) => failRead(key, token, { code: "failed", message: errorText(error) }, options.force),
     ),
   );
 }
@@ -417,15 +462,20 @@ export function rememberPullSummaries(cwd: string, pulls: readonly PullRequest[]
 
 /** Why a list's last read failed, whether or not an older answer is still drawn. */
 export function pullListError(cwd: string, state: PullListState, limit = PULL_LIMIT): PullError | undefined {
-  return errors.get(listKey(cwd, state, limit));
+  return errors.get(listKey(cwd, state, limit))?.error;
+}
+
+/** When a list's last read failed, if it did: the sidebar does not retry it on every render. */
+export function pullListFailedAt(cwd: string, state: PullListState, limit = PULL_LIMIT): number | undefined {
+  return errors.get(listKey(cwd, state, limit))?.at;
 }
 
 export function pullDetailError(cwd: string, number: number): PullError | undefined {
-  return errors.get(detailKey(cwd, number));
+  return errors.get(detailKey(cwd, number))?.error;
 }
 
 export function pullDiffError(cwd: string, number: number): PullError | undefined {
-  return errors.get(diffKey(cwd, number));
+  return errors.get(diffKey(cwd, number))?.error;
 }
 
 // ---------------------------------------------------------------- the panel's reads
@@ -462,7 +512,7 @@ export function usePullList(
 export function usePullDetail(
   cwd: string | undefined,
   number: number | null | undefined,
-): { detail?: PullDetail; summary?: PullRequest; error?: PullError; refreshing: boolean } {
+): { detail?: PullDetail; summary?: PullRequest; error?: PullError; refreshing: boolean; live: boolean } {
   useSyncExternalStore(subscribePullQueries, pullQueriesVersion);
   useEffect(() => {
     if (cwd && number) void readPullDetail(cwd, number);
@@ -474,6 +524,8 @@ export function usePullDetail(
     summary,
     error: cwd && number ? answerError(pullDetailError(cwd, number), detail) : undefined,
     refreshing: !!cwd && !!number && pullDetailReading(cwd, number),
+    // A saved detail makes a header, not a commit to review at.
+    live: !!cwd && !!number && pullDetailLive(cwd, number),
   };
 }
 
@@ -563,22 +615,19 @@ function savedDetail(detail: PullDetail): JsonObject {
   };
 }
 
-const bytes = (value: unknown) => JSON.stringify(value).length;
-
 /**
  * The answers that would be saved now, trimmed to what the device may hold: the
  * newest eight projects' lists (four asks each), the newest forty details,
  * nothing over 256 KB, nothing older than a week, all under 1.5 MB.
+ *
+ * Each row is serialized once, and that text is both what is measured and what
+ * the file is built from: the file is the same JSON `JSON.stringify` of the
+ * payload would give, without writing every row twice to find out its size.
  */
-export function savedPayload(now = Date.now()): SavedQueries {
+function trimmed(now: number): { payload: SavedQueries; text: string } {
   let total = 0;
-  const fits = (value: unknown) => {
-    const size = bytes(value);
-    if (size > SAVED_ENTRY_BYTES || total + size > SAVED_TOTAL_BYTES) return false;
-    total += size;
-    return true;
-  };
   const savedLists: SavedList[] = [];
+  const listTexts: string[] = [];
   const perProject = new Map<string, number>();
   for (const entry of [...lists.values()].sort((a, b) => b.readAt - a.readAt)) {
     if (now - entry.readAt > SAVED_MAX_AGE_MS) continue;
@@ -593,11 +642,15 @@ export function savedPayload(now = Date.now()): SavedQueries {
       hasMore: entry.hasMore,
       pulls: entry.pulls.map(savedPull),
     };
-    if (!fits(row)) continue;
+    const text = JSON.stringify(row);
+    if (text.length > SAVED_ENTRY_BYTES || total + text.length > SAVED_TOTAL_BYTES) continue;
+    total += text.length;
     perProject.set(entry.cwd, kept + 1);
     savedLists.push(row);
+    listTexts.push(text);
   }
   const savedDetails: SavedDetail[] = [];
+  const detailTexts: string[] = [];
   for (const entry of [...details.values()].sort((a, b) => b.readAt - a.readAt)) {
     if (savedDetails.length >= SAVED_DETAILS) break;
     if (now - entry.readAt > SAVED_MAX_AGE_MS) continue;
@@ -607,10 +660,22 @@ export function savedPayload(now = Date.now()): SavedQueries {
       readAt: entry.readAt,
       pull: savedDetail(entry.detail),
     };
-    if (!fits(row)) continue;
+    const text = JSON.stringify(row);
+    if (text.length > SAVED_ENTRY_BYTES || total + text.length > SAVED_TOTAL_BYTES) continue;
+    total += text.length;
     savedDetails.push(row);
+    detailTexts.push(text);
   }
-  return { version: SAVED_VERSION, lists: savedLists, details: savedDetails };
+  return {
+    payload: { version: SAVED_VERSION, lists: savedLists, details: savedDetails },
+    // The same text `JSON.stringify(payload)` gives, in the same key order.
+    text: `{"version":${SAVED_VERSION},"lists":[${listTexts.join(",")}],"details":[${detailTexts.join(",")}]}`,
+  };
+}
+
+/** The answers that would be saved now, trimmed to the device's bounds. */
+export function savedPayload(now = Date.now()): SavedQueries {
+  return trimmed(now).payload;
 }
 
 /** Writes the trimmed answers now. Never throws: a window without storage works as before. */
@@ -618,20 +683,26 @@ export function savePullQueries(now = Date.now()): void {
   hydratePullQueries(now);
   const store = storage();
   if (!store) return;
+  const { text } = trimmed(now);
   try {
-    store.setItem(SAVED_KEY, JSON.stringify(savedPayload(now)));
+    store.setItem(SAVED_KEY, text);
   } catch {
     // Full, private, or held by another window: the answers stay in memory.
   }
 }
 
-/** Saves after a burst of answers lands, so one read is one write. */
+/**
+ * How long a burst of answers waits before it is written: a panel opens with a
+ * list and a detail, and one file write for both is a write nobody notices.
+ */
+const SAVE_DEBOUNCE_MS = 2000;
+
 function scheduleSave() {
   if (!storage() || saveTimer !== undefined) return;
   saveTimer = setTimeout(() => {
     saveTimer = undefined;
     savePullQueries();
-  }, 250);
+  }, SAVE_DEBOUNCE_MS);
 }
 
 /**
@@ -639,19 +710,19 @@ function scheduleSave() {
  * answer counts as stale, so it always refreshes behind: it is only ever what
  * the app paints before the engine answers.
  */
-export function hydratePullQueries(now = Date.now()): void {
-  if (hydrated) return;
+export function hydratePullQueries(now = Date.now()): boolean {
+  if (hydrated) return false;
   hydrated = true;
   const store = storage();
-  if (!store) return;
+  if (!store) return false;
   let saved: SavedQueries | undefined;
   try {
     const raw = store.getItem(SAVED_KEY);
     saved = raw ? (JSON.parse(raw) as SavedQueries) : undefined;
   } catch {
-    return;
+    return false;
   }
-  if (!saved || saved.version !== SAVED_VERSION) return;
+  if (!saved || saved.version !== SAVED_VERSION) return false;
   for (const list of Array.isArray(saved.lists) ? saved.lists : []) {
     const state = stateOf(list?.state);
     const cwd = str(list?.cwd);
@@ -682,7 +753,7 @@ export function hydratePullQueries(now = Date.now()): void {
     details.set(key, { cwd, detail, readAt, saved: true });
     keepSummary(cwd, detail, readAt);
   }
-  changed();
+  return true;
 }
 
 /** Drops every answer held in memory: a test's clean slate. The saved copy stays, as it would across a reload. */

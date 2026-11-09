@@ -3,18 +3,22 @@
 
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import type { Json, JsonObject } from "../acp/jsonrpc";
+import type { AgentInfo } from "../acp/types";
 import {
   clearPullQueries,
   hydratePullQueries,
   loadPullDiff,
   PULL_FRESH_MS,
   PULL_LIMIT,
+  prefetchPullDetail,
   pullDetail,
   pullDetailError,
+  pullDetailLive,
   pullDiff,
   pullDiffError,
   pullList,
   pullListError,
+  pullQueriesVersion,
   pullSummary,
   readPullDetail,
   readPullDiff,
@@ -29,6 +33,8 @@ import {
   savePullQueries,
   setPullReader,
 } from "./pullQueries";
+import { loadPulls, PULLS_TTL } from "./pulls";
+import { useApp } from "./store";
 
 const NOW = 1_760_000_000_000;
 const CWD = "/repo";
@@ -58,15 +64,15 @@ const listAnswer = (pulls: JsonObject[], hasMore = false): Json => ({
   list: { provider: "github", hasMore, pulls },
 });
 
-const detailAnswer = (over: JsonObject = {}): Json => ({
-  pull: {
-    ...wirePull(over),
-    body: "The body.",
-    checkRuns: [{ name: "desktop / check", status: "passed" }],
-    files: [{ path: "apps/desktop/src/a.ts", additions: 12, deletions: 3 }],
-    activity: [{ author: "reviewer", kind: "COMMENTED", at: at(40).toISOString(), body: "Looks good." }],
-  },
+const detailPull = (over: JsonObject = {}): JsonObject => ({
+  ...wirePull(over),
+  body: "The body.",
+  checkRuns: [{ name: "desktop / check", status: "passed" }],
+  files: [{ path: "apps/desktop/src/a.ts", additions: 12, deletions: 3 }],
+  activity: [{ author: "reviewer", kind: "COMMENTED", at: at(40).toISOString(), body: "Looks good." }],
 });
+
+const detailAnswer = (over: JsonObject = {}): Json => ({ pull: detailPull(over) });
 
 const failure = (code: string, message: string): Json => ({ error: { code, message } });
 
@@ -122,9 +128,16 @@ beforeEach(() => {
 
 afterEach(() => {
   clearPullQueries();
+  useApp.setState({ agent: undefined, toasts: [] });
   setSystemTime();
   Reflect.deleteProperty(globalThis, "localStorage");
 });
+
+/** Everything the app is saying to the user right now. */
+const toasts = () => useApp.getState().toasts.map((shown) => shown.text);
+
+/** Waits for a read nobody awaits (`loadPulls` starts one and returns). */
+const settle = () => new Promise((done) => setTimeout(done, 0));
 
 describe("one read per answer", () => {
   test("two askers of the same list share one read", async () => {
@@ -241,20 +254,79 @@ describe("a list is a row of another list", () => {
     expect(pullSummary(CWD, 12)?.checks.passed).toBe(6);
   });
 
-  test("the sidebar's wider list answers a panel's state by filtering it", async () => {
+  test("a cut-short wider list paints a state, and the state's own read still runs", async () => {
+    answerWith({
+      "_rustcode/pulls": () =>
+        listAnswer(
+          [wirePull({ number: 20, state: "merged" }), wirePull({ number: 21, state: "open" })],
+          true,
+        ),
+    });
+    await readPullList(CWD, "all", { limit: 50 });
+    expect(asked).toHaveLength(1);
+
+    // It paints what the app holds, without claiming to be the whole state:
+    // the "All" list was cut short, so filtering it may hide open pulls.
+    const stand = pullList(CWD, "open", PULL_LIMIT);
+    expect(stand?.pulls.map((pull) => pull.number)).toEqual([21]);
+    expect(stand?.complete).toBe(false);
+    expect(stand?.hasMore).toBe(true);
+
+    answerWith({
+      "_rustcode/pulls": () =>
+        listAnswer([wirePull({ number: 21, state: "open" }), wirePull({ number: 22, state: "open" })]),
+    });
+    await readPullList(CWD, "open");
+    expect(asked).toHaveLength(2);
+    expect(asked[1]?.params).toEqual({ cwd: CWD, state: "open", limit: PULL_LIMIT });
+    expect(pullList(CWD, "open", PULL_LIMIT)?.pulls.map((pull) => pull.number)).toEqual([21, 22]);
+  });
+
+  test("an exhaustive wider list answers a state with no read of its own", async () => {
     answerWith({
       "_rustcode/pulls": () =>
         listAnswer([wirePull({ number: 20, state: "merged" }), wirePull({ number: 21, state: "open" })]),
     });
     await readPullList(CWD, "all", { limit: 50 });
-    expect(asked).toHaveLength(1);
+    const answer = pullList(CWD, "open", PULL_LIMIT);
+    expect(answer?.pulls.map((pull) => pull.number)).toEqual([21]);
+    expect(answer?.complete).toBe(true);
+    expect(answer?.hasMore).toBe(false);
 
-    // No "open" read: the wider answer is what the app holds.
-    expect(pullList(CWD, "open", PULL_LIMIT)?.pulls.map((pull) => pull.number)).toEqual([21]);
     await readPullList(CWD, "open");
     expect(asked).toHaveLength(1);
-    // "All" still draws the wider answer, not a filtered one.
+    // "All" still draws the wider answer, not the filtered one.
     expect(pullList(CWD, "all", PULL_LIMIT)?.pulls.map((pull) => pull.number)).toEqual([20, 21]);
+  });
+
+  test("hasMore says there are more rows than are shown, narrowed or filtered", async () => {
+    answerWith({
+      "_rustcode/pulls": () =>
+        listAnswer([wirePull({ number: 1 }), wirePull({ number: 2 }), wirePull({ number: 3 })]),
+    });
+    await readPullList(CWD, "open", { limit: 3 });
+    const narrowed = pullList(CWD, "open", 2);
+    expect(narrowed?.pulls.map((pull) => pull.number)).toEqual([1, 2]);
+    expect(narrowed?.hasMore).toBe(true);
+    expect(narrowed?.complete).toBe(true);
+    // The whole list is shown at its own limit, so nothing is hidden.
+    expect(pullList(CWD, "open", 3)?.hasMore).toBe(false);
+  });
+
+  test("a state's own list outranks a newer filtered one", async () => {
+    answerWith({ "_rustcode/pulls": () => listAnswer([wirePull({ number: 30 })]) });
+    await readPullList(CWD, "open");
+    setSystemTime(new Date(NOW + 1000));
+    answerWith({
+      "_rustcode/pulls": () =>
+        listAnswer([wirePull({ number: 31 }), wirePull({ number: 32, state: "merged" })]),
+    });
+    await readPullList(CWD, "all", { limit: 50 });
+    expect(asked).toHaveLength(2);
+
+    const answer = pullList(CWD, "open", PULL_LIMIT);
+    expect(answer?.pulls.map((pull) => pull.number)).toEqual([30]);
+    expect(answer?.complete).toBe(true);
   });
 
   test("a written answer outranks the list row it came from", async () => {
@@ -417,5 +489,125 @@ describe("a detail is read ahead of the click", () => {
     const answer = await loadPullDiff(CWD, 12);
     expect(asked).toHaveLength(1);
     expect(answer.diff).toContain("diff --git a/b.ts b/b.ts");
+  });
+});
+
+describe("what a failed read says", () => {
+  test("a reload the user asked for says so, and keeps the rows", async () => {
+    answerWith({ "_rustcode/pulls": () => listAnswer([wirePull()]) });
+    await readPullList(CWD, "open");
+    answerWith({ "_rustcode/pulls": () => failure("timed_out", "No answer.") });
+    await readPullList(CWD, "open", { force: true });
+
+    expect(pullList(CWD, "open")?.pulls).toHaveLength(1);
+    expect(toasts()).toEqual(["GitHub did not answer in time: No answer."]);
+  });
+
+  test("a refresh behind the panel fails quietly", async () => {
+    answerWith({ "_rustcode/pulls": () => listAnswer([wirePull()]) });
+    await readPullList(CWD, "open");
+    setSystemTime(new Date(NOW + PULL_FRESH_MS + 1));
+    answerWith({ "_rustcode/pulls": () => failure("timed_out", "No answer.") });
+    await readPullList(CWD, "open");
+
+    expect(pullListError(CWD, "open")?.code).toBe("timed_out");
+    expect(pullList(CWD, "open")?.pulls).toHaveLength(1);
+    expect(toasts()).toEqual([]);
+  });
+});
+
+describe("the sidebar's own read retries once", () => {
+  test("a failed read is remembered for its TTL", async () => {
+    useApp.setState({ agent: { pullRequests: true } as unknown as AgentInfo });
+    answerWith({ "_rustcode/pulls": () => failure("gh_missing", "gh is not installed") });
+    loadPulls(CWD);
+    await settle();
+    expect(asked).toHaveLength(1);
+
+    // The list re-renders and its effect asks again: no second `gh` process.
+    loadPulls(CWD);
+    expect(asked).toHaveLength(1);
+
+    // Once the failure is as old as an answer would be, it tries again.
+    setSystemTime(new Date(NOW + PULLS_TTL + 1));
+    answerWith({ "_rustcode/pulls": () => listAnswer([wirePull()]) });
+    loadPulls(CWD);
+    await settle();
+    expect(asked).toHaveLength(2);
+    expect(asked[1]?.params).toEqual({ cwd: CWD, state: "all", limit: 50 });
+  });
+});
+
+describe("the first paint off the device", () => {
+  test("hydrating from render tells nobody: it is not a read landing", () => {
+    const disk = fakeStorage();
+    disk.write({
+      version: SAVED_VERSION,
+      lists: [
+        {
+          cwd: CWD,
+          state: "open",
+          limit: PULL_LIMIT,
+          readAt: NOW - 60_000,
+          hasMore: false,
+          pulls: [wirePull()],
+        },
+      ],
+      details: [],
+    });
+    const version = pullQueriesVersion();
+    expect(pullList(CWD, "open")?.pulls).toHaveLength(1);
+    expect(pullQueriesVersion()).toBe(version);
+  });
+
+  test("a saved detail is not a commit to post a review at", async () => {
+    const disk = fakeStorage();
+    disk.write({
+      version: SAVED_VERSION,
+      lists: [],
+      details: [{ cwd: CWD, number: 12, readAt: NOW - 60_000, pull: detailPull() }],
+    });
+    hydratePullQueries();
+    expect(pullDetail(CWD, 12)?.body).toBe("The body.");
+    expect(pullDetailLive(CWD, 12)).toBe(false);
+
+    // A read this session makes it live.
+    answerWith({ "_rustcode/pulls/view": () => detailAnswer() });
+    await readPullDetail(CWD, 12, { force: true });
+    expect(pullDetailLive(CWD, 12)).toBe(true);
+  });
+
+  test("the file written is the same JSON the payload stringifies to", async () => {
+    const disk = fakeStorage();
+    answerWith({ "_rustcode/pulls": () => listAnswer([wirePull()]) });
+    await readPullList(CWD, "open");
+    answerWith({ "_rustcode/pulls/view": () => detailAnswer() });
+    await readPullDetail(CWD, 12);
+
+    savePullQueries(NOW);
+    expect(disk.read()).toBe(JSON.stringify(savedPayload(NOW)));
+  });
+});
+
+describe("a rest on a row that is already answered", () => {
+  test("a fresh or in-flight read starts nothing", async () => {
+    answerWith({ "_rustcode/pulls/view": () => detailAnswer() });
+    await readPullDetail(CWD, 12);
+    const version = pullQueriesVersion();
+
+    // Fresh: the rest reads nothing and re-renders nothing.
+    prefetchPullDetail(CWD, 12);
+    expect(asked).toHaveLength(1);
+    expect(pullQueriesVersion()).toBe(version);
+
+    // In flight: the rest joins that read instead of adding a process.
+    const slow = deferred<Json>();
+    answerWith({ "_rustcode/pulls/view": () => slow.promise });
+    const opening = readPullDetail(CWD, 13);
+    prefetchPullDetail(CWD, 13);
+    expect(asked).toHaveLength(2);
+    slow.settle(detailAnswer({ number: 13 }));
+    await opening;
+    expect(asked).toHaveLength(2);
   });
 });

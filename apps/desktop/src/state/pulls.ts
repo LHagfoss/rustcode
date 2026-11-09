@@ -7,7 +7,13 @@
 // read for seconds: `gh` is a process per read, and a row is not worth another.
 
 import type { PullRequest } from "../acp/rustcode";
-import { pullList, pullQueriesVersion, readPullList, subscribePullQueries } from "./pullQueries";
+import {
+  pullList,
+  pullListFailedAt,
+  pullQueriesVersion,
+  readPullList,
+  subscribePullQueries,
+} from "./pullQueries";
 import { useApp } from "./store";
 
 /** How long a project's read is trusted: a pull request changes on the host, not under our hands. */
@@ -35,13 +41,15 @@ export function cachedPulls(cwd: string): PullRequest[] | undefined {
 
 /**
  * Reads a project's pull requests once, unless they were read in the last
- * `PULLS_TTL`. A read in flight is not repeated: the rows and the panel that
- * asks at the same moment wait on the same process. A project that cannot
- * answer keeps an empty answer for the same while, so the row says nothing
- * about a branch instead of asking again on every render.
+ * `PULLS_TTL`, or the last try failed in that time: a project that cannot answer
+ * keeps its failure for the same while, so a row says nothing about a branch and
+ * a re-render does not spawn another `gh`. A read in flight is not repeated
+ * either: the rows and the panel that asks at the same moment wait on one process.
  */
 export function loadPulls(cwd: string): void {
   if (!cwd || !useApp.getState().agent?.pullRequests) return;
+  const failedAt = pullListFailedAt(cwd, "all", LIMIT);
+  if (failedAt !== undefined && Date.now() - failedAt < PULLS_TTL) return;
   void readPullList(cwd, "all", { limit: LIMIT, maxAge: PULLS_TTL });
 }
 
