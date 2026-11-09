@@ -14,6 +14,7 @@
 //! ran in the data store's `store_meta`. No model is called and no transcript
 //! is changed.
 
+use rustcode_session::SessionRelationship;
 use serde_json::Value;
 
 use crate::app::ChatMessage;
@@ -37,24 +38,36 @@ pub(crate) struct Report {
 }
 
 /// The parent `session/new` named in `_meta.rustcode.parent`, when it is a
-/// usable session id.
-pub(crate) fn requested(meta: Option<&serde_json::Map<String, Value>>) -> Option<String> {
-    meta.and_then(|meta| meta.get("rustcode"))
-        .and_then(|rustcode| rustcode.get("parent"))
+/// usable session id, and how the new thread relates to it
+/// (`_meta.rustcode.relationship`; a delegate when absent or unknown, which is
+/// what every caller before the field was).
+pub(crate) fn requested(
+    meta: Option<&serde_json::Map<String, Value>>,
+) -> Option<(String, SessionRelationship)> {
+    let rustcode = meta.and_then(|meta| meta.get("rustcode"))?;
+    let id = rustcode
+        .get("parent")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|id| rustcode_session::valid_session_id(id))
-        .map(str::to_owned)
+        .filter(|id| rustcode_session::valid_session_id(id))?;
+    let relationship = rustcode
+        .get("relationship")
+        .and_then(Value::as_str)
+        .and_then(SessionRelationship::parse)
+        .unwrap_or(SessionRelationship::Delegate);
+    Some((id.to_owned(), relationship))
 }
 
-/// Record that `parent` started `child`, with the parent's title as it is now.
-pub(crate) fn record(child: &str, parent: &str) {
+/// Record that `parent` started `child` as `relationship`, with the parent's
+/// title as it is now.
+pub(crate) fn record(child: &str, parent: &str, relationship: SessionRelationship) {
     if !rustcode_session::valid_session_id(child) {
         return;
     }
     let parent = rustcode_session::SessionParent {
         id: Some(parent.to_owned()),
         title: crate::config::load_session_title(parent).filter(|title| !title.is_empty()),
+        relationship: Some(relationship),
     };
     crate::config::save_session_parent(child, &parent);
 }
@@ -159,6 +172,7 @@ pub(crate) fn backfill() -> Report {
             // The heading is what the parent was called when it handed the
             // task over; the link, when it survives, has it as it was later.
             title: parent_title.or_else(|| Some(title.to_owned())),
+            relationship: Some(SessionRelationship::Delegate),
         };
         crate::config::save_session_parent(&id, &parent);
         report.delegated += 1;
@@ -198,8 +212,11 @@ mod tests {
             json!({ "parent": " 018d6b28-0000-7000-8000-000000000002 " }),
         )]);
         assert_eq!(
-            requested(Some(&meta)).as_deref(),
-            Some("018d6b28-0000-7000-8000-000000000002")
+            requested(Some(&meta)),
+            Some((
+                "018d6b28-0000-7000-8000-000000000002".to_owned(),
+                SessionRelationship::Delegate
+            ))
         );
         assert_eq!(requested(None), None);
         let blank = serde_json::Map::from_iter([("rustcode".to_owned(), json!({ "parent": " " }))]);
@@ -207,6 +224,40 @@ mod tests {
         let relative =
             serde_json::Map::from_iter([("rustcode".to_owned(), json!({ "parent": "../x" }))]);
         assert_eq!(requested(Some(&relative)), None);
+    }
+
+    #[test]
+    fn the_relationship_named_by_session_new_is_read_and_defaults_to_a_delegate() {
+        let id = "018d6b28-0000-7000-8000-000000000002";
+        let relationship = |name: Value| {
+            let meta = serde_json::Map::from_iter([(
+                "rustcode".to_owned(),
+                json!({ "parent": id, "relationship": name }),
+            )]);
+            requested(Some(&meta)).map(|(_, relationship)| relationship)
+        };
+        assert_eq!(relationship(json!("fork")), Some(SessionRelationship::Fork));
+        assert_eq!(
+            relationship(json!("side_chat")),
+            Some(SessionRelationship::SideChat)
+        );
+        // A name this release does not know is a delegate, as before the field.
+        assert_eq!(
+            relationship(json!("mirror")),
+            Some(SessionRelationship::Delegate)
+        );
+    }
+
+    #[test]
+    fn a_recorded_relationship_survives_in_the_thread_metadata() {
+        let parent = crate::config::create_detached_session();
+        let child = crate::config::create_detached_session();
+        crate::config::save_session_title(&parent, "Update the sidebar");
+        record(&child, &parent, SessionRelationship::SideChat);
+        let saved = crate::config::load_session_parent(&child).expect("recorded parent");
+        assert_eq!(saved.id.as_deref(), Some(parent.as_str()));
+        assert_eq!(saved.title.as_deref(), Some("Update the sidebar"));
+        assert_eq!(saved.relationship, Some(SessionRelationship::SideChat));
     }
 
     #[test]
@@ -276,6 +327,7 @@ mod tests {
         // No link in this test's store: the heading is all there is.
         assert_eq!(parent.id, None);
         assert_eq!(parent.title.as_deref(), Some("Update the sidebar"));
+        assert_eq!(parent.relationship, Some(SessionRelationship::Delegate));
 
         // The next pass leaves it alone.
         let before = crate::config::load_session_parent(&child);

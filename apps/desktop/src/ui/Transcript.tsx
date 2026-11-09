@@ -20,6 +20,7 @@ import { observeSize } from "../lib/resize";
 import { flyInFromComposer, takesFlight } from "../lib/sendFlight";
 import { hasTimeline } from "../lib/trace";
 import { checkpointsByMessage } from "../state/attempts";
+import { type Branch, branchesOf } from "../state/branches";
 import { COLLAPSED_MESSAGE_HEIGHT, messageCollapses } from "../state/compose";
 import {
   foldEnds,
@@ -56,6 +57,7 @@ import {
 import { useWaiting, type Waiting, waitingLabel } from "../state/waiting";
 import { StartedThreadsRow, SubagentGroupRow, SubagentRow } from "./AgentViews";
 import { ApprovalRow, ChildRequestCard } from "./AttentionCards";
+import { BranchRow } from "./Branches";
 import { EarlierAttempts } from "./EarlierAttempts";
 import { PlanCard } from "./PlanCard";
 import { cx } from "./primitives";
@@ -93,6 +95,8 @@ export type Row = {
   agents?: { items: Extract<TranscriptItem, { kind: "tool" }>[]; open: boolean };
   /** The threads a run of `start_session` calls started, shown as one row or card. */
   threads?: { links: Link[]; open: boolean };
+  /** A fork or side chat opened from this thread: its lifecycle line (state/branches.ts). */
+  branch?: Branch;
   /** The running turn's foot: what it does now, when no row of its own shows it. */
   activity?: string;
   /** The turn ended while the foot was the live line: it settles on a check. */
@@ -216,6 +220,7 @@ export function estimatedRowHeight(row: Row | undefined, hidden = false): number
   if (row.fold || row.group) return 26;
   if (row.queued) return 96;
   if (row.resume) return 30;
+  if (row.branch) return 24;
   if (row.queueWake) return 26;
   // The turn's own lines: `Working for 12s` is `h-[34px]` over its hairline, and the live activity
   // is `min-h-6`. Left at a generic 24 they measured 39px taller a frame after mounting, and the
@@ -446,6 +451,8 @@ export function Transcript({
   const wait = useWaiting(thread.id);
   // What the threads below this one wait on: answered here, in the same cards their own chat shows.
   const childRequests = useChildRequests(thread.id);
+  const sessions = useApp((s) => s.sessions);
+  const branches = useMemo(() => branchesOf(sessions, thread.id), [sessions, thread.id]);
   const started = useMemo(
     () =>
       startedLinks(
@@ -508,6 +515,13 @@ export function Transcript({
         out.push(grouped[i]!);
       }
       i++;
+    }
+    // The forks and side chats opened from here, after the turns that were done when they were
+    // opened. The history stores no row for them: they come from the threads' recorded parents.
+    if (branches.length) {
+      const lastEnd = out.findLastIndex((r) => r.item?.kind === "turnEnd");
+      const rowsFor = branches.map((branch): Row => ({ key: `branch-${branch.id}`, branch }));
+      out.splice(lastEnd < 0 ? out.length : lastEnd + 1, 0, ...rowsFor);
     }
     // A pending approval sits at the call it is about, so what it wants is read where the work
     // stopped; one whose call is not on screen (yet, or folded away) goes to the foot, where it
@@ -617,7 +631,19 @@ export function Transcript({
     }
     drawnRows.current = keepUnchangedRows(drawnRows.current, out);
     return drawnRows.current;
-  }, [visible, subagentSteps, started, links, thread, open, searching, wait, childRequests, settleEnd]);
+  }, [
+    visible,
+    subagentSteps,
+    started,
+    links,
+    thread,
+    open,
+    searching,
+    wait,
+    childRequests,
+    settleEnd,
+    branches,
+  ]);
   // Footers of folded turns: their time is in the summary row, not repeated. The turn that just
   // finished still counts as folded while its live header holds the place of that summary row.
   const foldedEnds = useMemo(() => {
@@ -1252,6 +1278,8 @@ export function Transcript({
                       />
                     ) : row.group ? (
                       <ToolGroupRow group={row.group} onToggle={toggleFold} />
+                    ) : row.branch ? (
+                      <BranchRow branch={row.branch} />
                     ) : row.waiting ? (
                       <WaitingRow wait={row.waiting} />
                     ) : row.queued ? (

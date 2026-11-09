@@ -29,6 +29,7 @@ import {
   FolderPlus,
   FolderX,
   GitBranch,
+  GitFork,
   GitMerge,
   GitPullRequest,
   GitPullRequestArrow,
@@ -37,6 +38,7 @@ import {
   KanbanSquare,
   ListFilter,
   MessageCircleQuestion,
+  MessageSquareQuote,
   PanelLeft,
   Pencil,
   Pin,
@@ -69,6 +71,7 @@ import { formatBinding, listCommandFor } from "../lib/keys";
 import { openTerminalAt, openThreadLog, pickFolder, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { liveSubagents, type StackAgent } from "../state/agentStack";
+import { branchKindOf, isBranch } from "../state/branches";
 import { type ChildInfo, childInfo } from "../state/children";
 import {
   cachedPulls,
@@ -738,6 +741,8 @@ const ThreadRow = memo(function ThreadRow({
     );
   }
   const done = status === "done";
+  // A fork or a side chat says so with a small glyph, whether it is nested or a row of its own.
+  const branch = session.parent ? branchKindOf(session.parent) : undefined;
   // The open thread is a delegated one with no row of its own: its parent stands in as the context.
   const lit = selected || !!context;
   return (
@@ -837,6 +842,14 @@ const ThreadRow = memo(function ThreadRow({
               {/* Its title, and the harness that runs it. */}
               <span className="relative flex w-full min-w-0 items-center gap-1.5">
                 {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
+                {branch && (
+                  <span
+                    title={branch === "fork" ? "A fork" : "A side chat"}
+                    className="shrink-0 text-fg-faint"
+                  >
+                    {branch === "fork" ? <GitFork size={11} /> : <MessageSquareQuote size={11} />}
+                  </span>
+                )}
                 <span
                   className={cx(
                     "min-w-0 flex-1 truncate text-body",
@@ -1125,6 +1138,9 @@ function OpenChild({ row, deeper }: { row: React.ReactNode | null; deeper: React
     </Fold>
   );
 }
+
+/** The most forks and side chats drawn under one thread's row. */
+const MAX_BRANCH_ROWS = 6;
 
 type HiddenKind = "needs" | "working" | "finished";
 
@@ -1586,6 +1602,17 @@ export function Sidebar() {
     return map;
   }, [filtered, parentOf]);
 
+  // The forks and side chats opened from a thread, drawn as indented rows under it so they can be
+  // found again (a delegate is not: it is the agent's, and shows as its parent's stack). The open
+  // one is drawn by the chain, and the list is capped so a thread forked many times stays a few rows.
+  const branchKids = useCallback(
+    (parentId: string, chainChild?: string): SessionSummary[] =>
+      (childrenByParent[parentId] ?? [])
+        .filter((c) => isBranch(c) && c.id !== chainChild)
+        .slice(0, MAX_BRANCH_ROWS),
+    [childrenByParent],
+  );
+
   // The projects whose branches a pull request could name: a thread in a worktree has one to look
   // up, and its pulls live in the repository the worktree came from.
   const branchProjects = useMemo(
@@ -1850,6 +1877,7 @@ export function Sidebar() {
         const sub = subOf.get(s.id);
         const child = sub && depth < 8 ? byId.get(sub.id) : undefined;
         if (child) add(child, depth + 1);
+        if (depth === 0) for (const kid of branchKids(s.id, sub?.id)) rows.push({ id: kid.id });
       };
       for (const s of items) add(s, 0);
       return rows;
@@ -1871,7 +1899,7 @@ export function Sidebar() {
             limit: section.id === "settled" && !query.trim() ? settledLimit : undefined,
           },
     );
-  }, [byId, folded, query, sections, settledLimit, subOf]);
+  }, [branchKids, byId, folded, query, sections, settledLimit, subOf]);
   const orderIds = useMemo(() => visibleRows(order), [order]);
 
   // The row the keyboard is on: where it was left, else the open thread, else the first row. A
@@ -2115,6 +2143,12 @@ export function Sidebar() {
             rowFor(s, grouped)
           )}
           {openBelow(s.id, grouped)}
+          {branchKids(s.id, subOf.get(s.id)?.id).map((kid) => (
+            <div key={kid.id} className="relative pl-4">
+              <span aria-hidden className="pointer-events-none absolute inset-y-1 left-1.5 w-px bg-border" />
+              {rowFor(kid, grouped, false)}
+            </div>
+          ))}
         </Fragment>
       ))}
     </div>

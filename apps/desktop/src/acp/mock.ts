@@ -81,8 +81,8 @@ interface MockThread {
   worktree?: MockWorktree;
   status?: string;
   pinned?: boolean;
-  /** The thread an agent started this one from, as the engine records it. */
-  parent?: { id?: string; title?: string };
+  /** The thread this one came from and why, as the engine records it. */
+  parent?: { id?: string; title?: string; relationship?: string };
   checkpoints: MockCheckpoint[];
   /** How many times `/compact` ran here, so the card can compare before and after. */
   compactions?: number;
@@ -446,10 +446,75 @@ function receiptKey(params: JsonObject | undefined): string {
 }
 
 /** A recorded parent as `session/list` carries it in `_meta.rustcode.parent`. */
-const mockParent = (parent: { id?: string; title?: string }): Json => ({
+const mockParent = (parent: { id?: string; title?: string; relationship?: string }): Json => ({
   ...(parent.id ? { sessionId: parent.id } : {}),
   ...(parent.title ? { title: parent.title } : {}),
+  relationship: parent.relationship ?? "delegate",
 });
+
+/**
+ * `?scenario=branches`: a thread with a fork and a side chat opened from it, as the engine records
+ * them (`_meta.rustcode.parent.relationship`). The fork and the side chat nest under the parent
+ * with a glyph, the parent's transcript ends on "Forked to" and "Side chat" lines, and the fork's
+ * header links back.
+ */
+function seedBranchThreads(): MockThread[] {
+  const turn = (id: string, ask: string, say: string): JsonObject[] => [
+    update(id, { sessionUpdate: "user_message_chunk", content: text(ask) }),
+    update(id, { sessionUpdate: "agent_message_chunk", content: text(say) }),
+  ];
+  const base = {
+    cwd: "/Users/you/code/rustcode",
+    harness: "rustcode",
+    model: "chatgpt/gpt-6-luna",
+    effort: "medium",
+    checkpoints: [],
+  };
+  return [
+    {
+      ...base,
+      id: "mock-branch-root",
+      title: "Rework the sidebar rows",
+      updatedAt: minutes(2),
+      history: turn(
+        "mock-branch-root",
+        "Rework the sidebar rows so a thread's state reads at a glance.",
+        "Done: each row now leads with its state, and the project mark moved to the second line.",
+      ),
+    },
+    {
+      ...base,
+      id: "mock-branch-fork",
+      title: "Rework the sidebar rows (fork)",
+      updatedAt: minutes(5),
+      parent: { id: "mock-branch-root", title: "Rework the sidebar rows", relationship: "fork" },
+      history: turn(
+        "mock-branch-fork",
+        "Rework the sidebar rows so a thread's state reads at a glance.",
+        "Done: each row now leads with its state, and the project mark moved to the second line.",
+      ),
+    },
+    {
+      ...base,
+      id: "mock-branch-side",
+      title: "Side chat: Rework the sidebar rows",
+      updatedAt: minutes(4),
+      parent: { id: "mock-branch-root", title: "Rework the sidebar rows", relationship: "side_chat" },
+      history: turn(
+        "mock-branch-side",
+        "> Done: each row now leads with its state.\n\nWhy the state first?",
+        "Because the state is what decides whether you open the row at all.",
+      ),
+    },
+    {
+      ...base,
+      id: "mock-branch-plain",
+      title: "Pick a name for the new command",
+      updatedAt: minutes(9),
+      history: turn("mock-branch-plain", "What should the new command be called?", "`rustcode data query`."),
+    },
+  ];
+}
 
 /**
  * `?scenario=delegated`: a parent with a child whose link is long pruned, and a
@@ -1985,7 +2050,9 @@ export class MockEngine {
           ? seedDelegatedThreads()
           : scenario === "delegates"
             ? seedDelegateTreeThreads()
-            : [];
+            : scenario === "branches"
+              ? seedBranchThreads()
+              : [];
     // The stored book is the only one the app reads at connect; a scenario brings its own.
     if (scenario === "delegates") {
       this.options.links ??= {
@@ -2490,6 +2557,7 @@ export class MockEngine {
         // pruning the link book cannot make the child a top-level thread.
         const parent = str(meta?.parent);
         const parentTitle = this.threads.find((t) => t.id === parent)?.title;
+        const relationship = str(meta?.relationship) ?? "delegate";
         const thread: MockThread = {
           id: `mock-${Date.now().toString(36)}-${++this.counter}`,
           cwd: worktree?.path ?? str(params.cwd) ?? "/",
@@ -2498,7 +2566,7 @@ export class MockEngine {
           updatedAt: Date.now(),
           harness,
           ...(account ? { account } : {}),
-          ...(parent ? { parent: { id: parent, title: parentTitle } } : {}),
+          ...(parent ? { parent: { id: parent, title: parentTitle, relationship } } : {}),
           model:
             str(meta?.model) ??
             h.last?.model ??
@@ -3803,6 +3871,24 @@ export class MockEngine {
           );
           await this.sleep();
         }
+        return done("end_turn");
+      }
+      if (prompt.trim() === "/fork") {
+        // Like the engine: a copy of the chat in a new thread that records this one as its parent.
+        const title = `${thread.title ?? "Forked chat"} (fork)`;
+        this.threads.unshift({
+          ...thread,
+          id: `mock-${Date.now().toString(36)}-${++this.counter}`,
+          title,
+          updatedAt: Date.now(),
+          parent: { id: thread.id, title: thread.title, relationship: "fork" },
+          history: [...thread.history],
+          checkpoints: [],
+        });
+        push({
+          sessionUpdate: "agent_message_chunk",
+          content: text(`**Fork**\n\nForked this chat into **${title}**. Open it from the chat list.`),
+        });
         return done("end_turn");
       }
       if (prompt.trim() === "/compact") {

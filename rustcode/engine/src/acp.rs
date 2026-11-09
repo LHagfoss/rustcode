@@ -256,6 +256,16 @@ fn session_info(
             value.insert("title".into(), serde_json::json!(title));
         }
         if !value.is_empty() {
+            // A record without one is a delegate; the app reads the same default.
+            value.insert(
+                "relationship".into(),
+                serde_json::json!(
+                    parent
+                        .relationship
+                        .unwrap_or(rustcode_session::SessionRelationship::Delegate)
+                        .as_str()
+                ),
+            );
             extra = crate::worktrees::merge_rustcode_meta(Some(extra), "parent", value.into());
         }
     }
@@ -589,8 +599,8 @@ async fn create_builtin_session(
     // Who started this thread, from the `_meta.rustcode.parent` its
     // caller gave: kept in the thread's own metadata, not only in
     // the link book the app prunes (`thread_parent.rs`).
-    if let Some(parent) = crate::thread_parent::requested(request.meta.as_ref()) {
-        crate::thread_parent::record(&session_id, &parent);
+    if let Some((parent, relationship)) = crate::thread_parent::requested(request.meta.as_ref()) {
+        crate::thread_parent::record(&session_id, &parent, relationship);
     }
     let session_clients = peer.attach(&session_id);
     apply_client_info(&mut state, peer.info(), &session_clients);
@@ -4325,6 +4335,7 @@ mod tests {
             &rustcode_session::SessionParent {
                 id: Some("parent-session".into()),
                 title: Some("Update the sidebar".into()),
+                relationship: Some(rustcode_session::SessionRelationship::Fork),
             },
         );
         let meta = crate::config::SessionMeta {
@@ -4342,6 +4353,7 @@ mod tests {
             .expect("parent meta");
         assert_eq!(parent["sessionId"], "parent-session");
         assert_eq!(parent["title"], "Update the sidebar");
+        assert_eq!(parent["relationship"], "fork");
     }
 
     #[test]

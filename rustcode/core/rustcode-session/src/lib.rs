@@ -696,15 +696,65 @@ pub struct SessionMetadata {
     pub repo: Option<PathBuf>,
 }
 
-/// The thread above a delegated one (`start_session`, `fan_out`). `id` is
-/// absent for a thread an older release started, where a one-time pass could
-/// only recover the parent's title from the first message.
+/// The thread above a related one. `id` is absent for a thread an older
+/// release started, where a one-time pass could only recover the parent's
+/// title from the first message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionParent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// How the thread relates to the parent. Absent in a record written
+    /// before this field existed, which was always a delegate: read it with
+    /// [`SessionParent::relationship`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relationship: Option<SessionRelationship>,
+}
+
+impl SessionParent {
+    /// How the thread relates to its parent; a record without one is a delegate.
+    pub fn relationship(&self) -> SessionRelationship {
+        self.relationship.unwrap_or(SessionRelationship::Delegate)
+    }
+}
+
+/// Why a thread has a parent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionRelationship {
+    /// An agent handed the parent's task to it (`start_session`, `fan_out`).
+    Delegate,
+    /// The user copied the parent's conversation (`/fork`, "Fork from here").
+    Fork,
+    /// A short question asked beside the parent, seeded from one of its messages.
+    SideChat,
+    /// A relationship a later release wrote. It is kept as a child of its
+    /// parent and never counted as a delegate.
+    #[serde(other)]
+    Other,
+}
+
+impl SessionRelationship {
+    /// The name `session/list` and `session/new` carry in `_meta.rustcode`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Delegate => "delegate",
+            Self::Fork => "fork",
+            Self::SideChat => "side_chat",
+            Self::Other => "other",
+        }
+    }
+
+    /// The relationship a `_meta` name stands for; `None` for an unknown one.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "delegate" => Some(Self::Delegate),
+            "fork" => Some(Self::Fork),
+            "side_chat" => Some(Self::SideChat),
+            _ => None,
+        }
+    }
 }
 
 /// What the session's last compaction did and how many it has run, so the
@@ -2677,6 +2727,7 @@ mod tests {
         let parent = SessionParent {
             id: Some("018d6b28-0000-7000-8000-000000000007".into()),
             title: Some("Research the sidebar".into()),
+            relationship: Some(SessionRelationship::Fork),
         };
         store
             .save_session_parent(id, parent.clone())
@@ -2689,11 +2740,47 @@ mod tests {
         let unknown = SessionParent {
             id: None,
             title: Some("my orchestrator app".into()),
+            relationship: None,
         };
         store
             .save_session_parent(id, unknown.clone())
             .expect("record parent");
-        assert_eq!(store.load_session_parent(id), Some(unknown));
+        assert_eq!(store.load_session_parent(id), Some(unknown.clone()));
+        // A record from before the relationship existed is a delegate.
+        assert_eq!(unknown.relationship(), SessionRelationship::Delegate);
+    }
+
+    #[test]
+    fn a_relationship_round_trips_and_an_unknown_one_is_kept() {
+        for relationship in [
+            SessionRelationship::Delegate,
+            SessionRelationship::Fork,
+            SessionRelationship::SideChat,
+        ] {
+            let parent = SessionParent {
+                id: Some("p".into()),
+                title: None,
+                relationship: Some(relationship),
+            };
+            let text = serde_json::to_string(&parent).unwrap();
+            assert!(text.contains(relationship.as_str()), "{text}");
+            assert_eq!(
+                serde_json::from_str::<SessionParent>(&text).unwrap(),
+                parent
+            );
+            assert_eq!(
+                SessionRelationship::parse(relationship.as_str()),
+                Some(relationship)
+            );
+        }
+        // An old record has no relationship key at all.
+        let old: SessionParent = serde_json::from_str(r#"{"id":"p"}"#).unwrap();
+        assert_eq!(old.relationship, None);
+        // A later release's name does not make the whole thread's metadata unreadable.
+        let later: SessionParent =
+            serde_json::from_str(r#"{"id":"p","relationship":"mirror"}"#).unwrap();
+        assert_eq!(later.relationship(), SessionRelationship::Other);
+        assert_eq!(SessionRelationship::parse("mirror"), None);
     }
 
     #[test]

@@ -10,6 +10,7 @@ describe("a finished turn's action row", () => {
       row: true,
       copy: "Done **it**.",
       fork: true,
+      sideChat: true,
       time: true,
     });
   });
@@ -22,10 +23,17 @@ describe("a finished turn's action row", () => {
     const empty = turnActions({ text: "  \n", at, threadId: "t1" });
     expect(empty.copy).toBeNull();
     expect(empty.fork).toBe(false);
+    expect(empty.sideChat).toBe(false);
     expect(empty.time).toBe(true);
     // Nothing to copy and no time either: no row at all, and no room held for one.
-    expect(turnActions({})).toEqual({ row: false, copy: null, fork: false, time: false });
-    expect(turnActions({ text: "" })).toEqual({ row: false, copy: null, fork: false, time: false });
+    expect(turnActions({})).toEqual({ row: false, copy: null, fork: false, sideChat: false, time: false });
+    expect(turnActions({ text: "" })).toEqual({
+      row: false,
+      copy: null,
+      fork: false,
+      sideChat: false,
+      time: false,
+    });
   });
 
   test("a reply that is only whitespace gets no copy button", () => {
@@ -37,6 +45,7 @@ describe("a finished turn's action row", () => {
       row: true,
       copy: "Done.",
       fork: false,
+      sideChat: false,
       time: true,
     });
   });

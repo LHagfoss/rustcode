@@ -29,6 +29,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { relationshipOf } from "../acp/types";
 import { observeSize } from "../lib/resize";
 import { type AppState, setPanel, showPanel, useApp, useShortcutHint } from "../state/store";
 import { HEADER_HEIGHT } from "./MainHeader";
@@ -163,6 +164,11 @@ export function RightPanel() {
   const panelKey = useShortcutHint("toggle-panel");
   const pullsOn = useApp((s) => !!s.agent?.pullRequests);
   const peekOn = useApp((s) => !!s.peekId);
+  // A side chat opened beside this thread gives its tab that name.
+  const peekIsSideChat = useApp((s) => {
+    const parent = s.sessions.find((x) => x.id === s.peekId)?.parent;
+    return !!parent && relationshipOf(parent) === "side_chat";
+  });
   // What the panel shows: the open one, or while closing the one that was.
   const [shown, setShown] = useState<Kind | null>(panel);
   const [width, setWidth] = useState(() => storedWidth(threadId));
@@ -325,7 +331,7 @@ export function RightPanel() {
     { value: "details", label: "Details" },
     { value: "changes", label: "Changes" },
     ...(pullsOn ? [{ value: "pulls" as const, label: "Pull requests" }] : []),
-    ...(peekOn ? [{ value: "peek" as const, label: "Thread" }] : []),
+    ...(peekOn ? [{ value: "peek" as const, label: peekIsSideChat ? "Side chat" : "Thread" }] : []),
   ];
 
   const contents = kind && (

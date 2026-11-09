@@ -347,8 +347,8 @@ pub(crate) async fn new_session(
     }
     // The thread that started this one, kept in its metadata so a pruned link
     // cannot turn it into a top-level thread (`thread_parent.rs`).
-    if let Some(parent) = crate::thread_parent::requested(request.meta.as_ref()) {
-        crate::thread_parent::record(&session_id, &parent);
+    if let Some((parent, relationship)) = crate::thread_parent::requested(request.meta.as_ref()) {
+        crate::thread_parent::record(&session_id, &parent, relationship);
     }
     let mut record = store::HarnessRecord::new(&resolved.id, cwd.clone());
     record.account = account.as_ref().map(|account| account.id.clone());

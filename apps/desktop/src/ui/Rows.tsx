@@ -20,6 +20,7 @@ import {
   Image as ImageIcon,
   Layers,
   MessageCircleQuestion,
+  MessageSquareQuote,
   MessagesSquare,
   MoveRight,
   Pencil,
@@ -44,7 +45,7 @@ import { messageCollapses, splitImageMarkers, splitSlashCommand } from "../state
 import { foldLabel, inferToolKind, type ToolGroup, type TurnFold } from "../state/fold";
 import { stateOf } from "../state/host";
 import { LINK_LABEL } from "../state/orchestration";
-import { editMessage, forkThread, retryMessage, selectThread, useApp } from "../state/store";
+import { editMessage, forkThread, openSideChat, retryMessage, selectThread, useApp } from "../state/store";
 import {
   diffCounts,
   formatDuration,
@@ -269,6 +270,22 @@ function ReplyForkButton({ threadId }: { threadId: string }) {
         className="inline-flex size-5 items-center justify-center rounded-md text-fg-faint hover:bg-fill hover:text-fg"
       >
         <GitFork size={12} />
+      </button>
+    </Tooltip>
+  );
+}
+
+/** "Ask in a side chat" on a finished turn: a thread beside this one, seeded with the reply. */
+function ReplySideChatButton({ threadId, reply }: { threadId: string; reply: string }) {
+  return (
+    <Tooltip label="Ask in a side chat: a thread beside this one, with this reply quoted">
+      <button
+        type="button"
+        aria-label="Ask in a side chat"
+        onClick={() => void openSideChat(threadId, reply)}
+        className="inline-flex size-5 items-center justify-center rounded-md text-fg-faint hover:bg-fill hover:text-fg"
+      >
+        <MessageSquareQuote size={12} />
       </button>
     </Tooltip>
   );
@@ -987,10 +1004,11 @@ export function TurnEndRow({
       <div className="mt-1 flex h-5 items-center gap-2 text-caption text-fg-faint">
         {item.outcome === "cancelled" && !folded && <SquareStop size={11} />}
         {parts.length > 0 && <span className="tabular">{parts.join(" · ")}</span>}
-        {(row.copy || row.fork) && (
+        {(row.copy || row.fork || row.sideChat) && (
           <span className="flex items-center gap-1 [&>button]:size-5 [&>button]:text-fg-faint">
             {row.copy && <CopyButton text={row.copy} iconOnly label="Copy reply" />}
             {row.fork && <ReplyForkButton threadId={threadId!} />}
+            {row.sideChat && row.copy && <ReplySideChatButton threadId={threadId!} reply={row.copy} />}
           </span>
         )}
         {traced && trace}

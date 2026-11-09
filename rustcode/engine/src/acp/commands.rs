@@ -394,6 +394,13 @@ fn fork(state: &crate::app::AppState) -> String {
         .map(|title| format!("{title} (fork)"))
         .unwrap_or_else(|| "Forked chat".into());
     crate::config::save_session_title(&session_id, &title);
+    // Where the fork came from, so the app nests it under this chat and the
+    // fork can link back (the title is as it is now, kept if this one is renamed).
+    crate::thread_parent::record(
+        &session_id,
+        &state.active_session_id,
+        rustcode_session::SessionRelationship::Fork,
+    );
     crate::config::flush_history();
     format!("Forked this chat into **{title}**. Open it from the chat list.")
 }
@@ -692,7 +699,14 @@ mod tests {
                         .any(|message| message.content == "original answer")
                 })
             });
-        assert!(forked.is_some(), "the fork is saved as its own session");
+        let forked = forked.expect("the fork is saved as its own session");
+        let parent =
+            crate::config::load_session_parent(&forked).expect("the fork records its parent");
+        assert_eq!(parent.id.as_deref(), Some(open.as_str()));
+        assert_eq!(
+            parent.relationship,
+            Some(rustcode_session::SessionRelationship::Fork)
+        );
     }
 
     #[tokio::test]

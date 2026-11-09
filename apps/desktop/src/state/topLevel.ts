@@ -6,6 +6,7 @@
 // pure function so the sidebar and its tests agree on it (ui/Sidebar.tsx,
 // docs/orchestrator.md).
 
+import type { ThreadParent } from "../acp/types";
 import type { Link } from "./orchestration";
 
 /** Where a thread sits in the sidebar. */
@@ -27,7 +28,7 @@ export interface DelegatedThread {
    * (`_meta.rustcode.parent`): `id` is absent for a thread an older release
    * started, where only the parent's title was recovered.
    */
-  parent?: { id?: string; title?: string };
+  parent?: ThreadParent;
 }
 
 /**
@@ -70,7 +71,9 @@ export function topLevel(
   // A thread older releases started has only its parent's title: it is still
   // delegated, and still not a top-level thread.
   if (!parent && !thread.parent) return "shown";
-  if (thread.pinned || thread.messaged) return "shown";
+  // A side chat is always asked beside its parent: writing in it does not make it a thread of its
+  // own. A delegate or a fork the user writes in is theirs now.
+  if (thread.pinned || (thread.messaged && thread.parent?.relationship !== "side_chat")) return "shown";
   if (parent && known.has(parent)) return "nested";
   return "shown";
 }

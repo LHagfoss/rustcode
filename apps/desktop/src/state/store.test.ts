@@ -5,6 +5,7 @@ import { harnessPlanKey, parsePlans, type UsagePlan } from "../acp/rustcode";
 import type { Transport, TransportEvent } from "../acp/transport";
 import { type HarnessModel, type HarnessSnapshot, Method } from "../acp/types";
 import { V2Method } from "../acp/v2";
+import { branchesOf, originOf } from "./branches";
 import { type ComposeExtras, emptyExtras } from "./compose";
 import { preferredDefault, rememberedEffort } from "./harness";
 import type { AgentUsage } from "./harnessUsage";
@@ -52,6 +53,7 @@ import {
   errorText,
   fetchHarnessModels,
   forgetPlans,
+  forkThread,
   loadTotalLimit,
   localChoices,
   MAX_PANELS,
@@ -60,6 +62,7 @@ import {
   moveThread,
   newThreadChoice,
   onlyCachedPlan,
+  openSideChat,
   openThread,
   PLAN_CACHE_MAX_AGE_MS,
   PLAN_CACHE_POLL_MS,
@@ -77,6 +80,7 @@ import {
   plansToCache,
   prunePanels,
   prunePlans,
+  quoteMessage,
   RESOLVED_APPROVAL_MS,
   RESUME_TEXT,
   refreshAgents,
@@ -143,7 +147,7 @@ import {
   windowNow,
 } from "./store";
 import { turnCompletion } from "./thread";
-import { topLevel } from "./topLevel";
+import { type DelegatedThread, topLevel } from "./topLevel";
 
 const until = async (check: () => boolean, ms = 2000) => {
   const start = Date.now();
@@ -3675,7 +3679,7 @@ describe("a delegated thread's place in the sidebar", () => {
       title: "Child",
     });
     const summary = useApp.getState().sessions.find((x) => x.id === id)!;
-    expect(summary.parent).toEqual({ id: parent });
+    expect(summary.parent).toMatchObject({ id: parent, relationship: "delegate" });
     const listed = new Set(useApp.getState().sessions.map((x) => x.id));
     expect(useApp.getState().links.links).toHaveLength(0);
     expect(topLevel(summary, [], listed)).toBe("nested");
@@ -3689,6 +3693,74 @@ describe("a delegated thread's place in the sidebar", () => {
     const summary = useApp.getState().sessions.find((x) => x.id === id)!;
     expect(summary.parent).toBeUndefined();
     expect(topLevel(summary, [], new Set([id]))).toBe("shown");
+  });
+});
+
+describe("forks and side chats", () => {
+  const ready = async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    const id = useApp.getState().sessions[0]!.id;
+    await openThread(id);
+    selectThread(id);
+    return id;
+  };
+  const summaryOf = (id: string) => useApp.getState().sessions.find((x) => x.id === id)!;
+
+  test("/fork lists a new thread that records its parent as a fork, nested under it", async () => {
+    const parent = await ready();
+    const before = new Set(useApp.getState().sessions.map((x) => x.id));
+    await forkThread(parent);
+    const fork = useApp.getState().sessions.find((x) => !before.has(x.id));
+    expect(fork?.parent).toMatchObject({ id: parent, relationship: "fork" });
+    const listed = new Set(useApp.getState().sessions.map((x) => x.id));
+    expect(topLevel(fork!, [], listed)).toBe("nested");
+    expect(branchesOf(useApp.getState().sessions, parent).map((b) => [b.id, b.kind])).toContainEqual([
+      fork!.id,
+      "fork",
+    ]);
+    expect(originOf(useApp.getState().sessions, fork!.id)).toMatchObject({ id: parent, kind: "fork" });
+  });
+
+  test("a side chat shares the parent's harness, model and folder, and opens beside it", async () => {
+    const parent = await ready();
+    const thread = useApp.getState().threads[parent]!;
+    const id = await openSideChat(parent, "First line\nSecond line");
+    expect(id).toBeDefined();
+    const side = summaryOf(id!);
+    expect(side.parent).toMatchObject({ id: parent, relationship: "side_chat" });
+    // The same folder and harness, and no worktree of its own.
+    expect(side.cwd).toBe(thread.cwd);
+    expect(side.harness).toBe(thread.harness?.id);
+    expect(useApp.getState().threads[id!]?.worktree).toBeUndefined();
+    // The message arrives as a quote in its composer, and the panel shows it beside the parent.
+    expect(useApp.getState().drafts[id!]).toBe("> First line\n> Second line\n\n");
+    expect(useApp.getState().peekId).toBe(id ?? null);
+    expect(useApp.getState().panel).toBe("peek");
+    expect(useApp.getState().selectedId).toBe(parent);
+  });
+
+  test("closing the panel keeps the side chat, and writing in it does not give it a row of its own", async () => {
+    const parent = await ready();
+    const id = (await openSideChat(parent, "A reply"))!;
+    setPanel(null);
+    expect(useApp.getState().sessions.some((x) => x.id === id)).toBe(true);
+    const listed = new Set(useApp.getState().sessions.map((x) => x.id));
+    expect(topLevel({ ...summaryOf(id), messaged: true }, [], listed)).toBe("nested");
+    // A fork the person writes in is theirs now, as a delegate is.
+    const fork: DelegatedThread = { id: "f", parent: { id: parent, relationship: "fork" }, messaged: true };
+    expect(topLevel(fork, [], listed)).toBe("shown");
+  });
+
+  test("a side chat of nothing is not opened", async () => {
+    await ready();
+    expect(await openSideChat("no-such-thread", "text")).toBeUndefined();
+    const parent = useApp.getState().sessions[0]!.id;
+    expect(await openSideChat(parent, "   ")).toBeUndefined();
+  });
+
+  test("a quote keeps blank lines as empty quote lines", () => {
+    expect(quoteMessage("a\n\nb\n")).toBe("> a\n>\n> b\n\n");
   });
 });
 

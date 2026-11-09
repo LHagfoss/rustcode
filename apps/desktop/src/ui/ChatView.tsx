@@ -49,6 +49,7 @@ import {
 import { formatClock, type ThreadState } from "../state/thread";
 import { overviewExpanded, setOverviewExpanded } from "../state/widgets";
 import { AttentionCard, ResolvedApprovalBar } from "./AttentionCards";
+import { OriginChip } from "./Branches";
 import { Composer } from "./Composer";
 import { HarnessIcon } from "./HarnessIcon";
 import { LinkedThreads } from "./Links";
@@ -383,6 +384,8 @@ function Header({
             <HarnessIcon id={thread.harness.id} size={14} className="text-fg-muted" />
           )}
           <h1 className="min-w-0 truncate font-semibold text-body">{title}</h1>
+          {/* A fork or a side chat links back to the thread it came from. */}
+          {thread && <OriginChip threadId={thread.id} />}
           {/* A paired device is attached, or the thread is shared with them (RemoteAccessPage.tsx). */}
           <RemoteThreadIndicator sessionId={thread?.id} />
         </>

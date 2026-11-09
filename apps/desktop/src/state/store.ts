@@ -23,6 +23,7 @@ import type { Transport } from "../acp/transport";
 import {
   type AgentInfo,
   byActivity,
+  delegateParent,
   displayPath,
   fallbackHarnessSnapshot,
   type HarnessAccount,
@@ -50,6 +51,7 @@ import {
   type SessionSummary,
   type SessionUsage,
   type SlashCommand,
+  type ThreadRelationship,
 } from "../acp/types";
 import {
   type Checkpoint,
@@ -1865,8 +1867,10 @@ export interface NewSession {
   effort?: string | null;
   /** Create a worktree first and run the thread in it (docs/orchestrator.md). */
   worktree?: { repo: string; branch?: string; title?: string };
-  /** The thread an agent starts this one from (`state/host.ts` `newThread`). */
+  /** The thread an agent starts this one from (`state/host.ts` `newThread`), or the user opens it beside. */
   parent?: string;
+  /** Why it has that parent; a delegate when omitted, which is what an agent's thread is. */
+  relationship?: ThreadRelationship;
   title?: string;
   select?: boolean;
   /** The setup this session finishes (state/setup.ts): it is listed and the setup cleared together. */
@@ -1893,7 +1897,10 @@ export async function createSession(options: NewSession): Promise<string> {
   }
   // The engine keeps this in the thread's own metadata, so pruning the link
   // book does not make the child a top-level thread (`state/topLevel.ts`).
-  if (options.parent) meta.parent = options.parent;
+  if (options.parent) {
+    meta.parent = options.parent;
+    if (options.relationship && options.relationship !== "delegate") meta.relationship = options.relationship;
+  }
   if (Object.keys(meta).length) params._meta = { rustcode: meta };
   const result = (await conn.request(Method.sessionNew, params, 120_000)) as JsonObject;
   const id = str(result.sessionId);
@@ -1922,7 +1929,13 @@ export async function createSession(options: NewSession): Promise<string> {
     // A thread an agent started is nested from its first frame: without the parent here the
     // sidebar draws it as a row of its own until the engine lists it with the same record, then
     // moves it under its parent (`state/topLevel.ts`).
-    parent: options.parent ? { id: options.parent } : undefined,
+    parent: options.parent
+      ? {
+          id: options.parent,
+          title: sessionById(s, options.parent)?.title,
+          relationship: options.relationship ?? "delegate",
+        }
+      : undefined,
   };
   // A pending setup keeps its row and its message until the thread is listed below, so nothing it
   // shows goes away and comes back between the session and its model. Any other session is listed
@@ -2578,6 +2591,45 @@ export async function forkThread(id: string): Promise<void> {
   toast(`Forked into "${fork.title || "a new thread"}"`, "success", {
     action: { label: "Open", run: () => selectThread(fork.id) },
   });
+}
+
+/** The text of a message as a quote: every line behind `> `, ready to be followed by a question. */
+export function quoteMessage(text: string): string {
+  const lines = text.trim().split("\n");
+  return `${lines.map((line) => (line ? `> ${line}` : ">")).join("\n")}\n\n`;
+}
+
+/**
+ * "Ask in a side chat": a new thread beside `parentId` on the same harness, model, effort and
+ * folder (never a new worktree), whose composer starts with `message` quoted. It opens in the
+ * panel's Thread tab so the parent stays on screen; closing the panel keeps the thread, and the
+ * sidebar and the parent's transcript list it. The engine records the parent (relationship
+ * `side_chat`) in the new thread's own metadata.
+ */
+export async function openSideChat(parentId: string, message: string): Promise<string | undefined> {
+  const parent = get().threads[parentId];
+  if (!parent || !message.trim()) return undefined;
+  const choice = (configId: string) => parent.configOptions.find((o) => o.id === configId)?.current;
+  const title = sessionById(get(), parentId)?.title || parent.title;
+  try {
+    const id = await createSession({
+      // The folder the parent runs in, its worktree included: a side chat reads the same files.
+      cwd: parent.cwd,
+      harness: parent.harness?.id,
+      account: parent.harness?.account,
+      model: choice("model") ?? null,
+      effort: choice("effort") ?? null,
+      parent: parentId,
+      relationship: "side_chat",
+      title: title ? `Side chat: ${title}` : "Side chat",
+    });
+    setDraft(id, quoteMessage(message));
+    peekThread(id);
+    return id;
+  } catch (error) {
+    toast(`Could not open a side chat: ${error instanceof Error ? error.message : String(error)}`, "error");
+    return undefined;
+  }
 }
 
 /**
@@ -4029,7 +4081,7 @@ function lastTurnEndedAt(thread: ThreadState | undefined): number | undefined {
 function autoCompactInput(s: AppState, id: string, now: number) {
   const thread = s.threads[id];
   const links = linksOf(s.links, id);
-  const parentId = sessionById(s, id)?.parent?.id;
+  const parentId = delegateParent(sessionById(s, id)?.parent)?.id;
   const parent = parentId ? s.sessions.find((x) => x.id === parentId) : undefined;
   const delegated = !!parentId || links.drivenBy !== undefined;
   // A delegate is kept only while its orchestrator is still talking to it: a
