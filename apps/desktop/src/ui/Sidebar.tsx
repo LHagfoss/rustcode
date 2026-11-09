@@ -1,18 +1,18 @@
 import { fileManagerName, primaryModifier } from "../lib/platform";
 // The sidebar: a toolbar clear of the traffic lights (the sidebar toggle only),
 // the app's brand under it (its mark, name and version), then one list: pinned
-// threads first, then every active thread (by project when asked), then the
-// Working, Snoozed and Settled shelves at the foot, each folding on its own
-// header. Threads are searched from ⌘K, which also holds the buttons that used
-// to sit here (new thread, add project, settings, pull requests, usage).
-// A row is one 32px line: the mark of where it runs, its title, and one trailing
-// slot — `Needs you`, `Working 2m`, `Waiting`, `Failed`, `Review`, the time it
-// wakes, or its age (state/sidebarRows.ts `rowStatus`), with the harness mark and
-// a lone diff beside it. A thread with a branch, a diff, a pull request or a stack
-// of delegates adds one quiet second line for them (48px); a request from the
-// thread adds its words under the title. The row layout preference (Settings ›
-// Appearance) keeps the older two-line row as `comfortable`, which puts the title
-// first and the branch under it.
+// threads first, then one Threads list (by project when asked) that leads with
+// the threads running now, then the Snoozed and Settled shelves at the foot, each
+// folding on its own header. Threads are searched from ⌘K, which also holds the
+// buttons that used to sit here (new thread, add project, settings, pull
+// requests, usage). A section header never folds.
+// The default row is the roomy two-line one, `py-2` with `rounded-xl`: the mark
+// of where it runs, its title, and one trailing slot — `Needs you`, `Working 2m`,
+// `Waiting`, `Failed`, `Review`, the time it wakes, or its age
+// (state/sidebarRows.ts `rowStatus`), with the harness mark and a lone diff
+// beside it; the branch and the counts go on the quiet line under it (48px). The
+// row layout preference (Settings › Appearance) keeps the opt-in compact row as
+// one 32px line, with a second only for a branch, a pull request or a stack.
 
 import {
   Check,
@@ -84,6 +84,7 @@ import { type PendingSetup, pendingSummary } from "../state/setup";
 import { applyOrder, moveBy, reorder, sectionOrderKey } from "../state/sidebarOrder";
 import { PREF, usePref, useRowLayout } from "../state/sidebarPrefs";
 import {
+  cleanFolds,
   contextRow,
   isShelf,
   keepListed,
@@ -103,6 +104,7 @@ import {
   type SectionId,
   type ShelfId,
   type SidebarLayout,
+  sectionLabelled,
   sectionsOf,
   shelfKey,
   shelfOpen,
@@ -1101,6 +1103,8 @@ const PendingRow = memo(function PendingRow({
   selected: boolean;
   navActive?: boolean;
 }) {
+  const [rowLayout] = useRowLayout();
+  const compact = rowLayout === "compact";
   const project = projectName(pending.worktree?.repo || pending.cwd);
   const branch = pending.worktree?.branch;
   const failure = pending.failure;
@@ -1113,9 +1117,12 @@ const PendingRow = memo(function PendingRow({
         onClick={() => selectThread(pending.id)}
         aria-current={selected ? "page" : undefined}
         title={failure ? `${pending.title} · ${failure.text}` : pending.title}
-        className="relative flex min-h-12 w-full flex-col justify-center gap-0.5 rounded-lg px-2 text-left"
+        className={cx(
+          "relative flex w-full flex-col justify-center gap-0.5 text-left",
+          compact ? "min-h-12 rounded-lg px-2" : "rounded-xl py-2 pr-2 pl-2",
+        )}
       >
-        <RowFill selected={selected} radius="rounded-lg" />
+        <RowFill selected={selected} radius={compact ? "rounded-lg" : "rounded-xl"} />
         <span className="relative flex w-full min-w-0 items-center gap-2">
           <ProjectMark name={project} size={14} className="opacity-60 group-hover:opacity-100" />
           <span className="min-w-0 flex-1 truncate text-body font-medium text-fg">{pending.title}</span>
@@ -1172,14 +1179,11 @@ function useNow() {
   return now;
 }
 
-/** The list's sections by name: Working leads the default layout, and the shelves close it. */
+/** The list's sections by name: the one Threads list, and the shelves that close it. */
 const LABELS: Record<SectionId, string> = {
   working: "Working",
   pinned: "Pinned",
-  // The threads that ask for an approval or an answer. Not "Needs you": that is the inbox row
-  // above, which is one row per item (a failure is not a thread) and opens the page for all of them.
-  needs: "Asking you",
-  threads: "Active",
+  threads: "Threads",
   snoozed: "Snoozed",
   settled: "Settled",
 };
@@ -1326,7 +1330,7 @@ function SectionHeader({
       onClick={onToggle}
       aria-expanded={open}
       className={cx(
-        "group/h flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left font-medium text-fg-muted text-sub hover:bg-fill-subtle",
+        "group/h flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left font-medium text-fg-muted text-body hover:bg-fill-subtle",
       )}
     >
       <span className="min-w-0 flex-1 truncate">{section.label}</span>
@@ -1360,10 +1364,10 @@ function SectionHeader({
   );
 }
 
-/** The heading of Pinned or Active: it names the group and never folds. */
+/** The heading of Pinned or Threads: it names the group and never folds. */
 function SectionLabel({ section }: { section: Section }) {
   return (
-    <div className="flex h-7 w-full items-center gap-2 px-2 font-medium text-fg-muted text-sub">
+    <div className="flex h-8 w-full items-center gap-2 px-2 font-medium text-fg-muted text-body">
       <span className="min-w-0 flex-1 truncate">{section.label}</span>
       <span className="shrink-0 font-normal text-fg-faint">
         <RollingNumber value={section.items.length} />
@@ -1375,8 +1379,8 @@ function SectionLabel({ section }: { section: Section }) {
 /**
  * A project's folder: the folder and its name, a dot for
  * what it hides and its count only while folded, the chevron at the end, and
- * a new-thread button on hover. It reads as its section's own labels do: the same 28px, the same
- * quiet 12px type, so a list of projects is one quiet column of headings.
+ * a new-thread button on hover. It reads as its section's own labels do: the same 32px, the same
+ * quiet 14px type, so a list of projects is one quiet column of headings.
  */
 function ProjectHeader({
   label,
@@ -1394,14 +1398,18 @@ function ProjectHeader({
   onNew?: () => void;
 }) {
   return (
-    <div className="group/p relative flex h-7 items-center">
+    <div className="group/p relative flex h-8 items-center">
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left font-medium text-fg-muted text-sub hover:bg-fill-subtle"
+        className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left font-medium text-body text-fg/90 hover:bg-fill-subtle"
       >
-        {open ? <FolderOpen size={12} className="shrink-0" /> : <Folder size={12} className="shrink-0" />}
+        {open ? (
+          <FolderOpen size={14} className="shrink-0 text-fg-muted" />
+        ) : (
+          <Folder size={14} className="shrink-0 text-fg-muted" />
+        )}
         <span className="min-w-0 flex-1 truncate">{label}</span>
         {!open && <HiddenDot kind={hidden} />}
         {!open && <RollingNumber value={count} className="font-normal text-fg-faint text-sub" />}
@@ -1443,7 +1451,7 @@ export function Sidebar() {
       .join(" "),
   );
   // When each request reached the app and each running turn started, as one string for the same
-  // reason: the Needs you and Working sections order by them (state/sidebarRows.ts `sortSection`).
+  // reason: the Threads list and the Working shelf order by them (state/sidebarRows.ts `sortSection`).
   const clocked = useApp((s) =>
     Object.values(s.threads)
       .flatMap((t) => {
@@ -1487,8 +1495,9 @@ export function Sidebar() {
   // By state, with the project on each row; grouping by project is an option.
   // The view options are changed from ⌘K (ui/CommandPalette.tsx), so they are shared, not local.
   const [byProject] = usePref(PREF.groupByProject, false);
-  // Working leads the list, or folds into the shelf at its foot with the preference off: the layout
-  // the sidebar had before it put running work first (state/sidebarRows.ts `SidebarLayout`).
+  // Running work leads the one Threads list, or folds into a shelf at its foot with the preference
+  // off: the layout the sidebar had before it put running work first (state/sidebarRows.ts
+  // `SidebarLayout`).
   const [showWorking] = usePref(PREF.workingSection, true);
   const layoutMode: SidebarLayout = showWorking ? "top" : "shelf";
   const snoozed = useApp((s) => s.snoozed);
@@ -1500,6 +1509,12 @@ export function Sidebar() {
   const [onlyProject] = usePref(PREF.onlyProject, false);
   // The projects folded under "group by project" (`project:<path>`); the shelves keep their own.
   const [folded, setFolded] = usePref<string[]>(PREF.folded, NO_FOLDS);
+  // A section header never folds, so a `working` or `threads` entry an older release stored would
+  // shut a list with no control to open it. Drop everything but a project's folder once, on mount.
+  useEffect(() => {
+    const kept = cleanFolds(folded);
+    if (kept.length !== folded.length) setFolded(kept);
+  }, [folded, setFolded]);
   // Each shelf's open state is its own, kept per section: `undefined` until the user chooses, so
   // it takes the shelf's default (Working open, Snoozed and Settled shut).
   const [workingStored, setWorkingStored] = usePref<boolean | undefined>(shelfKey("working"), undefined);
@@ -1545,7 +1560,7 @@ export function Sidebar() {
       ),
     [sessions, onlyProject, projectCwd],
   );
-  // The threads waiting on work they handed out, though no turn of theirs runs: the Working section
+  // The threads waiting on work they handed out, though no turn of theirs runs: the Threads list
   // holds them beside the ones running (state/waiting.ts).
   const waiting = useWaitingIds(useMemo(() => filtered.map((s) => s.id), [filtered]));
 
@@ -1647,12 +1662,11 @@ export function Sidebar() {
     const flagged = new Set(flags.split(" "));
     const isFresh = (id: string) => !!finished[id];
     // A thread that waits on work it handed out is drawn with the ones that run, so it is not lost
-    // among the idle rows. The shelf layout keeps today's list, where it stays in Active.
+    // among the idle rows. The shelf layout keeps today's list, where it stays in Threads.
     const works = (id: string) => flagged.has(`${id}:w`) || (layoutMode === "top" && waiting.has(id));
     const placed: Record<SectionId, SessionSummary[]> = {
       working: [],
       pinned: [],
-      needs: [],
       threads: [],
       snoozed: [],
       settled: [],
@@ -1697,6 +1711,8 @@ export function Sidebar() {
       unseen: !!(finished[s.id] || failed[s.id]),
       pinRank: pinAt.get(s.id),
       wakeAt: snoozed[s.id],
+      running: works(s.id),
+      needs: flagged.has(`${s.id}:n`),
     });
     // The order the user arranged comes over the section's own (state/sidebarOrder.ts): a row that
     // was dragged or ⌥↑/↓'d is drawn where it was put, and the rows nobody arranged keep the order
@@ -1721,8 +1737,8 @@ export function Sidebar() {
     for (const project of projects ?? []) {
       project.items = arranged("threads", project.items, project.key);
     }
-    // The sections this layout draws, in its order: Working, Pinned, Asking you and Active lead, and
-    // the shelves close the list (state/sidebarRows.ts `sectionsOf`).
+    // The sections this layout draws, in its order: Pinned and the one Threads list, and the
+    // shelves close it (state/sidebarRows.ts `sectionsOf`).
     const all: Section[] = sectionsOf(layoutMode).map((id) => ({
       id,
       label: LABELS[id],
@@ -1761,10 +1777,11 @@ export function Sidebar() {
   ]);
 
   const settledSection = sections.find((g) => g.id === "settled");
-  // The first shelf starts the foot of the list; the sections above it are labelled once there is
-  // more than one of them.
+  // The first shelf starts the foot of the list; the sections above it name themselves only while
+  // there is more than one of them (state/sidebarRows.ts `sectionLabelled`).
   const firstShelf = sections.find((g) => isShelf(g.id, layoutMode))?.id;
-  const labelled = sections.filter((g) => !isShelf(g.id, layoutMode)).length > 1;
+  const shownIds = sections.map((g) => g.id);
+  const labelled = (id: SectionId) => sectionLabelled(id, shownIds, layoutMode);
   // The open delegate's parent may have been settled: the shelf opens for it and its slice of the
   // shelf grows to hold the row, so the row it hangs under is reachable rather than out of sight.
   const settledAt = settledSection
@@ -1781,7 +1798,13 @@ export function Sidebar() {
     snoozed: shelfOpen("snoozed", snoozedStored),
     settled: shelfOpen("settled", settledStored, { forced: settledForChain }),
   };
-  const isOpen = (id: string) => (isShelf(id, layoutMode) ? shelfIsOpen[id] : !folded.includes(id));
+  // Only a shelf and a project's folder fold. A section header never does, whatever `folded` holds,
+  // so an id an older release stored can never shut a list with no control to open it.
+  const isOpen = (id: string) => {
+    if (isShelf(id, layoutMode)) return shelfIsOpen[id];
+    if (id.startsWith("project:")) return !folded.includes(id);
+    return true;
+  };
   const toggle = (id: string) => {
     if (id === "working") setWorkingStored(!isOpen(id));
     else if (id === "snoozed") setSnoozedStored(!isOpen(id));
@@ -2184,7 +2207,7 @@ export function Sidebar() {
     );
   };
   const rows = (items: SessionSummary[], grouped: boolean) => (
-    <div className="flex flex-col gap-px">
+    <div className="flex flex-col gap-0.5">
       {items.map((s) => (
         <Fragment key={s.id}>
           {pending && s.id === pending.id ? (
@@ -2257,7 +2280,7 @@ export function Sidebar() {
               const shelf = isShelf(section.id, layoutMode);
               return (
                 <Fragment key={section.id}>
-                  {/* The shelves sit at the foot, under one hairline, apart from Pinned and Active. */}
+                  {/* The shelves sit at the foot, under one hairline, apart from Pinned and Threads. */}
                   {section.id === firstShelf && (
                     <div aria-hidden className="mt-2 min-h-2 flex-1 border-border border-b" />
                   )}
@@ -2266,12 +2289,12 @@ export function Sidebar() {
                     aria-label={section.label}
                     data-shelf={shelf ? section.id : undefined}
                   >
-                    {/* Pinned and Active carry a label (they never fold) once there are two of them;
-                      a shelf's header folds it. */}
+                    {/* Pinned and Threads carry a label (they never fold) while there is another
+                      list beside them; a shelf's header folds it. */}
                     {shelf ? (
                       <SectionHeader section={section} open={open} onToggle={() => toggle(section.id)} />
                     ) : (
-                      labelled && <SectionLabel section={section} />
+                      labelled(section.id) && <SectionLabel section={section} />
                     )}
                     <Fold open={open}>
                       {section.projects
@@ -2312,7 +2335,7 @@ export function Sidebar() {
                         <button
                           type="button"
                           onClick={() => setSettledShown((n) => n + 25)}
-                          className="flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left text-fg-muted text-sub hover:bg-fill-subtle hover:text-fg"
+                          className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-callout text-fg-muted hover:bg-fill-subtle hover:text-fg"
                         >
                           <ChevronDown size={14} className="shrink-0" />
                           Show {Math.min(25, section.items.length - settledShown)} more
@@ -2404,17 +2427,26 @@ export function Sidebar() {
   );
 }
 
-/** Where the thread list will be: a section's label, then rows of one 32px line each. */
+/** Where the thread list will be: a section's label, then rows at the chosen density. */
 const SKELETON_ROWS = [72, 56, 84, 64, 48, 76, 60];
 function ThreadRowsSkeleton() {
+  const [rowLayout] = useRowLayout();
+  const compact = rowLayout === "compact";
   return (
     <div className="flex flex-col pt-1" role="status" aria-label="Loading threads">
       <Skeleton className="mx-2 mt-2 mb-3 h-2.5 w-16" />
-      {SKELETON_ROWS.map((w, i) => (
-        <div key={i} className="flex h-8 items-center px-2">
-          <Skeleton className="h-3" style={{ width: `${w}%` }} />
-        </div>
-      ))}
+      {SKELETON_ROWS.map((w, i) =>
+        compact ? (
+          <div key={i} className="flex h-8 items-center px-2">
+            <Skeleton className="h-3" style={{ width: `${w}%` }} />
+          </div>
+        ) : (
+          <div key={i} className="flex flex-col gap-1.5 px-2 py-[7px]">
+            <Skeleton className="h-3" style={{ width: `${w}%` }} />
+            <Skeleton className="h-2" style={{ width: `${Math.round(w * 0.55)}%` }} />
+          </div>
+        ),
+      )}
     </div>
   );
 }

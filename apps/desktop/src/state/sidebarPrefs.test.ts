@@ -1,5 +1,5 @@
-// The sidebar's stored preferences: the row layout's migration off the two two-line values that
-// earlier releases wrote, so a user who chose one keeps it and everyone else gets the compact row.
+// The sidebar's stored preferences: the row layout's migration off the two values earlier releases
+// wrote, so a user who chose one keeps it and everyone else gets the roomy default.
 
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_ROW_LAYOUT, rowLayoutOf } from "./sidebarPrefs";
@@ -15,10 +15,10 @@ describe("rowLayoutOf", () => {
     expect(rowLayoutOf("title-first")).toBe("comfortable");
   });
 
-  test("a store with no value, or one it cannot read, takes the compact default", () => {
-    expect(DEFAULT_ROW_LAYOUT).toBe("compact");
-    expect(rowLayoutOf(undefined)).toBe("compact");
-    expect(rowLayoutOf(null)).toBe("compact");
-    expect(rowLayoutOf(42)).toBe("compact");
+  test("a store with no value, or one it cannot read, takes the roomy default", () => {
+    expect(DEFAULT_ROW_LAYOUT).toBe("comfortable");
+    expect(rowLayoutOf(undefined)).toBe("comfortable");
+    expect(rowLayoutOf(null)).toBe("comfortable");
+    expect(rowLayoutOf(42)).toBe("comfortable");
   });
 });

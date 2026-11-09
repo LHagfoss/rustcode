@@ -314,9 +314,9 @@ function DecidedRow({ item }: { item: DecidedItem }) {
  *
  * It counts inbox items, not threads — an approval, a question, a failed turn, a
  * delegate — and opens the page that lists them all, so it keeps the name; the
- * list's own "Asking you" section (`ui/Sidebar.tsx` `LABELS`) is the threads that
- * have one of those open, and its heading says so. The 6px under it matches the
- * brand header's, so the row closes the top block instead of heading the list.
+ * sidebar's Threads list says "Needs you" in the chip of a thread that has one of
+ * those open. The 6px under it matches the brand header's, so the row closes the
+ * top block instead of heading the list.
  */
 export function NeedsYouRow() {
   const items = useInboxItems();
