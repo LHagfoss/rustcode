@@ -79,10 +79,9 @@ prompts, messages) is never rewritten.
 | `stale_session` | `stale_thread` | error `code` |
 
 The gateway translates at the device's socket
-(`rustcode/engine/src/remote_gateway/wire_names.rs`) and the iOS app at its own
-(`ios/RustCodeRemote/Sources/RustCodeRemote/Wire/WireNames.swift`); a test
-fails when the schema gains a `session` name the table does not cover. The
-current iOS app asks for thread names.
+(`rustcode/engine/src/remote_gateway/wire_names.rs`); a test fails when the
+schema gains a `session` name the table does not cover. The phone app asks for
+thread names.
 
 ## Connection
 

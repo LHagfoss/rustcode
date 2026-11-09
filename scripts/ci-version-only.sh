@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Succeed only when a PR changes release notes and version literals: Cargo
-# manifests and the iOS app's MARKETING_VERSION and CURRENT_PROJECT_VERSION.
+# Succeed only when a PR changes release notes and version literals in the
+# Cargo manifests.
 #
 #   ci-version-only.sh <base> [head]   read the diff and decide
 #   ci-version-only.sh --prefilter     read changed paths on stdin and decide
@@ -13,7 +13,6 @@ set -euo pipefail
 is_release_metadata_path() {
     case "$1" in
         CHANGELOG.md|Cargo.toml|Cargo.lock|rustcode/*/Cargo.toml) ;;
-        ios/RustCode.xcodeproj/project.pbxproj) ;;
         *) return 1 ;;
     esac
 }
@@ -43,10 +42,5 @@ done <<< "$paths"
 if git diff --unified=0 "$base...$head" -- Cargo.toml Cargo.lock ':(glob)rustcode/**/Cargo.toml' |
     grep -E '^[+-]' |
     grep -Ev '^(\+\+\+ |--- )|^[+-]version = "[^"]+"$'; then
-    exit 1
-fi
-if git diff --unified=0 "$base...$head" -- ios/RustCode.xcodeproj/project.pbxproj |
-    grep -E '^[+-]' |
-    grep -Ev '^(\+\+\+ |--- )|^[+-][[:space:]]*(MARKETING_VERSION|CURRENT_PROJECT_VERSION) = [0-9.]+;$'; then
     exit 1
 fi

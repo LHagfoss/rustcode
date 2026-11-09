@@ -9,11 +9,11 @@ client is built against is [remote-protocol/README.md](remote-protocol/README.md
 and the design behind both is
 [`Live terminal sessions from an iOS client`](architecture/mobile-remote-plan.md).
 
-The SwiftUI client in [`ios/`](../ios/README.md) is a reference now, not part of
-a release: its CI job and its release assets are gone. The phone app is an Expo
-(React Native) app in its own repository, `rustcode-mobile`, built against the
-remote gateway and the wire contract in this one; the gateway and the wire
-contract stay here and stay supported.
+The phone app is an Expo (React Native) app in its own repository,
+`rustcode-mobile`, built against the remote gateway and the wire contract in
+this one; the gateway and the wire contract stay here and stay supported. The
+older SwiftUI client that lived in `ios/` has been removed from this
+repository.
 
 Plain LAN traffic to the gateway is authenticated but not encrypted; NetBird is
 the recommended way to reach it from a phone.

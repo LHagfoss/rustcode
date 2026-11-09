@@ -550,41 +550,11 @@ phase_update_versions() {
     if [[ "$crate_count" -eq 0 ]]; then
         die "Could not discover any workspace crate manifests."
     fi
-
-    # The iOS app used to ship from ios/ under the same version. It is no
-    # longer part of this repository's releases (docs/mobile.md); a checkout
-    # that still has the project bumps its version and build number as before.
-    local pbxproj="$REPO_ROOT/$IOS_PROJECT"
-    if [[ ! -f "$pbxproj" ]]; then
-        info "No iOS project; skipping its version bump."
-        return
-    fi
-    tmp="$(mktemp)"
-    # The App Store version is plain X.Y.Z; a beta's suffix
-    # stays out of it (the build number already drops it).
-    sed -e 's/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = '"${VERSION%%-*}"';/' \
-        -e 's/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = '"$(ios_build_number "$VERSION")"';/' \
-        "$pbxproj" > "$tmp"
-    if $DRY_RUN; then
-        info "[dry-run] mv $tmp $pbxproj"
-        rm -f -- "$tmp"
-    else
-        mv -- "$tmp" "$pbxproj"
-    fi
 }
 
-IOS_PROJECT="ios/RustCode.xcodeproj/project.pbxproj"
-
-# 0.72.3 -> 72003: monotonic across releases, as CFBundleVersion must be.
 # A beta: a version with a pre-release suffix, `0.115.0-beta.1`.
 is_prerelease() {
     [[ "$VERSION" == *-* ]]
-}
-
-ios_build_number() {
-    local core="${1%%-*}" major minor patch
-    IFS=. read -r major minor patch <<< "$core"
-    echo $((10#$major * 1000000 + 10#$minor * 1000 + 10#$patch))
 }
 
 verify_workspace_versions() {
@@ -746,7 +716,7 @@ To resume: fix the reported issues and re-run: scripts/release.sh --version $VER
 # Files the release is allowed to touch. Everything else must be committed
 # or stashed before releasing, and is never swept into the release commit.
 release_files() {
-    printf '%s\n' "Cargo.toml" "Cargo.lock" "CHANGELOG.md" "$IOS_PROJECT"
+    printf '%s\n' "Cargo.toml" "Cargo.lock" "CHANGELOG.md"
     local crate_path
     while IFS= read -r crate_path; do
         [[ -z "$crate_path" ]] && continue
@@ -1426,8 +1396,6 @@ run_tests() {
        [[ "$(bump_version 0.51.7 minor)" == "0.52.0" ]] && \
        [[ "$(bump_version 0.51.7 major)" == "1.0.0" ]] && \
        [[ "$(bump_version 1.2.3-beta.1 patch)" == "1.2.4" ]] && \
-       [[ "$(ios_build_number 0.72.3)" == "72003" ]] && \
-       [[ "$(ios_build_number 1.0.0-beta.1)" == "1000000" ]] && \
        semver_gt 0.115.0 0.115.0-beta.1 && ! semver_gt 0.115.0-beta.1 0.115.0 && \
        semver_gt 0.115.0-beta.2 0.115.0-beta.1 && semver_gt 0.115.0-beta.1 0.114.0 && \
        semver_gt 0.114.10 0.114.9 && ! semver_gt 0.114.0 0.114.0 && \

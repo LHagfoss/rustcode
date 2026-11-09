@@ -32,7 +32,6 @@ The repo has a few parts:
 | `rustcode/tui` | The terminal app |
 | `rustcode/core` | Shared crates |
 | `apps/desktop` | The RustCode app (Tauri + React) |
-| `ios/` | iOS app for `/remote` |
 | `docs/` | User docs |
 
 ## Checks
@@ -53,9 +52,6 @@ If you touched the desktop app (`apps/desktop`):
 ```bash
 cd apps/desktop && bun run check
 ```
-
-If you touched the iOS app, see [ios/AGENTS.md](ios/AGENTS.md) for the
-`xcodebuild` commands.
 
 Docs-only changes don't need any of this.
 
