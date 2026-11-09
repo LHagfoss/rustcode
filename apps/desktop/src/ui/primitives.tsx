@@ -19,6 +19,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useHoverTip } from "../lib/hover";
 import { useIntentRest } from "../lib/intent";
 import { errorText, toast } from "../state/store";
 
@@ -84,6 +85,14 @@ export function Skeleton({ className, style }: { className?: string; style?: Rea
   return <span aria-hidden className={cx("rc-skeleton block", className)} style={style} />;
 }
 
+/**
+ * The surface a tip sits on, tooltip or hover card alike (docs/design.md › Tooltips and hover
+ * cards): the `elevated` glass and its hairline, the `xl` radius every popover and menu takes, and
+ * the tooltip's own text size. A tip adds its inset and width — `px-2 py-1` for one line,
+ * `p-3` for a hover card — and `pointer-events-none` unless it has controls in it.
+ */
+export const tipSurface = "elevated rounded-xl text-callout text-fg";
+
 export function Tooltip({
   label,
   children,
@@ -93,18 +102,21 @@ export function Tooltip({
   children: ReactNode;
   side?: "top" | "bottom" | "left" | "right";
 }) {
+  // The app's own timing (lib/hover.ts) rather than the provider's: it is the same rest for every
+  // tip, hands the place to a neighbour at once, and a press or a scroll puts the tip away.
+  const tip = useHoverTip();
   if (!label) return <>{children}</>;
   return (
-    // Delays come from the one Tooltip.Provider in App.tsx: 400 ms for the first, then
-    // none while the pointer moves between triggers. The tip never takes the pointer.
-    <RadixTooltip.Root>
-      <RadixTooltip.Trigger asChild>{children}</RadixTooltip.Trigger>
+    <RadixTooltip.Root open={tip.open} disableHoverableContent>
+      <RadixTooltip.Trigger asChild {...tip.triggerProps}>
+        {children}
+      </RadixTooltip.Trigger>
       <RadixTooltip.Portal>
         <RadixTooltip.Content
           side={side}
           sideOffset={8}
-          collisionPadding={10}
-          className="elevated pointer-events-none z-50 max-w-80 rounded-lg px-2 py-1 text-callout text-fg"
+          collisionPadding={surfaceCollisionPadding}
+          className={cx(tipSurface, "pointer-events-none z-50 max-w-80 px-2 py-1")}
         >
           {label}
         </RadixTooltip.Content>

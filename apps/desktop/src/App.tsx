@@ -155,7 +155,9 @@ export function App() {
   const onboarding = useApp((s) => s.onboardingOpen);
   const view = useApp((s) => s.view);
   return (
-    <Tooltip.Provider delayDuration={400} skipDelayDuration={300} disableHoverableContent>
+    // Every tip times itself and shares one open/close behaviour (lib/hover.ts); the provider is
+    // what Radix's Tooltip and HoverCard require, and nothing here waits on it.
+    <Tooltip.Provider>
       {/*
         One shell, never unmounted. Settings floats over it (docs/design.md ›
         Settings): the shell stays mounted and laid out underneath, inert, so
