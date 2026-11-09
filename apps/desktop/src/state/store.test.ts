@@ -2294,6 +2294,20 @@ describe("engine controller with the mock engine", () => {
     expect(statusOf(useApp.getState(), "mock-thread-4")).toBe("review");
   });
 
+  test("sending in a settled thread unsets its persisted status", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().features.status === true);
+    const id = useApp.getState().sessions[0]!.id;
+    await setThreadStatus(id, "done");
+    selectThread(id);
+    await until(() => !!useApp.getState().threads[id]?.loaded);
+    expect(statusOf(useApp.getState(), id)).toBe("done");
+    await submit("yolo hello");
+    await until(() => useApp.getState().sessions.find((s) => s.id === id)?.status === "idle");
+    await refreshSessions();
+    expect(useApp.getState().sessions.find((s) => s.id === id)?.status).toBe("idle");
+  });
+
   test("unsettling a mixed selection leaves the reviewed threads in review", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
     await until(() => useApp.getState().status === "ready" && useApp.getState().features.status === true);

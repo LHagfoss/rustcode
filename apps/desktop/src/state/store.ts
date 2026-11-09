@@ -2522,7 +2522,10 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
     cancelEdit(id);
     const later = messagesAfter(thread, edit.itemId);
     const go = async () => {
-      if (await rewindTo(id!, edit.itemId, edit.original)) void runPrompt(id!, trimmed, extras);
+      if (await rewindTo(id!, edit.itemId, edit.original)) {
+        unsettleThreads([id!]);
+        void runPrompt(id!, trimmed, extras);
+      }
     };
     if (later > 0) {
       askConfirm({
@@ -2535,6 +2538,7 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
     } else void go();
     return true;
   }
+  if (trimmed !== "/fork" || hasExtras(extras)) unsettleThreads([id]);
   if (thread.running) {
     updateThread(id, (t) => ({
       ...t,
@@ -2598,6 +2602,7 @@ export async function steerOrSubmit(text: string, extras: ComposeExtras = emptyE
     if (next) return sendQueuedNow(id, next.id);
     return submit(text, extras);
   }
+  unsettleThreads([id]);
   const verdict = sendDecisionFor(thread, extras);
   if (verdict.action === "steer" && (await steer(id, trimmed, extras))) return true;
   if (verdict.action === "interruptRestart") return restartWith(id, text, extras);
@@ -4297,7 +4302,7 @@ export function settleThread(id: string): void {
  */
 export function unsettleThreads(ids: string[]): void {
   const state = get();
-  const settled = ids.filter((id) => statusOf(state, id) === "done");
+  const settled = ids.filter((id) => (state.statusMarks[id] ?? sessionById(state, id)?.status) === "done");
   if (!settled.length) return;
   void setThreadsStatus(settled, "idle");
   toast(settled.length === 1 ? "Unsettled" : `Unsettled ${settled.length} threads`, "info");
