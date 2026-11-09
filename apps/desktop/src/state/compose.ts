@@ -4,6 +4,7 @@
 
 import type { Json, JsonObject } from "../acp/jsonrpc";
 import type { SlashCommand } from "../acp/types";
+import { pasteLabel } from "../lib/paste";
 
 /**
  * A message that starts with a command (`/review the diff`), as the name and what follows. A path
@@ -41,7 +42,9 @@ export function imageMime(name: string): string | undefined {
 
 export type Attachment =
   | { id: string; kind: "image"; name: string; mimeType: string; data: string }
-  | { id: string; kind: "file"; name: string; path?: string; text?: string };
+  | { id: string; kind: "file"; name: string; path?: string; text?: string }
+  /** A long paste the field kept out of the draft (lib/paste.ts). */
+  | { id: string; kind: "text"; text: string };
 
 export interface ComposeExtras {
   command?: SlashCommand;
@@ -96,11 +99,19 @@ export interface BlockOptions {
   cwd: string;
 }
 
+/** A fenced block the text cannot close: one backtick longer than its longest run of them. */
+function fenced(text: string): string {
+  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(Math.max(3, longest + 1));
+  return `${fence}\n${text}\n${fence}`;
+}
+
 /**
  * ACP prompt blocks for a message. Images become `image` blocks; files with a
  * path become `resource_link` blocks on an external harness and an "Attached
  * files" list in the text on the built-in one (it ignores links, as the
- * SwiftUI app found); a file without a path is inlined as text.
+ * SwiftUI app found); a file without a path, and a long paste held as a chip,
+ * are inlined as text.
  */
 export function promptBlocks(text: string, extras: ComposeExtras, options: BlockOptions): Json[] {
   let body = composedText(text, extras);
@@ -110,6 +121,12 @@ export function promptBlocks(text: string, extras: ComposeExtras, options: Block
   if (withPath.length && options.builtin) {
     const list = withPath.map((f) => `- \`${relative(f.path!, options.cwd)}\``).join("\n");
     body = `${body ? `${body}\n\n` : ""}Attached files:\n${list}`;
+  }
+  // A pasted block goes in where the user wrote it, as a fenced block of its own, before the files
+  // it came with.
+  for (const a of extras.attachments) {
+    if (a.kind !== "text") continue;
+    body = `${body ? `${body}\n\n` : ""}${fenced(a.text)}`;
   }
   for (const f of inline) {
     body = `${body ? `${body}\n\n` : ""}Attached file \`${f.name}\`:\n\`\`\`\n${f.text}\n\`\`\``;
@@ -132,18 +149,21 @@ export function promptBlocks(text: string, extras: ComposeExtras, options: Block
 
 /** What the transcript shows for a sent message's attachments. */
 export interface SentAttachment {
-  kind: "image" | "file";
+  kind: "image" | "file" | "text";
   name: string;
   /** A data URL, for an image sent from here. */
   preview?: string;
+  /** The pasted text, for the chip a sent message keeps (`ui/PasteChip.tsx`). */
+  text?: string;
 }
 
 export function sentAttachments(extras: ComposeExtras): SentAttachment[] {
-  return extras.attachments.map((a) =>
-    a.kind === "image"
-      ? { kind: "image", name: a.name, preview: `data:${a.mimeType};base64,${a.data}` }
-      : { kind: "file", name: a.name },
-  );
+  return extras.attachments.map((a) => {
+    if (a.kind === "image")
+      return { kind: "image", name: a.name, preview: `data:${a.mimeType};base64,${a.data}` };
+    if (a.kind === "text") return { kind: "text", name: pasteLabel(a.text), text: a.text };
+    return { kind: "file", name: a.name };
+  });
 }
 
 const IMAGE_MARKER = /!\[image\]\(file:\/\/[^)\s]+\)\n?/g;
