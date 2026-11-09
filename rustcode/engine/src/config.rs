@@ -1509,7 +1509,7 @@ impl AppConfig {
         self.models.is_empty().then(|| {
             concat!(
                 "No model is configured for this harness, so the turn was not sent. ",
-                "Add a model profile (`[[models]]` in config.toml, or Settings › Agents ",
+                "Add a model profile (`[[models]]` in config.toml, or Settings › Harnesses ",
                 "in the app), choose it in the composer, then send the message again; ",
                 "or start this thread on another harness."
             )
