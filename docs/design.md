@@ -152,6 +152,12 @@ this: pressed icon buttons (`bg-fill-strong`), primary actions (`bg-fg
 text-bg`) and native checkboxes, whose check is the mark rather than a knob.
 The model picker's effort slider takes the same knob.
 
+Every knob is 24 px. A switch's is the slider's, on a 40×20 px track: centred
+vertically so it overhangs the track by 2 px top and bottom, travelling 0 →
+16 px, and both the knob and the track's fill answer a toggle over 200 ms.
+The button's own box stays the track's 20 px, so a switch in a Settings row does
+not make the row taller than its neighbours.
+
 ## Focus
 
 - Controls normally use `:focus-visible` for a ring: 2px `focus` at 40%, offset 2px. It is
@@ -554,8 +560,9 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   `bg-fill` track with the picked segment on a white pill that slides to it
   (`bg-knob`, `text-knob-fg`), the others muted; `Choice` (settingsKit) is the
   same pill track and selected pill inside Settings' cards.
-- **Switch:** the track is `bg-accent` on and `bg-fill-strong` off, its thumb
-  the white knob: `bg-knob shadow-knob`.
+- **Switch:** the track is 40×20 px (`bg-accent` on, `bg-fill-strong` off)
+  and its thumb the 24 px white knob (`bg-knob shadow-knob`), overhanging the
+  track's top and bottom and sliding from x=0 to x=16 over 200 ms.
 - **Slider:** `Slider` (settingsKit) for a whole number in a short range, such
   as the delegates one thread may run at once: the native range (so arrows, Home
   and End work), a thin track filled with accent up to the white thumb, the value vertically centred beside it and the ends of the range under the rail.
