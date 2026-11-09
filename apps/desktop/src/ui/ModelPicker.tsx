@@ -1,14 +1,13 @@
 // The composer's model pill and its card. The card opens on the searchable list of every harness's
-// models (one harness on top, the current model checked), in one box of a fixed height: a view that
-// is longer scrolls inside it and a shorter one does not shrink it, so the card never jumps while
-// the user moves around it. Behind the list is the effort: the current level and the model's name on
-// one header row with Fast mode and the reset at its end, a short slider over the levels that model
-// itself lists, and the harness's logins as chips at the card's foot. Picking a model comes back to
-// the slider with the effort clamped to the new model's levels. What the thread's harness cannot do
-// is greyed out with the reason, from capability flags.
+// models (one harness on top, the current model checked) and docks the highlighted model's effort
+// and the harness's logins in a column beside it: the card is as tall as what it holds, up to the
+// room the window has, and only the model list scrolls. The effort column follows the row the list
+// highlights, and picking a model takes that model's own levels. A narrow card stacks the column
+// under the list. What the thread's harness cannot do is greyed out with the reason, from
+// capability flags.
 
-import { Check, ChevronLeft, ChevronRight, ChevronUp, Lock, RotateCcw, UserRound, Zap } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Check, ChevronUp, Lock, RotateCcw, UserRound, Zap } from "lucide-react";
+import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import {
   type ConfigOption,
   effortLabel,
@@ -65,11 +64,11 @@ const EFFORT_ORDER = ["off", "none", "default", "minimal", "low", "medium", "hig
 const THUMB = 24;
 
 /**
- * The card's one height, shared by the model list and the effort behind it: a view that is longer
- * scrolls inside and a shorter one leaves the card as it is, so nothing jumps under the pointer.
- * The window's own room caps it, and 430 is what it is on a screen with space to spare.
+ * The card's ceiling: it is as tall as what it holds, and this keeps a long model list from reaching
+ * past the room the window has under the pill. 480 is what it takes on a screen with space to
+ * spare; the 16px is the panel's own padding, which the window's room already counts.
  */
-const CARD_HEIGHT = "min(430px, var(--radix-popper-available-height, 430px))";
+const CARD_MAX = "min(480px, calc(var(--radix-popper-available-height, 480px) - 16px))";
 
 /**
  * Where a point on the track sits from the pill's left edge, as a length: the thumb's radius at 0,
@@ -130,16 +129,80 @@ export function modelThreadWrites(
   remembered: string | null | undefined,
   sameHarness: boolean,
 ): ModelWrite[] {
-  const next = clampEffort(
-    model,
-    orderEfforts(model?.efforts ?? []),
-    sameHarness ? effort : null,
-    remembered,
-  );
+  return modelThreadWritesAt(model, value, null, effort, remembered, sameHarness);
+}
+
+/**
+ * The same writes with a level the user moved in the docked slider: a level the model lists is
+ * taken as it is (the row was highlighted for that level, so picking it keeps the user's choice),
+ * and a level it does not list is left to `clampEffort`.
+ */
+export function modelThreadWritesAt(
+  model: HarnessModel | undefined,
+  value: string,
+  level: string | null | undefined,
+  effort: string | null | undefined,
+  remembered: string | null | undefined,
+  sameHarness: boolean,
+): ModelWrite[] {
+  const levels = orderEfforts(model?.efforts ?? []);
+  const next = chosenLevel(model, level, levels, sameHarness ? effort : null, remembered);
   const writes: ModelWrite[] = [{ configId: "model", value }];
   // A model that lists no levels keeps the effort the thread had.
   if (next && (sameHarness ? next !== effort : true)) writes.push({ configId: "effort", value: next });
   return writes;
+}
+
+/** The level a highlighted model takes: the one moved in the dock while its list has it, else the
+ * level it keeps (`clampEffort`). */
+export function chosenLevel(
+  model: HarnessModel | undefined,
+  level: string | null | undefined,
+  levels: string[],
+  effort: string | null | undefined,
+  remembered: string | null | undefined,
+): string | null {
+  if (level && levels.includes(level)) return level;
+  return clampEffort(model, levels, effort, remembered);
+}
+
+/**
+ * What the docked column shows for the row the list highlights. The model the picker's owner runs
+ * keeps the levels `pickerModels` found for it; any other row brings its own, ordered, and the
+ * level it was last left on, else its default.
+ */
+export function dockedEffort({
+  entry,
+  levels,
+  effort,
+  defaultLevel,
+  current,
+  sameHarness,
+  remembered,
+}: {
+  entry: HarnessModel | undefined;
+  /** The levels `pickerModels` lists for the model the picker's owner runs. */
+  levels: string[];
+  /** The effort that model runs at, or the new thread's choice. */
+  effort: string | null | undefined;
+  /** The level that model resets to. */
+  defaultLevel: string | null;
+  /** Whether the highlighted row is that model. */
+  current: boolean;
+  /** Whether the highlighted row runs on the same harness, whose effort a switch keeps. */
+  sameHarness: boolean;
+  /** The level the highlighted model was last left on, if any. */
+  remembered?: string | null;
+}): { levels: string[]; effort: string | null; defaultLevel: string | null } {
+  if (current) return { levels, effort: effort ?? null, defaultLevel };
+  const own = orderEfforts(entry?.efforts ?? []);
+  return {
+    levels: own,
+    // Inside one harness the level the thread runs stays while the model lists it, exactly as the
+    // write `pickModel` makes; another harness never keeps it.
+    effort: clampEffort(entry, own, sameHarness ? effort : null, remembered),
+    defaultLevel: defaultEffort(entry, own),
+  };
 }
 
 /**
@@ -194,21 +257,23 @@ function EffortSlider({
   levels,
   value,
   onChange,
+  onBack,
+  railRef,
 }: {
   levels: string[];
   value: string;
   onChange: (effort: string) => void;
+  /** ← on the lowest level leaves the track for the search field. */
+  onBack?: () => void;
+  /** The card focuses this track when → leaves the model list for the dock. */
+  railRef?: RefObject<HTMLDivElement | null>;
 }) {
   const last = levels.length - 1;
   const at = Math.max(levels.indexOf(value), 0);
   const pct = last > 0 ? at / last : 0;
-  const rail = useRef<HTMLDivElement>(null);
+  const own = useRef<HTMLDivElement>(null);
+  const rail = railRef ?? own;
   const dragging = useRef(false);
-  // The slider, not the model's name, takes focus when the card opens: ←→ change the effort,
-  // which is what the card is for; the model list is Enter or a click on its name.
-  useEffect(() => {
-    rail.current?.focus({ preventScroll: true });
-  }, []);
   const choose = (index: number) => {
     const level = levels[Math.min(Math.max(index, 0), last)];
     if (level && level !== value) onChange(level);
@@ -250,6 +315,11 @@ function EffortSlider({
           dragging.current = false;
         }}
         onKeyDown={(e) => {
+          if (e.key === "ArrowLeft" && at === 0 && onBack) {
+            e.preventDefault();
+            onBack();
+            return;
+          }
           const step =
             e.key === "ArrowRight" || e.key === "ArrowUp"
               ? 1
@@ -312,12 +382,12 @@ function EffortSlider({
 }
 
 /**
- * The card's effort view: one header row with the effort and the model's name, Fast mode and the
- * reset at its end, then the short slider, then the harness's logins at the card's foot. No effort
- * control on the harness, and the slider's place says why. It fills the card's fixed height, so the
- * logins sit on the bottom edge rather than floating under a short track.
+ * The card's docked column: the highlighted model's name with Fast mode and the reset on one row,
+ * the level over a short slider of the levels that model lists, and the harness's logins directly
+ * under it, with no gap to pin them across. A harness without an effort control, or one that is not
+ * available now, says why in the slider's place.
  */
-function EffortCard({
+function EffortDock({
   levels,
   effort,
   model,
@@ -326,52 +396,55 @@ function EffortCard({
   fast,
   fastOn,
   effortReason,
-  modelReason,
   blocked,
   accounts,
   accountsDisabled,
   onEffort,
   onFast,
-  onModels,
   onPickAccount,
+  onBack,
+  sliderRef,
+  containerRef,
 }: {
   levels: string[];
   effort?: string | null;
-  model?: string | null;
+  model: string;
   harness?: Harness;
   defaultLevel: string | null;
   fast?: ConfigOption;
   fastOn: boolean;
   effortReason?: string;
-  /** Why the harness picks its own model: the model's name cannot open the list. */
-  modelReason?: string;
-  /** Why nothing here runs now (an unavailable harness), under the model's name. */
+  /** Why nothing here runs now (an unavailable harness, or one that picks its own model). */
   blocked?: string;
   accounts: AccountChip[];
   accountsDisabled: boolean;
   onEffort: (effort: string) => void;
   onFast: (on: boolean) => void;
-  onModels: () => void;
   onPickAccount: (id: string | null) => void;
+  /** ← from any control but the slider returns to the search field. */
+  onBack: () => void;
+  sliderRef: RefObject<HTMLDivElement | null>;
+  containerRef: RefObject<HTMLDivElement | null>;
 }) {
-  const name = model ?? "Default model";
   const showEffort = effortsShown(levels, effort);
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-0.5">
-      <div className="flex items-center gap-1 px-1.5 pt-1 pb-0.5">
-        <div className="flex min-w-0 flex-1 items-center gap-1">
-          <button
-            type="button"
-            aria-label={`Model: ${name}`}
-            disabled={!!modelReason}
-            onClick={onModels}
-            className="flex min-w-0 items-center gap-0.5 rounded-full py-0.5 pr-1.5 pl-1 text-body font-semibold text-fg enabled:hover:bg-fill disabled:opacity-40"
-          >
-            <HarnessIcon id={harness?.id ?? "rustcode"} name={harness?.name} size={16} />
-            <span className="truncate">{name}</span>
-            <ChevronRight size={11} strokeWidth={2.5} className="shrink-0" />
-          </button>
-        </div>
+    <div
+      ref={containerRef}
+      tabIndex={-1}
+      onKeyDown={(e) => {
+        // The slider keeps ←→ for its own levels; every other control hands ← to the search.
+        if (e.key === "ArrowLeft" && !e.defaultPrevented) {
+          e.preventDefault();
+          onBack();
+        }
+      }}
+      className="flex min-h-0 flex-col gap-1 border-border border-t p-1.5 outline-none @min-[40rem]/modelcard:w-[248px] @min-[40rem]/modelcard:shrink-0 @min-[40rem]/modelcard:border-t-0 @min-[40rem]/modelcard:border-l"
+    >
+      <div className="flex items-center gap-1 px-0.5">
+        <HarnessIcon id={harness?.id ?? "rustcode"} name={harness?.name} size={14} />
+        <span className="min-w-0 flex-1 truncate text-callout font-semibold text-fg" title={model}>
+          {model || "Default model"}
+        </span>
         {fast && (
           <Tooltip label="Fast mode" side="bottom">
             <button
@@ -403,28 +476,35 @@ function EffortCard({
           </button>
         </Tooltip>
       </div>
-      <div className="px-1.5">
-        {effortReason ? (
-          <p className="flex items-start gap-1.5 px-2 py-1.5 text-caption text-fg-faint">
-            <Lock size={10} className="mt-[2px] shrink-0" />
-            <span>{effortReason}</span>
-          </p>
-        ) : (
-          // A short track under its level's name, centred: the card is as wide as the model list's
-          // two panes, and a slider stretched across all of it reads as a different control.
-          <div className="mx-auto w-full max-w-[260px]">
+      {effortReason ? (
+        <p className="flex items-start gap-1.5 px-2 py-1 text-caption text-fg-faint">
+          <Lock size={10} className="mt-[2px] shrink-0" />
+          <span>{effortReason}</span>
+        </p>
+      ) : (
+        <>
+          <div className="flex items-baseline justify-between gap-1 px-1.5 pt-0.5">
+            <span className="text-caption text-fg-faint">Effort</span>
             {showEffort && (
-              <span className="block px-2 pt-1 text-callout text-fg-muted">{effortLabel(effort!)}</span>
-            )}
-            {levels.length > 1 && effort && (
-              <EffortSlider levels={levels} value={effort} onChange={onEffort} />
+              <span className="min-w-0 truncate text-callout text-fg-muted">{effortLabel(effort!)}</span>
             )}
           </div>
-        )}
-      </div>
-      {blocked && <p className="px-3 pb-1 text-caption text-fg-faint">{blocked}</p>}
+          {levels.length > 1 && effort ? (
+            <EffortSlider
+              levels={levels}
+              value={effort}
+              onChange={onEffort}
+              onBack={onBack}
+              railRef={sliderRef}
+            />
+          ) : (
+            !showEffort && <span className="px-1.5 text-caption text-fg-faint">No effort levels</span>
+          )}
+        </>
+      )}
+      {blocked && <p className="px-1.5 text-caption text-fg-faint">{blocked}</p>}
       {accounts.length > 0 && (
-        <div className="mt-auto border-border border-t px-1.5 pt-1">
+        <div className="border-border border-t px-0.5 pt-1">
           <div className="flex items-baseline gap-1.5 px-1 pb-0.5 text-caption text-fg-faint">
             <span>Account</span>
             {accountsDisabled && <span className="ms-auto">Stop the turn to switch</span>}
@@ -472,169 +552,197 @@ function effortsShown(levels: string[], effort?: string | null): boolean {
   return levels.length > 0 && !!effort;
 }
 
+interface ModelRow {
+  group: ModelGroup;
+  model: Choice;
+}
+
+/** The refs and the way back the docked column needs from the list beside it. */
+interface DockControls {
+  sliderRef: RefObject<HTMLDivElement | null>;
+  containerRef: RefObject<HTMLDivElement | null>;
+  focusSearch: () => void;
+}
+
 /**
- * The list itself: a search that opens focused, every harness's models under a sticky header
- * (the current harness first) and the current model checked, behind a back button to the effort.
- * ↑↓ move the highlight, Home/End the ends, PageUp/PageDown a screen, ⏎ picks, and Escape clears
- * the search before it closes the card.
+ * The list and the column docked beside it: a search that opens focused, every harness's models
+ * under its own harness column (the current harness first) with the current model checked, and on
+ * the right the highlighted model's effort and logins. ↑↓ move the highlight, so the dock follows
+ * the row, ⏎ picks the model, → moves to the effort slider and ← returns to the search.
  */
 function ModelPanel({
   groups,
   current,
   onPick,
-  onBack,
+  renderDock,
 }: {
   groups: ModelGroup[];
   current?: string | null;
   onPick: (group: ModelGroup, value: string) => void;
-  onBack: () => void;
+  renderDock: (row: ModelRow | undefined, controls: DockControls) => ReactNode;
 }) {
   const [filter, setFilter] = useState("");
-  const [provider, setProvider] = useState(groups[0]?.harness.id ?? "");
-  const [column, setColumn] = useState<"providers" | "models">("models");
-  const [active, setActive] = useState(0);
+  // The harness the user is browsing, until a switch makes another one current.
+  const [browsed, setBrowsed] = useState<string | null>(null);
+  // The row the user moved to, named rather than numbered: the rows change under it when the
+  // provider, the filter or the current harness changes, and the dock must follow the model.
+  const [picked, setPicked] = useState<{ harness: string; model: string } | null>(null);
   const field = useRef<HTMLInputElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
+  const slider = useRef<HTMLDivElement>(null);
+  const dock = useRef<HTMLDivElement>(null);
   const searching = !!filter.trim();
+  const provider = groups.some((g) => g.harness.id === browsed)
+    ? (browsed as string)
+    : (groups[0]?.harness.id ?? "");
   const rows = useMemo(() => filterModelRows(groups, provider, filter), [groups, provider, filter]);
+  // Until the user moves, the list highlights the model the picker's owner runs; a highlight the
+  // current rows no longer hold (another harness browsed) falls back to the first row.
+  const marker = picked ?? (current ? { harness: groups[0]?.harness.id ?? "", model: current } : null);
+  const found = marker
+    ? rows.findIndex((r) => r.group.harness.id === marker.harness && r.model.value === marker.model)
+    : -1;
+  const active = Math.max(found, 0);
+  const row = rows[active];
   useEffect(() => {
     field.current?.focus();
   }, []);
   useEffect(() => {
     scroller.current?.querySelector(`[id="model-row-${active}"]`)?.scrollIntoView({ block: "nearest" });
   }, [active]);
+  const highlight = (at: number) => {
+    const next = rows[at];
+    if (next) setPicked({ harness: next.group.harness.id, model: next.model.value });
+  };
+  const pick = (group: ModelGroup, value: string) => {
+    setPicked({ harness: group.harness.id, model: value });
+    onPick(group, value);
+  };
+  // The search field keeps → while the caret has somewhere to go; at its end it moves to the dock.
+  const caretAtEnd = () => {
+    const input = field.current;
+    if (!input || document.activeElement !== input) return true;
+    return input.selectionStart === input.value.length && input.selectionEnd === input.selectionStart;
+  };
   return (
-    <div
-      className="flex min-h-0 flex-1 flex-col"
-      onKeyDown={(e) => {
-        if (e.key === "ArrowLeft") {
-          e.preventDefault();
-          setColumn("providers");
-        } else if (e.key === "ArrowRight") {
-          e.preventDefault();
-          setColumn("models");
-        } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-          e.preventDefault();
-          const delta = e.key === "ArrowDown" ? 1 : -1;
-          if (column === "providers" && !searching) {
-            const next = movePickerIndex(
-              groups.findIndex((g) => g.harness.id === provider),
-              delta,
-              groups.length,
-            );
-            setProvider(groups[next]?.harness.id ?? provider);
-            setActive(0);
-          } else setActive((i) => movePickerIndex(i, delta, rows.length));
-        } else if (e.key === "Enter" && column === "models") {
-          const row = rows[active];
-          if (row && !row.group.blocked) {
+    <div className="flex min-h-0 flex-1 flex-col @min-[40rem]/modelcard:flex-row">
+      <div
+        className="flex min-h-0 min-w-0 flex-1 flex-col"
+        onKeyDown={(e) => {
+          if (e.key === "ArrowRight") {
+            if (!caretAtEnd()) return;
             e.preventDefault();
-            onPick(row.group, row.model.value);
+            (slider.current ?? dock.current)?.focus();
+          } else if (e.key === "ArrowLeft") {
+            if (document.activeElement === field.current) return;
+            e.preventDefault();
+            field.current?.focus();
+          } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+            e.preventDefault();
+            highlight(movePickerIndex(active, e.key === "ArrowDown" ? 1 : -1, rows.length));
+          } else if (e.key === "Enter") {
+            if (row && !row.group.blocked) {
+              e.preventDefault();
+              pick(row.group, row.model.value);
+            }
           }
-        }
-      }}
-    >
-      <div className="flex items-center gap-1 p-1">
-        <button
-          type="button"
-          aria-label="Back to effort"
-          onClick={onBack}
-          className="flex size-6 shrink-0 items-center justify-center rounded-full text-fg-muted hover:bg-fill"
-        >
-          <ChevronLeft size={14} />
-        </button>
-        <MenuSearchField
-          value={filter}
-          onChange={(v) => {
-            setFilter(v);
-            setActive(0);
-            setColumn("models");
-          }}
-          placeholder="Search models"
-          label="Search models"
-          inputRef={field}
-          controls="model-list"
-          activeDescendant={rows[active] ? `model-row-${active}` : undefined}
-        />
-      </div>
-      <div className="px-2 min-[480px]:hidden">
-        <Select
-          label="Provider"
-          value={provider}
-          options={groups.map((g) => ({ value: g.harness.id, label: g.harness.name }))}
-          onChange={(v) => {
-            setProvider(v);
-            setActive(0);
-          }}
-        />
-      </div>
-      <div className="flex min-h-0 flex-1">
-        <div
-          className="hidden w-36 shrink-0 overflow-auto border-r border-border p-1 min-[480px]:block"
-          role="group"
-          aria-label="Providers"
-        >
-          {groups.map((g) => (
-            <button
-              type="button"
-              key={g.harness.id}
-              onClick={() => {
-                setProvider(g.harness.id);
-                setFilter("");
-                setActive(0);
-                setColumn("providers");
-              }}
-              className={cx(
-                "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-callout",
-                provider === g.harness.id && !searching && "font-semibold text-accent",
-              )}
-            >
-              <HarnessIcon id={g.harness.id} name={g.harness.name} size={14} />
-              <span className="truncate">{g.harness.name}</span>
-            </button>
-          ))}
+        }}
+      >
+        <div className="flex items-center gap-1 p-1">
+          <MenuSearchField
+            className="flex-1"
+            value={filter}
+            onChange={setFilter}
+            placeholder="Search models"
+            label="Search models"
+            inputRef={field}
+            controls="model-list"
+            activeDescendant={rows[active] ? `model-row-${active}` : undefined}
+          />
         </div>
-        <div
-          ref={scroller}
-          id="model-list"
-          role="listbox"
-          aria-label="Models"
-          className="scroll-stable min-h-0 min-w-0 flex-1 p-1"
-        >
-          {rows.map((row, i) => (
-            <div
-              key={`${row.group.harness.id}:${row.model.value}`}
-              id={`model-row-${i}`}
-              role="option"
-              tabIndex={-1}
-              aria-selected={row.group.harness.id === groups[0]?.harness.id && row.model.value === current}
-              aria-disabled={!!row.group.blocked}
-              onMouseEnter={() => setActive(i)}
-              onClick={() => !row.group.blocked && onPick(row.group, row.model.value)}
-              className={cx(
-                "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1",
-                i === active && "bg-fill",
-                row.group.blocked && "opacity-45",
-              )}
-            >
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-body">{row.model.name || row.model.value}</span>
-                {searching && (
-                  <span className="block truncate text-caption text-fg-muted">{row.group.harness.name}</span>
+        <div className="hidden px-2 @max-[26rem]/modelcard:block">
+          <Select
+            label="Provider"
+            value={provider}
+            options={groups.map((g) => ({ value: g.harness.id, label: g.harness.name }))}
+            onChange={(v) => {
+              setBrowsed(v);
+              setPicked(null);
+            }}
+          />
+        </div>
+        <div className="flex min-h-0 flex-1">
+          <div
+            className="hidden w-36 shrink-0 overflow-auto border-r border-border p-1 @min-[26rem]/modelcard:block"
+            role="group"
+            aria-label="Providers"
+          >
+            {groups.map((g) => (
+              <button
+                type="button"
+                key={g.harness.id}
+                onClick={() => {
+                  setBrowsed(g.harness.id);
+                  setFilter("");
+                  setPicked(null);
+                }}
+                className={cx(
+                  "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-callout",
+                  provider === g.harness.id && !searching && "font-semibold text-accent",
                 )}
-              </span>
-              {row.group.harness.id === groups[0]?.harness.id && row.model.value === current && (
-                <Check size={13} className="text-accent" />
-              )}
-            </div>
-          ))}
-          {!rows.length && (
-            <div className="px-2 py-3 text-center text-callout text-fg-muted">
-              {searching ? "No matching models" : "No models listed"}
-            </div>
-          )}
+              >
+                <HarnessIcon id={g.harness.id} name={g.harness.name} size={14} />
+                <span className="truncate">{g.harness.name}</span>
+              </button>
+            ))}
+          </div>
+          <div
+            ref={scroller}
+            id="model-list"
+            role="listbox"
+            aria-label="Models"
+            className="scroll-stable min-h-0 min-w-0 flex-1 p-1"
+          >
+            {rows.map((item, i) => (
+              <div
+                key={`${item.group.harness.id}:${item.model.value}`}
+                id={`model-row-${i}`}
+                role="option"
+                tabIndex={-1}
+                aria-selected={
+                  item.group.harness.id === groups[0]?.harness.id && item.model.value === current
+                }
+                aria-disabled={!!item.group.blocked}
+                onMouseEnter={() => highlight(i)}
+                onClick={() => !item.group.blocked && pick(item.group, item.model.value)}
+                className={cx(
+                  "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1",
+                  i === active && "bg-fill",
+                  item.group.blocked && "opacity-45",
+                )}
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-body">{item.model.name || item.model.value}</span>
+                  {searching && (
+                    <span className="block truncate text-caption text-fg-muted">
+                      {item.group.harness.name}
+                    </span>
+                  )}
+                </span>
+                {item.group.harness.id === groups[0]?.harness.id && item.model.value === current && (
+                  <Check size={13} className="text-accent" />
+                )}
+              </div>
+            ))}
+            {!rows.length && (
+              <div className="px-2 py-3 text-center text-callout text-fg-muted">
+                {searching ? "No matching models" : "No models listed"}
+              </div>
+            )}
+          </div>
         </div>
       </div>
+      {renderDock(row, { sliderRef: slider, containerRef: dock, focusSearch: () => field.current?.focus() })}
     </div>
   );
 }
@@ -749,38 +857,20 @@ export function pickerModels(
   };
 }
 
-type Page = "effort" | "models";
-
 export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact?: boolean }) {
   const harnesses = useApp((s) => s.harnesses);
   const choice = useApp((s) => s.newThread);
   // The first open thread's config options: stable while a reply streams, so the picker does not re-render per chunk.
   const knownConfig = useApp((s) => firstConfig(s.threads));
   const [open, setOpen] = useState(false);
-  const [page, setPage] = useState<Page>("models");
-  // A swap plays the drill motion; only after the user moved between the two views.
-  const [swapped, setSwapped] = useState(false);
   // `/model` asks the picker to open (store.runCommandAction).
   const ask = useApp((s) => s.modelPickerAsk);
   const seenAsk = useRef(ask);
   useEffect(() => {
     if (ask === seenAsk.current) return;
     seenAsk.current = ask;
-    setSwapped(false);
-    setPage("models");
     setOpen(true);
   }, [ask]);
-  // Every open starts on the model list, the view picked most, in the same box the effort is;
-  // a close leaves nothing behind.
-  useEffect(() => {
-    if (open) return;
-    setSwapped(false);
-    setPage("models");
-  }, [open]);
-  const turnPage = (next: Page) => {
-    setSwapped(true);
-    setPage(next);
-  };
 
   const isNew = !thread;
   const effective: NewThreadChoice = newThreadChoice({ newThread: choice, harnesses }) ?? {
@@ -809,8 +899,6 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   const fast = thread?.configOptions.find((o) => o.id === "fast" && o.type === "boolean");
   const harnessName = harness?.name ?? "This harness";
   const effortReason = controlDisabledReason("effort", caps, harnessName);
-  const modelReason = controlDisabledReason("model", caps, harnessName);
-  const harnessBlocked = harness ? unavailableReason(harness) : undefined;
 
   const setChoice = (next: Partial<NewThreadChoice>) => {
     const merged = { ...effective, model: model ?? null, effort: effort ?? null, ...next };
@@ -900,27 +988,28 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   /**
    * A model row. In the current harness it is set in place and the level the
    * new model does not offer is clamped to its default; another harness is
-   * switched to with its remembered login, as its model row always did. Either
-   * way the card goes back to the effort.
+   * switched to with its remembered login, as its model row always did. A
+   * level the user moved in the dock is written with the model it belongs to.
    */
-  const pickModel = (group: ModelGroup, value: string) => {
+  const pickModel = (group: ModelGroup, value: string, level?: string) => {
     if (group.blocked) return;
     // The level the model was last left on, so picking it again returns to that level; a level
-    // its list no longer offers is left to the model's default (`clampEffort`).
+    // its list no longer offers is left to the model's default (`chosenLevel`).
     const entry = group.harness.models.find((m) => m.id === value);
     const remembered = rememberedEffort(effortMemory(), group.harness.id, value);
     const same = group.harness.id === providerId;
     if (same) {
-      if (thread) void writeModelPick(thread.id, modelThreadWrites(entry, value, effort, remembered, true));
+      if (thread)
+        void writeModelPick(thread.id, modelThreadWritesAt(entry, value, level, effort, remembered, true));
       else {
         // A harness that lists no levels for the model keeps the effort it had.
-        const next = clampEffort(entry, orderEfforts(entry?.efforts ?? []), effort, remembered);
+        const next = chosenLevel(entry, level, orderEfforts(entry?.efforts ?? []), effort, remembered);
         setChoice(entry?.efforts.length ? { model: value, effort: next } : { model: value });
       }
     } else if (isNew) {
       // Another harness's model brings the level it was last left on, never this harness's
       // effort: the choice normalizes it, and its remembered account goes with it.
-      const next = clampEffort(entry, orderEfforts(entry?.efforts ?? []), null, remembered);
+      const next = chosenLevel(entry, level, orderEfforts(entry?.efforts ?? []), null, remembered);
       setChoice({ harness: group.harness.id, model: value, effort: next });
       pickNewThreadAccount(newThreadAccountOn(group.harness, lastAccountFor(group.harness.id), signedOut));
     } else if (thread) {
@@ -928,12 +1017,11 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
       // brings the level it was last left on once the switch lands. That harness never keeps
       // this one's effort, so the level is clamped from nothing.
       const account = newThreadAccountOn(group.harness, lastAccountFor(group.harness.id), signedOut);
-      const writes = modelThreadWrites(entry, value, null, remembered, false);
+      const writes = modelThreadWritesAt(entry, value, level, null, remembered, false);
       void switchThreadHarness(thread.id, group.harness.id, account).then((switched) => {
         if (switched) void writeModelPick(thread.id, writes);
       });
     }
-    turnPage("effort");
   };
 
   // A catalog name is shown as it is; a bare id reads without its `provider/` prefix.
@@ -943,6 +1031,63 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   // The pill names the login whenever the harness has named accounts, even
   // when there is one: which subscription a thread spends is worth a word.
   // A thread from before accounts says which login it is really on.
+
+  /**
+   * The docked column for the row the list highlights: that model's own levels and the level it
+   * keeps, the harness's capability notes, and the current harness's logins. Another harness's row
+   * is a preview of the switch, so it carries no login chips: that harness brings its own.
+   */
+  const renderDock = (target: ModelRow | undefined, controls: DockControls) => {
+    const group = target?.group;
+    const rowHarness = group?.harness ?? harness;
+    const value = target?.model.value;
+    const entry = group?.harness.models.find((m) => m.id === value);
+    const sameHarness = !!group && group.harness.id === providerId;
+    const currentModel = sameHarness && value === model;
+    const docked = dockedEffort({
+      entry,
+      levels: efforts,
+      effort,
+      defaultLevel,
+      current: currentModel,
+      sameHarness,
+      remembered: rememberedEffort(effortMemory(), group?.harness.id, value),
+    });
+    const rowCaps = sameHarness ? caps : group?.harness.capabilities;
+    const rowName = group?.harness.name ?? harnessName;
+    const blocked = rowHarness ? unavailableReason(rowHarness) : undefined;
+    const picksOwnModel = controlDisabledReason("model", rowCaps, rowName);
+    const rowEffortReason = controlDisabledReason("effort", rowCaps, rowName);
+    return (
+      <EffortDock
+        levels={docked.levels}
+        effort={docked.effort}
+        model={
+          (value && (entry?.name || target?.model.name || modelName(value))) || displayName || "Default model"
+        }
+        harness={rowHarness}
+        defaultLevel={docked.defaultLevel}
+        fast={sameHarness ? fast : undefined}
+        fastOn={!!fast?.currentBool}
+        effortReason={rowEffortReason}
+        blocked={picksOwnModel ?? blocked}
+        accounts={sameHarness ? accountRows : []}
+        accountsDisabled={accountBlocked || !!blocked}
+        onEffort={(level) => {
+          if (!target) return;
+          // A level moved on a row the thread does not run yet picks that model at that level:
+          // the dock is the model's property panel, never another model's level.
+          if (currentModel) pickEffort(level);
+          else pickModel(target.group, target.model.value, level);
+        }}
+        onFast={(on) => thread && void setConfigOption(thread.id, "fast", on)}
+        onPickAccount={pickAccount}
+        onBack={controls.focusSearch}
+        sliderRef={controls.sliderRef}
+        containerRef={controls.containerRef}
+      />
+    );
+  };
 
   // Nothing to show until the engine lists harnesses (or the thread its options): a placeholder pill.
   if (!harnesses && !thread?.configOptions.length) {
@@ -959,14 +1104,13 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
       onOpenChange={setOpen}
       role="dialog"
       label="Model and effort"
-      // The card focuses its own control (the search field, or the slider once the user drills
-      // back to the effort) so the arrow keys act on what the card is for the moment it opens.
+      // The card focuses its own control (the search field, which the list beside the dock does on
+      // mount) so the arrow keys act on what the card is for the moment it opens.
       onOpenAutoFocus={(event) => event.preventDefault()}
-      // One box for every view: the card keeps this height while the user moves between the model
-      // list and the effort, the view inside scrolls instead of the card resizing, and it never
-      // reaches past the room the window has under the pill.
-      className="flex w-[min(480px,calc(100vw-32px))] flex-col p-0"
-      style={{ height: CARD_HEIGHT, maxHeight: CARD_HEIGHT }}
+      // As tall as its content up to the room the window has: the model list is the one part that
+      // scrolls, and the docked effort sits beside it, or under it when the card is narrow.
+      className="flex w-[min(720px,calc(100vw-32px))] flex-col overflow-hidden p-0 @container/modelcard"
+      style={{ maxHeight: CARD_MAX }}
       trigger={
         <button
           type="button"
@@ -988,36 +1132,13 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
         </button>
       }
     >
-      <div
-        key={page}
-        className={cx(
-          "flex min-h-0 flex-1 flex-col",
-          swapped && (page === "models" ? "rc-drill" : "rc-drill-back"),
-        )}
-      >
-        {page === "models" ? (
-          <ModelPanel groups={groups} current={model} onPick={pickModel} onBack={() => turnPage("effort")} />
-        ) : (
-          <EffortCard
-            levels={efforts}
-            effort={effort}
-            model={displayName}
-            harness={harness}
-            defaultLevel={defaultLevel}
-            fast={fast}
-            fastOn={!!fast?.currentBool}
-            effortReason={effortReason}
-            modelReason={modelReason}
-            blocked={modelReason ?? harnessBlocked}
-            accounts={accountRows}
-            accountsDisabled={accountBlocked || !!harnessBlocked}
-            onEffort={pickEffort}
-            onFast={(on) => thread && void setConfigOption(thread.id, "fast", on)}
-            onModels={() => turnPage("models")}
-            onPickAccount={pickAccount}
-          />
-        )}
-      </div>
+      <ModelPanel
+        key={providerId}
+        groups={groups}
+        current={model}
+        onPick={pickModel}
+        renderDock={renderDock}
+      />
     </CardPopover>
   );
 }

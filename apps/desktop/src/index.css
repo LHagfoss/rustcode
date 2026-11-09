@@ -1368,26 +1368,6 @@
   animation: rc-fade 400ms ease-out;
 }
 
-/* Drilling into a panel's page and back. */
-@keyframes rc-drill {
-  from {
-    opacity: 0;
-    transform: translateX(12px);
-  }
-}
-@keyframes rc-drill-back {
-  from {
-    opacity: 0;
-    transform: translateX(-12px);
-  }
-}
-.rc-drill {
-  animation: rc-drill 220ms var(--ease-snappy);
-}
-.rc-drill-back {
-  animation: rc-drill-back 220ms var(--ease-snappy);
-}
-
 /*
  * Reduce transparency: glass turns solid. The media query where the web
  * view has it, else the `reduce-transparency` class (lib/transparency.ts):
