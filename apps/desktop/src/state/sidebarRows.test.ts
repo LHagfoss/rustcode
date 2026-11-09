@@ -18,6 +18,7 @@ import {
   shelfKey,
   shelfOpen,
   threadDiff,
+  titleFirstTrailing,
   visibleRows,
 } from "./sidebarRows";
 import type { TranscriptItem } from "./thread";
@@ -363,5 +364,15 @@ describe("which section a thread is drawn under", () => {
       place({ settled: true }),
     ];
     for (const id of placed) expect(SECTION_ORDER).toContain(id);
+  });
+});
+
+describe("titleFirstTrailing", () => {
+  test("prioritizes attention, running, done, status, then age", () => {
+    expect(titleFirstTrailing({ needs: true, running: true, done: true, status: true })).toBe("needs");
+    expect(titleFirstTrailing({ needs: false, running: true, done: true, status: true })).toBe("running");
+    expect(titleFirstTrailing({ needs: false, running: false, done: true, status: true })).toBe("done");
+    expect(titleFirstTrailing({ needs: false, running: false, done: false, status: true })).toBe("status");
+    expect(titleFirstTrailing({ needs: false, running: false, done: false, status: false })).toBe("age");
   });
 });

@@ -251,6 +251,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
 
   // ------------------------------------------------------------ Appearance
+  { section: "appearance", title: "Thread row layout", keywords: "sidebar title first threads" },
   { section: "appearance", title: "Light or dark", keywords: "mode theme system" },
   {
     section: "appearance",

@@ -5,6 +5,7 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 
 export const PREF = {
+  rowLayout: "rustcode.sidebar.rowLayout",
   groupByProject: "rustcode.sidebar.groupByProject",
   workingSection: "rustcode.sidebar.workingSection",
   onlyProject: "rustcode.sidebar.onlyProject",
