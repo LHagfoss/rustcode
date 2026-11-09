@@ -1042,8 +1042,9 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     const rowHarness = group?.harness ?? harness;
     const value = target?.model.value;
     const entry = group?.harness.models.find((m) => m.id === value);
-    const sameHarness = !!group && group.harness.id === providerId;
-    const currentModel = sameHarness && value === model;
+    // With nothing highlighted (an empty list or search) the dock shows the model the thread runs.
+    const sameHarness = !group || group.harness.id === providerId;
+    const currentModel = !target || (sameHarness && value === model);
     const docked = dockedEffort({
       entry,
       levels: efforts,
