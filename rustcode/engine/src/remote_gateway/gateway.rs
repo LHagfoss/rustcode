@@ -6,7 +6,9 @@
 //! registering the connection, forgetting a device and closing its
 //! connections. Nothing awaits while the lock is held.
 
-use super::address::{AdvertisedAddress, Candidate, ListenPlan, candidate_addresses};
+use super::address::{
+    AdvertisedAddress, Candidate, ListenPlan, alternate_addresses, candidate_addresses,
+};
 use super::connect::{ConnectRequests, OpenError, Outcome, RequestEnd, RequestState};
 use super::control::{
     CONTROL_TIMEOUT, ConnectAnswer, ConnectRequestSummary, ConnectionSummary, ControlRequest,
@@ -972,14 +974,19 @@ impl Shared {
     }
 
     fn issue_pairing(&self) -> OfferDetails {
+        // Read the interfaces before taking the state lock.
+        let advertised = self.advertised.borrow().clone();
+        let alternates =
+            alternate_addresses(*self.bind.borrow(), &advertised, &candidate_addresses());
         let now = Instant::now();
         let mut state = self.state();
         replace_approved(&mut state, now);
         let offer = state.pairing.issue(now);
-        let mut details = OfferDetails::new(
-            &self.advertised.borrow(),
+        let mut details = OfferDetails::with_alternates(
+            &advertised,
             &self.gateway_id,
             self.host_name.as_deref(),
+            alternates,
             offer,
         );
         details.instance_id = Some(self.instance_id.clone());

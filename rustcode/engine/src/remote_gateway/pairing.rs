@@ -58,6 +58,13 @@ pub struct QrPayload {
     /// The host's own name, for display; cut to keep the code scannable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_name: Option<String>,
+    /// Other `host:port` addresses the same listener answers on, best first,
+    /// for a device that cannot reach `address` (say, a phone on the LAN
+    /// without the mesh VPN `address` belongs to). Same gateway, same
+    /// credential; try `address` first. Empty, and left out, when the
+    /// listener is bound to one address.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternates: Vec<String>,
 }
 
 /// Longest host name the QR payload carries.
@@ -69,6 +76,7 @@ pub fn qr_payload(
     gateway_id: &str,
     credential: &Secret,
     host_name: Option<&str>,
+    alternates: &[String],
 ) -> String {
     serde_json::to_string(&QrPayload {
         protocol_version: HANDSHAKE_PROTOCOL_VERSION,
@@ -76,6 +84,7 @@ pub fn qr_payload(
         gateway_id: gateway_id.to_string(),
         credential: credential.clone(),
         host_name: host_name.map(|name| name.chars().take(QR_HOST_NAME_CHARS).collect()),
+        alternates: alternates.to_vec(),
     })
     .expect("QR payload always serializes")
 }
@@ -655,13 +664,37 @@ mod tests {
     #[test]
     fn qr_payload_carries_version_address_identity_and_credential() {
         let address = AdvertisedAddress::new("192.168.1.20", 17879).unwrap();
-        let payload = qr_payload(&address, "gateway-1", &Secret::new("cred"), None);
+        let payload = qr_payload(&address, "gateway-1", &Secret::new("cred"), None, &[]);
         assert_eq!(
             payload,
             r#"{"protocol_version":1,"address":"192.168.1.20:17879","gateway_id":"gateway-1","credential":"cred"}"#
         );
         let decoded: QrPayload = serde_json::from_str(&payload).unwrap();
         assert_eq!(decoded.credential.expose(), "cred");
+        assert!(decoded.alternates.is_empty());
+    }
+
+    #[test]
+    fn qr_payload_carries_alternates_after_the_address() {
+        let address = AdvertisedAddress::new("100.90.16.237", 17879).unwrap();
+        let alternates = [
+            "192.168.31.185:17879".to_owned(),
+            "[2a01:79c::1]:17879".to_owned(),
+        ];
+        let payload = qr_payload(
+            &address,
+            "gateway-1",
+            &Secret::new("cred"),
+            Some("studio"),
+            &alternates,
+        );
+        assert_eq!(
+            payload,
+            r#"{"protocol_version":1,"address":"100.90.16.237:17879","gateway_id":"gateway-1","credential":"cred","host_name":"studio","alternates":["192.168.31.185:17879","[2a01:79c::1]:17879"]}"#
+        );
+        let decoded: QrPayload = serde_json::from_str(&payload).unwrap();
+        assert_eq!(decoded.address, "100.90.16.237:17879");
+        assert_eq!(decoded.alternates, alternates);
     }
 
     #[test]

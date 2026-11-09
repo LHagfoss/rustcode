@@ -12,6 +12,13 @@
       "description": "`host:port` of the WebSocket listener, never an unspecified address.",
       "type": "string"
     },
+    "alternates": {
+      "description": "Other `host:port` addresses the same listener answers on, best first,\nfor a device that cannot reach `address` (say, a phone on the LAN\nwithout the mesh VPN `address` belongs to). Same gateway, same\ncredential; try `address` first. Empty, and left out, when the\nlistener is bound to one address.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
     "credential": {
       "$ref": "#/$defs/Secret"
     },

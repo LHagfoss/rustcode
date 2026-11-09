@@ -394,6 +394,11 @@ export function PairingCard({
               <div>
                 <div className="text-caption text-fg-faint">Address</div>
                 <div className="font-mono text-callout text-fg">{offer.address}</div>
+                {offer.alternates && offer.alternates.length > 0 && (
+                  <div className="pt-0.5 text-caption text-fg-faint">
+                    Also reachable at <span className="font-mono">{offer.alternates.join(", ")}</span>
+                  </div>
+                )}
               </div>
               <div>
                 <div className="text-caption text-fg-faint">Code</div>

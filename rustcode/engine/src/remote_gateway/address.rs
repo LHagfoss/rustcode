@@ -116,6 +116,14 @@ impl AdvertisedHost {
             HostKind::Name(name) => name == "localhost",
         }
     }
+
+    /// The IP address, when the host is one rather than a name.
+    pub fn ip(&self) -> Option<IpAddr> {
+        match &self.0 {
+            HostKind::Ip(ip) => Some(*ip),
+            HostKind::Name(_) => None,
+        }
+    }
 }
 
 /// `host:port` as shown in pairing details and embedded in the QR payload.
@@ -132,6 +140,10 @@ impl AdvertisedAddress {
 
     pub fn host(&self) -> &AdvertisedHost {
         &self.host
+    }
+
+    pub fn port(&self) -> u16 {
+        self.port
     }
 }
 
@@ -405,6 +417,67 @@ fn automatic_address_with_route(candidates: &[Candidate], route: Option<IpAddr>)
         })
         .map(|candidate| candidate.address)
         .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST))
+}
+
+/// Most fallback addresses a pairing QR code carries, so it stays scannable.
+pub const MAX_ALTERNATES: usize = 4;
+
+/// Other `host:port` addresses a wildcard listener (`0.0.0.0` or `::`) is
+/// reachable on, for a device that cannot dial the advertised one: private
+/// IPv4 on Wi-Fi/Ethernet first, then mesh VPN addresses (100.64.0.0/10,
+/// NetBird and Tailscale), then global IPv6, at most [`MAX_ALTERNATES`].
+/// The advertised address, loopback, link-local and container/VM bridges are
+/// left out, and so is everything when the listener is bound to one address:
+/// nothing else reaches it then.
+pub fn alternate_addresses(
+    bind: IpAddr,
+    advertised: &AdvertisedAddress,
+    candidates: &[Candidate],
+) -> Vec<String> {
+    if !bind.is_unspecified() {
+        return Vec::new();
+    }
+    let advertised_ip = advertised.host().ip();
+    let mut ranked: Vec<(u8, IpAddr)> = eligible_candidates(candidates)
+        .into_iter()
+        .filter(|candidate| bind.is_ipv6() || candidate.address.is_ipv4())
+        .map(|candidate| {
+            (
+                candidate.interface.as_str(),
+                candidate.address.to_canonical(),
+            )
+        })
+        .filter(|(_, address)| Some(*address) != advertised_ip)
+        .filter_map(|(interface, address)| {
+            let rank = match address {
+                IpAddr::V4(ip) if ip.is_private() && is_lan_interface(interface) => 0,
+                IpAddr::V4(ip) if is_shared_address_space(ip) => 1,
+                IpAddr::V6(ip) if is_global_ipv6(ip) => 2,
+                _ => return None,
+            };
+            Some((rank, address))
+        })
+        .collect();
+    ranked.sort();
+    ranked.dedup_by_key(|(_, address)| *address);
+    ranked
+        .into_iter()
+        .filter_map(|(_, address)| AdvertisedHost::from_ip(address).ok())
+        .take(MAX_ALTERNATES)
+        .map(|host| host.with_port(advertised.port()).to_string())
+        .collect()
+}
+
+/// 100.64.0.0/10, the shared address space mesh VPNs (NetBird, Tailscale)
+/// hand out.
+fn is_shared_address_space(ip: Ipv4Addr) -> bool {
+    let [first, second, ..] = ip.octets();
+    first == 100 && (64..128).contains(&second)
+}
+
+/// Global unicast IPv6 (2000::/3): not unique-local, link-local or special.
+fn is_global_ipv6(ip: std::net::Ipv6Addr) -> bool {
+    (ip.segments()[0] & 0xe000) == 0x2000
 }
 
 /// Non-loopback addresses of interfaces that are up. Link-local addresses are
@@ -807,5 +880,90 @@ mod tests {
             assert!(!candidate.address.is_unspecified(), "{candidate:?}");
             assert!(!candidate.interface.is_empty());
         }
+    }
+
+    fn machine() -> Vec<Candidate> {
+        vec![
+            candidate("utun4", "100.90.16.237"),
+            candidate("en0", "2a01:79c:cebf:d688::1"),
+            candidate("en0", "fe80::1"),
+            candidate("bridge100", "192.168.64.1"),
+            candidate("docker0", "172.17.0.1"),
+            candidate("vmnet8", "172.16.12.1"),
+            candidate("utun2", "10.8.0.2"),
+            candidate("en0", "192.168.31.185"),
+            candidate("en0", "fd00::1"),
+            candidate("lo0", "127.0.0.1"),
+            candidate("en5", "169.254.10.2"),
+        ]
+    }
+
+    #[test]
+    fn alternates_of_a_wildcard_bind_put_the_lan_first_and_skip_the_advertised_address() {
+        let advertised = AdvertisedAddress::new("100.90.16.237", 17879).unwrap();
+        let unspecified = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+        assert_eq!(
+            alternate_addresses(unspecified, &advertised, &machine()),
+            ["192.168.31.185:17879"],
+        );
+        let dual_stack: IpAddr = "::".parse().unwrap();
+        assert_eq!(
+            alternate_addresses(dual_stack, &advertised, &machine()),
+            ["192.168.31.185:17879", "[2a01:79c:cebf:d688::1]:17879"],
+        );
+
+        let lan = AdvertisedAddress::new("192.168.31.185", 17879).unwrap();
+        assert_eq!(
+            alternate_addresses(dual_stack, &lan, &machine()),
+            ["100.90.16.237:17879", "[2a01:79c:cebf:d688::1]:17879"],
+        );
+    }
+
+    #[test]
+    fn alternates_of_an_advertised_name_include_every_reachable_address() {
+        let named = AdvertisedAddress::new("mac.netbird.cloud", 17879).unwrap();
+        assert_eq!(
+            alternate_addresses(IpAddr::V4(Ipv4Addr::UNSPECIFIED), &named, &machine()),
+            ["192.168.31.185:17879", "100.90.16.237:17879"],
+        );
+    }
+
+    #[test]
+    fn alternates_are_capped_and_deduplicated() {
+        let advertised = AdvertisedAddress::new("mac.example", 1).unwrap();
+        let candidates = [
+            candidate("wt0", "100.64.0.9"),
+            candidate("en0", "10.0.0.5"),
+            candidate("en1", "10.0.0.5"),
+            candidate("eth0", "172.20.0.4"),
+            candidate("wlan0", "192.168.0.7"),
+            candidate("tailscale0", "100.127.255.1"),
+            candidate("en0", "2001:db8::5"),
+        ];
+        let alternates = alternate_addresses("::".parse().unwrap(), &advertised, &candidates);
+        assert_eq!(
+            alternates,
+            [
+                "10.0.0.5:1",
+                "172.20.0.4:1",
+                "192.168.0.7:1",
+                "100.64.0.9:1"
+            ],
+        );
+    }
+
+    #[test]
+    fn a_specific_bind_has_no_alternates() {
+        let advertised = AdvertisedAddress::new("100.90.16.237", 17879).unwrap();
+        let bind: IpAddr = "100.90.16.237".parse().unwrap();
+        assert!(alternate_addresses(bind, &advertised, &machine()).is_empty());
+    }
+
+    #[test]
+    fn mesh_range_is_100_64_slash_10() {
+        assert!(is_shared_address_space(Ipv4Addr::new(100, 64, 0, 0)));
+        assert!(is_shared_address_space(Ipv4Addr::new(100, 127, 255, 255)));
+        assert!(!is_shared_address_space(Ipv4Addr::new(100, 128, 0, 1)));
+        assert!(!is_shared_address_space(Ipv4Addr::new(100, 63, 0, 1)));
     }
 }
