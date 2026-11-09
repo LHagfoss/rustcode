@@ -270,7 +270,7 @@ export function RemoteAccessPage() {
 
       <Group
         title={`Paired devices · ${devices.length}`}
-        footer="A pairing lasts 30 days, then the device pairs again. Revoke disconnects a device at once."
+        footer="A pairing stays until you revoke it here, so a device does not have to pair again. Revoke disconnects it at once."
       >
         {devices.length ? (
           devices.map((device) => (

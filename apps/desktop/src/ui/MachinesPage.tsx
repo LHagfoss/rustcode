@@ -17,6 +17,7 @@ import { hasShell } from "../lib/shell";
 import {
   askMachine,
   cancelPairing,
+  codeCheckOverdue,
   codeComplete,
   codeDigits,
   type DiscoveredMachine,
@@ -142,7 +143,7 @@ function NoMachines() {
   return (
     <Row
       title="No other computers yet"
-      subtitle="Add a computer running RustCode to see its threads here, and to start threads on it."
+      subtitle="Add a computer running RustCode below to see its threads here, and to start threads on it."
     />
   );
 }
@@ -157,12 +158,12 @@ function MachineRow({ machine, count, now }: { machine: Machine; count: number |
         <>
           <MachineIcon platform={machine.platform} />
           {machine.name}
-          {machine.main && <Chip>Main machine</Chip>}
         </>
       }
       subtitle={machineLine(machine)}
       status={
         <>
+          {machine.main && "Main machine · "}
           {platform && `${platform} · `}
           {/* The state is the chip; this line says when and how much, not what. */}
           {machine.lastConnectedAt
@@ -230,13 +231,17 @@ function AddMachine({ error }: { error: string | null }) {
       <Row
         title="Machines on this network"
         subtitle="Found with Bonjour, the same way a phone finds this computer. A machine whose network is an overlay is not announced; enter its address instead."
-        status={discoverError}
       >
         <Action disabled={discovering} onClick={discover}>
           {discovering ? <Spinner /> : <Search size={13} />}
           {discovering ? "Looking…" : "Look for machines"}
         </Action>
       </Row>
+      {discoverError && (
+        <p className="m-0 px-4 py-3 text-callout text-warning leading-normal">
+          Could not look for machines: {discoverError}
+        </p>
+      )}
       {(discovered ?? []).map((found) => (
         <DiscoveredRow key={found.gatewayId ?? found.name} found={found} />
       ))}
@@ -291,8 +296,14 @@ function DiscoveredRow({ found }: { found: DiscoveredMachine }) {
 // ---------------------------------------------------------------- pairing
 
 function PairingGroup({ pairing }: { pairing: Pairing }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const overdue = codeCheckOverdue(pairing, now);
   return (
-    <Group title={pairing.stage === "code" ? "Enter the code" : "Asking to connect"}>
+    <Group title={pairingTitle(pairing, overdue)}>
       {pairing.stage === "waiting" && (
         <Row
           title={`Waiting for ${pairing.host} to accept on that machine…`}
@@ -302,16 +313,42 @@ function PairingGroup({ pairing }: { pairing: Pairing }) {
           <Action onClick={cancelPairing}>Cancel</Action>
         </Row>
       )}
-      {pairing.stage === "pairing" && (
-        <Row title={`Pairing with ${pairing.host}…`} subtitle="Checking the code with that machine.">
-          <Spinner />
-        </Row>
-      )}
+      {pairing.stage === "pairing" &&
+        (overdue ? (
+          <Row
+            title={`${pairing.host} did not answer`}
+            subtitle="The code was sent, and nothing came back. If that machine accepted it, it now lists this computer under its paired devices: pair again, or remove this computer there first."
+            status="Nothing was saved on this computer. Ask again to start over."
+          >
+            <Action onClick={() => void askMachine(pairing.address, pairing.host)}>Ask again</Action>
+            <Action quiet onClick={cancelPairing}>
+              Cancel
+            </Action>
+          </Row>
+        ) : (
+          <Row title={`Pairing with ${pairing.host}…`} subtitle="Checking the code with that machine.">
+            <Spinner />
+            {/* Every stage has a way out: a shell that stopped answering is not a reason to reload the app. */}
+            <Action onClick={cancelPairing}>Cancel</Action>
+          </Row>
+        ))}
       {pairing.stage === "code" && (
         <CodeRow host={pairing.host} length={pairing.codeLength} expiresAt={pairing.expiresAt} />
       )}
     </Group>
   );
+}
+
+/** The section's name: what this stage is doing, in the words of whoever must act. */
+function pairingTitle(pairing: Pairing, overdue: boolean): string {
+  switch (pairing.stage) {
+    case "waiting":
+      return "Waiting for approval";
+    case "pairing":
+      return overdue ? "No answer" : "Checking the code";
+    case "code":
+      return "Enter the code";
+  }
 }
 
 /** The eight-digit code the machine shows, typed in its own boxes. */

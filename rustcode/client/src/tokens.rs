@@ -25,6 +25,17 @@
 //! `RUSTCODE_MACHINE_TOKEN_STORE=file` keeps machine tokens in
 //! `machines/tokens.json` (`0600` in a `0700` directory) instead. Tests use
 //! [`TokenStore::in_file`] directly, so no test touches a real keychain.
+//!
+//! Every call that goes to the store blocks on the operating system's own IPC:
+//! a Secret Service prompt, a keychain unlock, a Credential Manager dialog — and
+//! on Linux, with the `async-secret-service` backend this crate enables, a call
+//! made on the thread a tokio runtime runs on **deadlocks** (keyring's own
+//! caution on that feature pair: spawn a thread of your own for keyring calls).
+//! A pairing cannot wait for either, so the app and the CLI reach the store
+//! through [`bounded`] — on a thread of its own, with a deadline — and open it
+//! *before* a connection request is sent: a store that cannot answer must stop
+//! the pairing at this end, not after the other machine has accepted the request
+//! and enrolled this computer (#3325).
 
 use crate::protocol::Secret;
 use crate::registry::write_private_json;
@@ -35,6 +46,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
 /// Keychain service name, shared by every machine and profile. The account
 /// names the machine; see [`keychain_account`].
@@ -48,6 +61,70 @@ pub const TOKEN_STORE_ENV: &str = "RUSTCODE_MACHINE_TOKEN_STORE";
 
 const MAX_TOKENS_BYTES: u64 = 128 * 1024;
 const MAX_TOKENS: usize = 256;
+
+/// How long one credential-store call may take before it is given up on. A
+/// keyring waiting for a person to unlock it never answers on its own; ten
+/// seconds is generous for an unlock that is happening and short enough that a
+/// pairing never looks hung.
+pub const STORE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Run one credential-store call off the async runtime, bounded.
+///
+/// The store is reached through the operating system's IPC, which blocks for as
+/// long as a person takes to unlock it — and blocking there holds a runtime
+/// thread that other commands share. The call therefore runs on a thread of its
+/// own, which is left behind if it never answers: a prompt nobody is looking at
+/// must not hold the command that asked, nor keep a process alive after it has
+/// given up. A call that does not finish within `timeout` comes back as the
+/// error to show, naming the file fallback.
+pub async fn bounded<T, F>(what: &str, timeout: Duration, work: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    let (send, receive) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("machine-token-store".to_owned())
+        .spawn(move || {
+            let _ = send.send(work());
+        })
+        .context("could not start a thread for the machine token store")?;
+    match tokio::time::timeout(timeout, receive).await {
+        Ok(Ok(answer)) => answer,
+        Ok(Err(_)) => bail!("the machine token store task stopped without an answer"),
+        Err(_) => bail!(
+            "{what} took longer than {} s and was given up on: the operating system credential \
+             store did not answer, which a locked keyring or a missing Secret Service does. \
+             Set {TOKEN_STORE_ENV}=file to keep machine tokens in machines/{TOKENS_FILE} instead",
+            timeout.as_secs().max(1)
+        ),
+    }
+}
+
+/// [`TokenStore::open`], off the async runtime and bounded: what a pairing (and
+/// a reconnect) calls, so an unanswering store cannot hold it.
+pub async fn open_bounded(config_dir: &Path, timeout: Duration) -> Result<TokenStore> {
+    let dir = config_dir.to_path_buf();
+    bounded("opening the machine token store", timeout, move || {
+        TokenStore::open(&dir)
+    })
+    .await
+}
+
+/// [`TokenStore::set`], off the async runtime and bounded. A pairing has stored
+/// its token only once this returns `Ok`, so a store that cannot answer is not
+/// mistaken for one that did.
+pub async fn set_bounded(
+    tokens: Arc<TokenStore>,
+    host_id: String,
+    token: Secret,
+    timeout: Duration,
+) -> Result<()> {
+    bounded("storing the pairing token", timeout, move || {
+        tokens.set(&host_id, &token)
+    })
+    .await
+}
 
 /// A short-lived access token and when the machine stops accepting it.
 ///
@@ -141,6 +218,23 @@ pub struct TokenStore {
     access: std::sync::Mutex<BTreeMap<String, Access>>,
 }
 
+/// Run one keyring call on a thread of its own.
+///
+/// `keyring` with `async-secret-service`, the Linux Secret Service backend this
+/// crate enables, wraps a blocking clock over D-Bus and **deadlocks when it is
+/// called from a thread a tokio runtime drives** — which is where the app's
+/// commands, the CLI and the connection supervisor all call it. keyring's own
+/// documentation for that feature pair says to spawn a thread for its calls, so
+/// that is what every call does here. It also keeps a keychain prompt on a
+/// thread nobody else's work is waiting on.
+fn on_a_thread<T: Send>(work: impl FnOnce() -> T + Send) -> T {
+    std::thread::scope(|scope| match scope.spawn(work).join() {
+        Ok(value) => value,
+        // Nothing here catches panics; pass the keyring one on as it was.
+        Err(panic) => std::panic::resume_unwind(panic),
+    })
+}
+
 impl TokenStore {
     /// The store to use on this profile: the OS credential store, or the file
     /// fallback when `RUSTCODE_MACHINE_TOKEN_STORE=file` asks for it.
@@ -201,13 +295,16 @@ impl TokenStore {
     pub fn get(&self, host_id: &str) -> Result<Option<Secret>> {
         match &self.backend {
             Backend::Keychain { profile } => {
-                match keyring::Entry::new(KEYCHAIN_SERVICE, &keychain_account(profile, host_id))
-                    .and_then(|entry| entry.get_password())
-                {
-                    Ok(token) => Ok(Some(Secret::new(token))),
-                    Err(keyring::Error::NoEntry) => Ok(None),
-                    Err(error) => Err(keyring_error("read", host_id, error)),
-                }
+                let account = keychain_account(profile, host_id);
+                on_a_thread(move || {
+                    match keyring::Entry::new(KEYCHAIN_SERVICE, &account)
+                        .and_then(|entry| entry.get_password())
+                    {
+                        Ok(token) => Ok(Some(Secret::new(token))),
+                        Err(keyring::Error::NoEntry) => Ok(None),
+                        Err(error) => Err(keyring_error("read", host_id, error)),
+                    }
+                })
             }
             Backend::File { tokens, .. } => Ok(tokens
                 .lock()
@@ -226,9 +323,13 @@ impl TokenStore {
     pub fn set(&self, host_id: &str, token: &Secret) -> Result<()> {
         match &self.backend {
             Backend::Keychain { profile } => {
-                keyring::Entry::new(KEYCHAIN_SERVICE, &keychain_account(profile, host_id))
-                    .and_then(|entry| entry.set_password(token.expose()))
-                    .map_err(|error| keyring_error("store", host_id, error))?;
+                let account = keychain_account(profile, host_id);
+                let token = token.expose().to_owned();
+                on_a_thread(move || {
+                    keyring::Entry::new(KEYCHAIN_SERVICE, &account)
+                        .and_then(|entry| entry.set_password(&token))
+                        .map_err(|error| keyring_error("store", host_id, error))
+                })?;
             }
             Backend::File { path, tokens } => {
                 let mut tokens = tokens.lock().expect("token map is not poisoned");
@@ -250,12 +351,15 @@ impl TokenStore {
         self.forget_access(host_id);
         match &self.backend {
             Backend::Keychain { profile } => {
-                match keyring::Entry::new(KEYCHAIN_SERVICE, &keychain_account(profile, host_id))
-                    .and_then(|entry| entry.delete_credential())
-                {
-                    Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-                    Err(error) => Err(keyring_error("remove", host_id, error)),
-                }
+                let account = keychain_account(profile, host_id);
+                on_a_thread(move || {
+                    match keyring::Entry::new(KEYCHAIN_SERVICE, &account)
+                        .and_then(|entry| entry.delete_credential())
+                    {
+                        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+                        Err(error) => Err(keyring_error("remove", host_id, error)),
+                    }
+                })
             }
             Backend::File { path, tokens } => {
                 let mut tokens = tokens.lock().expect("token map is not poisoned");
@@ -310,12 +414,15 @@ fn keyring_error(action: &str, host_id: &str, error: keyring::Error) -> anyhow::
 /// behind. A keychain that needs an interactive unlock fails here, which is
 /// what makes [`TokenStore::open`] report it before pairing rather than after.
 fn keyring_probe() -> Result<()> {
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, "__probe__")
-        .map_err(|error| anyhow::anyhow!("credential store unavailable: {error}"))?;
-    match entry.get_password() {
-        Ok(_) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(error) => Err(anyhow::anyhow!("credential store unavailable: {error}")),
-    }
+    on_a_thread(
+        || match keyring::Entry::new(KEYCHAIN_SERVICE, "__probe__") {
+            Err(error) => Err(anyhow::anyhow!("credential store unavailable: {error}")),
+            Ok(entry) => match entry.get_password() {
+                Ok(_) | Err(keyring::Error::NoEntry) => Ok(()),
+                Err(error) => Err(anyhow::anyhow!("credential store unavailable: {error}")),
+            },
+        },
+    )
 }
 
 #[derive(Serialize, Deserialize)]
@@ -556,5 +663,69 @@ mod tests {
         let message =
             format!("{TOKEN_STORE_ENV}=floppy is not a token store; use `file` or `keychain`");
         assert!(message.contains("file") && message.contains("keychain"));
+    }
+
+    /// `keyring` with `async-secret-service` deadlocks when it is called from a
+    /// thread a tokio runtime drives, so every keyring call is made on a thread
+    /// of its own — this is that mechanism, and the value it returns.
+    #[test]
+    fn a_keyring_call_runs_on_a_thread_of_its_own() {
+        let caller = std::thread::current().id();
+        let worker = on_a_thread(|| std::thread::current().id());
+        assert_ne!(
+            caller, worker,
+            "the call must not run on the caller's thread"
+        );
+        assert_eq!(on_a_thread(|| 7), 7);
+    }
+
+    /// A store that never answers is given up on within the deadline, with the
+    /// message that says what to do about it, and the call runs off this
+    /// thread: a locked keyring is not an answer, it is silence (#3325).
+    #[tokio::test]
+    async fn a_store_that_does_not_answer_is_given_up_on() {
+        let started = std::time::Instant::now();
+        let error = bounded(
+            "opening the machine token store",
+            Duration::from_millis(100),
+            || {
+                // What an unlock prompt does: nothing, for longer than anybody waits.
+                std::thread::sleep(Duration::from_secs(1));
+                Ok(())
+            },
+        )
+        .await
+        .expect_err("silence is not an answer");
+        let text = format!("{error:#}");
+        assert!(text.contains("did not answer"), "{text}");
+        assert!(text.contains("RUSTCODE_MACHINE_TOKEN_STORE=file"), "{text}");
+        assert!(
+            started.elapsed() < Duration::from_millis(900),
+            "the pairing must not wait for the store: {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// The bound is only a ceiling: a store that answers is used, and the
+    /// token it stores is the one the pairing handed out.
+    #[tokio::test]
+    async fn an_answered_store_is_used() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let store = bounded("opening the machine token store", STORE_TIMEOUT, {
+            let dir = dir.path().to_path_buf();
+            move || TokenStore::in_file(&dir)
+        })
+        .await
+        .unwrap();
+        let store = Arc::new(store);
+        set_bounded(
+            Arc::clone(&store),
+            "gw-a".to_owned(),
+            Secret::new("token-a"),
+            STORE_TIMEOUT,
+        )
+        .await
+        .unwrap();
+        assert_eq!(store.get("gw-a").unwrap().unwrap().expose(), "token-a");
     }
 }

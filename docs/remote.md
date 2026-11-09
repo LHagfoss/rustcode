@@ -448,6 +448,14 @@ holds until encrypted transport (#2651) lands.
   `RUSTCODE_MACHINE_TOKEN_STORE=file` to keep them in
   `machines/tokens.json` (`0600` in a `0700` directory) instead; without it,
   the command says so rather than writing a credential to disk silently.
+- The store is opened *before* a request is sent, off the runtime and with a
+  deadline (`rustcode_client::tokens::bounded`, ten seconds). It is reached
+  over the operating system's own IPC, where a keychain unlock or a Secret
+  Service prompt can block for as long as nobody answers; a store that does not
+  answer stops the pairing at this end, with the message naming the file
+  fallback, instead of doing so after the other machine has accepted the
+  request and enrolled this computer (#3325). The token write after the code is
+  bounded the same way.
 - Routes are tried in the saved order; the first that authenticates *as the
   machine we saved* — same `host_id`, and the device record the token belongs
   to — is used. An address that now belongs to another computer is refused
@@ -466,10 +474,11 @@ without a second computer.
 | **Add machine › Machines on this network** | Bonjour, the same browse as `machines discover`: every machine whose record lists `caps=desktops`, with *Ask to connect*. |
 | **Add machine › Enter an address** | The `host:port` a machine is reached on when it is not announced (an overlay, or another subnet). |
 | **Waiting for ‹host› to accept on that machine…** | The request is on that machine's screen; *Cancel* drops it. Once its owner accepts, the eight digits it shows are typed here, one box per digit. |
-| A machine row | Its name and platform, the state chip at the row's top right — *Connected*, *Connecting*, *Offline · retrying in N s*, *Pairing expired* — the route **in use** under the name as `LAN · Unencrypted` or `Tailscale`/`VPN · Encrypted`, then when it was last reached and how many threads it has. **Main machine** and **Remove** sit in a row of their own below. |
+| **Checking the code** | The code is being checked with that machine, which answers within ten seconds. After half a minute the page stops waiting and says so — *‹host› did not answer* — with **Ask again** and **Cancel**: a machine that accepted the code but could not store the token still lists this computer as a device, so it is removed there and the pairing started again. No stage of the flow is a spinner without a way out. |
+| A machine row | Its name and platform, the state chip at the row's top right — *Connected*, *Connecting*, *Offline · retrying in N s*, *Needs pairing* — the route **in use** under the name as `LAN · Unencrypted` or `Tailscale`/`VPN · Encrypted`, then whether it is the main machine, when it was last reached and how many threads it has. **Main machine** and **Remove** sit in a row of their own below. |
 | **Main machine** | The machine listed first and the default **Run on**. One at a time. |
 | **Remove** | Forgets it here: token, routes and its threads' rows go. The machine keeps listing this computer until it is revoked there. |
-| **Pair again** | On a machine whose pairing it ended (`Pairing expired`): asks it again, so a new code can be typed. |
+| **Pair again** | On a machine whose pairing it ended (*Needs pairing*): asks it again, so a new code can be typed. |
 
 The app keeps one connection per machine, retried with jittered backoff from a
 second up to five minutes (reset after half a minute connected), so a machine
