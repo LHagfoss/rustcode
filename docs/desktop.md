@@ -236,8 +236,8 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   `account_login_command`), so the app holds no per-harness copy of them.
   *Found on this Mac* lists the logins the engine found for that harness
   (`~/.claude`, `~/.claude-personal`; `~/.codex`, `~/.codex-paral`), each added
-  by its own path. RustCode never reads or copies those tokens. The effort pill
-  beside the model pill lists the harness's named accounts while it has more
+  by its own path. RustCode never reads or copies those tokens. The model pill's
+  effort step lists the harness's named accounts while it has more
   than one: a row starts a new thread on it, moves an idle thread with the
   conversation so far as a summary, and a running thread shows the rows
   disabled with *Stop the turn to switch*. A thread from before accounts shows its own login as
@@ -569,9 +569,12 @@ composer's keys stay outside the table.
   answer above it stays the last answer and one row under it says
   *Compacted automatically*, and the context inspector compares the context
   before and after it.
-- **Model picker.** The model pill opens a narrow card (a harness icon rail
-  and a searchable model list); the effort pill beside it opens a menu with
-  the model's levels, *Reset to default*, *Fast mode* (when the thread's
+- **Model picker.** One pill names the model and its effort (*Opus 5.5
+  Medium*) and opens a narrow card (a harness icon rail and a searchable model
+  list). Picking a model with levels turns the card to its second step, and an
+  *Effort and account* row at the list's foot goes there too; the step's header
+  (or ←) goes back to the models, and picking a level closes the card. The step
+  holds the model's levels, *Reset to default*, *Fast mode* (when the thread's
   model has the `fast` option) and the harness's logins. Each model keeps the
   effort it was last left on (one record per harness, which its logins share),
   so picking the model again returns to that level; a level the model no longer
