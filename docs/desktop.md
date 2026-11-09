@@ -416,8 +416,14 @@ composer's keys stay outside the table.
   `api.anthropic.com/api/oauth/usage` (5-hour, weekly, weekly per model),
   read-only and never refreshed (`provider_auth/claude_usage.rs`). The first
   read happens when Usage opens or a Claude account is used; macOS may ask to
-  allow Keychain access. Each source is cached a minute. Showing the page is an
-  explicit look and reads every Claude login; the background reads one at a
+  allow Keychain access. ChatGPT's numbers are cached a minute; Claude's five
+  minutes, with a failed read retried after one. That is one Anthropic request
+  per login per interval however often the view is opened, because the endpoint
+  rate-limits: when it answers 429 the engine waits out its `Retry-After` (or
+  doubles its own wait per refusal, up to about 30 minutes) and keeps the last
+  numbers on screen, marked with when they were read, instead of showing an
+  error. Showing the page is an explicit look and reads every Claude login; the
+  background reads one at a
   time, the default login and the account of the thread on screen
   (`claudeAccount`). While the page is open it reads again every three minutes
   (`PLAN_CACHE_POLL_MS`, the meter poll's interval, `watchUsageRefresh` in
@@ -432,7 +438,7 @@ composer's keys stay outside the table.
   engine shares a read that is already under way. A read that fails doubles the
   wait, up to fifteen minutes, and a read that answers puts it back on the
   interval; a read in flight is never doubled, and Refresh still reads at once,
-  past the engine's minute of cache. What the page reads fills the same cache
+  past the engine's cache. What the page reads fills the same cache
   `list_harnesses` reports to an agent (`state/harnessUsage.ts`,
   `docs/orchestrator.md`), which answers without a Keychain read or a request of
   its own and refreshes the stale named logins in the background.
@@ -449,8 +455,12 @@ composer's keys stay outside the table.
   item over) or `transient` (no answer). The page retries `expired` and `refused`
   on its own
   and sends `force: true` then, which reads again instead of answering from the
-  engine's minute of cache — so a sign-in renewed in Claude Code shows on return
+  engine's cache (`WINDOWS_TTL`, five minutes for numbers, a minute for a
+  failure) — so a sign-in renewed in Claude Code shows on return
   to the page, and the background poll picks it up within its three minutes. A
+  429 is not an error for the user to fix: the engine waits it out (its
+  `Retry-After`, else a doubling wait up to about 30 minutes) and keeps serving
+  the login's last numbers, marked `asOf` so the row says how old they are. A
   `forbidden` login is not retried on its own (renewing does not fix it), nor is
   a `denied` one (that would only prompt again); Settings › Usage, Refresh and
   Check in Settings › Harnesses read them again, and Refresh always forces. Reads
