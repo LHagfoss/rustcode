@@ -1,12 +1,12 @@
-// The composer's model pill and the effort pill beside it. The model pill opens a narrow card: a
+// The composer's model pill: the model and, beside its name, its effort. It opens a narrow card: a
 // rail of harness icons on the left (the current harness first) and, beside it, a search over the
 // browsed harness's models with the current one checked; typing searches every harness. The card
 // is as tall as the longest list it can show, up to the room the window has, and only the list
-// scrolls. The effort pill opens a small menu of the running model's levels, Fast mode and the
-// harness's logins. What the thread's harness cannot do is greyed out with the reason, from
-// capability flags.
+// scrolls. Picking a model turns the card to its second step: the model's levels, Fast mode and
+// the harness's logins (a row at the foot of the list goes there too). What the thread's harness
+// cannot do is greyed out with the reason, from capability flags.
 
-import { Check, ChevronDown, ChevronUp, Lock, RotateCcw, UserRound, Zap } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, ChevronUp, Lock, RotateCcw, UserRound, Zap } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   type ConfigOption,
@@ -202,12 +202,14 @@ export function panelHeight(groups: { models: unknown[] }[]): number {
 }
 
 /**
- * The effort pill's menu, for the model the thread runs: its levels from lowest to highest with the
+ * The card's second step, for the model the thread runs: its levels from lowest to highest with the
  * default marked, a reset, Fast mode when the model has it, and the harness's logins while it has
- * more than one. A harness without an effort control says why in the levels' place.
+ * more than one. A harness without an effort control says why in the levels' place. Its header
+ * goes back to the models.
  */
-function EffortMenu({
-  label,
+function EffortPanel({
+  model,
+  onBack,
   levels,
   effort,
   defaultLevel,
@@ -220,7 +222,8 @@ function EffortMenu({
   onFast,
   onPickAccount,
 }: {
-  label: string;
+  model: string;
+  onBack: () => void;
   levels: string[];
   effort?: string | null;
   defaultLevel: string | null;
@@ -234,23 +237,37 @@ function EffortMenu({
   onPickAccount: (id: string | null) => void;
 }) {
   const showLevels = !effortReason && levels.length > 0;
+  const panel = useRef<HTMLDivElement>(null);
+  // The card opens on this step's checked row (or its first), so ↑↓ and ⏎ act at once; a model just
+  // picked settles its level a render later, and focus follows it there.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refocus when the checked level changes
+  useEffect(() => {
+    const root = panel.current;
+    const row =
+      root?.querySelector<HTMLElement>("[data-menu-row][aria-checked='true']:not([disabled])") ??
+      root?.querySelector<HTMLElement>("[data-menu-row]:not([disabled])");
+    row?.focus({ preventScroll: true });
+  }, [effort]);
   return (
-    <CardPopover
-      label="Effort and account"
-      onKeyDown={menuKeys}
-      className="flex w-[220px] flex-col"
-      trigger={
-        <button
-          type="button"
-          aria-label="Effort and account"
-          className="flex h-[30px] min-w-0 max-w-[140px] items-center gap-1 rounded-full px-2 text-callout text-fg-muted hover:bg-fill hover:text-fg data-[state=open]:bg-fill-strong data-[state=open]:text-fg"
-        >
-          {fastOn && <Zap size={11} className="shrink-0 text-fg" fill="currentColor" />}
-          <span className="min-w-0 truncate">{label}</span>
-          <ChevronDown size={11} strokeWidth={2.5} className="shrink-0 text-fg-faint" />
-        </button>
-      }
+    <div
+      ref={panel}
+      onKeyDown={(event) => {
+        if (event.key === "ArrowLeft" || event.key === "Backspace") {
+          event.preventDefault();
+          onBack();
+        } else menuKeys(event);
+      }}
+      className="flex flex-col p-1"
     >
+      <button
+        type="button"
+        onClick={onBack}
+        className="flex h-7 min-w-0 items-center gap-1 rounded-sm px-1.5 text-callout text-fg-muted hover:bg-fill hover:text-fg"
+      >
+        <ChevronLeft size={13} strokeWidth={2.5} className="shrink-0" />
+        <span className="min-w-0 truncate">{model}</span>
+      </button>
+      <div className={menuSeparator} />
       {(showLevels || effortReason) && <div className={menuLabel}>Effort</div>}
       {effortReason && (
         <p data-menu-static className="flex items-start gap-1.5 px-2 pb-1 text-caption text-fg-faint">
@@ -329,7 +346,7 @@ function EffortMenu({
           ))}
         </>
       )}
-    </CardPopover>
+    </div>
   );
 }
 
@@ -344,10 +361,15 @@ function ModelPanel({
   groups,
   current,
   onPick,
+  traits,
+  onTraits,
 }: {
   groups: ModelGroup[];
   current?: string | null;
   onPick: (group: ModelGroup, value: string) => void;
+  /** What the second step holds for the current model (its effort), and the row that opens it. */
+  traits?: string | null;
+  onTraits?: () => void;
 }) {
   const [filter, setFilter] = useState("");
   // The harness the user is browsing, until a switch makes another one current.
@@ -511,6 +533,19 @@ function ModelPanel({
             </div>
           )}
         </div>
+        {traits && onTraits && (
+          <div className="shrink-0 border-border border-t p-1">
+            <button
+              type="button"
+              onClick={onTraits}
+              className="flex h-7 w-full min-w-0 items-center gap-2 rounded-md px-2 text-body hover:bg-fill focus-visible:bg-fill"
+            >
+              <span className="min-w-0 flex-1 truncate text-start text-fg-muted">Effort and account</span>
+              <span className="shrink-0 text-fg">{traits}</span>
+              <ChevronRight size={13} strokeWidth={2.5} className="shrink-0 text-fg-faint" />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -629,14 +664,22 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   const choice = useApp((s) => s.newThread);
   // The first open thread's config options: stable while a reply streams, so the picker does not re-render per chunk.
   const knownConfig = useApp((s) => firstConfig(s.threads));
-  const [open, setOpen] = useState(false);
+  const [open, setOpenState] = useState(false);
+  // The card's step: the model list, or the picked model's effort, Fast mode and logins.
+  const [step, setStep] = useState<"models" | "traits">("models");
+  // Every opening starts on the models.
+  const setOpen = (next: boolean) => {
+    if (next) setStep("models");
+    setOpenState(next);
+  };
   // `/model` asks the picker to open (store.runCommandAction).
   const ask = useApp((s) => s.modelPickerAsk);
   const seenAsk = useRef(ask);
   useEffect(() => {
     if (ask === seenAsk.current) return;
     seenAsk.current = ask;
-    setOpen(true);
+    setStep("models");
+    setOpenState(true);
   }, [ask]);
 
   const isNew = !thread;
@@ -753,17 +796,18 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   /**
    * A model row. In the current harness it is set in place and the level the
    * new model does not offer is clamped to its default; another harness is
-   * switched to with its remembered login, as its model row always did. The
-   * card closes on the pick; the effort pill beside it then names the level.
+   * switched to with its remembered login, as its model row always did. A
+   * model with levels turns the card to its effort step; one without closes it.
    */
   const pickModel = (group: ModelGroup, value: string) => {
     if (group.blocked) return;
-    setOpen(false);
     // The level the model was last left on, so picking it again returns to that level; a level
     // its list no longer offers is left to the model's default (`clampEffort`).
     const entry = group.harness.models.find((m) => m.id === value);
     const remembered = rememberedEffort(effortMemory(), group.harness.id, value);
     const levels = orderEfforts(entry?.efforts ?? []);
+    if (levels.length) setStep("traits");
+    else setOpen(false);
     const same = group.harness.id === providerId;
     if (same) {
       if (thread) void writeModelPick(thread.id, modelThreadWrites(entry, value, effort, remembered, true));
@@ -816,47 +860,45 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     );
   }
 
+  const traitsStep = step === "traits" && !!traits;
   return (
-    <div className="flex min-w-0 items-center gap-0.5">
-      <CardPopover
-        open={open}
-        onOpenChange={setOpen}
-        role="dialog"
-        label="Model"
-        // The card focuses its own control (the search field, which the panel does on mount) so
-        // the arrow keys act on what the card is for the moment it opens.
-        onOpenAutoFocus={(event) => event.preventDefault()}
-        // As tall as the longest list up to the room the window has: the model list is the one
-        // part that scrolls.
-        className="flex w-[min(360px,calc(100vw-32px))] flex-col overflow-hidden p-0"
-        style={{ maxHeight: CARD_MAX }}
-        trigger={
-          <button
-            type="button"
-            aria-label="Model"
-            className="flex h-[30px] min-w-0 max-w-[220px] items-center gap-1.5 rounded-full px-2 text-callout text-fg hover:bg-fill data-[state=open]:bg-fill-strong @max-lg/composer:max-w-[160px]"
-          >
-            <HarnessIcon id={harness?.id ?? "rustcode"} name={harness?.name} size={14} />
-            <span className="min-w-0 truncate">{label}</span>
-            <ChevronUp
-              size={11}
-              strokeWidth={2.5}
-              className={cx("shrink-0 transition-transform duration-200 ease-snappy", open && "rotate-180")}
-            />
-          </button>
-        }
-      >
-        <ModelPanel key={providerId} groups={groups} current={model} onPick={pickModel} />
-        {modelReason && (
-          <p className="flex shrink-0 items-start gap-1.5 border-border border-t px-3 py-2 text-caption text-fg-faint">
-            <Lock size={10} className="mt-[2px] shrink-0" />
-            <span>{modelReason}</span>
-          </p>
-        )}
-      </CardPopover>
-      {traits && (
-        <EffortMenu
-          label={traits}
+    <CardPopover
+      open={open}
+      onOpenChange={setOpen}
+      role="dialog"
+      label="Model"
+      // The card focuses its own control (the search field, which the panel does on mount; the
+      // effort step its checked row) so the arrow keys act on what the card is for the moment it opens.
+      onOpenAutoFocus={(event) => event.preventDefault()}
+      // As tall as the longest list up to the room the window has: the model list is the one part
+      // that scrolls. The effort step is a narrower menu.
+      className={cx(
+        "flex flex-col overflow-hidden",
+        traitsStep ? "w-[240px] p-0" : "w-[min(360px,calc(100vw-32px))] p-0",
+      )}
+      style={{ maxHeight: CARD_MAX }}
+      trigger={
+        <button
+          type="button"
+          aria-label="Model"
+          className="flex h-[30px] min-w-0 max-w-[280px] items-center gap-1.5 rounded-full px-2 text-callout text-fg hover:bg-fill data-[state=open]:bg-fill-strong @max-lg/composer:max-w-[200px]"
+        >
+          <HarnessIcon id={harness?.id ?? "rustcode"} name={harness?.name} size={14} />
+          <span className="min-w-0 shrink truncate">{label}</span>
+          {fast?.currentBool && <Zap size={11} className="shrink-0" fill="currentColor" />}
+          {traits && <span className="min-w-0 shrink-[2] truncate text-fg-muted">{traits}</span>}
+          <ChevronUp
+            size={11}
+            strokeWidth={2.5}
+            className={cx("shrink-0 transition-transform duration-200 ease-snappy", open && "rotate-180")}
+          />
+        </button>
+      }
+    >
+      {traitsStep ? (
+        <EffortPanel
+          model={displayName ?? label}
+          onBack={() => setStep("models")}
           levels={efforts}
           effort={effort}
           defaultLevel={defaultLevel}
@@ -869,7 +911,24 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
           onFast={(on) => thread && void setConfigOption(thread.id, "fast", on)}
           onPickAccount={pickAccount}
         />
+      ) : (
+        <>
+          <ModelPanel
+            key={providerId}
+            groups={groups}
+            current={model}
+            onPick={pickModel}
+            traits={traits}
+            onTraits={() => setStep("traits")}
+          />
+          {modelReason && (
+            <p className="flex shrink-0 items-start gap-1.5 border-border border-t px-3 py-2 text-caption text-fg-faint">
+              <Lock size={10} className="mt-[2px] shrink-0" />
+              <span>{modelReason}</span>
+            </p>
+          )}
+        </>
       )}
-    </div>
+    </CardPopover>
   );
 }
