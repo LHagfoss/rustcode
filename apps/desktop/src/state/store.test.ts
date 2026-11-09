@@ -1289,7 +1289,7 @@ describe("engine controller with the mock engine", () => {
     await connect(new MockTransport({ delayMs: 0 }));
     await until(() => useApp.getState().features.themes === true);
     const names = useApp.getState().themes?.themes.map((t) => t.name);
-    expect(names).toEqual(["rustcode", "light", "graphite"]);
+    expect(names).toEqual(["rustcode", "oled", "light", "graphite"]);
     await setActiveTheme("light");
     expect(useApp.getState().themeActive).toBe("light");
     expect(useApp.getState().theme).toBe("light");

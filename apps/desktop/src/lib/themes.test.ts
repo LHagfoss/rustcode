@@ -12,7 +12,7 @@ describe("themes", () => {
     const x = snap.themes[0]!;
     expect(x.tokens.bg).toBe("#123456");
     // An invalid value falls back to the built-in theme of that mode.
-    expect(x.tokens.text).toBe(BUILTIN_THEMES[1]!.tokens.text);
+    expect(x.tokens.text).toBe(BUILTIN_THEMES.find((t) => t.name === "light")!.tokens.text);
     expect(x.radius).toBe("round");
     expect(cssName("surface_2")).toBe("--rc-surface-2");
   });
