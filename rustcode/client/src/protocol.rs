@@ -21,6 +21,12 @@ pub const HANDSHAKE_PROTOCOL_VERSION: u32 = 1;
 /// Largest handshake frame either side sends, matching the gateway's limit.
 pub const MAX_HANDSHAKE_FRAME_BYTES: usize = 8 * 1024;
 
+/// The capability this client names in `pair` and `authenticate` to exchange a
+/// rotating refresh token for a new one. A gateway that predates it answers the
+/// pairing with the static `token` and its 30-day expiry, which this client
+/// still presents and stores.
+pub const CAPABILITY_TOKEN_ROTATION: &str = "token_rotation";
+
 /// Digits in the pairing code a machine shows and the owner types, as the
 /// gateway issues it. A `connect_approved` frame reports the same number.
 pub const PAIRING_CODE_DIGITS: u32 = 8;
@@ -103,15 +109,39 @@ pub enum HandshakeRequest {
         platform: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         host_id: Option<String>,
+        /// Optional features the device understands. Naming
+        /// [`CAPABILITY_TOKEN_ROTATION`] asks for rotating tokens instead of
+        /// the static device token and its expiry.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        capabilities: Option<Vec<String>>,
     },
     /// Present a device token obtained from an earlier `paired` frame.
     Authenticate {
         protocol_version: u32,
         device_id: String,
-        token: Secret,
+        /// The static device token, or the refresh token of a device that
+        /// rotates its tokens. Absent when `refresh_token` or `access_token`
+        /// is the credential.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token: Option<Secret>,
+        /// The rotating device's long-lived token: every accepted one is
+        /// replaced by the answer.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refresh_token: Option<Secret>,
+        /// The short-lived token from an earlier `paired` or `authenticated`
+        /// frame: reconnects without rotating anything.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        access_token: Option<Secret>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         wire_names: Option<String>,
+        /// Optional features the device understands, as in `pair`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        capabilities: Option<Vec<String>>,
     },
+    /// The device stored the refresh token from the `authenticated` frame that
+    /// named `rotation_id`, so the machine may retire the token before it. A
+    /// session-path frame after authentication, never a first frame.
+    TokenAck { rotation_id: String },
 }
 
 /// Frames the gateway sends during the handshake, and the error frame that
@@ -135,22 +165,37 @@ pub enum HandshakeResponse {
     ConnectDenied,
     /// Nobody answered in time, or the code was not sent in time.
     ConnectExpired,
-    /// Pairing succeeded. `token` is shown exactly once.
+    /// Pairing succeeded. `token` is shown exactly once, or, for a device that
+    /// named [`CAPABILITY_TOKEN_ROTATION`], `refresh_token` and `access_token`
+    /// are and the pairing does not expire.
     Paired {
         protocol_version: u32,
         gateway_id: String,
         instance_id: String,
         device_id: String,
         device_name: String,
-        token: Secret,
+        /// The static token of a device that does not rotate; shown once.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token: Option<Secret>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         host_name: Option<String>,
+        /// When this pairing stops being accepted; absent for a device that
+        /// rotates its tokens, whose pairing lasts until it is revoked.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expires_at: Option<String>,
+        /// The rotating device's first refresh token; shown once.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refresh_token: Option<Secret>,
+        /// The access token to reconnect with, until `access_expires_at`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        access_token: Option<Secret>,
+        /// When the machine stops accepting `access_token`, RFC 3339 in UTC.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        access_expires_at: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         wire_names: Option<String>,
     },
-    /// The device token was accepted.
+    /// The presented credential was accepted.
     Authenticated {
         protocol_version: u32,
         gateway_id: String,
@@ -161,6 +206,19 @@ pub enum HandshakeResponse {
         host_name: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expires_at: Option<String>,
+        /// The new refresh token when a refresh token was presented: the
+        /// device stores it and answers with `token_ack`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refresh_token: Option<Secret>,
+        /// The access token for this connection, until `access_expires_at`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        access_token: Option<Secret>,
+        /// When the machine stops accepting the access token, RFC 3339 in UTC.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        access_expires_at: Option<String>,
+        /// The rotation to acknowledge; absent when nothing rotated.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rotation_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         wire_names: Option<String>,
     },
@@ -198,6 +256,12 @@ pub enum ErrorCode {
     RateLimited,
     /// Unknown device, revoked device or wrong token.
     Unauthorized,
+    /// A retired refresh token was presented: the machine revoked the whole
+    /// pairing. The device drops its tokens and pairs again.
+    TokenReplayed,
+    /// The access token expired or was replaced. The pairing is still valid:
+    /// authenticate with the refresh token.
+    AccessExpired,
     /// The authenticated device cannot perform this operation.
     UnauthorizedAccess,
     Busy,
@@ -215,9 +279,20 @@ pub enum ErrorCode {
 impl ErrorCode {
     /// Whether pairing again could fix this. `Unauthorized` means the token is
     /// gone (revoked, expired or replaced), which is the client's cue to say
-    /// "pair again" instead of "offline".
+    /// "pair again" instead of "offline". `AccessExpired` is not one of them:
+    /// the refresh token still authenticates.
     pub fn needs_new_pairing(self) -> bool {
-        matches!(self, Self::Unauthorized | Self::Revoked)
+        matches!(
+            self,
+            Self::Unauthorized | Self::Revoked | Self::TokenReplayed
+        )
+    }
+
+    /// Whether the machine revoked the pairing rather than refusing a stale
+    /// credential. The saved token is worthless after one of these, so the
+    /// client drops it instead of presenting it again.
+    pub fn revoked_pairing(self) -> bool {
+        matches!(self, Self::Revoked | Self::TokenReplayed)
     }
 }
 
@@ -283,11 +358,14 @@ mod tests {
             names,
             BTreeSet::from([
                 "authenticate.json".to_owned(),
+                "authenticate_access.json".to_owned(),
+                "authenticate_refresh.json".to_owned(),
                 "authenticate_thread_names.json".to_owned(),
                 "connect_request.json".to_owned(),
                 "connect_request_desktop.json".to_owned(),
                 "pair_code.json".to_owned(),
                 "pair_credential.json".to_owned(),
+                "token_ack.json".to_owned(),
             ]),
             "a golden request was added or removed: update this mirror and this list"
         );
@@ -301,6 +379,111 @@ mod tests {
                 "{name} does not re-encode identically"
             );
         }
+    }
+
+    /// The two ways a rotating device presents its tokens, and the
+    /// acknowledgement that retires the one a rotation replaced, decode to the
+    /// shapes the client acts on.
+    #[test]
+    fn the_rotating_handshake_frames_carry_what_the_client_needs() {
+        let directory = contract_dir().join("golden/handshake");
+        let HandshakeRequest::Authenticate {
+            token,
+            refresh_token,
+            access_token,
+            capabilities,
+            ..
+        } = serde_json::from_value(json(&directory.join("requests/authenticate_refresh.json")))
+            .unwrap()
+        else {
+            panic!("authenticate_refresh is an authenticate frame");
+        };
+        assert!(token.is_none(), "a refresh token is not the static slot");
+        assert!(refresh_token.is_some());
+        assert!(access_token.is_none());
+        assert_eq!(
+            capabilities.as_deref(),
+            Some([CAPABILITY_TOKEN_ROTATION.to_owned()].as_slice()),
+            "a rotating device names the capability on authenticate"
+        );
+
+        let HandshakeRequest::Authenticate {
+            token,
+            refresh_token,
+            access_token,
+            capabilities,
+            ..
+        } = serde_json::from_value(json(&directory.join("requests/authenticate_access.json")))
+            .unwrap()
+        else {
+            panic!("authenticate_access is an authenticate frame");
+        };
+        assert!(token.is_none() && refresh_token.is_none());
+        assert!(access_token.is_some());
+        assert!(
+            capabilities.is_none(),
+            "an access reconnect asks for nothing"
+        );
+
+        let ack: HandshakeRequest =
+            serde_json::from_value(json(&directory.join("requests/token_ack.json"))).unwrap();
+        assert_eq!(
+            ack,
+            HandshakeRequest::TokenAck {
+                rotation_id: "5be1c4a07d2e9f63".to_owned()
+            }
+        );
+
+        let HandshakeResponse::Paired {
+            token,
+            expires_at,
+            refresh_token,
+            access_token,
+            access_expires_at,
+            ..
+        } = serde_json::from_value(json(&directory.join("responses/paired_rotating.json")))
+            .unwrap()
+        else {
+            panic!("paired_rotating is a paired frame");
+        };
+        assert!(
+            token.is_none() && expires_at.is_none(),
+            "a rotating pairing never expires"
+        );
+        assert!(refresh_token.is_some() && access_token.is_some());
+        assert_eq!(access_expires_at.as_deref(), Some("2026-08-22T09:15:00Z"));
+
+        let HandshakeResponse::Authenticated {
+            refresh_token,
+            access_token,
+            rotation_id,
+            ..
+        } = serde_json::from_value(json(
+            &directory.join("responses/authenticated_rotating.json"),
+        ))
+        .unwrap()
+        else {
+            panic!("authenticated_rotating is an authenticated frame");
+        };
+        assert!(refresh_token.is_some() && access_token.is_some());
+        assert_eq!(rotation_id.as_deref(), Some("5be1c4a07d2e9f63"));
+
+        let HandshakeResponse::Authenticated {
+            refresh_token,
+            access_token,
+            rotation_id,
+            access_expires_at,
+            ..
+        } = serde_json::from_value(json(&directory.join("responses/authenticated_access.json")))
+            .unwrap()
+        else {
+            panic!("authenticated_access is an authenticated frame");
+        };
+        assert!(
+            refresh_token.is_none() && access_token.is_none() && rotation_id.is_none(),
+            "an access reconnect rotates nothing"
+        );
+        assert!(access_expires_at.is_some());
     }
 
     /// The desktop request that wins ACP access carries the kind, the machine
@@ -353,6 +536,8 @@ mod tests {
             ErrorCode::UnauthorizedAccess,
             ErrorCode::PairingFailed,
             ErrorCode::Revoked,
+            ErrorCode::TokenReplayed,
+            ErrorCode::AccessExpired,
             ErrorCode::ConnectBusy,
             ErrorCode::ConnectRateLimited,
         ] {
@@ -404,10 +589,26 @@ mod tests {
         let frame = HandshakeRequest::Authenticate {
             protocol_version: 1,
             device_id: "0011".into(),
-            token: Secret::new(needle),
+            token: Some(Secret::new(needle)),
+            refresh_token: Some(Secret::new(needle)),
+            access_token: Some(Secret::new(needle)),
             wire_names: None,
+            capabilities: None,
         };
         assert!(!format!("{frame:?}").contains(needle));
         assert!(!format!("{:?}", Secret::new(needle)).contains(needle));
+    }
+
+    /// The two error codes a rotating device acts on are the ones the contract
+    /// spells, and only a revoked pairing drops the saved token.
+    #[test]
+    fn the_rotation_error_codes_are_read_the_way_the_client_acts() {
+        assert!(ErrorCode::TokenReplayed.revoked_pairing());
+        assert!(ErrorCode::Revoked.revoked_pairing());
+        assert!(!ErrorCode::Unauthorized.revoked_pairing());
+        assert!(!ErrorCode::AccessExpired.revoked_pairing());
+        assert!(!ErrorCode::AccessExpired.needs_new_pairing());
+        assert!(ErrorCode::TokenReplayed.needs_new_pairing());
+        assert!(ErrorCode::Unauthorized.needs_new_pairing());
     }
 }
