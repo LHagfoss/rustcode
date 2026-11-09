@@ -684,15 +684,28 @@ composer's keys stay outside the table.
   A thread merely marked for review does not count, and the row's count is the
   inbox's own list. With nothing waiting there is no row at all, so no empty
   heading stands over the thread rows, and the inbox stays reachable from ⌘⇧I
-  and the palette. One list: pinned threads first, then every
-  active thread, and Settled as a shelf at the foot: threads marked Settled
+  and the palette. One list, top to bottom: Working, Pinned, Needs you,
+  Active, then Snoozed and Settled as shelves at the foot. **Working** leads
+  with the threads whose turn runs and the threads still waiting on work they
+  handed out — always open, the thread you last sent work to first; a pinned
+  thread that works stays in Pinned and says so in its chip, so no row is
+  drawn twice. **Needs you** holds the threads waiting on an approval or an
+  answer, the one that has waited longest first, and draws nothing when
+  nothing waits. **Active** is every other live thread, the one that last came
+  back to you first, with the completions and failures you have not opened
+  above the rest. A section sorts itself from marks the app already keeps, so
+  it never reorders as a turn streams; a row you dragged keeps the place you
+  put it, in any section. With Sidebar: Working at the top off (⌘K) the list
+  is what it was: Pinned and Active lead, and Working folds into the shelf at
+  the foot beside Snoozed and Settled. Settled holds the threads marked Settled
   and threads untouched for three days unless they wait
   for review (`idleSettled`), folded by default, 5 at a time then *Show
   25 more*. A thread that works, waits or needs you stays in the list and
   says so in its row. A row is one 32px line: the 14px mark of where it runs,
   its title, and one 80px slot on the right — the age (`5m`, `3h`), the running
   turn's spinner and clock, *Waiting*, *Needs you* (with the request under the
-  title), *Failed* (red) or *Review* (accent), the hour a snoozed thread wakes;
+  title), *Failed* (red), *Completed* (green, until you open the thread) or
+  *Review* (accent), the hour a snoozed thread wakes;
   a turn that ended while you looked elsewhere keeps its row at full strength
   until you open the thread (`finished`/`failed` in the store; *Mark Unread* in
   the menu brings it back). The project's name is not repeated on the rows: the
@@ -718,7 +731,9 @@ composer's keys stay outside the table.
   screen, and a status set by an agent or the engine never moves it. The
   filter button by the search groups Threads by project (off by default; each
   project folds and has New thread on hover; a worktree thread sits under
-  its repository), keeps to the current project, and opens the Board.
+  its repository), keeps to the current project, and opens the Board. Working
+  and Needs you stay above the folders, and a folded folder's dot says what it
+  hides.
   Search matches titles and folders at once, and from three characters
   also what was said: the engine's SQLite index (`index.sqlite`,
   `_rustcode/threads/search`) adds threads whose messages match, with the
@@ -740,8 +755,8 @@ composer's keys stay outside the table.
   filter in the sidebar: ⌘K finds threads (by title, project, branch, pull
   request and what was said) and holds those five as New thread, Add project
   folder, Open Settings, Open Git and Open Usage, with their shortcuts, and
-  the view options. Working, Snoozed
-  and Settled are shelves at the foot of the list, each folding on its own;
+  the view options. Snoozed and Settled are the shelves at the foot of the
+  list, each folding on its own;
   the project is chosen per thread in the composer's footer.
 - **Title bar.** The sidebar's and header's buttons sit on the traffic
   lights' line, 14 px past the zoom button (x 92; the button ends at x 78),

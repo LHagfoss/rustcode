@@ -6,17 +6,19 @@ import {
   keepListed,
   listedPicks,
   nextRow,
+  type OrderKey,
   opensRowMenu,
   type Placement,
   placeThread,
   rangeRows,
   rowKeyAction,
   rowStatus,
-  SECTION_ORDER,
   SHELF_DEFAULT_OPEN,
-  SHELVES,
+  sectionsOf,
   shelfKey,
   shelfOpen,
+  shelvesOf,
+  sortSection,
   threadDiff,
   titleFirstTrailing,
   visibleRows,
@@ -219,11 +221,21 @@ describe("a row's one status chip", () => {
     });
   });
 
-  test("a failure, then a review, each in its own words", () => {
+  test("a failure, then a completion you have not seen, then a review, each in its own words", () => {
     expect(rowStatus({ running: false, failed: true, review: true })).toEqual({
       kind: "failed",
       label: "Failed",
       title: "Its last turn failed",
+    });
+    expect(rowStatus({ running: false, failed: true, fresh: true })).toEqual({
+      kind: "failed",
+      label: "Failed",
+      title: "Its last turn failed",
+    });
+    expect(rowStatus({ running: false, fresh: true, review: true })).toEqual({
+      kind: "completed",
+      label: "Completed",
+      title: "It finished while you were elsewhere",
     });
     expect(rowStatus({ running: false, review: true })).toEqual({
       kind: "review",
@@ -278,7 +290,7 @@ describe("the shelves' fold state", () => {
   });
 
   test("every shelf folds and unfolds on the user's choice, not only Settled", () => {
-    for (const id of SHELVES) {
+    for (const id of shelvesOf("shelf")) {
       expect(shelfOpen(id, true)).toBe(true);
       expect(shelfOpen(id, false)).toBe(false);
     }
@@ -292,14 +304,22 @@ describe("the shelves' fold state", () => {
 
   test("each shelf keeps its own key, Settled's the one older releases wrote", () => {
     expect(shelfKey("settled")).toBe("rustcode.sidebar.settledOpen");
-    expect(new Set(SHELVES.map(shelfKey)).size).toBe(SHELVES.length);
+    expect(new Set(shelvesOf("shelf").map(shelfKey)).size).toBe(shelvesOf("shelf").length);
   });
 
-  test("only the shelves fold", () => {
-    expect(SHELVES.every(isShelf)).toBe(true);
-    expect(isShelf("pinned")).toBe(false);
-    expect(isShelf("threads")).toBe(false);
-    expect(isShelf("project:/code/app")).toBe(false);
+  test("the default layout folds only the foot shelves: Working leads it", () => {
+    expect(shelvesOf("top")).toEqual(["snoozed", "settled"]);
+    expect(shelvesOf("shelf")).toEqual(["working", "snoozed", "settled"]);
+  });
+
+  test("only the shelves fold, and which ones depends on the layout", () => {
+    expect(shelvesOf("shelf").every((id) => isShelf(id, "shelf"))).toBe(true);
+    expect(isShelf("working", "top")).toBe(false);
+    expect(isShelf("working", "shelf")).toBe(true);
+    expect(isShelf("pinned", "shelf")).toBe(false);
+    expect(isShelf("needs", "top")).toBe(false);
+    expect(isShelf("threads", "top")).toBe(false);
+    expect(isShelf("project:/code/app", "top")).toBe(false);
   });
 });
 
@@ -312,13 +332,14 @@ describe("which section a thread is drawn under", () => {
     needs: false,
     working: false,
     fresh: false,
-    showWorking: true,
-    byProject: false,
+    layout: "top",
   };
   const place = (over: Partial<Placement>) => placeThread({ ...base, ...over });
 
-  test("Pinned and Active lead, the shelves follow at the foot", () => {
-    expect(SECTION_ORDER).toEqual(["pinned", "threads", "working", "snoozed", "settled"]);
+  test("the default layout leads with Working, then Pinned, Needs you and Active", () => {
+    expect(sectionsOf("top")).toEqual(["working", "pinned", "needs", "threads", "snoozed", "settled"]);
+    // The layout before it keeps Working as a shelf at the foot, between Active and Snoozed.
+    expect(sectionsOf("shelf")).toEqual(["pinned", "threads", "working", "snoozed", "settled"]);
   });
 
   test("an idle thread is Active, a pinned one Pinned", () => {
@@ -328,6 +349,7 @@ describe("which section a thread is drawn under", () => {
 
   test("a pinned thread that works stays Pinned, never under Working", () => {
     expect(place({ pinned: true, working: true })).toBe("pinned");
+    expect(place({ pinned: true, working: true, layout: "shelf" })).toBe("pinned");
   });
 
   test("a settled thread is never under Pinned", () => {
@@ -337,33 +359,146 @@ describe("which section a thread is drawn under", () => {
     expect(place({ pinned: true, settled: true, working: true })).toBe("pinned");
   });
 
-  test("running threads go under Working, unless it is off or the list is grouped by project", () => {
+  test("running threads go under Working, in either layout, and above Pinned in the default one", () => {
     expect(place({ working: true })).toBe("working");
-    expect(place({ working: true, showWorking: false })).toBe("threads");
-    expect(place({ working: true, byProject: true })).toBe("threads");
+    expect(place({ working: true, layout: "shelf" })).toBe("working");
+  });
+
+  test("an approval or a question moves the thread into Needs you, at once", () => {
+    expect(place({ needs: true })).toBe("needs");
+    expect(place({ needs: true, working: true })).toBe("needs");
+    expect(place({ needs: true, aged: true })).toBe("needs");
+    expect(place({ needs: true, snoozed: true })).toBe("needs");
+    expect(place({ needs: true, settled: true, fresh: true })).toBe("needs");
   });
 
   test("a snoozed thread sleeps until it needs you or works", () => {
     expect(place({ snoozed: true })).toBe("snoozed");
-    expect(place({ snoozed: true, needs: true })).toBe("threads");
+    expect(place({ snoozed: true, needs: true })).toBe("needs");
     expect(place({ snoozed: true, working: true })).toBe("working");
   });
 
   test("a thread untouched for days is Settled, a freshly finished one is not", () => {
     expect(place({ aged: true })).toBe("settled");
     expect(place({ aged: true, fresh: true })).toBe("threads");
-    expect(place({ aged: true, needs: true })).toBe("threads");
+    expect(place({ aged: true, needs: true })).toBe("needs");
   });
 
-  test("every section id a thread can be placed in is one the list draws", () => {
-    const placed = [
-      place({}),
-      place({ pinned: true }),
-      place({ working: true }),
-      place({ snoozed: true }),
-      place({ settled: true }),
-    ];
-    for (const id of placed) expect(SECTION_ORDER).toContain(id);
+  test("every section id a thread can be placed in is one the layout draws", () => {
+    // Every combination of the flags, in both layouts: nothing can be placed where nothing is drawn.
+    for (const layout of ["top", "shelf"] as const) {
+      for (const pinned of [false, true])
+        for (const settled of [false, true])
+          for (const aged of [false, true])
+            for (const snoozed of [false, true])
+              for (const needs of [false, true])
+                for (const working of [false, true])
+                  for (const fresh of [false, true]) {
+                    const id = place({ pinned, settled, aged, snoozed, needs, working, fresh, layout });
+                    expect(sectionsOf(layout)).toContain(id);
+                  }
+    }
+  });
+
+  test("the shelf layout draws no Needs you section: the chip is the whole of it", () => {
+    expect(sectionsOf("shelf")).not.toContain("needs");
+    // So a thread that asks you something stays in Active there: it is never placed where nothing
+    // is drawn.
+    expect(place({ needs: true, layout: "shelf" })).toBe("threads");
+    expect(place({ needs: true, snoozed: true, layout: "shelf" })).toBe("threads");
+  });
+});
+
+describe("the order a section keeps", () => {
+  type Row = { id: string; at: OrderKey };
+  const rows = (list: [string, OrderKey][]): Row[] => list.map(([id, at]) => ({ id, at }));
+  const ids = (list: Row[]) => list.map((r) => r.id);
+  const order = (section: Parameters<typeof sortSection>[0], list: Row[]) =>
+    ids(sortSection(section, list, (r) => r.at));
+
+  test("Working puts the thread the user last sent work to first", () => {
+    const list = rows([
+      ["older", { backAt: 10, sentAt: 100 }],
+      ["newest", { backAt: 20, sentAt: 300 }],
+      ["middle", { backAt: 30, sentAt: 200 }],
+    ]);
+    expect(order("working", list)).toEqual(["newest", "middle", "older"]);
+  });
+
+  test("a working thread with no turn of its own falls back to when it last moved", () => {
+    const list = rows([
+      ["waiting", { backAt: 50 }],
+      ["sent", { backAt: 10, sentAt: 40 }],
+    ]);
+    expect(order("working", list)).toEqual(["waiting", "sent"]);
+  });
+
+  test("Needs you puts the request that has waited longest first", () => {
+    const list = rows([
+      ["recent", { backAt: 10, askedAt: 900 }],
+      ["oldest", { backAt: 20, askedAt: 100 }],
+      ["middle", { backAt: 30, askedAt: 500 }],
+    ]);
+    expect(order("needs", list)).toEqual(["oldest", "middle", "recent"]);
+  });
+
+  test("a request with no recorded arrival reads by how recently it moved", () => {
+    const list = rows([
+      ["quiet", { backAt: 10 }],
+      ["asking", { backAt: 20, askedAt: 5 }],
+      ["fresh", { backAt: 30 }],
+    ]);
+    expect(order("needs", list)).toEqual(["asking", "quiet", "fresh"]);
+  });
+
+  test("Active is the last one back first, with what came back unseen above it all", () => {
+    const list = rows([
+      ["read-hours-ago", { backAt: 100 }],
+      ["unseen-yesterday", { backAt: 50, unseen: true }],
+      ["read-newest", { backAt: 300 }],
+      ["unseen-just-now", { backAt: 400, unseen: true }],
+    ]);
+    expect(order("threads", list)).toEqual([
+      "unseen-just-now",
+      "unseen-yesterday",
+      "read-newest",
+      "read-hours-ago",
+    ]);
+  });
+
+  test("Pinned follows the pin order and Snoozed the soonest wake, unmarked rows last", () => {
+    const pins = rows([
+      ["third", { backAt: 1, pinRank: 2 }],
+      ["first", { backAt: 2, pinRank: 0 }],
+      ["unpinned", { backAt: 3 }],
+      ["second", { backAt: 4, pinRank: 1 }],
+    ]);
+    expect(order("pinned", pins)).toEqual(["first", "second", "third", "unpinned"]);
+    const sleeps = rows([
+      ["tomorrow", { backAt: 1, wakeAt: 90 }],
+      ["an-hour", { backAt: 2, wakeAt: 10 }],
+      ["no-wake", { backAt: 3 }],
+    ]);
+    expect(order("snoozed", sleeps)).toEqual(["an-hour", "tomorrow", "no-wake"]);
+  });
+
+  test("Settled keeps the order the engine gave it", () => {
+    const list = rows([
+      ["old", { backAt: 1 }],
+      ["new", { backAt: 900 }],
+      ["middle", { backAt: 5 }],
+    ]);
+    expect(order("settled", list)).toEqual(["old", "new", "middle"]);
+  });
+
+  test("the order is the rows' own, and a fresh array every time", () => {
+    const list = rows([
+      ["a", { backAt: 2 }],
+      ["b", { backAt: 1 }],
+    ]);
+    const sorted = sortSection("threads", list, (r) => r.at);
+    expect(sorted).toEqual([list[0]!, list[1]!]);
+    expect(sorted).not.toBe(list);
   });
 });
 

@@ -169,8 +169,8 @@ describe("the actions the sidebar's buttons and filter left for ⌘K", () => {
       .find((a) => a.id === "sidebar-group")
       ?.run();
     expect(readPref(PREF.groupByProject, false)).toBe(true);
-    // Folders already separate the work: the Working option is off while grouped.
-    expect(sidebarActions().find((a) => a.id === "sidebar-working")?.disabled).toBeDefined();
+    // The Working section stays available while grouped: it draws above the folders.
+    expect(sidebarActions().find((a) => a.id === "sidebar-working")?.disabled).toBeUndefined();
     sidebarActions()
       .find((a) => a.id === "sidebar-group")
       ?.run();

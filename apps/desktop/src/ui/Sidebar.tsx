@@ -87,6 +87,7 @@ import {
   keepListed,
   listedPicks,
   nextRow,
+  type OrderKey,
   type OrderRow,
   type OrderSection,
   opensRowMenu,
@@ -96,11 +97,13 @@ import {
   rangeRows,
   rowKeyAction,
   rowStatus,
-  SECTION_ORDER,
   type SectionId,
   type ShelfId,
+  type SidebarLayout,
+  sectionsOf,
   shelfKey,
   shelfOpen,
+  sortSection,
   threadDiff,
   titleFirstTrailing,
   visibleRows,
@@ -140,7 +143,7 @@ import {
 } from "../state/store";
 import { formatClock, idleSettled, shortAge } from "../state/thread";
 import { openChain, parentOf as parentOfThread, type SubRow, topLevel } from "../state/topLevel";
-import { useWaiting, waitingLabel, waitingTitle } from "../state/waiting";
+import { useWaiting, useWaitingIds, waitingLabel, waitingTitle } from "../state/waiting";
 import { AgentStack } from "./AgentStack";
 import { CustomSnooze } from "./CustomSnooze";
 import { HarnessIcon } from "./HarnessIcon";
@@ -435,6 +438,7 @@ const CHIP_TINT: Record<RowStatusKind, string> = {
   working: "bg-accent/12 text-accent",
   waiting: "bg-fill-subtle text-fg-muted",
   failed: "bg-danger/12 text-danger",
+  completed: "bg-success/12 text-success",
   review: "bg-accent/16 text-accent",
 };
 
@@ -465,6 +469,8 @@ function RowStatusChip({ status, startedAt }: { status: RowStatus; startedAt?: n
         )
       ) : kind === "failed" ? (
         <CircleAlert size={10} />
+      ) : kind === "completed" ? (
+        <Check size={10} />
       ) : kind === "review" ? (
         <Eye size={10} />
       ) : null}
@@ -834,10 +840,20 @@ const ThreadRow = memo(function ThreadRow({
                           <span
                             className={cx(
                               "flex items-center gap-1",
-                              chip.kind === "failed" ? "text-danger" : "text-accent",
+                              chip.kind === "failed"
+                                ? "text-danger"
+                                : chip.kind === "completed"
+                                  ? "text-success"
+                                  : "text-accent",
                             )}
                           >
-                            {chip.kind === "failed" ? <CircleAlert size={11} /> : <Eye size={11} />}
+                            {chip.kind === "failed" ? (
+                              <CircleAlert size={11} />
+                            ) : chip.kind === "completed" ? (
+                              <Check size={11} />
+                            ) : (
+                              <Eye size={11} />
+                            )}
                             {chip.label}
                           </span>
                         )
@@ -1141,11 +1157,12 @@ function useNow() {
   return now;
 }
 
-/** Pinned and Active are the list itself; the shelves have a header that folds them. */
+/** The list's sections by name: Working leads the default layout, and the shelves close it. */
 const LABELS: Record<SectionId, string> = {
-  pinned: "Pinned",
-  threads: "Active",
   working: "Working",
+  pinned: "Pinned",
+  needs: "Needs you",
+  threads: "Active",
   snoozed: "Snoozed",
   settled: "Settled",
 };
@@ -1408,8 +1425,34 @@ export function Sidebar() {
       .map((t) => (t.permissions.length ? `${t.id}:n` : t.running ? `${t.id}:w` : ""))
       .join(" "),
   );
+  // When each request reached the app and each running turn started, as one string for the same
+  // reason: the Needs you and Working sections order by them (state/sidebarRows.ts `sortSection`).
+  const clocked = useApp((s) =>
+    Object.values(s.threads)
+      .flatMap((t) => {
+        const asked = t.permissions[0]?.at;
+        const sent = t.turnStartedAt;
+        return asked === undefined && sent === undefined ? [] : [`${t.id}:${asked ?? ""}:${sent ?? ""}`];
+      })
+      .join(" "),
+  );
+  const timings = useMemo(() => {
+    const askedAt = new Map<string, number>();
+    const sentAt = new Map<string, number>();
+    for (const row of clocked.split(" ")) {
+      if (!row) continue;
+      // A thread id never holds a colon: the two times follow the first one.
+      const at = row.indexOf(":");
+      const id = at < 0 ? row : row.slice(0, at);
+      const [asked, sent] = row.slice(at + 1).split(":");
+      if (asked) askedAt.set(id, Number(asked));
+      if (sent) sentAt.set(id, Number(sent));
+    }
+    return { askedAt, sentAt };
+  }, [clocked]);
   const marks = useApp((s) => s.statusMarks ?? NO_MARKS);
   const finished = useApp((s) => s.finished);
+  const failed = useApp((s) => s.failed);
   const projectCwd = useApp((s) => s.projectCwd);
   const hidden = useApp((s) => s.sidebarHidden);
   const shortcuts = useApp((s) => s.shortcuts);
@@ -1427,7 +1470,10 @@ export function Sidebar() {
   // By state, with the project on each row; grouping by project is an option.
   // The view options are changed from ⌘K (ui/CommandPalette.tsx), so they are shared, not local.
   const [byProject] = usePref(PREF.groupByProject, false);
+  // Working leads the list, or folds into the shelf at its foot with the preference off: the layout
+  // the sidebar had before it put running work first (state/sidebarRows.ts `SidebarLayout`).
   const [showWorking] = usePref(PREF.workingSection, true);
+  const layoutMode: SidebarLayout = showWorking ? "top" : "shelf";
   const snoozed = useApp((s) => s.snoozed);
   useEffect(() => {
     wakeSnoozed();
@@ -1482,6 +1528,9 @@ export function Sidebar() {
       ),
     [sessions, onlyProject, projectCwd],
   );
+  // The threads waiting on work they handed out, though no turn of theirs runs: the Working section
+  // holds them beside the ones running (state/waiting.ts).
+  const waiting = useWaitingIds(useMemo(() => filtered.map((s) => s.id), [filtered]));
 
   const links = useApp((s) => s.links.links);
   const messaged = useApp((s) => s.messaged);
@@ -1580,10 +1629,14 @@ export function Sidebar() {
   const sections = useMemo(() => {
     const flagged = new Set(flags.split(" "));
     const isFresh = (id: string) => !!finished[id];
+    // A thread that waits on work it handed out is drawn with the ones that run, so it is not lost
+    // among the idle rows. The shelf layout keeps today's list, where it stays in Active.
+    const works = (id: string) => flagged.has(`${id}:w`) || (layoutMode === "top" && waiting.has(id));
     const placed: Record<SectionId, SessionSummary[]> = {
-      pinned: [],
-      threads: [],
       working: [],
+      pinned: [],
+      needs: [],
+      threads: [],
       snoozed: [],
       settled: [],
     };
@@ -1609,21 +1662,30 @@ export function Sidebar() {
           aged: status !== "review" && idleSettled(s.updatedAt, now),
           snoozed: !!snoozed[s.id],
           needs: flagged.has(`${s.id}:n`),
-          working: flagged.has(`${s.id}:w`),
+          working: works(s.id),
           fresh: isFresh(s.id),
-          showWorking,
-          byProject,
+          layout: layoutMode,
         })
       ].push(s);
     }
-    const { pinned: pins, threads: active, snoozed: sleeping } = placed;
-    pins.sort((a, b) => pinned.indexOf(a.id) - pinned.indexOf(b.id));
+    const { threads: active } = placed;
     if (pendingRow) active.unshift(pendingRow);
-    // The order the user arranged, per section (state/sidebarOrder.ts): a row that was dragged or
-    // ⌥↑/↓'d is drawn where it was put, and a section never arranges itself as turns stream. What
-    // the user never arranged keeps the order the section gave it.
+    // What a slot in the list reads of one thread when the user has not arranged it: the marks the
+    // app already keeps, never a running clock, so no section reorders as a turn streams.
+    const pinAt = new Map(pinned.map((id, at) => [id, at] as const));
+    const keyOf = (s: SessionSummary): OrderKey => ({
+      sentAt: timings.sentAt.get(s.id) ?? s.updatedAt,
+      askedAt: timings.askedAt.get(s.id),
+      backAt: Math.max(s.updatedAt ?? 0, finished[s.id] ?? 0, failed[s.id] ?? 0),
+      unseen: !!(finished[s.id] || failed[s.id]),
+      pinRank: pinAt.get(s.id),
+      wakeAt: snoozed[s.id],
+    });
+    // The order the user arranged comes over the section's own (state/sidebarOrder.ts): a row that
+    // was dragged or ⌥↑/↓'d is drawn where it was put, and the rows nobody arranged keep the order
+    // their section gives them (state/sidebarRows.ts `sortSection`).
     const arranged = (id: SectionId, items: SessionSummary[], project?: string) =>
-      applyOrder(items, layout[sectionOrderKey(id, project)]);
+      applyOrder(sortSection(id, items, keyOf), layout[sectionOrderKey(id, project)]);
     // The active threads by project: a worktree thread belongs to its repository.
     const byKey = new Map<string, SessionSummary[]>();
     for (const s of active) {
@@ -1642,9 +1704,9 @@ export function Sidebar() {
     for (const project of projects ?? []) {
       project.items = arranged("threads", project.items, project.key);
     }
-    sleeping.sort((a, b) => (snoozed[a.id] ?? 0) - (snoozed[b.id] ?? 0));
-    // Pinned and Active lead; the Working, Snoozed and Settled shelves follow at the foot.
-    const all: Section[] = SECTION_ORDER.map((id) => ({
+    // The sections this layout draws, in its order: Working, Pinned, Needs you and Active lead, and
+    // the shelves close the list (state/sidebarRows.ts `sectionsOf`).
+    const all: Section[] = sectionsOf(layoutMode).map((id) => ({
       id,
       label: LABELS[id],
       items: arranged(id, placed[id]),
@@ -1653,7 +1715,7 @@ export function Sidebar() {
     for (const g of all) {
       g.hidden = g.items.some((x) => flagged.has(`${x.id}:n`))
         ? "needs"
-        : g.items.some((x) => flagged.has(`${x.id}:w`))
+        : g.items.some((x) => works(x.id))
           ? "working"
           : g.items.some((x) => isFresh(x.id))
             ? "finished"
@@ -1663,14 +1725,17 @@ export function Sidebar() {
   }, [
     filtered,
     flags,
+    waiting,
+    timings,
     marks,
     finished,
+    failed,
     pinned,
     parentOf,
     byProject,
     now,
     snoozed,
-    showWorking,
+    layoutMode,
     pending,
     onlyProject,
     projectCwd,
@@ -1679,9 +1744,10 @@ export function Sidebar() {
   ]);
 
   const settledSection = sections.find((g) => g.id === "settled");
-  // The first shelf starts the foot of the list; Pinned and Active are labelled once both are there.
-  const firstShelf = sections.find((g) => isShelf(g.id))?.id;
-  const labelled = sections.filter((g) => !isShelf(g.id)).length > 1;
+  // The first shelf starts the foot of the list; the sections above it are labelled once there is
+  // more than one of them.
+  const firstShelf = sections.find((g) => isShelf(g.id, layoutMode))?.id;
+  const labelled = sections.filter((g) => !isShelf(g.id, layoutMode)).length > 1;
   // The open delegate's parent may have been settled: the shelf opens for it and its slice of the
   // shelf grows to hold the row, so the row it hangs under is reachable rather than out of sight.
   const settledAt = settledSection
@@ -1691,14 +1757,14 @@ export function Sidebar() {
       )
     : -1;
   const settledForChain = settledAt >= 0;
-  // Every shelf folds on its own header, and the choice is kept per shelf. Pinned and Active are
-  // the list itself and never fold; a project's folder (group by project) folds with `folded`.
+  // Every shelf folds on its own header, and the choice is kept per shelf. The sections above them
+  // are the list itself and never fold; a project's folder (group by project) folds with `folded`.
   const shelfIsOpen: Record<ShelfId, boolean> = {
     working: shelfOpen("working", workingStored),
     snoozed: shelfOpen("snoozed", snoozedStored),
     settled: shelfOpen("settled", settledStored, { forced: settledForChain }),
   };
-  const isOpen = (id: string) => (isShelf(id) ? shelfIsOpen[id] : !folded.includes(id));
+  const isOpen = (id: string) => (isShelf(id, layoutMode) ? shelfIsOpen[id] : !folded.includes(id));
   const toggle = (id: string) => {
     if (id === "working") setWorkingStored(!isOpen(id));
     else if (id === "snoozed") setSnoozedStored(!isOpen(id));
@@ -1851,7 +1917,7 @@ export function Sidebar() {
           }
         : {
             id: section.id,
-            shut: isShelf(section.id) && shelfShut[section.id],
+            shut: isShelf(section.id, layoutMode) && shelfShut[section.id],
             rows: toOrder(section.items),
             limit: section.id === "settled" ? settledLimit : undefined,
           },
@@ -1866,6 +1932,7 @@ export function Sidebar() {
     snoozedOpen,
     settledShelfOpen,
     subOf,
+    layoutMode,
   ]);
   const orderIds = useMemo(() => visibleRows(order), [order]);
 
@@ -2169,7 +2236,7 @@ export function Sidebar() {
           <div className="flex min-h-full flex-col">
             {sections.map((section) => {
               const open = isOpen(section.id);
-              const shelf = isShelf(section.id);
+              const shelf = isShelf(section.id, layoutMode);
               return (
                 <Fragment key={section.id}>
                   {/* The shelves sit at the foot, under one hairline, apart from Pinned and Active. */}

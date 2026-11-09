@@ -591,34 +591,45 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   action), not to repeat what the screen already shows (no pin, archive,
   theme, harness-switch or steering notice); an error about a thread's turn
   stays an error card over the composer. No banners.
-- **Sidebar sections:** Pinned and Active lead the list, each with a quiet
-  label once both are there; the Working, Snoozed and Settled shelves follow
-  at the foot, under one hairline, each a one-line header with its count and a
-  chevron that folds it. Every shelf folds on its own and the choice is kept
-  per shelf (`rustcode.sidebar.<shelf>Open`; Working open by default, Snoozed
-  and Settled shut); a shut shelf still shows its count and the dot for a
-  thread that needs you or works. Working holds the threads running now (off
-  from ⌘K, or when grouping by project). A settled thread never sits under
-  Pinned. The sidebar has no search field or filter menu, and none of the
-  buttons it used to carry past the toggle in its toolbar: no Add project or
-  New thread row above the list, no Settings, Pull requests or Usage row at
-  its foot. Threads are found with ⌘K, which also holds the view options
-  (group by project, the Working shelf, one project), New thread, Add project
-  folder, Open Settings, Open Git, Open Usage and Statistics, each with the
-  shortcut it has. A snoozed row shows when it wakes where the age goes.
-  Snooze (presets, or Custom…) is a submenu of the row's menu; a thread comes
-  back on time, marked unread, or sooner when it needs you, works or is messaged.
-  Section and project headers are one 28px line of quiet 12px type (`text-sub`
-  in `fg-muted`): the label, a dot for what a folded group hides, a count only
-  while it is folded, then the chevron.
+- **Sidebar sections:** Working leads the list, always open; then Pinned,
+  Needs you and Active, each with a quiet label once there is more than one of
+  them; then the Snoozed and Settled shelves at the foot, under one hairline,
+  each a one-line header with its count and a chevron that folds it. Every
+  shelf folds on its own and the choice is kept per shelf
+  (`rustcode.sidebar.<shelf>Open`; Snoozed and Settled shut by default); a shut
+  shelf still shows its count and the dot for a thread that needs you or
+  works. Working holds the threads running now and the threads waiting on work
+  they handed out, the one the user last sent work to first; Needs you holds
+  what waits on an approval or an answer, longest wait first, and neither of
+  them folds. Active is the rest of the live threads, the one that last came
+  back to the user first, unseen completions and failures above the rest. A
+  section sorts from marks the app already keeps, so it never reorders as
+  turns stream, and a row the user dragged keeps its place. Turning Working at
+  the top off (⌘K, `rustcode.sidebar.workingSection`) gives back the layout
+  before it: Pinned and Active lead, Working folds into the foot shelf with
+  Snoozed and Settled. A settled thread never sits under Pinned, and a pinned
+  thread that works or needs you stays in Pinned and says so in its chip,
+  never drawn twice. The sidebar has no search field or filter menu, and none
+  of the buttons it used to carry past the toggle in its toolbar: no Add
+  project or New thread row above the list, no Settings, Pull requests or
+  Usage row at its foot. Threads are found with ⌘K, which also holds the view
+  options (group by project, Working at the top, one project), New thread, Add
+  project folder, Open Settings, Open Git, Open Usage and Statistics, each
+  with the shortcut it has. A snoozed row shows when it wakes where the age
+  goes. Snooze (presets, or Custom…) is a submenu of the row's menu; a thread
+  comes back on time, marked unread, or sooner when it needs you, works or is
+  messaged. Section and project headers are one 28px line of quiet 12px type
+  (`text-sub` in `fg-muted`): the label, a dot for what a folded group hides,
+  a count only while it is folded, then the chevron.
 - **Sidebar rows:** one 32px line. A 14px `ProjectMark`, the title, and one
   80px trailing slot on the right. The project's name is not repeated on a row:
   the mark carries it, and the hover card and the project's heading spell it
   out. A row under a project's heading drops the mark, so its title lines up
   under the folder's name. The slot holds one thing, by `rowStatus` — what it
   needs of you, the running turn's spinner and clock, that it waits on work it
-  handed out, a failure, a review, the time a snoozed thread wakes, else its age
-  (`5m`, `3h`) — never two, and never a second spinner. A thread with a worktree
+  handed out, a failure, a completion you have not opened, a review, the time a
+  snoozed thread wakes, else its age (`5m`, `3h`) — never two, and never a
+  second spinner. A thread with a worktree
   branch, a diff, a pull request or a stack of delegates adds one quiet second
   line (`text-sub`, 48px row): the branch in `font-mono`, `+N −N` in
   `success`/`danger`, the pull request's mark, and the stack or the harness mark
