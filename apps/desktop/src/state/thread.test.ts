@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseSessionUpdate, type SessionUpdate } from "../acp/types";
+import { sentMessages } from "./compose";
 import type { Link } from "./orchestration";
 import {
   agentStepLabel,
@@ -38,6 +39,7 @@ import {
   waitingOn,
   wakeLine,
   wakeTurn,
+  withContinueMark,
   withWakeMark,
   workingLabel,
 } from "./thread";
@@ -1224,6 +1226,22 @@ describe("wake turns and the queue they hold", () => {
       kind: "user",
       wake: undefined,
     });
+  });
+
+  test("the app's own continue after a compaction replays as a divider, never a user message", () => {
+    // The engine keeps the text, not the app's flag, so the prompt marks itself
+    // (state/thread.ts `CONTINUE_MARK`).
+    const text = withContinueMark("Continued after compaction\n\nContinue the task where you left off.");
+    const replayed = apply([{ kind: "user", text }]).items[0];
+    expect(replayed?.kind === "user" && replayed.continued).toBe(true);
+    // What the transcript shows is its first line.
+    expect(wakeLine(text)).toBe("Continued after compaction");
+    // The text is not the user's to recall or retry.
+    expect(sentMessages([{ kind: "user", text, continued: true }])).toEqual([]);
+    // And it starts a turn like any other, with the thread working again.
+    const started = beginTurn(emptyThread("s", "/p"), text);
+    expect(started.running).toBe(true);
+    expect(started.items.at(-1)).toMatchObject({ kind: "user", continued: true });
   });
 
   test("a turn that completed runs the queue on; a stopped or failed one holds it", () => {

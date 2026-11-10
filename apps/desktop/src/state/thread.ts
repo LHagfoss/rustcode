@@ -31,6 +31,11 @@ export type TranscriptItem =
       /** The app woke the thread for its children: a divider row, not a message the user typed. */
       wake?: boolean;
       /**
+       * The app carried the thread on after compacting it (`CONTINUE_MARK`): a divider row, not a
+       * message the user typed, and no text of it is theirs to recall.
+       */
+      continued?: boolean;
+      /**
        * Typed here and sent from the composer: its row flies out of the field on its first sighting
        * (`lib/sendFlight.ts`). A replayed item, a wake, a message from another thread or a view and
        * the one a thread was made for all leave it out, so they only rise in.
@@ -274,6 +279,19 @@ export const withWakeMark = (text: string) => `${text}\n\n${WAKE_MARK}`;
 /** Whether a watched marker is the wake message's. */
 export const isWakeMessage = (text: string) => text.includes(WAKE_MARK);
 
+/**
+ * The marker the continue-after-a-compaction prompt ends with. It is kept in the prompt's own text
+ * because the engine keeps the text a turn started with, not the app's flag: a thread reloaded
+ * after an automatic compaction still shows a divider, never a message that reads as the user's own.
+ */
+export const CONTINUE_MARK = "<!-- rustcode:continued -->";
+
+/** The prompt that carries the thread on after the app compacted it, marked as the app's own. */
+export const withContinueMark = (text: string) => `${text}\n\n${CONTINUE_MARK}`;
+
+/** Whether a message is the app continuing the thread after a compaction. */
+export const isContinueMessage = (text: string) => text.includes(CONTINUE_MARK);
+
 /** A wake message's first line: its compact summary ("2 delegates finished · 1 delegate asks"). */
 export const wakeLine = (text: string) => text.split("\n")[0] ?? text;
 
@@ -500,6 +518,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
           at: update.at,
           // A replay of history has no app flags: the message says itself whether it is a wake.
           wake: isWakeMessage(update.text) || undefined,
+          continued: isContinueMessage(update.text) || undefined,
         }),
       };
     }
@@ -704,6 +723,7 @@ export function beginTurn(
   fromView?: boolean,
   wake?: boolean,
   sent?: boolean,
+  continued?: boolean,
 ): ThreadState {
   const closed = closePendingTurn(state);
   return {
@@ -727,6 +747,7 @@ export function beginTurn(
         attachments: attachments?.length ? attachments : undefined,
         fromView: fromView || undefined,
         wake: wake || isWakeMessage(text) || undefined,
+        continued: continued || isContinueMessage(text) || undefined,
         sent: sent || undefined,
       },
     ],

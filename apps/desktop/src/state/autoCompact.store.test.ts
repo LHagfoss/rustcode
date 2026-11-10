@@ -5,8 +5,9 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { MockTransport } from "../acp/mock";
 import type { SessionSummary, SessionUsage } from "../acp/types";
-import { emptyExtras } from "./compose";
+import { emptyExtras, sentMessages } from "./compose";
 import { foldTurns } from "./fold";
+import type { Link } from "./orchestration";
 import {
   cancel,
   clearFinished,
@@ -313,5 +314,72 @@ describe("quiet automatic compaction", () => {
     await running;
     expect(compactionRows(id)).toHaveLength(0);
     expect(useApp.getState().threads[id]!.running).toBe(false);
+  });
+});
+
+describe("carrying on after an automatic compaction", () => {
+  const link = (orchestrator: string, state: string): Link => ({
+    id: `${orchestrator}/1`,
+    orchestrator,
+    target: "delegate-1",
+    orchestratorTitle: "Parent",
+    targetTitle: "A delegate",
+    message: "do the work",
+    state: state as Link["state"],
+    createdAt: Date.now(),
+  });
+
+  const continuedRow = (id: string) =>
+    useApp.getState().threads[id]?.items.find((item) => item.kind === "user" && item.continued);
+
+  test("a thread its delegate is still working for carries on, as a divider", async () => {
+    const id = await openClaudeThread();
+    endedTurn(id, Date.now(), 30_000);
+    useApp.setState((s) => ({ links: { ...s.links, links: [...s.links.links, link(id, "working")] } }));
+
+    scheduleAutoCompact(id);
+    await until(() => continuedRow(id) !== undefined);
+    // The compaction still happened, and the turn after it is the thread's own work again.
+    expect(compacted(id)).toBe(true);
+    const row = continuedRow(id);
+    expect(row).toMatchObject({ continued: true });
+    expect(row?.kind === "user" ? row.text.split("\n")[0] : "").toBe("Continued after compaction");
+    // Never a message the user sent: ↑ in the composer does not recall it.
+    const recalled = sentMessages(useApp.getState().threads[id]!.items);
+    expect(recalled.some((text) => text.includes("Continued after compaction"))).toBe(false);
+    // A normal prompt asks the mock for approval; stopping ends the test's turn.
+    await cancel(id);
+    await settle(40);
+    expect(useApp.getState().threads[id]!.running).toBe(false);
+  });
+
+  test("a thread that finished everything it was doing stays stopped", async () => {
+    const id = await openClaudeThread();
+    endedTurn(id, Date.now(), 30_000);
+    useApp.setState((s) => ({ links: { ...s.links, links: [...s.links.links, link(id, "done")] } }));
+
+    scheduleAutoCompact(id);
+    await until(() => compacted(id));
+    await settle(80);
+    expect(continuedRow(id)).toBeUndefined();
+    expect(useApp.getState().threads[id]!.running).toBe(false);
+  });
+
+  test("a turn the user stopped is not carried on", async () => {
+    const id = await openClaudeThread();
+    endedTurn(id, Date.now(), 30_000);
+    // The stop the user made: the last real turn ended cancelled.
+    updateThread(id, (t) => ({
+      ...t,
+      items: t.items.map((item) =>
+        item.kind === "turnEnd" ? { ...item, outcome: "cancelled" as const } : item,
+      ),
+    }));
+    useApp.setState((s) => ({ links: { ...s.links, links: [...s.links.links, link(id, "working")] } }));
+
+    scheduleAutoCompact(id);
+    await until(() => compacted(id));
+    await settle(80);
+    expect(continuedRow(id)).toBeUndefined();
   });
 });

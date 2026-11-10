@@ -196,10 +196,12 @@ const DELIVERED = /^From thread “/;
  * app's own turn, a message another thread delivered is not the user's to recall, and one with no
  * text (attachments only) has nothing to put back in the field.
  */
-export function sentMessages(items: readonly { kind: string; text?: string; wake?: boolean }[]): string[] {
+export function sentMessages(
+  items: readonly { kind: string; text?: string; wake?: boolean; continued?: boolean }[],
+): string[] {
   const out: string[] = [];
   for (const item of items) {
-    if (item.kind !== "user" || item.wake) continue;
+    if (item.kind !== "user" || item.wake || item.continued) continue;
     const text = item.text;
     if (!text?.trim() || DELIVERED.test(text)) continue;
     out.push(text);
