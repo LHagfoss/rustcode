@@ -2,7 +2,7 @@
 // mono inline code on a quiet rounded fill, code blocks on the `code-bg` surface
 // with a Copy button and Xcode colours, tables and quotes on rounded-xs fills.
 
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, MessagesSquare } from "lucide-react";
 import {
   type ComponentProps,
   memo,
@@ -24,7 +24,7 @@ import { remarkMathAsCode, remarkMoneySafeMath } from "../lib/markdownMath";
 import { openExternal, openInEditor } from "../lib/native";
 import { advance, newRevealState, type RevealState, rehypeReveal } from "../lib/reveal";
 import { hasShell } from "../lib/shell";
-import { toast, useApp } from "../state/store";
+import { selectThread, toast, useApp } from "../state/store";
 import { LinkChip } from "./LinkChip";
 import { MarkdownImage, MermaidBlock } from "./MarkdownMedia";
 import { copyText, cx, Pill } from "./primitives";
@@ -213,6 +213,32 @@ const Formula = memo(function Formula({ tex, display }: { tex: string; display: 
 // in em of the text around them, so code in a heading keeps its proportion.
 const PILL = "rounded-full px-[0.5em] py-[0.2em]";
 
+/** A thread a message points at, as the composer writes it: `#[Title](rustcode://thread/<id>)`. */
+const THREAD_LINK = /^rustcode:\/\/thread\/([^/?#\s]+)$/;
+
+/**
+ * The chip a thread mention reads as in a sent message, and the way back to that thread: the name
+ * says which thread it is, the press opens it. The title is read from the app, so a thread renamed
+ * since the message was sent reads current; a thread that is gone keeps the name it was sent with.
+ */
+function ThreadChip({ id, label }: { id: string; label?: string }) {
+  const title = useApp((s) => s.sessions.find((session) => session.id === id)?.title) ?? label ?? "A thread";
+  return (
+    <button
+      type="button"
+      title={`Open “${title}”`}
+      onClick={() => selectThread(id)}
+      className={cx(
+        PILL,
+        "-mx-[0.5em] inline-flex max-w-full cursor-pointer items-center gap-1 bg-fill-strong align-baseline text-fg hover:bg-accent/12",
+      )}
+    >
+      <MessagesSquare size={11} className="shrink-0 text-fg-muted" />
+      <span className="truncate">{title}</span>
+    </button>
+  );
+}
+
 const components: Components = {
   // A heading takes more air above it than the blocks' own gap gives it, so it groups with
   // the text it heads rather than floating between two paragraphs.
@@ -250,9 +276,13 @@ const components: Components = {
       </li>
     );
   },
-  a: ({ href, children }) =>
+  a: ({ href, children }) => {
+    // A thread the message points at (`state/compose.ts` `mentionText`) opens that thread.
+    const thread = href ? THREAD_LINK.exec(href) : null;
+    if (thread?.[1])
+      return <ThreadChip id={thread[1]} label={typeof children === "string" ? children : undefined} />;
     // A bare link (autolinked, or `<url>`) reads as a chip; a link with its own words stays a link.
-    href && /^https?:\/\//i.test(href) && typeof children === "string" && children === href ? (
+    return href && /^https?:\/\//i.test(href) && typeof children === "string" && children === href ? (
       <LinkChip url={href} />
     ) : (
       <a
@@ -277,7 +307,8 @@ const components: Components = {
       >
         {href ? shortUrl(href, children) : children}
       </a>
-    ),
+    );
+  },
   blockquote: ({ children }) => (
     <blockquote className="relative rounded-md bg-fill-subtle py-2 pr-3 pl-[21px] text-fg/80 before:absolute before:top-2 before:bottom-2 before:left-2 before:w-[3px] before:rounded-full before:bg-fg-muted/45">
       {children}
@@ -359,6 +390,8 @@ const plugins = [remarkGfm, remarkMoneySafeMath, remarkMathAsCode];
 /** react-markdown's safe URLs, plus `file://` and `data:image/` for pictures (MarkdownMedia.tsx checks them). */
 export function urlTransform(url: string, key: string): string {
   if (key === "src" && /^(file:\/\/|data:image\/)/i.test(url)) return url;
+  // A thread mention is the app's own link: it opens a thread, never a page.
+  if (THREAD_LINK.test(url)) return url;
   return defaultUrlTransform(url);
 }
 

@@ -36,9 +36,9 @@ import {
   SquareTerminal,
   X,
 } from "lucide-react";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { projectName, type SlashCommand } from "../acp/types";
+import { modelName, projectName, type SlashCommand } from "../acp/types";
 import { suggestBranch, validBranch } from "../acp/v2";
 import { FIELD_FADE, type FieldFade, fieldFade } from "../lib/fade";
 import { measuredFieldHeight } from "../lib/fieldHeight";
@@ -60,24 +60,33 @@ import { isLongPaste, pastedImages } from "../lib/paste";
 import { observeSize } from "../lib/resize";
 import { fadeClearedField } from "../lib/sendFlight";
 import {
+  type AgentChoice,
   type Attachment,
   type ComposeExtras,
   commandSuggestions,
   emptyExtras,
   hasExtras,
+  hashToken,
   hasTokens,
   IMAGE_TYPES,
   imageMime,
   insertCommand,
+  insertMention,
   MAX_IMAGE_BYTES,
   MAX_INLINE_FILE_BYTES,
+  type Mention,
+  type MentionState,
+  rankAgents,
+  rankThreads,
   sentMessages,
   slashToken,
   splitTokens,
+  type ThreadChoice,
   trackPastes,
 } from "../state/compose";
+import { agentStateOf, type DelegateNode, delegateTree } from "../state/delegates";
 import { atToken, insertRef, rankFiles } from "../state/fileRefs";
-import { controlDisabledReason } from "../state/harness";
+import { controlDisabledReason, orderHarnesses, unavailableReason } from "../state/harness";
 import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
 import {
   acceptsImages,
@@ -107,9 +116,10 @@ import {
   toast,
   useApp,
 } from "../state/store";
-import { localId, type ThreadState } from "../state/thread";
+import { localId, shortAge, type ThreadState } from "../state/thread";
 import { UsageMeter } from "./ComposerUsage";
 import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
+import { HarnessIcon } from "./HarnessIcon";
 import { openLightbox } from "./Lightbox";
 import { LinkChip } from "./LinkChip";
 import { ModelPicker } from "./ModelPicker";
@@ -234,6 +244,65 @@ const NO_FILES: string[] = [];
 /** How long a project's file list is used before `@` lists it again. */
 const FILES_FRESH_MS = 30_000;
 
+/** A row of the composer's drawer: a command, a thread, a harness, or a file. */
+type DrawerEntry =
+  | { kind: "command"; command: SlashCommand }
+  | { kind: "file"; path: string }
+  | { kind: "harness"; agent: AgentChoice }
+  | { kind: "thread"; thread: ThreadChoice };
+
+interface DrawerGroup {
+  label: string;
+  entries: DrawerEntry[];
+  /** What a group says when it has nothing: the `@` drawer's files keep their place while it is typed. */
+  empty?: string;
+}
+
+/** A row of the drawer as it is drawn: a heading, a bound row, or what an empty group says. */
+type DrawerRowItem =
+  | { kind: "heading"; label: string }
+  | { kind: "row"; entry: DrawerEntry; index: number }
+  | { kind: "empty"; text: string };
+
+/** The folder a thread is grouped by: a worktree's repo, else the thread's own folder. */
+const projectKeyOf = (session: { cwd?: string; repo?: string; worktree?: { repo?: string } }) =>
+  session.worktree?.repo || session.repo || session.cwd || "";
+
+/** What a thread's state says last in its row, in the sidebar's own words and tones. */
+const MENTION_WORD: Record<MentionState, string> = {
+  needs: "Needs you",
+  working: "Working",
+  open: "",
+  settled: "Done",
+};
+const MENTION_TINT: Record<MentionState, string> = {
+  needs: "text-warning",
+  working: "text-accent",
+  open: "",
+  settled: "text-fg-muted",
+};
+
+// The drawer's row, shared by all four kinds: one line, the mark first, what it is last.
+const DRAWER_ROW = "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left";
+const DRAWER_NAME = "min-w-[96px] max-w-[45%] shrink-0 truncate font-medium text-fg text-sub";
+
+/** `text` with the letters the query matched marked, as the folder picker marks a folder's name. */
+function Marked({ text, query }: { text: string; query: string }) {
+  return (
+    <>
+      {matchSpans(text, query).map((span, i) =>
+        span.hit ? (
+          <mark key={i} className="rounded-xs bg-fill-strong text-fg">
+            {span.text}
+          </mark>
+        ) : (
+          <Fragment key={i}>{span.text}</Fragment>
+        ),
+      )}
+    </>
+  );
+}
+
 export const Composer = memo(function Composer({
   thread,
   compact,
@@ -251,7 +320,7 @@ export const Composer = memo(function Composer({
   // This thread's own session list, or else the menu of its harness (the engine's catalog for a new thread).
   const commands = useApp(useShallow((s) => commandsFor(s, thread?.id ?? null)));
   const projectCwd = useApp((s) => s.projectCwd);
-  useApp((s) => s.harnesses); // re-render when harness capabilities arrive
+  const harnesses = useApp((s) => s.harnesses?.harnesses); // re-render when harness capabilities arrive
   const status = useApp((s) => s.status);
   const field = useRef<HTMLTextAreaElement>(null);
   // The field's own box (the mirror and the field): what fades when the message leaves it.
@@ -300,6 +369,150 @@ export const Composer = memo(function Composer({
     () => (query !== null && files?.cwd === cwdForFiles ? rankFiles(files.paths, query) : NO_FILES),
     [query, files, cwdForFiles],
   );
+  // `#`: the threads this message can point at. It opens like `/` and `@` do, and never inside a
+  // word, a heading or code (state/compose.ts `hashToken`).
+  const hash = dismissed === draft || slash || token ? null : hashToken(draft, caret);
+  const hashQuery = hash?.query ?? null;
+  const sessions = useApp((s) => s.sessions);
+  const links = useApp((s) => s.links);
+  const openId = thread?.id;
+  // The open thread's project: its own, or the folder a new thread will start in.
+  const home = useMemo(() => {
+    const open = openId ? sessions.find((s) => s.id === openId) : undefined;
+    return open ? projectKeyOf(open) : cwdForFiles;
+  }, [sessions, openId, cwdForFiles]);
+  // The threads that work or ask right now, as their rows say it: read as lists so a streamed chunk
+  // somewhere else does not redraw the composer.
+  const working = useApp(
+    useShallow((s) => Object.values(s.threads).flatMap((t) => (t.running ? [t.id] : []))),
+  );
+  const asking = useApp(
+    useShallow((s) => Object.values(s.threads).flatMap((t) => (t.permissions.length ? [t.id] : []))),
+  );
+  const threadChoices = useMemo(() => {
+    const workingIds = new Set(working);
+    const askingIds = new Set(asking);
+    return sessions.flatMap((session): ThreadChoice[] => {
+      const title = session.title?.trim();
+      // A thread cannot point at itself, and one with no name has nothing to match or to write.
+      if (!title || session.id === openId) return [];
+      const project = projectKeyOf(session);
+      return [
+        {
+          id: session.id,
+          title,
+          harness: session.harness,
+          project: project ? projectName(project) : undefined,
+          home: project === home || session.cwd === home,
+          state: askingIds.has(session.id)
+            ? "needs"
+            : workingIds.has(session.id)
+              ? "working"
+              : session.status === "done"
+                ? "settled"
+                : "open",
+          updatedAt: session.updatedAt,
+        },
+      ];
+    });
+  }, [sessions, openId, home, working, asking]);
+  // The threads this one started and still runs, at any depth: the tree the details panel draws.
+  const delegates = useMemo(() => {
+    if (!openId) return [];
+    const workingIds = new Set(working);
+    const askingIds = new Set(asking);
+    const found: ThreadChoice[] = [];
+    const walk = (nodes: readonly DelegateNode[]) => {
+      for (const node of nodes) {
+        const session = sessions.find((s) => s.id === node.id);
+        const title = session?.title?.trim();
+        // What the thread itself reports wins over the link's own record, as the details tree reads
+        // it (state/delegates.ts `agentStateOf`); the app's live turn, when it has one, first of all.
+        const activity = askingIds.has(node.id)
+          ? "needs_input"
+          : workingIds.has(node.id)
+            ? "running"
+            : session?.status;
+        const state = agentStateOf(node.link, activity);
+        if (session && title && (state === "working" || state === "needs")) {
+          found.push({
+            id: node.id,
+            title,
+            harness: session.harness,
+            state,
+            delegate: true,
+            home: true,
+            updatedAt: session.updatedAt,
+          });
+        }
+        walk(node.children);
+      }
+    };
+    walk(delegateTree(openId, links.links));
+    return found;
+  }, [openId, sessions, links, working, asking]);
+  // `@`: the harnesses an agent could hand the work to, and the model a new thread there starts on.
+  const agents = useMemo(
+    () =>
+      orderHarnesses(harnesses ?? [])
+        .filter((h) => !unavailableReason(h))
+        .map((h) => ({
+          harness: h.id,
+          name: h.name,
+          model: modelName(h.last?.model ?? undefined) ?? h.models[0]?.name,
+        })),
+    [harnesses],
+  );
+  const drawerGroups = useMemo((): DrawerGroup[] => {
+    if (slash) return [{ label: "", entries: list.map((command) => ({ kind: "command", command })) }];
+    if (hashQuery !== null) {
+      const found = rankThreads(threadChoices, hashQuery);
+      const home = found.filter((t) => t.home);
+      const others = found.filter((t) => !t.home);
+      return [
+        { label: "This project", entries: home.map((thread) => ({ kind: "thread", thread })) },
+        { label: "Other projects", entries: others.map((thread) => ({ kind: "thread", thread })) },
+      ];
+    }
+    if (query === null) return [];
+    // The agents go first: naming a harness is how the orchestrator is told who does the work.
+    return [
+      {
+        label: "Agents",
+        entries: [
+          ...rankAgents(query, agents).map((agent): DrawerEntry => ({ kind: "harness", agent })),
+          ...rankThreads(delegates, query).map((thread): DrawerEntry => ({ kind: "thread", thread })),
+        ],
+      },
+      {
+        label: "Files",
+        entries: fileList.map((path): DrawerEntry => ({ kind: "file", path })),
+        // The list is read once `@` opens it: until it lands there is nothing to say about the files.
+        empty: files?.cwd === cwdForFiles ? "No matching files or folders." : undefined,
+      },
+    ];
+  }, [slash, hashQuery, query, list, threadChoices, delegates, agents, fileList, files, cwdForFiles]);
+  // The drawer's rows, as drawn: a group's heading, then its rows, and in one bound list so the
+  // arrow keys walk the rows across the groups and never land on a heading.
+  const drawerRows = useMemo((): DrawerRowItem[] => {
+    const drawn = drawerGroups.filter((group) => group.entries.length || group.empty);
+    const labelled = drawn.length > 1;
+    const rows: DrawerRowItem[] = [];
+    let index = 0;
+    for (const group of drawn) {
+      if (labelled && group.label) rows.push({ kind: "heading", label: group.label });
+      if (!group.entries.length && group.empty) rows.push({ kind: "empty", text: group.empty });
+      for (const entry of group.entries) rows.push({ kind: "row", entry, index: index++ });
+    }
+    return rows;
+  }, [drawerGroups]);
+  const entries = useMemo(
+    () => drawerRows.flatMap((row) => (row.kind === "row" ? [row.entry] : [])),
+    [drawerRows],
+  );
+  // What the drawer is: `/`'s commands, `#`'s threads, or `@`'s agents and files.
+  const drawer = slash ? "commands" : hash ? "threads" : token ? "agents" : null;
+  const drawerQuery = hashQuery ?? query ?? "";
   const harness = threadHarness(thread);
   const harnessName = harness?.name ?? "This harness";
   // Who the message goes to: the thread's harness, or for a new thread the one it will start on.
@@ -317,8 +530,10 @@ export const Composer = memo(function Composer({
   const drawerRef = useRef<HTMLDivElement>(null);
   // Where the field is in what ↑/↓ walks (`sentMessages`), and the draft the walk started from.
   const history = useRef<{ draft: string; index: number } | null>(null);
-  // Anything the mirror has to draw: a URL, or a `@file` reference (state/compose.ts `splitTokens`).
-  const tokenized = useMemo(() => hasTokens(draft), [draft]);
+  // Anything the mirror has to draw: a URL, a `@file` reference, or a `#thread` mention
+  // (state/compose.ts `splitTokens`).
+  const mentions = extras.mentions;
+  const tokenized = useMemo(() => hasTokens(draft, mentions), [draft, mentions]);
   // Which edges of the scrolled field fade (lib/fade.ts); nothing to fade while the draft fits.
   const [fade, setFade] = useState<FieldFade>("none");
   // Carried by the field and the mirror alike: the mask (`.rc-field-fade`) takes its two depths.
@@ -388,7 +603,7 @@ export const Composer = memo(function Composer({
   }, [draft]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new suggestion list starts at the top
-  useEffect(() => setSelected(0), [list.length, fileList]);
+  useEffect(() => setSelected(0), [entries]);
 
   // A narrower window rewraps the draft, so the field can start or stop scrolling: measure again.
   // biome-ignore lint/correctness/useExhaustiveDependencies: the field and the mirror are refs
@@ -534,6 +749,40 @@ export const Composer = memo(function Composer({
     requestAnimationFrame(() => field.current?.setSelectionRange(next.caret, next.caret));
   };
 
+  const addMention = (mention: Mention) => {
+    // The token the drawer was opened by: `#` for a thread's own list, `@` for a harness — and a
+    // delegate can come from either, since `@` lists the threads this one runs.
+    const found = mention.kind === "thread" && hash ? hash : token;
+    if (!found) return;
+    const next = insertMention(draft, found, mention);
+    update(next.text);
+    // The id travels with the message, kept beside the text: two threads may share a title, and
+    // the draft's own words say only the title (state/compose.ts `Mention`).
+    change((e) => ({ ...e, mentions: [...(e.mentions ?? []), mention] }));
+    setCaret(next.caret);
+    requestAnimationFrame(() => field.current?.setSelectionRange(next.caret, next.caret));
+  };
+
+  // Accepting a row: `Enter` runs a command the app answers itself, as it always has; the arrows'
+  // own keys only ever write a token.
+  const accept = (entry: DrawerEntry, run: boolean) => {
+    switch (entry.kind) {
+      case "command":
+        complete(entry.command, run);
+        return;
+      case "file":
+        reference(entry.path);
+        return;
+      case "harness":
+        // The token is the harness's id, one word the agent can act on; the row said its full name.
+        addMention({ kind: "agent", harness: entry.agent.harness, name: entry.agent.harness });
+        return;
+      case "thread":
+        addMention({ kind: "thread", id: entry.thread.id, title: entry.thread.title });
+        return;
+    }
+  };
+
   const onChange = (text: string) => {
     // `/name ` typed out becomes the token too, as in the SwiftUI app.
     const typed = /^(\/\S+) (.*)$/s.exec(text);
@@ -582,41 +831,24 @@ export const Composer = memo(function Composer({
     // An IME's Enter (keyCode 229) belongs to the field: it commits a candidate. Taking it would
     // complete a command or send a draft that was still being written.
     if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
-    if (fileList.length) {
+    if (entries.length) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
-        setSelected((i) => (i + (e.key === "ArrowDown" ? 1 : fileList.length - 1)) % fileList.length);
+        setSelected((i) => (i + (e.key === "ArrowDown" ? 1 : entries.length - 1)) % entries.length);
         return;
       }
       if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !primaryModifier(e))) {
         e.preventDefault();
-        const path = fileList[selected];
-        if (path) reference(path);
-        return;
-      }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setDismissed(draft);
+        const entry = entries[selected] ?? entries[0];
+        if (entry) accept(entry, e.key === "Enter");
         return;
       }
     }
-    if (list.length) {
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        e.preventDefault();
-        setSelected((i) => (i + (e.key === "ArrowDown" ? 1 : list.length - 1)) % list.length);
-        return;
-      }
-      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !primaryModifier(e))) {
-        e.preventDefault();
-        const command = list[selected];
-        if (command) complete(command, e.key === "Enter");
-        return;
-      }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setDismissed(draft);
-        return;
-      }
+    // An open drawer takes the Escape even when nothing matches it: it is what the reader sees.
+    if (drawer && e.key === "Escape") {
+      e.preventDefault();
+      setDismissed(draft);
+      return;
     }
     const el = e.currentTarget;
     if (e.key === "Backspace" && el.selectionStart === 0 && el.selectionEnd === 0) {
@@ -729,9 +961,11 @@ export const Composer = memo(function Composer({
               : "⏎ queues it for the next turn…"
           : `Message ${speakingTo}…`;
 
-  // The drawer over the box: the commands `/` is looking for, or the files `@` is. A slash that
-  // matches nothing still opens it and says so, where the field is about to be typed in.
-  const drawer = slash ? "commands" : token && files?.cwd === cwdForFiles ? "files" : null;
+  // The drawer over the box: the commands `/` is looking for, the threads `#` is, or the agents and
+  // files `@` is. A token that matches nothing still opens it and says so, where the field is about
+  // to be typed in. It rises from the box's top edge, so it never covers the line being typed on.
+  const drawerLabel =
+    drawer === "commands" ? "Commands" : drawer === "threads" ? "Threads" : "Agents and files";
 
   // The drawer reaches up over the transcript, under the box's top edge. It tells the chat column how
   // far it does (`--rc-composer-float`, from the foot of the pane), so the jump-to-latest pill sits
@@ -761,6 +995,110 @@ export const Composer = memo(function Composer({
     };
   }, [drawer]);
 
+  // The scroll follows the arrow keys: the list runs past the drawer's height, the row it is on
+  // stays in view.
+  const selectedRow = useRef<HTMLButtonElement>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the row under the keys is the one that moves
+  useEffect(() => {
+    selectedRow.current?.scrollIntoView({ block: "nearest" });
+  }, [selected]);
+
+  const drawerRow = (entry: DrawerEntry, i: number) => {
+    const picked = i === selected;
+    const row = {
+      type: "button" as const,
+      role: "option",
+      "aria-selected": picked,
+      ref: picked ? selectedRow : undefined,
+      onMouseDown: (e: React.MouseEvent) => e.preventDefault(),
+      onMouseEnter: () => setSelected(i),
+      className: cx(DRAWER_ROW, picked && "bg-fill"),
+    };
+    switch (entry.kind) {
+      case "command":
+        return (
+          <button key={`c:${entry.command.name}`} {...row} onClick={() => complete(entry.command, true)}>
+            <Command size={16} className="shrink-0 text-fg-muted" />
+            {/* A command that wants arguments says so before it is picked. */}
+            <span className={DRAWER_NAME}>
+              {entry.command.name}
+              {entry.command.takesArguments && <span className="text-fg-faint"> …</span>}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">
+              {entry.command.description}
+            </span>
+            {/* What answers it: the app itself, not the harness. */}
+            {(entry.command.action !== "execute" || entry.command.report) && (
+              <span className="ml-auto shrink-0 rounded-xs bg-fill px-1.5 text-caption text-fg-muted">
+                {entry.command.action === "skill" ? "Skill" : "App"}
+              </span>
+            )}
+          </button>
+        );
+      case "file": {
+        const cut = entry.path.lastIndexOf("/") + 1;
+        return (
+          <button key={`f:${entry.path}`} {...row} onClick={() => reference(entry.path)}>
+            <FileText size={16} className="shrink-0 text-fg-muted" />
+            <span className={DRAWER_NAME}>{entry.path.slice(cut)}</span>
+            <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">{entry.path.slice(0, cut)}</span>
+            <span className="ml-auto shrink-0 rounded-xs bg-fill px-1.5 text-caption text-fg-muted">
+              Project
+            </span>
+          </button>
+        );
+      }
+      case "harness":
+        return (
+          <button key={`h:${entry.agent.harness}`} {...row} onClick={() => accept(entry, false)}>
+            <HarnessIcon id={entry.agent.harness} name={entry.agent.name} size={16} className="shrink-0" />
+            <span className={DRAWER_NAME}>
+              <Marked text={entry.agent.name} query={drawerQuery} />
+            </span>
+            <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">
+              {entry.agent.model ?? "Its own default model"}
+            </span>
+            {/* The token the row writes, so what it will say in the message is no surprise. */}
+            <span className="ml-auto shrink-0 rounded-xs bg-fill px-1.5 font-mono text-caption text-fg-muted">
+              @{entry.agent.harness}
+            </span>
+          </button>
+        );
+      case "thread": {
+        const thread = entry.thread;
+        return (
+          <button key={`t:${thread.id}`} {...row} onClick={() => accept(entry, false)}>
+            <HarnessIcon
+              id={thread.harness ?? "rustcode"}
+              name={thread.harness}
+              size={16}
+              className="shrink-0"
+            />
+            <span className={DRAWER_NAME}>
+              <Marked text={thread.title} query={drawerQuery} />
+            </span>
+            {thread.project && !thread.home && (
+              <span className="min-w-0 flex-1 truncate text-caption text-fg-faint">{thread.project}</span>
+            )}
+            <span className="ml-auto flex shrink-0 items-center gap-2">
+              {thread.delegate && (
+                <span className="rounded-xs bg-fill px-1.5 text-caption text-fg-muted">Delegate</span>
+              )}
+              {MENTION_WORD[thread.state] && (
+                <span className={cx("font-medium text-caption", MENTION_TINT[thread.state])}>
+                  {MENTION_WORD[thread.state]}
+                </span>
+              )}
+              {thread.updatedAt !== undefined && (
+                <span className="text-caption text-fg-faint tabular">{shortAge(thread.updatedAt)}</span>
+              )}
+            </span>
+          </button>
+        );
+      }
+    }
+  };
+
   return (
     <div ref={shell} className={cx("rc-composer-shell relative @container/composer", className)}>
       {thread && <QueuedAnnouncer threadId={thread.id} />}
@@ -772,72 +1110,35 @@ export const Composer = memo(function Composer({
             ref={drawerRef}
             className="rc-composer-drawer rc-in absolute inset-x-6 bottom-[calc(100%-1rem)] z-0 flex max-h-72 flex-col gap-0.5 overflow-y-auto px-1.5 pt-1.5 pb-[calc(1rem+6px)]"
             role="listbox"
-            aria-label={drawer === "commands" ? "Commands" : "Files"}
+            aria-label={drawerLabel}
           >
-            {drawer === "commands" &&
-              list.map((c, i) => (
-                <button
-                  key={c.name}
-                  type="button"
-                  role="option"
-                  aria-selected={i === selected}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => complete(c, true)}
-                  onMouseEnter={() => setSelected(i)}
-                  className={cx(
-                    "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left",
-                    i === selected && "bg-fill",
-                  )}
-                >
-                  <Command size={16} className="shrink-0 text-fg-muted" />
-                  {/* A command that wants arguments says so before it is picked. */}
-                  <span className="min-w-[96px] max-w-[45%] shrink-0 truncate font-medium text-fg text-sub">
-                    {c.name}
-                    {c.takesArguments && <span className="text-fg-faint"> …</span>}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">{c.description}</span>
-                  {/* What answers it: the app itself, not the harness. */}
-                  {(c.action !== "execute" || c.report) && (
-                    <span className="ml-auto shrink-0 rounded-xs bg-fill px-1.5 text-caption text-fg-muted">
-                      {c.action === "skill" ? "Skill" : "App"}
-                    </span>
-                  )}
-                </button>
-              ))}
-            {drawer === "files" &&
-              fileList.map((path, i) => {
-                const cut = path.lastIndexOf("/") + 1;
-                return (
-                  <button
-                    key={path}
-                    type="button"
-                    role="option"
-                    aria-selected={i === selected}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => reference(path)}
-                    onMouseEnter={() => setSelected(i)}
-                    className={cx(
-                      "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left",
-                      i === selected && "bg-fill",
-                    )}
-                  >
-                    <FileText size={16} className="shrink-0 text-fg-muted" />
-                    <span className="min-w-[96px] max-w-[45%] shrink-0 truncate font-medium text-fg text-sub">
-                      {path.slice(cut)}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">
-                      {path.slice(0, cut)}
-                    </span>
-                    <span className="ml-auto shrink-0 rounded-xs bg-fill px-1.5 text-caption text-fg-muted">
-                      Project
-                    </span>
-                  </button>
-                );
-              })}
-            {(drawer === "commands" ? !list.length : !fileList.length) && (
+            {/* Nothing at all to offer: the drawer says so where the field is about to be typed in. */}
+            {!entries.length && !drawerRows.length && (
               <p className="px-5 pt-4 pb-7 text-fg-muted text-sub">
-                {drawer === "commands" ? "No matching command." : "No matching files or folders."}
+                {drawer === "commands"
+                  ? "No matching command."
+                  : drawer === "threads"
+                    ? "No threads match."
+                    : "No matching harnesses or files."}
               </p>
+            )}
+            {drawerRows.map((item) =>
+              item.kind === "heading" ? (
+                // A group's name: the rows under it are the drawer's options, never this line.
+                <div
+                  key={`g:${item.label}`}
+                  role="presentation"
+                  className="px-2 pt-1.5 pb-0.5 font-medium text-caption text-fg-muted"
+                >
+                  {item.label}
+                </div>
+              ) : item.kind === "empty" ? (
+                <p key={`e:${item.text}`} className="px-2 py-1.5 text-fg-muted text-sub">
+                  {item.text}
+                </p>
+              ) : (
+                drawerRow(item.entry, item.index)
+              ),
             )}
           </div>
         )}
@@ -959,13 +1260,21 @@ export const Composer = memo(function Composer({
                   className="rc-field-fade pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words py-1.5 text-body text-fg leading-normal"
                   style={fadeStyle}
                 >
-                  {splitTokens(draft).map((part, i) =>
+                  {splitTokens(draft, mentions).map((part, i) =>
                     part.url ? (
                       <span
                         key={i}
                         className="rounded-xs bg-accent/15 text-accent [box-decoration-break:clone]"
                       >
                         {part.url}
+                      </span>
+                    ) : part.mention ? (
+                      // A thread's name, exactly as the field holds it: the pill adds no character.
+                      <span
+                        key={i}
+                        className="rounded-xs bg-fill-strong font-medium text-fg [box-decoration-break:clone]"
+                      >
+                        {part.mention}
                       </span>
                     ) : part.ref ? (
                       <span

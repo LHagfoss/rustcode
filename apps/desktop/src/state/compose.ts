@@ -1,12 +1,13 @@
 // What a message is made of before it is sent: the typed text, an optional
-// slash-command token, pasted link chips, long pastes held above the field,
-// images and files. A paste goes back into the text where it was pasted when
-// the message is composed, so it is sent as plain text, not as a chip; and
-// `promptBlocks` turns the rest into ACP content blocks. No React and no I/O,
-// so tests drive it.
+// slash-command token, pasted link chips, thread and harness mentions, long
+// pastes held above the field, images and files. A paste goes back into the
+// text where it was pasted when the message is composed, so it is sent as plain
+// text, not as a chip; and `promptBlocks` turns the rest into ACP content
+// blocks. No React and no I/O, so tests drive it.
 
 import type { Json, JsonObject } from "../acp/jsonrpc";
 import type { SlashCommand } from "../acp/types";
+import { fuzzyScore } from "../lib/modelSearch";
 
 /**
  * A message that starts with a command (`/review the diff`), as the name and what follows. A path
@@ -95,10 +96,226 @@ export type Attachment =
    */
   | { id: string; kind: "text"; text: string; at: number };
 
+// ---------------------------------------------------------------- mentions
+
+/**
+ * Something a message points at besides its words: another thread (`#Title`), or a harness the
+ * agent should hand work to (`@codex`). The draft keeps the short form the reader types, and is
+ * sent in full (`composedText`), so the agent can act on it: a thread id for `read_session`, a
+ * harness id for `start_session`. The id is what makes it unambiguous: two threads may share a
+ * title, and the list of mentions carries which one was picked.
+ */
+export type Mention =
+  | { kind: "thread"; id: string; title: string }
+  | { kind: "agent"; harness: string; name: string };
+
+/** What a mention reads as in the draft, and what the mirror draws on its pill: `#Title`, `@codex`. */
+export function mentionToken(mention: Mention): string {
+  return mention.kind === "thread" ? `#${mention.title}` : `@${mention.name}`;
+}
+
+/** A link's label cannot hold an unescaped bracket: `#[a]b](…)` would end at the first `]`. */
+const escapeLabel = (title: string) => title.replace(/[\\[\]]/g, (c) => `\\${c}`);
+
+/**
+ * What a mention says in the sent message: a link around the title, so the agent reads the thread's
+ * id and can open it; or the harness's id spelled out beside the name the drawer offered.
+ */
+export function mentionText(mention: Mention): string {
+  return mention.kind === "thread"
+    ? `#[${escapeLabel(mention.title)}](rustcode://thread/${mention.id})`
+    : `@${mention.name} (harness: ${mention.harness})`;
+}
+
+/** One mention written out in the draft, as the text and what it stands for. */
+export interface MentionRun {
+  mention: Mention;
+  /** The draft's own characters: `#Title`, `@codex`, exactly as the field holds them. */
+  raw: string;
+}
+
+/**
+ * Whether the character at `at` sits in code: inside a fenced block (``` or ~~~) opened above it,
+ * or between the backticks of an inline span on its own line. A `#` there is text being written,
+ * not a mention: a note about an issue number is not a thread.
+ */
+export function inCode(text: string, at: number): boolean {
+  const lines = text.slice(0, at).split("\n");
+  const line = lines.pop() ?? "";
+  if (lines.filter((l) => /^\s*(```|~~~)/.test(l)).length % 2 === 1) return true;
+  return (line.match(/`/g)?.length ?? 0) % 2 === 1;
+}
+
+/**
+ * The `#word` the caret is in: a thread mention. The `#` opens a word — at the start of the message
+ * or just after whitespace, so `abc#x` is not one — and an empty one opens the list. A markdown
+ * heading is not one either: its `#` is followed by a space. Nor is a `#` in code (see `inCode`),
+ * or one inside a token already written (`#[Title]`).
+ */
+export function hashToken(text: string, caret: number): { start: number; query: string } | null {
+  const before = text.slice(0, caret);
+  const start = before.lastIndexOf("#");
+  if (start < 0) return null;
+  if (start > 0 && !/\s/.test(before[start - 1] ?? "")) return null;
+  const query = before.slice(start + 1);
+  if (/\s/.test(query)) return null;
+  // A token already written, or a title being edited inside one: the drawer has no business there.
+  if (/[[\]]/.test(query)) return null;
+  // The caret mid-word: the rest of the word is part of what gets replaced.
+  if (/^\S/.test(text.slice(caret))) return null;
+  if (inCode(text, start)) return null;
+  return { start, query };
+}
+
+/** The mention whose own token starts at `start`, the longest first, or undefined. */
+function mentionAt(
+  text: string,
+  start: number,
+  mentions: readonly Mention[],
+  written: readonly number[],
+): number | undefined {
+  let best: number | undefined;
+  for (let i = 0; i < mentions.length; i++) {
+    const token = mentionToken(mentions[i]!);
+    if (!text.startsWith(token, start)) continue;
+    // A token that runs into a word is a different word: `#Fix` is not `#Fixer`.
+    if (/[\w-]/.test(text[start + token.length] ?? "")) continue;
+    if (best === undefined) {
+      best = i;
+      continue;
+    }
+    const length = mentionToken(mentions[best]!).length;
+    // The longest token wins, so `#Fix` inside `#Fix the tests` is not a second mention; of two the
+    // same length (the same title in two projects), the one written least often so far goes next.
+    if (token.length > length || (token.length === length && written[i]! < written[best]!)) best = i;
+  }
+  return best;
+}
+
+/**
+ * The text as runs of plain words and the mentions in it, in the order they were typed. A mention
+ * counts where its token opens a word — the start of the text or after whitespace — and where it
+ * does not run into a longer word. The mirror draws each of these on a pill, and `composedText`
+ * writes each one out in full.
+ */
+export function mentionRuns(text: string, mentions: readonly Mention[]): (string | MentionRun)[] {
+  if (!mentions.length) return text ? [text] : [];
+  const written = mentions.map(() => 0);
+  const out: (string | MentionRun)[] = [];
+  let last = 0;
+  let at = 0;
+  while (at < text.length) {
+    const c = text[at];
+    if ((c === "#" || c === "@") && (at === 0 || /\s/.test(text[at - 1] ?? ""))) {
+      const found = mentionAt(text, at, mentions, written);
+      if (found !== undefined) {
+        const mention = mentions[found]!;
+        const raw = mentionToken(mention);
+        written[found] = written[found]! + 1;
+        if (at > last) out.push(text.slice(last, at));
+        out.push({ mention, raw });
+        at += raw.length;
+        last = at;
+        continue;
+      }
+    }
+    at += 1;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
+/** The message's words for each mention in it; a mention no longer in the draft is left out. */
+export function serializeMentions(text: string, mentions: readonly Mention[] | undefined): string {
+  if (!mentions?.length) return text;
+  return mentionRuns(text, mentions)
+    .map((run) => (typeof run === "string" ? run : mentionText(run.mention)))
+    .join("");
+}
+
+/** The text with the `#` token replaced by the mention's own words, and where the caret goes. */
+export function insertMention(
+  text: string,
+  token: { start: number; query: string },
+  mention: Mention,
+): { text: string; caret: number } {
+  const ref = `${mentionToken(mention)} `;
+  const end = token.start + 1 + token.query.length;
+  const rest = text.slice(end).replace(/^ /, "");
+  return { text: text.slice(0, token.start) + ref + rest, caret: token.start + ref.length };
+}
+
+/** How a thread is doing, as the `#` list orders it and says it: what asks or works comes first. */
+export type MentionState = "needs" | "working" | "open" | "settled";
+
+/** A thread the `#` list offers. */
+export interface ThreadChoice {
+  id: string;
+  title: string;
+  /** The harness it runs on, for the row's mark. */
+  harness?: string;
+  /** The project it lives in, when it is not this one's. */
+  project?: string;
+  /** It runs in the folder the message is written in. */
+  home?: boolean;
+  state: MentionState;
+  updatedAt?: number;
+  /** It works for the thread the message is written in. */
+  delegate?: boolean;
+}
+
+const STATE_RANK: Record<MentionState, number> = { needs: 0, working: 1, open: 2, settled: 3 };
+
+/**
+ * The threads a `#` token is looking for: this project's before another project's, the closest
+ * title first (`lib/modelSearch.ts`'s `fuzzyScore`, so a title typed out of order still finds it),
+ * and what asks or works before what is settled when two names match as well. A thread with no
+ * name is left out: there is nothing to match it on, and nothing to write in the message.
+ */
+export function rankThreads(threads: readonly ThreadChoice[], query: string, limit = 20): ThreadChoice[] {
+  const scored = threads.flatMap((thread, at) => {
+    const score = fuzzyScore(query, thread.title);
+    return score === null ? [] : [{ thread, at, score }];
+  });
+  scored.sort(
+    (a, b) =>
+      Number(!!b.thread.home) - Number(!!a.thread.home) ||
+      b.score - a.score ||
+      STATE_RANK[a.thread.state] - STATE_RANK[b.thread.state] ||
+      (b.thread.updatedAt ?? 0) - (a.thread.updatedAt ?? 0) ||
+      a.at - b.at,
+  );
+  return scored.slice(0, limit).map((hit) => hit.thread);
+}
+
+/** A harness the `@` list offers: what the agent can hand work to. */
+export interface AgentChoice {
+  /** The harness's id: what the message names. */
+  harness: string;
+  /** What the row calls it. */
+  name: string;
+  /** The model a new thread on it would start with. */
+  model?: string;
+}
+
+/** The harnesses an `@` token is looking for, the closest name first. */
+export function rankAgents(query: string, agents: readonly AgentChoice[], limit = 6): AgentChoice[] {
+  const scored = agents.flatMap((agent, at) => {
+    const name = fuzzyScore(query, agent.name);
+    const id = fuzzyScore(query, agent.harness);
+    const score = name === null && id === null ? null : Math.max(name ?? 0, id ?? 0);
+    return score === null ? [] : [{ agent, at, score }];
+  });
+  scored.sort((a, b) => b.score - a.score || a.at - b.at);
+  return scored.slice(0, limit).map((hit) => hit.agent);
+}
+
 export interface ComposeExtras {
   command?: SlashCommand;
   links: string[];
   attachments: Attachment[];
+  /** The threads and harnesses the message names (`#Title`, `@codex`). */
+  mentions?: Mention[];
 }
 
 export const emptyExtras: ComposeExtras = { links: [], attachments: [] };
@@ -174,10 +391,14 @@ export function splicePastes(text: string, attachments: readonly Attachment[]): 
   return body;
 }
 
-/** The text the prompt carries, in the order the composer shows it: command, links, then what was typed with its pastes in place. */
+/**
+ * The text the prompt carries, in the order the composer shows it: command, links, then what was
+ * typed with its pastes in place and each mention written out in full. The transcript shows the
+ * same text, so the mention it draws as a chip is the one the agent was given.
+ */
 export function composedText(text: string, extras: ComposeExtras): string {
   const head = [extras.command?.name, ...extras.links].filter(Boolean).join(" ");
-  const body = splicePastes(text, extras.attachments);
+  const body = serializeMentions(splicePastes(text, extras.attachments), extras.mentions);
   if (!head) return body;
   return body ? `${head} ${body}` : head;
 }
@@ -314,6 +535,16 @@ export interface DraftToken {
   text?: string;
   url?: string;
   ref?: string;
+  /** A thread mention, drawn on a pill as the draft's own characters (`#Title`). */
+  mention?: string;
+}
+
+/** The mention runs of one text part, a thread's on a pill and a harness's as a reference. */
+function mentionTokens(text: string, mentions: readonly Mention[]): DraftToken[] {
+  return mentionRuns(text, mentions).flatMap((run): DraftToken[] => {
+    if (typeof run === "string") return refRuns(run);
+    return run.mention.kind === "thread" ? [{ mention: run.raw }] : [{ ref: run.raw.slice(1) }];
+  });
 }
 
 function refRuns(text: string): DraftToken[] {
@@ -332,18 +563,22 @@ function refRuns(text: string): DraftToken[] {
   return out;
 }
 
-/** The draft split into text and tokens, URLs first and references inside the text between them. */
-export function splitTokens(text: string): DraftToken[] {
+/**
+ * The draft split into text and tokens: URLs first, then the mentions and references inside the
+ * text between them. A mention's pill carries the draft's own characters, so the mirror and the
+ * field stay on the same line.
+ */
+export function splitTokens(text: string, mentions: readonly Mention[] = []): DraftToken[] {
   return splitUrls(text).flatMap((part) =>
-    part.url ? [part] : part.text === undefined ? [] : refRuns(part.text),
+    part.url ? [part] : part.text === undefined ? [] : mentionTokens(part.text, mentions),
   );
 }
 
 /** Whether the draft has anything the mirror draws as a token. */
-export function hasTokens(text: string): boolean {
+export function hasTokens(text: string, mentions: readonly Mention[] = []): boolean {
   const urls = new RegExp(URL_IN_TEXT.source, "i");
   const refs = new RegExp(REF_IN_TEXT.source);
-  return urls.test(text) || refs.test(text);
+  return urls.test(text) || refs.test(text) || mentions.some((m) => text.includes(mentionToken(m)));
 }
 
 /** Plain text split into text runs and URLs, for link chips in user messages. */

@@ -240,10 +240,13 @@ surface and the control, so its hover is a fill layer over the glass
 rather than a `hover:bg-…` utility a class rule would beat.
 
 The composer floats over the transcript as one card: the field, and under it one control row with
-every control the send needs. Its slash and `@` menus are a solid drawer attached to the box's top
-edge, each opened by the token at the caret, at the start of the message or after whitespace
-anywhere in it. Everything in the card starts on one left edge: the field, the chips, the
-thumbnails and the hint rows at 20px (`px-5`); the tray at 12px (`px-3`), because its round
+every control the send needs. Its `/`, `#` and `@` menus are a solid drawer attached to the box's
+top edge, each opened by the token at the caret, at the start of the message or after whitespace
+anywhere in it: `/` lists commands, `#` threads, and `@` agents above the project's files. A list
+with more than one kind of row is grouped under a quiet heading — `This project` and `Other
+projects` for `#`, `Agents` and `Files` for `@` — and the arrow keys walk the rows across the
+groups, never onto a heading. Everything in the card starts on one left edge: the field, the chips,
+the thumbnails and the hint rows at 20px (`px-5`); the tray at 12px (`px-3`), because its round
 controls carry 8px of their own, which puts their icons on that same edge.
 
 The composer takes the shared glass in the sidebar's own hue: `--rc-glass-alpha` of
@@ -864,8 +867,9 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   is that same line box, so it keeps the field's baseline. **Tokens in the draft**
   are drawn by a mirror under the field, not by an editor (the way T3 Code's
   composer keeps references in the text): the field's text is transparent over a
-  copy that sets each URL on an accent pill and each `@file` reference on a quiet
-  one (`state/compose.ts` `splitTokens`). The two take the same padding, scroll
+  copy that sets each URL on an accent pill, and each `@file` reference and `#thread`
+  mention on a quiet one (`state/compose.ts` `splitTokens`), the mention drawn from the
+  draft's own characters (`#Title`) so its pill never moves the caret. The two take the same padding, scroll
   and mask, and a token's span adds **no** horizontal padding — that is what
   keeps the caret on its character. The field's height is measured on an
   off-screen twin of it (same font, leading, padding and width, no transition,
