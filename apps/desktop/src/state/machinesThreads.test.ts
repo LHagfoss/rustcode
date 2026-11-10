@@ -12,6 +12,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { AcpConnection, type JsonObject } from "../acp/jsonrpc";
 import { MockMachine } from "../acp/mock";
 import type { Transport } from "../acp/transport";
+import type { PermissionRequest } from "../acp/types";
 import { setShellTransport } from "../lib/shell";
 import {
   type Machine,
@@ -35,6 +36,7 @@ import {
   useApp,
   watchMachineConnection,
 } from "./store";
+import { emptyThread } from "./thread";
 import { LOCAL_HOST, splitThreadKey, threadKey } from "./threadKeys";
 
 const LINUX = "gw-7c1d9e4f2a8b6d30";
@@ -340,7 +342,7 @@ describe("a remote thread's operations", () => {
     expect(useApp.getState().threads[LINUX_THREAD]?.running ?? false).toBe(false);
   });
 
-  test("an approval waits for the machine to come back, then answers on its connection", async () => {
+  test("an answer on a connected machine goes back on its connection", async () => {
     const { conn, sent } = recordingConnection();
     watchMachineConnection(LINUX, conn);
     await openThread(LINUX_THREAD);
@@ -351,19 +353,64 @@ describe("a remote thread's operations", () => {
     expect(request?.toolCallId).toBe("call-1");
     expect(request?.sessionId).toBe(LINUX_THREAD);
 
-    // The machine goes away while the turn waits: the card stays, and an answer is refused.
-    watchMachineConnection(LINUX, null);
-    expect(useApp.getState().threads[LINUX_THREAD]?.permissions).toHaveLength(1);
     answerPermission(request!, request!.options[0]!);
-    expect(useApp.getState().threads[LINUX_THREAD]?.permissions).toHaveLength(1);
-    expect(sent().some((frame) => frame.id === 77 && frame.result !== undefined)).toBe(false);
-
-    // Back: the request was not thrown away, and the answer reaches the machine.
-    watchMachineConnection(LINUX, conn);
-    const again = useApp.getState().threads[LINUX_THREAD]?.permissions[0];
-    expect(again).toBeDefined();
-    answerPermission(again!, again!.options[0]!);
     expect(useApp.getState().threads[LINUX_THREAD]?.permissions).toHaveLength(0);
     expect(sent().some((frame) => frame.id === 77 && frame.result !== undefined)).toBe(true);
+  });
+
+  test("a drop ends the turn waiting on an approval, and its card with it", async () => {
+    const { conn } = recordingConnection();
+    watchMachineConnection(LINUX, conn);
+    await openThread(LINUX_THREAD);
+    // The turn the engine asked for approval on.
+    useApp.setState((s) => ({
+      threads: {
+        ...s.threads,
+        [LINUX_THREAD]: {
+          ...s.threads[LINUX_THREAD]!,
+          running: true,
+          turnStartedAt: Date.now() - 1000,
+        },
+      },
+    }));
+    conn.receive(permissionFrame(78, "mock-linux-1"));
+    await sleep(5);
+    expect(useApp.getState().threads[LINUX_THREAD]?.permissions).toHaveLength(1);
+
+    watchMachineConnection(LINUX, null);
+    const thread = useApp.getState().threads[LINUX_THREAD];
+    // The connection the request arrived on is gone, so the turn ends and the card goes with it,
+    // saying why, rather than holding an answer nothing can carry.
+    expect(thread?.running).toBe(false);
+    expect(thread?.permissions).toHaveLength(0);
+    expect(thread?.error).toContain("machine disconnected");
+    expect(threadOffline(LINUX_THREAD)).toBe(true);
+  });
+
+  test("an answer with no connection is refused and keeps the card", () => {
+    // The guard's own state: a request on a thread whose machine is away (a frame that arrived in
+    // the moment before the drop clears it).
+    watchMachineConnection(LINUX, null);
+    asListed();
+    const request: PermissionRequest = {
+      rpcId: 79,
+      sessionId: LINUX_THREAD,
+      toolCallId: "call-2",
+      title: "read src/ui/Composer.tsx",
+      options: [{ id: "allow", name: "Allow once", kind: "allow_once" }],
+      diffs: [],
+    };
+    useApp.setState((s) => ({
+      threads: {
+        ...s.threads,
+        [LINUX_THREAD]: {
+          ...emptyThread(LINUX_THREAD, LINUX_CWD, "Run the tests"),
+          loaded: true,
+          permissions: [request],
+        },
+      },
+    }));
+    answerPermission(request, request.options[0]!);
+    expect(useApp.getState().threads[LINUX_THREAD]?.permissions).toHaveLength(1);
   });
 });
