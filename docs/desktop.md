@@ -73,6 +73,34 @@ because a web view cannot dial a gateway and the pairing token belongs in the
 credential store. `?machines=paired|connect|offline|revoked` in the mock walks
 the page without a second computer; `paired` is two computers with threads.
 
+**Settings on one machine or all.** Settings is not synced from a main machine
+(user decision, #3202). A server-setting page — General's server rows,
+Harnesses and Capabilities — starts with **Applying to**: This machine (the
+default), one paired machine, or All machines, and the choice persists across
+pages (`src/state/settingsScope.ts`). A row whose connected machines disagree
+shows **Mixed** with a layers mark; its hover card lists each machine's value.
+Picking a value under All machines writes it to every connected machine, and
+an offline machine is listed as keeping its value rather than being changed.
+Every row's kind is in one registry (`src/state/settingsRegistry.ts`):
+appearance, shortcuts and window state are this app's own and show no
+selector; credentials, accounts, the default project folder, Remote access and
+the machines list are machine-only and shown for one machine at a time —
+credentials are never editable over a remote connection.
+
+Skills and MCP servers are listed per machine under Capabilities. **Add server
+to all** adds an MCP definition to every connected machine; **Copy to ‹machine›**
+on a row copies its definition. Values of MCP environment variables and
+headers never travel: the target gets the key names blank with a note to set
+them there, and a command whose target has a masked secret is not offered for
+copying. A skill copies its `SKILL.md`; other files in its folder stay on the
+source machine. The default harness/model/effort reads through
+`_rustcode/harnesses`, and harness switches write through `_rustcode/harnesses/set`
+on each chosen machine. The other server settings live in each machine's
+`~/.config/rustcode/settings.json` through `_rustcode/settings/get|set`
+(docs/configuration.md); the app applies this computer's values when it starts,
+so a value set from another machine is in force there next launch. `#3400`
+carries the threads themselves; this step follows it.
+
 Item 4 and the rest of the orchestration work move the domain model from
 sessions to an execution graph:
 [architecture/execution-graph.md](architecture/execution-graph.md) records that

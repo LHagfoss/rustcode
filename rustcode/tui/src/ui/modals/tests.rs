@@ -943,6 +943,7 @@ fn skills_panel() -> rustcode::controller::SkillsPanel {
         source: "universal",
         read_only: false,
         enabled,
+        content: None,
     };
     rustcode::controller::SkillsPanel {
         entries: vec![entry("deploy", true), entry("review", false)],

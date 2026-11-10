@@ -71,8 +71,14 @@ import {
   MIN_DELEGATES_PER_THREAD,
   MIN_DELEGATES_TOTAL,
 } from "../state/orchestration";
-import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
+import { PERMISSION_MODES } from "../state/permissions";
 import { RECAP_HOUR_OPTIONS } from "../state/recap";
+import {
+  useLoadScopeSettings,
+  useScope,
+  useScopedDefaultHarness,
+  useScopedSetting,
+} from "../state/settingsScope";
 import { useRowLayout } from "../state/sidebarPrefs";
 import {
   APP_VERSION,
@@ -86,27 +92,17 @@ import {
   type SettingsSection,
   setActiveTheme,
   setAnimateStreaming,
-  setAutoCompactMode,
-  setAutoCompactThreshold,
   setChatWidth,
-  setContinueAfterLimit,
   setDefaultCwd,
-  setDefaultHarness,
-  setDefaultPermissionMode,
   setNotificationsBackgroundOnly,
   setOnboarding,
-  setOrchestration,
-  setReadAcrossProjects,
   setRecapHours,
   setRecapWhileAway,
   setReduceTransparency,
-  setResumeAfterRestart,
   setRoundedFont,
   setSmartUi,
   setSystemNotifications,
   setTheme,
-  setThreadLimit,
-  setTotalLimit,
   toast,
   useApp,
 } from "../state/store";
@@ -130,6 +126,8 @@ import { MachinesPage } from "./MachinesPage";
 import { NewThreadBanner } from "./NewThreadBanner";
 import { ChromeButton, cx, Kbd, noTextHelpers, Spinner, Switch } from "./primitives";
 import { RemoteAccessPage } from "./RemoteAccessPage";
+import { ScopedHarnessList } from "./ScopedHarnesses";
+import { ScopedValue, SettingsScopeBar } from "./SettingsScope";
 import { ShortcutsPage } from "./ShortcutSettings";
 import { StatisticsPage } from "./StatisticsPage";
 import { type SettingEntry, searchSettings } from "./settingsIndex";
@@ -262,12 +260,27 @@ function PresenceRow() {
   );
 }
 
+const permissionLabel = (value: Json | undefined) =>
+  PERMISSION_MODES.find((mode) => mode.id === value)?.label ?? String(value ?? "Ask");
+const boolLabel = (value: Json | undefined) => (value ? "On" : "Off");
+const compactLabel = (value: Json | undefined) =>
+  AUTO_COMPACT_MODES.find((mode) => mode.value === value)?.label ?? String(value ?? "Off");
+const thresholdLabel = (value: Json | undefined) =>
+  typeof value === "number" ? `${Math.round(value / 1_000)}k tokens` : "150k tokens";
+
 function GeneralPage() {
   const defaultCwd = useApp((s) => s.defaultCwd);
-  const autoCompact = useApp((s) => s.autoCompact);
-  const resume = useApp((s) => s.resumeAfterRestart);
-  const afterLimit = useApp((s) => s.continueAfterLimit);
-  const defaultAccess = useApp((s) => s.defaultPermissionMode);
+  useLoadScopeSettings();
+  const defaultAccess = useScopedSetting("default-permission-mode", permissionLabel);
+  const resume = useScopedSetting("resume-after-restart", boolLabel);
+  const afterLimit = useScopedSetting("continue-after-limit", boolLabel);
+  const autoCompactMode = useScopedSetting("auto-compact-mode", compactLabel);
+  const autoCompactThreshold = useScopedSetting("auto-compact-threshold", thresholdLabel);
+  const defaultAccessValue = String(defaultAccess.value ?? SETTINGS_DEFAULTS.defaultPermissionMode);
+  const resumeValue = Boolean(resume.value ?? SETTINGS_DEFAULTS.resumeAfterRestart);
+  const afterLimitValue = Boolean(afterLimit.value ?? SETTINGS_DEFAULTS.continueAfterLimit);
+  const autoCompactValue = String(autoCompactMode.value ?? SETTINGS_DEFAULTS.autoCompact.mode);
+  const autoCompactThresholdValue = Number(autoCompactThreshold.value ?? AUTO_COMPACT_DEFAULT_THRESHOLD);
   const notifications = useApp((s) => s.systemNotifications);
   const backgroundOnly = useApp((s) => s.notificationsBackgroundOnly);
   const recap = useApp((s) => s.recapWhileAway);
@@ -276,6 +289,7 @@ function GeneralPage() {
   const [haptics, setHapticsState] = useState(hapticsEnabled);
   return (
     <>
+      <SettingsScopeBar />
       <Group title="New threads">
         <Row
           title="Default project folder"
@@ -292,79 +306,97 @@ function GeneralPage() {
         <Row
           title="Default access"
           reset={
-            defaultAccess !== SETTINGS_DEFAULTS.defaultPermissionMode
-              ? () => setDefaultPermissionMode(SETTINGS_DEFAULTS.defaultPermissionMode)
+            defaultAccess.mixed || defaultAccessValue !== SETTINGS_DEFAULTS.defaultPermissionMode
+              ? () => void defaultAccess.set(SETTINGS_DEFAULTS.defaultPermissionMode)
               : undefined
           }
           subtitle="New threads start here. The shield under the message box changes one thread only."
         >
-          <Choice
-            label="Default access"
-            value={defaultAccess}
-            options={PERMISSION_MODES.map((m) => ({ value: m.id, label: m.label }))}
-            onChange={(value) => setDefaultPermissionMode(value as PermissionMode)}
-          />
+          <ScopedValue mixed={defaultAccess.mixed} breakdown={defaultAccess.breakdown}>
+            <Choice
+              label="Default access"
+              value={defaultAccessValue}
+              options={PERMISSION_MODES.map((m) => ({ value: m.id, label: m.label }))}
+              onChange={(value) => void defaultAccess.set(value)}
+            />
+          </ScopedValue>
         </Row>
       </Group>
       <Group title="Threads">
         <Row
           title="Continue threads after a restart"
-          reset={resume ? undefined : () => setResumeAfterRestart(SETTINGS_DEFAULTS.resumeAfterRestart)}
+          reset={
+            resume.mixed || !resumeValue
+              ? () => void resume.set(SETTINGS_DEFAULTS.resumeAfterRestart)
+              : undefined
+          }
           subtitle="A thread whose turn was cut short by quitting, an update or a server restart is sent “Continue where you left off” when the app is back."
         >
-          <Switch
-            label="Continue threads after a restart"
-            checked={resume}
-            onChange={setResumeAfterRestart}
-          />
+          <ScopedValue mixed={resume.mixed} breakdown={resume.breakdown}>
+            <Switch
+              label="Continue threads after a restart"
+              checked={resumeValue}
+              onChange={(value) => void resume.set(value)}
+            />
+          </ScopedValue>
         </Row>
         <Row
           title="Continue threads when a usage limit resets"
-          reset={afterLimit ? undefined : () => setContinueAfterLimit(SETTINGS_DEFAULTS.continueAfterLimit)}
+          reset={
+            afterLimit.mixed || !afterLimitValue
+              ? () => void afterLimit.set(SETTINGS_DEFAULTS.continueAfterLimit)
+              : undefined
+          }
           subtitle="A thread stopped by its plan's limit is sent “Continue where you left off” when the limit resets, unless you have moved it to another harness or account, or sent it something else."
         >
-          <Switch
-            label="Continue threads when a usage limit resets"
-            checked={afterLimit}
-            onChange={setContinueAfterLimit}
-          />
+          <ScopedValue mixed={afterLimit.mixed} breakdown={afterLimit.breakdown}>
+            <Switch
+              label="Continue threads when a usage limit resets"
+              checked={afterLimitValue}
+              onChange={(value) => void afterLimit.set(value)}
+            />
+          </ScopedValue>
         </Row>
         <Row
           title="Auto-compact"
           stacked
           reset={
-            autoCompact.mode === SETTINGS_DEFAULTS.autoCompact.mode
-              ? undefined
-              : () => setAutoCompactMode(SETTINGS_DEFAULTS.autoCompact.mode)
+            autoCompactMode.mixed || autoCompactValue !== SETTINGS_DEFAULTS.autoCompact.mode
+              ? () => void autoCompactMode.set(SETTINGS_DEFAULTS.autoCompact.mode)
+              : undefined
           }
           subtitle="RustCode asks the harness to compact its own context when a turn ends above the threshold; the second mode also compacts shortly before Claude Code's or Codex's prompt cache expires. Never while a turn runs, a message waits, an approval is open or the thread's last answer is unread, and never over the answer itself: the compaction leaves one quiet row under it. Turn it off for one thread in its menu."
         >
-          <Choice
-            label="Auto-compact"
-            value={autoCompact.mode}
-            options={AUTO_COMPACT_MODES}
-            onChange={setAutoCompactMode}
-          />
+          <ScopedValue mixed={autoCompactMode.mixed} breakdown={autoCompactMode.breakdown}>
+            <Choice
+              label="Auto-compact"
+              value={autoCompactValue}
+              options={AUTO_COMPACT_MODES}
+              onChange={(value) => void autoCompactMode.set(value)}
+            />
+          </ScopedValue>
         </Row>
-        {autoCompact.mode !== "off" && (
+        {autoCompactValue !== "off" && (
           <Row
             title="Auto-compact threshold"
             reset={
-              autoCompact.threshold === AUTO_COMPACT_DEFAULT_THRESHOLD
-                ? undefined
-                : () => setAutoCompactThreshold(AUTO_COMPACT_DEFAULT_THRESHOLD)
+              autoCompactThreshold.mixed || autoCompactThresholdValue !== AUTO_COMPACT_DEFAULT_THRESHOLD
+                ? () => void autoCompactThreshold.set(AUTO_COMPACT_DEFAULT_THRESHOLD)
+                : undefined
             }
             subtitle="Compact once the context passes this many tokens. The second mode's idle, pre-cache rule uses a smaller 60k threshold."
           >
-            <Slider
-              label="Auto-compact threshold"
-              value={Math.round(autoCompact.threshold / 1_000)}
-              min={20}
-              max={500}
-              step={10}
-              onChange={(value) => setAutoCompactThreshold(value * 1_000)}
-              unit="k tokens"
-            />
+            <ScopedValue mixed={autoCompactThreshold.mixed} breakdown={autoCompactThreshold.breakdown}>
+              <Slider
+                label="Auto-compact threshold"
+                value={Math.round(autoCompactThresholdValue / 1_000)}
+                min={20}
+                max={500}
+                step={10}
+                onChange={(value) => void autoCompactThreshold.set(value * 1_000)}
+                unit="k tokens"
+              />
+            </ScopedValue>
           </Row>
         )}
       </Group>
@@ -533,7 +565,11 @@ function ChatPage() {
 }
 
 function AgentsPage() {
-  const snapshot = useApp((s) => s.harnesses);
+  useLoadScopeSettings();
+  const { scope, targets, writes } = useScope();
+  const scoped = useScopedDefaultHarness();
+  const snapshot = scoped.snapshot;
+  const thisMachine = scope.mode === "this";
   const [saved, setSaved] = useState(false);
   const [adding, setAdding] = useState(false);
   const checking = useHarnessChecks((s) => Object.values(s.byHarness).some((e) => "running" in e));
@@ -541,20 +577,24 @@ function AgentsPage() {
   useAutoDetect();
   // An unsaved choice stays here while it is not valid yet (a harness that still lists models).
   const [choice, setChoice] = useState<NewThreadChoice | null>(null);
-  if (!snapshot) return <Loading error={null} />;
+  if (!snapshot) return <Loading error={scoped.error} />;
   // The default saves as it changes: there is nothing to confirm, and the choice is easy to undo.
   const change = (next: NewThreadChoice) => {
     setSaved(false);
     setChoice(next);
     if (validateDefault(snapshot, next)) return;
-    void setDefaultHarness(next).then((ok) => {
-      if (!ok) return;
-      setChoice(null);
-      setSaved(true);
-    });
+    void scoped.set(next).then(
+      () => {
+        setChoice(null);
+        setSaved(true);
+      },
+      () => undefined,
+    );
   };
+  const value = choice ?? scoped.value ?? snapshot.default;
   return (
     <>
+      <SettingsScopeBar />
       {snapshot.unsupported && (
         <p className="mb-4 rounded-lg bg-warning/10 px-3 py-2 text-callout">
           This server does not run other harnesses yet (no{" "}
@@ -574,27 +614,44 @@ function AgentsPage() {
           }
           footer="A thread can still switch harness and model from the composer."
         >
-          <DefaultsForm snapshot={snapshot} value={choice ?? snapshot.default} onChange={change} />
+          {scoped.mixed && (
+            <div className="px-4 pb-2">
+              <ScopedValue mixed breakdown={scoped.breakdown}>
+                <span className="text-callout text-fg-muted">The connected machines disagree</span>
+              </ScopedValue>
+            </div>
+          )}
+          <DefaultsForm snapshot={snapshot} value={value} onChange={change} />
         </Group>
       )}
       <Group
         title="Harnesses"
         action={
-          <div className="flex items-center gap-1">
-            <Action quiet size="sm" onClick={() => void runAllHarnessChecks()} disabled={checking}>
-              {checking && <Spinner size={11} />}
-              Check all
-            </Action>
-            <Action size="sm" onClick={() => setAdding(true)} disabled={adding}>
-              <Plus size={11} />
-              Add harness
-            </Action>
-          </div>
+          thisMachine ? (
+            <div className="flex items-center gap-1">
+              <Action quiet size="sm" onClick={() => void runAllHarnessChecks()} disabled={checking}>
+                {checking && <Spinner size={11} />}
+                Check all
+              </Action>
+              <Action size="sm" onClick={() => setAdding(true)} disabled={adding}>
+                <Plus size={11} />
+                Add harness
+              </Action>
+            </div>
+          ) : undefined
         }
-        footer="Each harness signs in on its own; RustCode never stores its credentials. Check starts a harness to confirm it runs and lists its models."
+        footer={
+          thisMachine
+            ? "Each harness signs in on its own; RustCode never stores its credentials. Check starts a harness to confirm it runs and lists its models."
+            : "A switch here turns the harness on or off on every connected machine. Sign-in, accounts and Check stay on the machine itself."
+        }
       >
-        {adding && <AddHarnessForm onClose={() => setAdding(false)} />}
-        <HarnessList snapshot={snapshot} />
+        {thisMachine && adding && <AddHarnessForm onClose={() => setAdding(false)} />}
+        {thisMachine ? (
+          <HarnessList snapshot={snapshot} />
+        ) : (
+          <ScopedHarnessList targets={targets} writes={writes} />
+        )}
       </Group>
       <OrchestrationGroup />
     </>
@@ -603,10 +660,18 @@ function AgentsPage() {
 
 /** Threads that start and message other threads (`state/host.ts`, docs/orchestrator.md). */
 function OrchestrationGroup() {
-  const orchestration = useApp((s) => s.orchestration);
-  const threadLimit = useApp((s) => s.threadLimit);
-  const totalLimit = useApp((s) => s.totalLimit);
-  const readAcrossProjects = useApp((s) => s.readAcrossProjects);
+  const orchestration = useScopedSetting("orchestration", boolLabel);
+  const threadLimitSetting = useScopedSetting("delegates-per-thread", (value) =>
+    typeof value === "number" ? String(value) : "4",
+  );
+  const totalLimitSetting = useScopedSetting("delegates-total", (value) =>
+    typeof value === "number" ? String(value) : "8",
+  );
+  const readAcrossProjects = useScopedSetting("read-across-projects", boolLabel);
+  const orchestrationValue = Boolean(orchestration.value ?? true);
+  const readAcrossValue = Boolean(readAcrossProjects.value ?? true);
+  const threadLimit = Number(threadLimitSetting.value ?? SETTINGS_DEFAULTS.threadLimit);
+  const totalLimit = Number(totalLimitSetting.value ?? SETTINGS_DEFAULTS.totalLimit);
   const pending = useApp((s) => s.orchestrationPending);
   const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
   const links = useApp((s) => s.links);
@@ -618,27 +683,37 @@ function OrchestrationGroup() {
       <Group title="Orchestration">
         <Row
           title="Threads can start and message other threads"
-          reset={orchestration ? undefined : () => setOrchestration(SETTINGS_DEFAULTS.orchestration)}
+          reset={
+            orchestration.mixed || !orchestrationValue
+              ? () => void orchestration.set(SETTINGS_DEFAULTS.orchestration)
+              : undefined
+          }
           subtitle="An agent can list and read threads, message one in this project, start new threads (in their own worktrees, on any harness, model or named account) and run one task on several harnesses to compare. A thread at Full access does this without asking; Auto-edit may list, read and wait. Otherwise you approve each: Allow for This Thread, Allow Once or Don't Allow. A thread it starts gets the lower of this thread's access and Default access, so it is never given more than the thread that started it."
         >
-          <Switch
-            label="Threads can start and message other threads"
-            checked={orchestration}
-            onChange={setOrchestration}
-          />
+          <ScopedValue mixed={orchestration.mixed} breakdown={orchestration.breakdown}>
+            <Switch
+              label="Threads can start and message other threads"
+              checked={orchestrationValue}
+              onChange={(value) => void orchestration.set(value)}
+            />
+          </ScopedValue>
         </Row>
         <Row
           title="Let agents read threads in other projects"
           reset={
-            readAcrossProjects ? undefined : () => setReadAcrossProjects(SETTINGS_DEFAULTS.readAcrossProjects)
+            readAcrossProjects.mixed || !readAcrossValue
+              ? () => void readAcrossProjects.set(SETTINGS_DEFAULTS.readAcrossProjects)
+              : undefined
           }
           subtitle="When on, an agent can list, search and read any thread, including in other projects. Reading a thread still follows the approval rules above. Messaging and starting threads stay in the project."
         >
-          <Switch
-            label="Let agents read threads in other projects"
-            checked={readAcrossProjects}
-            onChange={setReadAcrossProjects}
-          />
+          <ScopedValue mixed={readAcrossProjects.mixed} breakdown={readAcrossProjects.breakdown}>
+            <Switch
+              label="Let agents read threads in other projects"
+              checked={readAcrossValue}
+              onChange={(value) => void readAcrossProjects.set(value)}
+            />
+          </ScopedValue>
         </Row>
         {pending && (
           <Row
@@ -653,9 +728,9 @@ function OrchestrationGroup() {
       </Group>
       <Group
         title="Delegation"
-        disabled={!orchestration}
+        disabled={!orchestrationValue}
         footer={
-          orchestration
+          orchestrationValue
             ? "Only live delegates take a slot; a finished one frees it at once. A message to a thread this one already runs is a follow-up and takes none."
             : "These limits have no effect while “Threads can start and message other threads” is off."
         }
@@ -663,9 +738,9 @@ function OrchestrationGroup() {
         <Row
           title="Delegates across all threads"
           reset={
-            totalLimit === SETTINGS_DEFAULTS.totalLimit
-              ? undefined
-              : () => setTotalLimit(SETTINGS_DEFAULTS.totalLimit)
+            totalLimitSetting.mixed || totalLimit !== SETTINGS_DEFAULTS.totalLimit
+              ? () => void totalLimitSetting.set(SETTINGS_DEFAULTS.totalLimit)
+              : undefined
           }
           subtitle="How many delegates may run at once across this app, whichever thread started them."
           status={
@@ -676,21 +751,23 @@ function OrchestrationGroup() {
                 : `${running} running now`
           }
         >
-          <Slider
-            label="Delegates across all threads"
-            value={totalLimit}
-            min={MIN_DELEGATES_TOTAL}
-            max={MAX_DELEGATES_TOTAL}
-            onChange={setTotalLimit}
-            unit="delegates"
-          />
+          <ScopedValue mixed={totalLimitSetting.mixed} breakdown={totalLimitSetting.breakdown}>
+            <Slider
+              label="Delegates across all threads"
+              value={totalLimit}
+              min={MIN_DELEGATES_TOTAL}
+              max={MAX_DELEGATES_TOTAL}
+              onChange={(value) => void totalLimitSetting.set(value)}
+              unit="delegates"
+            />
+          </ScopedValue>
         </Row>
         <Row
           title="Delegates one thread can run at once"
           reset={
-            threadLimit === SETTINGS_DEFAULTS.threadLimit
-              ? undefined
-              : () => setThreadLimit(SETTINGS_DEFAULTS.threadLimit)
+            threadLimitSetting.mixed || threadLimit !== SETTINGS_DEFAULTS.threadLimit
+              ? () => void threadLimitSetting.set(SETTINGS_DEFAULTS.threadLimit)
+              : undefined
           }
           subtitle="How many delegates one thread may have working at the same time. The total above can make this lower."
           status={
@@ -701,14 +778,16 @@ function OrchestrationGroup() {
                 : `The busiest thread has ${busiest} now`
           }
         >
-          <Slider
-            label="Delegates one thread can run at once"
-            value={threadLimit}
-            min={MIN_DELEGATES_PER_THREAD}
-            max={MAX_DELEGATES_PER_THREAD}
-            onChange={setThreadLimit}
-            unit="delegates"
-          />
+          <ScopedValue mixed={threadLimitSetting.mixed} breakdown={threadLimitSetting.breakdown}>
+            <Slider
+              label="Delegates one thread can run at once"
+              value={threadLimit}
+              min={MIN_DELEGATES_PER_THREAD}
+              max={MAX_DELEGATES_PER_THREAD}
+              onChange={(value) => void threadLimitSetting.set(value)}
+              unit="delegates"
+            />
+          </ScopedValue>
         </Row>
       </Group>
     </>
@@ -758,9 +837,33 @@ const parseConnections = (v: Json): Connections => {
 
 function ConnectionsPage() {
   const { data, error } = useEngineData(Method.connections, parseConnections);
-  if (!data) return <Loading error={error} />;
+  const { scope, machines } = useScope();
+  const remote =
+    scope.mode === "machine"
+      ? machines.find((machine) => machine.host === scope.host && !machine.local)
+      : undefined;
+  if (remote)
+    return (
+      <>
+        <SettingsScopeBar machineOnly />
+        <Group title="Credentials and accounts">
+          <Row
+            title={`Sign in on ${remote.name} itself`}
+            subtitle="Credentials and accounts never leave their machine, so they are not editable here. Open RustCode on that computer and sign in there; this app can still use its threads."
+          />
+        </Group>
+      </>
+    );
+  if (!data)
+    return (
+      <>
+        <SettingsScopeBar machineOnly />
+        <Loading error={error} />
+      </>
+    );
   return (
     <>
+      <SettingsScopeBar machineOnly />
       <Group title="GitHub" footer="RustCode uses the GitHub CLI's sign-in for pull requests.">
         {!data.github?.cliInstalled ? (
           <Row title="GitHub CLI not installed" subtitle="Install it with: brew install gh" />

@@ -2032,6 +2032,18 @@ export class MockEngine {
   private orchestration = 0;
   /** Discord Rich Presence (docs/discord-rich-presence.md), as `discord_rpc_enabled` holds it. */
   private presence = true;
+  /** The server settings of this machine (`_rustcode/settings`, docs/configuration.md). */
+  private serverSettings: JsonObject = {
+    "default-permission-mode": "ask",
+    "resume-after-restart": true,
+    "continue-after-limit": true,
+    "auto-compact-mode": "size",
+    "auto-compact-threshold": 150_000,
+    orchestration: true,
+    "delegates-total": 8,
+    "delegates-per-thread": 4,
+    "read-across-projects": true,
+  };
   /** The payload-capture switches (docs/data-store.md › Captured payloads), off as `config.toml` defaults them. */
   private payloadCapture = { providerPayloads: false, harnessRpcPayloads: false };
   /**
@@ -3555,6 +3567,20 @@ export class MockEngine {
       case "_rustcode/presence/set":
         this.presence = params.enabled === true;
         return { enabled: this.presence, discordDetected: true };
+      case "_rustcode/settings/get": {
+        const keys = arr(params.keys).flatMap((key) => (typeof key === "string" ? [key] : []));
+        const values = keys.length
+          ? Object.fromEntries(
+              keys.filter((key) => key in this.serverSettings).map((key) => [key, this.serverSettings[key]!]),
+            )
+          : this.serverSettings;
+        return { values };
+      }
+      case "_rustcode/settings/set": {
+        const values = obj(params.values);
+        if (values) this.serverSettings = { ...this.serverSettings, ...values };
+        return { values: this.serverSettings };
+      }
       case "_rustcode/harnesses":
         return this.snapshot();
       case "_rustcode/harnesses/models": {
@@ -4894,16 +4920,159 @@ function mockDiscovered(saved: JsonObject[]): JsonObject[] {
 }
 
 /**
+ * The harnesses of a mock machine, with the enabled ones differing from this
+ * app's own so **All machines** shows Mixed and a switch is visible.
+ */
+function mockMachineHarnesses(studio: boolean): JsonObject {
+  const snapshot = {
+    harnesses: [
+      {
+        id: "rustcode",
+        name: "RustCode",
+        kind: "builtin",
+        builtin: true,
+        known: true,
+        enabled: true,
+        command: [],
+        installed: true,
+        auth: "ok",
+        capabilities: BUILTIN_CAPABILITIES,
+        accounts: [],
+        models: [],
+        error: null,
+      },
+      {
+        id: "codex",
+        name: "Codex",
+        kind: "codex",
+        builtin: false,
+        known: true,
+        enabled: !studio,
+        command: ["codex", "app-server"],
+        installed: true,
+        version: "0.162.1",
+        auth: "ok",
+        capabilities: CODEX_CAPS,
+        accounts: [],
+        models: [],
+        error: null,
+      },
+      {
+        id: "claude-code",
+        name: "Claude Code",
+        kind: "acp",
+        builtin: false,
+        known: true,
+        enabled: studio,
+        command: ["claude-agent-acp"],
+        installed: true,
+        version: "2.4.0",
+        auth: "needs_login",
+        capabilities: CLAUDE_CAPS,
+        accounts: [],
+        models: [],
+        error: null,
+      },
+    ],
+    default: studio
+      ? { harness: "claude-code", model: "sonnet-5.5", effort: "low" }
+      : { harness: "codex", model: "gpt-5.5", effort: "high" },
+    onboarded: true,
+    remembers: true,
+  };
+  return snapshot as unknown as JsonObject;
+}
+
+/**
  * One saved machine's ACP, answered in process for `?machines=`: the app's own
  * shell dials the real machine over its gateway, so this exists only where
  * there is no shell to dial with. It answers `initialize` and `session/list`,
  * which is what the app reads of a connected machine in this step.
  */
 export class MockMachine {
+  /** The server settings of this machine, differing from this app's own. */
+  private settings: JsonObject;
+  /** Its harnesses, which a server-settings page may read and toggle. */
+  private harnesses: JsonObject;
+  /** Its skills, with the SKILL.md so a copy can be seen. */
+  private skills: JsonObject[];
+  /** Its MCP servers, with key names but no secret values. */
+  private mcpServers: JsonObject[];
+
   constructor(
     private readonly name: string,
     private readonly threads?: number,
-  ) {}
+  ) {
+    const studio = name === MOCK_STUDIO.name;
+    this.settings = {
+      "default-permission-mode": studio ? "ask" : "edits",
+      "resume-after-restart": studio,
+      "continue-after-limit": true,
+      "auto-compact-mode": studio ? "size" : "cache",
+      "auto-compact-threshold": studio ? 150_000 : 200_000,
+      orchestration: true,
+      "delegates-total": 8,
+      "delegates-per-thread": studio ? 4 : 6,
+      "read-across-projects": true,
+    };
+    this.harnesses = mockMachineHarnesses(studio);
+    this.skills = [
+      {
+        name: studio ? "frontend-design" : "release-automation",
+        description: studio ? "Design guidance for web UIs" : "Cut a release with scripts/release.sh",
+        path: studio
+          ? "/Users/lars/.agents/skills/frontend-design"
+          : "/home/lars/.agents/skills/release-automation",
+        source: "universal",
+        readOnly: false,
+        enabled: true,
+        content: studio
+          ? "---\nname: frontend-design\ndescription: Design guidance for web UIs\n---\n\nRead docs/design.md before shaping a page.\n"
+          : "---\nname: release-automation\ndescription: Cut a release with scripts/release.sh\n---\n\nRun scripts/release.sh --patch.\n",
+      },
+      {
+        name: "shared-notes",
+        description: "Notes every machine can have",
+        path: "/home/lars/.config/rustcode/skills/shared-notes",
+        source: "rustcode",
+        readOnly: false,
+        enabled: false,
+        content:
+          "---\nname: shared-notes\ndescription: Notes every machine can have\n---\n\nKeep notes short.\n",
+      },
+    ];
+    this.mcpServers = studio
+      ? [
+          {
+            name: "notes",
+            transport: "http",
+            target: "https://mcp.example.com/notes",
+            enabled: true,
+            scope: "user",
+            connection: "connected",
+            tools: ["search", "write"],
+            error: null,
+            envKeys: [],
+            headerKeys: ["Authorization"],
+            copyTarget: ["https://mcp.example.com/notes"],
+          },
+        ]
+      : [
+          {
+            name: "github",
+            transport: "stdio",
+            target: "npx -y github-mcp",
+            enabled: true,
+            scope: "user",
+            connection: "connected",
+            tools: ["issues", "pulls"],
+            error: null,
+            envKeys: ["GITHUB_TOKEN"],
+            headerKeys: [],
+            copyTarget: ["npx", "-y", "github-mcp"],
+          },
+        ];
+  }
 
   /** The frames this machine sends back for one line the page wrote. */
   receive(line: string): string[] {
@@ -4941,6 +5110,124 @@ export class MockMachine {
         JSON.stringify({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } }),
       ];
       return reply.filter((x): x is string => x !== null);
+    }
+    if (frame.method === "_rustcode/settings/get") {
+      const keys = arr(obj(frame.params)?.keys).flatMap((key) => (typeof key === "string" ? [key] : []));
+      const values = keys.length
+        ? Object.fromEntries(
+            keys.filter((key) => key in this.settings).map((key) => [key, this.settings[key]!]),
+          )
+        : this.settings;
+      return [JSON.stringify({ jsonrpc: "2.0", id, result: { values } })];
+    }
+    if (frame.method === "_rustcode/settings/set") {
+      const values = obj(obj(frame.params)?.values);
+      if (values) this.settings = { ...this.settings, ...values };
+      return [JSON.stringify({ jsonrpc: "2.0", id, result: { values: this.settings } })];
+    }
+    if (frame.method === "_rustcode/harnesses") {
+      return [JSON.stringify({ jsonrpc: "2.0", id, result: this.harnesses })];
+    }
+    if (frame.method === "_rustcode/harnesses/default") {
+      const params = obj(frame.params);
+      const defaults = obj(this.harnesses.default) ?? {};
+      this.harnesses = {
+        ...this.harnesses,
+        default: {
+          harness: str(params?.harness) ?? defaults.harness ?? "rustcode",
+          model: str(params?.model) ?? null,
+          effort: str(params?.effort) ?? null,
+        },
+      };
+      return [JSON.stringify({ jsonrpc: "2.0", id, result: this.harnesses })];
+    }
+    if (frame.method === "_rustcode/harnesses/set") {
+      const params = obj(frame.params);
+      const id = str(params?.id);
+      const enabled = params?.enabled;
+      const harnesses = arr(this.harnesses.harnesses) as JsonObject[];
+      this.harnesses = {
+        ...this.harnesses,
+        harnesses: harnesses.map((harness) =>
+          str(harness.id) === id && typeof enabled === "boolean" ? { ...harness, enabled } : harness,
+        ),
+      };
+      return [JSON.stringify({ jsonrpc: "2.0", id, result: this.harnesses })];
+    }
+    if (frame.method === "_rustcode/capabilities") {
+      return [
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            configPath: `/home/lars/.config/rustcode/config.toml`,
+            skills: this.skills,
+            mcpServers: this.mcpServers,
+          },
+        }),
+      ];
+    }
+    if (frame.method === "_rustcode/capabilities/set") {
+      const params = obj(frame.params);
+      const name = str(params?.name);
+      const enabled = params?.enabled === true;
+      if (params?.kind === "skill")
+        this.skills = this.skills.map((skill) => (str(skill.name) === name ? { ...skill, enabled } : skill));
+      if (params?.kind === "mcp")
+        this.mcpServers = this.mcpServers.map((server) =>
+          str(server.name) === name ? { ...server, enabled } : server,
+        );
+      return this.receive(JSON.stringify({ jsonrpc: "2.0", id, method: "_rustcode/capabilities" }));
+    }
+    if (frame.method === "_rustcode/capabilities/mcp/add") {
+      const params = obj(frame.params);
+      const target = arr(params?.target).flatMap((part) => (typeof part === "string" ? [part] : []));
+      const transport = str(params?.transport) ?? (target[0]?.startsWith("http") ? "http" : "stdio");
+      this.mcpServers = [
+        ...this.mcpServers.filter((server) => str(server.name) !== str(params?.name)),
+        {
+          name: str(params?.name) ?? "server",
+          transport,
+          target: target.join(" "),
+          enabled: true,
+          scope: "user",
+          connection: "connected",
+          tools: [],
+          error: null,
+          envKeys: arr(params?.env).map((line) => String(line).split("=")[0] ?? ""),
+          headerKeys: arr(params?.headers).map((line) => String(line).split(":")[0] ?? ""),
+          copyTarget: target,
+        },
+      ];
+      return this.receive(JSON.stringify({ jsonrpc: "2.0", id, method: "_rustcode/capabilities" }));
+    }
+    if (frame.method === "_rustcode/capabilities/mcp/remove") {
+      const name = str(obj(frame.params)?.name);
+      this.mcpServers = this.mcpServers.filter((server) => str(server.name) !== name);
+      return this.receive(JSON.stringify({ jsonrpc: "2.0", id, method: "_rustcode/capabilities" }));
+    }
+    if (frame.method === "_rustcode/skills/add") {
+      const params = obj(frame.params);
+      const name = str(params?.name) ?? "skill";
+      this.skills = [
+        ...this.skills.filter((skill) => str(skill.name) !== name),
+        {
+          name,
+          description: "Copied from another machine",
+          path: `/home/lars/.config/rustcode/skills/${name}`,
+          source: "rustcode",
+          readOnly: false,
+          enabled: true,
+          ...(str(params?.content) ? { content: str(params?.content) } : {}),
+        },
+      ];
+      return [
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          result: { path: `/home/lars/.config/rustcode/skills/${name}/SKILL.md` },
+        }),
+      ];
     }
     return [
       JSON.stringify({

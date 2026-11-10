@@ -14,14 +14,17 @@ import {
   SquarePen,
   Trash2,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { arr, bool, type Json, type JsonObject, num, obj, str } from "../acp/jsonrpc";
 import { Method } from "../acp/types";
 import { createSkill, openPath, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
-import { askConfirm, request, toast, useApp } from "../state/store";
+import { mcpCopy } from "../state/settingsRegistry";
+import { machineRequest, useLoadScopeSettings, useScope } from "../state/settingsScope";
+import { askConfirm, errorText, toast, useApp } from "../state/store";
 import { cardInset, cx, noTextHelpers, Spinner, Switch, Tooltip } from "./primitives";
-import { Action, fieldClass, Group, Loading, Row, SectionTitle, useEngineData } from "./settingsKit";
+import { SettingsScopeBar } from "./SettingsScope";
+import { Action, fieldClass, Group, Loading, Row, SectionTitle, Select } from "./settingsKit";
 
 interface Skill {
   name: string;
@@ -31,6 +34,8 @@ interface Skill {
   /** A harness owns the folder: listed here, never written by RustCode. */
   readOnly: boolean;
   enabled: boolean;
+  /** Its SKILL.md, so Settings can copy the definition to another machine. */
+  content?: string;
 }
 
 interface McpServer {
@@ -43,6 +48,9 @@ interface McpServer {
   tools: string[];
   toolCount: number;
   error?: string;
+  envKeys: string[];
+  headerKeys: string[];
+  copyTarget: string[] | null;
 }
 
 interface Capabilities {
@@ -65,6 +73,7 @@ const parseCapabilities = (v: Json): Capabilities => {
         source: str(o.source) ?? "",
         readOnly: bool(o.readOnly) ?? false,
         enabled: bool(o.enabled) ?? false,
+        content: str(o.content),
       };
     }),
     mcpServers: arr(root.mcpServers).map((s) => {
@@ -84,6 +93,11 @@ const parseCapabilities = (v: Json): Capabilities => {
         tools,
         toolCount: Array.isArray(o.tools) ? tools.length : (num(o.tools) ?? 0),
         error: str(o.error),
+        envKeys: arr(o.envKeys).flatMap((key) => (typeof key === "string" ? [key] : [])),
+        headerKeys: arr(o.headerKeys).flatMap((key) => (typeof key === "string" ? [key] : [])),
+        copyTarget: Array.isArray(o.copyTarget)
+          ? arr(o.copyTarget).flatMap((part) => (typeof part === "string" ? [part] : []))
+          : null,
       };
     }),
   };
@@ -106,32 +120,67 @@ const SOURCE: Record<string, { label: string; order: number; note?: string }> = 
 
 const sourceOf = (s: string) => SOURCE[s] ?? { label: s || "Other", order: 9 };
 
-function useCapabilities() {
-  const state = useEngineData(Method.capabilities, parseCapabilities);
+/** One machine's skills and MCP servers, read over its own connection. */
+function useCapabilities(host: string, version: number) {
+  const [data, setData] = useState<Capabilities | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    try {
+      setData(parseCapabilities(await machineRequest(host, Method.capabilities, {}, 30_000)));
+      setError(null);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  }, [host]);
+  // `version` re-reads the machine after an add-to-all reached it.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `version` is the read trigger
   useEffect(() => {
-    if (!state.data?.mcpServers.some((server) => server.connection === "connecting")) return;
-    const timer = setInterval(() => void state.reload(), 1000);
+    void load();
+  }, [load, version]);
+  useEffect(() => {
+    if (!data?.mcpServers.some((server) => server.connection === "connecting")) return;
+    const timer = setInterval(() => void load(), 1000);
     return () => clearInterval(timer);
-  }, [state.data, state.reload]);
+  }, [data, load]);
   const run = async (method: string, params: JsonObject, timeout = 30_000) => {
     try {
-      state.setData(parseCapabilities(await request(method, params, timeout)));
+      setData(parseCapabilities(await machineRequest(host, method, params, timeout)));
       return true;
     } catch (e) {
-      toast(e instanceof Error ? e.message : String(e), "error");
+      toast(errorText(e), "error");
       return false;
     }
   };
-  return { ...state, run };
+  return { data, error, reload: load, run };
 }
 
 export function CapabilitiesPage() {
-  const { data, error, run, reload } = useCapabilities();
+  useLoadScopeSettings();
+  const { targets, writes, machines } = useScope();
   const [filter, setFilter] = useState("");
-  if (!data) return <Loading error={error} />;
+  const [version, bump] = useState(0);
+  const [addingAll, setAddingAll] = useState(false);
   const q = filter.trim().toLowerCase();
+  const online = targets.filter((machine) => machine.online);
+  // Add to all machines sends the definition, never the values: a secret set
+  // here stays here and is named for the user to set on each machine.
+  const runAll = async (method: string, params: JsonObject, timeout?: number) => {
+    let ok = true;
+    for (const machine of writes) {
+      const forMachine = method === Method.mcpAdd ? blankMcpSecrets(params) : params;
+      try {
+        await machineRequest(machine.host, method, forMachine, timeout);
+      } catch (e) {
+        ok = false;
+        toast(`${machine.name}: ${errorText(e)}`, "error");
+      }
+    }
+    if (ok) bump((n) => n + 1);
+    return ok;
+  };
   return (
     <>
+      <SettingsScopeBar />
       <div className="mb-6 flex items-center gap-2">
         <label className={cx(fieldClass, "flex flex-1 items-center gap-2 focus-within:bg-fill-strong")}>
           <Search size={14} className="shrink-0 text-fg-faint" />
@@ -144,14 +193,119 @@ export function CapabilitiesPage() {
             className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-fg-faint"
           />
         </label>
-        <Action onClick={() => void reload()} aria-label="Refresh">
+        <Action onClick={() => bump((n) => n + 1)} aria-label="Refresh">
           <RefreshCw size={12} /> Refresh
         </Action>
       </div>
-      <McpSection data={data} filter={q} run={run} />
-      <SkillsSection data={data} filter={q} run={run} />
+      {online.length === 0 && (
+        <p className="mb-6 rounded-lg bg-warning/10 px-3 py-2 text-callout">
+          No connected machine. Connect one in Settings › Machines to read or change its skills and MCP
+          servers.
+        </p>
+      )}
+      {writes.length > 1 && (
+        <Group
+          title="Add to all machines"
+          action={
+            <Action size="sm" onClick={() => setAddingAll(!addingAll)} aria-expanded={addingAll}>
+              <Plus size={12} /> Add server to all
+            </Action>
+          }
+          footer="The definition is added to every connected machine. Environment variables and headers are left blank on each one; set their values on that machine."
+        >
+          {!addingAll && (
+            <Row
+              title="One MCP server on every connected machine"
+              subtitle="Choose Add server to all and enter the definition once."
+            />
+          )}
+          {addingAll && (
+            <AddServer
+              run={async (method, params, timeout) => {
+                const keys = method === Method.mcpAdd ? mcpSecretKeys(params) : [];
+                const ok = await runAll(method, params, timeout);
+                if (ok && keys.length)
+                  toast(`Added to ${writes.length} machines. Set ${keys.join(", ")} on each one.`, "success");
+                return ok;
+              }}
+              onDone={() => setAddingAll(false)}
+            />
+          )}
+        </Group>
+      )}
+      {targets.map((machine, index) => (
+        <MachineCapabilities
+          key={machine.host || "local"}
+          machine={machine}
+          others={machines.filter((other) => other.host !== machine.host && other.online)}
+          filter={q}
+          version={version}
+          showName={targets.length > 1 || !machine.local}
+          last={index === targets.length - 1}
+          onChanged={() => bump((n) => n + 1)}
+        />
+      ))}
     </>
   );
+}
+
+/** One machine's two sections, under its name when the page shows more than one. */
+function MachineCapabilities({
+  machine,
+  others,
+  filter,
+  version,
+  showName,
+  last,
+  onChanged,
+}: {
+  machine: { host: string; name: string; online: boolean; local: boolean };
+  others: { host: string; name: string; online: boolean; local: boolean }[];
+  filter: string;
+  version: number;
+  showName: boolean;
+  last: boolean;
+  onChanged: () => void;
+}) {
+  const { data, error, run } = useCapabilities(machine.host, version);
+  if (!machine.online)
+    return (
+      <Group title={showName ? machine.name : undefined}>
+        <Row
+          title="Offline — keeps its skills and servers"
+          subtitle="Connect the machine in Settings › Machines to read or change them."
+        />
+      </Group>
+    );
+  if (!data) return <Loading error={error} />;
+  return (
+    <div className={cx(!last && "mb-8")}>
+      {showName && <SectionTitle title={machine.local ? "This machine" : machine.name} />}
+      <McpSection data={data} filter={filter} run={run} others={others} onChanged={onChanged} />
+      <SkillsSection data={data} filter={filter} run={run} others={others} onChanged={onChanged} />
+    </div>
+  );
+}
+
+/** The env/header values of an add request as key names with blank values. */
+function blankMcpSecrets(params: JsonObject): JsonObject {
+  const env = Array.isArray(params.env)
+    ? params.env.map((line) => `${String(line).split("=")[0]}=`)
+    : undefined;
+  const headers = Array.isArray(params.headers)
+    ? params.headers.map((line) => `${String(line).split(":")[0]}: `)
+    : undefined;
+  return { ...params, ...(env ? { env } : {}), ...(headers ? { headers } : {}) };
+}
+
+function mcpSecretKeys(params: JsonObject): string[] {
+  const env = Array.isArray(params.env)
+    ? params.env.map((line) => String(line).split("=")[0] ?? "").filter(Boolean)
+    : [];
+  const headers = Array.isArray(params.headers)
+    ? params.headers.map((line) => String(line).split(":")[0] ?? "").filter(Boolean)
+    : [];
+  return [...env, ...headers];
 }
 
 // ---------------------------------------------------------------- MCP
@@ -181,14 +335,55 @@ const CONNECTION: Record<string, string> = {
   not_connected: "Not connected",
 };
 
+/** A "Copy to…" menu: one other machine, or every other connected one. */
+function CopyMenu({
+  label,
+  busy,
+  others,
+  onCopy,
+}: {
+  label: string;
+  busy: boolean;
+  others: { host: string; name: string; online: boolean; local: boolean }[];
+  onCopy: (target: string) => void;
+}) {
+  const [value, setValue] = useState("");
+  const options = [
+    { value: "", label: busy ? "Copying…" : "Copy to…" },
+    ...others.map((machine) => ({
+      value: `machine:${machine.host}`,
+      label: `Copy to ${machine.name}`,
+    })),
+    ...(others.length > 1 ? [{ value: "all", label: "Copy to all machines" }] : []),
+  ];
+  return (
+    <Select
+      label={label}
+      value={value}
+      disabled={busy}
+      options={options}
+      onChange={(next) => {
+        setValue("");
+        if (!next) return;
+        onCopy(next === "all" ? "all" : next.slice("machine:".length));
+      }}
+      className="max-w-[180px]"
+    />
+  );
+}
+
 function McpSection({
   data,
   filter,
   run,
+  others,
+  onChanged,
 }: {
   data: Capabilities;
   filter: string;
   run: (method: string, params: JsonObject, timeout?: number) => Promise<boolean>;
+  others: { host: string; name: string; online: boolean; local: boolean }[];
+  onChanged: () => void;
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -232,6 +427,8 @@ function McpSection({
           open={open === s.name}
           onToggleOpen={() => setOpen(open === s.name ? null : s.name)}
           run={run}
+          others={others}
+          onChanged={onChanged}
         />
       ))}
     </Group>
@@ -243,11 +440,15 @@ function McpRow({
   open,
   onToggleOpen,
   run,
+  others,
+  onChanged,
 }: {
   server: McpServer;
   open: boolean;
   onToggleOpen: () => void;
   run: (method: string, params: JsonObject, timeout?: number) => Promise<boolean>;
+  others: { host: string; name: string; online: boolean; local: boolean }[];
+  onChanged: () => void;
 }) {
   // The engine's stderr lines that name this server.
   // Select the log itself and filter here: a selector that builds a new array on every read made
@@ -263,12 +464,56 @@ function McpRow({
   // unconfigured server has nothing to reconnect to.
   const canRetry = s.enabled && s.scope !== "session";
   const [retrying, setRetrying] = useState(false);
+  const [copying, setCopying] = useState(false);
   const retry = async () => {
     setRetrying(true);
     try {
       await run(Method.mcpRestart, { name: s.name }, 45_000);
     } finally {
       setRetrying(false);
+    }
+  };
+  const copyTo = async (target: string) => {
+    const copy = mcpCopy({
+      name: s.name,
+      transport: s.transport,
+      copyTarget: s.copyTarget,
+      envKeys: s.envKeys,
+      headerKeys: s.headerKeys,
+    });
+    if (!copy) {
+      toast("This server's command has a masked secret; set it up on that machine itself.", "error");
+      return;
+    }
+    const nodes = target === "all" ? others : others.filter((machine) => machine.host === target);
+    if (!nodes.length) return;
+    setCopying(true);
+    try {
+      for (const machine of nodes) {
+        await machineRequest(
+          machine.host,
+          Method.mcpAdd,
+          {
+            name: copy.name,
+            target: copy.target,
+            transport: copy.transport,
+            ...(copy.transport === "http" ? { headers: copy.headers } : { env: copy.env }),
+          },
+          45_000,
+        );
+      }
+      const where = nodes.map((machine) => machine.name).join(", ");
+      toast(
+        copy.secretKeys.length
+          ? `Copied ${s.name} to ${where}. Set ${copy.secretKeys.join(", ")} there.`
+          : `Copied ${s.name} to ${where}.`,
+        "success",
+      );
+      onChanged();
+    } catch (e) {
+      toast(errorText(e), "error");
+    } finally {
+      setCopying(false);
     }
   };
   return (
@@ -333,6 +578,14 @@ function McpRow({
               />
             </span>
           </Tooltip>
+          {others.length > 0 && s.copyTarget?.length ? (
+            <CopyMenu
+              label={`Copy ${s.name}`}
+              busy={copying}
+              others={others}
+              onCopy={(target) => void copyTo(target)}
+            />
+          ) : null}
         </div>
       </div>
       {open && (
@@ -342,6 +595,14 @@ function McpRow({
             <dd className="selectable m-0 truncate font-mono text-fg-muted">{s.target}</dd>
             <dt className="text-fg-faint">Scope</dt>
             <dd className="m-0 text-fg-muted">{s.scope}</dd>
+            {(s.envKeys.length > 0 || s.headerKeys.length > 0) && (
+              <>
+                <dt className="text-fg-faint">Set here</dt>
+                <dd className="m-0 font-mono text-caption text-fg-muted">
+                  {[...s.envKeys, ...s.headerKeys].join(", ")} — values stay on this machine
+                </dd>
+              </>
+            )}
             {s.tools.length > 0 && (
               <>
                 <dt className="text-fg-faint">Tools</dt>
@@ -456,10 +717,14 @@ function SkillsSection({
   data,
   filter,
   run,
+  others,
+  onChanged,
 }: {
   data: Capabilities;
   filter: string;
   run: (method: string, params: JsonObject, timeout?: number) => Promise<boolean>;
+  others: { host: string; name: string; online: boolean; local: boolean }[];
+  onChanged: () => void;
 }) {
   const [creating, setCreating] = useState(false);
   const on = data.skills.filter((s) => s.enabled).length;
@@ -530,6 +795,9 @@ function SkillsSection({
                   </Tooltip>
                 </div>
               )}
+              {s.content && others.length > 0 && (
+                <SkillCopy skill={s} others={others} onChanged={onChanged} />
+              )}
               <Switch
                 label={`Use ${s.name}`}
                 checked={s.enabled}
@@ -542,6 +810,53 @@ function SkillsSection({
         </Group>
       ))}
     </>
+  );
+}
+
+/** Copy one skill's definition (its SKILL.md) to another connected machine. */
+function SkillCopy({
+  skill,
+  others,
+  onChanged,
+}: {
+  skill: Skill;
+  others: { host: string; name: string; online: boolean; local: boolean }[];
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const copyTo = async (target: string) => {
+    if (!skill.content) return;
+    const nodes = target === "all" ? others : others.filter((machine) => machine.host === target);
+    if (!nodes.length) return;
+    setBusy(true);
+    try {
+      for (const machine of nodes) {
+        await machineRequest(
+          machine.host,
+          "_rustcode/skills/add",
+          { name: skill.name, content: skill.content },
+          30_000,
+        );
+      }
+      const where = nodes.map((machine) => machine.name).join(", ");
+      toast(
+        `Copied ${skill.name}'s SKILL.md to ${where}. Other files in the skill stay on the source machine.`,
+        "success",
+      );
+      onChanged();
+    } catch (e) {
+      toast(errorText(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <CopyMenu
+      label={`Copy ${skill.name}`}
+      busy={busy}
+      others={others}
+      onCopy={(target) => void copyTo(target)}
+    />
   );
 }
 

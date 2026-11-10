@@ -43,7 +43,14 @@ pub struct SkillEntry {
     /// RustCode from offering the skill. Nothing is ever written there.
     pub read_only: bool,
     pub enabled: bool,
+    /// The skill's `SKILL.md`, so Settings can copy the definition to another
+    /// machine. Absent when it is unreadable or larger than
+    /// [`SKILL_CONTENT_LIMIT`].
+    pub content: Option<String>,
 }
+
+/// How large a `SKILL.md` may be before the snapshot leaves its content out.
+pub const SKILL_CONTENT_LIMIT: u64 = 64 * 1024;
 
 /// Whether a configured MCP server is up in this process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -69,7 +76,8 @@ impl McpConnection {
 }
 
 /// One configured or connected MCP server, without header or environment
-/// values: those are usually secrets.
+/// values: those are usually secrets. The key names are kept so Settings can
+/// copy the definition to another machine and say which values to set there.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpEntry {
@@ -79,6 +87,11 @@ pub struct McpEntry {
     /// The command line or URL, with credentials and secret-looking
     /// arguments masked.
     pub target: String,
+    /// The unmasked target as its parts, when there was nothing to mask, so
+    /// Settings can copy the definition faithfully. `None` when the target
+    /// carries a password or a secret-looking argument: a masked value is
+    /// never copied.
+    pub copy_target: Option<Vec<String>>,
     pub enabled: bool,
     /// `user` when the user config declares it and a toggle reaches it,
     /// `project` when only a project config file does, `session` when it is
@@ -87,6 +100,10 @@ pub struct McpEntry {
     pub connection: McpConnection,
     pub tools: Vec<String>,
     pub error: Option<String>,
+    /// The names of its environment variables, never their values.
+    pub env_keys: Vec<String>,
+    /// The names of its HTTP headers, never their values.
+    pub header_keys: Vec<String>,
 }
 
 impl McpEntry {
@@ -147,6 +164,7 @@ pub fn skill_entries_from(
                     .unwrap_or("configured"),
                 read_only: root.is_some_and(|root| root.kind.is_harness_owned()),
                 enabled: !disabled.contains(&skill.name),
+                content: skill_content(&skill.path),
             }
         })
         .collect()
@@ -197,6 +215,10 @@ pub(crate) fn mcp_entries_from(
                     ),
                 ),
             };
+            let copy_target = config.and_then(|server| {
+                let parts = raw_target_parts(server);
+                (parts.join(" ") == redacted_target(server)).then_some(parts)
+            });
             McpEntry {
                 name: status.name.clone(),
                 transport: match config {
@@ -204,6 +226,7 @@ pub(crate) fn mcp_entries_from(
                     _ => "stdio",
                 },
                 target: config.map(redacted_target).unwrap_or_default(),
+                copy_target,
                 enabled: config.is_none_or(|server| server.enabled),
                 scope: if config.is_none() {
                     "session"
@@ -215,9 +238,31 @@ pub(crate) fn mcp_entries_from(
                 connection,
                 tools,
                 error,
+                env_keys: config
+                    .map(|server| sorted_keys(&server.env))
+                    .unwrap_or_default(),
+                header_keys: config
+                    .map(|server| sorted_keys(&server.headers))
+                    .unwrap_or_default(),
             }
         })
         .collect()
+}
+
+fn sorted_keys(map: &HashMap<String, String>) -> Vec<String> {
+    let mut keys: Vec<String> = map.keys().cloned().collect();
+    keys.sort();
+    keys
+}
+
+/// The skill's `SKILL.md` text, when it is readable and small enough to copy.
+fn skill_content(path: &Path) -> Option<String> {
+    let file = path.join("SKILL.md");
+    let metadata = std::fs::metadata(&file).ok()?;
+    if !metadata.is_file() || metadata.len() > SKILL_CONTENT_LIMIT {
+        return None;
+    }
+    std::fs::read_to_string(file).ok()
 }
 
 fn mcp_workspace() -> std::path::PathBuf {
@@ -254,6 +299,50 @@ fn user_config_dir() -> Result<std::path::PathBuf, String> {
 /// request. Returns the new `disabled_skills` list.
 pub fn set_skill_enabled(name: &str, enabled: bool) -> Result<Vec<String>, String> {
     set_skill_enabled_in(&user_config_dir()?, name, enabled)
+}
+
+/// Write a skill's `SKILL.md` under the user's RustCode skills directory, so
+/// another machine's settings page can copy its definition here (#3202). The
+/// content is the definition; any other files the source skill had do not
+/// travel, because the snapshot carries the `SKILL.md` only.
+pub fn add_skill(name: &str, content: &str) -> Result<String, String> {
+    let name = name.trim();
+    if !is_valid_skill_name(name) {
+        return Err(format!(
+            "invalid skill name '{name}'; use lowercase letters, digits and dashes"
+        ));
+    }
+    if content.trim().is_empty() {
+        return Err("the skill is empty".to_owned());
+    }
+    if content.len() as u64 > SKILL_CONTENT_LIMIT {
+        return Err("the skill is too large to copy".to_owned());
+    }
+    let dir = user_config_dir()?.join("skills").join(name);
+    let file = dir.join("SKILL.md");
+    if file.exists() {
+        return Err(format!(
+            "a skill named '{name}' already exists on this machine"
+        ));
+    }
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| format!("could not create {}: {error}", dir.display()))?;
+    std::fs::write(&file, content)
+        .map_err(|error| format!("could not write {}: {error}", file.display()))?;
+    crate::skills::bump_skill_catalog_generation();
+    Ok(file.display().to_string())
+}
+
+fn is_valid_skill_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && name
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
 }
 
 pub(crate) fn set_skill_enabled_in(
@@ -445,6 +534,16 @@ fn is_secret_name(name: &str) -> bool {
 
 /// The command line or URL of a server with credentials masked, so a settings
 /// page can show where a server points without leaking what unlocks it.
+/// The target as configured, before secrets are masked.
+pub fn raw_target_parts(server: &crate::config::McpServerConfig) -> Vec<String> {
+    if server.is_remote() {
+        return vec![server.url.clone().unwrap_or_default()];
+    }
+    let mut parts = vec![server.command.clone()];
+    parts.extend(server.args.iter().cloned());
+    parts
+}
+
 pub fn redacted_target(server: &crate::config::McpServerConfig) -> String {
     if server.is_remote() {
         let raw = server.url.as_deref().unwrap_or_default();
@@ -630,6 +729,7 @@ mod tests {
             source: "universal",
             read_only: false,
             enabled: true,
+            content: None,
         };
         let mut panel = SkillsPanel {
             entries: vec![entry("deploy"), entry("review")],
@@ -677,9 +777,12 @@ mod tests {
             serde_json::to_value(snapshot).unwrap(),
             serde_json::json!({
                 "skills": [{"name": "deploy", "description": "deploy skill", "path": "/p/deploy",
-                            "source": "configured", "readOnly": false, "enabled": true}],
-                "mcpServers": [{"name": "idle", "transport": "stdio", "target": "npx", "enabled": true,
-                                "scope": "user", "connection": "not_connected", "tools": [], "error": null}],
+                            "source": "configured", "readOnly": false, "enabled": true,
+                            "content": null}],
+                "mcpServers": [{"name": "idle", "transport": "stdio", "target": "npx",
+                                "copyTarget": ["npx"], "enabled": true, "scope": "user",
+                                "connection": "not_connected", "tools": [], "error": null,
+                                "envKeys": ["API_KEY"], "headerKeys": []}],
                 "configPath": "/c/config.toml",
             })
         );
