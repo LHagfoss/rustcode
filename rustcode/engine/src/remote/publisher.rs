@@ -28,7 +28,7 @@ use super::projection::{
 };
 use super::protocol::{
     OwnerHealth, REMOTE_PROTOCOL_VERSION, RemoteEvent, RemoteEventFrame, RemoteSessionInfo,
-    RemoteSnapshot, ResyncReason,
+    RemoteSnapshot, RemoteThreadParent, ResyncReason,
 };
 
 /// Position in the live response up to which text was published.
@@ -190,6 +190,10 @@ pub struct SessionPublisher {
     batch_id: Option<String>,
     unannounced: Unannounced,
     info: RemoteSessionInfo,
+    /// The thread this one was started from, read once when the publisher is
+    /// registered: it never changes for the life of the session, and the
+    /// projection that publishes it stays free of the store.
+    parent: Option<RemoteThreadParent>,
     /// The outbound queue overflowed; nothing is sent until a resync.
     lagging: bool,
     snapshot_due: Option<Option<ResyncReason>>,
@@ -246,9 +250,14 @@ impl SessionPublisher {
         turn_stream_open: bool,
     ) -> (Self, OwnerMessage) {
         let limits = ProjectionLimits::default();
+        let parent = super::session_parent(&registration.session_id);
         let mut publisher = Self {
-            info: project_session_info(state, &Self::context(&registration, 0, state)),
+            info: project_session_info(
+                state,
+                &Self::context(&registration, 0, state, parent.as_ref()),
+            ),
             registration,
+            parent,
             limits,
             sequence: 0,
             observed: Vec::new(),
@@ -315,6 +324,7 @@ impl SessionPublisher {
         registration: &SessionRegistration,
         sequence: u64,
         state: &AppState,
+        parent: Option<&RemoteThreadParent>,
     ) -> ProjectionContext {
         ProjectionContext {
             registration_epoch: registration.registration_epoch,
@@ -327,6 +337,7 @@ impl SessionPublisher {
                 .as_ref()
                 .filter(|(session_id, _)| *session_id == state.active_session_id)
                 .and_then(|(_, title)| title.clone()),
+            parent: parent.cloned(),
         }
     }
 
@@ -347,7 +358,12 @@ impl SessionPublisher {
     fn snapshot(&mut self, state: &AppState, resync: Option<ResyncReason>) -> OwnerMessage {
         let snapshot = project_snapshot(
             state,
-            &Self::context(&self.registration, self.sequence, state),
+            &Self::context(
+                &self.registration,
+                self.sequence,
+                state,
+                self.parent.as_ref(),
+            ),
             &self.limits,
         );
         self.announced_turn = state.active_turn_id.clone();
@@ -583,7 +599,10 @@ impl SessionPublisher {
         if let Some(resync) = self.snapshot_due {
             messages.push(self.snapshot(state, resync));
         } else {
-            let info = project_session_info(state, &Self::context(&self.registration, 0, state));
+            let info = project_session_info(
+                state,
+                &Self::context(&self.registration, 0, state, self.parent.as_ref()),
+            );
             if info != self.info {
                 self.info = info.clone();
                 messages.push(OwnerMessage::SessionInfo(info));
@@ -845,7 +864,12 @@ mod tests {
         state.clear_current_response();
         let snapshot = project_snapshot(
             &state,
-            &SessionPublisher::context(publisher.registration(), publisher.sequence(), &state),
+            &SessionPublisher::context(
+                publisher.registration(),
+                publisher.sequence(),
+                &state,
+                None,
+            ),
             &ProjectionLimits::default(),
         );
         assert_eq!(snapshot.turn.as_ref().unwrap().thought_time_ms, None);

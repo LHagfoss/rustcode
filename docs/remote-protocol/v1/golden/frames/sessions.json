@@ -27,6 +27,10 @@
       "model": "gpt-5.5",
       "harness": "rustcode",
       "turn_count": 0,
+      "parent": {
+        "session_id": "5f0c2d9e-7a41-4c1b-9d55-0b6c1f2a3e44",
+        "relationship": "delegate"
+      },
       "activity": "idle",
       "attention": {
         "approval": false,

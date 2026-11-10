@@ -39,6 +39,7 @@ pub(crate) fn info(session_id: &str, epoch: u64) -> RemoteSessionInfo {
         harness: Some("rustcode".to_owned()),
         turn_count: None,
         last_active_at: None,
+        parent: None,
         activity: SessionActivity::Idle,
         attention: RemoteAttention {
             approval: false,

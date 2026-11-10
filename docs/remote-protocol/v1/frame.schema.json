@@ -1756,6 +1756,17 @@
           ],
           "description": "What has an `open` session open, when the host knows. Absent from\nolder hosts and when the holder did not say; clients then name no\nplace."
         },
+        "parent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RemoteThreadParent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The thread this one was started from, so a client folds delegates,\nforks and side chats under their parent here as it does in the live\nlist. Absent for a top-level thread and from a host that predates the\nfield."
+        },
         "project": {
           "description": "The project the thread belongs to: its recorded workspace directory,\nso a device can group threads of one project together. Absent for a\nsession that predates workspace recording; such a session cannot be\nresumed from a device.",
           "type": [
@@ -1823,6 +1834,17 @@
         "model": {
           "description": "The model the thread runs on, as the host names it; empty when the\nhost does not know it.",
           "type": "string"
+        },
+        "parent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RemoteThreadParent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The thread this one was started from, so a client can fold delegates,\nforks and side chats under their parent. Absent for a top-level thread\nand from a host that predates the field."
         },
         "registration_epoch": {
           "format": "uint64",
@@ -2128,6 +2150,23 @@
         "cancelled"
       ],
       "type": "string"
+    },
+    "RemoteThreadParent": {
+      "description": "The thread above a related one, as the host recorded it in the thread's own\nmetadata (`_meta.rustcode.parent` for the app). A record written before the\nrelationship existed was always a delegate, and a record that never\nrecovered the parent's ID has none to report.",
+      "properties": {
+        "relationship": {
+          "description": "Why the parent exists: `delegate`, `fork`, `side_chat`, or `other` for\none a later release wrote. A client that does not know a value keeps the\nthread as a child and never counts it as a delegate.",
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session_id",
+        "relationship"
+      ],
+      "type": "object"
     },
     "RemoteTool": {
       "properties": {

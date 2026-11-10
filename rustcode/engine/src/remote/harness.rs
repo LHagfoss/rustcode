@@ -41,8 +41,8 @@ use super::protocol::{
     RemoteAttention, RemoteError, RemoteErrorCode, RemoteHistoryPage, RemoteMessage,
     RemoteMessageTool, RemoteOmitted, RemoteOperation, RemotePendingPrompt,
     RemotePendingPromptKind, RemoteQuestion, RemoteQuestionOption, RemoteRequest, RemoteResult,
-    RemoteSessionInfo, RemoteSnapshot, RemoteTool, RemoteToolState, RemoteTurn, RemoteTurnTiming,
-    SessionActivity,
+    RemoteSessionInfo, RemoteSnapshot, RemoteThreadParent, RemoteTool, RemoteToolState, RemoteTurn,
+    RemoteTurnTiming, SessionActivity,
 };
 
 /// Prompts a device may have queued on one thread. Past this the owner says
@@ -434,6 +434,9 @@ pub(crate) struct HarnessMirror {
     cwd: PathBuf,
     model: String,
     title: String,
+    /// The thread this one was started from, read when the mirror is created:
+    /// it never changes, and the snapshot builds stay free of the store.
+    parent: Option<RemoteThreadParent>,
     state: StdMutex<Mirror>,
     /// Prompts that were applied to the harness and whose turn has not
     /// returned yet. A turn the harness is between phases of still counts.
@@ -464,12 +467,14 @@ impl HarnessMirror {
             .map(|turn| turn.turn_id.clone())
             .collect::<std::collections::HashSet<_>>()
             .len() as u64;
+        let parent = super::session_parent(&session_id);
         Self {
             session_id,
             harness,
             cwd,
             model,
             title,
+            parent,
             state: StdMutex::new(Mirror {
                 history,
                 turns,
@@ -896,6 +901,7 @@ impl HarnessMirror {
                 harness: Some(self.harness.clone()),
                 turn_count: Some(state.turns),
                 last_active_at: state.last_active_at.clone(),
+                parent: self.parent.clone(),
                 activity: if awaiting_approval {
                     SessionActivity::AwaitingApproval
                 } else if awaiting_question {
