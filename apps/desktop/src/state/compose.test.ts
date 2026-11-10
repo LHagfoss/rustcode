@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
+  carriesExtras,
   commandSuggestions,
   composedText,
   emptyExtras,
+  hasExtras,
   hashToken,
   hasTokens,
   insertCommand,
@@ -11,6 +13,7 @@ import {
   mentionToken,
   messageCollapses,
   promptBlocks,
+  pruneMentions,
   rankAgents,
   rankThreads,
   sentAttachments,
@@ -498,5 +501,30 @@ describe("a mention in the draft", () => {
   test("a harness mention is the same pill a file reference gets", () => {
     const codex = { kind: "agent" as const, harness: "codex", name: "codex" };
     expect(splitTokens("ask @codex", [codex])).toEqual([{ text: "ask " }, { ref: "codex" }]);
+  });
+});
+
+describe("a mention that stays with a waiting message", () => {
+  const thread = { kind: "thread" as const, id: "42", title: "Ship the tree" };
+
+  test("a mention alone is something the message carries, though not a chip", () => {
+    const mentions = { ...emptyExtras, mentions: [thread] };
+    // Nothing to draw above the field, so it never makes an empty draft sendable…
+    expect(hasExtras(mentions)).toBe(false);
+    // …but a message waiting in a queue or a new thread's setup keeps it, or the id is lost.
+    expect(carriesExtras(mentions)).toBe(true);
+    expect(carriesExtras(emptyExtras)).toBe(false);
+    expect(carriesExtras(undefined)).toBe(false);
+    expect(carriesExtras({ ...emptyExtras, links: ["https://a.dev"] })).toBe(true);
+  });
+
+  test("the mentions a draft still writes, in the order it writes them", () => {
+    const codex = { kind: "agent" as const, harness: "codex", name: "codex" };
+    expect(pruneMentions("look at #Ship the tree, then @codex", [codex, thread])).toEqual([thread, codex]);
+    // A token the user deleted leaves nothing to expand.
+    expect(pruneMentions("nothing left", [thread])).toEqual([]);
+    expect(pruneMentions("#Ship the tree", [])).toEqual([]);
+    // Two threads with one title keep both registrations: the draft says the title twice.
+    expect(pruneMentions("#Ship the tree and #Ship the tree", [thread, thread])).toHaveLength(2);
   });
 });

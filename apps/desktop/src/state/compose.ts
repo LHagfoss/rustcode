@@ -225,6 +225,16 @@ export function mentionRuns(text: string, mentions: readonly Mention[]): (string
   return out;
 }
 
+/**
+ * The mentions the draft still writes, in the order it writes them: a token the user deleted leaves
+ * nothing to expand, so its registration goes with it. The same token twice keeps two registrations,
+ * because two threads may share a title (a `#` token says only the title).
+ */
+export function pruneMentions(text: string, mentions: readonly Mention[] | undefined): Mention[] {
+  if (!mentions?.length) return [];
+  return mentionRuns(text, mentions).flatMap((run) => (typeof run === "string" ? [] : [run.mention]));
+}
+
 /** The message's words for each mention in it; a mention no longer in the draft is left out. */
 export function serializeMentions(text: string, mentions: readonly Mention[] | undefined): string {
   if (!mentions?.length) return text;
@@ -322,6 +332,16 @@ export const emptyExtras: ComposeExtras = { links: [], attachments: [] };
 
 export function hasExtras(extras: ComposeExtras | undefined): boolean {
   return !!extras && (!!extras.command || extras.links.length > 0 || extras.attachments.length > 0);
+}
+
+/**
+ * Whether anything about the message has to travel beside its words: a chip, or the id a mention
+ * stands for (the draft says only `#Title`, the message says the thread). Not `hasExtras`: a
+ * mention never makes an empty draft sendable, but it must not be dropped when the message waits in
+ * a queue or a new thread's setup, or the id it was picked for is lost.
+ */
+export function carriesExtras(extras: ComposeExtras | undefined): boolean {
+  return hasExtras(extras) || (extras?.mentions?.length ?? 0) > 0;
 }
 
 /**

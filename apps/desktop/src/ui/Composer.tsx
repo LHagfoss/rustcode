@@ -39,6 +39,7 @@ import {
 import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { modelName, projectName, type SlashCommand } from "../acp/types";
+import type { ThreadStatus } from "../acp/v2";
 import { suggestBranch, validBranch } from "../acp/v2";
 import { FIELD_FADE, type FieldFade, fieldFade } from "../lib/fade";
 import { measuredFieldHeight } from "../lib/fieldHeight";
@@ -76,6 +77,7 @@ import {
   MAX_INLINE_FILE_BYTES,
   type Mention,
   type MentionState,
+  pruneMentions,
   rankAgents,
   rankThreads,
   sentMessages,
@@ -268,6 +270,17 @@ type DrawerRowItem =
 const projectKeyOf = (session: { cwd?: string; repo?: string; worktree?: { repo?: string } }) =>
   session.worktree?.repo || session.repo || session.cwd || "";
 
+/**
+ * What a thread is doing, as the `#` list orders it and says it: the app's live turn first, then what
+ * the engine listed (a thread working in another window is working here too), and settled only when
+ * the engine says so.
+ */
+function mentionStateOf(session: { status?: ThreadStatus }, working: boolean, asking: boolean): MentionState {
+  if (asking || session.status === "needs_input") return "needs";
+  if (working || session.status === "running") return "working";
+  return session.status === "done" ? "settled" : "open";
+}
+
 /** What a thread's state says last in its row, in the sidebar's own words and tones. */
 const MENTION_WORD: Record<MentionState, string> = {
   needs: "Needs you",
@@ -404,13 +417,7 @@ export const Composer = memo(function Composer({
           harness: session.harness,
           project: project ? projectName(project) : undefined,
           home: project === home || session.cwd === home,
-          state: askingIds.has(session.id)
-            ? "needs"
-            : workingIds.has(session.id)
-              ? "working"
-              : session.status === "done"
-                ? "settled"
-                : "open",
+          state: mentionStateOf(session, workingIds.has(session.id), askingIds.has(session.id)),
           updatedAt: session.updatedAt,
         },
       ];
@@ -623,7 +630,16 @@ export const Composer = memo(function Composer({
     const before = state.drafts[key] ?? "";
     const attachments = state.extras[key]?.attachments ?? [];
     const tracked = trackPastes(attachments, before, text);
-    if (tracked !== attachments) change((e) => ({ ...e, attachments: [...tracked] }));
+    const mentions = state.extras[key]?.mentions;
+    // A mention whose `#Title` was deleted has nothing left to say in the message.
+    const kept = pruneMentions(text, mentions);
+    const stale = kept.length !== (mentions?.length ?? 0);
+    if (tracked !== attachments || stale)
+      change((e) => ({
+        ...e,
+        attachments: tracked === attachments ? e.attachments : [...tracked],
+        mentions: kept,
+      }));
     setDraft(key, text);
   };
   // A message walked back into the field puts the caret at its end, so ↓ comes forward again at once.
