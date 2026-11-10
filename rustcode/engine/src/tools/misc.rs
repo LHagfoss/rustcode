@@ -765,6 +765,201 @@ pub const CLEANUP_WORKTREE: Tool = Tool {
     safety: ToolSafety::Interactive,
 };
 
+/// Orchestration version 11 (`docs/orchestrator.md`): the user's projects and
+/// the scheduler daemon's work (`docs/daemon.md`).
+pub const READ_PROJECT: Tool = Tool {
+    name: crate::orchestration::READ_PROJECT,
+    description: "Read one of the user's projects: path, name, whether it is a git repository, its remote and branch, the branch it calls default, its threads, and its display name and default harness/model. Reads any project while \"Let agents read threads in other projects\" is on, else only this thread's.",
+    arguments: r#"{"path": "/abs/project"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "minLength": 1, "description": "absolute path of the project, as list_projects prints it"}
+            },
+            "required": ["path"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const CREATE_PROJECT: Tool = Tool {
+    name: crate::orchestration::CREATE_PROJECT,
+    description: "Register a project folder: an existing one, or a new empty folder that gets `git init` (init: false leaves it plain). Nothing is cloned; see clone_project. The user approves it.",
+    arguments: r#"{"path": "/abs/new-project", "init": true}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "minLength": 1, "description": "absolute path of the folder"},
+                "init": {"type": "boolean", "description": "`git init` a folder that is not a repository; true by default"}
+            },
+            "required": ["path"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const CLONE_PROJECT: Tool = Tool {
+    name: crate::orchestration::CLONE_PROJECT,
+    description: "Clone a git repository into parent/name (the parent defaults to its usual folder) and register it as a project. `git clone` runs with a ten-minute wait. The user approves it.",
+    arguments: r#"{"url": "https://github.com/owner/repo.git", "parent": "/abs/folder", "name": "repo"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "minLength": 1},
+                "parent": {"type": "string", "minLength": 1, "description": "absolute folder the clone goes in; the default is the folder new threads start in"},
+                "name": {"type": "string", "minLength": 1, "description": "the new folder's name; the url's last part by default"}
+            },
+            "required": ["url"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const UPDATE_PROJECT: Tool = Tool {
+    name: crate::orchestration::UPDATE_PROJECT,
+    description: "Update one project's settings: a display name, and the harness and model new threads in that folder start on. Omitted fields are unchanged; a name is replaced, never cleared with \"\". The user approves it.",
+    arguments: r#"{"path": "/abs/project", "name": "RustCode", "harness": "claude-code", "model": "opus"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "minLength": 1},
+                "name": {"type": "string", "minLength": 1, "maxLength": 200, "description": "display name in the sidebar; the folder's own name when unset"},
+                "harness": {"type": "string", "minLength": 1, "description": "harness id a new thread here starts on, from list_harnesses"},
+                "model": {"type": "string", "minLength": 1}
+            },
+            "required": ["path"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const REMOVE_PROJECT: Tool = Tool {
+    name: crate::orchestration::REMOVE_PROJECT,
+    description: "Unregister a project: it leaves the project list with its display name and defaults. Its folder, files and threads stay. The user approves it.",
+    arguments: r#"{"path": "/abs/project"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "minLength": 1}
+            },
+            "required": ["path"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const SCHEDULE_TASK: Tool = Tool {
+    name: crate::orchestration::SCHEDULE_TASK,
+    description: "Schedule work that runs with no thread open: a prompt the scheduler daemon runs on a cron expression or once at an ISO 8601 time. `schedule` is {kind: cron, expression, timezone?} or {kind: at, at}; the timezone defaults to the user's. The daemon must be running (`rustcode daemon start`); report the next run it answers. The user approves it.",
+    arguments: r#"{"prompt": "Check the build", "schedule": {"kind": "cron", "expression": "0 9 * * 1-5", "timezone": "Europe/Oslo"}, "project": "/abs/project", "name": "Morning check"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "minLength": 1, "maxLength": 32768, "description": "what the scheduled run is asked to do"},
+                "schedule": {
+                    "oneOf": [
+                        {"type": "object", "properties": {"kind": {"const": "cron"}, "expression": {"type": "string", "minLength": 1}, "timezone": {"type": "string", "minLength": 1}}, "required": ["kind", "expression"], "additionalProperties": false},
+                        {"type": "object", "properties": {"kind": {"const": "at"}, "at": {"type": "string", "minLength": 1}}, "required": ["kind", "at"], "additionalProperties": false}
+                    ]
+                },
+                "project": {"type": "string", "minLength": 1, "description": "absolute folder the prompt runs in; this thread's project by default"},
+                "name": {"type": "string", "minLength": 1, "maxLength": 200, "description": "what the task is called; the prompt's first line by default"},
+                "model_profile": {"type": "string", "minLength": 1, "description": "a model profile from the config, as manage_scheduled_jobs takes"}
+            },
+            "required": ["prompt", "schedule"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const LIST_SCHEDULED_TASKS: Tool = Tool {
+    name: crate::orchestration::LIST_SCHEDULED_TASKS,
+    description: "List the scheduler daemon's tasks: id, name, paused, schedule, workspace and next run time, at most 100. `daemon_running: false` means nothing runs until `rustcode daemon start`.",
+    arguments: r#"{}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const DELETE_SCHEDULED_TASK: Tool = Tool {
+    name: crate::orchestration::DELETE_SCHEDULED_TASK,
+    description: "Delete one scheduled task by id. It stops at once; its run history goes with it. The user approves it.",
+    arguments: r#"{"id": "task-1750000000000-1a2b"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "minLength": 1}
+            },
+            "required": ["id"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const RUN_SCHEDULED_TASK_NOW: Tool = Tool {
+    name: crate::orchestration::RUN_SCHEDULED_TASK_NOW,
+    description: "Run one scheduled task now, keeping its schedule. The scheduler daemon must be running. The user approves it.",
+    arguments: r#"{"id": "task-1750000000000-1a2b"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "minLength": 1}
+            },
+            "required": ["id"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
 /// Link a thread to a pull request (#3369) and read it back: the engine keeps
 /// checking through the watch machinery (`pull_watch.rs`), so the thread hears
 /// about a change once instead of polling `gh` itself.

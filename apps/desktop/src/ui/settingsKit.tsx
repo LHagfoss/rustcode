@@ -488,6 +488,10 @@ export function Chip({
  * A whole number chosen from a short range, in a row: the native slider (so
  * the arrow keys, Home and End work) with the value it is on beside it and the
  * ends of its range under them.
+ *
+ * With `onCommit` the thumb follows the drag locally and the write happens
+ * once, when it is released, a key comes up or focus leaves: one request per
+ * gesture instead of one per step.
  */
 export function Slider({
   label,
@@ -496,6 +500,7 @@ export function Slider({
   max,
   step = 1,
   onChange,
+  onCommit,
   unit,
 }: {
   label: string;
@@ -503,27 +508,68 @@ export function Slider({
   min: number;
   max: number;
   step?: number;
-  onChange: (value: number) => void;
+  /** A live value while the slider moves; with `onCommit`, a preview only. */
+  onChange?: (value: number) => void;
+  /** The value to save once the gesture ends. */
+  onCommit?: (value: number) => void;
   /** What one step is of, for the caption (“threads”). */
   unit: string;
 }) {
+  const [draft, setDraft] = useState(value);
+  const dragging = useRef(false);
+  const lastSent = useRef<number | null>(null);
+  useEffect(() => {
+    lastSent.current = null;
+    if (!dragging.current) setDraft(value);
+  }, [value]);
+  const commit = (next: number) => {
+    if (!onCommit || next === value || next === lastSent.current) return;
+    lastSent.current = next;
+    onCommit(next);
+  };
+  const shown = onCommit ? draft : value;
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center gap-3">
         <input
           type="range"
           aria-label={label}
-          aria-valuetext={`${value} ${unit}`}
+          aria-valuetext={`${shown} ${unit}`}
           min={min}
           max={max}
           step={step}
-          value={value}
-          onChange={(e) => onChange(Number(e.target.value))}
+          value={shown}
+          onChange={(e) => {
+            const next = Number(e.target.value);
+            if (onCommit) setDraft(next);
+            onChange?.(next);
+          }}
+          onPointerDown={() => {
+            dragging.current = true;
+            lastSent.current = null;
+          }}
+          onPointerUp={(e) => {
+            dragging.current = false;
+            commit(Number(e.currentTarget.value));
+          }}
+          onPointerCancel={() => {
+            dragging.current = false;
+            lastSent.current = null;
+            setDraft(value);
+          }}
+          onKeyDown={() => {
+            lastSent.current = null;
+          }}
+          onKeyUp={(e) => commit(Number(e.currentTarget.value))}
+          onBlur={(e) => {
+            dragging.current = false;
+            commit(Number(e.currentTarget.value));
+          }}
           className="rc-range h-5 w-36 cursor-pointer"
-          style={{ "--rc-range-progress": `${((value - min) / (max - min)) * 100}%` } as React.CSSProperties}
+          style={{ "--rc-range-progress": `${((shown - min) / (max - min)) * 100}%` } as React.CSSProperties}
         />
         <span className="min-w-14 text-right font-medium text-callout text-fg tabular">
-          {value} {unit}
+          {shown} {unit}
         </span>
       </div>
       {/* Under the rail, not under the row: `min` sits at the range's start and `max` at its end. */}
