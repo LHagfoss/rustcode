@@ -1407,24 +1407,27 @@ describe("engine controller with the mock engine", () => {
     expect(turnCompletion(selected()!.items, end)?.checks[0]?.outcome).toBe("passed");
   });
 
-  test("editing a message sent with a long paste puts the paste back in the composer", async () => {
+  test("editing a message sent with a long paste keeps the paste in its text", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
     await until(() => useApp.getState().status === "ready");
     setProjectCwd("/tmp/project");
     const paste = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
-    const extras = { ...emptyExtras, attachments: [{ id: "p1", kind: "text" as const, text: paste }] };
-    await submit("yolo why does this fail?", extras);
+    const typed = "yolo why does this fail?";
+    const extras = {
+      ...emptyExtras,
+      attachments: [{ id: "p1", kind: "text" as const, text: paste, at: typed.length }],
+    };
+    await submit(typed, extras);
     await until(() => selected()?.items.at(-1)?.kind === "turnEnd");
     const thread = selected()!;
     const first = thread.items.find((i) => i.kind === "user")!;
-    // The message keeps the paste as its own chip; the text is only what was typed around it.
-    expect(first.attachments).toEqual([{ kind: "text", name: "Pasted text · 20 lines", text: paste }]);
+    // The message says the paste where it was pasted, as plain text, and keeps no chip for it.
+    expect((first as { text: string }).text).toBe(`${typed}\n${paste}`);
+    expect(first.attachments).toBeUndefined();
     editMessage(thread.id, first.id);
-    expect(useApp.getState().drafts[thread.id]).toBe("yolo why does this fail?");
-    // Sending the edit again carries the log with it, not a question about a log it never got.
-    expect(useApp.getState().extras[thread.id]?.attachments).toEqual([
-      { id: expect.any(String), kind: "text", text: paste },
-    ]);
+    expect(useApp.getState().drafts[thread.id]).toBe(`${typed}\n${paste}`);
+    // The paste is already in the text: the composer does not hold a second copy of it.
+    expect(useApp.getState().extras[thread.id]?.attachments).toEqual([]);
     // Editing another message leaves that one's paste behind: it belongs to the message it came with.
     cancelEdit(thread.id);
     await submit("yolo second");

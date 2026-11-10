@@ -1,10 +1,12 @@
 // What a message is made of before it is sent: the typed text, an optional
-// slash-command token, pasted link chips, images and files. `promptBlocks`
-// turns it into ACP content blocks; no React and no I/O, so tests drive it.
+// slash-command token, pasted link chips, long pastes held above the field,
+// images and files. A paste goes back into the text where it was pasted when
+// the message is composed, so it is sent as plain text, not as a chip; and
+// `promptBlocks` turns the rest into ACP content blocks. No React and no I/O,
+// so tests drive it.
 
 import type { Json, JsonObject } from "../acp/jsonrpc";
 import type { SlashCommand } from "../acp/types";
-import { pasteLabel } from "../lib/paste";
 
 /**
  * A message that starts with a command (`/review the diff`), as the name and what follows. A path
@@ -43,8 +45,12 @@ export function imageMime(name: string): string | undefined {
 export type Attachment =
   | { id: string; kind: "image"; name: string; mimeType: string; data: string }
   | { id: string; kind: "file"; name: string; path?: string; text?: string }
-  /** A long paste the field kept out of the draft (lib/paste.ts). */
-  | { id: string; kind: "text"; text: string };
+  /**
+   * A long paste the field kept out of the draft (lib/paste.ts). `at` is the caret offset it was
+   * pasted at, kept right while the draft changes (`trackPastes`), so the sent text can put it back
+   * where the user wrote it.
+   */
+  | { id: string; kind: "text"; text: string; at: number };
 
 export interface ComposeExtras {
   command?: SlashCommand;
@@ -58,10 +64,77 @@ export function hasExtras(extras: ComposeExtras | undefined): boolean {
   return !!extras && (!!extras.command || extras.links.length > 0 || extras.attachments.length > 0);
 }
 
-/** The text the prompt carries, in the order the composer shows it: command, links, then what was typed. */
+/**
+ * Where a paste sits after the draft changes: `before` and `after` are the draft around one edit,
+ * and `at` the offset the paste took when it was made. The edit starts where the two texts stop
+ * agreeing, so one that starts at or before the paste moves it by the edit's length change; one
+ * after the paste leaves it alone. Clamped to the new draft, since the text it was pasted under may
+ * have gone.
+ */
+export function shiftPasteOffset(at: number, before: string, after: string): number {
+  const max = Math.min(before.length, after.length);
+  let common = 0;
+  while (common < max && before[common] === after[common]) common++;
+  const next = common <= at ? at + (after.length - before.length) : at;
+  return Math.max(0, Math.min(after.length, next));
+}
+
+/** The attachments with each paste's offset kept where it was in the draft that became `after`. */
+export function trackPastes(
+  attachments: readonly Attachment[],
+  before: string,
+  after: string,
+): readonly Attachment[] {
+  if (before === after) return attachments;
+  let changed = false;
+  const next = attachments.map((a) => {
+    if (a.kind !== "text") return a;
+    const at = shiftPasteOffset(a.at, before, after);
+    if (at === a.at) return a;
+    changed = true;
+    return { ...a, at };
+  });
+  return changed ? next : attachments;
+}
+
+/** A paste spliced into the draft at `at`, with a newline where it would run into the text around it. */
+function insertPaste(draft: string, at: number, pasted: string): { text: string; added: number } {
+  const before = draft.slice(0, at);
+  const after = draft.slice(at);
+  const lead = before && !/\s$/.test(before) && !/^\s/.test(pasted) ? "\n" : "";
+  const trail = after && !/\s$/.test(pasted) && !/^\s/.test(after) ? "\n" : "";
+  return {
+    text: `${before}${lead}${pasted}${trail}${after}`,
+    added: lead.length + pasted.length + trail.length,
+  };
+}
+
+/**
+ * The typed text with every long paste put back where it was pasted, as plain text: the field keeps
+ * a paste above it while the draft is written, and the message says it in the place it was pasted.
+ * Pastes go in by offset (`at`), those at the same offset in the order they were made, and each one
+ * gets a newline where it would otherwise run into the text beside it. The typed text keeps the
+ * trim it had before pastes were a part of it.
+ */
+export function splicePastes(text: string, attachments: readonly Attachment[]): string {
+  const start = text.length - text.trimStart().length;
+  let body = text.slice(start).trimEnd();
+  let added = 0;
+  const pastes = attachments.flatMap((a, i) => (a.kind === "text" ? [{ paste: a, i }] : []));
+  pastes.sort((x, y) => x.paste.at - y.paste.at || x.i - y.i);
+  for (const { paste } of pastes) {
+    const at = Math.max(0, Math.min(body.length, paste.at - start + added));
+    const next = insertPaste(body, at, paste.text);
+    body = next.text;
+    added += next.added;
+  }
+  return body;
+}
+
+/** The text the prompt carries, in the order the composer shows it: command, links, then what was typed with its pastes in place. */
 export function composedText(text: string, extras: ComposeExtras): string {
   const head = [extras.command?.name, ...extras.links].filter(Boolean).join(" ");
-  const body = text.trim();
+  const body = splicePastes(text, extras.attachments);
   if (!head) return body;
   return body ? `${head} ${body}` : head;
 }
@@ -99,19 +172,13 @@ export interface BlockOptions {
   cwd: string;
 }
 
-/** A fenced block the text cannot close: one backtick longer than its longest run of them. */
-function fenced(text: string): string {
-  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length));
-  const fence = "`".repeat(Math.max(3, longest + 1));
-  return `${fence}\n${text}\n${fence}`;
-}
-
 /**
  * ACP prompt blocks for a message. Images become `image` blocks; files with a
  * path become `resource_link` blocks on an external harness and an "Attached
  * files" list in the text on the built-in one (it ignores links, as the
- * SwiftUI app found); a file without a path, and a long paste held as a chip,
- * are inlined as text.
+ * SwiftUI app found); a file without a path is inlined as text. A long paste is
+ * already in the text, at the offset it was pasted (`composedText`), so it
+ * needs no block of its own.
  */
 export function promptBlocks(text: string, extras: ComposeExtras, options: BlockOptions): Json[] {
   let body = composedText(text, extras);
@@ -121,12 +188,6 @@ export function promptBlocks(text: string, extras: ComposeExtras, options: Block
   if (withPath.length && options.builtin) {
     const list = withPath.map((f) => `- \`${relative(f.path!, options.cwd)}\``).join("\n");
     body = `${body ? `${body}\n\n` : ""}Attached files:\n${list}`;
-  }
-  // A pasted block goes in where the user wrote it, as a fenced block of its own, before the files
-  // it came with.
-  for (const a of extras.attachments) {
-    if (a.kind !== "text") continue;
-    body = `${body ? `${body}\n\n` : ""}${fenced(a.text)}`;
   }
   for (const f of inline) {
     body = `${body ? `${body}\n\n` : ""}Attached file \`${f.name}\`:\n\`\`\`\n${f.text}\n\`\`\``;
@@ -153,16 +214,23 @@ export interface SentAttachment {
   name: string;
   /** A data URL, for an image sent from here. */
   preview?: string;
-  /** The pasted text, for the chip a sent message keeps (`ui/PasteChip.tsx`). */
+  /**
+   * The pasted text, on a message sent before pastes were composed into the text: history keeps its
+   * chip (`ui/PasteChip.tsx`), and Retry or Edit carries the text again.
+   */
   text?: string;
 }
 
+/**
+ * What the transcript keeps of a sent message's attachments. A long paste is in the message's text
+ * now (`composedText`), so no chip is kept for it; images and files keep their bubble.
+ */
 export function sentAttachments(extras: ComposeExtras): SentAttachment[] {
-  return extras.attachments.map((a) => {
+  return extras.attachments.flatMap((a): SentAttachment[] => {
     if (a.kind === "image")
-      return { kind: "image", name: a.name, preview: `data:${a.mimeType};base64,${a.data}` };
-    if (a.kind === "text") return { kind: "text", name: pasteLabel(a.text), text: a.text };
-    return { kind: "file", name: a.name };
+      return [{ kind: "image", name: a.name, preview: `data:${a.mimeType};base64,${a.data}` }];
+    if (a.kind === "text") return [];
+    return [{ kind: "file", name: a.name }];
   });
 }
 

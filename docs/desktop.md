@@ -312,7 +312,9 @@ composer's keys stay outside the table.
   built-in one); files with a path go as an "Attached files" list on the
   built-in harness (it ignores `resource_link`) and as `resource_link`
   blocks on others; a file without a path (the browser) is inlined as text
-  up to 200 KB.
+  up to 200 KB. A long paste becomes a chip above the field while the draft
+  is written, and the message puts its text back where it was pasted, as
+  plain text, when it is sent (`state/compose.ts` `splicePastes`).
 - **Sending.** ⏎ answers at once, whatever the harness or the worktree
   costs: `session/new` starts a harness and may check out a worktree, which
   can take a minute, so the message is shown before it is asked for

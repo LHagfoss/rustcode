@@ -108,6 +108,7 @@ import {
 import {
   type Attachment,
   type ComposeExtras,
+  composedText,
   emptyExtras,
   hasExtras,
   promptBlocks,
@@ -2187,7 +2188,7 @@ export function retryMessage(id: string, itemId: string) {
   const thread = get().threads[id];
   const item = thread?.items.find((i) => i.id === itemId);
   if (!thread || item?.kind !== "user") return;
-  const extras = { ...emptyExtras, attachments: pastesOf(item.attachments) };
+  const extras = { ...emptyExtras, attachments: pastesOf(item.attachments, item.text) };
   const go = async () => {
     if (canRewind(thread)) {
       if (await rewindTo(id, itemId, item.text)) void runPrompt(id, item.text, extras);
@@ -2259,11 +2260,15 @@ export async function retryThread(id: string): Promise<void> {
 
 /**
  * The pastes a sent message kept, back in a message that is sent again: a retry or an edit must
- * carry the log the message was about, or the model is asked about text it cannot see.
+ * carry the log the message was about, or the model is asked about text it cannot see. Only a
+ * message sent before pastes went into the text has these; one written since carries the text
+ * itself, so `at` puts them back at its end, where the chip used to send them.
  */
-function pastesOf(attachments: SentAttachment[] | undefined): Attachment[] {
+function pastesOf(attachments: SentAttachment[] | undefined, text: string): Attachment[] {
   return (attachments ?? []).flatMap((a) =>
-    a.kind === "text" && a.text ? [{ id: localId("paste"), kind: "text" as const, text: a.text }] : [],
+    a.kind === "text" && a.text
+      ? [{ id: localId("paste"), kind: "text" as const, text: a.text, at: text.length }]
+      : [],
   );
 }
 
@@ -2275,7 +2280,7 @@ export function editMessage(id: string, itemId: string) {
   const text = splitImageMarkers(item.text).text;
   // What the message held past the text comes back with it, as the chips it was written as. The
   // composer's own paste chips go: the draft is this message now, not the one edited before it.
-  const pastes = pastesOf(item.attachments);
+  const pastes = pastesOf(item.attachments, text);
   setExtras(id, (e) => ({
     ...e,
     attachments: [...e.attachments.filter((a) => a.kind !== "text"), ...pastes],
@@ -2578,7 +2583,7 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
   const madeHere = !id;
   try {
     if (!id) {
-      const started = await createThread(trimmed, extras);
+      const started = await createThread(text, extras);
       // A setup that failed keeps the message and its attachments on the thread's own bubble, with
       // Retry: the field stays clear rather than holding a second copy. One that could not start at
       // all (another is still going) leaves the draft in the composer, as it was.
@@ -2602,7 +2607,7 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
     const go = async () => {
       if (await rewindTo(id!, edit.itemId, edit.original)) {
         unsettleThreads([id!], { quiet: true });
-        void runPrompt(id!, trimmed, extras);
+        void runPrompt(id!, text, extras);
       }
     };
     if (later > 0) {
@@ -2622,7 +2627,9 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
       ...t,
       queue: [
         ...t.queue,
-        { id: localId("queued"), text: trimmed, extras: hasExtras(extras) ? extras : undefined },
+        // The text as it was written: a paste's offset is an offset in it, and the row composes the
+        // two when it draws and when the turn runs (`composedText`).
+        { id: localId("queued"), text, extras: hasExtras(extras) ? extras : undefined },
       ],
     }));
     return true;
@@ -2636,15 +2643,12 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
   if (thread.queue.length) {
     updateThread(id, (t) => ({
       ...t,
-      queue: [
-        ...t.queue,
-        { id: localId("queued"), text: trimmed, extras: hasExtras(extras) ? extras : undefined },
-      ],
+      queue: [...t.queue, { id: localId("queued"), text, extras: hasExtras(extras) ? extras : undefined }],
     }));
     void resumeQueue(id);
     return true;
   }
-  void runPrompt(id, trimmed, extras, { alreadyShown: madeHere });
+  void runPrompt(id, text, extras, { alreadyShown: madeHere });
   return true;
 }
 
@@ -2728,7 +2732,7 @@ export async function steerOrSubmit(text: string, extras: ComposeExtras = emptyE
   }
   unsettleThreads([id], { quiet: true });
   const verdict = sendDecisionFor(thread, extras);
-  if (verdict.action === "steer" && (await steer(id, trimmed, extras))) return true;
+  if (verdict.action === "steer" && (await steer(id, text, extras))) return true;
   if (verdict.action === "interruptRestart") return restartWith(id, text, extras);
   // A steer the engine refused (the turn ended or began waiting on the user meanwhile) waits too.
   return queueMessage(id, text, extras, verdict.action === "queue" ? verdict.reason : "refused");
@@ -2748,7 +2752,7 @@ async function queueMessage(
   }
   updateThread(id, (t) => ({
     ...t,
-    queue: [...t.queue, { id: localId("queued"), text: text.trim() }],
+    queue: [...t.queue, { id: localId("queued"), text }],
   }));
   toast(QUEUE_REASON[reason]);
   return true;
@@ -2766,7 +2770,7 @@ async function restartWith(id: string, text: string, extras: ComposeExtras): Pro
     queue: [
       {
         id: localId("queued"),
-        text: text.trim(),
+        text,
         extras: hasExtras(extras) ? extras : undefined,
         restart: true,
       },
@@ -2823,6 +2827,8 @@ export function sendDecisionFor(
  */
 export async function steer(id: string, text: string, extras?: ComposeExtras): Promise<boolean> {
   const thread = get().threads[id];
+  // What the turn reads: the typed text with its command, links and long pastes in place.
+  const full = composedText(text, extras ?? emptyExtras);
   const conditions = {
     images: acceptsImages(thread),
     builtin: threadHarness(thread)?.builtin ?? true,
@@ -2837,11 +2843,11 @@ export async function steer(id: string, text: string, extras?: ComposeExtras): P
   try {
     const result = (await engine().request(
       Method.steer,
-      prompt ? { sessionId: id, text, prompt } : { sessionId: id, text },
+      prompt ? { sessionId: id, text: full, prompt } : { sessionId: id, text: full },
       10_000,
     )) as JsonObject | null;
     if (result?.accepted !== true) return false;
-    updateThread(id, (t) => appendSteer(t, text, Date.now(), extras && sentAttachments(extras)));
+    updateThread(id, (t) => appendSteer(t, full, Date.now(), extras && sentAttachments(extras)));
     // The steered row in the transcript says it was read after the current step.
     return true;
   } catch {
@@ -2979,11 +2985,12 @@ export function updateQueued(id: string, queuedId: string, text: string, extras?
     const item = t.queue.find((q) => q.id === queuedId);
     if (!item) return t;
     const next = extras ?? item.extras;
-    // Its attachments stay; one with attachments survives an emptied text.
+    // Its attachments stay; one with attachments survives an emptied text. The text is kept as it
+    // was written, since a paste is spliced at its offset when the message is composed.
     if (!trimmed && !hasExtras(next)) return { ...t, queue: t.queue.filter((q) => q.id !== queuedId) };
     return {
       ...t,
-      queue: t.queue.map((q) => (q.id === queuedId ? { ...q, text: trimmed, extras: next } : q)),
+      queue: t.queue.map((q) => (q.id === queuedId ? { ...q, text, extras: next } : q)),
     };
   });
 }
@@ -3076,7 +3083,9 @@ export async function runPrompt(
   // point brings the wake back, early enough that nothing in the turn reports it again.
   if (options.wake && options.wakeLinks?.length) wakeDelivered(options.wakeLinks, options.wakeAsking ?? []);
   if (!options.autoCompact && id in get().snoozed) snoozeThread(id, null);
-  const shown = [extras.command?.name, ...extras.links, text].filter(Boolean).join(" ");
+  // The message the transcript shows: the command, links and typed text, with each long paste back
+  // where it was pasted. The prompt's blocks say the same thing (below).
+  const shown = composedText(text, extras);
   // A message typed here flies out of the composer on its first sighting; one the new-thread screen
   // already drew does not (lib/sendFlight.ts).
   const sent = userTypedPrompt(options) && !options.fromView && !options.alreadyShown;

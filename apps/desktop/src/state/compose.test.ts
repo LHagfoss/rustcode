@@ -7,10 +7,13 @@ import {
   promptBlocks,
   sentAttachments,
   sentMessages,
+  shiftPasteOffset,
+  splicePastes,
   splitImageMarkers,
   splitSlashCommand,
   splitTokens,
   splitUrls,
+  trackPastes,
 } from "./compose";
 
 const command = { name: "/review", description: "", takesArguments: true, report: false, action: "execute" };
@@ -62,31 +65,31 @@ describe("compose", () => {
     ]);
   });
 
-  test("a long paste is inlined as a fence of its own, after the text", () => {
+  test("a long paste is in the text where it was pasted, as plain text", () => {
     const extras = {
       ...emptyExtras,
-      attachments: [{ id: "1", kind: "text" as const, text: "error: it broke\n  at main.rs:1" }],
+      attachments: [{ id: "1", kind: "text" as const, text: "error: it broke\n  at main.rs:1", at: 19 }],
     };
     expect(promptBlocks("why does this fail?", extras, { images: true, builtin: true, cwd: "" })).toEqual([
-      { type: "text", text: "why does this fail?\n\n```\nerror: it broke\n  at main.rs:1\n```" },
+      { type: "text", text: "why does this fail?\nerror: it broke\n  at main.rs:1" },
     ]);
   });
 
-  test("a paste holding a fence closes it with a longer one", () => {
+  test("a paste is never fenced, even one holding a fence", () => {
     const extras = {
       ...emptyExtras,
-      attachments: [{ id: "1", kind: "text" as const, text: "```\ncode\n```" }],
+      attachments: [{ id: "1", kind: "text" as const, text: "```\ncode\n```", at: 0 }],
     };
     expect(promptBlocks("", extras, { images: true, builtin: true, cwd: "" })).toEqual([
-      { type: "text", text: "````\n```\ncode\n```\n````" },
+      { type: "text", text: "```\ncode\n```" },
     ]);
   });
 
-  test("a sent paste keeps its chip and its text", () => {
+  test("a sent paste is in the text, so it keeps no chip of its own", () => {
     const text = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
-    expect(sentAttachments({ ...emptyExtras, attachments: [{ id: "1", kind: "text", text }] })).toEqual([
-      { kind: "text", name: "Pasted text · 20 lines", text },
-    ]);
+    const extras = { ...emptyExtras, attachments: [{ id: "1", kind: "text" as const, text, at: 4 }] };
+    expect(sentAttachments(extras)).toEqual([]);
+    expect(composedText("why?", extras)).toBe(`why?\n${text}`);
   });
 
   test("replayed image markers and URLs in text", () => {
@@ -96,6 +99,76 @@ describe("compose", () => {
       { url: "https://a.dev/x" },
       { text: ". ok" },
     ]);
+  });
+});
+
+describe("a long paste's offset in the draft", () => {
+  test("an edit before it moves it, an edit after it leaves it alone", () => {
+    // "hello| world", the paste after "hello".
+    expect(shiftPasteOffset(5, "hello world", "well hello world")).toBe(10);
+    expect(shiftPasteOffset(5, "hello world", "hello world again")).toBe(5);
+    expect(shiftPasteOffset(5, "hello world", "hellXo world")).toBe(6);
+  });
+
+  test("it stays inside the draft when the text it sat in goes", () => {
+    expect(shiftPasteOffset(9, "hello world", "hello wor")).toBe(7);
+    expect(shiftPasteOffset(5, "hello world", "hello")).toBe(0);
+    expect(shiftPasteOffset(0, "hello", "")).toBe(0);
+    expect(shiftPasteOffset(3, "hello", "hello")).toBe(3);
+  });
+
+  test("every paste in the attachments moves together", () => {
+    const file = { id: "f", kind: "file" as const, name: "a.ts", path: "/p/a.ts" };
+    const first = { id: "1", kind: "text" as const, text: "A", at: 2 };
+    const second = { id: "2", kind: "text" as const, text: "B", at: 8 };
+    expect(trackPastes([file, first, second], "one two three", "oXne two three")).toEqual([
+      file,
+      { ...first, at: 3 },
+      { ...second, at: 9 },
+    ]);
+    // Nothing moved: the same list comes back, so the composer does not write on every keystroke.
+    const untouched = [first, second];
+    expect(trackPastes(untouched, "same", "same")).toBe(untouched);
+  });
+});
+
+describe("splicing long pastes into the message", () => {
+  const paste = (text: string, at: number) => ({ id: text, kind: "text" as const, text, at });
+
+  test("an empty draft is the paste itself", () => {
+    expect(splicePastes("", [paste("LOG", 0)])).toBe("LOG");
+  });
+
+  test("at the start, the middle and the end of the typed text", () => {
+    expect(splicePastes("explain this", [paste("LOG", 0)])).toBe("LOG\nexplain this");
+    expect(splicePastes("before after", [paste("LOG", 7)])).toBe("before LOG\nafter");
+    expect(splicePastes("beforeafter", [paste("LOG", 6)])).toBe("before\nLOG\nafter");
+    expect(splicePastes("explain this", [paste("LOG", 12)])).toBe("explain this\nLOG");
+  });
+
+  test("two pastes go in by offset, and in the order they were made at the same one", () => {
+    expect(splicePastes("xy", [paste("A", 0), paste("B", 2)])).toBe("A\nxy\nB");
+    expect(splicePastes("", [paste("A", 0), paste("B", 0)])).toBe("A\nB");
+    expect(splicePastes("q", [paste("B", 1), paste("A", 0)])).toBe("A\nq\nB");
+  });
+
+  test("text typed before and after the paste keeps it in place", () => {
+    // "| world", then "well " typed in front of it.
+    const at = shiftPasteOffset(0, " world", "well  world");
+    expect(splicePastes("well  world", [paste("LOG", at)])).toBe("well LOG world");
+    // A word typed past the end does not move a paste in the middle.
+    expect(shiftPasteOffset(6, "hello world", "hello world again")).toBe(6);
+  });
+
+  test("a paste that already ends in a newline is not given a second one", () => {
+    expect(splicePastes("before after", [paste("LOG\n", 7)])).toBe("before LOG\nafter");
+    expect(splicePastes("beforeafter", [paste("\nLOG", 6)])).toBe("before\nLOG\nafter");
+  });
+
+  test("the typed text keeps its own trim, and a paste-only message is just the paste", () => {
+    expect(splicePastes("  why?  ", [paste("LOG", 7)])).toBe("why?\nLOG");
+    expect(splicePastes("  \n", [paste("LOG", 3)])).toBe("LOG");
+    expect(splicePastes("\n\nwhy?\n", [paste("LOG", 0)])).toBe("LOG\nwhy?");
   });
 });
 
