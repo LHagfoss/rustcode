@@ -115,7 +115,12 @@ source machine. The default harness/model/effort reads through
 live in each machine's `~/.config/rustcode/settings.json` through
 `_rustcode/settings/get|set` (docs/configuration.md); the app applies this
 computer's values when it starts, so a value set from another machine is in
-force there next launch.
+force there next launch. Its first-start seed writes only the keys the server
+does not already hold (`stored`), so it cannot revert a value another machine
+wrote before this app's first start. The design's machine-only line (§6.1)
+covers binary paths, credentials and accounts; the enabled harness switches
+and MCP definitions are server settings here and fan out, with every copy
+leaving secrets behind.
 
 The project follows the machine: `src/state/projects.ts` finds the same project
 there by path, then by git remote (`_meta.rustcode.remote`, normalized so

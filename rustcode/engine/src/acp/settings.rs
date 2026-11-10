@@ -147,7 +147,9 @@ fn write_values(path: &PathBuf, values: &Map<String, Value>) -> Result<(), Strin
 }
 
 /// Answer `_rustcode/settings/get`: the requested keys, with each registry
-/// default where the machine has no value of its own.
+/// default where the machine has no value of its own, and `stored`, the keys
+/// this file actually holds. A client seeds a missing key only, so a value
+/// another machine wrote before this one first started is not overwritten.
 pub(crate) fn read(request: GetSettingsRequest) -> Result<Value, agent_client_protocol::Error> {
     let stored = read_values(&settings_path().unwrap_or_default());
     let mut values = Map::new();
@@ -170,7 +172,8 @@ pub(crate) fn read(request: GetSettingsRequest) -> Result<Value, agent_client_pr
             stored.get(key).cloned().unwrap_or_else(|| default.clone()),
         );
     }
-    Ok(json!({ "values": values }))
+    let stored_keys: Vec<String> = stored.keys().cloned().collect();
+    Ok(json!({ "values": values, "stored": stored_keys }))
 }
 
 /// Answer `_rustcode/settings/set`: merge the values, then read them back.
@@ -203,6 +206,7 @@ mod tests {
         let answer = read(GetSettingsRequest::default()).unwrap();
         let values = answer["values"].as_object().unwrap();
         assert_eq!(values.len(), registry().len());
+        assert_eq!(answer["stored"], json!([]));
         assert_eq!(values["default-permission-mode"], json!("ask"));
         assert_eq!(values["resume-after-restart"], json!(true));
         assert_eq!(values["auto-compact-threshold"], json!(150_000));
@@ -220,6 +224,14 @@ mod tests {
         assert_eq!(answer["values"]["orchestration"], json!(false));
         assert_eq!(answer["values"]["delegates-total"], json!(12));
         assert_eq!(answer["values"]["default-permission-mode"], json!("ask"));
+        let mut stored: Vec<&str> = answer["stored"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|key| key.as_str().unwrap())
+            .collect();
+        stored.sort();
+        assert_eq!(stored, ["delegates-total", "orchestration"]);
 
         let reread = read(GetSettingsRequest {
             keys: Some(vec!["orchestration".to_owned()]),
@@ -231,6 +243,18 @@ mod tests {
             "only the asked keys are answered"
         );
         assert_eq!(reread["values"]["orchestration"], json!(false));
+        let mut reread_stored: Vec<&str> = reread["stored"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|key| key.as_str().unwrap())
+            .collect();
+        reread_stored.sort();
+        assert_eq!(
+            reread_stored,
+            ["delegates-total", "orchestration"],
+            "stored names every key the file holds, whatever was asked"
+        );
     }
 
     #[test]
@@ -265,6 +289,10 @@ mod tests {
         assert_eq!(values["orchestration"], json!(false));
         assert_eq!(values["delegates-total"], json!(8));
         assert!(!values.contains_key("theme"));
+        assert_eq!(
+            read(GetSettingsRequest::default()).unwrap()["stored"],
+            json!(["orchestration"])
+        );
         let _ = std::fs::remove_file(path);
     }
 }

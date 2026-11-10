@@ -220,6 +220,58 @@ export function writableMachines(choice: ScopeChoice, machines: ScopedMachine[])
   return scopedMachines(choice, machines).filter((machine) => machine.online);
 }
 
+/** One machine a fan-out failed on, and why. */
+export interface MachineRunFailure {
+  host: string;
+  name: string;
+  message: string;
+}
+
+/** Every machine a fan-out was sent to, and the ones that failed. */
+export interface MachineRunResult {
+  attempted: number;
+  succeeded: ScopedMachine[];
+  failures: MachineRunFailure[];
+}
+
+/**
+ * Send work to every machine and wait for all of them: one failure never stops
+ * the next machine's write, and the result names the machine that failed so
+ * the page can say so instead of one anonymous toast.
+ */
+export async function runOnMachines(
+  machines: ScopedMachine[],
+  run: (machine: ScopedMachine) => Promise<unknown>,
+): Promise<MachineRunResult> {
+  const outcomes = await Promise.allSettled(machines.map((machine) => run(machine)));
+  const succeeded: ScopedMachine[] = [];
+  const failures: MachineRunFailure[] = [];
+  outcomes.forEach((outcome, index) => {
+    const machine = machines[index]!;
+    if (outcome.status === "fulfilled") succeeded.push(machine);
+    else
+      failures.push({
+        host: machine.host,
+        name: machine.name,
+        message: outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason),
+      });
+  });
+  return { attempted: machines.length, succeeded, failures };
+}
+
+/** "Lars's Linux box: that machine is not connected; Studio: …" */
+export function failureSummary(result: Pick<MachineRunResult, "failures">): string {
+  return result.failures.map((failure) => `${failure.name}: ${failure.message}`).join("; ");
+}
+
+/**
+ * The values to put on a server that has none yet: only the keys its
+ * `settings.json` does not hold, so a value another machine wrote first stays.
+ */
+export function missingSettingValues(stored: string[], values: Record<string, Json>): Record<string, Json> {
+  return Object.fromEntries(Object.entries(values).filter(([key]) => !stored.includes(key)));
+}
+
 /** Each machine's value in words, for the **Mixed** hover card. */
 export function scopeBreakdown(
   entries: ScopeValueEntry[],

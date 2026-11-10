@@ -4,10 +4,13 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  failureSummary,
   mcpCopy,
+  missingSettingValues,
   pageHasServerSettings,
   pageIsMachineOnly,
   rowKind,
+  runOnMachines,
   type ScopedMachine,
   scopeBreakdown,
   scopedMachines,
@@ -128,5 +131,45 @@ describe("copying an MCP server", () => {
         headerKeys: [],
       }),
     ).toBeNull();
+  });
+});
+
+describe("a fan-out", () => {
+  test("reaches every machine and names the one that failed", async () => {
+    const machines = [LOCAL, LINUX, STUDIO];
+    const visited: string[] = [];
+    const result = await runOnMachines(machines, async (machine) => {
+      visited.push(machine.host);
+      if (machine.host === LINUX.host) throw new Error("That machine is not connected.");
+      return machine.host;
+    });
+
+    expect(visited).toEqual([LOCAL.host, LINUX.host, STUDIO.host]);
+    expect(result.attempted).toBe(3);
+    expect(result.succeeded.map((machine) => machine.host)).toEqual([LOCAL.host, STUDIO.host]);
+    expect(result.failures).toEqual([
+      { host: LINUX.host, name: LINUX.name, message: "That machine is not connected." },
+    ]);
+    expect(failureSummary(result)).toBe("Lars's Linux box: That machine is not connected.");
+  });
+
+  test("a later machine is still written after one fails", async () => {
+    const writes: string[] = [];
+    await runOnMachines([LOCAL, LINUX, STUDIO], async (machine) => {
+      writes.push(machine.name);
+      if (machine.host === LOCAL.host) throw new Error("old server");
+    });
+    expect(writes).toEqual(["This machine", "Lars's Linux box", "Studio"]);
+  });
+});
+
+describe("seeding a machine that has no values yet", () => {
+  test("only the keys the server does not already hold are written", () => {
+    const missing = missingSettingValues(["default-permission-mode", "orchestration"], {
+      "default-permission-mode": "full",
+      orchestration: false,
+      "resume-after-restart": true,
+    });
+    expect(missing).toEqual({ "resume-after-restart": true });
   });
 });

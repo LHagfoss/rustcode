@@ -3577,12 +3577,12 @@ export class MockEngine {
               keys.filter((key) => key in this.serverSettings).map((key) => [key, this.serverSettings[key]!]),
             )
           : this.serverSettings;
-        return { values };
+        return { values, stored: Object.keys(this.serverSettings) };
       }
       case "_rustcode/settings/set": {
         const values = obj(params.values);
         if (values) this.serverSettings = { ...this.serverSettings, ...values };
-        return { values: this.serverSettings };
+        return { values: this.serverSettings, stored: Object.keys(this.serverSettings) };
       }
       case "_rustcode/harnesses":
         return this.snapshot();
@@ -5090,12 +5090,24 @@ export class MockMachine {
             keys.filter((key) => key in this.settings).map((key) => [key, this.settings[key]!]),
           )
         : this.settings;
-      return [JSON.stringify({ jsonrpc: "2.0", id, result: { values } })];
+      return [
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          result: { values, stored: Object.keys(this.settings) },
+        }),
+      ];
     }
     if (frame.method === "_rustcode/settings/set") {
       const values = obj(obj(frame.params)?.values);
       if (values) this.settings = { ...this.settings, ...values };
-      return [JSON.stringify({ jsonrpc: "2.0", id, result: { values: this.settings } })];
+      return [
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          result: { values: this.settings, stored: Object.keys(this.settings) },
+        }),
+      ];
     }
     if (frame.method === "_rustcode/harnesses/default") {
       const params = obj(frame.params);

@@ -7,8 +7,8 @@
 
 import { useMemo, useState } from "react";
 import type { Harness } from "../acp/types";
+import { failureSummary, runOnMachines } from "../state/settingsRegistry";
 import { type ScopeMachine, useMachineHarnessList, writeHarnessEnabled } from "../state/settingsScope";
-import { errorText } from "../state/store";
 import { HarnessIcon } from "./HarnessIcon";
 import { cx, Spinner, Switch, Tooltip } from "./primitives";
 import { MixedChip } from "./SettingsScope";
@@ -45,13 +45,11 @@ export function ScopedHarnessList({ targets, writes }: { targets: ScopeMachine[]
         const toggle = async (enabled: boolean) => {
           setBusy(harness.id);
           setError(null);
-          try {
-            for (const machine of writes) await writeHarnessEnabled(machine.host, harness.id, enabled);
-          } catch (failure) {
-            setError(errorText(failure));
-          } finally {
-            setBusy(null);
-          }
+          const result = await runOnMachines(writes, (machine) =>
+            writeHarnessEnabled(machine.host, harness.id, enabled),
+          );
+          setError(result.failures.length ? failureSummary(result) : null);
+          setBusy(null);
         };
         return (
           <div key={harness.id} className="flex min-h-12 items-center gap-3 px-4 py-2">

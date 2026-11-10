@@ -14,11 +14,14 @@
 
 import { useEffect } from "react";
 import { create } from "zustand";
-import { type Json, type JsonObject, obj } from "../acp/jsonrpc";
+import { arr, type Json, type JsonObject, obj } from "../acp/jsonrpc";
 import type { HarnessSnapshot } from "../acp/types";
 import { Method, parseHarnessSnapshot } from "../acp/types";
 import { useMachines } from "./machines";
 import {
+  failureSummary,
+  missingSettingValues,
+  runOnMachines,
   type ScopeBreakdownEntry,
   type ScopeChoice,
   type ScopedMachine,
@@ -178,10 +181,18 @@ function localValues(): Record<ServerSettingKey, Json> {
   };
 }
 
-/** Put the app's local values on its server once, so a later machine sees them. */
+/**
+ * Put the app's local values on its server once. A key the server already
+ * holds is left alone: another machine may have set it before this app first
+ * started, and this seed is a migration, not an overwrite.
+ */
 async function seedLocalSettings(host: string): Promise<void> {
   if (host !== LOCAL_HOST || stored(LOCAL_SEEDED) === "1") return;
-  await machineRequest(host, "_rustcode/settings/set", { values: localValues() }, 10_000);
+  const answer = await machineRequest(host, "_rustcode/settings/get", {}, 10_000);
+  const storedKeys = arr(obj(answer)?.stored).flatMap((key) => (typeof key === "string" ? [key] : []));
+  const missing = missingSettingValues(storedKeys, localValues());
+  if (Object.keys(missing).length)
+    await machineRequest(host, "_rustcode/settings/set", { values: missing }, 10_000);
   localStorage.setItem(LOCAL_SEEDED, "1");
 }
 
@@ -227,11 +238,11 @@ export async function loadServerSettings(host: string, force = false): Promise<v
   }
 }
 
-/** Load the settings of every machine the scope shows. */
-export function loadScopeSettings(machines: ScopeMachine[]): Promise<void> {
-  return Promise.all(
+/** Load the settings of every machine the scope shows; one failing read does not stop the rest. */
+export async function loadScopeSettings(machines: ScopeMachine[]): Promise<void> {
+  await Promise.allSettled(
     machines.filter((machine) => machine.online).map((machine) => loadServerSettings(machine.host)),
-  ).then(() => undefined);
+  );
 }
 
 /** Apply a server's values to the local app, so its behaviour follows them. */
@@ -326,9 +337,10 @@ export function useScopedSetting(
   format: (value: Json | undefined) => string,
 ): ScopedSetting {
   const { scope, machines, writes } = useScope();
-  const loading = useSettingValues((state) => state.loading[valueKey(LOCAL_HOST, "*")] === true);
+  const loadingByHost = useSettingValues((state) => state.loading);
   const stored = useSettingValues((state) => state.values);
   const targets = scopeTargets(scope, machines);
+  const loading = targets.some((machine) => loadingByHost[valueKey(machine.host, "*")] === true);
   const entries: ScopeValueEntry[] = targets.map((machine) => ({
     host: machine.host,
     name: machine.name,
@@ -339,11 +351,8 @@ export function useScopedSetting(
   const mixed = scopeValuesMixed(entries);
   const offline = machines.filter((machine) => !machine.online);
   const set = async (value: Json) => {
-    try {
-      for (const machine of writes) await writeServerSetting(machine.host, key, value);
-    } catch (error) {
-      toast(errorText(error), "error");
-    }
+    const result = await runOnMachines(writes, (machine) => writeServerSetting(machine.host, key, value));
+    if (result.failures.length) toast(failureSummary(result), "error");
   };
   return {
     value: shown?.value,
@@ -522,11 +531,8 @@ export function useScopedDefaultHarness(): ScopedDefaultHarness {
   const mixed = scopeValuesMixed(entries);
   const value = snapshot?.default ?? null;
   const set = async (choice: NewThreadChoice) => {
-    try {
-      for (const machine of writes) await writeDefaultHarness(machine.host, choice);
-    } catch (error) {
-      toast(errorText(error), "error");
-    }
+    const result = await runOnMachines(writes, (machine) => writeDefaultHarness(machine.host, choice));
+    if (result.failures.length) toast(failureSummary(result), "error");
   };
   return {
     snapshot,

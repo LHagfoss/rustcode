@@ -523,13 +523,15 @@ the app, not the engine's model loop, acts on them:
 
 A client reads and writes them with `_rustcode/settings/get` and
 `_rustcode/settings/set` (both take and answer `{ "values": { … } }`; `get`
-accepts `"keys"`). The engine refuses a key outside its registry, so the file
+accepts `"keys"` and also answers `"stored"`, the keys the file actually
+holds). The engine refuses a key outside its registry, so the file
 cannot become a general store over ACP. The keys are
 `default-permission-mode`, `resume-after-restart`, `continue-after-limit`,
 `auto-compact-mode`, `auto-compact-threshold`, `orchestration`,
 `delegates-total`, `delegates-per-thread` and `read-across-projects`. A client
-that reads a key the machine never set gets the engine's default; the desktop
-app writes its own values once on first start.
+that reads a key the machine never set gets the engine's default. The desktop
+app seeds its own values once on first start, but only for the keys `stored`
+does not list, so a value another machine wrote first is kept.
 
 The default harness, model and effort stay in `config.toml`
 (`[harness_defaults]`, `_rustcode/harnesses/default`) and skill/MCP toggles

@@ -19,7 +19,7 @@ import { arr, bool, type Json, type JsonObject, num, obj, str } from "../acp/jso
 import { Method } from "../acp/types";
 import { createSkill, openPath, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
-import { mcpCopy } from "../state/settingsRegistry";
+import { failureSummary, mcpCopy, runOnMachines } from "../state/settingsRegistry";
 import { machineRequest, useLoadScopeSettings, useScope } from "../state/settingsScope";
 import { askConfirm, errorText, toast, useApp } from "../state/store";
 import { cardInset, cx, noTextHelpers, Spinner, Switch, Tooltip } from "./primitives";
@@ -165,18 +165,13 @@ export function CapabilitiesPage() {
   // Add to all machines sends the definition, never the values: a secret set
   // here stays here and is named for the user to set on each machine.
   const runAll = async (method: string, params: JsonObject, timeout?: number) => {
-    let ok = true;
-    for (const machine of writes) {
+    const result = await runOnMachines(writes, (machine) => {
       const forMachine = method === Method.mcpAdd ? blankMcpSecrets(params) : params;
-      try {
-        await machineRequest(machine.host, method, forMachine, timeout);
-      } catch (e) {
-        ok = false;
-        toast(`${machine.name}: ${errorText(e)}`, "error");
-      }
-    }
-    if (ok) bump((n) => n + 1);
-    return ok;
+      return machineRequest(machine.host, method, forMachine, timeout);
+    });
+    for (const failure of result.failures) toast(`${failure.name}: ${failure.message}`, "error");
+    if (result.succeeded.length) bump((n) => n + 1);
+    return result.failures.length === 0;
   };
   return (
     <>
@@ -488,21 +483,21 @@ function McpRow({
     const nodes = target === "all" ? others : others.filter((machine) => machine.host === target);
     if (!nodes.length) return;
     setCopying(true);
-    try {
-      for (const machine of nodes) {
-        await machineRequest(
-          machine.host,
-          Method.mcpAdd,
-          {
-            name: copy.name,
-            target: copy.target,
-            transport: copy.transport,
-            ...(copy.transport === "http" ? { headers: copy.headers } : { env: copy.env }),
-          },
-          45_000,
-        );
-      }
-      const where = nodes.map((machine) => machine.name).join(", ");
+    const result = await runOnMachines(nodes, (machine) =>
+      machineRequest(
+        machine.host,
+        Method.mcpAdd,
+        {
+          name: copy.name,
+          target: copy.target,
+          transport: copy.transport,
+          ...(copy.transport === "http" ? { headers: copy.headers } : { env: copy.env }),
+        },
+        45_000,
+      ),
+    );
+    if (result.succeeded.length) {
+      const where = result.succeeded.map((machine) => machine.name).join(", ");
       toast(
         copy.secretKeys.length
           ? `Copied ${s.name} to ${where}. Set ${copy.secretKeys.join(", ")} there.`
@@ -510,11 +505,9 @@ function McpRow({
         "success",
       );
       onChanged();
-    } catch (e) {
-      toast(errorText(e), "error");
-    } finally {
-      setCopying(false);
     }
+    if (result.failures.length) toast(failureSummary(result), "error");
+    setCopying(false);
   };
   return (
     <div>
@@ -825,30 +818,24 @@ function SkillCopy({
 }) {
   const [busy, setBusy] = useState(false);
   const copyTo = async (target: string) => {
-    if (!skill.content) return;
+    const content = skill.content;
+    if (!content) return;
     const nodes = target === "all" ? others : others.filter((machine) => machine.host === target);
     if (!nodes.length) return;
     setBusy(true);
-    try {
-      for (const machine of nodes) {
-        await machineRequest(
-          machine.host,
-          "_rustcode/skills/add",
-          { name: skill.name, content: skill.content },
-          30_000,
-        );
-      }
-      const where = nodes.map((machine) => machine.name).join(", ");
+    const result = await runOnMachines(nodes, (machine) =>
+      machineRequest(machine.host, "_rustcode/skills/add", { name: skill.name, content }, 30_000),
+    );
+    if (result.succeeded.length) {
+      const where = result.succeeded.map((machine) => machine.name).join(", ");
       toast(
         `Copied ${skill.name}'s SKILL.md to ${where}. Other files in the skill stay on the source machine.`,
         "success",
       );
       onChanged();
-    } catch (e) {
-      toast(errorText(e), "error");
-    } finally {
-      setBusy(false);
     }
+    if (result.failures.length) toast(failureSummary(result), "error");
+    setBusy(false);
   };
   return (
     <CopyMenu

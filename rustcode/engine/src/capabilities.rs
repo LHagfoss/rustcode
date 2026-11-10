@@ -215,10 +215,7 @@ pub(crate) fn mcp_entries_from(
                     ),
                 ),
             };
-            let copy_target = config.and_then(|server| {
-                let parts = raw_target_parts(server);
-                (parts.join(" ") == redacted_target(server)).then_some(parts)
-            });
+            let copy_target = config.and_then(copy_target_parts);
             McpEntry {
                 name: status.name.clone(),
                 transport: match config {
@@ -544,6 +541,44 @@ pub fn raw_target_parts(server: &crate::config::McpServerConfig) -> Vec<String> 
     parts
 }
 
+/// The target parts to copy to another machine, or `None` when the copy would
+/// carry a masked secret. Copyability follows the masking decision itself:
+/// a remote URL is copyable when it has no userinfo, query or fragment (all
+/// of which [`redacted_target`] removes), and a stdio command when no
+/// secret-looking argument is masked. Root URLs stay copyable even though
+/// `Url::to_string()` would normalise them with a trailing slash.
+pub fn copy_target_parts(server: &crate::config::McpServerConfig) -> Option<Vec<String>> {
+    if server.is_remote() {
+        let raw = server.url.as_deref()?;
+        let url = reqwest::Url::parse(raw).ok()?;
+        if !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return None;
+        }
+        return Some(vec![raw.to_owned()]);
+    }
+    let mut mask_next = false;
+    for arg in &server.args {
+        if mask_next {
+            return None;
+        }
+        if let Some((key, _)) = arg.split_once('=') {
+            if is_secret_name(key) {
+                return None;
+            }
+        } else if arg.starts_with('-') && is_secret_name(arg) {
+            mask_next = true;
+        }
+    }
+    if mask_next {
+        return None;
+    }
+    Some(raw_target_parts(server))
+}
+
 pub fn redacted_target(server: &crate::config::McpServerConfig) -> String {
     if server.is_remote() {
         let raw = server.url.as_deref().unwrap_or_default();
@@ -821,5 +856,59 @@ mod tests {
         let json = serde_json::to_string(row).unwrap();
         assert!(!json.contains("secret") && !json.contains("pw@") && !json.contains("hunter2"));
         assert_eq!(row.transport, "http");
+    }
+
+    #[test]
+    fn a_root_http_url_is_copyable_until_it_carries_a_secret() {
+        let row = |server: &McpServerConfig| {
+            mcp_entries_from(
+                std::slice::from_ref(server),
+                std::slice::from_ref(server),
+                &[McpServerStatus {
+                    name: server.name.clone(),
+                    state: McpServerState::NotRunning,
+                }],
+            )
+            .pop()
+            .unwrap()
+        };
+        let hosted = |url: &str| {
+            let mut server = stdio("hosted", &[]);
+            server.command.clear();
+            server.url = Some(url.to_owned());
+            server
+        };
+
+        // A root URL is what a hosted server usually has; `Url::to_string()`
+        // adding a slash must not hide it from Copy to…
+        assert_eq!(
+            row(&hosted("https://mcp.example.com")).copy_target,
+            Some(vec!["https://mcp.example.com".to_owned()])
+        );
+        assert_eq!(
+            row(&hosted("https://mcp.example.com/mcp")).copy_target,
+            Some(vec!["https://mcp.example.com/mcp".to_owned()])
+        );
+        assert_eq!(
+            row(&hosted("https://mcp.example.com?token=secret")).copy_target,
+            None
+        );
+        assert_eq!(
+            row(&hosted("https://user:pass@mcp.example.com")).copy_target,
+            None
+        );
+
+        assert_eq!(
+            row(&stdio("plain", &["-y", "github-mcp"])).copy_target,
+            Some(vec![
+                "npx".to_owned(),
+                "-y".to_owned(),
+                "github-mcp".to_owned()
+            ])
+        );
+        assert_eq!(
+            row(&stdio("secret", &["-y", "server", "--token", "abc"])).copy_target,
+            None
+        );
     }
 }
