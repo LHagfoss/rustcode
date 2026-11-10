@@ -9,12 +9,19 @@
 // The app's Rust shell holds each machine's connection supervisor (an app
 // cannot dial a gateway from the web view), so this page only asks, lists and
 // explains; `state/machines.ts` keeps what it is told.
+//
+// This computer's row also says whether the RustCode server is installed as a
+// background service: that is what keeps threads running when the app closes,
+// and Settings › Remote access installs it when network access is turned on.
+// A row of another machine says which RustCode version it runs, so an old one
+// is a sentence with a command, not a silent connection failure.
 
-import { CircleHelp, Laptop, Monitor, RefreshCw, Search, SquareTerminal } from "lucide-react";
+import { CircleHelp, Laptop, Monitor, RefreshCw, Search, Server, SquareTerminal } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { currentPlatform } from "../lib/platform";
 import { hasShell } from "../lib/shell";
 import {
+  askInstallServer,
   askMachine,
   cancelPairing,
   codeCheckOverdue,
@@ -23,19 +30,24 @@ import {
   type DiscoveredMachine,
   discoverMachines,
   lastSeen,
+  localAppVersion,
   type Machine,
   machineLine,
   type Pairing,
   pairMachine,
   platformName,
   refreshMachines,
+  refreshServerService,
   removeMachine,
+  routeName,
+  serverLine,
   setMainMachine,
   stateLabel,
   stateTone,
   threadCount,
   threadLabel,
   useMachines,
+  versionSkew,
 } from "../state/machines";
 import { toast, useApp } from "../state/store";
 import { cx, noTextHelpers, Spinner, Switch } from "./primitives";
@@ -77,6 +89,7 @@ export function MachinesPage() {
   const pairing = useMachines((s) => s.pairing);
   const pairingError = useMachines((s) => s.pairingError);
   const [now, setNow] = useState(() => Date.now());
+  const [local, setLocal] = useState<string | null>(null);
 
   // The shell learns about a machine on its own (a retry that worked, a
   // pairing ended there), so the page keeps asking while it is open.
@@ -93,6 +106,13 @@ export function MachinesPage() {
     return () => clearInterval(timer);
   }, []);
 
+  // The background server and this app's own version: both read once, and
+  // again after an install.
+  useEffect(() => {
+    void refreshServerService();
+    void localAppVersion().then(setLocal);
+  }, []);
+
   if (!ready) return <Loading error={error} />;
 
   return (
@@ -105,22 +125,35 @@ export function MachinesPage() {
       >
         <ThisComputer />
         {machines.map((machine) => (
-          <MachineRow key={machine.id} machine={machine} count={threadCount(machine, counts)} now={now} />
+          <MachineRow
+            key={machine.id}
+            machine={machine}
+            count={threadCount(machine, counts)}
+            now={now}
+            local={local}
+          />
         ))}
         {machines.length === 0 && <NoMachines />}
       </Group>
 
-      {pairing ? <PairingGroup pairing={pairing} /> : <AddMachine error={pairingError} />}
+      {pairing ? <PairingGroup pairing={pairing} /> : <AddMachine error={pairingError} local={local} />}
     </>
   );
 }
 
-/** This app's own computer: the local RustCode server, over the local socket. */
+/**
+ * This app's own computer: the local RustCode server, over the local socket,
+ * and whether that server is installed to run in the background — which is
+ * what keeps threads running when the app closes (docs/server.md).
+ */
 function ThisComputer() {
   const status = useApp((s) => s.status);
   const open = useApp((s) => Object.values(s.threads).filter((thread) => thread.loaded).length);
+  const server = useMachines((s) => s.server);
+  const installing = useMachines((s) => s.serverInstalling);
   const platform = currentPlatform();
   const running = status === "ready";
+  const installed = server?.installed === true;
   return (
     <Row
       title={
@@ -129,13 +162,38 @@ function ThisComputer() {
           {selfName()}
         </>
       }
-      subtitle={`The RustCode server this app runs. ${open === 1 ? "One thread is open." : `${open} threads are open.`}`}
+      subtitle={`The RustCode server this app runs. ${open === 1 ? "One thread is open." : `${open} threads are open.`}${
+        installed ? "" : " It runs only while the app is open, so closed threads stop with it."
+      }`}
+      status={
+        <>
+          <span className="tabular">Server: {serverLine(server)}</span>
+          {server?.version && server.version !== server.cliVersion ? (
+            <span className="text-warning">
+              {" "}
+              · it runs {server.version}, this app ships {server.cliVersion}
+            </span>
+          ) : null}
+          {server?.problems.map((problem) => (
+            <span key={problem.code} className="block pt-0.5 text-warning">
+              {problem.message}
+            </span>
+          ))}
+        </>
+      }
       badge={
         <Chip tone={running ? "ok" : "warn"}>
           {running ? "Connected" : status === "connecting" ? "Starting" : "Stopped"}
         </Chip>
       }
-    />
+    >
+      {server && !installed && (
+        <Action disabled={installing} onClick={() => askInstallServer()}>
+          {installing ? <Spinner /> : <Server size={13} />}
+          Install server
+        </Action>
+      )}
+    </Row>
   );
 }
 
@@ -148,9 +206,22 @@ function NoMachines() {
   );
 }
 
-function MachineRow({ machine, count, now }: { machine: Machine; count: number | undefined; now: number }) {
+function MachineRow({
+  machine,
+  count,
+  now,
+  local,
+}: {
+  machine: Machine;
+  count: number | undefined;
+  now: number;
+  /** This app's version, for the row that says another machine runs another. */
+  local: string | null;
+}) {
   const platform = platformName(machine.platform);
   const threads = threadLabel(count);
+  const skew = versionSkew(machine.version, local, machine.platform);
+  const hint = machine.hint;
   return (
     <Row
       stacked
@@ -160,7 +231,15 @@ function MachineRow({ machine, count, now }: { machine: Machine; count: number |
           {machine.name}
         </>
       }
-      subtitle={machineLine(machine)}
+      subtitle={
+        <>
+          <span className="block">{machineLine(machine)}</span>
+          {/* Who is older, and what updates it: the Mac Studio on 0.96 against a 1.28 app. */}
+          {skew && <span className="mt-1 block text-warning">{skew}</span>}
+          {/* PR 3402's words for a route that does not answer while another does. */}
+          {hint && <span className="mt-1 block">{hint}</span>}
+        </>
+      }
       status={
         <>
           {machine.main && "Main machine · "}
@@ -207,12 +286,17 @@ function PairAgainAction({ machine }: { machine: Machine }) {
 
 // ---------------------------------------------------------------- adding
 
-function AddMachine({ error }: { error: string | null }) {
+function AddMachine({ error, local }: { error: string | null; local: string | null }) {
   const [address, setAddress] = useState("");
   const discovered = useMachines((s) => s.discovered);
   const discovering = useMachines((s) => s.discovering);
   const discoverError = useMachines((s) => s.discoverError);
   const discover = useCallback(() => void discoverMachines(), []);
+  // The list is what the sheet is for, so it fills itself: Bonjour on this
+  // network and the overlay addresses the saved machines reported.
+  useEffect(() => {
+    if (discovered === null) void discoverMachines();
+  }, [discovered]);
   const ask = () => {
     const target = address.trim();
     if (!target) {
@@ -224,27 +308,30 @@ function AddMachine({ error }: { error: string | null }) {
   };
   return (
     <Group
-      title="Add machine"
-      footer="Both computers need RustCode running with remote access on, and to be on the same network. A machine away from home is reached over Tailscale or a VPN by entering its address."
+      title="Machines found"
+      action={
+        <Action quiet disabled={discovering} onClick={discover}>
+          {discovering ? <Spinner /> : <Search size={13} />}
+          {discovering ? "Looking…" : "Look again"}
+        </Action>
+      }
+      footer="Found automatically: Bonjour, the same way a phone finds this computer, on this network; and a saved machine's NetBird, Tailscale or ZeroTier address, which its own handshake reported and no browse can hear. Both computers need RustCode running with remote access on. A machine away from home is reached over an overlay or a VPN; entering its address is the fallback."
     >
       {error && <p className="m-0 px-4 py-4 text-callout text-warning">{error}</p>}
-      <Row
-        title="Machines on this network"
-        subtitle="Found with Bonjour, the same way a phone finds this computer. A machine whose network is an overlay is not announced; enter its address instead."
-      >
-        <Action disabled={discovering} onClick={discover}>
-          {discovering ? <Spinner /> : <Search size={13} />}
-          {discovering ? "Looking…" : "Look for machines"}
-        </Action>
-      </Row>
       {discoverError && (
         <p className="m-0 px-4 py-3 text-callout text-warning leading-normal">
           Could not look for machines: {discoverError}
         </p>
       )}
       {(discovered ?? []).map((found) => (
-        <DiscoveredRow key={found.gatewayId ?? found.name} found={found} />
+        <DiscoveredRow key={found.gatewayId ?? found.name} found={found} local={local} />
       ))}
+      {discovered?.length === 0 && (
+        <Row
+          title="Nothing found yet"
+          subtitle="A machine on this network appears once it announces itself. One on another network appears here after it has been paired once, or by entering its address below."
+        />
+      )}
       <Row
         stacked
         title="Enter an address"
@@ -269,11 +356,39 @@ function AddMachine({ error }: { error: string | null }) {
   );
 }
 
-function DiscoveredRow({ found }: { found: DiscoveredMachine }) {
+/**
+ * One found machine, whichever way it was found: its name, then what this app
+ * knows of it — platform, the RustCode version it runs and the network its
+ * address is on — with the address. An older version is a sentence with the
+ * command that updates it there, and a route that does not answer carries
+ * PR 3402's hint.
+ */
+function DiscoveredRow({ found, local }: { found: DiscoveredMachine; local: string | null }) {
+  const platform = found.platform ? platformName(found.platform) : undefined;
+  const facts = [
+    platform,
+    found.version ? `RustCode ${found.version}` : undefined,
+    routeName(null, found.routeKind),
+  ];
+  const skew = versionSkew(found.version, local, found.platform);
   return (
     <Row
-      title={found.name}
-      subtitle={found.address ? `At ${found.address}` : "It announced no address this computer can reach."}
+      title={
+        <>
+          {found.platform && <MachineIcon platform={found.platform} />}
+          {found.name}
+        </>
+      }
+      subtitle={
+        <>
+          <span className="block">{facts.filter(Boolean).join(" · ")}</span>
+          <span className="block font-mono">
+            {found.address ?? "It announced no address this computer can reach."}
+          </span>
+          {skew && <span className="mt-1 block text-warning">{skew}</span>}
+          {found.hint && <span className="mt-1 block">{found.hint}</span>}
+        </>
+      }
     >
       {found.saved ? (
         <Chip tone="ok">Saved</Chip>

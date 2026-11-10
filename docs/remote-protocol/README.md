@@ -154,6 +154,10 @@ Host → client:
   and keeping the pairing alive never means pairing again.
 - `host_name` is optional: the machine's own name, for display. It is a
   label, not an identity.
+- `version` is optional on both answers: the RustCode version running on the
+  host (`1.28.0`), so an app connected to several machines can say which one is
+  older and what updates it. A label, never a gate: a client does not refuse a
+  machine over it, and an older gateway leaves it out.
 - `routes` is optional on both answers: the addresses this host answers on
   right now, best first, each
   `{ "address": "host:port", "kind": "lan", "provider": null }`.

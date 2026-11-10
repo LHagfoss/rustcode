@@ -57,10 +57,12 @@ export interface MockOptions {
   remote?: "disconnected" | "expired" | "connect" | "refused";
   /**
    * The machines this app is paired with (`?machines=`): `paired` is a machine
-   * saved just now, `connect` starts with none saved so the Add machine flow
-   * can be walked, `offline` a machine the shell keeps retrying, and `revoked`
-   * one whose pairing the machine ended. The default is the paired, connected
-   * machine the happy path shows.
+   * saved just now, `connect` starts with one saved machine on an older
+   * RustCode reached over NetBird so the Add sheet has found machines to list
+   * (one of them needing an update) and the server not installed, `offline` a
+   * machine the shell keeps retrying, and `revoked` one whose pairing the
+   * machine ended. The default is the paired, connected machine the happy path
+   * shows.
    */
   machines?: "paired" | "connect" | "offline" | "revoked";
   /**
@@ -4774,18 +4776,38 @@ const MOCK_MACHINE = {
   platform: "linux",
   host: "ubuntu-1.local",
   route: "192.168.1.31:17879",
+  overlay: "100.90.16.237:17879",
   threads: 3,
 };
 
-/** One saved machine as `machines_list` reports it (`src-tauri/src/machines.rs`). */
-function mockMachine(state: "connected" | "offline" | "needsPairing", addedAt: number): JsonObject {
+/** The NetBird address the saved machine's handshake reported (#3402). */
+const MOCK_OVERLAY_ROUTE = {
+  kind: "vpn",
+  address: MOCK_MACHINE.overlay,
+  provider: "netbird",
+  encrypted: true,
+};
+
+/**
+ * One saved machine as `machines_list` reports it (`src-tauri/src/machines.rs`).
+ * `?machines=connect` asks for the overlay route and an older version, the
+ * state the Add sheet has to explain.
+ */
+function mockMachine(
+  state: "connected" | "offline" | "needsPairing",
+  addedAt: number,
+  extra: { overlay?: boolean; version?: string; hint?: string | null } = {},
+): JsonObject {
+  const route = { kind: "lan", address: MOCK_MACHINE.route, encrypted: false };
+  const routes = extra.overlay ? [route, MOCK_OVERLAY_ROUTE] : [route];
   return {
     id: MOCK_MACHINE.id,
     name: MOCK_MACHINE.name,
     platform: MOCK_MACHINE.platform,
+    version: extra.version ?? "1.28.0",
     main: false,
-    routes: [{ kind: "lan", address: MOCK_MACHINE.route, encrypted: false }],
-    route: { kind: "lan", address: MOCK_MACHINE.route, encrypted: false },
+    routes,
+    route,
     state,
     detail:
       state === "offline"
@@ -4793,6 +4815,7 @@ function mockMachine(state: "connected" | "offline" | "needsPairing", addedAt: n
         : state === "needsPairing"
           ? "Lars's Linux box ended this computer's pairing. Pair it again to see its threads."
           : null,
+    hint: extra.hint ?? null,
     retryInSecs: state === "offline" ? 4 : null,
     addedAt: new Date(addedAt).toISOString(),
     lastConnectedAt: state === "connected" ? new Date().toISOString() : new Date(addedAt).toISOString(),
@@ -4804,7 +4827,15 @@ function mockMachineList(option: MockOptions["machines"]): JsonObject[] {
   const savedAt = Date.now() - 1000 * 60 * 60 * 24 * 6;
   switch (option) {
     case "connect":
-      return [];
+      // Saved once, on an older RustCode, and reached over NetBird: the Add
+      // sheet lists it, says to update it, and the server is not installed.
+      return [
+        mockMachine("offline", savedAt, {
+          overlay: true,
+          version: "0.96.0",
+          hint: "Not reachable over NetBird (100.90.16.237:17879). On that machine, check that NetBird allows inbound connections and that an access policy allows TCP 17879 between the two machines.",
+        }),
+      ];
     case "offline":
       return [mockMachine("offline", savedAt)];
     case "revoked":
@@ -4845,25 +4876,70 @@ function mockIsPublic(address: string): boolean {
   return host.includes(".");
 }
 
-/** The machines Bonjour finds in the mock, one of them already saved. */
+/**
+ * The machines `machines_discover` lists in the mock, as the shell answers:
+ * Bonjour on this network, plus the saved machine's own NetBird address, which
+ * the page merges by host id into one row per machine.
+ */
 function mockDiscovered(saved: JsonObject[]): JsonObject[] {
-  const known = saved.some((machine) => machine.id === MOCK_MACHINE.id);
+  const machine = saved.find((row) => row.id === MOCK_MACHINE.id);
+  const version = machine ? String(machine.version ?? "") || null : null;
   return [
     {
       name: MOCK_MACHINE.name,
+      source: "bonjour",
       address: MOCK_MACHINE.route,
       addresses: ["192.168.1.31"],
       gatewayId: MOCK_MACHINE.id,
-      saved: known,
+      platform: MOCK_MACHINE.platform,
+      version,
+      routeKind: "lan",
+      hint: null,
+      saved: Boolean(machine),
     },
     {
       name: "Studio",
+      source: "bonjour",
       address: "192.168.1.20:17879",
       addresses: ["192.168.1.20"],
       gatewayId: "gw-8e1f4b7a5c2d4e6f",
-      saved: saved.some((machine) => machine.id === "gw-8e1f4b7a5c2d4e6f"),
+      platform: "macos",
+      version: "1.28.0",
+      routeKind: "lan",
+      hint: null,
+      saved: saved.some((row) => row.id === "gw-8e1f4b7a5c2d4e6f"),
     },
+    ...(machine
+      ? [
+          {
+            name: MOCK_MACHINE.name,
+            source: "overlay",
+            address: MOCK_MACHINE.overlay,
+            addresses: [MOCK_MACHINE.overlay],
+            gatewayId: MOCK_MACHINE.id,
+            platform: MOCK_MACHINE.platform,
+            version,
+            routeKind: "netbird",
+            hint: machine.hint ?? null,
+            saved: true,
+          },
+        ]
+      : []),
   ];
+}
+
+/** The RustCode server as a background service, as `src-tauri/src/service.rs` answers. */
+function mockServerService(installed: boolean): JsonObject {
+  return {
+    installed,
+    running: installed,
+    version: installed ? "1.28.0" : null,
+    cliVersion: "1.28.0",
+    problems: installed
+      ? []
+      : [{ code: "not-installed", message: "The RustCode server service is not installed." }],
+    error: null,
+  };
 }
 
 /**
@@ -4927,8 +5003,12 @@ export class MockTransport implements Transport {
   /** The machines this app is paired with, as `machines_list` reports them. */
   private machineList: JsonObject[];
 
+  /** Whether the RustCode server is installed as a service (`?machines=connect` starts without it). */
+  private serverInstalled: boolean;
+
   constructor(private readonly options: MockOptions = {}) {
     this.machineList = mockMachineList(options.machines);
+    this.serverInstalled = options.machines !== "connect";
   }
 
   async start(onEvent: (event: TransportEvent) => void): Promise<void> {
@@ -5013,6 +5093,12 @@ export class MockTransport implements Transport {
     if (command === "machines_remove") {
       this.machineList = this.machineList.filter((machine) => machine.id !== String(args.id));
       return null;
+    }
+    if (command === "app_version") return "1.28.0";
+    if (command === "server_service_status") return mockServerService(this.serverInstalled);
+    if (command === "server_service_install") {
+      this.serverInstalled = true;
+      return mockServerService(true);
     }
     if (command === "machines_set_main") {
       this.machineList = this.machineList.map((machine) => ({

@@ -21,9 +21,11 @@ import {
 } from "../acp/remote";
 import { encodeQr } from "../lib/qr";
 import { deviceLabel, lastSeenLabel } from "../state/connectRequests";
+import { installServer, refreshServerService, serverLine, useMachines } from "../state/machines";
 import { refusalAgo, refusalCopy } from "../state/refusals";
 import { activeChallenge, remainingPairingSeconds } from "../state/remotePairing";
 import {
+  askConfirm,
   dismissRemoteChallenge,
   errorText,
   pairRemoteDevice,
@@ -54,6 +56,8 @@ export function RemoteAccessPage() {
   const remoteError = useApp((s) => s.remoteError);
   const [busy, setBusy] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const server = useMachines((s) => s.server);
+  const installing = useMachines((s) => s.serverInstalling);
   const challenge = useApp((s) => s.remoteChallenge);
   const paired = useApp((s) => s.remotePaired);
   const [pairAskedAt, setPairAskedAt] = useState<number | null>(null);
@@ -65,6 +69,9 @@ export function RemoteAccessPage() {
   useEffect(() => {
     if (engine !== "ready") return;
     void refresh();
+    // The background server is what makes network access outlive the app, so
+    // its state is read with the gateway's.
+    void refreshServerService();
     const timer = setInterval(() => void refresh(), POLL_MS);
     return () => clearInterval(timer);
   }, [engine, refresh]);
@@ -104,8 +111,31 @@ export function RemoteAccessPage() {
     }
   };
 
+  /**
+   * Turning network access on also makes sure the RustCode server is
+   * installed: threads that live in a service keep running when the app
+   * closes, which is the point of sharing them. Nothing is installed before
+   * the owner agrees, and a running turn is never ended for it.
+   */
   const toggle = (next: boolean) => {
-    void run("toggle", () => setRemoteAccess(next));
+    if (!next) {
+      void run("toggle", () => setRemoteAccess(false));
+      return;
+    }
+    const turnOn = () => void run("toggle", () => setRemoteAccess(true));
+    const server = useMachines.getState().server;
+    if (server === null) {
+      void refreshServerService().then(() => {
+        if (useMachines.getState().server?.installed) turnOn();
+        else askInstallThenTurnOn(turnOn);
+      });
+      return;
+    }
+    if (server.installed) {
+      turnOn();
+      return;
+    }
+    askInstallThenTurnOn(turnOn);
   };
 
   const pair = () => {
@@ -149,6 +179,20 @@ export function RemoteAccessPage() {
             disabled={unavailable || busy !== null}
             onChange={toggle}
           />
+        </Row>
+        <Row
+          title="RustCode server"
+          subtitle="Threads run in the RustCode server in the background, so closing the app stops nothing and they are still here when you log in next. Turning network access on installs it when it is not installed."
+          status={serverLine(server)}
+        >
+          {server === null ? null : server.installed ? (
+            <Chip tone={server.running ? "ok" : "warn"}>{server.running ? "Running" : "Not running"}</Chip>
+          ) : (
+            <Action disabled={busy !== null || installing} onClick={() => void installServer()}>
+              {installing ? <Spinner /> : null}
+              Install
+            </Action>
+          )}
         </Row>
         <Row
           title="Gateway address"
@@ -297,6 +341,24 @@ export function RemoteAccessPage() {
       </Group>
     </>
   );
+}
+
+/**
+ * Ask before installing the server on the way to turning network access on,
+ * in the words that explain it. A failed install does not stop network access:
+ * the reason is a message of its own.
+ */
+function askInstallThenTurnOn(turnOn: () => void) {
+  askConfirm({
+    title: "Install the RustCode server too?",
+    message:
+      "Network access lets paired devices reach this computer's threads. To keep those threads running when the app is closed, RustCode also installs its server as a background service: it starts when you log in, and the app uses it. Threads, settings and pairings stay as they are. Network access turns on either way.",
+    action: "Turn on and install",
+    run: () => {
+      turnOn();
+      void installServer();
+    },
+  });
 }
 
 /**

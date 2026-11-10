@@ -12,6 +12,7 @@ mod native;
 mod notify;
 mod process;
 mod pty;
+mod service;
 mod smartui;
 mod threads;
 mod updater;
@@ -99,6 +100,8 @@ pub fn run() {
             threads::thread_log_open,
             diagnostics::server_status,
             diagnostics::system_info,
+            service::server_service_status,
+            service::server_service_install,
             diagnostics::resolve_binaries,
             diagnostics::logs_folder_open,
             diagnostics::diagnostics_save,

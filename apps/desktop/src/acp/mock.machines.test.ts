@@ -57,9 +57,27 @@ describe("mock machines", () => {
     expect(Date.now() - Date.parse(String(machines[0]!.addedAt))).toBeLessThan(5_000);
   });
 
-  test("?machines=connect starts with none, and asking then pairing saves one", async () => {
+  test("?machines=connect starts with one saved machine on an older RustCode, its server not installed", async () => {
     const transport = new MockTransport({ machines: "connect" });
-    expect(await machineList("connect")).toEqual([]);
+    const machines = await machineList("connect");
+    expect(machines.map((machine) => machine.name)).toEqual(["Lars's Linux box"]);
+    expect(machines[0]!.version).toBe("0.96.0");
+    // The NetBird address its handshake reported, and why it does not answer.
+    expect(machines[0]!.routes).toContainEqual({
+      kind: "vpn",
+      address: "100.90.16.237:17879",
+      provider: "netbird",
+      encrypted: true,
+    });
+    expect(String(machines[0]!.hint)).toContain("NetBird");
+    // The background server is the other half of the state: nothing is installed.
+    const server = (await call(transport, "server_service_status")) as JsonObject;
+    expect(server.installed).toBe(false);
+    expect(((await call(transport, "server_service_install")) as JsonObject).running).toBe(true);
+  });
+
+  test("asking a machine then typing its code saves it", async () => {
+    const transport = new MockTransport({ machines: "connect" });
     const ask = (await call(transport, "machines_ask", {
       askId: "ask-mock-1",
       address: "192.168.1.20:17879",
@@ -72,8 +90,7 @@ describe("mock machines", () => {
       code: "48219034",
     })) as JsonObject;
     expect(paired.name).toBe("Lars's Linux box");
-    // The list the page reads next has it, and the app can reach it.
-    expect(await machineList("connect")).toEqual([]);
+    // The list the page reads next has it once, and the app can reach it.
     const saved = (await call(transport, "machines_list")) as JsonObject[];
     expect(saved.map((machine) => machine.name)).toEqual(["Lars's Linux box"]);
     await expect(call(transport, "machine_connect", { id: paired.id })).resolves.toEqual({ connected: true });
@@ -101,14 +118,18 @@ describe("mock machines", () => {
     }
   });
 
-  test("discovery offers a machine already saved and one that is not", async () => {
+  test("discovery offers a machine already saved, one that is not, and the saved one's overlay address", async () => {
     const transport = new MockTransport();
     const found = (await call(transport, "machines_discover")) as JsonObject[];
-    expect(found.map((machine) => [machine.name, machine.saved])).toEqual([
-      ["Lars's Linux box", true],
-      ["Studio", false],
+    // The page merges the two rows for one machine by host id (`mergeDiscovered`).
+    expect(found.map((machine) => [machine.name, machine.saved, machine.source])).toEqual([
+      ["Lars's Linux box", true, "bonjour"],
+      ["Studio", false, "bonjour"],
+      ["Lars's Linux box", true, "overlay"],
     ]);
     expect(found[1]!.address).toBe("192.168.1.20:17879");
+    expect(found[2]!.address).toBe("100.90.16.237:17879");
+    expect(found[2]!.routeKind).toBe("netbird");
   });
 
   test("removing a machine takes it out of the list, and main moves to the one asked for", async () => {

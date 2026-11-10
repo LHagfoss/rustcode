@@ -428,6 +428,7 @@ impl Connector {
             access_expires_at,
             rotation_id,
             wire_names,
+            version,
             routes,
             ..
         } = answer
@@ -482,6 +483,7 @@ impl Connector {
                 host_name,
                 expires_at,
                 wire_names,
+                version,
                 routes: learned_routes(&routes),
             },
             access,
@@ -803,6 +805,7 @@ impl Approved {
                 access_token,
                 access_expires_at,
                 wire_names,
+                version,
                 routes,
                 ..
             } => {
@@ -828,6 +831,7 @@ impl Approved {
                             host_name,
                             expires_at,
                             wire_names,
+                            version,
                             routes: learned_routes(&routes),
                         },
                         access: None,
@@ -896,6 +900,9 @@ pub struct Welcome {
     pub host_name: Option<String>,
     pub expires_at: Option<String>,
     pub wire_names: Option<String>,
+    /// The RustCode version that machine reported: the row it appears on says
+    /// which machine needs updating. `None` from a gateway that predates it.
+    pub version: Option<String>,
     /// The addresses the machine reports it answers on, wrapped as routes.
     /// Empty from a gateway before the handshake carried them, and from a
     /// loopback-only listener no other machine can reach.
@@ -1381,6 +1388,7 @@ mod tests {
             host_name: Some("Studio".into()),
             expires_at: None,
             wire_names: None,
+            version: None,
             routes: vec![
                 Route::with_kind(RouteKind::Vpn, "100.90.16.237:17879"),
                 Route::with_kind(RouteKind::Lan, "192.168.1.20:17879"),
@@ -1410,6 +1418,7 @@ mod tests {
             host_name: None,
             expires_at: None,
             wire_names: None,
+            version: None,
             routes: Vec::new(),
         };
         let mut machine = Machine::new(

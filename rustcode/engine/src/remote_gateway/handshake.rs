@@ -429,6 +429,11 @@ pub enum HandshakeResponse {
         /// thread names; absent means the v1 names.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         wire_names: Option<String>,
+        /// The RustCode version running on this host, so the app can say which
+        /// machine needs updating. A label for the owner, never a protocol
+        /// gate; absent from an older host.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
         /// The addresses this host answers on right now, best first: its LAN
         /// addresses, a mesh VPN (`100.64.0.0/10`) address and its `.local`
         /// name. A device adds them to the routes it knows for this host, so
@@ -469,6 +474,9 @@ pub enum HandshakeResponse {
         /// thread names; absent means the v1 names.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         wire_names: Option<String>,
+        /// The RustCode version running on this host, as in `paired`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
         /// The addresses this host answers on right now, as in `paired`.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         routes: Vec<HostRoute>,
@@ -764,6 +772,7 @@ mod tests {
             access_token: None,
             access_expires_at: None,
             wire_names: None,
+            version: None,
             routes: Vec::new(),
         };
         assert_eq!(
@@ -783,6 +792,7 @@ mod tests {
             access_token: Some(Secret::new("A1")),
             access_expires_at: Some("2026-01-01T00:15:00Z".into()),
             wire_names: None,
+            version: None,
             routes: Vec::new(),
         };
         assert_eq!(
@@ -802,6 +812,7 @@ mod tests {
             access_expires_at: None,
             rotation_id: None,
             wire_names: None,
+            version: None,
             routes: Vec::new(),
         };
         assert_eq!(
@@ -821,6 +832,7 @@ mod tests {
             access_expires_at: Some("2026-01-01T00:15:00Z".into()),
             rotation_id: Some("5be1c4a07d2e9f63".into()),
             wire_names: None,
+            version: None,
             routes: Vec::new(),
         };
         assert_eq!(
@@ -991,6 +1003,7 @@ mod tests {
             access_token: Some(Secret::new(needle)),
             access_expires_at: None,
             wire_names: None,
+            version: None,
             routes: Vec::new(),
         };
         assert!(!format!("{pair:?}").contains(needle));

@@ -115,6 +115,16 @@ rustcode server uninstall   # remove the service
 - `uninstall` stops the server the service runs and removes the service.
   Threads, settings, pairings and logs stay. It asks first when turns are
   running (`--yes` skips the question).
+- **The app installs it** when Settings › Remote access › *Network access* is
+  turned on and the server is not installed, after one confirmation that says
+  what it is for: threads then keep running when the app closes, and the
+  server starts when you log in. It runs the same `rustcode server install`
+  with the `rustcode` the app itself runs, so a development build is refused
+  there with the reason shown, and a server another process runs is never
+  stopped while a turn is running — `--yes` stays a decision for a terminal.
+  Settings › Machines shows the result on *This computer* as
+  *Server: Installed · Running*, with **Install server** while it is not
+  installed; Settings › Remote access shows the same and its version.
 
 ### Linux: keep it running after logout
 

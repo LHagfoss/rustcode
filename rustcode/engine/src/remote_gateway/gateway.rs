@@ -830,6 +830,7 @@ impl Shared {
                 .as_ref()
                 .map(|issued| rfc3339(issued.access_expires_at)),
             wire_names: None,
+            version: Some(host_version()),
             routes: routes_now(self),
         };
         Ok(self.register(&mut state, &record, welcome))
@@ -936,6 +937,7 @@ impl Shared {
                 .as_ref()
                 .and_then(|issued| issued.rotation_id.clone()),
             wire_names: None,
+            version: Some(host_version()),
             routes: routes_now(self),
         };
         Ok(self.register(&mut state, &record, welcome))
@@ -1322,6 +1324,12 @@ fn rfc3339(at: chrono::DateTime<chrono::Utc>) -> String {
 /// Only what is bound is reported: a specific bind answers on that address
 /// alone, a wildcard on every candidate of its family, and an `auto` gateway
 /// on the LAN plus overlay listeners it opened.
+/// The RustCode version this host answers as, reported in `paired` and
+/// `authenticated` so a client can say which machine needs updating.
+fn host_version() -> String {
+    env!("CARGO_PKG_VERSION").to_owned()
+}
+
 fn routes_now(shared: &Shared) -> Vec<HostRoute> {
     let advertised = shared.advertised.borrow().clone();
     let bound = shared.bound.borrow().clone();
