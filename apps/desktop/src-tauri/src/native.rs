@@ -610,6 +610,71 @@ pub fn thread_image(path: String, roots: Vec<String>) -> Result<ImageFile, Strin
     })
 }
 
+/// The most one attached file may be, and how many a message may carry
+/// (`message_session`'s `attachments`, docs/orchestrator.md).
+const MAX_ATTACHMENT_BYTES: u64 = 5 * 1024 * 1024;
+pub const MAX_ATTACHMENTS: usize = 10;
+
+/// A file a thread's agent attaches to a message it sends another thread.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachedFile {
+    pub path: String,
+    pub name: String,
+    pub bytes: u64,
+}
+
+/// The files one message attaches, measured here: each absolute, inside the
+/// caller's project or worktree (symlinks followed), a file of at most 5 MB.
+/// A web view cannot stat a file, and a delegate must not hand a sibling a
+/// path from elsewhere on the disk.
+#[tauri::command(async)]
+pub fn attached_files(paths: Vec<String>, roots: Vec<String>) -> Result<Vec<AttachedFile>, String> {
+    if paths.len() > MAX_ATTACHMENTS {
+        return Err(format!(
+            "A message attaches at most {MAX_ATTACHMENTS} files."
+        ));
+    }
+    let roots: Vec<PathBuf> = roots
+        .iter()
+        .map(PathBuf::from)
+        .filter(|root| root.is_absolute())
+        .filter_map(|root| root.canonicalize().ok())
+        .collect();
+    if roots.is_empty() {
+        return Err("This thread has no folder to attach a file from.".into());
+    }
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
+        let raw = expand_home(&path);
+        if !raw.is_absolute() {
+            return Err(format!("{path} is not an absolute path."));
+        }
+        let real = raw
+            .canonicalize()
+            .map_err(|_| format!("No such file: {path}."))?;
+        if !roots.iter().any(|root| real.starts_with(root)) {
+            return Err(format!("{path} is outside this thread's project."));
+        }
+        let meta = std::fs::metadata(&real).map_err(|e| e.to_string())?;
+        if !meta.is_file() {
+            return Err(format!("{path} is not a file."));
+        }
+        if meta.len() > MAX_ATTACHMENT_BYTES {
+            return Err(format!("{path} is over 5 MB."));
+        }
+        out.push(AttachedFile {
+            path: real.to_string_lossy().into_owned(),
+            name: real
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            bytes: meta.len(),
+        });
+    }
+    Ok(out)
+}
+
 /// `~/…` from the engine or the mock, against `$HOME`.
 fn expand_home(path: &str) -> PathBuf {
     match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
@@ -860,6 +925,62 @@ mod tests {
         assert!(skill_root("elsewhere", "/", &root).is_err());
         assert!(skill_root("project", "relative", &root).is_err());
         assert_eq!(skill_root("user", "", &root).unwrap(), root.join("skills"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn attaches_only_files_inside_the_thread_folder() {
+        let root = std::env::temp_dir().join(format!("rc-attach-{}", std::process::id()));
+        let inside = root.join("repo");
+        std::fs::create_dir_all(inside.join("docs")).unwrap();
+        std::fs::write(inside.join("docs/notes.md"), b"# notes").unwrap();
+        std::fs::write(root.join("secret.txt"), b"secret").unwrap();
+        let roots = vec![inside.to_string_lossy().into_owned()];
+        let file = inside.join("docs/notes.md").to_string_lossy().into_owned();
+        let attached = attached_files(vec![file.clone()], roots.clone()).unwrap();
+        assert_eq!(attached.len(), 1);
+        assert_eq!(attached[0].name, "notes.md");
+        assert_eq!(attached[0].bytes, 7);
+        assert_eq!(
+            attached[0].path,
+            inside
+                .canonicalize()
+                .unwrap()
+                .join("docs/notes.md")
+                .to_string_lossy()
+        );
+        assert!(attached_files(vec!["docs/notes.md".into()], roots.clone()).is_err());
+        let outside = root.join("secret.txt").to_string_lossy().into_owned();
+        assert!(attached_files(vec![outside], roots.clone()).is_err());
+        assert!(attached_files(
+            vec![inside.join("docs").to_string_lossy().into_owned()],
+            roots.clone()
+        )
+        .is_err());
+        assert!(attached_files(vec![file], vec!["relative".into()]).is_err());
+        // The reason the path is resolved before it is compared: a link inside the
+        // folder that points out of it would otherwise pass a prefix check.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join("secret.txt"), inside.join("link.txt")).unwrap();
+            let link = inside.join("link.txt").to_string_lossy().into_owned();
+            let refused = attached_files(vec![link], roots.clone())
+                .err()
+                .unwrap_or_default();
+            assert!(
+                refused.contains("outside this thread's project"),
+                "{refused}"
+            );
+        }
+        // And the size the web view cannot measure.
+        let big = inside.join("big.bin");
+        std::fs::write(&big, vec![0u8; MAX_ATTACHMENT_BYTES as usize + 1]).unwrap();
+        let refused = attached_files(vec![big.to_string_lossy().into_owned()], roots.clone())
+            .err()
+            .unwrap_or_default();
+        assert!(refused.contains("over 5 MB"), "{refused}");
+        let many: Vec<String> = (0..=MAX_ATTACHMENTS).map(|_| "x".to_owned()).collect();
+        assert!(attached_files(many, roots).is_err());
         std::fs::remove_dir_all(&root).unwrap();
     }
 

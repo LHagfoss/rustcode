@@ -24,6 +24,8 @@ export const ORCHESTRATION_TOOLS = [
   "configure_session",
   "transfer_session",
   "list_pending_requests",
+  "answer_request",
+  "organize_threads",
   "list_projects",
   "list_machines",
   "list_pull_requests",
@@ -164,8 +166,13 @@ function orchestrationLabel(
       const summary = [named ? cut(named, 60) : "", harness, where].filter(Boolean).join(" · ");
       return { title: "Started thread", summary: summary || undefined };
     }
-    case "message_session":
-      return { title: "Messaged thread" };
+    case "message_session": {
+      const files = Array.isArray(args.attachments) ? args.attachments.length : 0;
+      return {
+        title: "Messaged thread",
+        summary: files ? `${files} file${files === 1 ? "" : "s"}` : undefined,
+      };
+    }
     case "manage_queue": {
       const what = text(args.action);
       const title =
@@ -198,6 +205,15 @@ function orchestrationLabel(
       return { title: "Moved thread", summary: text(args.harness) || undefined };
     case "list_pending_requests":
       return { title: "Listed waiting requests" };
+    case "answer_request":
+      return { title: "Answered a request", summary: text(args.choice) || text(args.answer) || undefined };
+    case "organize_threads": {
+      const ids = Array.isArray(args.session_ids) ? args.session_ids.length : 0;
+      return {
+        title: `Organized ${ids || 1} thread${ids === 1 ? "" : "s"}`,
+        summary: text(args.title) || undefined,
+      };
+    }
     case "list_projects":
       return { title: "Listed projects", summary: text(args.machine) || undefined };
     case "list_machines":

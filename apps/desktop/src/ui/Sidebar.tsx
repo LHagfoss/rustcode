@@ -73,7 +73,7 @@ import { liveSubagents, type StackAgent } from "../state/agentStack";
 import { type BranchRow, branchKindOf, branchRows } from "../state/branches";
 import { type ChildInfo, childInfo } from "../state/children";
 import { stateOf } from "../state/host";
-import { type Machine, type MachineState, stateLabel, useMachines } from "../state/machines";
+import { stateLabel, useMachines } from "../state/machines";
 import {
   cachedPulls,
   loadPulls,
@@ -84,6 +84,7 @@ import {
   subscribePulls,
 } from "../state/pulls";
 import { type PendingSetup, pendingSummary } from "../state/setup";
+import { type MachineHead, machineGroups, type ProjectGroup } from "../state/sidebarGroups";
 import { applyOrder, moveBy, reorder, sectionOrderKey } from "../state/sidebarOrder";
 import { PREF, usePref, useRowLayout } from "../state/sidebarPrefs";
 import {
@@ -738,6 +739,12 @@ const ThreadRow = memo(function ThreadRow({
   // What the row cannot spell out, on its hover card (ui/ThreadHoverCard.tsx).
   const harnessName = harness?.name ?? (external ? session.harness : undefined);
   const startRename = () => {
+    // A machine's thread is renamed on that machine (`thread_rename` is the shell's): the row
+    // says so instead of opening an editor whose save would only be refused (store.ts).
+    if (session.host) {
+      toast("A thread on another computer is renamed on that computer.", "info");
+      return;
+    }
     setTitle(session.title ?? "");
     // After the menu closes and gives focus back.
     setTimeout(() => setRenaming(true), 0);
@@ -1278,34 +1285,12 @@ interface Section {
   projects?: ProjectGroup[];
 }
 
-/** One project's rows in the list, and the machine they run on (docs/desktop.md › Several machines). */
-interface ProjectGroup {
-  key: string;
-  label: string;
-  items: SessionSummary[];
-  /** The machine it belongs to, whose heading is drawn above its first project. */
-  machine?: MachineHead;
-  /** The first project of its machine: the machine's name goes here. */
-  first?: boolean;
-  /** The machine's only project: its rows are drawn under the machine's name, with no folder. */
-  only?: boolean;
-}
-
-/** What the list says a machine is: this computer, or another one and how it stands. */
-interface MachineHead {
-  id: string;
-  name: string;
-  state: MachineState;
-  /** Seconds until the next attempt, while it waits (`state/machines.ts` `stateLabel`). */
-  retryInSecs: Machine["retryInSecs"];
-}
-
 /**
  * A machine's name above its threads: `● Connected`, `○ Offline`, `⚠ Revoked`, or
  * nothing for this computer. The dot and the words say the same thing twice, so
  * a row read out loud still says where it runs (docs/desktop.md › Several machines).
  */
-function MachineHeader({ machine }: { machine: MachineHead }) {
+function MachineHeader({ machine, onNew }: { machine: MachineHead; onNew?: () => void }) {
   const local = machine.id === LOCAL_HOST;
   const glyph = machine.state === "connected" ? "●" : machine.state === "needsPairing" ? "⚠" : "○";
   return (
@@ -1316,7 +1301,7 @@ function MachineHeader({ machine }: { machine: MachineHead }) {
           : `${stateLabel({ state: machine.state, retryInSecs: machine.retryInSecs })}. Its threads open read-only while it is away.`
       }
     >
-      <div className="mt-3 mb-1 flex h-6 items-center gap-1.5 px-2 first:mt-0">
+      <div className="group/m relative mt-3 mb-1 flex h-6 items-center gap-1.5 px-2 first:mt-0">
         <span
           aria-hidden
           className={cx(
@@ -1332,12 +1317,24 @@ function MachineHeader({ machine }: { machine: MachineHead }) {
         </span>
         <span className="min-w-0 flex-1 truncate font-medium text-callout text-fg/90">{machine.name}</span>
         {!local && (
-          <span className="shrink-0 text-fg-faint text-sub">
+          <span
+            className={cx(
+              "shrink-0 text-fg-faint text-sub",
+              onNew && "group-hover/m:invisible group-has-[:focus-visible]/m:invisible",
+            )}
+          >
             {machine.state === "connected"
               ? "Connected"
               : machine.state === "needsPairing"
                 ? "Revoked"
                 : "Offline"}
+          </span>
+        )}
+        {onNew && (
+          <span className="absolute right-1.5 hidden group-hover/m:flex group-has-[:focus-visible]/m:flex">
+            <RowAction label={`New thread on ${machine.name}`} onClick={onNew}>
+              <SquarePen size={12} />
+            </RowAction>
           </span>
         )}
       </div>
@@ -1872,58 +1869,22 @@ export function Sidebar() {
     // One group per machine once a computer is paired: this one first, then each machine with the
     // state of its connection, and the threads by project inside (docs/desktop.md › Several machines).
     // Working and Pinned are grouped too, so a running thread on another computer is never drawn
-    // beside a local one as if it were here.
-    const machineGroups = (id: SectionId, items: SessionSummary[]): ProjectGroup[] | undefined => {
+    // beside a local one as if it were here; a machine with no rows keeps a heading only in Threads
+    // (state/sidebarGroups.ts `machineGroups`).
+    const groupsFor = (id: SectionId, rows: SessionSummary[]): ProjectGroup[] | undefined => {
       if (!machines.length) return undefined;
-      const groups: ProjectGroup[] = [];
-      for (const host of [LOCAL_HOST, ...machines.map((m) => m.id)]) {
-        const mine = items.filter((s) => (s.host ?? LOCAL_HOST) === host);
-        if (!mine.length && host === LOCAL_HOST) continue;
-        const saved = machines.find((m) => m.id === host);
-        const head: MachineHead = saved
-          ? { id: saved.id, name: saved.name, state: saved.state, retryInSecs: saved.retryInSecs }
-          : { id: LOCAL_HOST, name: "This computer", state: "connected", retryInSecs: null };
-        // A machine that has not listed a thread yet (away, or just paired) keeps its heading, so
-        // the list still says it is there.
-        if (!mine.length) {
-          groups.push({
-            key: `${host}\u0000`,
-            label: "",
-            items: [],
-            machine: head,
-            first: true,
-            only: true,
-          });
-          continue;
-        }
-        const perProject = new Map<string, SessionSummary[]>();
-        for (const s of mine) {
-          const key = s.worktree?.repo || s.cwd || "";
-          perProject.set(key, [...(perProject.get(key) ?? []), s]);
-        }
-        let first = true;
-        for (const [project, rows] of perProject) {
-          const key = `${host}\u0000${project}`;
-          groups.push({
-            key,
-            label: project ? projectName(project) : "No folder",
-            items: arranged(id, rows, key),
-            machine: head,
-            first,
-            only: perProject.size === 1,
-          });
-          first = false;
-        }
-      }
+      const groups = machineGroups(id, rows, machines);
+      for (const group of groups) group.items = arranged(id, group.items, group.key);
       return groups;
     };
     // The Threads list's project groups: by machine when one is paired, else by the preference.
     let projects: ProjectGroup[] | undefined;
-    if (machines.length) projects = machineGroups("threads", active);
+    if (machines.length) projects = groupsFor("threads", active);
     else if (byProject && byKey.size > 1) {
       projects = [...byKey.entries()].map(([key, items]) => ({
         key,
         label: key ? projectName(key) : "No folder",
+        project: key || undefined,
         items,
       }));
       // Each project's own rows are arranged on their own: two projects never share one order.
@@ -1941,7 +1902,7 @@ export function Sidebar() {
         id === "threads"
           ? projects
           : id === "working" || id === "pinned"
-            ? machineGroups(id, placed[id])
+            ? groupsFor(id, placed[id])
             : undefined,
     }));
     for (const g of all) {
@@ -2512,9 +2473,36 @@ export function Sidebar() {
                       {section.projects
                         ? section.projects.map((p) => {
                             const projectOpen = isOpen(`project:${p.key}`);
+                            // A new thread started in this group runs on the computer the group is
+                            // for: the row's machine is where its folder is (docs/desktop.md ›
+                            // Several machines).
+                            const onNew = p.project
+                              ? () =>
+                                  startNewThread(
+                                    p.project,
+                                    p.machine && p.machine.id !== LOCAL_HOST ? p.machine.id : undefined,
+                                  )
+                              : undefined;
+                            // A machine that is away cannot start a thread, and one with no project
+                            // yet has no folder to start in: its heading offers none.
+                            const canStart =
+                              !!p.project &&
+                              (!p.machine || p.machine.id === LOCAL_HOST || p.machine.state === "connected");
                             const head =
                               p.first && p.machine ? (
-                                <MachineHeader key={`machine:${p.machine.id}`} machine={p.machine} />
+                                <MachineHeader
+                                  key={`machine:${p.machine.id}`}
+                                  machine={p.machine}
+                                  onNew={
+                                    canStart
+                                      ? () =>
+                                          startNewThread(
+                                            p.project,
+                                            p.machine!.id === LOCAL_HOST ? undefined : p.machine!.id,
+                                          )
+                                      : undefined
+                                  }
+                                />
                               ) : null;
                             if (p.only)
                               return (
@@ -2540,7 +2528,7 @@ export function Sidebar() {
                                   }
                                   open={projectOpen}
                                   onToggle={() => toggle(`project:${p.key}`)}
-                                  onNew={p.key ? () => startNewThread(p.key) : undefined}
+                                  onNew={onNew}
                                 />
                                 {/* Under its project's heading the row drops the mark: its title then
                                     lines up under the folder's name. */}

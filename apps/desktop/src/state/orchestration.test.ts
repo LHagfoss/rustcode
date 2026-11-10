@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { Json } from "../acp/jsonrpc";
 import {
   checkpointsByTurn,
   parseTurnDiff,
@@ -152,6 +153,56 @@ describe("management tools", () => {
     });
     expect(isFailure(parseCall({ tool: "transfer_session", args: { session_id: "a" } }))).toBe(true);
     expect(parseCall({ tool: "list_pending_requests", args: {} })).toEqual({ tool: "list_pending_requests" });
+    // Answering what a thread waits on: an approval's choice, or a question's answer.
+    expect(
+      parseCall({ tool: "answer_request", args: { session_id: "c1", request_id: "7", choice: "deny" } }),
+    ).toEqual({ tool: "answer_request", target: "c1", requestId: "7", choice: "deny" });
+    expect(
+      parseCall({
+        tool: "answer_request",
+        args: { session_id: "c1", request_id: " 7 ", answer: "  yes, run it " },
+      }),
+    ).toEqual({ tool: "answer_request", target: "c1", requestId: "7", answer: "yes, run it" });
+    for (const args of [
+      {},
+      { session_id: "c1" },
+      // The engine's name check refuses a number, so the app does too, as it is printed.
+      { session_id: "c1", request_id: 7, choice: "allow_once" },
+      { session_id: "c1", request_id: "7" },
+      { session_id: "c1", request_id: "7", choice: "allow_hour" },
+      { session_id: "c1", request_id: "7", choice: "deny", answer: "no" },
+      { session_id: "c1", request_id: "7", answer: "  " },
+    ] as Record<string, Json>[])
+      expect(isFailure(parseCall({ tool: "answer_request", args }))).toBe(true);
+    // Organizing several at once: one change set, at least one thread.
+    expect(
+      parseCall({ tool: "organize_threads", args: { session_ids: ["a", "b", "a"], pinned: true } }),
+    ).toEqual({ tool: "organize_threads", targets: ["a", "b"], pinned: true });
+    for (const args of [
+      {},
+      { session_ids: [] },
+      { session_ids: ["a"] },
+      { session_ids: ["a"], pinned: "yes" },
+      { session_ids: [1], unread: true },
+    ] as Record<string, Json>[])
+      expect(isFailure(parseCall({ tool: "organize_threads", args }))).toBe(true);
+    // Attachments are absolute paths in a list, at most ten.
+    expect(
+      parseCall({
+        tool: "message_session",
+        args: { session_id: "b", message: "look", attachments: ["/repo/a.png", " /repo/b.log "] },
+      }),
+    ).toEqual({
+      tool: "message_session",
+      target: "b",
+      text: "look",
+      attachments: ["/repo/a.png", "/repo/b.log"],
+    });
+    expect(
+      isFailure(
+        parseCall({ tool: "message_session", args: { session_id: "b", message: "x", attachments: "a" } }),
+      ),
+    ).toBe(true);
     // A delegate's pull request: report it, merge it, clean up after it.
     expect(parseCall({ tool: "thread_status", args: {} })).toEqual({
       tool: "thread_status",
@@ -191,9 +242,10 @@ describe("management tools", () => {
 });
 
 describe("orchestration rules", () => {
-  test("the app advertises the version whose account and machine arguments it answers", () => {
-    // The engine strips `account` below v5 and `machine` below v10, and refuses a call that carries one.
-    expect(CAPABILITY_VERSION).toBe(10);
+  test("the app advertises the version whose arguments it answers", () => {
+    // The engine strips `account` below 5, `attachments` below 10 and `machine` below 11, and
+    // refuses a call that carries one: the app speaks the newest, so it is offered all three.
+    expect(CAPABILITY_VERSION).toBe(11);
   });
 
   test("a machine is read from any call that takes one, and absent when it is not named", () => {
@@ -219,11 +271,7 @@ describe("orchestration rules", () => {
     // A call that acts on a thread takes it too; the id may carry the machine itself.
     expect(
       parseCall({ tool: "interrupt_session", args: { session_id: "gw-1/t", machine: "Studio" } }),
-    ).toEqual({
-      tool: "interrupt_session",
-      target: "gw-1/t",
-      machine: "Studio",
-    });
+    ).toEqual({ tool: "interrupt_session", target: "gw-1/t", machine: "Studio" });
     expect(parseCall({ tool: "thread_status", args: { session_id: "t", machine: "Studio" } })).toEqual({
       tool: "thread_status",
       target: "t",

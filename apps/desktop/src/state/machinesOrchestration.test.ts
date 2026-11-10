@@ -247,7 +247,7 @@ describe("a call on another machine", () => {
     expect(prompted?.params).toMatchObject({ sessionId: "remote-1" });
   });
 
-  test("a bare thread id lands on the machine the call named; another machine's is refused", async () => {
+  test("its threads are listed with keys that carry the machine", async () => {
     const { conn } = recordingConnection();
     watchMachineConnection(LINUX, conn);
     const listed = await answerOrchestration({

@@ -385,6 +385,16 @@ async fn call(
             ),
         };
     }
+    // The same for a file an older app would drop, instead of attaching it silently
+    // nowhere.
+    if version < super::ATTACHMENT_VERSION && super::carries_attachments(tool, &args) {
+        return CallAnswer {
+            success: false,
+            content: format!(
+                "error: {tool} with attachments needs a newer RustCode app. Nothing was sent."
+            ),
+        };
+    }
     // The same for a machine: a server that never listed `machine` must not
     // quietly act on this computer when another one was named.
     if version < super::MACHINE_VERSION && super::names_a_machine(tool, &args) {

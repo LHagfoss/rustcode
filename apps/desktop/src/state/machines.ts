@@ -151,6 +151,12 @@ export function selfName(): string {
   }
 }
 
+/** When a machine went away, as `09:12`: the time `offlineSince` holds, or undefined. */
+export function offlineSinceLabel(at: number | undefined): string | undefined {
+  if (at === undefined) return undefined;
+  return new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
+
 /** The words a row's state chip uses. */
 export function stateLabel(machine: Pick<Machine, "state" | "retryInSecs">): string {
   switch (machine.state) {
@@ -218,12 +224,6 @@ export function machineLine(machine: Machine): string {
     case "stopped":
       return "Not connected.";
   }
-}
-
-/** When a machine went away, as `09:12`: the time `offlineSince` holds, or undefined. */
-export function offlineSinceLabel(at: number | undefined): string | undefined {
-  if (at === undefined) return undefined;
-  return new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
 /** The platform as people say it: Mac, Windows, Linux, or nothing when unknown. */

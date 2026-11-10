@@ -33,6 +33,7 @@ import { heldSetup, type PendingSetup, pendingStatus } from "../state/setup";
 import {
   autoCompactOffFor,
   dismissPendingSetup,
+  harnessesOn,
   refreshSessions,
   repairThread,
   retryPendingSetup,
@@ -50,6 +51,7 @@ import {
   worktreeOf,
 } from "../state/store";
 import { formatClock, type ThreadState } from "../state/thread";
+import { splitThreadKey } from "../state/threadKeys";
 import { overviewExpanded, setOverviewExpanded } from "../state/widgets";
 import { AttentionCard, ResolvedApprovalBar } from "./AttentionCards";
 import { OriginChip } from "./Branches";
@@ -340,6 +342,11 @@ function Header({
   // whether that computer is reachable now (docs/desktop.md › Several machines).
   const machine = useMachineOfThread(thread?.id);
   const offline = useThreadOffline(thread?.id);
+  // The harness's name as the machine that runs it lists it, not its id: a thread on another
+  // computer runs that computer's harness (docs/desktop.md › Several machines).
+  const harnessSnapshot = useApp((s) => (thread ? harnessesOn(s, splitThreadKey(thread.id).host) : null));
+  const harnessId = thread?.harness?.id ?? session?.harness ?? "harness";
+  const harnessName = harnessSnapshot?.harnesses.find((h) => h.id === harnessId)?.name ?? harnessId;
   const lastUpdated = session?.updatedAt
     ? new Date(session.updatedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
     : undefined;
@@ -436,8 +443,7 @@ function Header({
               <span className="flex max-w-[300px] shrink-0 items-center gap-1 rounded-full bg-fill-subtle px-2 py-0.5 text-callout text-fg-muted">
                 <Laptop size={12} className="shrink-0" aria-hidden />
                 <span className="truncate">
-                  Runs on {machine} · {thread.harness?.id ?? session?.harness ?? "harness"} ·{" "}
-                  {modelName(session?.model) ?? "model"}
+                  Runs on {machine} · {harnessName} · {modelName(session?.model) ?? "model"}
                 </span>
               </span>
             </Tooltip>

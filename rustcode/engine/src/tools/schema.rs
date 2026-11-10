@@ -159,8 +159,10 @@ pub struct ToolSchemaPolicy {
     /// `manage_queue`, for a client that advertises orchestration version 7.
     pub(crate) include_orchestration_v7_tools: bool,
     pub(crate) include_orchestration_v9_tools: bool,
-    /// `list_machines`, for a client that advertises orchestration version 10.
+    /// `answer_request` and `organize_threads`, for orchestration version 10.
     pub(crate) include_orchestration_v10_tools: bool,
+    /// `list_machines`, for a client that advertises orchestration version 11.
+    pub(crate) include_orchestration_v11_tools: bool,
     /// What the client advertised, capped at [`crate::orchestration::VERSION`]:
     /// the tool set follows the flags above, and the args follow this one.
     pub(crate) orchestration_version: u8,
@@ -231,6 +233,7 @@ impl ToolSchemaPolicy {
             include_orchestration_v7_tools: false,
             include_orchestration_v9_tools: false,
             include_orchestration_v10_tools: false,
+            include_orchestration_v11_tools: false,
             orchestration_version: 0,
             profile: ToolSchemaProfile::Coding,
             compact_text_prompt: false,
@@ -261,6 +264,7 @@ impl ToolSchemaPolicy {
             include_orchestration_v7_tools: false,
             include_orchestration_v9_tools: false,
             include_orchestration_v10_tools: false,
+            include_orchestration_v11_tools: false,
             orchestration_version: 0,
             profile: ToolSchemaProfile::ReadOnlyInspection,
             compact_text_prompt: false,
@@ -284,6 +288,7 @@ impl ToolSchemaPolicy {
             include_orchestration_v7_tools: false,
             include_orchestration_v9_tools: false,
             include_orchestration_v10_tools: false,
+            include_orchestration_v11_tools: false,
             orchestration_version: 0,
             profile: ToolSchemaProfile::ReadOnlySubagent,
             compact_text_prompt: false,
@@ -344,6 +349,7 @@ impl ToolSchemaPolicy {
         self.include_orchestration_v7_tools = self.include_orchestration_tools && version >= 7;
         self.include_orchestration_v9_tools = self.include_orchestration_tools && version >= 9;
         self.include_orchestration_v10_tools = self.include_orchestration_tools && version >= 10;
+        self.include_orchestration_v11_tools = self.include_orchestration_tools && version >= 11;
         self.orchestration_version = version.min(crate::orchestration::VERSION);
         self
     }
@@ -721,15 +727,14 @@ pub(crate) fn mcp_schema_budget_bytes() -> usize {
 }
 /// The hard cap before the menu is pruned from the specialised end. The
 /// orchestration tools are the tail and the biggest: a client advertising
-/// version 7 gets the whole built-in menu at 42,302 bytes, 1,730 under this
-/// cap, so the next tool raises it rather than dropping one. The cap moved
-/// from 40 KiB when the delegation tool descriptions gained what a stalled
-/// delegate costs (a prompt with no TTY, and no default timeout), and from
-/// 41 KiB when the machine-aware tools gained their `machine` argument.
-/// Raising the cap keeps every version- and setting-gated tool advertised
+/// version 7 gets the whole built-in menu at 41,897 bytes, 87 under this cap,
+/// so the next tool raises it rather than dropping one. The cap moved from
+/// 40 KiB when the delegation tool descriptions gained what a stalled
+/// delegate costs (a prompt with no TTY, and no default timeout). Raising the
+/// cap keeps every version- and setting-gated tool advertised
 /// (`schema_budget_tests` keeps it that way); the 25 KiB budget below still
 /// keeps a plain root prompt lean.
-pub(crate) const MAX_BUILTIN_NATIVE_SCHEMA_BYTES: usize = 43 * 1024;
+pub(crate) const MAX_BUILTIN_NATIVE_SCHEMA_BYTES: usize = 44 * 1024;
 pub(super) const MCP_DISCOVERY_FALLBACK_COUNT: usize = 4;
 const MCP_RELEVANCE_THRESHOLD: usize = 6;
 const MCP_DISCOVERY_CORE: &[&str] = &[
@@ -890,6 +895,8 @@ const ROOT_ONLY_TOOLS: &[&str] = &[
     crate::orchestration::LIST_PULL_REQUESTS,
     crate::orchestration::TRANSFER_SESSION,
     crate::orchestration::LIST_PENDING_REQUESTS,
+    crate::orchestration::ANSWER_REQUEST,
+    crate::orchestration::ORGANIZE_THREADS,
     crate::orchestration::THREAD_STATUS,
     crate::orchestration::MERGE_WHEN_GREEN,
     crate::orchestration::CLEANUP_WORKTREE,
@@ -940,6 +947,7 @@ fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
         || (crate::orchestration::is_v7_tool(tool.name) && !policy.include_orchestration_v7_tools)
         || (crate::orchestration::is_v9_tool(tool.name) && !policy.include_orchestration_v9_tools)
         || (crate::orchestration::is_v10_tool(tool.name) && !policy.include_orchestration_v10_tools)
+        || (crate::orchestration::is_v11_tool(tool.name) && !policy.include_orchestration_v11_tools)
         || (policy.compact_text_prompt
             && !TEXT_CODING_TOOLS.contains(&tool.name)
             && !(policy.include_agent_tools
@@ -2895,7 +2903,6 @@ pub(crate) fn tool_system_prompt_for_policy(
         include_orchestration_v6_tools: false,
         include_orchestration_v7_tools: false,
         include_orchestration_v9_tools: false,
-        include_orchestration_v10_tools: false,
         ..policy
     };
     let mut p = String::new();
@@ -3248,6 +3255,19 @@ mod schema_budget_tests {
         };
         assert!(start_schema(4)["function"]["parameters"]["properties"]["account"].is_null());
         assert!(start_schema(5)["function"]["parameters"]["properties"]["account"].is_object());
+        // Nor is v9 shown files to attach, which its app would drop.
+        let message_schema = |version: u8| {
+            let policy = ToolSchemaPolicy::root(true).with_orchestration_tools(version);
+            let (tools, _) = build_builtin_native_tools_schema(policy);
+            tools
+                .into_iter()
+                .find(|tool| tool["function"]["name"] == crate::orchestration::MESSAGE_SESSION)
+                .expect("message_session")
+        };
+        assert!(message_schema(9)["function"]["parameters"]["properties"]["attachments"].is_null());
+        assert!(
+            message_schema(10)["function"]["parameters"]["properties"]["attachments"].is_object()
+        );
     }
 
     #[test]

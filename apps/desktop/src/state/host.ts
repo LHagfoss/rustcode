@@ -25,13 +25,23 @@ import {
   type HarnessModel,
   type HarnessSnapshot,
   Method,
-  parseHarnessSnapshot,
+  type PermissionOption,
+  type PermissionRequest,
   projectName,
 } from "../acp/types";
 import { type ThreadStatus, V2Method } from "../acp/v2";
+import { optionScope } from "../lib/approval";
 import { currentPlatform } from "../lib/platform";
 import { hasShell, shellCall } from "../lib/shell";
 import { childTitle, titleFrom } from "../lib/title";
+import {
+  type AttachedFile,
+  attachedExtras,
+  attachmentRefusal,
+  attachmentRoots,
+  MAX_ATTACHMENT_FILES,
+} from "./attachments";
+import type { ComposeExtras } from "./compose";
 import { restoreChoice, selectOption, unavailableReason, usableHarnesses } from "./harness";
 import { usageOf } from "./harnessUsage";
 import {
@@ -43,9 +53,11 @@ import {
 } from "./logins";
 import { LOCAL_MACHINE_ID, type Machine, offlineSinceLabel, selfName, useMachines } from "./machines";
 import {
+  type ApprovalChoice,
   activeDescendants,
   activityOf,
   advanceLink,
+  ancestorsOf,
   askingIds,
   capped,
   checkManage,
@@ -123,6 +135,7 @@ import {
   wakesDue,
 } from "./orchestration";
 import { delegationAllowed, effectiveMode, modeLabel, type PermissionMode } from "./permissions";
+import { projectsOn } from "./projects";
 import { rememberPullSummaries } from "./pullQueries";
 import { QUEUE_REASON, wakeDelivery } from "./queue";
 import {
@@ -136,13 +149,19 @@ import {
 } from "./queues";
 import {
   type AppState,
+  answerPermission,
+  answerQuestionOptions,
+  answerQuestionText,
   cancel,
+  clearFinished,
   connectionFor,
   createSession,
   effortMemory,
   ensureHarnessModels,
   errorText,
+  harnessesOn,
   lastAccountFor,
+  loadMachineHarnesses,
   localChoices,
   markUnread,
   openThread,
@@ -162,6 +181,7 @@ import {
   setPermissionMode,
   setSnoozed,
   setThreadStatus,
+  setThreadsStatus,
   statusOf,
   steer,
   steeringOf,
@@ -452,6 +472,8 @@ export function verb(q: GrantAsk): string {
       return `run one task on ${q.harnesses?.length ?? 2} harnesses`;
     case "organize":
       return `change “${q.target}”`;
+    case "answer":
+      return `answer what “${q.target}” asks`;
     case "interrupt":
       return `stop “${q.target}”`;
     case "configure":
@@ -480,6 +502,7 @@ const TOOL_OF_KIND: Record<GrantAsk["kind"], string> = {
   start: "start_session",
   fan_out: "fan_out",
   organize: "update_session",
+  answer: "answer_request",
   interrupt: "interrupt_session",
   configure: "configure_session",
   transfer: "transfer_session",
@@ -494,6 +517,7 @@ const ALLOWED_NOTICE: Record<GrantAsk["kind"], string> = {
   start: "Started a thread",
   fan_out: "Fanned out across harnesses",
   organize: "Changed a thread",
+  answer: "Answered a thread",
   interrupt: "Stopped a thread",
   configure: "Changed a thread's model",
   transfer: "Moved a thread to another harness",
@@ -672,7 +696,7 @@ async function machineEntry(machine: MachineRef): Promise<JsonObject> {
       : {}),
     ...(saved?.lastConnectedAt ? { last_connected: saved.lastConnectedAt } : {}),
     harnesses: await machineHarnesses(machine),
-    projects: projectsOn(useApp.getState(), machine.host).map((p) => p.name),
+    projects: projectsOn(useApp.getState().sessions, machine.host).map((project) => project.name),
   };
 }
 
@@ -683,17 +707,12 @@ async function listMachines(): Promise<JsonObject> {
   return { current: local.id, machines: await Promise.all(machines.map(machineEntry)) };
 }
 
-/** The harnesses one machine can run: this app's own snapshot, or a request to that machine. */
+/** The harnesses one machine can run: this app's own snapshot, or that machine's. */
 async function machineHarnesses(machine: MachineRef): Promise<JsonObject[] | null> {
-  if (!machine.host) {
-    return (useApp.getState().harnesses?.harnesses ?? []).map((h) => ({
-      id: h.id,
-      name: h.name,
-      available: !unavailableReason(h),
-    }));
-  }
-  const snapshot = await remoteSnapshot(machine);
-  if (isFailure(snapshot)) return null;
+  const snapshot = machine.host
+    ? await loadMachineHarnesses(machine.host)
+    : harnessesOn(useApp.getState(), LOCAL_HOST);
+  if (!snapshot) return null;
   return snapshot.harnesses.map((h) => ({
     id: h.id,
     name: h.name,
@@ -701,15 +720,11 @@ async function machineHarnesses(machine: MachineRef): Promise<JsonObject[] | nul
   }));
 }
 
-/** Another machine's harnesses, read over its own connection. */
+/** Another machine's harnesses, read over its own connection (kept per machine). */
 async function remoteSnapshot(machine: MachineRef): Promise<HarnessSnapshot | Failure> {
-  const conn = connectionFor(machine.host);
-  if (!conn) return machineUnavailable(machine) ?? failure("offline", `${machine.name} is offline`);
-  try {
-    return parseHarnessSnapshot(await conn.request(Method.harnesses, {}, 15_000));
-  } catch (error) {
-    return failure("failed", `could not read ${machine.name}'s harnesses: ${errorText(error)}`);
-  }
+  const snapshot = await loadMachineHarnesses(machine.host);
+  if (snapshot) return snapshot;
+  return machineUnavailable(machine) ?? failure("failed", `could not read ${machine.name}'s harnesses`);
 }
 
 /** One harness of a named machine, by id else name, refused with what can run there. */
@@ -754,34 +769,6 @@ function harnessOn(
   return h;
 }
 
-/** The projects one machine has threads in, newest first. */
-function projectsOn(
-  state: AppState,
-  host: string,
-): { path: string; name: string; threads: number; working: boolean; updatedAt: number }[] {
-  const byPath = new Map<
-    string,
-    { path: string; name: string; threads: number; working: boolean; updatedAt: number }
-  >();
-  for (const x of state.sessions) {
-    if ((x.host ?? LOCAL_HOST) !== host) continue;
-    const path = projectOf({ folder: x.cwd, worktree: x.worktree });
-    if (!path) continue;
-    const entry = byPath.get(path) ?? {
-      path,
-      name: projectName(path),
-      threads: 0,
-      working: false,
-      updatedAt: 0,
-    };
-    entry.threads += 1;
-    entry.working ||= !!state.threads[x.id]?.running || x.status === "running";
-    entry.updatedAt = Math.max(entry.updatedAt, x.updatedAt ?? 0);
-    byPath.set(path, entry);
-  }
-  return [...byPath.values()].sort((a, b) => b.updatedAt - a.updatedAt);
-}
-
 /**
  * `list_projects` on a machine: the projects it has threads in. This
  * computer's answer also counts a project's unopened threads; another
@@ -789,7 +776,28 @@ function projectsOn(
  */
 function projectsOnMachine(machine: MachineRef): JsonObject {
   if (!machine.host) return { ...machineFields(machine), ...listProjects(useApp.getState()) };
-  const projects = projectsOn(useApp.getState(), machine.host)
+  const rows = new Map<
+    string,
+    { path: string; name: string; threads: number; working: boolean; updatedAt: number }
+  >();
+  for (const x of useApp.getState().sessions) {
+    if ((x.host ?? LOCAL_HOST) !== machine.host) continue;
+    const path = x.worktree?.repo || x.repo || x.cwd;
+    if (!path) continue;
+    const entry = rows.get(path) ?? {
+      path,
+      name: projectName(path),
+      threads: 0,
+      working: false,
+      updatedAt: 0,
+    };
+    entry.threads += 1;
+    entry.working ||= !!useApp.getState().threads[x.id]?.running || x.status === "running";
+    entry.updatedAt = Math.max(entry.updatedAt, x.updatedAt ?? 0);
+    rows.set(path, entry);
+  }
+  const projects = [...rows.values()]
+    .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, MAX_PROJECTS)
     .map((p) => ({ path: p.path, name: p.name, threads: p.threads, working: p.working }));
   return { ...machineFields(machine), projects };
@@ -860,8 +868,8 @@ function sessionsOnMachine(
   allProjects: boolean,
 ): JsonObject {
   const s = useApp.getState();
-  const state = { ...s, sessions: s.sessions.filter((x) => (x.host ?? LOCAL_HOST) === machine.host) };
-  const threads = state.sessions.flatMap((x) => ruleThread(state, x.id) ?? []);
+  const among = { ...s, sessions: s.sessions.filter((x) => (x.host ?? LOCAL_HOST) === machine.host) };
+  const threads = among.sessions.flatMap((x) => ruleThread(among, x.id) ?? []);
   const listed = listSessions(threads, caller, query, true);
   const sessions = (Array.isArray(listed.sessions) ? listed.sessions : []).map((entry) => {
     const item = obj(entry) ?? {};
@@ -875,9 +883,10 @@ function sessionsOnMachine(
 }
 
 /**
- * The project a thread starts in on a machine: the caller's path when that
- * machine has it, else a folder with the caller's project name, else its only
- * project. A folder the machine never opened is refused by name.
+ * The project a thread starts in on a machine: the agent's own path, else the
+ * caller's when that machine has it, else a folder with the caller's project
+ * name, else its only project. A machine that has listed nothing yet needs
+ * the path.
  */
 function projectOnMachine(
   machine: MachineRef,
@@ -885,10 +894,9 @@ function projectOnMachine(
   asked: string | undefined,
 ): string | Failure {
   // A path the agent names is its own choice, and the machine's engine refuses
-  // one that is not a folder there: this app only lists what it has listed.
+  // one that is not a folder there: this app only knows what it has listed.
   if (asked?.trim()) return asked.trim().replace(/\/+$/, "");
-  const projects = projectsOn(useApp.getState(), machine.host);
-  const paths = projects.map((p) => p.path);
+  const paths = projectsOn(useApp.getState().sessions, machine.host).map((project) => project.path);
   if (!paths.length) {
     return failure(
       "invalid",
@@ -917,13 +925,12 @@ async function threadOnMachine(
     effort?: string;
     account?: string | null;
     title: string;
-    task: string;
     worktree?: boolean;
     parent?: string;
   },
 ): Promise<string> {
   const wantWorktree = (options.worktree ?? true) && !!useApp.getState().features.worktrees;
-  const request = (worktree: boolean) =>
+  const ask = (worktree: boolean) =>
     createSession({
       host: machine.host,
       cwd: project,
@@ -936,10 +943,10 @@ async function threadOnMachine(
       worktree: worktree ? { repo: project, title: options.title } : undefined,
     });
   try {
-    return await request(wantWorktree);
+    return await ask(wantWorktree);
   } catch (error) {
     if (wantWorktree && options.worktree === undefined && /git|repositor/i.test(errorText(error))) {
-      return request(false);
+      return ask(false);
     }
     throw error;
   }
@@ -981,7 +988,6 @@ async function startOnMachine(machine: MachineRef, caller: RuleThread, call: Sta
       // The login is that machine's own: never resolve it against this app's.
       account: call.account ?? null,
       title,
-      task: call.prompt,
       worktree: call.worktree,
       parent: caller.id,
     });
@@ -1075,7 +1081,6 @@ async function fanOutOnMachine(
         effort: h.effort,
         account: h.account,
         title: threadTitle,
-        task: call.prompt,
         parent: caller.id,
       });
       setPermissionMode(id, access);
@@ -1128,6 +1133,7 @@ async function fanOutOnMachine(
 
 // ---------------------------------------------------------------- the calls
 
+/** Answer one `_rustcode/orchestration` request: a result, or `{ error }` the agent reads. */
 /** Answer one `_rustcode/orchestration` request: a result, or `{ error }` the agent reads. */
 export async function answerOrchestration(params: JsonObject): Promise<JsonObject> {
   try {
@@ -1317,7 +1323,7 @@ async function perform(
       if (isFailure(machine)) return failureJson(machine);
       const target = scopedTarget(machine, call.target);
       if (isFailure(target)) return failureJson(target);
-      const answer = await message(caller, target, call.text);
+      const answer = await message(caller, target, call.text, call.attachments);
       return answer.error ? answer : { ...answer, ...machineFields(machine) };
     }
     case "manage_queue":
@@ -1383,6 +1389,10 @@ async function perform(
       if (isFailure(machine)) return failureJson(machine);
       return listPendingRequests(caller, machine);
     }
+    case "answer_request":
+      return answerRequest(caller, call);
+    case "organize_threads":
+      return organizeThreads(caller, call);
     case "thread_status": {
       const machine = checkedMachine(call.machine);
       if (isFailure(machine)) return failureJson(machine);
@@ -2072,7 +2082,7 @@ const STATUS_OF_CHOICE = { active: "idle", review: "review", settled: "done" } a
  * The thread a management call acts on. A thread on another machine is only
  * reachable when the call named that machine (`machine`): the app refuses to
  * act there by a bare guess, and the tools that cannot work across machines
- * say where the thread runs instead (`state/host.ts` `targetMachine`).
+ * say where the thread runs instead (`targetMachine`).
  */
 function manageTarget(caller: RuleThread, id: string | undefined, machine = false): RuleThread | Failure {
   const target = id ? ruleThread(useApp.getState(), id) : caller;
@@ -2091,6 +2101,47 @@ function manageTarget(caller: RuleThread, id: string | undefined, machine = fals
 function targetMachine(id: string): string | undefined {
   const { host } = splitThreadKey(id);
   return host ? useApp.getState().machineNames[host] : undefined;
+}
+
+/** The changes `update_session` and `organize_threads` share, as one list. */
+interface ManagedChange {
+  title?: string;
+  pinned?: boolean;
+  unread?: boolean;
+}
+
+/** Whether a thread is the list's unread one: it finished something the user has not seen. */
+const isUnread = (id: string) => {
+  const s = useApp.getState();
+  return id in s.finished || id in s.failed;
+};
+
+/**
+ * Applies a thread's title, pin and unread flag with the store calls the app's own
+ * controls use, and counts the ones that did something: a value the thread already
+ * has is not a change, and `unread` is a two-way flag (`true` marks it unread,
+ * `false` reads it, as opening the thread does).
+ */
+async function applyManagedChange(
+  target: RuleThread,
+  change: ManagedChange,
+): Promise<{ applied: number; renameFailed: boolean }> {
+  let applied = 0;
+  const live = () => ruleThread(useApp.getState(), target.id) ?? target;
+  if (change.title !== undefined && change.title !== live().title) {
+    if (!(await renameThread(target.id, change.title))) return { applied, renameFailed: true };
+    applied += 1;
+  }
+  if (change.pinned !== undefined && useApp.getState().pinned.includes(target.id) !== change.pinned) {
+    togglePin(target.id);
+    applied += 1;
+  }
+  if (change.unread !== undefined && isUnread(target.id) !== change.unread) {
+    if (change.unread) markUnread(target.id);
+    else clearFinished(target.id);
+    applied += 1;
+  }
+  return { applied, renameFailed: false };
 }
 
 async function updateSession(caller: RuleThread, call: UpdateCall): Promise<JsonObject> {
@@ -2113,13 +2164,12 @@ async function updateSession(caller: RuleThread, call: UpdateCall): Promise<Json
     });
     if (no) return failureJson(no);
   }
-  if (call.title && !(await renameThread(target.id, call.title))) {
-    return failureJson(failure("failed", "the thread could not be renamed"));
-  }
-  if (call.pinned !== undefined && useApp.getState().pinned.includes(target.id) !== call.pinned) {
-    togglePin(target.id);
-  }
-  if (call.unread) markUnread(target.id);
+  const applied = await applyManagedChange(target, {
+    title: call.title,
+    pinned: call.pinned,
+    unread: call.unread,
+  });
+  if (applied.renameFailed) return failureJson(failure("failed", "the thread could not be renamed"));
   if (call.status) await setThreadStatus(target.id, STATUS_OF_CHOICE[call.status]);
   if (call.snoozedUntil !== undefined) setSnoozed(target.id, call.snoozedUntil);
   const after = ruleThread(useApp.getState(), target.id);
@@ -2130,6 +2180,246 @@ async function updateSession(caller: RuleThread, call: UpdateCall): Promise<Json
     pinned: useApp.getState().pinned.includes(target.id),
     status: after?.status ?? "idle",
     snoozed_until: until ? new Date(until).toISOString() : null,
+  };
+}
+
+type AnswerCall = Extract<ReturnType<typeof parseCall>, { tool: "answer_request" }>;
+type OrganizeCall = Extract<ReturnType<typeof parseCall>, { tool: "organize_threads" }>;
+
+type Scope = ReturnType<typeof optionScope>;
+
+/** What each scope is called when a choice cannot be answered with it. */
+const SCOPE_WORD: Record<Scope, string> = {
+  once: "allow once",
+  hour: "allow for an hour",
+  always: "allow always",
+  decline: "decline",
+  other: "another answer",
+};
+
+/**
+ * The option a `choice` answers with: the scope it names, and no other. A request
+ * that offers only a standing answer is refused rather than answered once, because
+ * the engine records the grant the option carries, not the word the caller used.
+ */
+function optionFor(request: PermissionRequest, choice: ApprovalChoice): PermissionOption | null {
+  const wanted = choice === "deny" ? "decline" : choice === "allow_always" ? "always" : "once";
+  return request.options.find((o) => optionScope(o) === wanted) ?? null;
+}
+
+/** Why a choice has no option here, naming the scopes the request does offer. */
+function scopeRefusal(request: PermissionRequest, choice: ApprovalChoice): Failure {
+  const offers = [...new Set(request.options.map(optionScope))].map((scope) => SCOPE_WORD[scope]);
+  return failure("invalid", `that request offers ${offers.join(", ")}, not “${ANSWER_LABEL[choice]}”`);
+}
+
+/** The options a question offers as answers: the allow and plain ones its card lists, not a reject. */
+const questionAnswers = (request: PermissionRequest) =>
+  request.options.filter((o) => !o.kind || o.kind === "allow_once" || o.kind === "allow_always");
+
+/** One approval's answer, in the words the grant card and the notice use. */
+const ANSWER_LABEL: Record<ApprovalChoice, string> = {
+  allow_once: "allow it once",
+  allow_always: "always allow it",
+  deny: "decline it",
+};
+
+/** How one call answers one request; a question answered by words has `text` instead of a pick. */
+interface Answering {
+  option: PermissionOption | null;
+  chosen: PermissionOption | null;
+  text: string | null;
+}
+
+/**
+ * The answer one call gives one request as it is now: an approval's option, a
+ * question's option by id or its text, or a question's own Decline. Checked again
+ * after the user answered the card, since that request may be gone by then.
+ */
+function answeringFor(request: PermissionRequest, call: AnswerCall): Answering | Failure {
+  const question = request.question;
+  if (!question) {
+    if (call.answer) return failure("invalid", "that request is an approval: give choice");
+    const option = optionFor(request, call.choice ?? "allow_once");
+    return option ? { option, chosen: null, text: null } : scopeRefusal(request, call.choice ?? "allow_once");
+  }
+  // A question's card offers the same Decline an approval's does.
+  if (call.choice === "deny") {
+    const option = optionFor(request, "deny");
+    return option ? { option, chosen: null, text: null } : scopeRefusal(request, "deny");
+  }
+  if (call.answer === undefined) {
+    return failure("invalid", "that request is a question: give answer, or choice deny to decline it");
+  }
+  const answers = questionAnswers(request);
+  const chosen = answers.find((o) => o.id === call.answer) ?? null;
+  if (chosen) return { option: chosen, chosen, text: null };
+  if (!answers.length) return failure("invalid", "that question offers no answer this call can give");
+  // The store picks the carrier option, as the card's text field does.
+  return { option: null, chosen: null, text: call.answer };
+}
+
+/**
+ * `answer_request`: answer one approval or question a thread waits on. The
+ * caller answers a thread below it in its own delegation tree, never itself,
+ * and never one in another project; the card the user would have clicked is
+ * the one this answers (`state/store.ts` `answerPermission`, `answerQuestionText`).
+ */
+async function answerRequest(caller: RuleThread, call: AnswerCall): Promise<JsonObject> {
+  const target = ruleThread(useApp.getState(), call.target);
+  const refused = checkManage(caller, target);
+  if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
+  if (target.id === caller.id) {
+    return failureJson(failure("not_allowed", "a thread cannot answer its own request"));
+  }
+  if (!ancestorsOf(book(), target.id).has(caller.id)) {
+    return failureJson(
+      failure(
+        "not_allowed",
+        `“${target.title}” is not a thread this one delegated to; only a thread below this one in its delegation tree can be answered`,
+      ),
+    );
+  }
+  const waiting = () =>
+    useApp.getState().threads[target.id]?.permissions.find((p) => String(p.rpcId) === call.requestId);
+  const request = waiting();
+  if (!request) {
+    return failureJson(
+      failure("not_found", "that request is not waiting any more; list_pending_requests again"),
+    );
+  }
+  const answered = answeringFor(request, call);
+  if (isFailure(answered)) return failureJson(answered);
+  const kind = request.question ? "question" : "approval";
+  const asked = capped(request.question?.text || request.title, 200).text;
+  const choice = call.answer === undefined ? (call.choice ?? "allow_once") : undefined;
+  const detail =
+    choice === "deny"
+      ? `It would decline “${asked}”`
+      : choice
+        ? `It would ${ANSWER_LABEL[choice]} “${asked}”`
+        : `It would answer “${asked}” with: ${call.answer}`;
+  // The grant names the request, not only the thread: "always" for one question or
+  // command must not answer a later, unrelated one without a card of its own.
+  const key = `answer:${target.id}:${kind}:${asked}`;
+  const no = await permitted(caller, key, {
+    kind: "answer",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: target.title,
+    detail,
+  });
+  if (no) return failureJson(no);
+  // The user took their time: the card may have been answered in its own chat meanwhile.
+  const current = waiting();
+  if (!current) {
+    return failureJson(failure("conflict", "that request was answered before this call reached it"));
+  }
+  const now = answeringFor(current, call);
+  if (isFailure(now)) return failureJson(now);
+  if (!current.question) answerPermission(current, now.option);
+  else if (now.text !== null) answerQuestionText(current, now.text);
+  else if (now.chosen) answerQuestionOptions(current, [now.chosen]);
+  else answerPermission(current, now.option);
+  const picked = now.option ?? now.chosen;
+  return {
+    session_id: target.id,
+    request_id: call.requestId,
+    thread: target.title,
+    kind,
+    // A question answered in words or by option id reports that answer; a declined
+    // question and every approval report the choice, and the option it picked.
+    ...(call.answer !== undefined
+      ? { answer: call.answer, ...(picked ? { option: picked.name } : {}) }
+      : { choice: choice ?? "allow_once", option: picked?.name ?? "" }),
+  };
+}
+
+/**
+ * `organize_threads`: the batch form of `update_session`. Every listed thread
+ * of the caller's project gets the same changes, the user is asked once, and a
+ * thread this caller cannot manage is skipped with the reason instead of
+ * failing the batch. A change a thread already has is not made and not counted.
+ */
+async function organizeThreads(caller: RuleThread, call: OrganizeCall): Promise<JsonObject> {
+  const decided: RuleThread[] = [];
+  const skipped: JsonObject[] = [];
+  for (const id of call.targets) {
+    const target = manageTarget(caller, id);
+    if (isFailure(target)) {
+      skipped.push({ session_id: id, reason: target.message });
+      continue;
+    }
+    decided.push(target);
+  }
+  if (!decided.length) {
+    return failureJson(
+      failure("not_allowed", skipped[0]?.reason?.toString() ?? "no thread of that list can be changed"),
+    );
+  }
+  const state = () => useApp.getState();
+  /** Which of the call's changes this thread does not have yet. */
+  const missing = (target: RuleThread) => ({
+    title: call.title !== undefined && call.title !== (ruleThread(state(), target.id) ?? target).title,
+    pinned: call.pinned !== undefined && state().pinned.includes(target.id) !== call.pinned,
+    unread: call.unread !== undefined && isUnread(target.id) !== call.unread,
+    archived: call.archived !== undefined && (statusOf(state(), target.id) === "done") !== call.archived,
+  });
+  const wanted = decided.filter((target) => Object.values(missing(target)).some(Boolean));
+  // Nothing to do is not a change to ask the user about: say so instead.
+  if (!wanted.length) return { changed: 0, threads: [], skipped };
+  const others = wanted.filter((target) => target.id !== caller.id);
+  if (others.length) {
+    const any = (key: keyof ReturnType<typeof missing>) => wanted.some((target) => missing(target)[key]);
+    const changes = [
+      any("title") && `rename ${others.length === 1 ? "it" : "them"} to “${call.title}”`,
+      any("pinned") && (call.pinned ? "pin" : "unpin"),
+      any("unread") && (call.unread ? "mark unread" : "mark read"),
+      any("archived") && (call.archived ? "settle" : "bring back"),
+    ].filter(Boolean);
+    const names = others.map((target) => `“${target.title}”`).join(", ");
+    const key = `organize:${decided
+      .map((target) => target.id)
+      .sort()
+      .join(",")}`;
+    const no = await permitted(caller, key, {
+      kind: "organize",
+      caller: caller.id,
+      callerTitle: caller.title,
+      target: names,
+      detail: `It would ${changes.join(", ")} ${names}.`,
+    });
+    if (no) return failureJson(no);
+  }
+  // The status of `archived` goes in one write for the batch, as the sidebar's own
+  // multi-select does it; the rest goes one thread at a time, and only where it changes.
+  const settled = wanted.filter((target) => missing(target).archived).map((target) => target.id);
+  if (settled.length) await setThreadsStatus(settled, call.archived ? "done" : "idle");
+  const threads: JsonObject[] = [];
+  for (const target of decided) {
+    const applied = await applyManagedChange(target, {
+      title: call.title,
+      pinned: call.pinned,
+      unread: call.unread,
+    });
+    if (applied.renameFailed) {
+      skipped.push({ session_id: target.id, reason: "the thread could not be renamed" });
+      continue;
+    }
+    if (!applied.applied && !settled.includes(target.id)) continue;
+    threads.push({
+      session_id: target.id,
+      title: ruleThread(state(), target.id)?.title ?? target.title,
+      pinned: state().pinned.includes(target.id),
+      unread: isUnread(target.id),
+      status: statusOf(state(), target.id),
+      archived: statusOf(state(), target.id) === "done",
+    });
+  }
+  return {
+    changed: threads.length,
+    threads,
+    ...(skipped.length ? { skipped } : {}),
   };
 }
 
@@ -2233,9 +2523,9 @@ async function transferSession(caller: RuleThread, id: string, harness: string):
 function listPendingRequests(caller: RuleThread, machine?: MachineRef): JsonObject {
   const s = useApp.getState();
   const rank = machine?.host;
-  const requests = Object.values(s.threads)
+  const waiting = Object.values(s.threads)
     .filter((t) => t.permissions.length)
-    .map((t) => ({ thread: t, rule: ruleThread(s, t.id) }))
+    .map((thread) => ({ thread, rule: ruleThread(s, thread.id) }))
     .filter(({ rule }) => {
       if (!rule) return false;
       // A named machine is the whole answer; without one, every thread this
@@ -2243,16 +2533,20 @@ function listPendingRequests(caller: RuleThread, machine?: MachineRef): JsonObje
       if (machine) return splitThreadKey(rule.id).host === rank;
       return reachesThread(caller, rule);
     })
-    .flatMap(({ thread, rule }) =>
-      thread.permissions.map((p) => ({
-        session_id: thread.id,
-        title: rule?.title ?? "",
-        ...(targetMachine(thread.id) ? { machine: targetMachine(thread.id) } : {}),
-        kind: p.question ? "question" : "approval",
-        asks: p.question?.text ?? p.title,
-      })),
-    );
-  return { ...(machine ? machineFields(machine) : {}), requests };
+    .flatMap(({ thread, rule }) => thread.permissions.map((request) => ({ thread, rule, request })))
+    // Oldest first, as docs/orchestrator.md says: the card that has waited longest comes first.
+    .sort((a, b) => (a.request.at ?? 0) - (b.request.at ?? 0));
+  const requests = waiting.map(({ thread, rule, request }) => ({
+    session_id: thread.id,
+    request_id: String(request.rpcId),
+    ...(targetMachine(thread.id) ? { machine: targetMachine(thread.id) } : {}),
+    title: rule?.title ?? "",
+    kind: request.question ? "question" : "approval",
+    asks: request.question?.text ?? request.title,
+    // An approval's choices and a question's answers, in the order the card lists them.
+    options: request.options.map((o) => ({ id: o.id, name: o.name })),
+  }));
+  return { requests };
 }
 
 async function read(
@@ -2335,8 +2629,39 @@ export function turnsOf(items: TranscriptItem[]): JsonObject[] {
   return out;
 }
 
-function message(caller: RuleThread, targetId: string, text: string): Promise<JsonObject> {
-  return withLinkGate(() => messageNow(caller, targetId, text));
+/**
+ * The files a message carries: each under the caller's project or worktree,
+ * measured by the shell (the web view cannot stat a file). `src-tauri`'s
+ * `attached_files` enforces the same roots and the 5 MB ceiling for the paths
+ * the pure rule above accepted.
+ */
+async function attachmentFiles(
+  caller: RuleThread,
+  paths: readonly string[],
+): Promise<AttachedFile[] | Failure> {
+  if (!paths.length) return [];
+  if (paths.length > MAX_ATTACHMENT_FILES) {
+    return failure("invalid", `a message attaches at most ${MAX_ATTACHMENT_FILES} files`);
+  }
+  const roots = attachmentRoots(caller);
+  for (const path of paths) {
+    const refused = attachmentRefusal(path, roots);
+    if (refused) return refused;
+  }
+  try {
+    return await shellCall<AttachedFile[]>("attached_files", { paths: [...paths], roots });
+  } catch (error) {
+    return failure("invalid", `the files could not be attached: ${errorText(error)}`);
+  }
+}
+
+function message(
+  caller: RuleThread,
+  targetId: string,
+  text: string,
+  attachments: readonly string[] = [],
+): Promise<JsonObject> {
+  return withLinkGate(() => messageNow(caller, targetId, text, attachments));
 }
 
 /** Do not message a settled or archived thread. */
@@ -2351,7 +2676,12 @@ function messageTargetRefusal(state: AppState, targetId: string): Failure | null
   return null;
 }
 
-async function messageNow(caller: RuleThread, targetId: string, text: string): Promise<JsonObject> {
+async function messageNow(
+  caller: RuleThread,
+  targetId: string,
+  text: string,
+  attachments: readonly string[] = [],
+): Promise<JsonObject> {
   const state = useApp.getState();
   const target = ruleThread(state, targetId);
   // Messaging another machine's thread is the one rule its own machine cannot
@@ -2361,12 +2691,20 @@ async function messageNow(caller: RuleThread, targetId: string, text: string): P
   if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
   const unavailable = messageTargetRefusal(state, targetId);
   if (unavailable) return failureJson(unavailable);
+  // The files are checked before the user is asked about a message that could not carry
+  // all of them, so a refusal never costs an approval.
+  const files = await attachmentFiles(caller, attachments);
+  if (isFailure(files)) return failureJson(files);
+  const extras = files.length ? attachedExtras(files) : undefined;
+  const withFiles = files.length
+    ? `${text}\n\n${files.length === 1 ? "1 file attached" : `${files.length} files attached`}: ${files.map((f) => f.name).join(", ")}`
+    : text;
   const no = await permitted(caller, target.id, {
     kind: "message",
     caller: caller.id,
     callerTitle: caller.title,
     target: target.title,
-    detail: text,
+    detail: withFiles,
     machine: targetMachine(target.id),
   });
   if (no) return failureJson(no);
@@ -2406,10 +2744,15 @@ async function messageNow(caller: RuleThread, targetId: string, text: string): P
     harness: session?.harness,
     harnessName,
     model: session?.model,
-    machine: targetMachine(target.id),
   });
-  deliver(target.id, delivered(text, caller.title), id, caller.id);
-  return { link_id: id, receipt: busy ? "queued" : "started", session_id: target.id, title: target.title };
+  deliver(target.id, delivered(text, caller.title), id, caller.id, extras);
+  return {
+    link_id: id,
+    receipt: busy ? "queued" : "started",
+    session_id: target.id,
+    title: target.title,
+    ...(files.length ? { attachments: files.map((f) => f.path) } : {}),
+  };
 }
 
 function addLink(link: Omit<Link, "id" | "createdAt" | "events">): string {
@@ -2434,16 +2777,19 @@ function addLink(link: Omit<Link, "id" | "createdAt" | "events">): string {
 }
 
 /** After the turn the target runs, never into it: the same queue a typed message uses. */
-function deliver(target: string, text: string, link: string, from: string) {
+function deliver(target: string, text: string, link: string, from: string, extras?: ComposeExtras) {
   const thread = useApp.getState().threads[target];
   if (thread?.running) {
     // `from` is who queued it, so that thread can correct it while it waits (`manageQueue`).
     updateThread(target, (t) => ({
       ...t,
-      queue: [...t.queue, { id: localId("queued"), text, link, from, queuedAt: Date.now() }],
+      queue: [
+        ...t.queue,
+        { id: localId("queued"), text, link, from, queuedAt: Date.now(), ...(extras ? { extras } : {}) },
+      ],
     }));
   } else {
-    void runPrompt(target, text, undefined, { link });
+    void runPrompt(target, text, extras, { link });
   }
 }
 

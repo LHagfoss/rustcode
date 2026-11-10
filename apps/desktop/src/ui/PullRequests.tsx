@@ -35,6 +35,7 @@ import {
 import { pullState } from "../state/pulls";
 import { openSettings, request, setDraft, setPanel, startNewThread, toast, useApp } from "../state/store";
 import { relativeAge } from "../state/thread";
+import { splitThreadKey } from "../state/threadKeys";
 import { Markdown } from "./Markdown";
 import { Cluster, ClusterButton, cx, noTextHelpers, Pill, Segments, Skeleton, Spinner } from "./primitives";
 
@@ -169,13 +170,23 @@ function ReviewForm({ cwd, pull, onDone }: { cwd: string; pull: PullRequest; onD
   );
 }
 
-function PullView({ cwd, number, onBack }: { cwd: string; number: number; onBack: () => void }) {
+function PullView({
+  cwd,
+  host,
+  number,
+  onBack,
+}: {
+  cwd: string;
+  host: string;
+  number: number;
+  onBack: () => void;
+}) {
   // The row the list already read draws the header at once; the body, the
   // files and the activity come from the detail read behind it.
   const { detail, summary, error, live } = usePullDetail(cwd, number);
   const [reviewing, setReviewing] = useState(false);
   const askAgent = (pull: PullRequest) => {
-    startNewThread(cwd);
+    startNewThread(cwd, host || undefined);
     setDraft(
       "new",
       `Review pull request #${pull.number} (${pull.title}) at commit ${pull.headSha.slice(0, 7)}: ${pull.url ?? ""}`,
@@ -292,7 +303,9 @@ function PullView({ cwd, number, onBack }: { cwd: string; number: number; onBack
 }
 
 export function PullsPanel() {
+  const selectedId = useApp((s) => s.selectedId);
   const cwd = useApp((s) => (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined) ?? s.projectCwd);
+  const host = selectedId ? splitThreadKey(selectedId).host : "";
   const [state, setState] = useState<PullListState>("open");
   const [viewing, setViewing] = useState<number | null>(null);
   // The panel paints the last answer for this state at once and refreshes
@@ -322,7 +335,7 @@ export function PullsPanel() {
         </Cluster>
       </div>
       {viewing !== null && cwd ? (
-        <PullView cwd={cwd} number={viewing} onBack={() => setViewing(null)} />
+        <PullView cwd={cwd} host={host} number={viewing} onBack={() => setViewing(null)} />
       ) : (
         <>
           <div className="px-3 pt-2">
