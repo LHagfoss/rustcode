@@ -200,13 +200,10 @@ export const UserRow = memo(function UserRow({
       {/* Time and actions show on hover, clipped to the bubble's width; `.rc-meta-reveal` is the
           same reveal the queued row's foot uses. */}
       <div className="rc-meta-reveal mt-0.5 flex h-[22px] max-w-[80%] min-w-0 select-none items-center gap-1 overflow-hidden whitespace-nowrap text-sub text-fg-faint tabular">
-        {item.steered && <span className="rc-keep text-accent">Steered</span>}
-        {item.fromView && <span className="rc-keep text-accent">From view</span>}
-        <Tooltip label={item.at ? new Date(item.at).toLocaleString() : undefined}>
-          <span className="truncate tabular">{messageTime(item.at)}</span>
-        </Tooltip>
         {/* The actions show on hover only, all three together: a steer holds the line open for its
-            badge and time, and must not leave Copy showing alone beside them. */}
+            badge and time, and must not leave Copy showing alone beside them. They come first, so
+            at rest their room is on the far side of the line from the bubble's edge and the badge
+            and time end flush with it instead of before an empty gap. */}
         <span className="inline-flex opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
           <CopyButton text={item.text} iconOnly label="Copy message" />
         </span>
@@ -238,6 +235,11 @@ export const UserRow = memo(function UserRow({
             </Tooltip>
           </>
         )}
+        {item.steered && <span className="rc-keep text-accent">Steered</span>}
+        {item.fromView && <span className="rc-keep text-accent">From view</span>}
+        <Tooltip label={item.at ? new Date(item.at).toLocaleString() : undefined}>
+          <span className="truncate tabular">{messageTime(item.at)}</span>
+        </Tooltip>
       </div>
     </div>
   );

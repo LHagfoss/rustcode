@@ -1028,7 +1028,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   What stays visible: the message sent (a `rounded-2xl bg-message` bubble at
   most 80% wide, `p-3`; consecutive messages soften the corners they share,
   `rounded-tr-md` / `rounded-br-md`; its time and actions on hover, 12px,
-  clipped to the bubble), the final answer (the replies after the last
+  clipped to the bubble, the actions before the time so a steer's kept badge and
+  time end flush with the bubble rather than before their empty room), the final answer (the replies after the last
   step), warnings and errors, and the footer, which says only the time: no
   duration, so a folded turn never states it twice.
   Nothing else in a turn draws actions: an intermediate reply, a thought and a
