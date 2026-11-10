@@ -3543,6 +3543,16 @@ export function dismissLink(id: string) {
   setBook((b) => ({ ...b, links: b.links.filter((l) => l.id !== id || isActive(l.state)) }));
 }
 
+/** Forget a finished thread's messages: the strip draws one row however many it got. */
+export function dismissLinkThread(orchestrator: string, target: string) {
+  setBook((b) => ({
+    ...b,
+    links: b.links.filter(
+      (link) => link.orchestrator !== orchestrator || link.target !== target || isActive(link.state),
+    ),
+  }));
+}
+
 /** "Keep this": the fan-out's other threads are done, and the kept one goes to review. */
 export async function keepFanOut(fanId: string, keep: string) {
   const group = book().fanOuts.find((f) => f.id === fanId);

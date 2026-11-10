@@ -6,7 +6,7 @@
 
 import { useMemo } from "react";
 import { stateOf, subtreeQuiet } from "./host";
-import { isActive, type Link, type LinkState } from "./orchestration";
+import { isActive, type Link, type LinkState, linkThreads } from "./orchestration";
 import { useApp } from "./store";
 
 /** What {@link waitingOn} reads of the app. */
@@ -46,14 +46,20 @@ export function waitingOn(read: WaitingRead): Waiting | undefined {
   const links = read.links.filter(
     (link) => link.orchestrator === read.id && (isActive(read.state(link)) || !read.quiet(link.target)),
   );
+  // One link per thread: a delegate messaged twice is one thread it waits on, not two.
+  const threads = linkThreads(
+    links,
+    links.map((link) => read.state(link)),
+  );
   const commands = read.commands ?? 0;
-  return links.length || commands ? { links, commands } : undefined;
+  return threads.length || commands ? { links: threads.map((thread) => thread.link), commands } : undefined;
 }
 
 /** The line itself: `Waiting on 2 threads`, `Waiting on a background command`, or both. */
 export function waitingLabel(wait: Waiting): string {
   const parts: string[] = [];
-  const n = wait.links.length;
+  // Counted by thread, not by link: a follow-up to the same delegate is not another wait.
+  const n = new Set(wait.links.map((link) => link.target)).size;
   if (n) parts.push(`${n} thread${n === 1 ? "" : "s"}`);
   if (wait.commands) {
     parts.push(wait.commands === 1 ? "a background command" : `${wait.commands} background commands`);
@@ -62,7 +68,8 @@ export function waitingLabel(wait: Waiting): string {
 }
 
 /** The threads it waits on, by title: the line's tooltip. */
-export const waitingTitle = (wait: Waiting) => wait.links.map((l) => l.targetTitle).join(", ");
+export const waitingTitle = (wait: Waiting) =>
+  [...new Map(wait.links.map((link) => [link.target, link.targetTitle])).values()].join(", ");
 
 /**
  * A thread's background work, read once for the transcript and the sidebar. The
