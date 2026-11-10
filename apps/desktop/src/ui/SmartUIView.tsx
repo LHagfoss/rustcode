@@ -356,7 +356,7 @@ export function SmartUIView({
           pump.current?.push(closeOpenTags(latest.current));
           break;
         case "hover": {
-          // Not from a click: show a held height only once the pointer is gone.
+          // Track whether measurements should be ignored while the pointer is inside.
           const next = sizeGate().hover(data.over === true);
           if (next !== null) {
             rememberHeight(source, next);
@@ -527,7 +527,7 @@ export function SmartUIView({
       {halt?.kind === "failed" && <p className="mt-1 text-caption text-danger">{halt.reason}</p>}
       <div
         className={cx(
-          "absolute top-0 right-0 flex gap-1 opacity-0 transition-opacity duration-150 group-focus-within/ui:opacity-100 group-hover/ui:opacity-100",
+          "absolute top-0 right-0 flex gap-1 opacity-0 group-focus-within/ui:opacity-100 group-hover/ui:opacity-100",
         )}
       >
         <IconButton
