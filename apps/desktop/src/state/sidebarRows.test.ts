@@ -546,11 +546,11 @@ describe("where a row puts what it has besides its title", () => {
     }
   });
 
-  test("a diff alone rides in the trailing slot of the compact row, never a line of its own", () => {
+  test("a diff alone is never a line of its own, whatever the layout", () => {
     expect(meta({ diff })).toBe("trailing");
     expect(meta({ diff, branch: true })).toBe("line");
-    // The two-line row has the width, and its line carries the diff beside the badges.
-    expect(meta({ diff, layout: "comfortable" })).toBe("line");
+    // The card puts it at the end of its title line, so a card is two lines unless it has a branch.
+    expect(meta({ diff, layout: "comfortable" })).toBe("trailing");
   });
 
   test("the harness mark alone rides in the trailing slot beside the state, never a line", () => {

@@ -670,7 +670,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   line (`text-sub`, 48px row): the branch in `font-mono`, `+N −N` in `success`/
   `danger`, the pull request's mark, and the stack or the harness mark at its
   end. Neither a diff nor the harness mark alone is worth a line: they ride in
-  the trailing slot beside the state, in that order, and the slot never wraps —
+  the trailing slot beside the state (on the card, at the end of the title
+  line), in that order, and the slot never wraps —
   a 12px glyph dropped onto a second line reads as the state's own icon
   wrapping (`state/sidebarRows.ts` `rowMeta`). Counts are shown only for a
   thread the app has already read; one it has not opened shows neither, rather
@@ -683,19 +684,20 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   works, waits or is settled recedes to weight 400 at 75%, back to full on
   hover, with its mark at 60% so a column of marks never competes with the
   titles. Hovering swaps the slot for Pin, Settle (or Unsettle) and the menu,
-  three 24px targets drawn over the row's right end rather than given room of
-  their own: the line fades out under them through a mask measured from the
-  row's right edge, so the title never moves and a narrow sidebar keeps as much
-  of it as a wide one. The hover card is the rest. The row layout preference
+  three 24px targets that take the slot's place: the slot widens to their 72px
+  and its state fades out as they fade in, so the line's text truncates before
+  them and nothing is ever drawn over it. On the card they sit on the first
+  line, beside the project's name, and the title below is untouched. The hover
+  card is the rest. The row layout preference
   (`rustcode.sidebar.rowLayout`) is `comfortable` unless the user chose
   `compact`: a card of up to three lines. The first is the project's mark and
   name in `text-sub` `fg-muted` (the harness under a project heading), ending
   with the state as an icon and a word in its tone (`Working` with its clock in
   `accent`, `Needs you` in `warning`, `Waiting` muted, `Failed` in `danger`,
   `Done` in `success` until the thread is opened, `Review` in `accent`) or else
-  the age, where the hover actions are drawn. The second is the title. The
-  third, drawn only when it has something to put there, is the branch, the diff,
-  the pull request and the stack (the retired `current` and `title-first`
+  the age, where the hover actions are drawn. The second is the title, ending
+  with the diff and the harness mark when there is no third line. The third,
+  drawn only for a branch, a pull request or a stack, carries those and the diff (the retired `current` and `title-first`
   values migrate to it). Logic: `state/sidebarRows.ts` `rowStatus` and `rowMeta`,
   `state/sidebarPrefs.ts` `rowLayoutOf`.
 - **Delegated threads:** a thread an agent started has no row of its own while
