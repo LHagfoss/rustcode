@@ -169,11 +169,26 @@ export function modelDisplayName(model: Choice): string {
 }
 
 /**
+ * The provider an id names, when it carries one: `anthropic/claude-sonnet` is Anthropic's, and
+ * `openrouter/anthropic/claude-sonnet` is the same model through OpenRouter, a different one to
+ * pick. Null for an id without a `provider/` prefix, which is one harness's own list.
+ */
+export function modelProviderOf(value: string): string | null {
+  const at = value.lastIndexOf("/");
+  return at > 0 ? value.slice(0, at) : null;
+}
+
+/**
  * One row per model. A harness can list the same model twice: one id twice (a cached listing merged
  * with a fresh one), or two ids under one name (an alias beside the dated id it names). The harness's
  * own order is kept, so the model it puts first stays first; of two rows sharing a name the one it
  * recommends (`recommended`, the model the harness runs or was last left on) wins, else the first it
  * listed. Ids are matched exactly, names case- and space-insensitively.
+ *
+ * A name only holds within one provider: two providers can each list a `Claude Sonnet`
+ * (`anthropic/…` and `openrouter/anthropic/…`), and hiding either would lose a model the user came
+ * to pick. Such a pair stays two rows, which `repeatedModelNames` marks so the row can say which
+ * provider it comes from.
  */
 export function dedupeModels(models: Choice[], recommended?: string | null): Choice[] {
   const seen = new Set<string>();
@@ -182,7 +197,7 @@ export function dedupeModels(models: Choice[], recommended?: string | null): Cho
   for (const model of models) {
     if (seen.has(model.value)) continue;
     seen.add(model.value);
-    const key = modelDisplayName(model).toLowerCase();
+    const key = `${modelProviderOf(model.value) ?? ""}\u0000${modelDisplayName(model).toLowerCase()}`;
     const at = byName.get(key);
     if (at === undefined) {
       byName.set(key, rows.length);
@@ -193,6 +208,19 @@ export function dedupeModels(models: Choice[], recommended?: string | null): Cho
     }
   }
   return rows;
+}
+
+/**
+ * The names one harness's list holds more than once, so a row among them can name its provider
+ * instead of reading as its neighbour.
+ */
+export function repeatedModelNames(models: Choice[]): Set<string> {
+  const counts = new Map<string, number>();
+  for (const model of models) {
+    const key = modelDisplayName(model).toLowerCase();
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
 }
 
 /** One harness's models in the list, with what the list needs to offer them. */
@@ -435,6 +463,11 @@ function ModelPanel({
     ? (browsed as string)
     : (groups[0]?.harness.id ?? "");
   const rows = useMemo(() => filterModelRows(groups, provider, filter), [groups, provider, filter]);
+  // A name two providers share: its rows say which provider they come from.
+  const shared = useMemo(
+    () => new Map(groups.map((group) => [group.harness.id, repeatedModelNames(group.models)])),
+    [groups],
+  );
   // Until the user moves, the list highlights the model the picker's owner runs; a highlight the
   // current rows no longer hold (another harness browsed) falls back to the first row.
   const marker = picked ?? (current ? { harness: groups[0]?.harness.id ?? "", model: current } : null);
@@ -567,43 +600,57 @@ function ModelPanel({
             aria-label="Models"
             className="scroll-stable min-h-0 min-w-0 flex-1 p-1"
           >
-            {rows.map((item, i) => (
-              <div
-                key={`${item.group.harness.id}:${item.model.value}`}
-                id={`model-row-${i}`}
-                role="option"
-                tabIndex={-1}
-                aria-selected={
-                  item.group.harness.id === groups[0]?.harness.id && item.model.value === current
-                }
-                aria-disabled={!!item.group.blocked}
-                onMouseEnter={() => highlight(i)}
-                onClick={() => !item.group.blocked && onPick(item.group, item.model.value)}
-                className={cx(
-                  "flex min-h-7 cursor-pointer items-center gap-2 rounded-xl px-2 py-1",
-                  i === active && "bg-fill",
-                  item.group.blocked && "opacity-45",
-                )}
-              >
-                {searching && (
-                  <HarnessIcon id={item.group.harness.id} name={item.group.harness.name} size={14} />
-                )}
-                <span className="min-w-0 flex-1 truncate text-body">
-                  {item.model.name || item.model.value}
-                </span>
-                {item.group.harness.id === groups[0]?.harness.id && item.model.value === current && (
-                  <Check size={13} className="shrink-0 text-accent" />
-                )}
-              </div>
-            ))}
+            {rows.map((item, i) => {
+              const name = modelDisplayName(item.model);
+              // A name the list holds twice is only told apart by the provider behind it.
+              const providerName = shared.get(item.group.harness.id)?.has(name.toLowerCase())
+                ? modelProviderOf(item.model.value)
+                : null;
+              return (
+                <div
+                  key={`${item.group.harness.id}:${item.model.value}`}
+                  id={`model-row-${i}`}
+                  role="option"
+                  tabIndex={-1}
+                  aria-selected={
+                    item.group.harness.id === groups[0]?.harness.id && item.model.value === current
+                  }
+                  aria-disabled={!!item.group.blocked}
+                  onMouseEnter={() => highlight(i)}
+                  onClick={() => !item.group.blocked && onPick(item.group, item.model.value)}
+                  className={cx(
+                    "flex min-h-7 cursor-pointer items-center gap-2 rounded-xl px-2 py-1",
+                    i === active && "bg-fill",
+                    item.group.blocked && "opacity-45",
+                  )}
+                >
+                  {searching && (
+                    <HarnessIcon id={item.group.harness.id} name={item.group.harness.name} size={14} />
+                  )}
+                  <span className="min-w-0 flex-1 truncate text-body">{name}</span>
+                  {providerName && (
+                    <span className="shrink-0 text-caption text-fg-faint">{providerName}</span>
+                  )}
+                  {item.group.harness.id === groups[0]?.harness.id && item.model.value === current && (
+                    <Check size={13} className="shrink-0 text-accent" />
+                  )}
+                </div>
+              );
+            })}
             {!rows.length &&
               (searching ? (
                 <div role="presentation" className="px-3 py-6 text-center">
                   <p className="text-callout text-fg">No models match “{filter.trim()}”</p>
-                  <p className="mt-1 text-caption text-fg-faint">Search every harness, by name.</p>
+                  <p className="mt-1 text-caption text-fg-faint">
+                    Search every harness, by name or provider.
+                  </p>
                   <button
                     type="button"
-                    onClick={() => setFilter("")}
+                    onClick={() => {
+                      setFilter("");
+                      // The button goes with the empty list: the field it cleared takes the caret.
+                      field.current?.focus();
+                    }}
                     className="mt-2 rounded-md px-2 py-1 text-callout text-accent hover:bg-fill focus-visible:bg-fill"
                   >
                     Clear search
@@ -629,10 +676,15 @@ export function filterModelRows(groups: ModelGroup[], provider: string, filter: 
   const searching = !!filter.trim();
   return groups.flatMap((group) =>
     searching || group.harness.id === provider
-      ? (searching ? matchModels(filter, group.models).shown : group.models).map((model) => ({
-          group,
-          model,
-        }))
+      ? // The id is searched beside the name: on a harness whose models are `provider/model`, the
+        // provider is only in the id, and that is what the user types to narrow the list.
+        (searching
+          ? matchModels(
+              filter,
+              group.models.map((model) => ({ ...model, id: model.value })),
+            ).shown
+          : group.models
+        ).map((model) => ({ group, model }))
       : [],
   );
 }
@@ -989,9 +1041,10 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
         setStep("models");
       }}
       // The card takes the size its step measured; the step itself is never wider than the window
-      // allows, and only the model list scrolls.
+      // allows, and only the model list scrolls. Its own ceiling is the full card, note included:
+      // the list gives the note its room (`cardMax`), so the two together never pass it.
       className="flex flex-col overflow-hidden! p-0"
-      style={{ maxHeight: cardMax }}
+      style={{ maxHeight: CARD_MAX }}
       trigger={
         <button
           type="button"
@@ -1020,7 +1073,14 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
         )}
         style={box ? { width: box.width, height: box.height } : undefined}
       >
-        <div ref={body} className="flex w-max max-w-[min(360px,calc(100vw-32px))] flex-col">
+        {/* The ceiling matters as much as the measurement: a long list that grew the body past it
+            would make the clipped card taller than the room it has, and nothing would scroll. Capped,
+            the body hands the list the room left under the note, and the list scrolls in it. */}
+        <div
+          ref={body}
+          style={{ maxHeight: CARD_MAX }}
+          className="flex w-max max-w-[min(360px,calc(100vw-32px))] flex-col"
+        >
           {traitsStep ? (
             <EffortPanel
               model={displayName ?? label}

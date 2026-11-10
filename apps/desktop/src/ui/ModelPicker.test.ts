@@ -5,12 +5,14 @@ import {
   dedupeModels,
   filterModelRows,
   modelDisplayName,
+  modelProviderOf,
   modelThreadWrites,
   movePickerIndex,
   orderEfforts,
   panelHeight,
   pickerModels,
   pillLabel,
+  repeatedModelNames,
   shownAccounts,
   traitsLabel,
   writeModelPick,
@@ -283,6 +285,46 @@ describe("one row per model", () => {
     expect(modelDisplayName({ value: "chatgpt/gpt-6-luna", name: "  " })).toBe("chatgpt/gpt-6-luna");
     expect(modelDisplayName({ value: "luna", name: " GPT  6 Luna " })).toBe("GPT 6 Luna");
   });
+
+  test("one name under two providers is two models, both listed", () => {
+    // Pi and OpenCode list `provider/model`: the same model through two providers is two picks.
+    const rows = dedupeModels([
+      model("anthropic/claude-sonnet-4", "Claude Sonnet 4"),
+      model("openrouter/anthropic/claude-sonnet-4", "Claude Sonnet 4"),
+    ]);
+    expect(rows.map((row) => row.value)).toEqual([
+      "anthropic/claude-sonnet-4",
+      "openrouter/anthropic/claude-sonnet-4",
+    ]);
+  });
+
+  test("one provider's pair of ids for one model is still one row", () => {
+    const rows = dedupeModels(
+      [
+        model("anthropic/claude-sonnet-4-20260115", "Claude Sonnet 4"),
+        model("anthropic/claude-sonnet-4", "Claude Sonnet 4"),
+        model("anthropic/claude-haiku-4", "Claude Haiku 4"),
+      ],
+      "anthropic/claude-sonnet-4",
+    );
+    expect(rows.map((row) => row.value)).toEqual(["anthropic/claude-sonnet-4", "anthropic/claude-haiku-4"]);
+  });
+
+  test("an id carries its provider, and a bare id names none", () => {
+    expect(modelProviderOf("anthropic/claude-sonnet-4")).toBe("anthropic");
+    expect(modelProviderOf("openrouter/anthropic/claude-sonnet-4")).toBe("openrouter/anthropic");
+    expect(modelProviderOf("claude-sonnet-4")).toBeNull();
+    expect(modelProviderOf("/leading")).toBeNull();
+  });
+
+  test("only the names a list holds twice read by their provider", () => {
+    const shared = repeatedModelNames([
+      model("anthropic/claude-sonnet-4", "Claude Sonnet 4"),
+      model("openrouter/anthropic/claude-sonnet-4", "claude  sonnet 4"),
+      model("anthropic/claude-haiku-4", "Claude Haiku 4"),
+    ]);
+    expect([...shared]).toEqual(["claude sonnet 4"]);
+  });
 });
 
 describe("account rows", () => {
@@ -364,6 +406,16 @@ describe("model picker navigation", () => {
     expect(filterModelRows(groups, "codex", "").map((r) => r.model.value)).toEqual(["sonnet"]);
     expect(filterModelRows(groups, "codex", "opus").map((r) => r.group.harness.id)).toEqual(["other"]);
     expect(filterModelRows(groups, "codex", "missing")).toEqual([]);
+  });
+  test("finds a model by its id, so a provider narrows the list", () => {
+    const group = {
+      harness: harness([]),
+      models: [
+        { value: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4" },
+        { value: "openai/gpt-6", name: "GPT 6" },
+      ],
+    };
+    expect(filterModelRows([group], "codex", "openai/").map((r) => r.model.value)).toEqual(["openai/gpt-6"]);
   });
   test("clamps keyboard movement and displays the catalog label", () => {
     expect(movePickerIndex(0, -1, 3)).toBe(0);
