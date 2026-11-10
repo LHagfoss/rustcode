@@ -62,14 +62,17 @@ import { fadeClearedField } from "../lib/sendFlight";
 import {
   type Attachment,
   type ComposeExtras,
+  commandSuggestions,
   emptyExtras,
   hasExtras,
   hasTokens,
   IMAGE_TYPES,
   imageMime,
+  insertCommand,
   MAX_IMAGE_BYTES,
   MAX_INLINE_FILE_BYTES,
   sentMessages,
+  slashToken,
   splitTokens,
   trackPastes,
 } from "../state/compose";
@@ -113,17 +116,6 @@ import { ModelPicker } from "./ModelPicker";
 import { PasteChip } from "./PasteChip";
 import { cx, MenuSearchField, MenuShortcut, Pill, Tooltip } from "./primitives";
 import { QueuedAnnouncer } from "./QueuedMessages";
-
-function suggestions(draft: string, commands: SlashCommand[]): SlashCommand[] {
-  if (!draft.startsWith("/") || /\s/.test(draft)) return [];
-  const typed = draft.toLowerCase();
-  const prefixed = commands.filter((c) => c.name.toLowerCase().startsWith(typed));
-  const others =
-    typed.length > 1
-      ? commands.filter((c) => !prefixed.includes(c) && c.name.toLowerCase().includes(typed.slice(1)))
-      : [];
-  return [...prefixed, ...others].slice(0, 40);
-}
 
 // The field's line box: 14px at 1.5 (`leading-normal`), a hair tighter than a reply's, which is what
 // makes a draft read as something being typed rather than something read back.
@@ -281,12 +273,16 @@ export const Composer = memo(function Composer({
   // The queued message the composer is editing (its pencil, or ↑): ⏎ saves it where it waits, and
   // never sends it. What the composer held before comes back when the edit ends.
   const queuedEdit = useApp((s) => (s.queuedEdit?.threadId === key ? s.queuedEdit : null));
+  // `/`: the commands, at the start or anywhere after whitespace, filtered by the
+  // token the caret is in. `/usr/bin` is a path, not a command (state/compose.ts).
+  const slash = dismissed === draft || extras.command ? null : slashToken(draft, caret);
+  const commandQuery = slash?.query ?? null;
   const list = useMemo(
-    () => (dismissed === draft || extras.command ? [] : suggestions(draft, commands)),
-    [draft, commands, dismissed, extras.command],
+    () => (commandQuery === null ? [] : commandSuggestions(commandQuery, commands)),
+    [commandQuery, commands],
   );
   // `@`: the project's files, listed when the first reference opens, and again once it is stale.
-  const token = dismissed === draft || list.length ? null : atToken(draft, caret);
+  const token = dismissed === draft || slash ? null : atToken(draft, caret);
   const cwdForFiles = thread?.cwd ?? projectCwd;
   const wantsFiles = !!token && !!cwdForFiles;
   useEffect(() => {
@@ -516,15 +512,26 @@ export const Composer = memo(function Composer({
   };
 
   const complete = (command: SlashCommand, run: boolean) => {
-    // A command the app answers itself (a picker, a new thread) runs at once, arguments or not.
-    if (run && (!command.takesArguments || command.action !== "execute")) {
-      update("");
-      void submit(command.name);
-    } else {
-      // A command that wants arguments becomes the token in front of the field.
-      change((e) => ({ ...e, command }));
-      update("");
+    if (!slash) return;
+    // A leading command keeps its path. A command the app answers itself (a picker, a new
+    // thread) runs at once, arguments or not; one that wants arguments becomes the token in
+    // front of the field.
+    if (slash.start === 0 && slash.start + 1 + slash.query.length === draft.length) {
+      if (run && (!command.takesArguments || command.action !== "execute")) {
+        update("");
+        void submit(command.name);
+      } else {
+        change((e) => ({ ...e, command }));
+        update("");
+      }
+      return;
     }
+    // Anywhere else the token is text: `/name ` is written where the caret was, as `@` is
+    // (the harness reads a slash command only at the start of a prompt).
+    const next = insertCommand(draft, slash, command.name);
+    update(next.text);
+    setCaret(next.caret);
+    requestAnimationFrame(() => field.current?.setSelectionRange(next.caret, next.caret));
   };
 
   const onChange = (text: string) => {
@@ -724,8 +731,7 @@ export const Composer = memo(function Composer({
 
   // The drawer over the box: the commands `/` is looking for, or the files `@` is. A slash that
   // matches nothing still opens it and says so, where the field is about to be typed in.
-  const slashTyped = !extras.command && dismissed !== draft && /^\/\S*$/.test(draft);
-  const drawer = slashTyped ? "commands" : token && files?.cwd === cwdForFiles ? "files" : null;
+  const drawer = slash ? "commands" : token && files?.cwd === cwdForFiles ? "files" : null;
 
   // The drawer reaches up over the transcript, under the box's top edge. It tells the chat column how
   // far it does (`--rc-composer-float`, from the foot of the pane), so the jump-to-latest pill sits
@@ -793,7 +799,7 @@ export const Composer = memo(function Composer({
                   {/* What answers it: the app itself, not the harness. */}
                   {(c.action !== "execute" || c.report) && (
                     <span className="ml-auto shrink-0 rounded-xs bg-fill px-1.5 text-caption text-fg-muted">
-                      App
+                      {c.action === "skill" ? "Skill" : "App"}
                     </span>
                   )}
                 </button>

@@ -27,6 +27,92 @@ that shares a session.
 The rest of this page describes the older experimental `rustcode serve`
 transport, which is separate from the gateway and unchanged.
 
+## Host features for the paired phone
+
+The remote gateway exposes a small, allowlisted set of desktop features to a
+paired device. Each one has a **host capability flag** in the `capabilities`
+list of a `sessions` result, so the phone offers a control only when the Mac
+it is talking to lists that flag. An older Mac lists none and answers the
+operation with `unsupported_operation`.
+
+| Feature | Operation | Capability flag | Success `result.type` |
+| --- | --- | --- | --- |
+| Usage summary, last 30 days | `get_usage` | `usage_summary` | `usage` |
+| Read host defaults | `get_settings` | `settings_get` | `settings` |
+| Write host defaults | `set_settings` | `settings_set` | `settings` |
+| Pin a thread | `pin_thread` | `thread_pin` | `thread_pinned` |
+| Unpin a thread | `unpin_thread` | `thread_unpin` | `thread_pinned` |
+| Settle a thread | `settle_thread` | `thread_settle` | `thread_settled` |
+| Unsettle a thread | `unsettle_thread` | `thread_unsettle` | `thread_settled` |
+
+### Usage
+
+`get_usage` reads the store behind `rustcode usage` for the last 30 days,
+today included. Token fields are what each harness reported; `cost_usd` is
+only the USD a harness reported. A value no turn reported is absent, not zero.
+
+```json
+{"protocol_version": 1, "request_id": "req-usage", "operation": {"type": "get_usage"}}
+```
+
+```json
+{
+  "kind": "response", "protocol_version": 1, "request_id": "req-usage",
+  "result": {
+    "type": "usage", "since": "2026-06-15", "until": "2026-07-14",
+    "totals": {"input_tokens": 120000, "output_tokens": 9000, "cached_tokens": 40000, "cache_write_tokens": 8000, "cost_usd": 1.42, "turns": 12},
+    "by_day": [{"day": "2026-07-14", "usage": {"input_tokens": 20000, "output_tokens": 1500, "cached_tokens": 6000, "cache_write_tokens": 1000, "cost_usd": 0.24, "turns": 2}}],
+    "by_harness": [{"harness": "codex", "usage": {"input_tokens": 90000, "output_tokens": 7000, "cached_tokens": 30000, "cache_write_tokens": 6000, "cost_usd": 1.1, "turns": 8}}],
+    "by_model": [{"harness": "codex", "model": "gpt-5.5", "usage": {"input_tokens": 90000, "output_tokens": 7000, "cached_tokens": 30000, "cache_write_tokens": 6000, "cost_usd": 1.1, "turns": 8}}]
+  }
+}
+```
+
+### Host settings
+
+Only the default harness, model and effort are visible or writable. A key
+outside that allowlist is rejected with `invalid_request`; nothing is written.
+An absent field keeps its current value. Both operations answer with the
+complete `settings` result after the read or write.
+
+```json
+{"protocol_version": 1, "request_id": "req-settings", "operation": {"type": "get_settings"}}
+{"protocol_version": 1, "request_id": "req-set-settings", "operation": {"type": "set_settings", "settings": {"harness": "codex", "model": "gpt-5.5", "effort": "high"}}}
+```
+
+```json
+{"kind": "response", "protocol_version": 1, "request_id": "req-settings", "result": {"type": "settings", "harness": "codex", "model": "gpt-5.5", "effort": "high"}}
+{"kind": "response", "protocol_version": 1, "request_id": "req-set-settings", "receipt": "applied", "result": {"type": "settings", "harness": "codex", "model": "gpt-5.5", "effort": "high"}}
+```
+
+### Pin and settle
+
+These use the engine's own thread paths, so the state shown on the phone is
+the same as in the desktop app. They work for a saved thread as well as a
+shared one; the thread is named in the operation, so no shared-session
+envelope is required. Settling stores `done`; unsettling returns the thread
+to `idle`.
+
+```json
+{"protocol_version": 1, "request_id": "req-pin", "operation": {"type": "pin_thread", "session_id": "20260714-091502-3fa2c1"}}
+{"protocol_version": 1, "request_id": "req-unpin", "operation": {"type": "unpin_thread", "session_id": "20260714-091502-3fa2c1"}}
+{"protocol_version": 1, "request_id": "req-settle", "operation": {"type": "settle_thread", "session_id": "20260714-091502-3fa2c1"}}
+{"protocol_version": 1, "request_id": "req-unsettle", "operation": {"type": "unsettle_thread", "session_id": "20260714-091502-3fa2c1"}}
+```
+
+```json
+{"kind": "response", "protocol_version": 1, "request_id": "req-pin", "receipt": "applied", "result": {"type": "thread_pinned", "session_id": "20260714-091502-3fa2c1", "pinned": true}}
+{"kind": "response", "protocol_version": 1, "request_id": "req-settle", "receipt": "applied", "result": {"type": "thread_settled", "session_id": "20260714-091502-3fa2c1", "settled": true}}
+```
+
+Snooze is deliberately not offered: it lives in the desktop app's own local
+storage, not in the engine or the host's session store, so the phone cannot
+set it and no capability advertises it.
+
+The committed schema and golden frames under
+[`remote-protocol/v1/`](remote-protocol/README.md) are the source of truth for
+every shape; the shapes above are the ones the phone uses.
+
 ## Transport (`rustcode serve`, experimental MVP)
 
 `rustcode serve --port 17878` (see README) drives one controller session

@@ -104,6 +104,7 @@ import {
   parseHarnessCommands,
   rememberCommands,
   serializeHarnessCommands,
+  withSkills,
 } from "./commands";
 import {
   type Attachment,
@@ -4986,7 +4987,8 @@ type CommandsSource = Pick<
  */
 export function commandsFor(s: CommandsSource, threadId?: string | null): SlashCommand[] {
   const own = threadId ? s.sessionCommands[threadId] : undefined;
-  if (own) return own;
+  // A session's own list is the harness's, which leaves out the skills RustCode discovered itself.
+  if (own) return withSkills(own, s.baseCommands);
   const harness = harnessOf(s, threadId ?? undefined);
   const known = s.harnesses?.harnesses.find((h) => h.id === harness);
   return menuCommands({

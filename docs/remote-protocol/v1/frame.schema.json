@@ -1255,6 +1255,94 @@
           "type": "object"
         },
         {
+          "$ref": "#/$defs/RemoteUsage",
+          "description": "The answer to `get_usage`: the last 30 days, by day, harness and model.",
+          "properties": {
+            "type": {
+              "const": "usage",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The answer to `get_settings` and `set_settings`. Only the three settings\na device may see and change; every other setting stays on the host.",
+          "properties": {
+            "effort": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "harness": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "model": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "settings",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`pin_thread` and `unpin_thread`.",
+          "properties": {
+            "pinned": {
+              "type": "boolean"
+            },
+            "session_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "thread_pinned",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "pinned"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`settle_thread` and `unsettle_thread`.",
+          "properties": {
+            "session_id": {
+              "type": "string"
+            },
+            "settled": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "thread_settled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "settled"
+          ],
+          "type": "object"
+        },
+        {
           "description": "One page of `list_saved_sessions`.",
           "properties": {
             "next_cursor": {
@@ -2194,6 +2282,156 @@
       },
       "required": [
         "turn_id"
+      ],
+      "type": "object"
+    },
+    "RemoteUsage": {
+      "description": "The answer to `get_usage`: the last 30 days, inclusive of today.",
+      "properties": {
+        "by_day": {
+          "description": "Newest day first. Days without a turn are absent, not zero rows.",
+          "items": {
+            "$ref": "#/$defs/RemoteUsageDay"
+          },
+          "type": "array"
+        },
+        "by_harness": {
+          "description": "Largest token total first.",
+          "items": {
+            "$ref": "#/$defs/RemoteUsageHarness"
+          },
+          "type": "array"
+        },
+        "by_model": {
+          "description": "Largest token total first.",
+          "items": {
+            "$ref": "#/$defs/RemoteUsageModel"
+          },
+          "type": "array"
+        },
+        "since": {
+          "description": "First day included, `YYYY-MM-DD` in UTC.",
+          "type": "string"
+        },
+        "totals": {
+          "$ref": "#/$defs/RemoteUsageTotals",
+          "description": "Every turn in the window, ungrouped."
+        },
+        "until": {
+          "description": "Last day included, `YYYY-MM-DD` in UTC.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "since",
+        "until",
+        "totals",
+        "by_day",
+        "by_harness",
+        "by_model"
+      ],
+      "type": "object"
+    },
+    "RemoteUsageDay": {
+      "description": "One day of `get_usage`.",
+      "properties": {
+        "day": {
+          "description": "`YYYY-MM-DD` in UTC.",
+          "type": "string"
+        },
+        "usage": {
+          "$ref": "#/$defs/RemoteUsageTotals"
+        }
+      },
+      "required": [
+        "day",
+        "usage"
+      ],
+      "type": "object"
+    },
+    "RemoteUsageHarness": {
+      "description": "One harness of `get_usage`.",
+      "properties": {
+        "harness": {
+          "type": "string"
+        },
+        "usage": {
+          "$ref": "#/$defs/RemoteUsageTotals"
+        }
+      },
+      "required": [
+        "harness",
+        "usage"
+      ],
+      "type": "object"
+    },
+    "RemoteUsageModel": {
+      "description": "One harness and model pair of `get_usage`.",
+      "properties": {
+        "harness": {
+          "type": "string"
+        },
+        "model": {
+          "description": "Empty when the harness did not report a model.",
+          "type": "string"
+        },
+        "usage": {
+          "$ref": "#/$defs/RemoteUsageTotals"
+        }
+      },
+      "required": [
+        "harness",
+        "model",
+        "usage"
+      ],
+      "type": "object"
+    },
+    "RemoteUsageTotals": {
+      "description": "Tokens and the cost a harness reported, over one window and one group.\nA value no turn reported is absent, never a made-up zero. `cost_usd` is\nonly ever the USD a harness reported; RustCode never computes a price.",
+      "properties": {
+        "cache_write_tokens": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cached_tokens": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cost_usd": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "input_tokens": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "output_tokens": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "turns": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "turns"
       ],
       "type": "object"
     },

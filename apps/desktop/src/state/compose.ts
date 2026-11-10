@@ -17,6 +17,49 @@ export function splitSlashCommand(text: string): { command: string; rest: string
   return match ? { command: match[1]!, rest: text.slice(match[0].length) } : null;
 }
 
+/**
+ * The `/word` the caret is in, when the `/` opens a word: at the start of the
+ * message or just after whitespace. A path is not a command, so a second slash
+ * inside the word (`/usr/bin`) closes the token, and so does a space.
+ */
+export function slashToken(text: string, caret: number): { start: number; query: string } | null {
+  const before = text.slice(0, caret);
+  const start = before.lastIndexOf("/");
+  if (start < 0) return null;
+  if (start > 0 && !/\s/.test(before[start - 1] ?? "")) return null;
+  const query = before.slice(start + 1);
+  if (/\s/.test(query)) return null;
+  // The caret mid-word: the rest of the word is part of what gets replaced.
+  if (/^\S/.test(text.slice(caret))) return null;
+  return { start, query };
+}
+
+/**
+ * The commands the token `query` is looking for: names that start with it first,
+ * then the ones with it anywhere, so `/rev` finds `/review` and `/release`.
+ */
+export function commandSuggestions(query: string, commands: SlashCommand[], limit = 40): SlashCommand[] {
+  const typed = `/${query.toLowerCase()}`;
+  const prefixed = commands.filter((c) => c.name.toLowerCase().startsWith(typed));
+  const others =
+    typed.length > 1
+      ? commands.filter((c) => !prefixed.includes(c) && c.name.toLowerCase().includes(typed.slice(1)))
+      : [];
+  return [...prefixed, ...others].slice(0, limit);
+}
+
+/** The text with the token replaced by `/name `, and where the caret goes. */
+export function insertCommand(
+  text: string,
+  token: { start: number; query: string },
+  command: string,
+): { text: string; caret: number } {
+  const ref = `${command} `;
+  const end = token.start + 1 + token.query.length;
+  const rest = text.slice(end).replace(/^ /, "");
+  return { text: text.slice(0, token.start) + ref + rest, caret: token.start + ref.length };
+}
+
 /** A message folds under this height (px)... */
 export const COLLAPSED_MESSAGE_HEIGHT = 176;
 /** ...only when folding hides more than this: three lines. Hiding one line behind a button helps nobody. */
@@ -179,9 +222,19 @@ export interface BlockOptions {
  * SwiftUI app found); a file without a path is inlined as text. A long paste is
  * already in the text, at the offset it was pasted (`composedText`), so it
  * needs no block of its own.
+ *
+ * A skill is RustCode's own (the harness did not advertise it): the built-in
+ * harness reads `/name` as a prompt and routes it to `use_skill`, but another
+ * harness may reject a leading slash command it does not know, so it is sent as
+ * words naming the skill instead. What the transcript shows is unchanged.
  */
 export function promptBlocks(text: string, extras: ComposeExtras, options: BlockOptions): Json[] {
   let body = composedText(text, extras);
+  if (!options.builtin && extras.command?.action === "skill") {
+    const name = extras.command.name.replace(/^\/+/, "");
+    const rest = composedText(text, { ...extras, command: undefined });
+    body = rest ? `Use the ${name} skill. ${rest}` : `Use the ${name} skill.`;
+  }
   const files = extras.attachments.filter((a) => a.kind === "file");
   const withPath = files.filter((f) => f.path);
   const inline = files.filter((f) => !f.path && f.text !== undefined);

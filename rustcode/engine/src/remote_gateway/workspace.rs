@@ -270,6 +270,211 @@ const MAX_SAVED_SESSION_QUERY_BYTES: usize = 256;
 /// Longest title reported per saved session, in characters.
 const MAX_SAVED_SESSION_TITLE_CHARS: usize = 200;
 
+/// How many days `get_usage` reports, today included.
+const USAGE_WINDOW_DAYS: i64 = 30;
+
+/// The first and last day `get_usage` reports, `YYYY-MM-DD` in UTC.
+fn usage_window(today: chrono::NaiveDate) -> (String, String) {
+    (
+        (today - chrono::Duration::days(USAGE_WINDOW_DAYS - 1))
+            .format("%Y-%m-%d")
+            .to_string(),
+        today.format("%Y-%m-%d").to_string(),
+    )
+}
+
+fn usage_totals(row: &serde_json::Value) -> RemoteUsageTotals {
+    let count = |key: &str| {
+        let value = row.get(key)?;
+        value
+            .as_i64()
+            .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+            .or_else(|| value.as_f64().map(|value| value as i64))
+    };
+    RemoteUsageTotals {
+        input_tokens: count("input_tokens"),
+        output_tokens: count("output_tokens"),
+        cached_tokens: count("cached_tokens"),
+        cache_write_tokens: count("cache_write_tokens"),
+        cost_usd: row.get("cost_usd").and_then(serde_json::Value::as_f64),
+        // The engine's totals add up as numbers, so 3 comes back as 3.0.
+        turns: count("turns")
+            .and_then(|turns| u64::try_from(turns).ok())
+            .unwrap_or(0),
+    }
+}
+
+fn usage_rows(answer: &serde_json::Value) -> Vec<serde_json::Value> {
+    answer
+        .get("rows")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn usage_text(row: &serde_json::Value, key: &str) -> String {
+    row.get(key)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// `get_usage`: the last 30 days from the store `rustcode usage` reads. A
+/// host without a store yet has no usage, not an error.
+fn usage_summary_at(store: &Path, since: &str, until: &str) -> Result<RemoteResult, String> {
+    if !store.is_file() {
+        return Ok(RemoteResult::Usage(RemoteUsage {
+            since: since.to_owned(),
+            until: until.to_owned(),
+            totals: RemoteUsageTotals::default(),
+            by_day: Vec::new(),
+            by_harness: Vec::new(),
+            by_model: Vec::new(),
+        }));
+    }
+    use crate::data_store::GroupBy;
+    let by_day = crate::data_store::usage_at(store, Some(since), GroupBy::Day, None)?;
+    let by_harness = crate::data_store::usage_at(store, Some(since), GroupBy::Harness, None)?;
+    let by_model = crate::data_store::usage_at(store, Some(since), GroupBy::Model, None)?;
+    let totals = by_harness
+        .get("totals")
+        .map(usage_totals)
+        .unwrap_or_default();
+    let mut by_day: Vec<RemoteUsageDay> = usage_rows(&by_day)
+        .iter()
+        .map(|row| RemoteUsageDay {
+            day: usage_text(row, "day"),
+            usage: usage_totals(row),
+        })
+        .collect();
+    by_day.sort_by(|left, right| right.day.cmp(&left.day));
+    Ok(RemoteResult::Usage(RemoteUsage {
+        since: since.to_owned(),
+        until: until.to_owned(),
+        totals,
+        by_day,
+        by_harness: usage_rows(&by_harness)
+            .iter()
+            .map(|row| RemoteUsageHarness {
+                harness: usage_text(row, "harness"),
+                usage: usage_totals(row),
+            })
+            .collect(),
+        by_model: usage_rows(&by_model)
+            .iter()
+            .map(|row| RemoteUsageModel {
+                harness: usage_text(row, "harness"),
+                model: usage_text(row, "model"),
+                usage: usage_totals(row),
+            })
+            .collect(),
+    }))
+}
+
+/// The host's three device-visible settings.
+fn settings_snapshot(config: &Path) -> Result<RemoteSettings, String> {
+    let (_, _, config) = crate::config::load_config_from(config);
+    if !config.is_valid {
+        return Err("the host's config could not be read; fix it first".to_owned());
+    }
+    let defaults = config.harness_defaults;
+    Ok(RemoteSettings {
+        harness: defaults.harness,
+        model: defaults.model,
+        effort: defaults.effort,
+    })
+}
+
+/// Change only `harness`, `model` and `effort`; every other setting is left
+/// untouched. Fields absent from `update` keep their current value.
+fn update_settings(config: &Path, update: &RemoteSettings) -> Result<RemoteSettings, String> {
+    crate::harness::config::edit_in(config, |defaults, _| {
+        if let Some(harness) = &update.harness {
+            defaults.harness = Some(harness.clone());
+        }
+        if let Some(model) = &update.model {
+            defaults.model = Some(model.clone());
+        }
+        if let Some(effort) = &update.effort {
+            defaults.effort = Some(effort.clone());
+        }
+        Ok(())
+    })?;
+    settings_snapshot(config)
+}
+
+fn pin_thread(session_id: &str, pinned: bool) -> Result<RemoteResult, String> {
+    crate::thread_status::set_pinned(session_id, pinned)?;
+    Ok(RemoteResult::ThreadPinned {
+        session_id: session_id.to_owned(),
+        pinned,
+    })
+}
+
+fn settle_thread(session_id: &str, settled: bool) -> Result<RemoteResult, String> {
+    crate::config::set_session_status(session_id, if settled { "done" } else { "idle" })?;
+    Ok(RemoteResult::ThreadSettled {
+        session_id: session_id.to_owned(),
+        settled,
+    })
+}
+
+/// A host-wide request's answer, with a receipt on mutations.
+fn host_answer(
+    request_id: String,
+    mutation: bool,
+    code: RemoteErrorCode,
+    result: Result<RemoteResult, String>,
+) -> RemoteResponse {
+    match result {
+        Ok(result) => {
+            let mut response = RemoteResponse::new(request_id, result);
+            if mutation {
+                response.receipt = Some(ReceiptState::Applied);
+            }
+            response
+        }
+        Err(error) => {
+            let mut response = RemoteResponse::error(request_id, RemoteError::new(code, error));
+            if mutation {
+                response.receipt = Some(ReceiptState::Rejected);
+            }
+            response
+        }
+    }
+}
+
+/// Run one host-wide operation off the connection's task, so neither the
+/// store nor the config file can stall other devices.
+fn spawn_host<F>(
+    sink: &FrameSink,
+    request_id: String,
+    mutation: bool,
+    code: RemoteErrorCode,
+    work: F,
+) where
+    F: FnOnce() -> Result<RemoteResult, String> + Send + 'static,
+{
+    let sink = sink.clone();
+    tokio::spawn(async move {
+        let result = tokio::task::spawn_blocking(work).await;
+        let response = match result {
+            Ok(result) => host_answer(request_id, mutation, code, result),
+            Err(error) => {
+                let mut response = RemoteResponse::error(
+                    request_id,
+                    RemoteError::new(RemoteErrorCode::Internal, error.to_string()),
+                );
+                if mutation {
+                    response.receipt = Some(ReceiptState::Rejected);
+                }
+                response
+            }
+        };
+        send(&sink, response);
+    });
+}
+
 /// One page of the host's saved sessions, newest first, each marked with
 /// whether a process holds it. Only ids the store itself lists, with a file
 /// inside the store, are ever reported: the same rule ACP's `session/list`
@@ -473,6 +678,13 @@ impl WorkspaceRouter {
         hub.advertise_capabilities(&[
             host_capability::SAVED_SESSIONS,
             host_capability::SESSION_CHANGES,
+            host_capability::USAGE_SUMMARY,
+            host_capability::SETTINGS_GET,
+            host_capability::SETTINGS_SET,
+            host_capability::THREAD_PIN,
+            host_capability::THREAD_UNPIN,
+            host_capability::THREAD_SETTLE,
+            host_capability::THREAD_UNSETTLE,
         ]);
         Self {
             hub,
@@ -1005,6 +1217,86 @@ impl FrameRouter for WorkspaceRouter {
                     send(&sink, response);
                 });
             }
+            RemoteOperation::GetUsage => {
+                let config = self.config.clone();
+                spawn_host(
+                    sink,
+                    request.request_id.clone(),
+                    false,
+                    RemoteErrorCode::Internal,
+                    move || {
+                        let today = chrono::Utc::now().date_naive();
+                        let (since, until) = usage_window(today);
+                        usage_summary_at(&config.join(crate::data_store::DATA_FILE), &since, &until)
+                    },
+                );
+            }
+            RemoteOperation::GetSettings => {
+                let config = self.config.clone();
+                spawn_host(
+                    sink,
+                    request.request_id.clone(),
+                    false,
+                    RemoteErrorCode::InvalidRequest,
+                    move || {
+                        settings_snapshot(&config).map(|settings| RemoteResult::Settings(settings))
+                    },
+                );
+            }
+            RemoteOperation::SetSettings { settings } => {
+                let config = self.config.clone();
+                let settings = settings.clone();
+                spawn_host(
+                    sink,
+                    request.request_id.clone(),
+                    true,
+                    RemoteErrorCode::InvalidRequest,
+                    move || {
+                        update_settings(&config, &settings)
+                            .map(|settings| RemoteResult::Settings(settings))
+                    },
+                );
+            }
+            RemoteOperation::PinThread { session_id } => {
+                let session_id = session_id.clone();
+                spawn_host(
+                    sink,
+                    request.request_id.clone(),
+                    true,
+                    RemoteErrorCode::InvalidRequest,
+                    move || pin_thread(&session_id, true),
+                );
+            }
+            RemoteOperation::UnpinThread { session_id } => {
+                let session_id = session_id.clone();
+                spawn_host(
+                    sink,
+                    request.request_id.clone(),
+                    true,
+                    RemoteErrorCode::InvalidRequest,
+                    move || pin_thread(&session_id, false),
+                );
+            }
+            RemoteOperation::SettleThread { session_id } => {
+                let session_id = session_id.clone();
+                spawn_host(
+                    sink,
+                    request.request_id.clone(),
+                    true,
+                    RemoteErrorCode::InvalidRequest,
+                    move || settle_thread(&session_id, true),
+                );
+            }
+            RemoteOperation::UnsettleThread { session_id } => {
+                let session_id = session_id.clone();
+                spawn_host(
+                    sink,
+                    request.request_id.clone(),
+                    true,
+                    RemoteErrorCode::InvalidRequest,
+                    move || settle_thread(&session_id, false),
+                );
+            }
             RemoteOperation::CreateSession { .. } | RemoteOperation::ResumeSession { .. } => {
                 // The desktop app starts the thread when it shares one: it
                 // runs the harness, so the thread opens there and a device
@@ -1209,6 +1501,141 @@ mod tests {
         );
         assert!(resolve_directory(Some("relative"), &roots).is_err());
         assert!(resolve_directory(root.path().join("file").to_str(), &roots).is_err());
+    }
+
+    #[test]
+    fn usage_summary_reports_totals_by_day_harness_and_model() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = directory.path().join(crate::data_store::DATA_FILE);
+        let connection = crate::data_store::open(&store).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO turns (thread_id, started_at, harness, model, input_tokens, \
+                 output_tokens, cached_tokens, cache_write_tokens, cost_usd, status) VALUES \
+                 ('a', '2026-01-02T10:00:00Z', 'codex', 'gpt-5.5', 100, 10, 5, 2, 0.5, 'completed'), \
+                 ('a', '2026-01-03T10:00:00Z', 'codex', 'gpt-5.5', 200, 20, 10, 4, 0.75, 'completed'), \
+                 ('b', '2026-01-03T11:00:00Z', 'claude-code', 'sonnet', 50, 5, NULL, NULL, NULL, 'completed')",
+            )
+            .unwrap();
+        let RemoteResult::Usage(usage) =
+            usage_summary_at(&store, "2026-01-01", "2026-01-30").unwrap()
+        else {
+            panic!("not a usage summary")
+        };
+        assert_eq!(usage.since, "2026-01-01");
+        assert_eq!(usage.until, "2026-01-30");
+        assert_eq!(usage.totals.input_tokens, Some(350));
+        assert_eq!(usage.totals.output_tokens, Some(35));
+        assert_eq!(usage.totals.cached_tokens, Some(15));
+        assert_eq!(usage.totals.cache_write_tokens, Some(6));
+        assert_eq!(usage.totals.cost_usd, Some(1.25));
+        assert_eq!(usage.totals.turns, 3);
+        assert_eq!(usage.by_day.len(), 2);
+        assert_eq!(usage.by_day[0].day, "2026-01-03");
+        assert_eq!(usage.by_day[0].usage.turns, 2);
+        assert_eq!(usage.by_day[1].day, "2026-01-02");
+        assert_eq!(usage.by_harness[0].harness, "codex");
+        assert_eq!(usage.by_harness[0].usage.turns, 2);
+        // A harness that reported no tokens keeps the field absent, not zero.
+        assert_eq!(usage.by_harness[1].harness, "claude-code");
+        assert!(usage.by_harness[1].usage.cached_tokens.is_none());
+        assert_eq!(usage.by_model[0].model, "gpt-5.5");
+        assert_eq!(usage.by_model[1].model, "sonnet");
+        // A host without a store yet answers with an empty window.
+        let missing = directory.path().join("missing.sqlite");
+        let RemoteResult::Usage(empty) =
+            usage_summary_at(&missing, "2026-01-01", "2026-01-30").unwrap()
+        else {
+            panic!("not a usage summary")
+        };
+        assert_eq!(empty.totals, RemoteUsageTotals::default());
+        assert!(
+            empty.by_day.is_empty() && empty.by_harness.is_empty() && empty.by_model.is_empty()
+        );
+    }
+
+    #[test]
+    fn settings_get_and_set_keep_to_the_three_allowed_keys() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join(crate::config::CONFIG_TOML_FILE),
+            "theme = \"dark\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            settings_snapshot(directory.path()).unwrap(),
+            RemoteSettings::default()
+        );
+        let changed = update_settings(
+            directory.path(),
+            &RemoteSettings {
+                harness: Some("codex".to_owned()),
+                model: Some("gpt-5.5".to_owned()),
+                effort: Some("high".to_owned()),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            changed,
+            RemoteSettings {
+                harness: Some("codex".to_owned()),
+                model: Some("gpt-5.5".to_owned()),
+                effort: Some("high".to_owned()),
+            }
+        );
+        // Only the allowlist changed; the rest of the user config is intact.
+        let text = std::fs::read_to_string(directory.path().join(crate::config::CONFIG_TOML_FILE))
+            .unwrap();
+        assert!(text.contains("theme = \"dark\""), "{text}");
+        assert!(text.contains("[harness_defaults]"), "{text}");
+        assert_eq!(
+            settings_snapshot(directory.path()).unwrap(),
+            changed,
+            "get reads back what set wrote"
+        );
+    }
+
+    #[test]
+    fn set_settings_rejects_a_key_outside_the_allowlist() {
+        let frame = r#"{"protocol_version":1,"request_id":"r","operation":{"type":"set_settings","settings":{"theme":"dark"}}}"#;
+        let rejection = decode_request(frame).unwrap_err();
+        let RemoteResult::Error(error) = &rejection.result else {
+            panic!("not an error: {rejection:?}")
+        };
+        assert_eq!(error.code, RemoteErrorCode::InvalidRequest);
+        assert!(
+            error.message.contains("unknown field") && error.message.contains("theme"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn pin_and_settle_use_the_engine_thread_paths() {
+        let id = crate::config::create_detached_session();
+        assert!(matches!(
+            pin_thread(&id, true).unwrap(),
+            RemoteResult::ThreadPinned { pinned: true, .. }
+        ));
+        assert!(crate::thread_status::pinned(&id));
+        assert!(matches!(
+            pin_thread(&id, false).unwrap(),
+            RemoteResult::ThreadPinned { pinned: false, .. }
+        ));
+        assert!(!crate::thread_status::pinned(&id));
+        assert!(matches!(
+            settle_thread(&id, true).unwrap(),
+            RemoteResult::ThreadSettled { settled: true, .. }
+        ));
+        assert_eq!(crate::thread_status::current(&id).as_str(), "done");
+        assert!(matches!(
+            settle_thread(&id, false).unwrap(),
+            RemoteResult::ThreadSettled { settled: false, .. }
+        ));
+        assert_eq!(crate::thread_status::current(&id).as_str(), "idle");
+        // An id with no thread folder is refused, as the engine path does.
+        assert!(pin_thread("../escape", true).is_err());
+        assert!(settle_thread("../escape", true).is_err());
     }
     #[test]
     fn mobile_creation_uses_the_normal_chronological_session_identity() {
@@ -2322,7 +2749,14 @@ mod tests {
                 hub.capabilities(),
                 [
                     host_capability::SAVED_SESSIONS,
-                    host_capability::SESSION_CHANGES
+                    host_capability::SESSION_CHANGES,
+                    host_capability::USAGE_SUMMARY,
+                    host_capability::SETTINGS_GET,
+                    host_capability::SETTINGS_SET,
+                    host_capability::THREAD_PIN,
+                    host_capability::THREAD_UNPIN,
+                    host_capability::THREAD_SETTLE,
+                    host_capability::THREAD_UNSETTLE
                 ]
             );
         });

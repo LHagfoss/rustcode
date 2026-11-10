@@ -39,6 +39,20 @@ pub mod host_capability {
     /// then gets a rotating refresh token and a short-lived access token, and
     /// no expiry. A gateway without it keeps the static token and its 30 days.
     pub const TOKEN_ROTATION: &str = "token_rotation";
+    /// `get_usage`: token and reported cost totals for the last 30 days.
+    pub const USAGE_SUMMARY: &str = "usage_summary";
+    /// `get_settings`: the host's default harness, model and effort.
+    pub const SETTINGS_GET: &str = "settings_get";
+    /// `set_settings`: change only the default harness, model and effort.
+    pub const SETTINGS_SET: &str = "settings_set";
+    /// `pin_thread`: pin a saved or shared thread.
+    pub const THREAD_PIN: &str = "thread_pin";
+    /// `unpin_thread`: remove a thread's pin.
+    pub const THREAD_UNPIN: &str = "thread_unpin";
+    /// `settle_thread`: mark a thread settled (`done`).
+    pub const THREAD_SETTLE: &str = "thread_settle";
+    /// `unsettle_thread`: return a settled thread to idle.
+    pub const THREAD_UNSETTLE: &str = "thread_unsettle";
 }
 
 /// Optional operations one session owner implements, in
@@ -206,11 +220,42 @@ pub enum RemoteOperation {
     /// Git operation that writes. Requires the `session_changes` host
     /// capability.
     GetChanges,
+    /// Token and reported cost totals for the last 30 days, by day, harness
+    /// and model. Read-only. Requires the `usage_summary` host capability.
+    GetUsage,
+    /// The host's default harness, model and effort: the three settings a
+    /// device may change, and nothing else. Requires the `settings_get` host
+    /// capability.
+    GetSettings,
+    /// Change only the host's default harness, model and effort. Any other
+    /// key is refused. Requires the `settings_set` host capability.
+    SetSettings {
+        settings: RemoteSettings,
+    },
+    /// Pin a thread, shared or only saved. Requires the `thread_pin` host
+    /// capability.
+    PinThread {
+        session_id: String,
+    },
+    /// Remove a thread's pin. Requires the `thread_unpin` host capability.
+    UnpinThread {
+        session_id: String,
+    },
+    /// Mark a thread settled (`done`). Requires the `thread_settle` host
+    /// capability.
+    SettleThread {
+        session_id: String,
+    },
+    /// Return a settled thread to idle. Requires the `thread_unsettle` host
+    /// capability.
+    UnsettleThread {
+        session_id: String,
+    },
 }
 
 impl RemoteOperation {
     /// Every `type` tag this version understands.
-    pub const NAMES: [&'static str; 23] = [
+    pub const NAMES: [&'static str; 30] = [
         "list_sessions",
         "list_directories",
         "create_session",
@@ -234,6 +279,13 @@ impl RemoteOperation {
         "list_saved_sessions",
         "resume_session",
         "get_changes",
+        "get_usage",
+        "get_settings",
+        "set_settings",
+        "pin_thread",
+        "unpin_thread",
+        "settle_thread",
+        "unsettle_thread",
     ];
 
     pub fn name(&self) -> &'static str {
@@ -261,6 +313,13 @@ impl RemoteOperation {
             Self::ListSavedSessions { .. } => "list_saved_sessions",
             Self::ResumeSession { .. } => "resume_session",
             Self::GetChanges => "get_changes",
+            Self::GetUsage => "get_usage",
+            Self::GetSettings => "get_settings",
+            Self::SetSettings { .. } => "set_settings",
+            Self::PinThread { .. } => "pin_thread",
+            Self::UnpinThread { .. } => "unpin_thread",
+            Self::SettleThread { .. } => "settle_thread",
+            Self::UnsettleThread { .. } => "unsettle_thread",
         }
     }
 
@@ -277,6 +336,13 @@ impl RemoteOperation {
                 | Self::RequestShare { .. }
                 | Self::ListSavedSessions { .. }
                 | Self::ResumeSession { .. }
+                | Self::GetUsage
+                | Self::GetSettings
+                | Self::SetSettings { .. }
+                | Self::PinThread { .. }
+                | Self::UnpinThread { .. }
+                | Self::SettleThread { .. }
+                | Self::UnsettleThread { .. }
         )
     }
 
@@ -298,6 +364,11 @@ impl RemoteOperation {
                 | Self::SetSessionSettings { .. }
                 | Self::RequestShare { .. }
                 | Self::ResumeSession { .. }
+                | Self::SetSettings { .. }
+                | Self::PinThread { .. }
+                | Self::UnpinThread { .. }
+                | Self::SettleThread { .. }
+                | Self::UnsettleThread { .. }
         )
     }
 }
@@ -336,7 +407,7 @@ pub enum RemoteAnswer {
 }
 
 /// Host → client.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RemoteFrame {
     Response(RemoteResponse),
@@ -344,7 +415,7 @@ pub enum RemoteFrame {
     Sessions(RemoteSessionsFrame),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct RemoteResponse {
     pub protocol_version: u32,
     /// Echoes the request. Empty when the request was too malformed to
@@ -391,7 +462,7 @@ pub enum ReceiptState {
     Unknown,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RemoteResult {
     ImageUploaded {
@@ -418,6 +489,21 @@ pub enum RemoteResult {
     },
     /// The answer to `get_changes`.
     Changes(RemoteChanges),
+    /// The answer to `get_usage`: the last 30 days, by day, harness and model.
+    Usage(RemoteUsage),
+    /// The answer to `get_settings` and `set_settings`. Only the three settings
+    /// a device may see and change; every other setting stays on the host.
+    Settings(RemoteSettings),
+    /// `pin_thread` and `unpin_thread`.
+    ThreadPinned {
+        session_id: String,
+        pinned: bool,
+    },
+    /// `settle_thread` and `unsettle_thread`.
+    ThreadSettled {
+        session_id: String,
+        settled: bool,
+    },
     /// One page of `list_saved_sessions`.
     SavedSessions {
         sessions: Vec<RemoteSavedSession>,
@@ -742,6 +828,81 @@ pub struct RemoteSessionInfo {
     pub activity: SessionActivity,
     pub attention: RemoteAttention,
     pub health: OwnerHealth,
+}
+
+/// The host's default harness, model and effort. This is the whole allowlist
+/// a device may read and write; every other setting stays on the host.
+///
+/// In `set_settings`, a field that is absent (or `null`) is left unchanged.
+/// An unknown key is rejected with `invalid_request`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+}
+
+/// Tokens and the cost a harness reported, over one window and one group.
+/// A value no turn reported is absent, never a made-up zero. `cost_usd` is
+/// only ever the USD a harness reported; RustCode never computes a price.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoteUsageTotals {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+    pub turns: u64,
+}
+
+/// One day of `get_usage`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoteUsageDay {
+    /// `YYYY-MM-DD` in UTC.
+    pub day: String,
+    pub usage: RemoteUsageTotals,
+}
+
+/// One harness of `get_usage`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoteUsageHarness {
+    pub harness: String,
+    pub usage: RemoteUsageTotals,
+}
+
+/// One harness and model pair of `get_usage`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoteUsageModel {
+    pub harness: String,
+    /// Empty when the harness did not report a model.
+    pub model: String,
+    pub usage: RemoteUsageTotals,
+}
+
+/// The answer to `get_usage`: the last 30 days, inclusive of today.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoteUsage {
+    /// First day included, `YYYY-MM-DD` in UTC.
+    pub since: String,
+    /// Last day included, `YYYY-MM-DD` in UTC.
+    pub until: String,
+    /// Every turn in the window, ungrouped.
+    pub totals: RemoteUsageTotals,
+    /// Newest day first. Days without a turn are absent, not zero rows.
+    pub by_day: Vec<RemoteUsageDay>,
+    /// Largest token total first.
+    pub by_harness: Vec<RemoteUsageHarness>,
+    /// Largest token total first.
+    pub by_model: Vec<RemoteUsageModel>,
 }
 
 /// A session's uncommitted changes as `get_changes` reads them.
@@ -1429,6 +1590,27 @@ mod tests {
                 session_id: String::new(),
             },
             RemoteOperation::GetChanges,
+            RemoteOperation::GetUsage,
+            RemoteOperation::GetSettings,
+            RemoteOperation::SetSettings {
+                settings: RemoteSettings {
+                    harness: Some("codex".into()),
+                    model: None,
+                    effort: None,
+                },
+            },
+            RemoteOperation::PinThread {
+                session_id: String::new(),
+            },
+            RemoteOperation::UnpinThread {
+                session_id: String::new(),
+            },
+            RemoteOperation::SettleThread {
+                session_id: String::new(),
+            },
+            RemoteOperation::UnsettleThread {
+                session_id: String::new(),
+            },
         ];
         assert_eq!(operations.len(), RemoteOperation::NAMES.len());
         for (operation, name) in operations.iter().zip(RemoteOperation::NAMES) {

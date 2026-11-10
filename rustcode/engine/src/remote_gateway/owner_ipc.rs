@@ -27,7 +27,7 @@ use crate::remote::{
 pub const OWNER_IPC_VERSION: u32 = 1;
 
 /// Owner → gateway.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum OwnerFrame {
     /// First frame of a connection. `snapshot.sequence` is the watermark the

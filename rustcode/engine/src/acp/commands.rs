@@ -106,12 +106,66 @@ pub(crate) fn catalog_update() -> Result<serde_json::Value, String> {
 /// Terminal-only commands are left out. ACP names carry no leading slash; the
 /// RustCode action rides in `_meta.rustcode.action`.
 pub(crate) fn available_commands_update() -> SessionUpdate {
-    let commands = catalog()
+    let mut commands: Vec<AvailableCommand> = catalog()
         .into_iter()
         .filter(|command| command.action != "terminal")
         .map(available_command)
         .collect();
+    let taken: std::collections::HashSet<String> = commands
+        .iter()
+        .map(|command| command.name.clone())
+        .collect();
+    commands.extend(skill_commands(crate::skills::discover_skills(), &taken));
+    commands.sort_by(|a, b| a.name.cmp(&b.name));
     SessionUpdate::AvailableCommandsUpdate(AvailableCommandsUpdate::new(commands))
+}
+
+/// One command per enabled skill, `action: "skill"`, so a client's drawer can
+/// offer it by name. `discover_skills` leaves out a harness's own roots: the
+/// harness advertises those itself, and the client adds these beside them.
+fn skill_commands(
+    skills: Vec<crate::skills::SkillMetadata>,
+    taken: &std::collections::HashSet<String>,
+) -> Vec<AvailableCommand> {
+    skills
+        .into_iter()
+        .filter(|skill| usable_skill_name(&skill.name) && !taken.contains(&skill.name))
+        .map(|skill| {
+            let mut rustcode = serde_json::Map::new();
+            rustcode.insert("action".into(), "skill".into());
+            let mut meta = serde_json::Map::new();
+            meta.insert("rustcode".into(), serde_json::Value::Object(rustcode));
+            AvailableCommand::new(skill.name, skill.description)
+                .input(Some(AvailableCommandInput::Unstructured(
+                    UnstructuredCommandInput::new("arguments"),
+                )))
+                .meta(meta)
+        })
+        .collect()
+}
+
+/// A skill name that can be a slash command: no space, no slash of its own.
+fn usable_skill_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Whether `text` invokes a skill (`/release-automation …`) rather than a host
+/// command. A skill is prompt text: the model loads it with `use_skill`, which
+/// `skills::skill_routing_hint` points at because the prompt names it.
+fn invokes_skill(text: &str, skills: &[crate::skills::SkillMetadata]) -> bool {
+    let Some(first) = text.split_whitespace().next() else {
+        return false;
+    };
+    let Some(name) = first.strip_prefix('/') else {
+        return false;
+    };
+    !name.is_empty()
+        && skills
+            .iter()
+            .any(|skill| skill.name.eq_ignore_ascii_case(name))
 }
 
 fn available_command(command: RemoteCommandInfo) -> AvailableCommand {
@@ -195,6 +249,12 @@ pub(crate) fn classify(state: &mut crate::app::AppState, text: &str) -> Option<A
 
 fn classify_command(state: &mut crate::app::AppState, text: &str) -> Option<AcpCommand> {
     let text = text.trim();
+    // A discovered skill named as a command is the user invoking it: the prompt stays a
+    // prompt, so the model loads it with `use_skill` (routing names it from the text).
+    let skills = state.prompt_cache.skill_metadata();
+    if invokes_skill(text, &skills) {
+        return None;
+    }
     let catalog = catalog();
     let name = command_name(text, &catalog)?;
     let arguments = text
@@ -408,6 +468,57 @@ fn fork(state: &crate::app::AppState) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_enabled_skill_is_advertised_as_a_command() {
+        let skill = |name: &str| crate::skills::SkillMetadata {
+            name: name.into(),
+            description: format!("The {name} skill"),
+            path: format!("/skills/{name}").into(),
+            triggers: Vec::new(),
+            keywords: Vec::new(),
+            priority: 0,
+        };
+        let taken = std::collections::HashSet::from(["status".to_string()]);
+        let commands = skill_commands(
+            vec![
+                skill("release-automation"),
+                skill("status"),
+                skill("not a token"),
+                skill("a/b"),
+            ],
+            &taken,
+        );
+        let names: Vec<_> = commands.iter().map(|c| c.name.as_str()).collect();
+        // A name a host command already has stays the host command's; one that cannot be a
+        // slash token (a space or a slash of its own) is not offered.
+        assert_eq!(names, ["release-automation"]);
+        let command = &commands[0];
+        assert_eq!(
+            command.meta.as_ref().unwrap()["rustcode"]["action"],
+            "skill"
+        );
+        assert!(command.input.is_some());
+        assert_eq!(command.description, "The release-automation skill");
+    }
+
+    #[test]
+    fn a_skill_name_at_the_start_is_prompt_text_not_an_unknown_command() {
+        let skill = crate::skills::SkillMetadata {
+            name: "release-automation".into(),
+            description: String::new(),
+            path: "~/.agents/skills/release-automation".into(),
+            triggers: Vec::new(),
+            keywords: Vec::new(),
+            priority: 0,
+        };
+        let skills = [skill];
+        assert!(invokes_skill("/release-automation cut a beta", &skills));
+        assert!(invokes_skill("/RELEASE-AUTOMATION", &skills));
+        assert!(!invokes_skill("/release", &skills));
+        assert!(!invokes_skill("release-automation please", &skills));
+        assert!(!invokes_skill("/", &skills));
+    }
 
     #[test]
     fn advertises_host_and_native_commands_without_slash_or_terminal_ones() {

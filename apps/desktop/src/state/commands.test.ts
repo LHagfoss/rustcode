@@ -8,6 +8,7 @@ import {
   parseHarnessCommands,
   rememberCommands,
   serializeHarnessCommands,
+  withSkills,
 } from "./commands";
 
 const command = (name: string, action = "execute", description = ""): SlashCommand => ({
@@ -75,6 +76,22 @@ describe("the slash-command menu of a thread without a session", () => {
     const many = Array.from({ length: COMMANDS_PER_HARNESS_MAX + 5 }, (_, i) => command(`/c${i}`));
     const all = rememberCommands({}, "rustcode", many);
     expect(all.rustcode?.length).toBe(COMMANDS_PER_HARNESS_MAX);
+  });
+
+  test("the engine's skills join a harness's own list, and one it already has stays its own", () => {
+    const own = [command("/compact"), command("/review", "execute", "Claude's review")];
+    const base = [
+      command("/status"),
+      command("/release-automation", "skill", "Cut a release"),
+      command("/review", "skill", "RustCode's review"),
+    ];
+    const merged = withSkills(own, base);
+    expect(names(merged)).toEqual(["/compact", "/review", "/release-automation"]);
+    // A command the engine answers itself is not a skill and does not cross over.
+    expect(names(merged)).not.toContain("/status");
+    expect(merged.find((c) => c.name === "/review")?.description).toBe("Claude's review");
+    // Nothing to add returns the list itself, so a re-render keeps the reference.
+    expect(withSkills(own, [])).toBe(own);
   });
 
   test("stored lists are read back, and malformed ones are dropped", () => {

@@ -510,8 +510,144 @@
             "type"
           ],
           "type": "object"
+        },
+        {
+          "description": "Token and reported cost totals for the last 30 days, by day, harness\nand model. Read-only. Requires the `usage_summary` host capability.",
+          "properties": {
+            "type": {
+              "const": "get_usage",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The host's default harness, model and effort: the three settings a\ndevice may change, and nothing else. Requires the `settings_get` host\ncapability.",
+          "properties": {
+            "type": {
+              "const": "get_settings",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Change only the host's default harness, model and effort. Any other\nkey is refused. Requires the `settings_set` host capability.",
+          "properties": {
+            "settings": {
+              "$ref": "#/$defs/RemoteSettings"
+            },
+            "type": {
+              "const": "set_settings",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "settings"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Pin a thread, shared or only saved. Requires the `thread_pin` host\ncapability.",
+          "properties": {
+            "session_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "pin_thread",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Remove a thread's pin. Requires the `thread_unpin` host capability.",
+          "properties": {
+            "session_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "unpin_thread",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Mark a thread settled (`done`). Requires the `thread_settle` host\ncapability.",
+          "properties": {
+            "session_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "settle_thread",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Return a settled thread to idle. Requires the `thread_unsettle` host\ncapability.",
+          "properties": {
+            "session_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "unsettle_thread",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id"
+          ],
+          "type": "object"
         }
       ]
+    },
+    "RemoteSettings": {
+      "additionalProperties": false,
+      "description": "The host's default harness, model and effort. This is the whole allowlist\na device may read and write; every other setting stays on the host.\n\nIn `set_settings`, a field that is absent (or `null`) is left unchanged.\nAn unknown key is rejected with `invalid_request`.",
+      "properties": {
+        "effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "harness": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "ResumeCursor": {
       "description": "Where a reconnecting client left off. Replay is offered only for the same\ngateway instance and registration epoch.",

@@ -585,6 +585,68 @@ pub fn golden_requests() -> Vec<(&'static str, RemoteRequest)> {
             request("req-changes", session, RemoteOperation::GetChanges),
         ),
         (
+            "get_usage",
+            request("req-usage", None, RemoteOperation::GetUsage),
+        ),
+        (
+            "get_settings",
+            request("req-settings", None, RemoteOperation::GetSettings),
+        ),
+        (
+            "set_settings",
+            request(
+                "req-set-settings",
+                None,
+                RemoteOperation::SetSettings {
+                    settings: RemoteSettings {
+                        harness: Some("codex".to_owned()),
+                        model: Some("gpt-5.5".to_owned()),
+                        effort: Some("high".to_owned()),
+                    },
+                },
+            ),
+        ),
+        (
+            "pin_thread",
+            request(
+                "req-pin",
+                None,
+                RemoteOperation::PinThread {
+                    session_id: SAVED_SESSION.to_owned(),
+                },
+            ),
+        ),
+        (
+            "unpin_thread",
+            request(
+                "req-unpin",
+                None,
+                RemoteOperation::UnpinThread {
+                    session_id: SAVED_SESSION.to_owned(),
+                },
+            ),
+        ),
+        (
+            "settle_thread",
+            request(
+                "req-settle",
+                None,
+                RemoteOperation::SettleThread {
+                    session_id: SAVED_SESSION.to_owned(),
+                },
+            ),
+        ),
+        (
+            "unsettle_thread",
+            request(
+                "req-unsettle",
+                None,
+                RemoteOperation::UnsettleThread {
+                    session_id: SAVED_SESSION.to_owned(),
+                },
+            ),
+        ),
+        (
             "get_history",
             request(
                 "req-0006",
@@ -1088,6 +1150,85 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
                 ],
                 omitted_files: 0,
             }),
+        ),
+        response(
+            "usage",
+            "req-usage",
+            None,
+            RemoteResult::Usage(RemoteUsage {
+                since: "2026-06-15".to_owned(),
+                until: "2026-07-14".to_owned(),
+                totals: RemoteUsageTotals {
+                    input_tokens: Some(120_000),
+                    output_tokens: Some(9_000),
+                    cached_tokens: Some(40_000),
+                    cache_write_tokens: Some(8_000),
+                    cost_usd: Some(1.42),
+                    turns: 12,
+                },
+                by_day: vec![RemoteUsageDay {
+                    day: "2026-07-14".to_owned(),
+                    usage: RemoteUsageTotals {
+                        input_tokens: Some(20_000),
+                        output_tokens: Some(1_500),
+                        cached_tokens: Some(6_000),
+                        cache_write_tokens: Some(1_000),
+                        cost_usd: Some(0.24),
+                        turns: 2,
+                    },
+                }],
+                by_harness: vec![RemoteUsageHarness {
+                    harness: "codex".to_owned(),
+                    usage: RemoteUsageTotals {
+                        input_tokens: Some(90_000),
+                        output_tokens: Some(7_000),
+                        cached_tokens: Some(30_000),
+                        cache_write_tokens: Some(6_000),
+                        cost_usd: Some(1.1),
+                        turns: 8,
+                    },
+                }],
+                by_model: vec![RemoteUsageModel {
+                    harness: "codex".to_owned(),
+                    model: "gpt-5.5".to_owned(),
+                    usage: RemoteUsageTotals {
+                        input_tokens: Some(90_000),
+                        output_tokens: Some(7_000),
+                        cached_tokens: Some(30_000),
+                        cache_write_tokens: Some(6_000),
+                        cost_usd: Some(1.1),
+                        turns: 8,
+                    },
+                }],
+            }),
+        ),
+        response(
+            "settings",
+            "req-settings",
+            None,
+            RemoteResult::Settings(RemoteSettings {
+                harness: Some("codex".to_owned()),
+                model: Some("gpt-5.5".to_owned()),
+                effort: Some("high".to_owned()),
+            }),
+        ),
+        response(
+            "thread_pinned",
+            "req-pin",
+            Some(ReceiptState::Applied),
+            RemoteResult::ThreadPinned {
+                session_id: SAVED_SESSION.to_owned(),
+                pinned: true,
+            },
+        ),
+        response(
+            "thread_settled",
+            "req-settle",
+            Some(ReceiptState::Applied),
+            RemoteResult::ThreadSettled {
+                session_id: SAVED_SESSION.to_owned(),
+                settled: true,
+            },
         ),
         response(
             "saved_sessions",
