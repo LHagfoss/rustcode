@@ -1072,8 +1072,9 @@ export function resetMachinesForTests(): void {
   machineRouting = null;
   machineMirrorOff?.();
   machineMirrorOff = null;
+  // Kept once loaded: a later reset has to clear the machines module too, even after a file
+  // attached machines without ever routing through this module (`state/machines.test.ts`).
   machineReset?.();
-  machineReset = null;
   set({ connectedHosts: [], machineNames: {}, sessions: [] });
 }
 

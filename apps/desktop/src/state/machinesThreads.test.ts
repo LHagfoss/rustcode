@@ -86,6 +86,8 @@ const sleep = (ms = 0) => new Promise((resolve) => setTimeout(resolve, ms));
 let shell: FakeShell | null = null;
 
 beforeAll(async () => {
+  // Nothing a previous file left behind: its machines, its shell, its engine.
+  resetForTests();
   shell = new FakeShell();
   setShellTransport(shell);
   await refreshMachines();
