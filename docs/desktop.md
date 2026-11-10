@@ -73,6 +73,31 @@ because a web view cannot dial a gateway and the pairing token belongs in the
 credential store. `?machines=paired|connect|offline|revoked` in the mock walks
 the page without a second computer; `paired` is two computers with threads.
 
+**Run on** is the new-thread composer's own choice of machine
+(`src/ui/Composer.tsx`), in the strip beside the folder: this computer first,
+then each paired machine with its connection state, and a machine that is away
+disabled with "Offline". It is hidden until a second computer is paired. Moving
+it reads that machine's `_rustcode/harnesses` — its harnesses, models, logins
+and default — over the machine's own connection and keeps the answer per
+machine (`remoteHarnesses` in `src/state/store.ts`), so the model picker, the
+`@` agents and the harness defaults are the machine's; this computer's list is
+untouched. `New thread` inside a machine's group in the sidebar starts there
+with that group's folder (`startNewThread(folder, host)`), and any other new
+thread starts here.
+
+The project follows the machine: `src/state/projects.ts` finds the same project
+there by path, then by git remote (`_meta.rustcode.remote`, normalized so
+`git@…` and `https://…` compare equal), then by folder name, and otherwise the
+composer offers that machine's most recent project and its other folders from
+its thread list ("Choose Folder…" stays this computer's, since no code here can
+browse a machine's disk). An engine that does not report a remote falls back to
+the folder name; the mock's Studio reports one. `session/new` is sent over the
+machine's connection with its folder and harness, and the thread is keyed with
+its host, so it appears under the machine's group at once; a thread created
+there is titled by that machine's history (`thread_rename` is this shell's).
+Reopening a thread uses its own machine's connection (`openThread`), including
+a thread listed before its machine went away.
+
 Item 4 and the rest of the orchestration work move the domain model from
 sessions to an execution graph:
 [architecture/execution-graph.md](architecture/execution-graph.md) records that

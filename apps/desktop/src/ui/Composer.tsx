@@ -25,6 +25,7 @@ import {
   FolderPlus,
   GitBranch,
   ListEnd,
+  Monitor,
   Paperclip,
   Pencil,
   Plus,
@@ -92,6 +93,7 @@ import { atToken, insertKeyword, insertRef, type MentionScope, rankFiles, SCOPES
 import { controlDisabledReason, defaultEffort, orderHarnesses, unavailableReason } from "../state/harness";
 import { usageOf } from "../state/harnessUsage";
 import { childAccountOn, type SignedOutLogins } from "../state/logins";
+import { type MachineState, useMachines } from "../state/machines";
 import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
 import type { CachedPlan } from "../state/store";
 import {
@@ -104,6 +106,7 @@ import {
   dropLimitWait,
   endQueuedEdit,
   featureMissing,
+  harnessesOn,
   limitTime,
   newThreadChoice,
   permissionModeOf,
@@ -111,6 +114,7 @@ import {
   sendDecisionFor,
   setDraft,
   setExtras,
+  setNewThreadHost,
   setNewWorktree,
   setPermissionMode,
   setProjectCwd,
@@ -125,6 +129,7 @@ import {
   useThreadOffline,
 } from "../state/store";
 import { localId, shortAge, type ThreadState } from "../state/thread";
+import { LOCAL_HOST, splitThreadKey } from "../state/threadKeys";
 import { UsageMeter } from "./ComposerUsage";
 import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
 import { HarnessIcon } from "./HarnessIcon";
@@ -418,7 +423,12 @@ export const Composer = memo(function Composer({
   // This thread's own session list, or else the menu of its harness (the engine's catalog for a new thread).
   const commands = useApp(useShallow((s) => commandsFor(s, thread?.id ?? null)));
   const projectCwd = useApp((s) => s.projectCwd);
-  const harnesses = useApp((s) => s.harnesses?.harnesses); // re-render when harness capabilities arrive
+  // The computer this composer speaks for: the thread's own, or the one **Run on** names for a new
+  // thread. Its harnesses are what the `@` agents and the model picker offer (docs/desktop.md ›
+  // Several machines).
+  const newThreadHost = useApp((s) => s.newThreadHost);
+  const host = thread ? splitThreadKey(thread.id).host : newThreadHost;
+  const harnesses = useApp((s) => harnessesOn(s, host)?.harnesses); // re-render when harness capabilities arrive
   const status = useApp((s) => s.status);
   const field = useRef<HTMLTextAreaElement>(null);
   // The field's own box (the mirror and the field): what fades when the message leaves it.
@@ -627,7 +637,7 @@ export const Composer = memo(function Composer({
   const speakingTo = useApp((s) => {
     if (harness) return harness.name;
     const id = newThreadChoice(s)?.harness;
-    return s.harnesses?.harnesses.find((h) => h.id === id)?.name ?? "RustCode";
+    return harnessesOn(s, s.newThreadHost)?.harnesses.find((h) => h.id === id)?.name ?? "RustCode";
   });
   const images = acceptsImages(thread);
   const cancelReason = controlDisabledReason("cancel", thread?.harness?.capabilities, harnessName);
@@ -1600,8 +1610,9 @@ export const Composer = memo(function Composer({
           what it says. */}
       <div className="rc-composer-footer relative z-0 mx-3 -mt-2 flex items-center gap-4 px-2 pt-[14px] pb-1.5 text-callout text-fg-muted">
         <div className="flex min-w-0 items-center gap-1">
-          <FolderMenu thread={thread} cwd={cwd} />
-          {!thread && <WorktreeToggle draft={draft} compact={compact} />}
+          {!thread && <RunOnMenu />}
+          <FolderMenu thread={thread} cwd={cwd} host={host} />
+          {!thread && !newThreadHost && <WorktreeToggle draft={draft} compact={compact} />}
           {thread?.worktree && (
             <Tooltip side="bottom" label={thread.worktree.path}>
               <span className="flex h-7 max-w-[220px] shrink-0 items-center gap-1.5 rounded-full px-2 text-fg-muted @max-xl/composer:hidden">
@@ -1799,6 +1810,83 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
 }
 
 /**
+ * **Run on**: the computer the next new thread runs on (docs/desktop.md › Several machines).
+ * This computer first, then each paired machine in the order Settings › Machines lists them,
+ * with the state of its connection. A machine that is away cannot start a thread, so its row
+ * says "Offline" and stays disabled. Hidden until a second computer is paired: a picker with one
+ * choice is noise. A thread that exists already has its machine, so this is the new-thread strip's
+ * own control.
+ */
+function RunOnMenu() {
+  const machines = useMachines((s) => s.machines);
+  const host = useApp((s) => s.newThreadHost);
+  if (!machines.length) return null;
+  const current = machines.find((machine) => machine.id === host);
+  const label = current?.name ?? "This computer";
+  const row = (id: string, name: string, state: MachineState, selected: boolean) => {
+    const online = state === "connected";
+    return (
+      <CardMenuItem
+        key={id || "local"}
+        role="menuitemradio"
+        aria-checked={selected}
+        disabled={!online}
+        onSelect={() => void setNewThreadHost(id)}
+        className={cx("gap-2", selected && "bg-fill-subtle", !online && "opacity-60")}
+      >
+        <span
+          aria-hidden
+          className={cx(
+            "shrink-0 text-[9px] leading-none",
+            online ? "text-success" : state === "needsPairing" ? "text-warn" : "text-fg-faint",
+          )}
+        >
+          {online ? "●" : state === "needsPairing" ? "⚠" : "○"}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-body text-fg">{name}</span>
+        {!online && (
+          <span className="shrink-0 text-caption text-fg-faint">
+            {state === "needsPairing" ? "Revoked" : "Offline"}
+          </span>
+        )}
+        {selected && <Check size={13} className="shrink-0 text-fg-muted" />}
+      </CardMenuItem>
+    );
+  };
+  return (
+    <CardPopover
+      role="menu"
+      label="Run on"
+      tooltip={`Run on ${label}`}
+      onKeyDown={menuKeys}
+      side="top"
+      className="min-w-[220px]"
+      trigger={
+        <button
+          type="button"
+          aria-label={`Run on: ${label}`}
+          className={cx(
+            footerButton,
+            "min-w-0 shrink data-[state=open]:bg-fill disabled:hover:bg-transparent",
+          )}
+        >
+          <Monitor size={14} className="shrink-0" />
+          <span className="min-w-0 max-w-[160px] truncate @max-xl/composer:max-w-[96px] @max-sm/composer:hidden">
+            {label}
+          </span>
+          <ChevronDown size={12} className="shrink-0 text-fg-faint" />
+        </button>
+      }
+    >
+      <div role="menu" aria-label="Run on">
+        {row(LOCAL_HOST, "This computer", "connected", !host)}
+        {machines.map((machine) => row(machine.id, machine.name, machine.state, machine.id === host))}
+      </div>
+    </CardPopover>
+  );
+}
+
+/**
  * The folder a thread works in: for a new thread a menu of projects to start
  * in; once the thread exists, what to do with its folder (Finder, Terminal,
  * copy the path, another thread there).
@@ -1811,13 +1899,19 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
  * list into a wall of wrapping text. "Choose Folder…" is the last row, and the last thing the
  * arrow keys reach.
  */
-function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
+function FolderMenu({ thread, cwd, host }: { thread?: ThreadState; cwd: string; host: string }) {
   const sessions = useApp((s) => s.sessions);
+  const machineName = useApp((s) => s.machineNames[host]);
   const threadMachine = useMachineOfThread(thread?.id);
   const [filter, setFilter] = useState("");
+  // A new thread on another computer starts in that computer's folders: its threads' projects,
+  // never this computer's paths, which are meaningless there.
   const sources = useMemo(
-    () => sessions.map((s) => ({ cwd: s.cwd, worktree: s.worktree, updatedAt: s.updatedAt })),
-    [sessions],
+    () =>
+      sessions
+        .filter((s) => (s.host ?? LOCAL_HOST) === host)
+        .map((s) => ({ cwd: s.cwd, worktree: s.worktree, updatedAt: s.updatedAt })),
+    [sessions, host],
   );
   const all = useMemo(() => folderRows(sources), [sources]);
   const rows = useMemo(() => folderRows(sources, { filter }), [sources, filter]);
@@ -1901,11 +1995,20 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
             {!rows.length && all.length > 0 && (
               <p className="px-3 py-2 text-callout text-fg-muted">No folder matches</p>
             )}
+            {!all.length && host && (
+              <p className="px-3 py-2 text-callout text-fg-muted">
+                No folders on {machineName ?? "that computer"} yet
+              </p>
+            )}
           </div>
-          {all.length > 0 && <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />}
-          <CardMenuItem onSelect={() => void pickFolder(cwd).then((p) => p && setProjectCwd(p))}>
-            <FolderPlus size={13} className="text-fg-muted" /> Choose Folder…
-          </CardMenuItem>
+          {/* A folder of another computer is not this app's to browse: its projects are what its
+              threads name, and nothing here can read its disk. */}
+          {all.length > 0 && !host && <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />}
+          {!host && (
+            <CardMenuItem onSelect={() => void pickFolder(cwd).then((p) => p && setProjectCwd(p))}>
+              <FolderPlus size={13} className="text-fg-muted" /> Choose Folder…
+            </CardMenuItem>
+          )}
         </>
       )}
     </CardPopover>

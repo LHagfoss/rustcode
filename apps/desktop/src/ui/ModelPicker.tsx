@@ -33,7 +33,9 @@ import { accountSignedOut, newThreadAccountOn } from "../state/logins";
 import {
   effortMemory,
   ensureHarnessModels,
+  harnessesOn,
   lastAccountFor,
+  loadMachineHarnesses,
   type NewThreadChoice,
   newThreadChoice,
   pickNewThreadAccount,
@@ -44,6 +46,7 @@ import {
   useApp,
 } from "../state/store";
 import type { ThreadState } from "../state/thread";
+import { splitThreadKey } from "../state/threadKeys";
 import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
 import { HarnessIcon } from "./HarnessIcon";
 import { cx, MenuSearchField, menuLabel, menuSeparator, Skeleton, Switch, Tooltip } from "./primitives";
@@ -808,10 +811,19 @@ export function pickerModels(
 }
 
 export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact?: boolean }) {
-  const harnesses = useApp((s) => s.harnesses);
+  // The computer this picker speaks for: an open thread's own machine, or for a new thread the one
+  // **Run on** names. Its harnesses, models and logins are that machine's, read over its connection
+  // (docs/desktop.md › Several machines).
+  const host = useApp((s) => (thread ? splitThreadKey(thread.id).host : s.newThreadHost));
+  const harnesses = useApp((s) => harnessesOn(s, host));
   const choice = useApp((s) => s.newThread);
   // The first open thread's config options: stable while a reply streams, so the picker does not re-render per chunk.
   const knownConfig = useApp((s) => firstConfig(s.threads));
+  // A machine's list is read when its picker appears, and kept: only this computer's engine reads
+  // its own on connect (state/store.ts `refreshHarnesses`).
+  useEffect(() => {
+    if (host) void loadMachineHarnesses(host, { report: false });
+  }, [host]);
   const [open, setOpenState] = useState(false);
   // The card's step: the model list, or the picked model's effort, Fast mode and logins.
   const [step, setStep] = useState<"models" | "traits">("models");
@@ -854,7 +866,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   const account = isNew ? newAccount : (thread?.harness?.account ?? null);
   // A running thread keeps its login, as it keeps its harness.
   const accountBlocked = !isNew && !!thread?.running;
-  const engineReady = useApp((s) => s.status === "ready");
+  const engineReady = useApp((s) => (host ? s.connectedHosts.includes(host) : s.status === "ready"));
 
   const { models, efforts, model, effort } = pickerModels(thread, harness, effective, knownConfig);
   // The model's own entry: what its effort levels are, and where the reset returns to.
@@ -866,7 +878,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
 
   const setChoice = (next: Partial<NewThreadChoice>) => {
     const merged = { ...effective, model: model ?? null, effort: effort ?? null, ...next };
-    pickNewThreadChoice(harnesses ? normalizeDefault(harnesses, merged) : merged);
+    pickNewThreadChoice(harnesses ? normalizeDefault(harnesses, merged) : merged, host);
   };
   const pickEffort = (value: string) => {
     if (value === effort) return;
@@ -947,8 +959,8 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     .join();
   useEffect(() => {
     if (!open || !engineReady || !listing) return;
-    for (const id of listing.split(",")) void ensureHarnessModels(id);
-  }, [open, engineReady, listing]);
+    for (const id of listing.split(",")) void ensureHarnessModels(id, host);
+  }, [open, engineReady, listing, host]);
 
   /**
    * A model row. In the current harness it is set in place and the level the

@@ -1283,6 +1283,8 @@ interface ProjectGroup {
   key: string;
   label: string;
   items: SessionSummary[];
+  /** The folder a thread starts in here: what **New thread** under this group starts on. */
+  project?: string;
   /** The machine it belongs to, whose heading is drawn above its first project. */
   machine?: MachineHead;
   /** The first project of its machine: the machine's name goes here. */
@@ -1305,7 +1307,7 @@ interface MachineHead {
  * nothing for this computer. The dot and the words say the same thing twice, so
  * a row read out loud still says where it runs (docs/desktop.md › Several machines).
  */
-function MachineHeader({ machine }: { machine: MachineHead }) {
+function MachineHeader({ machine, onNew }: { machine: MachineHead; onNew?: () => void }) {
   const local = machine.id === LOCAL_HOST;
   const glyph = machine.state === "connected" ? "●" : machine.state === "needsPairing" ? "⚠" : "○";
   return (
@@ -1316,7 +1318,7 @@ function MachineHeader({ machine }: { machine: MachineHead }) {
           : `${stateLabel({ state: machine.state, retryInSecs: machine.retryInSecs })}. Its threads open read-only while it is away.`
       }
     >
-      <div className="mt-3 mb-1 flex h-6 items-center gap-1.5 px-2 first:mt-0">
+      <div className="group/m relative mt-3 mb-1 flex h-6 items-center gap-1.5 px-2 first:mt-0">
         <span
           aria-hidden
           className={cx(
@@ -1332,12 +1334,24 @@ function MachineHeader({ machine }: { machine: MachineHead }) {
         </span>
         <span className="min-w-0 flex-1 truncate font-medium text-callout text-fg/90">{machine.name}</span>
         {!local && (
-          <span className="shrink-0 text-fg-faint text-sub">
+          <span
+            className={cx(
+              "shrink-0 text-fg-faint text-sub",
+              onNew && "group-hover/m:invisible group-has-[:focus-visible]/m:invisible",
+            )}
+          >
             {machine.state === "connected"
               ? "Connected"
               : machine.state === "needsPairing"
                 ? "Revoked"
                 : "Offline"}
+          </span>
+        )}
+        {onNew && (
+          <span className="absolute right-1.5 hidden group-hover/m:flex group-has-[:focus-visible]/m:flex">
+            <RowAction label={`New thread on ${machine.name}`} onClick={onNew}>
+              <SquarePen size={12} />
+            </RowAction>
           </span>
         )}
       </div>
@@ -1907,6 +1921,7 @@ export function Sidebar() {
           groups.push({
             key,
             label: project ? projectName(project) : "No folder",
+            project: project || undefined,
             items: arranged(id, rows, key),
             machine: head,
             first,
@@ -1924,6 +1939,7 @@ export function Sidebar() {
       projects = [...byKey.entries()].map(([key, items]) => ({
         key,
         label: key ? projectName(key) : "No folder",
+        project: key || undefined,
         items,
       }));
       // Each project's own rows are arranged on their own: two projects never share one order.
@@ -2507,9 +2523,34 @@ export function Sidebar() {
                       {section.projects
                         ? section.projects.map((p) => {
                             const projectOpen = isOpen(`project:${p.key}`);
+                            // A new thread started in this group runs on the computer the group is
+                            // for: the row's machine is where its folder is (docs/desktop.md ›
+                            // Several machines).
+                            const onNew = p.project
+                              ? () =>
+                                  startNewThread(
+                                    p.project,
+                                    p.machine && p.machine.id !== LOCAL_HOST ? p.machine.id : undefined,
+                                  )
+                              : undefined;
+                            // A machine that is away cannot start a thread, so its heading offers none.
+                            const canStart =
+                              !p.machine || p.machine.id === LOCAL_HOST || p.machine.state === "connected";
                             const head =
                               p.first && p.machine ? (
-                                <MachineHeader key={`machine:${p.machine.id}`} machine={p.machine} />
+                                <MachineHeader
+                                  key={`machine:${p.machine.id}`}
+                                  machine={p.machine}
+                                  onNew={
+                                    canStart
+                                      ? () =>
+                                          startNewThread(
+                                            p.project,
+                                            p.machine!.id === LOCAL_HOST ? undefined : p.machine!.id,
+                                          )
+                                      : undefined
+                                  }
+                                />
                               ) : null;
                             if (p.only)
                               return (
@@ -2535,7 +2576,7 @@ export function Sidebar() {
                                   }
                                   open={projectOpen}
                                   onToggle={() => toggle(`project:${p.key}`)}
-                                  onNew={p.key ? () => startNewThread(p.key) : undefined}
+                                  onNew={onNew}
                                 />
                                 {/* Under its project's heading the row drops the mark: its title then
                                     lines up under the folder's name. */}
