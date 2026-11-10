@@ -2737,6 +2737,9 @@ export class MockEngine {
                   ...(t.pinned ? { pinned: true } : {}),
                   ...(t.parent ? { parent: mockParent(t.parent) } : {}),
                   ...(t.worktree ? { worktree: t.worktree as unknown as Json } : {}),
+                  // The project's git remote, when its machine reports one: what finds the same
+                  // project on another computer (state/projects.ts).
+                  ...(mockRemote(t.cwd) ? { remote: mockRemote(t.cwd) } : {}),
                 },
               },
             })),
@@ -4767,6 +4770,18 @@ export function mockLinkMeta(url: string): JsonObject | null {
 // ---------------------------------------------------------------- machines
 
 /**
+ * The git remote of the mock's projects, as a machine's `session/list` reports it
+ * (`_meta.rustcode.remote`): one repository checked out in two places, which is what **Run on**
+ * finds again (state/projects.ts).
+ */
+function mockRemote(cwd: string): string | undefined {
+  if (cwd.startsWith("/Users/you/code/rustcode") || cwd.startsWith("/Users/lars/code/rustcode"))
+    return "git@github.com:LHagfoss/rustcode.git";
+  if (cwd.startsWith("/Users/you/code/website")) return "git@github.com:LHagfoss/rustcode-website.git";
+  return undefined;
+}
+
+/**
  * The machine this app is paired with in the mock: a Linux box with three
  * threads, which is what `Lars's Linux box` is on the machine network plan.
  */
@@ -4822,6 +4837,33 @@ function mockMachine(
   };
 }
 
+/** A second computer on the same network, with threads of its own (`?machines=paired`). */
+const MOCK_STUDIO = {
+  id: "gw-8e1f4b7a5c2d4e6f",
+  name: "Studio",
+  platform: "macos",
+  route: "192.168.1.20:17879",
+  // Two threads in one project and one in another, so **Run on** shows a choice of folders.
+  threads: 3,
+};
+
+/** The Studio row: a Mac on the LAN, connected (or not) like the Linux box. */
+function mockStudio(state: "connected" | "offline", addedAt: number): JsonObject {
+  return {
+    id: MOCK_STUDIO.id,
+    name: MOCK_STUDIO.name,
+    platform: MOCK_STUDIO.platform,
+    main: false,
+    routes: [{ kind: "lan", address: MOCK_STUDIO.route, encrypted: false }],
+    route: { kind: "lan", address: MOCK_STUDIO.route, encrypted: false },
+    state,
+    detail: state === "offline" ? "Not connected. Retrying in 8 s." : null,
+    retryInSecs: state === "offline" ? 8 : null,
+    addedAt: new Date(addedAt).toISOString(),
+    lastConnectedAt: new Date(addedAt).toISOString(),
+  };
+}
+
 /** The saved machines `?machines=` starts with. */
 function mockMachineList(option: MockOptions["machines"]): JsonObject[] {
   const savedAt = Date.now() - 1000 * 60 * 60 * 24 * 6;
@@ -4841,8 +4883,9 @@ function mockMachineList(option: MockOptions["machines"]): JsonObject[] {
     case "revoked":
       return [mockMachine("needsPairing", savedAt)];
     case "paired":
-      // Saved during this session: the row says "just now".
-      return [mockMachine("connected", Date.now())];
+      // Saved during this session: the row says "just now". Two computers, so the sidebar's
+      // machine groups (this one, then each paired machine) are what the mock window shows.
+      return [mockMachine("connected", Date.now()), mockStudio("connected", savedAt)];
     default:
       return [mockMachine("connected", savedAt)];
   }
@@ -4945,13 +4988,24 @@ function mockServerService(installed: boolean): JsonObject {
 /**
  * One saved machine's ACP, answered in process for `?machines=`: the app's own
  * shell dials the real machine over its gateway, so this exists only where
- * there is no shell to dial with. It answers `initialize` and `session/list`,
- * which is what the app reads of a connected machine in this step.
+ * there is no shell to dial with. It answers `initialize`, `session/list`,
+ * `_rustcode/harnesses` and `session/new`, which is what the app reads and does
+ * of a connected machine (docs/desktop.md › Several machines).
  */
 export class MockMachine {
+  /** The threads this window started on the machine, newest first (`session/new`). */
+  private readonly created: {
+    sessionId: string;
+    cwd: string;
+    title: string;
+    harness: string;
+    updatedAt: number;
+  }[] = [];
+  private createdCount = 0;
+
   constructor(
     private readonly name: string,
-    private readonly threads = MOCK_MACHINE.threads,
+    private readonly threads?: number,
   ) {}
 
   /** The frames this machine sends back for one line the page wrote. */
@@ -4970,6 +5024,31 @@ export class MockMachine {
       return [JSON.stringify({ jsonrpc: "2.0", id, result: { protocolVersion: 1, agentCapabilities: {} } })];
     if (frame.method === "session/list")
       return [JSON.stringify({ jsonrpc: "2.0", id, result: { sessions: this.sessions() } })];
+    if (frame.method === "_rustcode/harnesses")
+      return [JSON.stringify({ jsonrpc: "2.0", id, result: this.harnesses() })];
+    if (frame.method === "session/new") return [this.newSession(id, frame.params)];
+    if (frame.method === "session/load") return this.load(id, frame.params);
+    if (frame.method === "session/prompt") {
+      const sessionId = str(obj(frame.params)?.sessionId);
+      this.titleFromPrompt(sessionId, frame.params);
+      const reply = [
+        sessionId
+          ? JSON.stringify({
+              jsonrpc: "2.0",
+              method: "session/update",
+              params: {
+                sessionId,
+                update: {
+                  sessionUpdate: "agent_message_chunk",
+                  content: { type: "text", text: `Ran it on ${this.name}. The answer stays there.` },
+                },
+              },
+            })
+          : null,
+        JSON.stringify({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } }),
+      ];
+      return reply.filter((x): x is string => x !== null);
+    }
     return [
       JSON.stringify({
         jsonrpc: "2.0",
@@ -4982,16 +5061,136 @@ export class MockMachine {
     ];
   }
 
+  /** Opening one of its threads: a two-line history, then the answer. */
+  private load(id: number, params: Json | undefined): string[] {
+    const sessionId = str(obj(params)?.sessionId);
+    const title = this.sessions().find((s) => s.sessionId === sessionId)?.title ?? "A thread";
+    const update = (u: JsonObject) =>
+      JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: u } });
+    return [
+      update({
+        sessionUpdate: "user_message_chunk",
+        content: { type: "text", text: `Run "${title}" on ${this.name}.` },
+      }),
+      update({
+        sessionUpdate: "agent_message_chunk",
+        content: {
+          type: "text",
+          text: `This thread lives on ${this.name}. Its workspace, its files and its shell are there; this window reads and drives it over the machine network.`,
+        },
+      }),
+      JSON.stringify({ jsonrpc: "2.0", id, result: { configOptions: [] } }),
+    ];
+  }
+
+  /** The engine titles a thread from its first prompt; a thread started here does the same. */
+  private titleFromPrompt(sessionId: string | undefined, params: Json | undefined): void {
+    const session = this.created.find((entry) => entry.sessionId === sessionId);
+    if (!session || session.title !== "New thread") return;
+    const text = arr(obj(params)?.prompt)
+      .map((block) => str(obj(block)?.text) ?? "")
+      .join(" ")
+      .trim();
+    if (text) session.title = text.length > 60 ? `${text.slice(0, 60)}…` : text;
+  }
+
+  /** `session/new` on this machine: a thread in its folder, run by one of its harnesses. */
+  private newSession(id: number, params: Json | undefined): string {
+    const studio = this.name === MOCK_STUDIO.name;
+    const meta = obj(obj(params)?._meta)?.rustcode;
+    this.createdCount += 1;
+    const cwd = str(obj(params)?.cwd) || (studio ? "/Users/lars/code/rustcode" : "/home/lars/code/rustcode");
+    const sessionId = `${studio ? "mock-studio" : "mock-linux"}-new-${this.createdCount}`;
+    this.created.unshift({
+      sessionId,
+      cwd,
+      title: "New thread",
+      harness: str(obj(meta)?.harness) ?? (studio ? "claude-code" : "codex"),
+      updatedAt: Date.now(),
+    });
+    return JSON.stringify({ jsonrpc: "2.0", id, result: { sessionId, configOptions: [] } });
+  }
+
+  /**
+   * This machine's own harnesses, models, logins and default: the Studio runs Claude Code,
+   * the Linux box Codex, and neither has this Mac's built-in harness list
+   * (docs/desktop.md › Several machines).
+   */
+  private harnesses(): HarnessSnapshot {
+    const studio = this.name === MOCK_STUDIO.name;
+    const base = initialHarnesses(true);
+    const kept = studio ? ["claude-code", "codex"] : ["rustcode", "codex"];
+    const models: Record<string, HarnessSnapshot["harnesses"][number]["models"]> = studio
+      ? {
+          "claude-code": [
+            {
+              id: "sonnet-5.5",
+              name: "Sonnet 5.5",
+              efforts: ["low", "medium", "high", "max"],
+              default_effort: "high",
+            },
+            { id: "opus-5.5", name: "Opus 5.5", efforts: ["medium", "high", "max"], default_effort: "high" },
+          ],
+          codex: [{ id: "gpt-5.5", name: "GPT-5.5", efforts: EFFORTS, default_effort: "medium" }],
+        }
+      : {
+          rustcode: RUSTCODE_MODELS.map((m) => ({
+            id: m.value,
+            name: m.name,
+            efforts: EFFORTS,
+            default_effort: "medium",
+          })),
+          codex: [{ id: "gpt-5.5-codex", name: "GPT-5.5 Codex", efforts: EFFORTS, default_effort: "medium" }],
+        };
+    return withLast({
+      harnesses: base.harnesses
+        .filter((harness) => kept.includes(harness.id))
+        .map((harness) => ({ ...harness, enabled: true, auth: "ok", models: models[harness.id] ?? [] })),
+      default: studio
+        ? { harness: "claude-code", model: "sonnet-5.5", effort: "high" }
+        : { harness: "codex", model: "gpt-5.5-codex", effort: "medium" },
+      onboarded: true,
+      remembers: true,
+    });
+  }
+
   private sessions(): JsonObject[] {
-    const titles = ["Run the tests", "Fix the flaky CI job", "Draft the release notes"];
+    const studio = this.name === MOCK_STUDIO.name;
     const now = Date.now();
-    return titles.slice(0, this.threads).map((title, index) => ({
-      sessionId: `mock-linux-${index + 1}`,
-      cwd: "/home/lars/code/rustcode",
-      title,
-      updatedAt: now - index * 60_000,
-      harness: "claude",
-      model: "sonnet-5.5",
+    const seeded = studio
+      ? [
+          { title: "Ship the mock window shots", cwd: "/Users/lars/code/rustcode", harness: "claude-code" },
+          { title: "Review the machine groups", cwd: "/Users/lars/code/rustcode", harness: "claude-code" },
+          { title: "Draft the release notes", cwd: "/Users/lars/code/notes", harness: "codex" },
+        ]
+      : [
+          { title: "Run the tests", cwd: "/home/lars/code/rustcode", harness: "codex" },
+          { title: "Fix the flaky CI job", cwd: "/home/lars/code/rustcode", harness: "codex" },
+          { title: "Draft the release notes", cwd: "/home/lars/code/rustcode", harness: "rustcode" },
+        ];
+    const count = this.threads ?? (studio ? MOCK_STUDIO.threads : MOCK_MACHINE.threads);
+    const listed = [
+      ...this.created,
+      ...seeded.slice(0, count).map((session, index) => ({
+        ...session,
+        sessionId: `${studio ? "mock-studio" : "mock-linux"}-${index + 1}`,
+        updatedAt: now,
+      })),
+    ];
+    return listed.map((session, index) => ({
+      sessionId: session.sessionId,
+      cwd: session.cwd,
+      title: session.title,
+      updatedAt: new Date(session.updatedAt - index * 60_000).toISOString(),
+      // The shape `session/list` really carries (`acp/types.ts` `parseSessionList`), including
+      // the project's git remote, which finds the same project on this computer (state/projects.ts).
+      _meta: {
+        model: studio ? "sonnet-5.5" : "gpt-5.5-codex",
+        rustcode: {
+          harness: session.harness,
+          ...(mockRemote(session.cwd) ? { remote: mockRemote(session.cwd) } : {}),
+        },
+      },
     }));
   }
 }

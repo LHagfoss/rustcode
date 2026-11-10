@@ -25,6 +25,8 @@ export interface PendingSetup {
   title: string;
   /** Where the thread starts, before the worktree exists. */
   cwd: string;
+  /** The computer it runs on (`state/threadKeys.ts`): omitted is this one. */
+  host?: string;
   /** The worktree `session/new` was asked for, when the toggle was on. */
   worktree?: SetupWorktree;
   /** When the send happened: the row and the chat tick from here. */
@@ -105,6 +107,8 @@ export function heldSetup(args: {
 export function pendingSummary(pending: PendingSetup): SessionSummary {
   return {
     id: pending.id,
+    // Its machine's group in the sidebar, like the thread it is about to become.
+    host: pending.host || undefined,
     cwd: pending.cwd,
     title: pending.title,
     updatedAt: pending.startedAt,
