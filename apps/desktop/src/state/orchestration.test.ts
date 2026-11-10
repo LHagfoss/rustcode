@@ -180,6 +180,31 @@ describe("management tools", () => {
       settle: false,
     });
     expect(isFailure(parseCall({ tool: "cleanup_worktree", args: {} }))).toBe(true);
+    // Where worktrees stand, and handing one back to the user.
+    expect(parseCall({ tool: "worktree_status", args: {} })).toEqual({
+      tool: "worktree_status",
+      allProjects: false,
+    });
+    expect(parseCall({ tool: "worktree_status", args: { session_id: "d1", all_projects: true } })).toEqual({
+      tool: "worktree_status",
+      target: "d1",
+      allProjects: true,
+    });
+    // Handing off defaults to the checkout: the direction the user asks for.
+    expect(parseCall({ tool: "handoff_worktree", args: { session_id: "d1" } })).toEqual({
+      tool: "handoff_worktree",
+      target: "d1",
+      to: "checkout",
+    });
+    expect(parseCall({ tool: "handoff_worktree", args: { session_id: "d1", to: "worktree" } })).toEqual({
+      tool: "handoff_worktree",
+      target: "d1",
+      to: "worktree",
+    });
+    expect(isFailure(parseCall({ tool: "handoff_worktree", args: {} }))).toBe(true);
+    expect(
+      isFailure(parseCall({ tool: "handoff_worktree", args: { session_id: "d1", to: "nowhere" } })),
+    ).toBe(true);
   });
 
   test("checkManage keeps a thread to its own project", () => {
@@ -193,7 +218,7 @@ describe("management tools", () => {
 describe("orchestration rules", () => {
   test("the app advertises the version whose account argument it answers", () => {
     // The engine strips `account` below this version and refuses a call that carries one.
-    expect(CAPABILITY_VERSION).toBe(9);
+    expect(CAPABILITY_VERSION).toBe(10);
   });
 
   test("parses the v2 calls and refuses bad arguments", () => {

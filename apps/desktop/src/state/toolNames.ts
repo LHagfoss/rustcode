@@ -30,6 +30,8 @@ export const ORCHESTRATION_TOOLS = [
   "thread_status",
   "merge_when_green",
   "cleanup_worktree",
+  "worktree_status",
+  "handoff_worktree",
 ] as const;
 
 /** `mcp__server__tool`, `server__tool`, `server.tool`, `server/tool`, `server:tool`. */
@@ -207,6 +209,12 @@ function orchestrationLabel(
       return { title: running(status) ? "Merging pull request" : "Merged pull request" };
     case "cleanup_worktree":
       return { title: "Cleaned up a worktree" };
+    case "worktree_status":
+      return { title: "Checked worktrees" };
+    case "handoff_worktree":
+      return text(args.to) === "worktree"
+        ? { title: "Moved thread to a worktree" }
+        : { title: "Moved work to the checkout" };
     case "update_session":
       return { title: "Updated thread", summary: text(args.title) || text(args.status) || undefined };
     case "interrupt_session":

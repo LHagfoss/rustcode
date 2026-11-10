@@ -2908,6 +2908,51 @@ async fn serve_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async move |request: crate::worktrees::StateRequest, responder, connection| {
+                connection.spawn(async move {
+                    let states = tokio::task::spawn_blocking(move || crate::worktrees::states(&request.paths)).await;
+                    match states {
+                        Ok(rows) => responder.respond(serde_json::json!({ "worktrees": rows }))?,
+                        Err(error) => responder.respond_with_error(agent_client_protocol::Error::internal_error().data(error.to_string()))?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: crate::worktrees::HandoffRequest, responder, connection| {
+                connection.spawn(async move {
+                    let to = crate::worktrees::Handoff::parse(request.to.trim());
+                    let Some(to) = to else {
+                        return responder.respond_with_error(
+                            agent_client_protocol::Error::invalid_params()
+                                .data(serde_json::json!({
+                                    "reason": "invalid",
+                                    "message": format!("to must be checkout or worktree, not '{}'", request.to),
+                                })),
+                        );
+                    };
+                    let moved = tokio::task::spawn_blocking(move || {
+                        crate::worktrees::handoff(
+                            &request.session_id,
+                            to,
+                            request.title.as_deref(),
+                            request.branch.as_deref(),
+                        )
+                    })
+                    .await;
+                    match moved {
+                        Ok(Ok(answer)) => responder.respond(answer)?,
+                        Ok(Err(error)) => responder.respond_with_error(error.into_acp())?,
+                        Err(error) => responder.respond_with_error(agent_client_protocol::Error::internal_error().data(error.to_string()))?,
+                    }
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |request: crate::thread_status::PinRequest, responder, _connection| {
                 match crate::thread_status::set_pinned(&request.session_id, request.pinned) {
                     Ok(()) => responder.respond(serde_json::json!({})),

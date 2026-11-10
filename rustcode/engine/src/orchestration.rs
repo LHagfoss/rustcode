@@ -54,6 +54,10 @@ pub const MANAGE_QUEUE: &str = "manage_queue";
 pub const THREAD_STATUS: &str = "thread_status";
 pub const MERGE_WHEN_GREEN: &str = "merge_when_green";
 pub const CLEANUP_WORKTREE: &str = "cleanup_worktree";
+/// Version 10: where a thread's work stands, and moving it to where the user can
+/// continue it (`docs/orchestrator.md` *Worktree handoff*).
+pub const WORKTREE_STATUS: &str = "worktree_status";
+pub const HANDOFF_WORKTREE: &str = "handoff_worktree";
 /// The M1 tools, what a client advertising version 1 gets.
 pub const TOOL_NAMES: [&str; 3] = [LIST_SESSIONS, MESSAGE_SESSION, WAIT_SESSION];
 /// Added by version 2.
@@ -79,8 +83,10 @@ pub const V6_TOOL_NAMES: [&str; 1] = [READ_ACTIVITY];
 pub const V7_TOOL_NAMES: [&str; 1] = [MANAGE_QUEUE];
 /// Added by version 9: a delegate's pull request, merging and cleanup.
 pub const V9_TOOL_NAMES: [&str; 3] = [THREAD_STATUS, MERGE_WHEN_GREEN, CLEANUP_WORKTREE];
+/// Added by version 10: where a worktree stands, and handing it back to the user.
+pub const V10_TOOL_NAMES: [&str; 2] = [WORKTREE_STATUS, HANDOFF_WORKTREE];
 /// The newest version this engine speaks.
-pub const VERSION: u8 = 9;
+pub const VERSION: u8 = 10;
 /// Version 5 adds named account targeting to the existing `start_session` and
 /// `fan_out` args. No tool is added, but a client that advertised less never
 /// sees the `account` field and has it refused, so an older app cannot quietly
@@ -92,6 +98,8 @@ pub const SESSION_STATUSES: [&str; 3] = ["active", "review", "settled"];
 pub const PR_STATES: [&str; 4] = ["open", "closed", "merged", "all"];
 /// What `manage_queue` may do to a message this thread queued on another one.
 pub const QUEUE_ACTIONS: [&str; 4] = ["list", "edit", "cancel", "steer"];
+/// Where `handoff_worktree` may move a thread's work.
+pub const HANDOFF_TARGETS: [&str; 2] = ["checkout", "worktree"];
 /// The longest `queue_id` `manage_queue` accepts: one a list returned.
 pub const MAX_QUEUE_ID_CHARS: usize = 128;
 
@@ -171,6 +179,10 @@ pub const PROMPT_HINT_V8: &str = "\n\nRustCode's threads: `list_sessions`, `sear
 /// [`PROMPT_HINT_V8`] for version 9 clients, which can finish a delegate's work.
 pub const PROMPT_HINT_V9: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. `thread_status` reports a delegate's worktree, branch, pull request and checks; `merge_when_green` merges it once green; `cleanup_worktree` removes its worktree and branch and settles it. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those, merge and cleanup change other threads, so do them only when the user asks; the user approves. Stay lean: every call resends this thread's context, so leave reading code, diffs, logs and CI to delegates, and check their pull requests with `thread_status`. Wait on all links in one `wait_session` with `link_ids`, or end the turn: the app wakes this thread when a child finishes. Call `list_harnesses` once.";
 
+/// [`PROMPT_HINT_V9`] for version 10 clients, which can see where a worktree
+/// stands and hand it back to the user (`docs/orchestrator.md` *Worktree handoff*).
+pub const PROMPT_HINT_V10: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. `thread_status` reports a delegate's worktree, branch, pull request and checks; `merge_when_green` merges it once green; `cleanup_worktree` removes its worktree and branch and settles it; `worktree_status` reports a worktree's branch, its distance from the branch it tracks, changed files, last commit and pull request; `handoff_worktree` moves a delegate's work into the user's checkout, or a thread's checkout work into a worktree of its own, and keeps every commit. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those, merge, cleanup and handoff change other threads, so do them only when the user asks; the user approves. Stay lean: every call resends this thread's context, so leave reading code, diffs, logs and CI to delegates, and check their pull requests with `thread_status`. Wait on all links in one `wait_session` with `link_ids`, or end the turn: the app wakes this thread when a child finishes. Call `list_harnesses` once.";
+
 /// The prompt hint a client of `version` gets.
 pub fn prompt_hint(version: u8) -> &'static str {
     match version {
@@ -183,7 +195,8 @@ pub fn prompt_hint(version: u8) -> &'static str {
         6 => PROMPT_HINT_V6,
         7 => PROMPT_HINT_V7,
         8 => PROMPT_HINT_V8,
-        _ => PROMPT_HINT_V9,
+        9 => PROMPT_HINT_V9,
+        _ => PROMPT_HINT_V10,
     }
 }
 
@@ -196,6 +209,7 @@ pub fn is_tool(name: &str) -> bool {
         || V6_TOOL_NAMES.contains(&name)
         || V7_TOOL_NAMES.contains(&name)
         || V9_TOOL_NAMES.contains(&name)
+        || V10_TOOL_NAMES.contains(&name)
 }
 
 /// Whether `name` needs a version 2 client.
@@ -226,6 +240,11 @@ pub fn is_v7_tool(name: &str) -> bool {
 /// Whether `name` needs a version 9 client (delegate pull requests and cleanup).
 pub fn is_v9_tool(name: &str) -> bool {
     V9_TOOL_NAMES.contains(&name)
+}
+
+/// Whether `name` needs a version 10 client (worktree status and handoff).
+pub fn is_v10_tool(name: &str) -> bool {
+    V10_TOOL_NAMES.contains(&name)
 }
 
 /// The tools a client of `version` gets, in order.
@@ -266,9 +285,14 @@ pub fn tool_names(version: u8) -> Vec<&'static str> {
         }
         // Version 8 adds native-subagent guidance to the hint, not another tool.
         8 => tool_names(7),
-        _ => {
+        9 => {
             let mut names = tool_names(8);
             names.extend(V9_TOOL_NAMES);
+            names
+        }
+        _ => {
+            let mut names = tool_names(9);
+            names.extend(V10_TOOL_NAMES);
             names
         }
     }
@@ -644,6 +668,20 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             Ok(())
         }
         THREAD_STATUS => optional_name(args, "session_id"),
+        WORKTREE_STATUS => {
+            optional_name(args, "session_id")?;
+            optional_flag(args, "all_projects")
+        }
+        HANDOFF_WORKTREE => {
+            required_name(args, "session_id")?;
+            // `to` defaults to `checkout`: the direction an orchestrator asks for
+            // when the user says "I'll take it from here".
+            match args.get("to") {
+                None | Some(Value::Null) => Ok(()),
+                Some(Value::String(to)) if HANDOFF_TARGETS.contains(&to.as_str()) => Ok(()),
+                Some(_) => Err(format!("to must be one of {HANDOFF_TARGETS:?}")),
+            }
+        }
         MERGE_WHEN_GREEN => {
             required_name(args, "session_id")?;
             match args.get("timeout_ms") {
@@ -972,7 +1010,8 @@ mod tests {
         assert_eq!(version(json!({"rustcode": {"orchestration": 1}})), 1);
         assert_eq!(version(json!({"rustcode": {"orchestration": 2}})), 2);
         // A newer client gets what this engine speaks.
-        assert_eq!(version(json!({"rustcode": {"orchestration": 9}})), VERSION);
+        assert_eq!(version(json!({"rustcode": {"orchestration": 10}})), VERSION);
+        assert_eq!(version(json!({"rustcode": {"orchestration": 11}})), VERSION);
         assert_eq!(version(json!({"rustcode": {"preview": 1}})), 0);
         assert_eq!(client_meta_version(None), 0);
     }
@@ -1009,7 +1048,7 @@ mod tests {
 
     #[test]
     fn version_four_adds_the_data_store_tools_only_for_its_clients() {
-        assert_eq!(VERSION, 9);
+        assert_eq!(VERSION, 10);
         let v3 = tool_names(3);
         assert!(v3.iter().all(|name| !is_v4_tool(name)), "{v3:?}");
         let v4 = tool_names(4);
@@ -1031,7 +1070,11 @@ mod tests {
         );
         assert_eq!(
             tool_names(10),
-            tool_names(9),
+            [tool_names(9), V10_TOOL_NAMES.to_vec()].concat()
+        );
+        assert_eq!(
+            tool_names(11),
+            tool_names(10),
             "a newer client gets what this engine speaks"
         );
         for name in [THREAD_USAGE, QUERY_DATA] {
@@ -1067,6 +1110,15 @@ mod tests {
             assert!(!PROMPT_HINT_V8.contains(name), "{name} is v9 only");
             assert!(!PROMPT_HINT_V7.contains(name), "{name} is v9 only");
         }
+        for name in V10_TOOL_NAMES {
+            assert!(is_tool(name) && is_v10_tool(name));
+            assert!(
+                !is_v9_tool(name) && !tool_names(9).contains(&name),
+                "{name} is v10 only"
+            );
+            assert!(PROMPT_HINT_V10.contains(name), "{name}");
+            assert!(!PROMPT_HINT_V9.contains(name), "{name} is v10 only");
+        }
         // An orchestrator is told how to keep its own context small .
         for said in ["Stay lean", "link_ids", "end the turn", "thread_status"] {
             assert!(PROMPT_HINT_V9.contains(said), "{said}");
@@ -1081,7 +1133,8 @@ mod tests {
         assert_eq!(prompt_hint(7), PROMPT_HINT_V7);
         assert_eq!(prompt_hint(8), PROMPT_HINT_V8);
         assert_eq!(prompt_hint(9), PROMPT_HINT_V9);
-        assert_eq!(prompt_hint(10), PROMPT_HINT_V9);
+        assert_eq!(prompt_hint(10), PROMPT_HINT_V10);
+        assert_eq!(prompt_hint(11), PROMPT_HINT_V10);
         assert_eq!(prompt_hint(0), "");
         // Accounts arrived in 5: a v4 hint promises nothing it cannot do.
         assert!(!PROMPT_HINT_V4.contains("account"));
@@ -1110,7 +1163,7 @@ mod tests {
         // activity read, v7 the queue control, v8 that native subagents go
         // through RustCode's tools, v9 a delegate's pull request.
 
-        let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V9);
+        let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V10);
         println!(
             "prompt hints: v3 {} tokens, v4 {} tokens, v5 {} tokens, v6 {} tokens, v9 {tokens} tokens",
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V3),
@@ -1120,8 +1173,40 @@ mod tests {
         );
         // v9 adds the three delegate pull-request tools, all named with their use,
         // and how an orchestrator keeps its own context small: those few lines
-        // save far more than they cost on each request.
-        assert!(tokens < 540, "{tokens}");
+        // save far more than they cost on each request. v10 adds the worktree
+        // pair, which also saves the shell round trips it replaces.
+        assert!(tokens < 600, "{tokens}");
+    }
+
+    #[test]
+    fn worktree_tool_arguments_are_checked() {
+        let ok = |name: &str, args: Value| validate(name, &args).is_ok();
+        // Where every worktree stands: the caller's own, one thread's, or all.
+        assert!(ok(WORKTREE_STATUS, json!({})));
+        assert!(ok(WORKTREE_STATUS, json!({"session_id": "d1"})));
+        assert!(ok(
+            WORKTREE_STATUS,
+            json!({"session_id": "d1", "all_projects": true})
+        ));
+        assert!(!ok(WORKTREE_STATUS, json!({"session_id": " "})));
+        assert!(!ok(WORKTREE_STATUS, json!({"all_projects": "yes"})));
+        // Handoff: `to` is `checkout` unless it says `worktree`.
+        assert!(ok(HANDOFF_WORKTREE, json!({"session_id": "d1"})));
+        assert!(ok(
+            HANDOFF_WORKTREE,
+            json!({"session_id": "d1", "to": "checkout"})
+        ));
+        assert!(ok(
+            HANDOFF_WORKTREE,
+            json!({"session_id": "d1", "to": "worktree"})
+        ));
+        assert!(!ok(HANDOFF_WORKTREE, json!({})));
+        assert!(!ok(HANDOFF_WORKTREE, json!({"session_id": " "})));
+        assert!(!ok(
+            HANDOFF_WORKTREE,
+            json!({"session_id": "d1", "to": "nowhere"})
+        ));
+        assert!(!ok(HANDOFF_WORKTREE, json!({"session_id": "d1", "to": 1})));
     }
 
     #[test]

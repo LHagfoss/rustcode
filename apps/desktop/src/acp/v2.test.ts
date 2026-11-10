@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { type Checkpoint, checkpointsByTurn, parseCheckpoints, parseRestoreAnswer } from "./v2";
+import {
+  type Checkpoint,
+  checkpointsByTurn,
+  handoffRefusal,
+  parseCheckpoints,
+  parseHandoff,
+  parseRestoreAnswer,
+  parseWorktreeStates,
+} from "./v2";
 
 const hour = 3_600_000;
 const t0 = 1_700_000_000_000;
@@ -154,5 +162,85 @@ describe("a rewind as an attempt", () => {
       kept: undefined,
       rewindError: undefined,
     });
+  });
+});
+
+describe("a worktree's state and a handoff", () => {
+  test("each row names the branch, the distance, the changed files and the last commit", () => {
+    const rows = parseWorktreeStates({
+      worktrees: [
+        {
+          path: "/wt/login",
+          exists: true,
+          branch: "feat/login",
+          against: "origin/feat/login",
+          ahead: 2,
+          behind: 1,
+          dirty: 3,
+          last_commit: "2026-05-01T10:00:00Z",
+          last_commit_subject: "feat(mcp): add the tool",
+        },
+        // A worktree removed since the app listed it: a row, not an error.
+        { path: "/wt/gone", exists: false },
+        // A git that could not answer says so, and gives no counts.
+        { path: "/wt/broken", exists: true, error: "git status failed: boom" },
+      ],
+    });
+    expect(rows[0]).toMatchObject({
+      path: "/wt/login",
+      branch: "feat/login",
+      against: "origin/feat/login",
+      ahead: 2,
+      behind: 1,
+      dirty: 3,
+      lastCommit: "2026-05-01T10:00:00Z",
+      lastCommitSubject: "feat(mcp): add the tool",
+    });
+    expect(rows[1]).toMatchObject({ path: "/wt/gone", exists: false });
+    expect(rows[1]!.dirty).toBeUndefined();
+    expect(rows[2]).toMatchObject({ path: "/wt/broken", error: "git status failed: boom" });
+    expect(parseWorktreeStates(undefined)).toEqual([]);
+    // A row without a path names nothing, so it is left out.
+    expect(parseWorktreeStates({ worktrees: [{ exists: true }] })).toEqual([]);
+  });
+
+  test("a handoff's answer says which way it moved and why a switch did not happen", () => {
+    expect(
+      parseHandoff({
+        session_id: "d1",
+        to: "checkout",
+        moved: true,
+        worktree_removed: true,
+        switched: false,
+        branch: "feat/login",
+        path: "/repo",
+        detail: "the checkout could not switch to it: local changes",
+      }),
+    ).toEqual({
+      sessionId: "d1",
+      to: "checkout",
+      moved: true,
+      worktreeRemoved: true,
+      switched: false,
+      branch: "feat/login",
+      path: "/repo",
+      repo: undefined,
+      detail: "the checkout could not switch to it: local changes",
+    });
+    expect(parseHandoff({ to: "worktree", moved: true, path: "/wt", branch: "feat/x" })).toMatchObject({
+      to: "worktree",
+      moved: true,
+      path: "/wt",
+    });
+    expect(parseHandoff(undefined)).toBeUndefined();
+  });
+
+  test("a refusal keeps the reason the engine gave, and nothing else", () => {
+    expect(handoffRefusal({ reason: "dirty_checkout" })).toBe("dirty_checkout");
+    expect(handoffRefusal({ reason: "unpushed_checkout" })).toBe("unpushed_checkout");
+    expect(handoffRefusal({ reason: "ignored_files" })).toBe("ignored_files");
+    expect(handoffRefusal({ reason: "has_worktree" })).toBe("has_worktree");
+    expect(handoffRefusal({ reason: "something else" })).toBeUndefined();
+    expect(handoffRefusal(undefined)).toBeUndefined();
   });
 });

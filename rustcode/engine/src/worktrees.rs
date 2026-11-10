@@ -392,6 +392,32 @@ pub(crate) struct RemoveRequest {
     pub force: bool,
 }
 
+/// Read the local git state of these worktrees: branch, ahead/behind the
+/// ref each one tracks, changed files and last commit. Answers `{ worktrees }`,
+/// one row per path, with `exists: false` for one that is gone.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
+#[serde(rename_all = "camelCase")]
+#[request(method = "_rustcode/worktrees/state", response = serde_json::Value)]
+pub(crate) struct StateRequest {
+    pub paths: Vec<PathBuf>,
+}
+
+/// Move a thread's work between the repository's main checkout and a worktree
+/// of its own. `to` is `checkout` or `worktree`; `title` and `branch`
+/// name the worktree a `worktree` handoff creates. Answers the move, or a
+/// refusal with `error.data.reason`; nothing is stashed, rebased or reset.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
+#[serde(rename_all = "camelCase")]
+#[request(method = "_rustcode/worktrees/handoff", response = serde_json::Value)]
+pub(crate) struct HandoffRequest {
+    pub session_id: String,
+    pub to: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub branch: Option<String>,
+}
+
 /// Create a worktree of `repo` on a new branch (or an existing one that no
 /// worktree has checked out).
 pub(crate) fn create(request: &CreateRequest) -> Result<Worktree, WorktreeError> {
@@ -593,37 +619,177 @@ fn same_path(left: &Path, right: &Path) -> bool {
     canonical(left) == canonical(right)
 }
 
-/// Whether the worktree has uncommitted changes, and how far it is ahead of and
-/// behind its upstream (or `base`). A git that cannot answer is an error, never
-/// "clean": removal must not proceed on an unknown state.
-fn status_counts(path: &Path, base: &str) -> Result<(bool, u64, u64), String> {
-    let dirty = git(path, &["status", "--porcelain", "--untracked-files=normal"])
-        .map(|out| !out.trim().is_empty())
-        .map_err(|message| format!("git status failed: {message}"))?;
-    let against = git_line(path, &["rev-parse", "--abbrev-ref", "@{upstream}"])
-        .ok()
-        .unwrap_or_else(|| base.to_owned());
-    let (ahead, behind) = git_line(
-        path,
-        &[
-            "rev-list",
-            "--left-right",
-            "--count",
-            &format!("HEAD...{against}"),
-        ],
-    )
-    .map_err(|message| format!("git rev-list failed: {message}"))
-    .and_then(|line| {
-        let mut parts = line.split_whitespace();
-        match (parts.next(), parts.next()) {
-            (Some(ahead), Some(behind)) => match (ahead.parse::<u64>(), behind.parse::<u64>()) {
-                (Ok(ahead), Ok(behind)) => Ok((ahead, behind)),
-                _ => Err(format!("git rev-list answered '{line}'")),
-            },
-            _ => Err(format!("git rev-list answered '{line}'")),
+/// Files `path` has uncommitted changes in, untracked ones included.
+fn changed_files(path: &Path) -> Result<u64, String> {
+    git(path, &["status", "--porcelain", "--untracked-files=normal"])
+        .map(|out| out.lines().filter(|line| !line.trim().is_empty()).count() as u64)
+        .map_err(|message| format!("git status failed: {message}"))
+}
+
+/// A worktree's local state: how many files it has changed, and how far HEAD is
+/// from the ref it tracks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Status {
+    pub dirty_files: u64,
+    /// Commits HEAD has that `against` does not, and the reverse: `None` when
+    /// there is nothing to compare against.
+    pub ahead: Option<u64>,
+    pub behind: Option<u64>,
+    pub against: Option<String>,
+}
+
+/// The ref a worktree's HEAD is counted against: the branch it tracks, else the
+/// `origin/<branch>` of the same name, else the `base` it branched from.
+fn tracking_ref(path: &Path, base: &str) -> Option<String> {
+    if let Ok(name) = git_line(path, &["rev-parse", "--abbrev-ref", "@{upstream}"]) {
+        let name = name.trim();
+        // A branch with no upstream answers `@{upstream}` on stderr and this
+        // string on stdout in some git versions, so it is not a ref.
+        if !name.is_empty() && name != "@{upstream}" {
+            return Some(name.to_owned());
         }
-    })?;
-    Ok((dirty, ahead, behind))
+    }
+    if let Ok(branch) = git_line(path, &["symbolic-ref", "--quiet", "--short", "HEAD"]) {
+        let origin = format!("origin/{branch}");
+        if git_line(
+            path,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{origin}^{{commit}}"),
+            ],
+        )
+        .is_ok()
+        {
+            return Some(origin);
+        }
+    }
+    (!base.trim().is_empty()).then(|| base.to_owned())
+}
+
+/// The worktree's state. A git that cannot answer is an error, never
+/// "clean": removal must not proceed on an unknown state.
+fn status_detail(path: &Path, base: &str) -> Result<Status, String> {
+    let dirty_files = changed_files(path)?;
+    let against = tracking_ref(path, base);
+    let (ahead, behind) = match against.as_deref() {
+        Some(against) => {
+            let counts = git_line(
+                path,
+                &[
+                    "rev-list",
+                    "--left-right",
+                    "--count",
+                    &format!("HEAD...{against}"),
+                ],
+            )
+            .map_err(|message| format!("git rev-list failed: {message}"))
+            .and_then(|line| {
+                let mut parts = line.split_whitespace();
+                match (parts.next(), parts.next()) {
+                    (Some(ahead), Some(behind)) => {
+                        match (ahead.parse::<u64>(), behind.parse::<u64>()) {
+                            (Ok(ahead), Ok(behind)) => Ok((ahead, behind)),
+                            _ => Err(format!("git rev-list answered '{line}'")),
+                        }
+                    }
+                    _ => Err(format!("git rev-list answered '{line}'")),
+                }
+            })?;
+            (Some(counts.0), Some(counts.1))
+        }
+        None => (None, None),
+    };
+    Ok(Status {
+        dirty_files,
+        ahead,
+        behind,
+        against,
+    })
+}
+
+/// Whether the worktree has uncommitted changes, and how far it is ahead of and
+/// behind its upstream (or `base`).
+fn status_counts(path: &Path, base: &str) -> Result<(bool, u64, u64), String> {
+    let status = status_detail(path, base)?;
+    Ok((
+        status.dirty_files > 0,
+        status.ahead.unwrap_or(0),
+        status.behind.unwrap_or(0),
+    ))
+}
+
+/// Paths `_rustcode/worktrees/state` reads in one call: a user's worktrees, not
+/// a sweep of the disk.
+pub(crate) const MAX_STATES: usize = 64;
+
+/// The last commit `path` has, as its committer time and subject.
+fn last_commit(path: &Path) -> Option<(String, String)> {
+    let line = git_line(path, &["log", "-1", "--format=%cI%x09%s"]).ok()?;
+    let (at, subject) = line.split_once('\t')?;
+    Some((at.trim().to_owned(), subject.trim().to_owned()))
+}
+
+/// One worktree's state, as `_rustcode/worktrees/state` answers it: the branch
+/// it is on now, how far it is from the ref it tracks, how many files it has
+/// changed, its last commit, and `error` when git could not answer. A worktree
+/// whose folder is gone answers `exists: false` instead.
+pub(crate) fn state(path: &Path) -> Value {
+    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut row = json!({ "path": path, "exists": path.is_dir() });
+    if !path.is_dir() {
+        return row;
+    }
+    let Some(object) = row.as_object_mut() else {
+        return row;
+    };
+    if let Ok(branch) = git_line(&path, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+        && !branch.is_empty()
+    {
+        object.insert("branch".into(), json!(branch));
+    }
+    if let Some((at, subject)) = last_commit(&path) {
+        object.insert("last_commit".into(), json!(at));
+        object.insert("last_commit_subject".into(), json!(subject));
+    }
+    let base = load_record(&path)
+        .map(|record| record.worktree.base)
+        .unwrap_or_default();
+    match status_detail(&path, &base) {
+        Ok(status) => {
+            object.insert("dirty".into(), json!(status.dirty_files));
+            if let Some(against) = status.against {
+                object.insert("against".into(), json!(against));
+            }
+            if let Some(ahead) = status.ahead {
+                object.insert("ahead".into(), json!(ahead));
+            }
+            if let Some(behind) = status.behind {
+                object.insert("behind".into(), json!(behind));
+            }
+        }
+        Err(message) => {
+            crate::dbg_log!(
+                "[worktrees] {} has no readable state: {message}",
+                path.display()
+            );
+            // Not a failure of the whole read: the row says what is unknown.
+            object.insert("error".into(), json!(message));
+        }
+    }
+    row
+}
+
+/// The state of each path, in order, at most [`MAX_STATES`]. A gone path is a
+/// row with `exists: false`, not an error: it may have been removed between the
+/// app's list and this read.
+pub(crate) fn states(paths: &[PathBuf]) -> Vec<Value> {
+    paths
+        .iter()
+        .take(MAX_STATES)
+        .map(|path| state(path))
+        .collect()
 }
 
 /// The worktrees RustCode made for `repo`, with their state.
@@ -673,9 +839,13 @@ pub(crate) fn list(repo: &Path) -> Result<Vec<Value>, WorktreeError> {
         // A worktree whose git state cannot be read (a prunable folder, a
         // broken checkout) still exists and still lists: the row says its
         // state is unknown. Removal is where unknown refuses.
-        let counts = status_counts(&path, &worktree.base);
+        let counts = status_detail(&path, &worktree.base);
         let (dirty, ahead, behind) = match &counts {
-            Ok((dirty, ahead, behind)) => (json!(dirty), json!(ahead), json!(behind)),
+            Ok(status) => (
+                json!(status.dirty_files > 0),
+                json!(status.ahead),
+                json!(status.behind),
+            ),
             Err(message) => {
                 crate::dbg_log!(
                     "[worktrees] {} has no readable state: {message}",
@@ -1265,6 +1435,285 @@ pub(crate) fn cleanup(
         answer["recorded_branch_removed"] = json!(recorded_branch_removed);
     }
     Ok(answer)
+}
+
+// ------------------------------------------------------------ handoff ----
+
+/// Where `handoff_worktree` moves a thread's work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Handoff {
+    /// Into the repository's main checkout, for the user to continue there.
+    Checkout,
+    /// Out of the main checkout into a worktree of its own.
+    Worktree,
+}
+
+impl Handoff {
+    pub(crate) fn parse(text: &str) -> Option<Self> {
+        match text {
+            "checkout" => Some(Self::Checkout),
+            "worktree" => Some(Self::Worktree),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Checkout => "checkout",
+            Self::Worktree => "worktree",
+        }
+    }
+}
+
+fn unknown(message: String) -> WorktreeError {
+    WorktreeError {
+        reason: "unknown",
+        message,
+    }
+}
+
+/// The branch the checkout has out and how many files it has changed. A
+/// checkout on a detached HEAD is its own refusal: there is no branch to come
+/// back to after a switch.
+fn checkout_state(repo: &Path) -> Result<(String, u64), WorktreeError> {
+    let branch = git_line(repo, &["symbolic-ref", "--quiet", "--short", "HEAD"]).map_err(|_| {
+        WorktreeError {
+            reason: "detached_checkout",
+            message: format!(
+                "the checkout {} is not on a branch, so there is nowhere to switch from",
+                repo.display()
+            ),
+        }
+    })?;
+    let dirty = changed_files(repo).map_err(unknown)?;
+    Ok((branch, dirty))
+}
+
+/// How many commits the checkout's HEAD has that no remote does.
+fn unpushed(repo: &Path) -> Result<u64, WorktreeError> {
+    // A repository with no remote at all has nothing to push to: every branch
+    // is local by nature, which is not work a switch would put out of sight.
+    let remotes = git_line(repo, &["remote"])
+        .map_err(|message| unknown(format!("git remote failed: {message}")))?;
+    if remotes.trim().is_empty() {
+        return Ok(0);
+    }
+    let line = git_line(repo, &["rev-list", "--count", "HEAD", "--not", "--remotes"])
+        .map_err(|message| unknown(format!("git rev-list failed: {message}")))?;
+    line.trim()
+        .parse::<u64>()
+        .map_err(|_| unknown(format!("git rev-list answered '{line}'")))
+}
+
+/// Move a worktree thread's work into the repository's main checkout
+/// `docs/orchestrator.md` *Worktree handoff*): the user takes over the branch
+/// there.
+///
+/// Refused, never forced: a worktree with uncommitted or ignored files (removing
+/// it would drop them), a checkout with uncommitted changes, and a checkout on
+/// another branch that holds commits no remote has. Nothing is stashed,
+/// rebased or reset, and the branch is never deleted, so every commit stays.
+/// The worktree goes first (a branch cannot be checked out in two worktrees),
+/// then the checkout switches to it and the thread opens there.
+pub(crate) fn to_checkout(session_id: &str) -> Result<Value, WorktreeError> {
+    let worktree = of_session(session_id).ok_or_else(|| WorktreeError {
+        reason: "no_worktree",
+        message: "this thread does not run in a worktree, so there is nothing to hand off"
+            .to_owned(),
+    })?;
+    if !worktree.path.is_dir() {
+        return Err(WorktreeError {
+            reason: "not_git",
+            message: format!("{} is gone", worktree.path.display()),
+        });
+    }
+    let repo = main_checkout(&worktree.path).ok_or_else(|| WorktreeError {
+        reason: "not_git",
+        message: format!("{} is not a git worktree", worktree.path.display()),
+    })?;
+    let branch = worktree_branch(&worktree.path)?;
+    let changed = changed_files(&worktree.path).map_err(unknown)?;
+    if changed > 0 {
+        return Err(WorktreeError {
+            reason: "dirty",
+            message: format!(
+                "the worktree has {changed} uncommitted change(s); commit them in {} first, so the handoff moves every one of them",
+                worktree.path.display()
+            ),
+        });
+    }
+    let ignored = ignored_files(&worktree.path).map_err(unknown)?;
+    if !ignored.is_empty() {
+        return Err(WorktreeError {
+            reason: "ignored_files",
+            message: format!(
+                "the worktree holds ignored files that removing it would delete: {}",
+                ignored.join(", ")
+            ),
+        });
+    }
+    // The user's checkout is read before anything moves, so a refusal leaves it
+    // exactly as it was.
+    let (checkout_branch, checkout_dirty) = checkout_state(&repo)?;
+    if checkout_dirty > 0 {
+        return Err(WorktreeError {
+            reason: "dirty_checkout",
+            message: format!(
+                "the checkout {} has {checkout_dirty} uncommitted change(s); commit or stash them yourself first",
+                repo.display()
+            ),
+        });
+    }
+    if checkout_branch != branch {
+        let unpushed = unpushed(&repo)?;
+        if unpushed > 0 {
+            return Err(WorktreeError {
+                reason: "unpushed_checkout",
+                message: format!(
+                    "the checkout is on {checkout_branch}, which has {unpushed} commit(s) no remote has; push them, or switch the checkout to {branch} yourself, first"
+                ),
+            });
+        }
+    }
+    // A branch cannot be checked out in two worktrees, so the worktree goes
+    // first. Only the worktree is removed: the branch and every commit stay.
+    let path_text = worktree.path.to_string_lossy().into_owned();
+    git(&repo, &["worktree", "remove", &path_text]).map_err(|message| {
+        WorktreeError::failed(format!("git worktree remove failed: {message}"))
+    })?;
+    let _ = git(&repo, &["worktree", "prune"]);
+    // The thread's folder is gone, so it opens in the checkout.
+    let moved = crate::acp::session_move::move_session(session_id, repo.clone()).is_ok();
+    if moved {
+        detach(session_id);
+    }
+    if let Some(record) = record_path(&worktree.path) {
+        let _ = std::fs::remove_file(record);
+    }
+    if checkout_branch != branch
+        && let Err(message) = git(&repo, &["switch", &branch])
+    {
+        // The worktree is gone and the branch is kept, so nothing is lost; the
+        // checkout stayed where it was, and the answer says so instead of
+        // failing after the move.
+        return Ok(json!({
+            "session_id": session_id,
+            "moved": moved,
+            "worktree_removed": true,
+            "switched": false,
+            "branch": branch,
+            "path": repo,
+            "detail": format!("the worktree was removed and {branch} kept, but the checkout could not switch to it: {message}"),
+        }));
+    }
+    Ok(json!({
+        "session_id": session_id,
+        "moved": moved,
+        "worktree_removed": true,
+        "switched": true,
+        "branch": branch,
+        "path": repo,
+    }))
+}
+
+/// Move a thread out of the repository's main checkout into a worktree of its
+/// own: the user keeps their checkout, and the next delegate that runs there
+/// does not edit it.
+///
+/// The worktree starts from the checkout's `HEAD` commit, so what the checkout
+/// has committed comes with it. A checkout with uncommitted changes is refused:
+/// they would stay behind, and the worktree would not have them.
+pub(crate) fn to_worktree(
+    session_id: &str,
+    title: Option<&str>,
+    branch: Option<&str>,
+) -> Result<Value, WorktreeError> {
+    if of_session(session_id).is_some() {
+        return Err(WorktreeError {
+            reason: "has_worktree",
+            message: "this thread already runs in a worktree".to_owned(),
+        });
+    }
+    let cwd = crate::checkpoints::thread_cwd(session_id).ok_or_else(|| WorktreeError {
+        reason: "no_folder",
+        message: "the thread has no folder to move".to_owned(),
+    })?;
+    let repo = main_checkout(&cwd).ok_or_else(|| WorktreeError {
+        reason: "not_git",
+        message: format!("{} is not in a git repository", cwd.display()),
+    })?;
+    let top = toplevel(&cwd).unwrap_or_else(|| cwd.clone());
+    if !same_path(&top, &repo) {
+        return Err(WorktreeError {
+            reason: "not_checkout",
+            message: format!(
+                "the thread runs in {}, not in the repository's main checkout {}",
+                top.display(),
+                repo.display()
+            ),
+        });
+    }
+    let (checkout_branch, dirty) = checkout_state(&repo)?;
+    if dirty > 0 {
+        return Err(WorktreeError {
+            reason: "dirty_checkout",
+            message: format!(
+                "the checkout has {dirty} uncommitted change(s); commit or discard them yourself first, so the worktree starts from what is committed"
+            ),
+        });
+    }
+    let worktree = create(&CreateRequest {
+        repo: repo.clone(),
+        branch: branch.map(str::to_owned),
+        title: title.map(str::to_owned),
+        base: Some("HEAD".to_owned()),
+    })?;
+    if crate::acp::session_move::move_session(session_id, worktree.path.clone()).is_err() {
+        // Nothing moved: the new worktree goes again, so the thread is where it
+        // was and no empty checkout is left behind.
+        let path_text = worktree.path.to_string_lossy().into_owned();
+        let _ = git(&repo, &["worktree", "remove", &path_text]);
+        let _ = git(&repo, &["worktree", "prune"]);
+        if let Some(record) = record_path(&worktree.path) {
+            let _ = std::fs::remove_file(record);
+        }
+        return Err(WorktreeError::failed(
+            "the thread's folder could not be moved into the worktree, so nothing changed"
+                .to_owned(),
+        ));
+    }
+    attach(session_id, &worktree);
+    Ok(json!({
+        "session_id": session_id,
+        "moved": true,
+        "path": worktree.path,
+        "branch": worktree.branch,
+        "repo": repo,
+        "base": worktree.base,
+        "checkout_branch": checkout_branch,
+    }))
+}
+
+/// `_rustcode/worktrees/handoff`: move a thread's work between the repository's
+/// main checkout and a worktree of its own, refusing rather than forcing.
+pub(crate) fn handoff(
+    session_id: &str,
+    to: Handoff,
+    title: Option<&str>,
+    branch: Option<&str>,
+) -> Result<Value, WorktreeError> {
+    match to {
+        Handoff::Checkout => to_checkout(session_id),
+        Handoff::Worktree => to_worktree(session_id, title, branch),
+    }
+    .map(|mut answer| {
+        // The answer says which direction moved, so a caller reading two of
+        // them never has to guess.
+        if let Some(object) = answer.as_object_mut() {
+            object.insert("to".into(), serde_json::json!(to.as_str()));
+        }
+        answer
+    })
 }
 
 // ------------------------------------------------------------ threads ----
@@ -2509,6 +2958,227 @@ pub(crate) mod tests {
         // A plain session/new is left alone.
         let (_, none) = prepare_new(NewSessionRequest::new(repo)).unwrap();
         assert!(none.is_none());
+    }
+
+    /// A worktree of `repo` with a seeded thread that runs in it.
+    fn worktree_thread(repo: &Path, branch: &str) -> (String, Worktree) {
+        let worktree = create(&CreateRequest {
+            repo: repo.to_path_buf(),
+            branch: Some(branch.into()),
+            ..Default::default()
+        })
+        .unwrap();
+        let session_id = thread_in(&worktree.path);
+        attach(&session_id, &worktree);
+        (session_id, worktree)
+    }
+
+    /// A seeded thread that runs in `cwd`, as one started there is.
+    fn thread_in(cwd: &Path) -> String {
+        let session_id = crate::config::create_detached_session();
+        seed_thread(&session_id);
+        crate::config::save_session_workspace(
+            &session_id,
+            &rustcode_session::SessionWorkspace {
+                cwd: cwd.to_path_buf(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        session_id
+    }
+
+    #[test]
+    fn a_handoff_to_the_checkout_moves_the_branch_there_and_keeps_every_commit() {
+        let (_dir, repo) = repo();
+        let (session_id, worktree) = worktree_thread(&repo, "feat/handoff");
+        std::fs::write(worktree.path.join("login.txt"), "login\n").unwrap();
+        git(&worktree.path, &["add", "-A"]).unwrap();
+        git(&worktree.path, &["commit", "-q", "-m", "add login"]).unwrap();
+        let tip = tip_of(&repo, "feat/handoff");
+
+        let answer = handoff(&session_id, Handoff::Checkout, None, None).unwrap();
+        assert_eq!(answer["to"], json!("checkout"));
+        assert_eq!(answer["switched"], true);
+        assert_eq!(answer["branch"], json!("feat/handoff"));
+        // The worktree is gone; the branch and its commit are not.
+        assert!(!worktree.path.exists());
+        assert_eq!(tip_of(&repo, "feat/handoff"), tip);
+        assert_eq!(
+            git_line(&repo, &["symbolic-ref", "--quiet", "--short", "HEAD"]).unwrap(),
+            "feat/handoff"
+        );
+        // The thread opens in the checkout, on the branch it handed over, and
+        // the checkout really has the work.
+        assert_eq!(
+            crate::config::load_session_workspace(&session_id)
+                .unwrap()
+                .cwd,
+            repo
+        );
+        assert_eq!(of_session(&session_id), None);
+        assert!(repo.join("login.txt").is_file());
+        // A thread that runs in the checkout has nothing to hand over that way.
+        let refused = handoff(&session_id, Handoff::Checkout, None, None).unwrap_err();
+        assert_eq!(refused.reason, "no_worktree");
+    }
+
+    #[test]
+    fn a_handoff_refuses_user_work_instead_of_hiding_it() {
+        let (_dir, repo) = repo();
+        let (session_id, worktree) = worktree_thread(&repo, "feat/handoff");
+        // Uncommitted work in the worktree: removing it would drop it.
+        std::fs::write(worktree.path.join("wip.txt"), "wip\n").unwrap();
+        let refused = handoff(&session_id, Handoff::Checkout, None, None).unwrap_err();
+        assert_eq!(refused.reason, "dirty");
+        assert!(worktree.path.is_dir(), "nothing moved");
+        std::fs::remove_file(worktree.path.join("wip.txt")).unwrap();
+        // Uncommitted work in the checkout: the switch would put it out of sight.
+        std::fs::write(repo.join("mine.txt"), "mine\n").unwrap();
+        let refused = handoff(&session_id, Handoff::Checkout, None, None).unwrap_err();
+        assert_eq!(refused.reason, "dirty_checkout");
+        assert!(worktree.path.is_dir());
+        std::fs::remove_file(repo.join("mine.txt")).unwrap();
+        // A checkout branch with commits no remote has.
+        git(
+            &repo,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://example.invalid/repo.git",
+            ],
+        )
+        .unwrap();
+        git(
+            &repo,
+            &["commit", "-q", "--allow-empty", "-m", "local only"],
+        )
+        .unwrap();
+        let refused = handoff(&session_id, Handoff::Checkout, None, None).unwrap_err();
+        assert_eq!(refused.reason, "unpushed_checkout");
+        assert!(
+            refused.message.contains("no remote has"),
+            "{}",
+            refused.message
+        );
+        assert!(worktree.path.is_dir());
+        // Nothing left to hide: the switch is safe again.
+        git(&repo, &["remote", "remove", "origin"]).unwrap();
+        let answer = handoff(&session_id, Handoff::Checkout, None, None).unwrap();
+        assert_eq!(answer["switched"], true);
+    }
+
+    #[test]
+    fn a_handoff_refuses_ignored_files_it_would_delete() {
+        let (_dir, repo) = repo();
+        let (session_id, worktree) = worktree_thread(&repo, "feat/handoff");
+        std::fs::write(repo.join(".git/info/exclude"), "secret.txt\n").unwrap();
+        std::fs::write(worktree.path.join("secret.txt"), "token\n").unwrap();
+        let refused = handoff(&session_id, Handoff::Checkout, None, None).unwrap_err();
+        assert_eq!(refused.reason, "ignored_files");
+        assert!(
+            refused.message.contains("secret.txt"),
+            "{}",
+            refused.message
+        );
+        assert!(worktree.path.join("secret.txt").is_file());
+        // Build output is not the user's work: it does not block the handoff.
+        std::fs::create_dir_all(worktree.path.join("target")).unwrap();
+        std::fs::write(worktree.path.join(".gitignore"), "target/\n").unwrap();
+        git(&worktree.path, &["add", ".gitignore"]).unwrap();
+        git(&worktree.path, &["commit", "-q", "-m", "ignore target"]).unwrap();
+        std::fs::remove_file(worktree.path.join("secret.txt")).unwrap();
+        std::fs::remove_file(repo.join(".git/info/exclude")).unwrap();
+        let answer = handoff(&session_id, Handoff::Checkout, None, None).unwrap();
+        assert_eq!(answer["switched"], true);
+    }
+
+    #[test]
+    fn a_worktrees_state_names_its_branch_distance_files_and_last_commit() {
+        let (_dir, repo) = repo();
+        let (_, worktree) = worktree_thread(&repo, "feat/state");
+        std::fs::write(worktree.path.join("a.txt"), "a\n").unwrap();
+        git(&worktree.path, &["add", "-A"]).unwrap();
+        git(&worktree.path, &["commit", "-q", "-m", "add a"]).unwrap();
+        std::fs::write(worktree.path.join("b.txt"), "b\n").unwrap();
+        // No upstream and no origin branch: the recorded base is what it counts against.
+        let row = state(&worktree.path);
+        assert_eq!(row["exists"], true);
+        assert_eq!(row["branch"], json!("feat/state"));
+        assert_eq!(row["ahead"], json!(1));
+        assert_eq!(row["behind"], json!(0));
+        assert_eq!(row["dirty"], json!(1));
+        assert_eq!(row["last_commit_subject"], json!("add a"));
+        assert!(
+            row["last_commit"]
+                .as_str()
+                .is_some_and(|at| at.contains('T')),
+            "{row:?}"
+        );
+        // With an `origin/<branch>` to track, that is what it is compared to.
+        let base = tip_of(&repo, "main");
+        git(
+            &repo,
+            &["update-ref", "refs/remotes/origin/feat/state", &base],
+        )
+        .unwrap();
+        let row = state(&worktree.path);
+        assert_eq!(row["against"], json!("origin/feat/state"));
+        assert_eq!(row["ahead"], json!(1));
+        // Several at once, and a path that is gone is a row, not a failure.
+        let gone = repo.join("no-such-worktree");
+        let rows = states(&[worktree.path.clone(), gone]);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1]["exists"], false);
+        assert_eq!(rows[0]["path"], json!(worktree.path));
+    }
+
+    #[test]
+    fn a_handoff_to_a_worktree_moves_a_checkout_thread_out_without_touching_it() {
+        let (_dir, repo) = repo();
+        let session_id = thread_in(&repo);
+        let head = tip_of(&repo, "main");
+        let answer = handoff(
+            &session_id,
+            Handoff::Worktree,
+            Some("Add the login form"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(answer["to"], json!("worktree"));
+        assert_eq!(answer["moved"], true);
+        assert_eq!(answer["branch"], json!("feat/login-form"));
+        let worktree = of_session(&session_id).expect("the thread runs in a worktree");
+        assert_eq!(
+            crate::config::load_session_workspace(&session_id)
+                .unwrap()
+                .cwd,
+            worktree.path
+        );
+        // The checkout is where it was: same branch, same commit.
+        assert_eq!(
+            git_line(&repo, &["symbolic-ref", "--quiet", "--short", "HEAD"]).unwrap(),
+            "main"
+        );
+        assert_eq!(tip_of(&repo, "main"), head);
+        // The new worktree starts from what the checkout had committed.
+        assert_eq!(tip_of(&repo, "feat/login-form"), head);
+        // A second handoff has nothing to move: it is in a worktree already.
+        let refused = handoff(&session_id, Handoff::Worktree, None, None).unwrap_err();
+        assert_eq!(refused.reason, "has_worktree");
+    }
+
+    #[test]
+    fn a_handoff_to_a_worktree_refuses_a_dirty_checkout() {
+        let (_dir, repo) = repo();
+        let session_id = thread_in(&repo);
+        std::fs::write(repo.join("mine.txt"), "mine\n").unwrap();
+        let refused = handoff(&session_id, Handoff::Worktree, Some("T"), None).unwrap_err();
+        assert_eq!(refused.reason, "dirty_checkout");
+        assert!(of_session(&session_id).is_none());
+        // Nothing was made: no worktree of this repository is left behind.
+        assert!(list(&repo).unwrap().is_empty());
     }
 
     #[test]

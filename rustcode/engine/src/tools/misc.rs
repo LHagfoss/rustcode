@@ -481,7 +481,7 @@ pub const SEARCH_SESSIONS: Tool = Tool {
 
 pub const LIST_WORKTREES: Tool = Tool {
     name: crate::orchestration::LIST_WORKTREES,
-    description: "List the threads that work in their own git worktree: session_id, title, project, branch and path. This project's by default, every project's with all_projects.",
+    description: "List the threads that work in their own git worktree: session_id, title, project, branch and path. This project's by default, every project's with all_projects. For where each one stands (distance from its upstream, changed files, last commit, pull request), use worktree_status.",
     arguments: r#"{"all_projects": false}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -698,6 +698,50 @@ pub const CLEANUP_WORKTREE: Tool = Tool {
             "properties": {
                 "session_id": {"type": "string", "minLength": 1},
                 "settle": {"type": "boolean", "description": "Set the thread to Settled after cleanup; true by default"}
+            },
+            "required": ["session_id"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+/// Orchestration version 10 (`docs/orchestrator.md`): where a worktree stands,
+/// and handing its work back to the user.
+pub const WORKTREE_STATUS: Tool = Tool {
+    name: crate::orchestration::WORKTREE_STATUS,
+    description: "Report where worktrees stand: the owning thread, its branch and path, commits ahead of and behind the branch it tracks, how many files are uncommitted, the last commit, and the pull request its branch heads. Omit session_id for every worktree thread this thread can reach, then this project's or every project's with all_projects; pass it for one thread, its own included. A read: no approval. Use it before handoff_worktree or cleanup_worktree.",
+    arguments: r#"{"session_id": "a thread's id, or omit for every worktree"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "minLength": 1, "description": "One thread, its own included; omit for every worktree this thread can reach"},
+                "all_projects": {"type": "boolean", "description": "Every project's worktree threads, with each one's project path"}
+            },
+            "required": [],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const HANDOFF_WORKTREE: Tool = Tool {
+    name: crate::orchestration::HANDOFF_WORKTREE,
+    description: "Move a thread's work to where the user can continue it, keeping every commit. `to: \"checkout\"` (the default) removes a delegate's worktree, switches the user's active checkout to its branch and moves the thread there, so the user can work locally; `to: \"worktree\"` gives a thread that runs in the checkout a worktree of its own on a new branch from the checkout's HEAD, leaving the checkout untouched. It refuses rather than forces: a worktree with uncommitted or ignored files, a checkout with uncommitted changes, a checkout on another branch holding commits no remote has, and a running thread. Nothing is stashed, rebased or reset, and no branch is deleted. The user approves it.",
+    arguments: r#"{"session_id": "the delegate whose work the user takes over", "to": "checkout"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "minLength": 1},
+                "to": {"type": "string", "enum": crate::orchestration::HANDOFF_TARGETS, "description": "checkout (default) moves a worktree's branch into the user's checkout; worktree moves a checkout thread into its own worktree"}
             },
             "required": ["session_id"],
             "additionalProperties": false

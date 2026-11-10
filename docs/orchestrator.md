@@ -35,6 +35,27 @@ Refuses (`error.data.reason = "dirty"` or `"unpushed"`) when the worktree has
 uncommitted changes or commits not on any remote branch, unless `force`.
 Removes the branch only when it is merged into the base.
 
+### `_rustcode/worktrees/state` `{ "paths": ["…"] }` → `{ "worktrees": [WorktreeState] }`
+
+Where each worktree stands now, read with local git only (no network, no
+approval): `{ "path", "exists", "branch"?, "against"?, "ahead"?, "behind"?,
+"dirty"?, "last_commit"?, "last_commit_subject"?, "error"? }`. `dirty` is the
+number of files with uncommitted changes (untracked ones included), `against`
+is the ref `ahead`/`behind` count from (the branch's upstream, else
+`origin/<branch>`, else the base it branched from), `last_commit` is the
+committer time (ISO 8601) with its subject, and a path whose folder is gone is
+a row with `exists: false` rather than an error. A git that cannot answer
+leaves the counts out and puts `error` on that row, never on the others. At
+most 64 paths are read in one call, in order.
+
+### `_rustcode/worktrees/handoff` `{ "sessionId": "…", "to": "checkout" | "worktree", "title"?, "branch"? }` → `{ "session_id", "to", "moved", "worktree_removed"?, "switched"?, "branch"?, "path"?, "repo"?, "detail"? }`
+
+Moves a thread's work between the repository's main checkout and a worktree of
+its own, refusing rather than forcing (see *Worktree handoff*). `sessionId` is
+the only input the engine needs: it resolves the worktree record, the
+repository and the branch itself, so the app cannot hand it a stale path.
+`title` and `branch` name the worktree a `to: "worktree"` handoff creates.
+
 Built (`rustcode/engine/src/worktrees.rs`). Details:
 
 - Errors are `invalid_params` with `data: { "reason", "message" }`; besides
@@ -919,6 +940,82 @@ writing the same path overwrote each other's pull request bodies (#3143,
 The app advertises 9 from `CAPABILITY_VERSION` (`state/orchestration.ts`),
 and a v8 app keeps exactly the v8 set and `PROMPT_HINT_V8`.
 
+## Orchestration tools v10
+
+Built. Clients advertising `_meta.rustcode.orchestration >= 10` also get the
+pair that answers "where does this work stand, and can the user continue it
+here?" without a shell: `worktree_status` reads it, `handoff_worktree` moves it.
+Before them an orchestrator ran `git status`, `git log` and `gh pr list` in a
+`run_command` per worktree, and moved work by hand — `git worktree remove`,
+then remembering to `git switch` in the checkout, which is exactly the step
+that loses a user's uncommitted work when it is done carelessly. The version is
+bumped for the same reason as v4, v6, v7 and v9: the *client* reads the threads,
+asks the user and carries the calls out, and a v9 app has neither the code nor
+the engine methods.
+
+| Tool | Args | Answer | Approval |
+| --- | --- | --- | --- |
+| `worktree_status` | `{ session_id?, all_projects? }` — omit `session_id` for every worktree thread this thread can reach (at most 20; `omitted_worktrees` says how many more) | `{ worktrees: [{ session_id, title, project?, status, branch, path, exists?, against?, ahead?, behind?, dirty?, last_commit?, last_commit_subject?, error?, pull, pull_error? }], omitted_worktrees?, pulls_omitted?, note? }`. `dirty` is a count of changed files and `against` the ref `ahead`/`behind` are counted from; `pull` is `{ number, title, state, merged, draft, branch?, url? }` and `null` when the branch heads no pull request. Pull requests are read for the first 12 worktrees (`pulls_omitted` counts the rest), one `gh` call each, run together and mapped exactly as `thread_status` maps them | None: a read of this project's threads, like `list_worktrees` |
+| `handoff_worktree` | `{ session_id, to?: "checkout" \| "worktree" }` — `to` is `checkout` unless it says `worktree` | `{ session_id, to, moved: true, worktree_removed?, switched?, branch?, path?, detail? }`. `to: "checkout"` answers `worktree_removed: true` and `switched: true` when your checkout took the branch; `switched: false` with a `detail` means the worktree is gone and the branch kept, but the checkout stayed where it was. A refusal is `not_allowed` (`no_worktree`, `has_worktree`, `not_checkout`), `conflict` (`dirty`, `dirty_checkout`, `unpushed_checkout`, `ignored_files`, `detached_checkout`) or `target_unavailable` (`unknown`, `not_git`, `no_folder`), each with the engine's own words after the reason | Asked, allowed by Full access, grant `handoff:<session id>:<to>` |
+
+### Worktree handoff
+
+`to: "checkout"` is the one an orchestrator uses when the user says they will
+take over: the delegate's branch is checked out in **the user's own checkout**,
+so work continues there under the user's hands rather than in
+`~/.config/rustcode/worktrees`. `to: "worktree"` is the reverse — a thread that
+runs in the checkout gets a worktree of its own, branched from the checkout's
+`HEAD`, so the next delegate does not edit the user's folder.
+
+Both keep every commit and neither ever discards work. AGENTS.md's rules — no
+stash, no rebase, no `reset --hard`, no force — are the engine's
+(`worktrees.rs` `to_checkout` / `to_worktree`), and they are checked in this
+order, before anything moves:
+
+- A **running thread** is refused (`conflict`): it would keep writing in a
+  folder it is losing.
+- The **worktree** must have no uncommitted files (`dirty`, with the count) and
+  no ignored files that are not build output (`ignored_files`, named, like
+  cleanup): `git worktree remove` would delete them. Build output
+  (`target/`, `node_modules/`, …) is expected and does not block.
+- The **checkout** must have no uncommitted changes (`dirty_checkout`, with the
+  count) and must not be on a detached HEAD (`detached_checkout`): the switch
+  would hide them. It must not be on another branch that holds commits no
+  remote has (`unpushed_checkout`, with the count and the branch): those
+  commits would stay on that branch, out of sight, and pushing or switching is
+  the user's call. A repository with no remote at all is not refused for it —
+  every branch there is local by nature.
+- A `to: "worktree"` handoff also refuses a thread that is not in the
+  repository's **main checkout** (`not_checkout`) and a **checkout with
+  uncommitted changes** (`dirty_checkout`): the new worktree would start
+  without them.
+
+The order matters. The worktree goes first, because a branch cannot be checked
+out in two worktrees; then the checkout switches to it; then the thread's
+folder follows (`session_move`), so the thread opens where its work is and no
+stale worktree record is left. Only `git worktree remove` runs — never
+`branch -D` — so a failure after the removal still leaves the branch and every
+commit. If `git switch` fails at that point, the answer says `switched: false`
+with the reason rather than failing after the move: the branch is intact, and
+the user can check it out themselves. `to: "worktree"` creates the worktree
+through the same `create` a `session/new` uses, and if the thread's folder
+cannot be moved, the new worktree is removed again so nothing is left behind.
+
+A grant is per thread and direction, so the same user who allowed a delegate to
+be started still answers one card before their checkout is switched. The app
+refuses before asking when it already knows the answer — the thread has no
+worktree, is in one already, or is working — and the engine refuses again on
+the real git state, which may have changed since the app read it.
+
+Like v9's three tools, the pair reaches an orchestrator through the `rustcode`
+MCP server an external harness runs. The built-in schema's byte cap is already
+exceeded at v9, so the built-in harness's own threads do not list these either;
+a v10 client loses none of the tools it had at v9
+(`version_ten_adds_tools_without_taking_any_away`).
+
+The app advertises 10 from `CAPABILITY_VERSION` (`state/orchestration.ts`), and
+a v9 app keeps exactly the v9 set and `PROMPT_HINT_V9`.
+
 ## External harnesses as orchestrators
 
 Built (`rustcode/engine/src/orchestration/{hub,mcp_server}.rs`). When the
@@ -936,8 +1033,8 @@ process list. `--token` still works for manual testing.
 The same environment carries `RUSTCODE_ORCHESTRATION_VERSION` (the client's
 version), so the server lists exactly that version's tools and prompt hint — a
 v3 app is never offered `thread_usage` or `query_data`, which it could not
-answer, a v5 app is never offered `read_activity`, and a v6 app is never
-offered `manage_queue`.
+answer, a v5 app is never offered `read_activity`, a v6 app is never
+offered `manage_queue`, and a v9 app is never offered the v10 worktree pair.
 
 While the user has Smart UI on, the same environment carries
 `RUSTCODE_SMART_UI=1` and the server also lists **`smart_ui_check`**
@@ -999,10 +1096,11 @@ can inject the server (unix), and in a thread's answer whether it did.
 engine does both); a thread's answer sets `checkpoints` to whether its cwd is
 in a git repository. `initialize` also advertises `_meta.rustcode.worktrees`,
 `checkpoints` and `threadStatus` (each `1`). The app advertises
-`_meta.rustcode.orchestration = 9` while threads may orchestrate
+`_meta.rustcode.orchestration = 10` while threads may orchestrate
 (`state/orchestration.ts` `CAPABILITY_VERSION`), and the newest client gets the
-v4 data-store tools, the v6 activity read, the v7 queue control and the v9
-delegate pull-request tools; v8 adds no tool, only its prompt hint.
+v4 data-store tools, the v6 activity read, the v7 queue control, the v9
+delegate pull-request tools and the v10 worktree pair; v8 adds no tool, only its
+prompt hint.
 
 ## Keeping an orchestrator's context small
 
@@ -1014,7 +1112,10 @@ itself, then from delegates' final answers. Four things keep it small:
 - The version 9 hint tells the orchestrator to leave reading, reviews and CI
   triage to delegates, check pull requests with `thread_status`, wait on all
   links in one long `wait_session` (or end the turn and be woken), and call
-  `list_harnesses` once.
+  `list_harnesses` once. Version 10 adds where worktrees stand
+  (`worktree_status`) and handing one back to the user (`handoff_worktree`),
+  which replace a `run_command` per worktree and the shell steps that used to
+  move work by hand.
 - A thread `start_session` or `fan_out` starts gets its task with one more
   paragraph after it (`DELEGATE_REPORT`, `state/orchestration.ts`): end with a
   report of about 12 lines, with no code, diffs or logs. `message_session`

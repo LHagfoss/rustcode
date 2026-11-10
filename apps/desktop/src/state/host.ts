@@ -27,7 +27,15 @@ import {
   Method,
   projectName,
 } from "../acp/types";
-import { type ThreadStatus, V2Method } from "../acp/v2";
+import {
+  type HandoffRefusal,
+  handoffRefusal,
+  parseHandoff,
+  parseWorktreeStates,
+  type ThreadStatus,
+  V2Method,
+  type WorktreeState,
+} from "../acp/v2";
 import { hasShell, shellCall } from "../lib/shell";
 import { childTitle, titleFrom } from "../lib/title";
 import { restoreChoice, selectOption, unavailableReason, usableHarnesses } from "./harness";
@@ -82,6 +90,8 @@ import {
   MAX_PROJECTS,
   MAX_PULL_REQUESTS,
   MAX_QUEUE_ITEMS,
+  MAX_WORKTREE_PULLS,
+  MAX_WORKTREES,
   markDelivered,
   mergeBooks,
   nextId,
@@ -457,6 +467,8 @@ export function verb(q: GrantAsk): string {
       return `merge “${q.target}”'s pull request`;
     case "cleanup":
       return `clean up “${q.target}”`;
+    case "handoff":
+      return `hand off “${q.target}”`;
   }
 }
 
@@ -480,6 +492,7 @@ const TOOL_OF_KIND: Record<GrantAsk["kind"], string> = {
   transfer: "transfer_session",
   merge: "merge_when_green",
   cleanup: "cleanup_worktree",
+  handoff: "handoff_worktree",
 };
 
 /** What the app did on the thread's behalf, when its call's row is not in flight to say it. */
@@ -494,6 +507,7 @@ const ALLOWED_NOTICE: Record<GrantAsk["kind"], string> = {
   transfer: "Moved a thread to another harness",
   merge: "Merged a delegate's pull request",
   cleanup: "Cleaned up a delegate's worktree",
+  handoff: "Handed a worktree off",
 };
 
 async function permitted(
@@ -743,6 +757,10 @@ async function perform(
       return listPendingRequests(caller);
     case "thread_status":
       return threadStatus(caller, call.target);
+    case "worktree_status":
+      return worktreeStatus(caller, call);
+    case "handoff_worktree":
+      return handoffWorktree(caller, call);
     case "merge_when_green":
       return mergeWhenGreen(caller, call);
     case "cleanup_worktree":
@@ -1395,6 +1413,212 @@ async function cleanupWorktree(
     answer.settled = true;
   }
   return answer;
+}
+
+/**
+ * `worktree_status`: where the worktree threads stand — the branch each one is
+ * on, its distance from the ref it tracks, how many files are uncommitted, its
+ * last commit, and the pull request its branch heads. The git reads are one
+ * engine call; the `gh` reads are bounded like `thread_status`'s. A read: no
+ * approval.
+ */
+async function worktreeStatus(
+  caller: RuleThread,
+  call: Extract<ReturnType<typeof parseCall>, { tool: "worktree_status" }>,
+): Promise<JsonObject> {
+  const where = useApp.getState().readAcrossProjects;
+  if (call.allProjects && !where) return reachRefused();
+  const entries: RuleThread[] = [];
+  if (call.target) {
+    const target = manageTarget(caller, call.target);
+    if (isFailure(target)) return failureJson(target);
+    if (!target.worktree) {
+      return { worktrees: [], note: `“${target.title}” does not run in a worktree` };
+    }
+    entries.push(target);
+  } else {
+    const rows = allThreads().filter((t) => t.worktree && (call.allProjects || reachesThread(caller, t)));
+    entries.push(...rows.slice(0, MAX_WORKTREES));
+  }
+  const omitted = call.target
+    ? 0
+    : Math.max(0, allThreads().filter((t) => t.worktree).length - entries.length);
+  if (!entries.length) {
+    return {
+      worktrees: [],
+      note: "no worktree threads here; start one with start_session and worktree",
+    };
+  }
+  // One engine call reads every worktree's branch, distance and changed files:
+  // a git process per path, not a `git` command from the agent.
+  const paths = entries.flatMap((t) => (t.worktree ? [t.worktree.path] : []));
+  let states: WorktreeState[] = [];
+  let stateError: string | undefined;
+  try {
+    states = parseWorktreeStates(await request(V2Method.worktreeState, { paths }, 60_000));
+  } catch (error) {
+    stateError = errorText(error);
+  }
+  // A pull request is one `gh` read, run together and capped like `thread_status`.
+  const asking = entries.slice(0, MAX_WORKTREE_PULLS);
+  const pulls = await Promise.allSettled(asking.map((entry) => delegatePull(entry)));
+  const worktrees = entries.map((entry, index) => {
+    const state = states.find((row) => row.path === entry.worktree?.path);
+    const read = index < pulls.length ? pulls[index] : undefined;
+    const pull = read?.status === "fulfilled" ? read.value : undefined;
+    return {
+      session_id: entry.id,
+      title: entry.title,
+      ...(call.allProjects ? { project: projectOf(entry) } : {}),
+      status: entry.status ?? (entry.running ? "running" : "idle"),
+      branch: state?.branch ?? entry.worktree?.branch ?? "",
+      path: state?.path ?? entry.worktree?.path ?? "",
+      ...(state ? { exists: state.exists } : {}),
+      // The ref is named wherever a count is given, so `ahead: 3` is never
+      // ambiguous about what it is ahead of.
+      ...(state?.against ? { against: state.against } : {}),
+      ...(state?.ahead === undefined ? {} : { ahead: state.ahead }),
+      ...(state?.behind === undefined ? {} : { behind: state.behind }),
+      ...(state?.dirty === undefined ? {} : { dirty: state.dirty }),
+      ...(state?.lastCommit ? { last_commit: state.lastCommit } : {}),
+      ...(state?.lastCommitSubject ? { last_commit_subject: state.lastCommitSubject } : {}),
+      ...(state?.error ? { error: { code: "unavailable", message: state.error } } : {}),
+      ...(pull?.error
+        ? { pull_error: { code: pull.error.code, message: pull.error.message } }
+        : pull
+          ? {
+              pull: pull.pull
+                ? {
+                    number: pull.pull.number,
+                    title: pull.pull.title,
+                    state: pull.pull.state,
+                    merged: pull.pull.merged,
+                    draft: pull.pull.draft,
+                    ...(pull.pull.branch !== (state?.branch ?? entry.worktree?.branch)
+                      ? { branch: pull.pull.branch }
+                      : {}),
+                    ...(pull.pull.url ? { url: pull.pull.url } : {}),
+                  }
+                : null,
+            }
+          : {}),
+    };
+  });
+  const pullsOmitted = entries.length - asking.length;
+  return {
+    worktrees,
+    ...(omitted ? { omitted_worktrees: omitted } : {}),
+    ...(pullsOmitted ? { pulls_omitted: pullsOmitted } : {}),
+    ...(stateError ? { note: `each worktree's git state could not be read: ${stateError}` } : {}),
+  };
+}
+
+/** The failure code each handoff refusal answers with: the reason itself says what to fix. */
+const HANDOFF_CODES: Record<HandoffRefusal, string> = {
+  no_worktree: "not_allowed",
+  has_worktree: "not_allowed",
+  not_checkout: "not_allowed",
+  dirty: "conflict",
+  dirty_checkout: "conflict",
+  unpushed_checkout: "conflict",
+  ignored_files: "conflict",
+  detached_checkout: "conflict",
+  not_git: "target_unavailable",
+  no_folder: "target_unavailable",
+  unknown: "target_unavailable",
+  failed: "failed",
+};
+
+/**
+ * `handoff_worktree`: move a delegate's work into the user's checkout (so they
+ * continue locally), or a thread out of the checkout into a worktree of its
+ * own. The engine refuses rather than force — a dirty worktree or checkout, a
+ * checkout on another branch with commits no remote has, a running thread —
+ * and nothing is stashed, rebased, reset or deleted. The user approves it.
+ */
+async function handoffWorktree(
+  caller: RuleThread,
+  call: Extract<ReturnType<typeof parseCall>, { tool: "handoff_worktree" }>,
+): Promise<JsonObject> {
+  const target = manageTarget(caller, call.target);
+  if (isFailure(target)) return failureJson(target);
+  const toCheckout = call.to === "checkout";
+  if (toCheckout && !target.worktree) {
+    return failureJson(
+      failure(
+        "not_allowed",
+        `“${target.title}” does not run in a worktree, so there is no branch to hand over`,
+      ),
+    );
+  }
+  if (!toCheckout && target.worktree) {
+    return failureJson(failure("not_allowed", `“${target.title}” already runs in a worktree`));
+  }
+  // A thread mid-turn would keep writing in a folder it is losing.
+  if (target.running) {
+    return failureJson(failure("conflict", `“${target.title}” is working; wait for its turn to finish`));
+  }
+  const checkout = projectOf(target);
+  const worktree = target.worktree;
+  const no = await permitted(caller, `handoff:${target.id}:${call.to}`, {
+    kind: "handoff",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: target.title,
+    detail: toCheckout
+      ? `It would remove the worktree at ${worktree?.path}, switch your checkout ${checkout} to ${worktree?.branch}, and move “${target.title}” there so you can continue locally. It refuses when your checkout has uncommitted changes or holds commits no remote has, or the worktree has uncommitted or ignored files. Nothing is stashed, rebased or reset, and the branch keeps every commit.`
+      : `It would create a worktree on a new branch from your checkout's HEAD and move “${target.title}” into it, leaving your checkout untouched. It refuses when your checkout has uncommitted changes.`,
+  });
+  if (no) return failureJson(no);
+  let result: Json;
+  try {
+    result = await request(
+      V2Method.worktreeHandoff,
+      { sessionId: target.id, to: call.to, title: target.title },
+      120_000,
+    );
+  } catch (error) {
+    if (error instanceof RpcError) {
+      const reason = handoffRefusal(error.data);
+      if (reason) {
+        // The reason names what to fix, and the engine's detail (which files,
+        // which commits, which branch) follows it; `error.message` alone is
+        // "Invalid params".
+        return failureJson(failure(HANDOFF_CODES[reason], `${reason}: ${errorText(error)}`));
+      }
+    }
+    return failureJson(failure("failed", `the handoff did not happen: ${errorText(error)}`));
+  }
+  const moved = parseHandoff(result);
+  if (!moved?.moved) {
+    return failureJson(failure("failed", "the engine answered without a handoff"));
+  }
+  // The thread's folder follows the move; the store must not keep the old one.
+  if (moved.to === "checkout") {
+    const repo = moved.path ?? checkout;
+    useApp.setState((s) => ({
+      sessions: s.sessions.map((x) => (x.id === target.id ? { ...x, worktree: undefined, cwd: repo } : x)),
+    }));
+    updateThread(target.id, (t) => ({ ...t, worktree: undefined, cwd: repo }));
+  } else {
+    const path = moved.path ?? target.folder;
+    const at = { path, branch: moved.branch ?? "", repo: moved.repo ?? checkout };
+    useApp.setState((s) => ({
+      sessions: s.sessions.map((x) => (x.id === target.id ? { ...x, worktree: at, cwd: path } : x)),
+    }));
+    updateThread(target.id, (t) => ({ ...t, worktree: at, cwd: path }));
+  }
+  setBook((b) => noteLinkEvent(b, caller.id, target.id, "handed_off"));
+  return {
+    session_id: target.id,
+    to: moved.to,
+    moved: true,
+    ...(moved.worktreeRemoved === undefined ? {} : { worktree_removed: moved.worktreeRemoved }),
+    ...(moved.switched === undefined ? {} : { switched: moved.switched }),
+    ...(moved.branch ? { branch: moved.branch } : {}),
+    ...(moved.path ? { path: moved.path } : {}),
+    ...(moved.detail ? { detail: moved.detail } : {}),
+  };
 }
 
 // ---------------------------------------------------------------- managing threads

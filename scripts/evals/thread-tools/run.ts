@@ -58,6 +58,32 @@ const MOCKS: Record<string, unknown> = {
   list_worktrees: {
     worktrees: [{ session_id: "t1", title: "Add the login form", branch: "feat/login-form", path: "/wt/login" }],
   },
+  worktree_status: {
+    worktrees: [
+      {
+        session_id: "t1",
+        title: "Add the login form",
+        branch: "feat/login-form",
+        path: "/wt/login",
+        exists: true,
+        against: "origin/feat/login-form",
+        ahead: 2,
+        behind: 0,
+        dirty: 0,
+        last_commit: "2026-05-01T10:00:00Z",
+        pull: { number: 42, state: "open", branch: "feat/login-form" },
+      },
+    ],
+  },
+  handoff_worktree: {
+    session_id: "t1",
+    to: "checkout",
+    moved: true,
+    worktree_removed: true,
+    switched: true,
+    branch: "feat/login-form",
+    path: "/Users/you/code/rustcode",
+  },
   list_pending_requests: {
     requests: [{ session_id: "t1", title: "Add the login form", kind: "approval", asks: "Run: cargo test" }],
   },
