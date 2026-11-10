@@ -26,6 +26,8 @@ export interface ProjectGroup {
   key: string;
   label: string;
   items: SessionSummary[];
+  /** The folder the group's threads run in: what **New thread** under it starts on. */
+  project?: string;
   /** The machine the group belongs to, drawn above its first project. */
   machine?: MachineHead;
   /** The first project of its machine: the heading goes here. */
@@ -82,6 +84,7 @@ export function machineGroups(
       groups.push({
         key: `${host}\u0000${project}`,
         label: project ? projectName(project) : "No folder",
+        ...(project ? { project } : {}),
         items: rows,
         machine: head,
         first,

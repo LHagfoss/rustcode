@@ -55,6 +55,8 @@ describe("the sidebar's machine groups", () => {
     expect(idle.only).toBe(true);
     expect(idle.first).toBe(true);
     expect(idle.machine?.state).toBe("offline");
+    // No project yet: no folder to start in, so its heading offers no New thread (ui/Sidebar.tsx).
+    expect(idle.project).toBeUndefined();
   });
 
   test("this computer comes first, then the saved machines, each with its projects inside", () => {
@@ -82,6 +84,11 @@ describe("the sidebar's machine groups", () => {
       `${LINUX}\u0000/home/lars/code/rustcode`,
       `${STUDIO}\u0000/Users/lars/code/notes`,
     ]);
+    // Each group carries its folder as well, so **New thread** under it starts there on that machine.
+    expect(groups.map((group) => group.project)).toEqual([
+      "/home/lars/code/rustcode",
+      "/Users/lars/code/notes",
+    ]);
   });
 
   test("a machine's worktree thread belongs to its repository, not the worktree folder", () => {
@@ -105,6 +112,8 @@ describe("the sidebar's machine groups", () => {
       {
         key: `${LOCAL_HOST}\u0000/Users/you/code/notes`,
         label: "notes",
+        // What **New thread** under the group starts on (`ui/Sidebar.tsx`).
+        project: "/Users/you/code/notes",
         items: [local],
         machine: { id: LOCAL_HOST, name: "This computer", state: "connected", retryInSecs: null },
         first: true,

@@ -200,6 +200,12 @@ export interface SessionSummary {
    * main checkout and its worktrees are one project for the orchestration tools.
    */
   repo?: string;
+  /**
+   * The git remote of the project the thread's folder belongs to (`_meta.rustcode.remote`),
+   * when its machine reports one: what finds the same project on another computer
+   * (state/projects.ts).
+   */
+  remote?: string;
   /** The named account the thread runs on (`_meta.rustcode.account`). */
   account?: string;
   /** Engine-reported status (`_meta.rustcode.status`). */
@@ -258,6 +264,7 @@ export function parseSessionList(result: Json): { sessions: SessionSummary[]; ne
     sessions.push({
       worktree: parseWorktree(rc?.worktree),
       repo: str(rc?.repo),
+      remote: str(rc?.remote),
       status: parseStatus(rc?.status),
       pinned: bool(rc?.pinned),
       account: str(rc?.account),
