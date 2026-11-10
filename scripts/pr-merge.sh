@@ -3,15 +3,12 @@
 #
 # Waits for every check except the advisory ones, which take longest and never
 # block a merge: the portability jobs (Windows and macOS compile coverage,
-# `continue-on-error` in ci.yml) and CodeQL code scanning (`Analyze (<lang>)`
-# and its `CodeQL` summary; Rust alone takes 15+ minutes against ~4 for the
-# tests). CodeQL keeps running on the PR and on main, and its alerts land in
-# the Security tab. Late-registering, path-filtered jobs are caught by
-# waiting until a pass finds nothing pending twice in a row.
+# `continue-on-error` in ci.yml). Late-registering, path-filtered jobs are
+# caught by waiting until a pass finds nothing pending twice in a row.
 set -euo pipefail
 
 pr="${1:?usage: scripts/pr-merge.sh <pr-number>}"
-advisory='portability coverage|^Analyze \(|^CodeQL\t'
+advisory='portability coverage'
 quiet=0
 for _ in $(seq 1 240); do
     checks="$(gh pr checks "$pr" 2>/dev/null | grep -Ev "$advisory" || true)"
