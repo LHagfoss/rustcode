@@ -25,11 +25,22 @@ import {
   type HarnessModel,
   type HarnessSnapshot,
   Method,
+  type PermissionOption,
+  type PermissionRequest,
   projectName,
 } from "../acp/types";
 import { type ThreadStatus, V2Method } from "../acp/v2";
+import { optionScope } from "../lib/approval";
 import { hasShell, shellCall } from "../lib/shell";
 import { childTitle, titleFrom } from "../lib/title";
+import {
+  type AttachedFile,
+  attachedExtras,
+  attachmentRefusal,
+  attachmentRoots,
+  MAX_ATTACHMENT_FILES,
+} from "./attachments";
+import type { ComposeExtras } from "./compose";
 import { restoreChoice, selectOption, unavailableReason, usableHarnesses } from "./harness";
 import { usageOf } from "./harnessUsage";
 import {
@@ -40,9 +51,11 @@ import {
   newThreadAccountOn,
 } from "./logins";
 import {
+  type ApprovalChoice,
   activeDescendants,
   activityOf,
   advanceLink,
+  ancestorsOf,
   askingIds,
   capped,
   checkManage,
@@ -133,6 +146,9 @@ import {
 } from "./queues";
 import {
   type AppState,
+  answerPermission,
+  answerQuestionOptions,
+  answerQuestionText,
   cancel,
   createSession,
   effortMemory,
@@ -158,6 +174,7 @@ import {
   setPermissionMode,
   setSnoozed,
   setThreadStatus,
+  setThreadsStatus,
   statusOf,
   steer,
   steeringOf,
@@ -447,6 +464,8 @@ export function verb(q: GrantAsk): string {
       return `run one task on ${q.harnesses?.length ?? 2} harnesses`;
     case "organize":
       return `change “${q.target}”`;
+    case "answer":
+      return `answer what “${q.target}” asks`;
     case "interrupt":
       return `stop “${q.target}”`;
     case "configure":
@@ -475,6 +494,7 @@ const TOOL_OF_KIND: Record<GrantAsk["kind"], string> = {
   start: "start_session",
   fan_out: "fan_out",
   organize: "update_session",
+  answer: "answer_request",
   interrupt: "interrupt_session",
   configure: "configure_session",
   transfer: "transfer_session",
@@ -489,6 +509,7 @@ const ALLOWED_NOTICE: Record<GrantAsk["kind"], string> = {
   start: "Started a thread",
   fan_out: "Fanned out across harnesses",
   organize: "Changed a thread",
+  answer: "Answered a thread",
   interrupt: "Stopped a thread",
   configure: "Changed a thread's model",
   transfer: "Moved a thread to another harness",
@@ -710,7 +731,7 @@ async function perform(
     case "read_session":
       return read(caller, call.target, call.lastTurns, call.offset);
     case "message_session":
-      return message(caller, call.target, call.text);
+      return message(caller, call.target, call.text, call.attachments);
     case "manage_queue":
       return manageQueue(caller, call);
     case "wait_session":
@@ -741,6 +762,10 @@ async function perform(
       return transferSession(caller, call.target, call.harness);
     case "list_pending_requests":
       return listPendingRequests(caller);
+    case "answer_request":
+      return answerRequest(caller, call);
+    case "organize_threads":
+      return organizeThreads(caller, call);
     case "thread_status":
       return threadStatus(caller, call.target);
     case "merge_when_green":
@@ -1450,6 +1475,185 @@ async function updateSession(caller: RuleThread, call: UpdateCall): Promise<Json
   };
 }
 
+type AnswerCall = Extract<ReturnType<typeof parseCall>, { tool: "answer_request" }>;
+type OrganizeCall = Extract<ReturnType<typeof parseCall>, { tool: "organize_threads" }>;
+
+/** The option an approval's `choice` answers with, as the card's own three buttons would. */
+function optionFor(request: PermissionRequest, choice: ApprovalChoice): PermissionOption | null {
+  const of = (scope: ReturnType<typeof optionScope>) =>
+    request.options.find((o) => optionScope(o) === scope) ?? null;
+  if (choice === "deny") return of("decline");
+  if (choice === "allow_always") return of("always") ?? of("hour");
+  // An engine that only offers a standing answer still lets "once" go through once.
+  return of("once") ?? of("always");
+}
+
+/** The options a question offers as answers: the allow and plain ones its card lists, not a reject. */
+const questionAnswers = (request: PermissionRequest) =>
+  request.options.filter((o) => !o.kind || o.kind === "allow_once" || o.kind === "allow_always");
+
+/** One approval's answer, in the words the grant card and the notice use. */
+const ANSWER_LABEL: Record<ApprovalChoice, string> = {
+  allow_once: "allow it once",
+  allow_always: "always allow it",
+  deny: "decline it",
+};
+
+/**
+ * `answer_request`: answer one approval or question a thread waits on. The
+ * caller answers a thread below it in its own delegation tree, never itself,
+ * and never one in another project; the card the user would have clicked is
+ * the one this answers (`state/store.ts` `answerPermission`, `answerQuestionText`).
+ */
+async function answerRequest(caller: RuleThread, call: AnswerCall): Promise<JsonObject> {
+  const target = ruleThread(useApp.getState(), call.target);
+  const refused = checkManage(caller, target);
+  if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
+  if (target.id === caller.id) {
+    return failureJson(failure("not_allowed", "a thread cannot answer its own request"));
+  }
+  if (!ancestorsOf(book(), target.id).has(caller.id)) {
+    return failureJson(
+      failure(
+        "not_allowed",
+        `“${target.title}” is not a thread this one delegated to; only a thread below this one in its delegation tree can be answered`,
+      ),
+    );
+  }
+  const waiting = () =>
+    useApp.getState().threads[target.id]?.permissions.find((p) => String(p.rpcId) === call.requestId);
+  const request = waiting();
+  if (!request) {
+    return failureJson(
+      failure("not_found", "that request is not waiting any more; list_pending_requests again"),
+    );
+  }
+  const question = request.question;
+  if (question && call.choice) {
+    return failureJson(failure("invalid", "that request is a question: give answer"));
+  }
+  if (!question && call.answer) {
+    return failureJson(failure("invalid", "that request is an approval: give choice"));
+  }
+  const option = question ? null : optionFor(request, call.choice!);
+  if (!question && !option) {
+    return failureJson(failure("invalid", `that request does not offer ${call.choice!.replace(/_/g, " ")}`));
+  }
+  const asked = capped(question?.text || request.title, 200).text;
+  const detail = question
+    ? `It would answer “${asked}” with: ${call.answer}`
+    : `It would ${ANSWER_LABEL[call.choice!]} “${asked}”`;
+  const no = await permitted(caller, `answer:${target.id}`, {
+    kind: "answer",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: target.title,
+    detail,
+  });
+  if (no) return failureJson(no);
+  // The user took their time: the card may have been answered in its own chat meanwhile.
+  const current = waiting();
+  if (!current) {
+    return failureJson(failure("conflict", "that request was answered before this call reached it"));
+  }
+  // A question takes the id of one of its options when the answer names one, and plain text
+  // otherwise, as the card's own buttons and text field do.
+  const chosen = current.question ? questionAnswers(current).find((o) => o.id === call.answer) : undefined;
+  if (current.question) {
+    if (chosen) answerQuestionOptions(current, [chosen]);
+    else if (questionAnswers(current).length) answerQuestionText(current, call.answer ?? "");
+    else {
+      return failureJson(failure("invalid", "that question offers no answer this call can give"));
+    }
+  } else answerPermission(current, option);
+  return {
+    session_id: target.id,
+    request_id: call.requestId,
+    thread: target.title,
+    kind: question ? "question" : "approval",
+    ...(question
+      ? { answer: call.answer ?? "", ...(chosen ? { option: chosen.name } : {}) }
+      : { choice: call.choice ?? "allow_once", option: option?.name ?? "" }),
+  };
+}
+
+/**
+ * `organize_threads`: the batch form of `update_session`. Every listed thread
+ * of the caller's project gets the same changes, the user is asked once, and a
+ * thread this caller cannot manage is skipped with the reason instead of
+ * failing the batch.
+ */
+async function organizeThreads(caller: RuleThread, call: OrganizeCall): Promise<JsonObject> {
+  const decided: RuleThread[] = [];
+  const skipped: JsonObject[] = [];
+  for (const id of call.targets) {
+    const target = manageTarget(caller, id);
+    if (isFailure(target)) {
+      skipped.push({ session_id: id, reason: target.message });
+      continue;
+    }
+    decided.push(target);
+  }
+  if (!decided.length) {
+    return failureJson(
+      failure("not_allowed", skipped[0]?.reason?.toString() ?? "no thread of that list can be changed"),
+    );
+  }
+  const others = decided.filter((target) => target.id !== caller.id);
+  if (others.length) {
+    const changes = [
+      call.title && `rename ${others.length === 1 ? "it" : "them"} to “${call.title}”`,
+      call.pinned !== undefined && (call.pinned ? "pin" : "unpin"),
+      call.unread && "mark unread",
+      call.archived !== undefined && (call.archived ? "settle" : "bring back"),
+    ].filter(Boolean);
+    const names = others.map((target) => `“${target.title}”`).join(", ");
+    const key = `organize:${decided
+      .map((target) => target.id)
+      .sort()
+      .join(",")}`;
+    const no = await permitted(caller, key, {
+      kind: "organize",
+      caller: caller.id,
+      callerTitle: caller.title,
+      target: names,
+      detail: `It would ${changes.join(", ")} ${names}.`,
+    });
+    if (no) return failureJson(no);
+  }
+  const settled: string[] = [];
+  const threads: JsonObject[] = [];
+  for (const target of decided) {
+    if (call.title && !(await renameThread(target.id, call.title))) {
+      skipped.push({ session_id: target.id, reason: "the thread could not be renamed" });
+      continue;
+    }
+    if (call.pinned !== undefined && useApp.getState().pinned.includes(target.id) !== call.pinned) {
+      togglePin(target.id);
+    }
+    if (call.unread) markUnread(target.id);
+    if (call.archived !== undefined) settled.push(target.id);
+    threads.push({
+      session_id: target.id,
+      title: ruleThread(useApp.getState(), target.id)?.title ?? target.title,
+      pinned: useApp.getState().pinned.includes(target.id),
+      ...(call.unread ? { unread: true } : {}),
+    });
+  }
+  // One status write for the batch, as the sidebar's own multi-select does it.
+  if (settled.length) await setThreadsStatus(settled, call.archived ? "done" : "idle");
+  for (const entry of threads) {
+    const id = String(entry.session_id);
+    entry.status = statusOf(useApp.getState(), id);
+    entry.archived = statusOf(useApp.getState(), id) === "done";
+  }
+  return {
+    changed: threads.length,
+    threads,
+    ...(skipped.length ? { skipped } : {}),
+  };
+}
+
 async function interruptSession(caller: RuleThread, id: string): Promise<JsonObject> {
   const target = manageTarget(caller, id);
   if (isFailure(target)) return failureJson(target);
@@ -1555,9 +1759,11 @@ function listPendingRequests(caller: RuleThread): JsonObject {
     .flatMap(({ thread, rule }) =>
       thread.permissions.map((p) => ({
         session_id: thread.id,
+        request_id: String(p.rpcId),
         title: rule?.title ?? "",
         kind: p.question ? "question" : "approval",
         asks: p.question?.text ?? p.title,
+        options: p.options.map((o) => ({ id: o.id, name: o.name })),
       })),
     );
   return { requests };
@@ -1634,8 +1840,39 @@ export function turnsOf(items: TranscriptItem[]): JsonObject[] {
   return out;
 }
 
-function message(caller: RuleThread, targetId: string, text: string): Promise<JsonObject> {
-  return withLinkGate(() => messageNow(caller, targetId, text));
+/**
+ * The files a message carries: each under the caller's project or worktree,
+ * measured by the shell (the web view cannot stat a file). `src-tauri`'s
+ * `attached_files` enforces the same roots and the 5 MB ceiling for the paths
+ * the pure rule above accepted.
+ */
+async function attachmentFiles(
+  caller: RuleThread,
+  paths: readonly string[],
+): Promise<AttachedFile[] | Failure> {
+  if (!paths.length) return [];
+  if (paths.length > MAX_ATTACHMENT_FILES) {
+    return failure("invalid", `a message attaches at most ${MAX_ATTACHMENT_FILES} files`);
+  }
+  const roots = attachmentRoots(caller);
+  for (const path of paths) {
+    const refused = attachmentRefusal(path, roots);
+    if (refused) return refused;
+  }
+  try {
+    return await shellCall<AttachedFile[]>("attached_files", { paths: [...paths], roots });
+  } catch (error) {
+    return failure("invalid", `the files could not be attached: ${errorText(error)}`);
+  }
+}
+
+function message(
+  caller: RuleThread,
+  targetId: string,
+  text: string,
+  attachments: readonly string[] = [],
+): Promise<JsonObject> {
+  return withLinkGate(() => messageNow(caller, targetId, text, attachments));
 }
 
 /** Do not message a settled or archived thread. */
@@ -1650,19 +1887,32 @@ function messageTargetRefusal(state: AppState, targetId: string): Failure | null
   return null;
 }
 
-async function messageNow(caller: RuleThread, targetId: string, text: string): Promise<JsonObject> {
+async function messageNow(
+  caller: RuleThread,
+  targetId: string,
+  text: string,
+  attachments: readonly string[] = [],
+): Promise<JsonObject> {
   const state = useApp.getState();
   const target = ruleThread(state, targetId);
   const refused = checkMessage(caller, target, book(), false, false, delegateLimits());
   if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
   const unavailable = messageTargetRefusal(state, targetId);
   if (unavailable) return failureJson(unavailable);
+  // The files are checked before the user is asked about a message that could not carry
+  // all of them, so a refusal never costs an approval.
+  const files = await attachmentFiles(caller, attachments);
+  if (isFailure(files)) return failureJson(files);
+  const extras = files.length ? attachedExtras(files) : undefined;
+  const withFiles = files.length
+    ? `${text}\n\n${files.length === 1 ? "1 file attached" : `${files.length} files attached`}: ${files.map((f) => f.name).join(", ")}`
+    : text;
   const no = await permitted(caller, target.id, {
     kind: "message",
     caller: caller.id,
     callerTitle: caller.title,
     target: target.title,
-    detail: text,
+    detail: withFiles,
   });
   if (no) return failureJson(no);
   // The user took their time: look again.
@@ -1702,8 +1952,14 @@ async function messageNow(caller: RuleThread, targetId: string, text: string): P
     harnessName,
     model: session?.model,
   });
-  deliver(target.id, delivered(text, caller.title), id, caller.id);
-  return { link_id: id, receipt: busy ? "queued" : "started", session_id: target.id, title: target.title };
+  deliver(target.id, delivered(text, caller.title), id, caller.id, extras);
+  return {
+    link_id: id,
+    receipt: busy ? "queued" : "started",
+    session_id: target.id,
+    title: target.title,
+    ...(files.length ? { attachments: files.map((f) => f.path) } : {}),
+  };
 }
 
 function addLink(link: Omit<Link, "id" | "createdAt" | "events">): string {
@@ -1728,16 +1984,19 @@ function addLink(link: Omit<Link, "id" | "createdAt" | "events">): string {
 }
 
 /** After the turn the target runs, never into it: the same queue a typed message uses. */
-function deliver(target: string, text: string, link: string, from: string) {
+function deliver(target: string, text: string, link: string, from: string, extras?: ComposeExtras) {
   const thread = useApp.getState().threads[target];
   if (thread?.running) {
     // `from` is who queued it, so that thread can correct it while it waits (`manageQueue`).
     updateThread(target, (t) => ({
       ...t,
-      queue: [...t.queue, { id: localId("queued"), text, link, from, queuedAt: Date.now() }],
+      queue: [
+        ...t.queue,
+        { id: localId("queued"), text, link, from, queuedAt: Date.now(), ...(extras ? { extras } : {}) },
+      ],
     }));
   } else {
-    void runPrompt(target, text, undefined, { link });
+    void runPrompt(target, text, extras, { link });
   }
 }
 
