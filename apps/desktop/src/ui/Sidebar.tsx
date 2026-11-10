@@ -529,24 +529,18 @@ const TRAILING_SLOT =
   "flex shrink-0 flex-nowrap items-center justify-end gap-1.5 whitespace-nowrap text-sub text-fg-muted tabular";
 
 /**
- * Hovering swaps the row's trailing state for its actions — Pin, Settle (or Unsettle) and the menu,
- * three 24px buttons 8px in from the row's end. They are drawn over the right end rather than in
- * their own room, so the title never moves: the line fades out under them instead. The fade is
- * taken from the row's right edge in pixels, so a narrow sidebar does not lose more of a title than
- * a wide one, and the actions' 88px is what it covers.
+ * Hovering swaps the row's trailing state for its actions: Pin, Settle (or Unsettle) and the menu,
+ * three 24px buttons in the slot the state held. The slot takes their width while they show, so
+ * the title truncates before them instead of running under them, and nothing is drawn over text.
+ * The actions themselves sit beside the row's button (a button cannot hold buttons), placed on the
+ * slot's line and fading in as the state fades out.
  */
-const FADE_UNDER_ACTIONS = cx(
-  "group-hover:[mask-image:linear-gradient(to_right,black_calc(100%_-_96px),transparent_calc(100%_-_84px))]",
-  "group-hover:[-webkit-mask-image:linear-gradient(to_right,black_calc(100%_-_96px),transparent_calc(100%_-_84px))]",
-  "group-has-[:focus-visible]:[mask-image:linear-gradient(to_right,black_calc(100%_-_96px),transparent_calc(100%_-_84px))]",
-  "group-has-[:focus-visible]:[-webkit-mask-image:linear-gradient(to_right,black_calc(100%_-_96px),transparent_calc(100%_-_84px))]",
-  "group-has-[[data-state=open]]:[mask-image:linear-gradient(to_right,black_calc(100%_-_96px),transparent_calc(100%_-_84px))]",
-  "group-has-[[data-state=open]]:[-webkit-mask-image:linear-gradient(to_right,black_calc(100%_-_96px),transparent_calc(100%_-_84px))]",
+/** The trailing slot while the actions show: their width, its own state hidden under them. */
+const SWAPPED_ON_HOVER = cx(
+  "group-hover:w-[72px] group-hover:*:invisible",
+  "group-has-[:focus-visible]:w-[72px] group-has-[:focus-visible]:*:invisible",
+  "group-has-[[data-state=open]]:w-[72px] group-has-[[data-state=open]]:*:invisible",
 );
-
-/** What the hover actions are drawn over: the state whose place they take. */
-const HIDDEN_ON_HOVER =
-  "group-hover:invisible group-has-[:focus-visible]:invisible group-has-[[data-state=open]]:invisible";
 
 /** What a thread's calls changed, small enough for the row's second line or its trailing slot. */
 function DiffStat({ diff }: { diff: { added: number; removed: number } }) {
@@ -841,7 +835,7 @@ const ThreadRow = memo(function ThreadRow({
     age
   );
   const stateSlot = (pill: boolean) => (
-    <span title={chip?.title} className={cx(TRAILING_SLOT, HIDDEN_ON_HOVER)}>
+    <span title={chip?.title} className={cx(TRAILING_SLOT, SWAPPED_ON_HOVER)}>
       {/* What the row has no line for: the harness it runs on, then the diff. */}
       {!pill && meta === "trailing" && external && (
         <HarnessIcon id={session.harness!} name={harness?.name} size={12} className="shrink-0" />
@@ -919,7 +913,7 @@ const ThreadRow = memo(function ThreadRow({
                   {/* One line: the mark of where it runs, its title, and the one thing it says at
                       the end. The project's name is not repeated here, since the mark carries it
                       and the hover card and the folder's heading spell it out. */}
-                  <span className={cx("relative flex w-full min-w-0 items-center gap-2", FADE_UNDER_ACTIONS)}>
+                  <span className="relative flex w-full min-w-0 items-center gap-2">
                     {!grouped && <ProjectMark name={project} size={14} className={markTint} />}
                     {glyphs}
                     <span className={titleTint}>{session.title || "New thread"}</span>
@@ -959,12 +953,7 @@ const ThreadRow = memo(function ThreadRow({
                   )}
                 </>
               ) : (
-                <span
-                  className={cx(
-                    "title-first-row relative flex w-full min-w-0 flex-col gap-0.5",
-                    FADE_UNDER_ACTIONS,
-                  )}
-                >
+                <span className="title-first-row relative flex w-full min-w-0 flex-col gap-0.5">
                   {/* A card of up to three lines. The first says where it runs and what it is doing:
                       the project's mark and name (under a project heading, the harness instead),
                       and the state or age at its end, where the hover actions are drawn. */}
@@ -988,6 +977,7 @@ const ThreadRow = memo(function ThreadRow({
                   <span className="flex min-w-0 items-center gap-1.5">
                     {glyphs}
                     <span className={titleTint}>{session.title || "New thread"}</span>
+                    {meta === "trailing" && diff && <DiffStat diff={diff} />}
                     {!grouped && meta !== "line" && external && (
                       <HarnessIcon
                         id={session.harness!}
@@ -1045,9 +1035,10 @@ const ThreadRow = memo(function ThreadRow({
             data-row-actions
             // Hidden while the row is dragged: the actions sit beside the row, not on it.
             className={cx(
-              "absolute top-1 right-2 hidden items-center",
+              "invisible absolute right-2 flex items-center opacity-0 transition-[opacity,visibility] duration-150 ease-snappy",
+              compact ? "top-1" : "top-1.5",
               !dragging &&
-                "group-hover:flex group-has-[:focus-visible]:flex group-has-[[data-state=open]]:flex",
+                "group-hover:visible group-hover:opacity-100 group-has-[:focus-visible]:visible group-has-[:focus-visible]:opacity-100 group-has-[[data-state=open]]:visible group-has-[[data-state=open]]:opacity-100",
             )}
           >
             <RowAction label={pinned ? "Unpin" : "Pin"} hint={pinKey} onClick={() => togglePin(session.id)}>
