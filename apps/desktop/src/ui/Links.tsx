@@ -4,6 +4,7 @@
 // asks the user before a thread reaches another one.
 
 import {
+  ChevronDown,
   CircleCheck,
   CircleX,
   Clock,
@@ -16,9 +17,16 @@ import {
   X,
 } from "lucide-react";
 import { Dialog, Popover } from "radix-ui";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { agentActive, agentElapsed, type SubagentInfo, spawnedAgentId } from "../acp/rustcode";
 import type { StackAgent, StackState } from "../state/agentStack";
+import {
+  foldStrip,
+  stripCounts,
+  stripFolded,
+  stripSummary,
+  subscribeStripFold,
+} from "../state/delegateStrip";
 import {
   type AgentState,
   addBranch,
@@ -53,7 +61,7 @@ import {
   useNow,
 } from "./AgentViews";
 import { useDelegateBranch } from "./DelegateTree";
-import { cx, Pill, Tooltip } from "./primitives";
+import { cx, Pill, Spinner, Tooltip } from "./primitives";
 
 const NO_AGENTS: SubagentInfo[] = [];
 
@@ -99,7 +107,7 @@ function LinkRow({ link }: { link: Link }) {
             type="button"
             aria-label={active ? `Stop ${link.targetTitle}` : `Remove ${link.targetTitle}`}
             onClick={() => (active ? void stopLink(link.id) : dismissLink(link.id))}
-            className="flex size-[22px] shrink-0 items-center justify-center rounded-sm text-fg-faint hover:bg-fill hover:text-fg"
+            className="flex size-[22px] shrink-0 items-center justify-center rounded-sm text-fg-faint hover:bg-fill hover:text-fg active:bg-fill-strong"
           >
             <X size={12} strokeWidth={2.5} />
           </button>
@@ -298,17 +306,56 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
   // details panel's row (and a failure the inbox's), so the strip stays out of the chat's way
   // rather than counting a lifetime or pinning an old failure. A native agent at work is a row
   // of its own too.
+  // What the strip's rows count as, for its one line: the delegates it draws, and how many of them
+  // work or wait. A harness's agent and RustCode's are both listed only while at work, so they add
+  // to `running` without a state of their own.
+  const counts = stripCounts(
+    live.map((_, i) => LINK_AGENT_STATE[states[i] ?? "done"]),
+    natives.length + builtins.length,
+  );
+  // Folded for the session, per thread: the rows a reader put away stay away while they move
+  // between threads, and come back when the app opens again.
+  const folded = useSyncExternalStore(subscribeStripFold, () => stripFolded(threadId));
   const { working, needs } = strip.total.counts;
   const news = live.length > 0 && working + needs > 0;
   if (!news && !drivenBy && !fanOuts.length && !natives.length && !builtins.length) return null;
+  const rowsId = `delegate-strip-${threadId}`;
   return (
     // The one surface this strip shares with the jump-to-latest pill above it and its own group card
     // (`index.css` `.rc-glass-overlay`): the transcript keeps showing through, so a run of threads
     // reads as an overlay on the chat rather than a hole cut in it. Its rows are transparent over it.
     <div className="rc-glass-overlay relative flex flex-col gap-0.5 rounded-xl p-1 rc-in">
       {drivenBy && <WorkingFor link={drivenBy} />}
-      {(live.length > 0 || fanOuts.length > 0 || natives.length > 0 || builtins.length > 0) && (
-        <div className="flex flex-col gap-0.5">
+      {/* The strip folds to this one line: what it holds and what that work does now. Two or more
+          rows get it, because one row is already one line; folding it leaves the header alone, and
+          the transcript keeps the room it took. */}
+      {counts.delegates > 1 && (
+        <Tooltip label={folded ? "Show the delegates" : "Fold the delegates into one line"}>
+          <button
+            type="button"
+            aria-expanded={!folded}
+            // Only when there is a list to point at: a folded strip draws no rows.
+            aria-controls={folded ? undefined : rowsId}
+            onClick={() => foldStrip(threadId, !folded)}
+            className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-lg px-2 text-left text-caption text-fg-muted hover:bg-fill-subtle active:bg-fill-strong"
+          >
+            <ChevronDown
+              size={12}
+              aria-hidden
+              className={cx(
+                "shrink-0 text-fg-faint transition-transform duration-200",
+                folded && "-rotate-90",
+              )}
+            />
+            <span className="min-w-0 truncate">{stripSummary(counts)}</span>
+            {counts.running > 0 && <Spinner size={9} className="text-accent" />}
+          </button>
+        </Tooltip>
+      )}
+      {!folded && (live.length > 0 || fanOuts.length > 0 || natives.length > 0 || builtins.length > 0) && (
+        // Capped and scrolled on its own: a long run of delegates stops growing over the chat and
+        // the strip keeps one height, whatever the branch does.
+        <div id={rowsId} className="flex max-h-[min(320px,45vh)] flex-col gap-0.5 overflow-y-auto">
           {live.length > 2 ? (
             <ManyLinks links={live} threadId={threadId} strip={strip} />
           ) : (
