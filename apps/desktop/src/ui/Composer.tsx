@@ -276,8 +276,12 @@ const projectKeyOf = (session: { cwd?: string; repo?: string; worktree?: { repo?
  * the engine says so.
  */
 function mentionStateOf(session: { status?: ThreadStatus }, working: boolean, asking: boolean): MentionState {
-  if (asking || session.status === "needs_input") return "needs";
-  if (working || session.status === "running") return "working";
+  // The app's own reading of a thread (state/store.ts `statusOf`): what it asks of you, then that it
+  // works, then what the engine last listed.
+  if (asking) return "needs";
+  if (working) return "working";
+  if (session.status === "needs_input") return "needs";
+  if (session.status === "running") return "working";
   return session.status === "done" ? "settled" : "open";
 }
 
