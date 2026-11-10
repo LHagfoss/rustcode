@@ -80,10 +80,11 @@ export type TranscriptItem =
       waits?: ToolWait[];
       /**
        * Its work goes on after the call returned: `agent` for a subagent sent
-       * to the background (the turn waits for it), `task` for a background
-       * command (it outlives the turn; the engine completes the call when it ends).
+       * to the background (the turn waits for it), `command` for a command the
+       * harness backgrounded, which the row says and the thread's own waiting
+       * line reports once it is idle.
        */
-      background?: "agent" | "task";
+      background?: "agent" | "command";
     }
   | {
       kind: "notice";
@@ -617,7 +618,9 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
         status: background
           ? "in_progress"
           : (update.status ?? (item.status === "pending" ? "in_progress" : item.status)),
-        background: background ?? item.background,
+        // A backgrounded command is done when it returns, and its row says where its work went;
+        // a background agent is the one whose call stays open.
+        background: background ?? (update.backgrounded ? "command" : item.background),
         output,
         diffs: update.diffs.length ? update.diffs : item.diffs,
         exitCode: update.exitCode ?? item.exitCode,
@@ -781,19 +784,21 @@ export function wakeTurn(state: ThreadState, now = Date.now()): ThreadState {
 }
 
 /**
- * Whether this update's call goes on in the background, so its row keeps
- * running: a call the harness marks backgrounded, or a subagent launched in the
- * background (Claude Code answers `Async agent launched` at once, then holds the
- * turn until the agent ends). Only while the turn runs: a replayed one is over.
+ * Whether this update's call goes on after it returned, so its row keeps
+ * running: a subagent launched in the background (Claude Code answers
+ * `Async agent launched` at once, then holds the turn until the agent ends).
+ * A command the harness backgrounds has finished, whatever its task does next:
+ * the call answered with the task's id, the harness reports the task
+ * separately, and the app's waiting line says the thread has work in flight. A
+ * row that spun until a task update came back kept spinning when none did.
  */
 function backgroundOf(
   item: ToolItem,
   update: Extract<SessionUpdate, { kind: "toolCallUpdate" }>,
   output: string | undefined,
   running: boolean,
-): "agent" | "task" | undefined {
+): "agent" | undefined {
   if (update.status !== "completed" || !running) return undefined;
-  if (update.backgrounded) return "task";
   if (subagentOf(item) && output?.trimStart().startsWith("Async agent launched")) return "agent";
   return undefined;
 }
@@ -809,7 +814,7 @@ export function holdsQueue(outcome: "completed" | "cancelled" | "failed"): boole
 
 /**
  * A turn ended: thoughts stop, running tools are marked, and a footer row is
- * added. A background command keeps running; the engine ends its call.
+ * added.
  */
 export function finishTurn(
   state: ThreadState,
@@ -819,9 +824,7 @@ export function finishTurn(
   quiet = false,
 ): ThreadState {
   const items = finishAllThoughts(settleEveryWait(state, now).items, now).map((item) =>
-    item.kind === "tool" &&
-    (item.status === "pending" || item.status === "in_progress") &&
-    !(item.background === "task" && outcome === "completed")
+    item.kind === "tool" && (item.status === "pending" || item.status === "in_progress")
       ? { ...item, status: (outcome === "completed" ? "completed" : "failed") as ToolStatus, endedAt: now }
       : item,
   );

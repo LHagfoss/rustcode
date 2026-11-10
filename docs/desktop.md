@@ -394,9 +394,12 @@ composer's keys stay outside the table.
   starts on its own when one finishes reach the app as
   `_rustcode/session/activity` (the engine asks the adapter for its async
   tasks, `harness/background.rs`): the thread shows "Waiting on a background
-  command", the command's row runs until it ends, and a turn Claude starts
+  command", a command the harness backgrounded says `Started in background`
+  on its row once the call returns (the task is the thread's waiting line, not
+  a spinner on a call that already answered), and a turn Claude starts
   itself shows as working with a quiet "Background task finished" line saying
-  why it ran again.
+  why it ran again. A call whose task state never comes back can then only
+  leave the wrong waiting line, never a row spinning forever.
 - **Pull requests.** A panel lists the project's pull requests
   (`_rustcode/pulls`), shows one (`/view`: description, checks, files,
   activity) and posts a review you write (`/review`: comment, approve or
