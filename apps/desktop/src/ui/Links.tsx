@@ -22,6 +22,7 @@ import { agentActive, agentElapsed, type SubagentInfo, spawnedAgentId } from "..
 import type { StackAgent, StackState } from "../state/agentStack";
 import {
   foldStrip,
+  stripCollapsed,
   stripCounts,
   stripFolded,
   stripSummary,
@@ -314,8 +315,10 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
     natives.length + builtins.length,
   );
   // Folded for the session, per thread: the rows a reader put away stay away while they move
-  // between threads, and come back when the app opens again.
+  // between threads, and come back when the app opens again. A fold only holds while the header is
+  // there to unfold it: a strip of one row draws that row, folded thread or not.
   const folded = useSyncExternalStore(subscribeStripFold, () => stripFolded(threadId));
+  const collapsed = stripCollapsed(counts, folded);
   const { working, needs } = strip.total.counts;
   const news = live.length > 0 && working + needs > 0;
   if (!news && !drivenBy && !fanOuts.length && !natives.length && !builtins.length) return null;
@@ -327,15 +330,15 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
     <div className="rc-glass-overlay relative flex flex-col gap-0.5 rounded-xl p-1 rc-in">
       {drivenBy && <WorkingFor link={drivenBy} />}
       {/* The strip folds to this one line: what it holds and what that work does now. Two or more
-          rows get it, because one row is already one line; folding it leaves the header alone, and
-          the transcript keeps the room it took. */}
+          rows get it, because one row is already one line; folding leaves the header alone, and the
+          transcript takes back the room the rows had (`ChatView.tsx`, the measured stack height). */}
       {counts.delegates > 1 && (
         <Tooltip label={folded ? "Show the delegates" : "Fold the delegates into one line"}>
           <button
             type="button"
-            aria-expanded={!folded}
+            aria-expanded={!collapsed}
             // Only when there is a list to point at: a folded strip draws no rows.
-            aria-controls={folded ? undefined : rowsId}
+            aria-controls={collapsed ? undefined : rowsId}
             onClick={() => foldStrip(threadId, !folded)}
             className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-lg px-2 text-left text-caption text-fg-muted hover:bg-fill-subtle active:bg-fill-strong"
           >
@@ -352,7 +355,7 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
           </button>
         </Tooltip>
       )}
-      {!folded && (live.length > 0 || fanOuts.length > 0 || natives.length > 0 || builtins.length > 0) && (
+      {!collapsed && (live.length > 0 || fanOuts.length > 0 || natives.length > 0 || builtins.length > 0) && (
         // Capped and scrolled on its own: a long run of delegates stops growing over the chat and
         // the strip keeps one height, whatever the branch does.
         <div id={rowsId} className="flex max-h-[min(320px,45vh)] flex-col gap-0.5 overflow-y-auto">

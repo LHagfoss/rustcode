@@ -4,6 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   foldStrip,
+  stripCollapsed,
   stripCounts,
   stripFolded,
   stripSummary,
@@ -49,6 +50,19 @@ describe("stripSummary", () => {
 
   test("keeps the count alone when nothing runs or waits", () => {
     expect(stripSummary({ delegates: 2, running: 0, needs: 0 })).toBe("2 delegates");
+  });
+});
+
+describe("stripCollapsed", () => {
+  test("folds the rows only where a header is there to unfold them", () => {
+    expect(stripCollapsed({ delegates: 3, running: 2, needs: 0 }, true)).toBe(true);
+    expect(stripCollapsed({ delegates: 2, running: 0, needs: 2 }, true)).toBe(true);
+    expect(stripCollapsed({ delegates: 3, running: 2, needs: 0 }, false)).toBe(false);
+  });
+
+  test("draws the row a shorter strip is left with, though the reader folded a longer one", () => {
+    expect(stripCollapsed({ delegates: 1, running: 1, needs: 0 }, true)).toBe(false);
+    expect(stripCollapsed({ delegates: 0, running: 0, needs: 0 }, true)).toBe(false);
   });
 });
 

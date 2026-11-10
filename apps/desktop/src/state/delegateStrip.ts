@@ -42,6 +42,16 @@ export function stripSummary({ delegates, running, needs }: StripCounts): string
   return doing.length ? `${count} · ${doing.join(" · ")}` : count;
 }
 
+/**
+ * Whether the strip draws its header alone, or its header and its rows. Only where there is a
+ * header to unfold them with: a fold is remembered per thread, so a strip that held three rows can
+ * shrink to one while it is folded, and folding then would draw the card empty and swallow the one
+ * delegate left (a fold hides the rows, never the header, so there would be no way back either).
+ */
+export function stripCollapsed({ delegates }: StripCounts, folded: boolean): boolean {
+  return folded && delegates > 1;
+}
+
 // Session state, not thread data: a Set that outlives the component, and the listeners that
 // redraw it when the reader folds the strip in one thread.
 const folded = new Set<string>();
