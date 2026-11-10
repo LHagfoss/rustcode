@@ -32,6 +32,8 @@ export interface StackAgent {
   harness?: string;
   /** Its title, for the stack's tooltip. */
   label?: string;
+  /** The paired machine it runs on; absent for this computer. */
+  machine?: string;
   /** When it started, so the tip can say how long it has run. */
   since?: number;
 }
@@ -139,7 +141,8 @@ export function stackDescription(view: AgentStackView): string {
   const marks = view.order
     .map((agent) => {
       const kind = agent.kind ? ` (${agent.kind})` : "";
-      return `${STACK_STATE_WORD[agent.state]} ${agent.label ?? "Thread"}${kind}`;
+      const where = agent.machine ? ` on ${agent.machine}` : "";
+      return `${STACK_STATE_WORD[agent.state]} ${agent.label ?? "Thread"}${kind}${where}`;
     })
     .join("; ");
   return [`Delegated work: ${counts}`, marks].filter(Boolean).join(". ");

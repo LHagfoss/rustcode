@@ -2191,17 +2191,33 @@ export interface NewSession {
   relationship?: ThreadRelationship;
   title?: string;
   select?: boolean;
+  /**
+   * The paired machine it starts on (`state/threadKeys.ts`): this computer's
+   * engine when omitted. The thread it answers with is keyed with the machine,
+   * so every later call for it routes there (`connectionForThread`).
+   */
+  host?: string;
   /** The setup this session finishes (state/setup.ts): it is listed and the setup cleared together. */
   pendingId?: string;
 }
 
 /** `session/new` with the harness, model, effort and worktree in `_meta.rustcode`; the thread is added to the list. */
 export async function createSession(options: NewSession): Promise<string> {
-  const conn = engine();
+  const host = options.host ?? LOCAL_HOST;
+  const conn = host ? connectionFor(host) : connection;
+  // A machine an agent named may have gone away since the call was checked
+  // (`state/host.ts` `checkMachine`): say which, never fall back to this one.
+  if (!conn) {
+    throw new Error(
+      host ? "The computer this thread was for is not connected." : "The server is not connected.",
+    );
+  }
   const s = get();
   const params: JsonObject = { cwd: options.cwd, mcpServers: [] };
   const meta: JsonObject = {};
-  if (options.harness && !s.harnesses?.unsupported) {
+  // Another machine's harness list is its own: this app's snapshot says nothing
+  // about whether it takes `_meta.rustcode.harness`.
+  if (options.harness && (host || !s.harnesses?.unsupported)) {
     meta.harness = options.harness;
     if (options.account) meta.account = options.account;
     if (options.model) meta.model = options.model;
@@ -2221,8 +2237,10 @@ export async function createSession(options: NewSession): Promise<string> {
   }
   if (Object.keys(meta).length) params._meta = { rustcode: meta };
   const result = (await conn.request(Method.sessionNew, params, 120_000)) as JsonObject;
-  const id = str(result.sessionId);
-  if (!id) throw new Error("The server did not return a thread id.");
+  const sessionId = str(result.sessionId);
+  if (!sessionId) throw new Error("The server did not return a thread id.");
+  // What the app keys the thread by: its own id here, `<machine>/<id>` there.
+  const id = threadKey(host, sessionId);
   const worktree: Worktree | undefined = parseWorktree(
     ((result._meta as JsonObject | undefined)?.rustcode as JsonObject | undefined)?.worktree,
   );
@@ -2237,6 +2255,7 @@ export async function createSession(options: NewSession): Promise<string> {
   };
   const summary: SessionSummary = {
     id,
+    ...(host ? { host } : {}),
     cwd,
     updatedAt: Date.now(),
     harness: thread.harness?.id ?? options.harness,
@@ -2273,7 +2292,9 @@ export async function createSession(options: NewSession): Promise<string> {
   }));
   // Saved, not only shown: otherwise the thread's first message replaces it at the next list.
   // A pending setup lets its rename run beside it: the message starts the moment the thread is listed.
-  if (options.title) {
+  // Another machine keeps the title on its own copy (the shell that writes it is here), so a
+  // remote thread starts with the one its first message gives it there.
+  if (options.title && !host) {
     const saved = renameThread(id, options.title);
     if (!pending) await saved;
   }

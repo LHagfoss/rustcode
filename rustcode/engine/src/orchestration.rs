@@ -54,6 +54,9 @@ pub const MANAGE_QUEUE: &str = "manage_queue";
 pub const THREAD_STATUS: &str = "thread_status";
 pub const MERGE_WHEN_GREEN: &str = "merge_when_green";
 pub const CLEANUP_WORKTREE: &str = "cleanup_worktree";
+/// Version 10: the other computers this app is paired with, and the machine a
+/// call acts on.
+pub const LIST_MACHINES: &str = "list_machines";
 /// The M1 tools, what a client advertising version 1 gets.
 pub const TOOL_NAMES: [&str; 3] = [LIST_SESSIONS, MESSAGE_SESSION, WAIT_SESSION];
 /// Added by version 2.
@@ -79,8 +82,29 @@ pub const V6_TOOL_NAMES: [&str; 1] = [READ_ACTIVITY];
 pub const V7_TOOL_NAMES: [&str; 1] = [MANAGE_QUEUE];
 /// Added by version 9: a delegate's pull request, merging and cleanup.
 pub const V9_TOOL_NAMES: [&str; 3] = [THREAD_STATUS, MERGE_WHEN_GREEN, CLEANUP_WORKTREE];
+/// Added by version 10: the machines the app is paired with.
+pub const V10_TOOL_NAMES: [&str; 1] = [LIST_MACHINES];
 /// The newest version this engine speaks.
-pub const VERSION: u8 = 9;
+pub const VERSION: u8 = 10;
+/// Version 10 adds `machine` to the tools that read or act on a thread: the id
+/// or name `list_machines` returned, omitted for this computer. A client that
+/// advertised less never sees the field and has it refused, so an older app
+/// cannot quietly act on this computer's thread instead of the named one.
+pub const MACHINE_VERSION: u8 = 10;
+/// The tools `machine` applies to.
+pub const MACHINE_TOOL_NAMES: [&str; 11] = [
+    LIST_SESSIONS,
+    READ_SESSION,
+    MESSAGE_SESSION,
+    WAIT_SESSION,
+    START_SESSION,
+    FAN_OUT,
+    LIST_HARNESSES,
+    LIST_PROJECTS,
+    INTERRUPT_SESSION,
+    THREAD_STATUS,
+    LIST_PENDING_REQUESTS,
+];
 /// Version 5 adds named account targeting to the existing `start_session` and
 /// `fan_out` args. No tool is added, but a client that advertised less never
 /// sees the `account` field and has it refused, so an older app cannot quietly
@@ -171,6 +195,10 @@ pub const PROMPT_HINT_V8: &str = "\n\nRustCode's threads: `list_sessions`, `sear
 /// [`PROMPT_HINT_V8`] for version 9 clients, which can finish a delegate's work.
 pub const PROMPT_HINT_V9: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. `thread_status` reports a delegate's worktree, branch, pull request and checks; `merge_when_green` merges it once green; `cleanup_worktree` removes its worktree and branch and settles it. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those, merge and cleanup change other threads, so do them only when the user asks; the user approves. Stay lean: every call resends this thread's context, so leave reading code, diffs, logs and CI to delegates, and check their pull requests with `thread_status`. Wait on all links in one `wait_session` with `link_ids`, or end the turn: the app wakes this thread when a child finishes. Call `list_harnesses` once.";
 
+/// [`PROMPT_HINT_V9`] for version 10 clients, which can reach the other
+/// computers this app is paired with.
+pub const PROMPT_HINT_V10: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. `thread_status` reports a delegate's worktree, branch, pull request and checks; `merge_when_green` merges it once green; `cleanup_worktree` removes its worktree and branch and settles it. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path. The thread tools take another paired computer's id or name, as `list_machines` lists them, in `machine`: omitted, they act on this computer, and a remote thread's id carries its machine. Name one only when the user did. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those, merge and cleanup change other threads, so do them only when the user asks; the user approves, and the card names the machine. Stay lean: every call resends this thread's context, so leave reading code, diffs, logs and CI to delegates, and check their pull requests with `thread_status`. Wait on all links in one `wait_session` with `link_ids`, or end the turn: the app wakes this thread when a child finishes. Call `list_harnesses` once.";
+
 /// The prompt hint a client of `version` gets.
 pub fn prompt_hint(version: u8) -> &'static str {
     match version {
@@ -183,7 +211,8 @@ pub fn prompt_hint(version: u8) -> &'static str {
         6 => PROMPT_HINT_V6,
         7 => PROMPT_HINT_V7,
         8 => PROMPT_HINT_V8,
-        _ => PROMPT_HINT_V9,
+        9 => PROMPT_HINT_V9,
+        _ => PROMPT_HINT_V10,
     }
 }
 
@@ -196,6 +225,7 @@ pub fn is_tool(name: &str) -> bool {
         || V6_TOOL_NAMES.contains(&name)
         || V7_TOOL_NAMES.contains(&name)
         || V9_TOOL_NAMES.contains(&name)
+        || V10_TOOL_NAMES.contains(&name)
 }
 
 /// Whether `name` needs a version 2 client.
@@ -226,6 +256,11 @@ pub fn is_v7_tool(name: &str) -> bool {
 /// Whether `name` needs a version 9 client (delegate pull requests and cleanup).
 pub fn is_v9_tool(name: &str) -> bool {
     V9_TOOL_NAMES.contains(&name)
+}
+
+/// Whether `name` needs a version 10 client (the other paired machines).
+pub fn is_v10_tool(name: &str) -> bool {
+    V10_TOOL_NAMES.contains(&name)
 }
 
 /// The tools a client of `version` gets, in order.
@@ -266,9 +301,14 @@ pub fn tool_names(version: u8) -> Vec<&'static str> {
         }
         // Version 8 adds native-subagent guidance to the hint, not another tool.
         8 => tool_names(7),
-        _ => {
+        9 => {
             let mut names = tool_names(8);
             names.extend(V9_TOOL_NAMES);
+            names
+        }
+        _ => {
+            let mut names = tool_names(9);
+            names.extend(V10_TOOL_NAMES);
             names
         }
     }
@@ -285,31 +325,47 @@ pub fn client_meta_version(meta: Option<&serde_json::Map<String, Value>>) -> u8 
 
 /// The schema a client of `version` gets. Named-account targeting arrived in
 /// version 5, so a client that advertised less is never told about `account`;
-/// [`execute_versioned`] refuses one it sends anyway.
+/// [`execute_versioned`] refuses one it sends anyway. Machine targeting
+/// arrived in version 10, and is dropped from the schema the same way.
 pub fn schema_for(name: &str, version: u8, mut schema: Value) -> Value {
-    if version >= ACCOUNT_VERSION {
-        return schema;
+    if version < ACCOUNT_VERSION {
+        match name {
+            START_SESSION => {
+                if let Some(properties) =
+                    schema.get_mut("properties").and_then(Value::as_object_mut)
+                {
+                    properties.remove("account");
+                }
+            }
+            FAN_OUT => {
+                if let Some(properties) = schema
+                    .get_mut("properties")
+                    .and_then(|properties| properties.get_mut("harnesses"))
+                    .and_then(|harnesses| harnesses.get_mut("items"))
+                    .and_then(|items| items.get_mut("properties"))
+                    .and_then(Value::as_object_mut)
+                {
+                    properties.remove("account");
+                }
+            }
+            _ => {}
+        }
     }
-    match name {
-        START_SESSION => {
-            if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
-                properties.remove("account");
-            }
+    if version < MACHINE_VERSION && MACHINE_TOOL_NAMES.contains(&name) {
+        if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+            properties.remove("machine");
         }
-        FAN_OUT => {
-            if let Some(properties) = schema
-                .get_mut("properties")
-                .and_then(|properties| properties.get_mut("harnesses"))
-                .and_then(|harnesses| harnesses.get_mut("items"))
-                .and_then(|items| items.get_mut("properties"))
-                .and_then(Value::as_object_mut)
-            {
-                properties.remove("account");
-            }
-        }
-        _ => {}
     }
     schema
+}
+
+/// Whether a call tries to name a machine, which only a version 10 client can
+/// do: an older app would act on this computer instead.
+pub(crate) fn names_a_machine(name: &str, args: &Value) -> bool {
+    MACHINE_TOOL_NAMES.contains(&name)
+        && args
+            .get("machine")
+            .is_some_and(|machine| !machine.is_null())
 }
 
 /// Whether a call tries to name a login, which only a version 5 client can do.
@@ -468,6 +524,10 @@ fn optional_title(args: &Value) -> Result<(), String> {
 
 /// Check the arguments before they leave the engine.
 pub fn validate(name: &str, args: &Value) -> Result<(), String> {
+    // The machine a call acts on is the same argument on every tool that takes it.
+    if MACHINE_TOOL_NAMES.contains(&name) {
+        optional_name(args, "machine")?;
+    }
     match name {
         LIST_SESSIONS | LIST_WORKTREES => optional_flag(args, "all_projects"),
         THREAD_USAGE => {
@@ -505,7 +565,7 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             optional_name(args, "harness")?;
             optional_name(args, "model")
         }
-        LIST_PROJECTS | LIST_PENDING_REQUESTS => Ok(()),
+        LIST_PROJECTS | LIST_PENDING_REQUESTS | LIST_MACHINES => Ok(()),
         TRANSFER_SESSION => {
             required_name(args, "session_id")?;
             required_name(args, "harness")
@@ -822,6 +882,15 @@ pub async fn execute_versioned(
             false,
         );
     }
+    // The same for a machine: acting on this computer when the user asked for
+    // another one is worse than saying the app is too old.
+    if client.is_some() && version < MACHINE_VERSION && names_a_machine(name, args) {
+        return ToolExecutionOutput::failure_with_kind(
+            format!("error: {name} with machine needs a newer RustCode app. Nothing was sent."),
+            ToolErrorKind::UnavailableDependency,
+            false,
+        );
+    }
     execute_with(client, cancel, name, args).await
 }
 
@@ -972,7 +1041,7 @@ mod tests {
         assert_eq!(version(json!({"rustcode": {"orchestration": 1}})), 1);
         assert_eq!(version(json!({"rustcode": {"orchestration": 2}})), 2);
         // A newer client gets what this engine speaks.
-        assert_eq!(version(json!({"rustcode": {"orchestration": 9}})), VERSION);
+        assert_eq!(version(json!({"rustcode": {"orchestration": 10}})), VERSION);
         assert_eq!(version(json!({"rustcode": {"preview": 1}})), 0);
         assert_eq!(client_meta_version(None), 0);
     }
@@ -1009,7 +1078,7 @@ mod tests {
 
     #[test]
     fn version_four_adds_the_data_store_tools_only_for_its_clients() {
-        assert_eq!(VERSION, 9);
+        assert_eq!(VERSION, 10);
         let v3 = tool_names(3);
         assert!(v3.iter().all(|name| !is_v4_tool(name)), "{v3:?}");
         let v4 = tool_names(4);
@@ -1031,9 +1100,27 @@ mod tests {
         );
         assert_eq!(
             tool_names(10),
-            tool_names(9),
+            [tool_names(9), V10_TOOL_NAMES.to_vec()].concat()
+        );
+        assert_eq!(
+            tool_names(11),
+            tool_names(10),
             "a newer client gets what this engine speaks"
         );
+        for name in V10_TOOL_NAMES {
+            assert!(is_tool(name) && is_v10_tool(name));
+            assert!(
+                !is_v9_tool(name) && !tool_names(9).contains(&name),
+                "{name}"
+            );
+            assert!(PROMPT_HINT_V10.contains(name), "{name}");
+            assert!(!PROMPT_HINT_V9.contains(name), "{name} is v10 only");
+        }
+        // The hint tells an agent how to reach a machine and that omitting it
+        // stays here: a delegate belongs on this computer unless asked.
+        for said in ["list_machines", "`machine`", "this computer"] {
+            assert!(PROMPT_HINT_V10.contains(said), "{said}");
+        }
         for name in [THREAD_USAGE, QUERY_DATA] {
             assert!(is_tool(name) && is_v4_tool(name));
             assert!(PROMPT_HINT_V4.contains(name), "{name}");
@@ -1081,7 +1168,8 @@ mod tests {
         assert_eq!(prompt_hint(7), PROMPT_HINT_V7);
         assert_eq!(prompt_hint(8), PROMPT_HINT_V8);
         assert_eq!(prompt_hint(9), PROMPT_HINT_V9);
-        assert_eq!(prompt_hint(10), PROMPT_HINT_V9);
+        assert_eq!(prompt_hint(9), PROMPT_HINT_V9);
+        assert_eq!(prompt_hint(10), PROMPT_HINT_V10);
         assert_eq!(prompt_hint(0), "");
         // Accounts arrived in 5: a v4 hint promises nothing it cannot do.
         assert!(!PROMPT_HINT_V4.contains("account"));
@@ -1108,11 +1196,12 @@ mod tests {
         // it is bounded: v4 adds the two data tools, v5 the account line and
         // the line that says a thread an agent starts is its delegate, v6 the
         // activity read, v7 the queue control, v8 that native subagents go
-        // through RustCode's tools, v9 a delegate's pull request.
+        // through RustCode's tools, v9 a delegate's pull request, v10 the
+        // machines and what a call on one says.
 
-        let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V9);
+        let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V10);
         println!(
-            "prompt hints: v3 {} tokens, v4 {} tokens, v5 {} tokens, v6 {} tokens, v9 {tokens} tokens",
+            "prompt hints: v3 {} tokens, v4 {} tokens, v5 {} tokens, v6 {} tokens, v10 {tokens} tokens",
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V3),
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V4),
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V5),
@@ -1121,7 +1210,7 @@ mod tests {
         // v9 adds the three delegate pull-request tools, all named with their use,
         // and how an orchestrator keeps its own context small: those few lines
         // save far more than they cost on each request.
-        assert!(tokens < 540, "{tokens}");
+        assert!(tokens < 600, "{tokens}");
     }
 
     #[test]
@@ -1606,6 +1695,122 @@ mod tests {
         assert!(tool(FAN_OUT).description.contains("named account"));
         // Discovery: list_harnesses names the accounts start_session takes.
         assert!(tool(LIST_HARNESSES).description.contains("named accounts"));
+    }
+
+    /// A machine is a version 10 argument: a v9 app never sees the field, and
+    /// a call that names one is refused rather than acted on here.
+    #[test]
+    fn a_machine_is_optional_and_advertised_where_it_is_used() {
+        let tool = |name: &str| {
+            crate::tools::TOOLS
+                .iter()
+                .find(|tool| tool.name == name)
+                .unwrap_or_else(|| panic!("{name}"))
+        };
+        for name in MACHINE_TOOL_NAMES {
+            let schema = (tool(name).schema)();
+            assert_eq!(
+                schema["properties"]["machine"]["type"], "string",
+                "{name} takes a machine"
+            );
+            // A v9 client is not told about a field its app cannot answer.
+            let old = schema_for(name, 9, schema.clone());
+            assert!(old["properties"]["machine"].is_null(), "{name} at v9");
+            // At v10 it is there, and the fields it had stay.
+            let new = schema_for(name, 10, schema);
+            assert!(new["properties"]["machine"].is_object(), "{name} at v10");
+            assert!(PROMPT_HINT_V10.contains(name), "{name} in the hint");
+        }
+        // The tools that do not act on a machine are unchanged.
+        for name in [MERGE_WHEN_GREEN, CLEANUP_WORKTREE, SEARCH_SESSIONS] {
+            let schema = (tool(name).schema)();
+            assert!(
+                schema["properties"]["machine"].is_null(),
+                "{name} takes no machine"
+            );
+        }
+        // list_machines is what names them, and carries no machine of its own.
+        let listed = (tool(LIST_MACHINES).schema)();
+        assert!(listed["properties"]["machine"].is_null());
+        // The MCP server builds its tools from the same versioned schema.
+        let mcp_v9 = crate::orchestration::mcp_server::tools(9, false);
+        let start = mcp_v9
+            .iter()
+            .find(|tool| tool["name"] == START_SESSION)
+            .expect("start_session for a v9 client");
+        assert!(start["inputSchema"]["properties"]["machine"].is_null());
+        assert!(
+            !mcp_v9.iter().any(|tool| tool["name"] == LIST_MACHINES),
+            "a v9 client never sees list_machines"
+        );
+        let mcp_v10 = crate::orchestration::mcp_server::tools(10, false);
+        let start = mcp_v10
+            .iter()
+            .find(|tool| tool["name"] == START_SESSION)
+            .expect("start_session for a v10 client");
+        assert!(start["inputSchema"]["properties"]["machine"].is_object());
+        let machines = mcp_v10
+            .iter()
+            .find(|tool| tool["name"] == LIST_MACHINES)
+            .expect("list_machines for a v10 client");
+        assert!(
+            machines["description"]
+                .as_str()
+                .unwrap_or("")
+                .contains("machine")
+        );
+        assert!(validate(START_SESSION, &json!({"prompt": "go", "machine": "Studio"})).is_ok());
+        assert!(validate(START_SESSION, &json!({"prompt": "go", "machine": "  "})).is_err());
+    }
+
+    /// An account a v4 app would ignore is refused; a machine a v9 app would
+    /// ignore is refused the same way, whichever side the call is made from.
+    #[tokio::test]
+    async fn an_older_client_cannot_act_on_another_machine() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let start = json!({"prompt": "go", "machine": "Studio"});
+        let refused = execute_versioned(
+            client(json!({"session_id": "c"})),
+            9,
+            &cancel,
+            START_SESSION,
+            &start,
+        )
+        .await;
+        assert!(!refused.success);
+        assert!(refused.content.contains("newer RustCode app"));
+        assert!(refused.content.contains("Nothing was sent"));
+        let sent = execute_versioned(
+            client(json!({"session_id": "c"})),
+            10,
+            &cancel,
+            START_SESSION,
+            &start,
+        )
+        .await;
+        assert!(sent.success, "{}", sent.content);
+        // The same refusal on a list, not only on a start.
+        let refused = execute_versioned(
+            client(json!({"sessions": []})),
+            9,
+            &cancel,
+            LIST_SESSIONS,
+            &json!({"machine": "Studio"}),
+        )
+        .await;
+        assert!(!refused.success);
+        assert!(refused.content.contains("newer RustCode app"));
+        // A null is no machine, so it is not a version 10 argument.
+        let null = json!({"prompt": "go", "machine": null});
+        let sent = execute_versioned(
+            client(json!({"session_id": "c"})),
+            9,
+            &cancel,
+            START_SESSION,
+            &null,
+        )
+        .await;
+        assert!(sent.success, "{}", sent.content);
     }
 
     /// An orchestrator that wants room left on an account reads

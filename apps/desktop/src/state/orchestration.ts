@@ -12,7 +12,7 @@ import { snoozeAt } from "./snooze";
 import { formatDuration, type QueuedPrompt, withWakeMark } from "./thread";
 
 /** What the client advertises in `initialize` while the setting is on. */
-export const CAPABILITY_VERSION = 9;
+export const CAPABILITY_VERSION = 10;
 /** The most of a child's answer `wait_session` carries; beyond it, `read_session` pages the rest. */
 export const MAX_BYTES = 8 * 1024;
 /** The longest prompt or message a thread may hand another one (32 KiB). */
@@ -317,6 +317,8 @@ export interface Link {
   harness?: string;
   /** The harness's display name, as the notice writes it (Pi, Codex, Claude Code). */
   harnessName?: string;
+  /** The paired machine the target runs on; absent for this computer. */
+  machine?: string;
   /** The named login the thread runs on, when it is not the harness's default. */
   account?: string;
   /** The model it runs on, for the first event's `harness · model`. */
@@ -414,11 +416,11 @@ export interface HarnessChoice {
 }
 
 export type Call =
-  | { tool: "list_sessions"; query: string; allProjects: boolean }
-  | { tool: "read_session"; target: string; lastTurns: number; offset: number }
-  | { tool: "message_session"; target: string; text: string }
+  | { tool: "list_sessions"; query: string; allProjects: boolean; machine?: string }
+  | { tool: "read_session"; target: string; lastTurns: number; offset: number; machine?: string }
+  | { tool: "message_session"; target: string; text: string; machine?: string }
   /** `callId` is the engine's name for this call, so a dropped call can end its wait. */
-  | { tool: "wait_session"; links: string[]; timeoutMs: number; callId?: string }
+  | { tool: "wait_session"; links: string[]; timeoutMs: number; callId?: string; machine?: string }
   | {
       tool: "start_session";
       prompt: string;
@@ -430,10 +432,12 @@ export type Call =
       account?: string;
       worktree?: boolean;
       project?: string;
+      /** The paired machine it runs on; omitted is this computer. */
+      machine?: string;
     }
-  | { tool: "fan_out"; prompt: string; title?: string; harnesses: HarnessChoice[] }
+  | { tool: "fan_out"; prompt: string; title?: string; harnesses: HarnessChoice[]; machine?: string }
   /** `harness` narrows to one harness, `model` to the models whose id or name matches. */
-  | { tool: "list_harnesses"; harness?: string; model?: string }
+  | { tool: "list_harnesses"; harness?: string; model?: string; machine?: string }
   | { tool: "search_sessions"; query: string; allProjects: boolean }
   | { tool: "list_worktrees"; allProjects: boolean }
   | {
@@ -446,11 +450,11 @@ export type Call =
       /** When it comes back, in ms; `null` brings it back now. */
       snoozedUntil?: number | null;
     }
-  | { tool: "interrupt_session"; target: string }
+  | { tool: "interrupt_session"; target: string; machine?: string }
   | { tool: "configure_session"; target?: string; model?: string; effort?: string }
   | { tool: "transfer_session"; target: string; harness: string }
-  | { tool: "list_pending_requests" }
-  | { tool: "list_projects" }
+  | { tool: "list_pending_requests"; machine?: string }
+  | { tool: "list_projects"; machine?: string }
   | { tool: "list_pull_requests"; state: PullStateChoice }
   | { tool: "thread_usage"; since?: string; groupBy: UsageGroup; project?: string }
   | { tool: "query_data"; sql: string; limit: number }
@@ -464,9 +468,11 @@ export type Call =
       /** What it says instead, for `edit`. */
       text?: string;
     }
-  | { tool: "thread_status"; target?: string }
+  | { tool: "thread_status"; target?: string; machine?: string }
   | { tool: "merge_when_green"; target: string; timeoutMs: number; callId?: string }
-  | { tool: "cleanup_worktree"; target: string; settle: boolean };
+  | { tool: "cleanup_worktree"; target: string; settle: boolean }
+  /** The computers this RustCode is paired with (orchestration version 10). */
+  | { tool: "list_machines" };
 
 /** What `update_session` may set a thread's status to. */
 export type SessionStatusChoice = "active" | "review" | "settled";
@@ -506,6 +512,13 @@ const s = (v: Json | undefined) => (typeof v === "string" ? v : undefined);
 /** `all_projects`: the user's threads in every project, when the setting allows it. */
 const allProjects = (args: JsonObject) => args.all_projects === true;
 const bytes = (text: string) => new TextEncoder().encode(text).length;
+/** The paired machine a call acts on: an id or name `list_machines` gave, absent for this one. */
+const machineOf = (args: JsonObject) => s(args.machine)?.trim() || undefined;
+/** The optional field, present only when the call named a machine. */
+const machineField = (args: JsonObject) => {
+  const machine = machineOf(args);
+  return machine ? { machine } : {};
+};
 
 /** The call in a request's params, or the failure to answer with. */
 export function parseCall(params: JsonObject): Call | Failure {
@@ -513,16 +526,28 @@ export function parseCall(params: JsonObject): Call | Failure {
   const args = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
   switch (s(params.tool)) {
     case "list_sessions":
-      return { tool: "list_sessions", query: s(args.query) ?? "", allProjects: allProjects(args) };
+      return {
+        tool: "list_sessions",
+        query: s(args.query) ?? "",
+        allProjects: allProjects(args),
+        ...machineField(args),
+      };
     case "list_harnesses": {
       const harness = s(args.harness)?.trim() || undefined;
       const model = s(args.model)?.trim() || undefined;
-      return { tool: "list_harnesses", ...(harness ? { harness } : {}), ...(model ? { model } : {}) };
+      return {
+        tool: "list_harnesses",
+        ...(harness ? { harness } : {}),
+        ...(model ? { model } : {}),
+        ...machineField(args),
+      };
     }
     case "list_worktrees":
       return { tool: "list_worktrees", allProjects: allProjects(args) };
     case "list_projects":
-      return { tool: "list_projects" };
+      return { tool: "list_projects", ...machineField(args) };
+    case "list_machines":
+      return { tool: "list_machines" };
     case "list_pull_requests": {
       const state = s(args.state) ?? "open";
       if (!PULL_STATES.includes(state)) {
@@ -538,7 +563,7 @@ export function parseCall(params: JsonObject): Call | Failure {
     case "interrupt_session": {
       const target = s(args.session_id) ?? "";
       if (!target) return failure("invalid", "session_id is required");
-      return { tool: "interrupt_session", target };
+      return { tool: "interrupt_session", target, ...machineField(args) };
     }
     case "transfer_session": {
       const target = s(args.session_id) ?? "";
@@ -547,7 +572,7 @@ export function parseCall(params: JsonObject): Call | Failure {
       return { tool: "transfer_session", target, harness };
     }
     case "list_pending_requests":
-      return { tool: "list_pending_requests" };
+      return { tool: "list_pending_requests", ...machineField(args) };
     case "thread_usage": {
       const since = s(args.since)?.trim() || undefined;
       if (since && !/^\d{4}-\d{2}(-\d{2})?$/.test(since)) {
@@ -572,7 +597,7 @@ export function parseCall(params: JsonObject): Call | Failure {
     }
     case "thread_status": {
       const target = s(args.session_id)?.trim() || undefined;
-      return { tool: "thread_status", target };
+      return { tool: "thread_status", target, ...machineField(args) };
     }
     case "merge_when_green": {
       const target = s(args.session_id) ?? "";
@@ -677,14 +702,14 @@ export function parseCall(params: JsonObject): Call | Failure {
       // Bytes into the rendered output: a page is a UTF-8 slice of it, never a character split.
       if (!Number.isFinite(offset) || offset < 0)
         return failure("invalid", "offset must be a whole number of bytes");
-      return { tool: "read_session", target, lastTurns: n, offset };
+      return { tool: "read_session", target, lastTurns: n, offset, ...machineField(args) };
     }
     case "message_session": {
       const target = s(args.session_id) ?? "";
       const text = s(args.message) ?? "";
       if (!target || !text.trim()) return failure("invalid", "session_id and message are required");
       if (bytes(text) > MAX_MESSAGE_BYTES) return failure("invalid", "the message is over 32 KiB");
-      return { tool: "message_session", target, text };
+      return { tool: "message_session", target, text, ...machineField(args) };
     }
     case "wait_session": {
       // One answer per link: a repeated id is asked about once.
@@ -700,6 +725,7 @@ export function parseCall(params: JsonObject): Call | Failure {
         links,
         timeoutMs: Math.min(Math.max(asked, 1), MAX_WAIT_MS),
         callId: s(params.callId),
+        ...machineField(args),
       };
     }
     case "start_session": {
@@ -716,6 +742,7 @@ export function parseCall(params: JsonObject): Call | Failure {
         account: s(args.account)?.trim() || undefined,
         worktree: typeof args.worktree === "boolean" ? args.worktree : undefined,
         project: s(args.project),
+        ...machineField(args),
       };
     }
     case "fan_out": {
@@ -737,7 +764,13 @@ export function parseCall(params: JsonObject): Call | Failure {
       }
       if (harnesses.length < 2 || harnesses.length > 4)
         return failure("invalid", "harnesses takes 2 to 4 entries");
-      return { tool: "fan_out", prompt, title: s(args.title)?.trim() || undefined, harnesses };
+      return {
+        tool: "fan_out",
+        prompt,
+        title: s(args.title)?.trim() || undefined,
+        harnesses,
+        ...machineField(args),
+      };
     }
     default:
       return failure("invalid", "unknown tool");
@@ -2335,6 +2368,8 @@ export interface GrantAsk {
   /** The access a new thread starts at (`start`, `fan_out`): never more than the caller's own. */
   access?: PermissionMode;
   worktree?: boolean;
+  /** The paired machine a start or a message acts on, named on the card; absent for this computer. */
+  machine?: string;
 }
 
 export type GrantChoice = "always" | "once" | "deny";

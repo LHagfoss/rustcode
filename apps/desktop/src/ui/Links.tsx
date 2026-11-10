@@ -11,6 +11,7 @@ import {
   CornerDownRight,
   GitBranch,
   Hand,
+  Laptop,
   ListTree,
   LoaderCircle,
   PauseCircle,
@@ -505,6 +506,11 @@ export function GrantDialog() {
             )}
             {grant.kind === "message" && (
               <span>The message arrives in that thread as yours would, headed with where it is from.</span>
+            )}
+            {grant.machine && (
+              <span className="flex items-center gap-1.5 text-warning">
+                <Laptop size={12} /> On {grant.machine}, not this computer
+              </span>
             )}
             {grant.project && (
               <span className="flex items-center gap-1.5 text-warning">

@@ -191,9 +191,50 @@ describe("management tools", () => {
 });
 
 describe("orchestration rules", () => {
-  test("the app advertises the version whose account argument it answers", () => {
-    // The engine strips `account` below this version and refuses a call that carries one.
-    expect(CAPABILITY_VERSION).toBe(9);
+  test("the app advertises the version whose account and machine arguments it answers", () => {
+    // The engine strips `account` below v5 and `machine` below v10, and refuses a call that carries one.
+    expect(CAPABILITY_VERSION).toBe(10);
+  });
+
+  test("a machine is read from any call that takes one, and absent when it is not named", () => {
+    // An id or a name `list_machines` gave; whitespace is not a machine.
+    expect(parseCall({ tool: "list_sessions", args: { machine: " Studio " } })).toMatchObject({
+      machine: "Studio",
+    });
+    expect(parseCall({ tool: "list_sessions", args: { machine: "  " } })).toEqual({
+      tool: "list_sessions",
+      query: "",
+      allProjects: false,
+    });
+    expect(parseCall({ tool: "list_machines", args: {} })).toEqual({ tool: "list_machines" });
+    expect(parseCall({ tool: "list_projects", args: { machine: "gw-1" } })).toMatchObject({
+      machine: "gw-1",
+    });
+    expect(
+      parseCall({ tool: "start_session", args: { prompt: "run it", machine: "Lars's Linux box" } }),
+    ).toMatchObject({ machine: "Lars's Linux box", prompt: "run it" });
+    expect(parseCall({ tool: "wait_session", args: { link_id: "a/1", machine: "Studio" } })).toMatchObject({
+      machine: "Studio",
+    });
+    // A call that acts on a thread takes it too; the id may carry the machine itself.
+    expect(
+      parseCall({ tool: "interrupt_session", args: { session_id: "gw-1/t", machine: "Studio" } }),
+    ).toEqual({
+      tool: "interrupt_session",
+      target: "gw-1/t",
+      machine: "Studio",
+    });
+    expect(parseCall({ tool: "thread_status", args: { session_id: "t", machine: "Studio" } })).toEqual({
+      tool: "thread_status",
+      target: "t",
+      machine: "Studio",
+    });
+    // The tools that cannot work across machines take no machine at all.
+    expect(parseCall({ tool: "merge_when_green", args: { session_id: "t", machine: "Studio" } })).toEqual({
+      tool: "merge_when_green",
+      target: "t",
+      timeoutMs: DEFAULT_MERGE_MS,
+    });
   });
 
   test("parses the v2 calls and refuses bad arguments", () => {

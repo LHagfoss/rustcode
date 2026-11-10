@@ -916,8 +916,72 @@ A delegated thread writes temporary files in its own directory under
 writing the same path overwrote each other's pull request bodies (#3143,
 #3144). The delegation guidance says so, and the v9 prompt hint repeats it.
 
-The app advertises 9 from `CAPABILITY_VERSION` (`state/orchestration.ts`),
-and a v8 app keeps exactly the v8 set and `PROMPT_HINT_V8`.
+The app advertised 9 from `CAPABILITY_VERSION` (`state/orchestration.ts`)
+while v9 was newest, and a v8 app keeps exactly the v8 set and
+`PROMPT_HINT_V8`; v10 is above.
+
+## Orchestration tools v10: other machines
+
+Built. Clients advertising `_meta.rustcode.orchestration >= 10` also get
+`list_machines`, and the eleven tools that read or act on a thread take an
+optional `machine`: the id or name `list_machines` returned. A call without it
+is this computer, never a "main" machine. This is the app-routed v1 of the machine network (design §8, linked machines):
+the desktop app already holds one connection per paired machine
+(`state/store.ts` `connectionFor`, #3400), so it executes the call over that
+machine's connection. A server-to-server link that works with this app closed
+is the follow-up (§10, phases 3.1 and 3.2).
+
+| Tool | With `machine` |
+| --- | --- |
+| `list_machines` | This computer (`current: true`) and each paired machine: `{ id, name, platform, state, route?, last_connected?, harnesses, projects }`. `harnesses` is that machine's list (`[{ id, name, available }]`), `projects` its project names |
+| `start_session`, `fan_out` | Start on that machine, in its project. `harness`, `model`, `effort` and `account` are that machine's own (never this app's logins or remembered choices). Without `project`, the caller's path when the machine has it, else a folder with the same project name, else its only project; otherwise the error lists what it has |
+| `list_harnesses` | That machine's harnesses, models and named accounts, without this app's plan numbers |
+| `list_projects`, `list_sessions` | That machine's projects or threads. Its folders are not this one's, so its threads are listed whether or not they share this project |
+| `read_session`, `message_session`, `interrupt_session` | On that machine's thread |
+| `wait_session` | Any: link ids carry their machine already; `machine` checks it is there |
+| `thread_status`, `list_pending_requests` | That machine's delegates or waiting requests |
+
+A thread id answers as `‹machine id›/‹thread id›` (`state/threadKeys.ts`), so
+every later call on it routes without `machine`; `machine` also refuses an id
+that carries another machine. Answers carry `machine` (the name) and
+`machine_id`, so an agent can say where a thread runs.
+
+An offline machine is refused by name and the time it was last connected
+(`Studio is offline since 09:12; nothing was sent`), and a machine that is no
+longer paired says to pair it again. Nothing falls back to this computer.
+
+Acting on another machine is a call that changes other threads, so the same
+approval gate applies, and the card names the machine ("On Studio, not this
+computer"). The grant is per machine (`start@‹machine id›[:‹project›]`,
+`interrupt:‹machine id›/‹thread›`), so a grant for a local start never allows a
+remote one. Running a thread at the caller's access level still applies: a
+remote delegate is never broader than its parent here.
+
+A delegate started on another machine is a link like any other: nested under
+the caller (no row of its own while it works, and its row and its parent's
+stack mark say `Studio`), settled by the turn that runs there, and its parent
+is woken with the answer exactly as for a local one. Read-only threads on a
+disconnected machine stay readable and refused to act on.
+
+Limits of v1, and what is left:
+
+- The machine's own app need not run: the engine runs the threads. But this
+  app must: with it closed nothing is answered.
+- `merge_when_green`, `cleanup_worktree`, `transfer_session`, `update_session`
+  and `configure_session` have no `machine` yet; they refuse a thread on
+  another machine with "runs on ‹machine›: do that there", and
+  `thread_status` for a remote thread reports its branch but no pull-request
+  checks (those are read by this app's `gh`, not that machine's folders).
+- A link's access mode (full vs only threads it starts) arrives with machine
+  links (§8.1); until then every paired machine is at the user's own trust, as
+  the rest of the multi-machine app is.
+- A thread started on another machine takes its title from its first message
+  there: the rename this app does for a local child is its own shell's write.
+  It is renamed by the user or itself there.
+
+The app advertises 10 from `CAPABILITY_VERSION` (`state/orchestration.ts`);
+a v9 app keeps exactly the v9 set and `PROMPT_HINT_V9`, and this engine
+refuses `machine` from it rather than acting on the wrong computer.
 
 ## External harnesses as orchestrators
 
@@ -999,10 +1063,11 @@ can inject the server (unix), and in a thread's answer whether it did.
 engine does both); a thread's answer sets `checkpoints` to whether its cwd is
 in a git repository. `initialize` also advertises `_meta.rustcode.worktrees`,
 `checkpoints` and `threadStatus` (each `1`). The app advertises
-`_meta.rustcode.orchestration = 9` while threads may orchestrate
+`_meta.rustcode.orchestration = 10` while threads may orchestrate
 (`state/orchestration.ts` `CAPABILITY_VERSION`), and the newest client gets the
-v4 data-store tools, the v6 activity read, the v7 queue control and the v9
-delegate pull-request tools; v8 adds no tool, only its prompt hint.
+v4 data-store tools, the v6 activity read, the v7 queue control, the v9
+delegate pull-request tools and the v10 machine tools; v8 adds no tool, only
+its prompt hint.
 
 ## Keeping an orchestrator's context small
 
@@ -1011,7 +1076,7 @@ reads costs again on each later call. In measured Opus orchestrator threads,
 most of that context came from the orchestrator reading diffs, files and logs
 itself, then from delegates' final answers. Four things keep it small:
 
-- The version 9 hint tells the orchestrator to leave reading, reviews and CI
+- The version 10 hint tells the orchestrator to leave reading, reviews and CI
   triage to delegates, check pull requests with `thread_status`, wait on all
   links in one long `wait_session` (or end the turn and be woken), and call
   `list_harnesses` once.

@@ -385,6 +385,16 @@ async fn call(
             ),
         };
     }
+    // The same for a machine: a server that never listed `machine` must not
+    // quietly act on this computer when another one was named.
+    if version < super::MACHINE_VERSION && super::names_a_machine(tool, &args) {
+        return CallAnswer {
+            success: false,
+            content: format!(
+                "error: {tool} with machine needs a newer RustCode app. Nothing was sent."
+            ),
+        };
+    }
     let limit = super::requested_wait(tool, &args).map(|wait| {
         wait + if tool == super::WAIT_SESSION {
             super::WAIT_SERVER_GRACE

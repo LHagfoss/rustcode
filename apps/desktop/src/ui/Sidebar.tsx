@@ -2111,6 +2111,11 @@ export function Sidebar() {
               kind: "thread",
               harness: child.harness,
               label: child.title || "New thread",
+              // A delegate on another machine says where it runs on this row's stack: the
+              // mark a parent shows and the tip it opens both name the machine.
+              ...(child.host
+                ? { machine: machines.find((m) => m.id === child.host)?.name ?? child.host }
+                : {}),
               since: linkOf.get(child.id)?.createdAt,
             });
           walk(child.id);
@@ -2125,7 +2130,7 @@ export function Sidebar() {
       if (agents.length) out.set(s.id, agents);
     }
     return out;
-  }, [childrenByParent, filtered, infos, links, parentOf]);
+  }, [childrenByParent, filtered, infos, links, machines, parentOf]);
 
   // The order the list draws its rows in, so ↑ ↓ move through what is on screen: a shut section
   // or project contributes nothing. A delegated thread has no row of its own, so it is not here
