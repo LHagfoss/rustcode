@@ -10,12 +10,15 @@
 
 use serde_json::{Value, json};
 
+// The job types exist on every platform; the client, the command helpers and
+// the lifecycle are the unix socket's, so a Windows build compiles the
+// validation and the "no daemon here" answers without them.
+use crate::daemon::model::{JobRecord, ScheduleSpec};
 #[cfg(unix)]
 use crate::daemon::{
     client::DaemonClient,
     command::create_job,
     lifecycle::DaemonLifecycle,
-    model::{JobRecord, ScheduleSpec},
     protocol::{DaemonRequest, DaemonResponse},
 };
 
@@ -164,6 +167,7 @@ pub(crate) fn name_from_prompt(prompt: &str) -> String {
 
 /// The fields of a job an answer carries: enough to name it, delete it and
 /// say when it runs next, never its prompt back.
+#[cfg(unix)]
 fn task(job: &JobRecord) -> Value {
     json!({
         "id": job.id,
