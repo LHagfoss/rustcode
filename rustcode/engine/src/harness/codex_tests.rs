@@ -794,6 +794,30 @@ fn a_codex_compaction_shows_while_it_runs_then_as_the_card() {
     assert_eq!(done[0]["_meta"]["rustcode"]["phase"], "completed");
 }
 
+#[test]
+fn a_codex_compaction_row_is_keyed_by_its_item_id() {
+    let automatic = compaction_row("t1".to_owned(), Some("gpt-6".to_owned()), false, "c1");
+    assert_eq!(automatic.harness.as_deref(), Some("codex"));
+    assert_eq!(automatic.model.as_deref(), Some("gpt-6"));
+    assert_eq!(automatic.trigger, "harness_auto");
+    assert_eq!(automatic.mode.as_deref(), Some("harness_summary"));
+    assert_eq!(
+        automatic.external_id.as_deref(),
+        Some("c1"),
+        "the item id keys the row, so a repeated item/completed does not add one"
+    );
+    assert!(automatic.success);
+
+    let manual = compaction_row("t1".to_owned(), None, true, "c2");
+    assert_eq!(manual.trigger, "manual");
+    // An item without an id still records one row; it just cannot be deduped.
+    assert!(
+        compaction_row("t1".to_owned(), None, false, "")
+            .external_id
+            .is_none()
+    );
+}
+
 fn tool_approval(server: &str) -> Value {
     json!({
         "threadId": "t1",

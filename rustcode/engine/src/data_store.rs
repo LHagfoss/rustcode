@@ -2069,6 +2069,12 @@ pub const NOISE_METHODS: [&str; 2] = [
     "mcpServer/startupStatus/updated",
 ];
 
+/// A streaming row's payload above this size is a raw frame body, not the
+/// `{coalesced, update, bytes}` metadata a recorder writes for a folded chunk
+/// (`harness/rpc_capture.rs`). Only the raw body is noise; the metadata is how
+/// the folded row can be read at all and is kept.
+pub const STREAMED_PAYLOAD_BODY_BYTES: i64 = 512;
+
 /// How long a command receipt stays usable: an orchestration call retried
 /// inside this window is answered from its receipt, and one retried later is
 /// a new call, like one that carried no retry key.
@@ -2715,26 +2721,35 @@ fn telemetry_bytes(connection: &Connection) -> Result<i64, String> {
         .map_err(|error| error.to_string())
 }
 
-/// Drops the payloads of raw streaming deltas and repeated status pings,
-/// whatever their age. The metadata row (method, at, latency, size) stays.
+/// Drops the raw bodies of streaming deltas and repeated status pings,
+/// whatever their age. The metadata row (method, at, latency, size) stays, and
+/// so does a folded chunk's small payload.
 fn clear_noise_payloads(connection: &Connection) -> Result<usize, String> {
     let mut cleared = connection
         .execute(
             "UPDATE harness_rpc_messages SET payload_json = NULL
              WHERE payload_json IS NOT NULL
-               AND (method GLOB '*/outputDelta'
-                    OR method = ?1 OR method = ?2)",
-            params![NOISE_METHODS[0], NOISE_METHODS[1]],
+               AND ((method GLOB '*/outputDelta' AND LENGTH(payload_json) > ?1)
+                    OR method = ?2 OR method = ?3)",
+            params![
+                STREAMED_PAYLOAD_BODY_BYTES,
+                NOISE_METHODS[0],
+                NOISE_METHODS[1]
+            ],
         )
         .map_err(|error| error.to_string())?;
-    // Older stores also captured the coalesced session/update text; the
-    // metadata payload a recorder writes now is small and is kept.
+    // A streaming chunk's row can carry the chunk text itself: a store from
+    // before chunks were folded, or a recorder that forwarded one as a frame.
+    // A captured tool-call payload is not that, whatever its size, and stays.
     cleared += connection
         .execute(
             "UPDATE harness_rpc_messages SET payload_json = NULL
              WHERE payload_json IS NOT NULL AND method = 'session/update'
-               AND LENGTH(payload_json) > 512",
-            [],
+               AND LENGTH(payload_json) > ?1
+               AND (payload_json LIKE '%\"sessionUpdate\":\"agent_message_chunk\"%'
+                    OR payload_json LIKE '%\"sessionUpdate\":\"agent_thought_chunk\"%'
+                    OR payload_json LIKE '%\"sessionUpdate\":\"user_message_chunk\"%')",
+            [STREAMED_PAYLOAD_BODY_BYTES],
         )
         .map_err(|error| error.to_string())?;
     Ok(cleared)
@@ -2933,8 +2948,9 @@ pub fn query(sql: &str, limit: usize) -> Result<QueryResult, String> {
 
 /// Per-table row counts and sizes, so growth itself can be tracked
 /// (`rustcode data stats`). Table and view names come from `sqlite_master`;
-/// a size is `dbstat`'s when SQLite has that virtual table and `NULL`
-/// otherwise, never a guess.
+/// a size is `dbstat`'s for the table together with its indexes (they grow
+/// with it), when SQLite has that virtual table, and `NULL` otherwise, never
+/// a guess.
 pub fn stats() -> Result<Value, String> {
     let path = data_path().ok_or_else(|| "no config directory".to_owned())?;
     stats_at(&path)
@@ -2964,8 +2980,15 @@ pub fn stats_at(path: &Path) -> Result<Value, String> {
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|error| error.to_string())?
     };
+    // `tbl_name` is the table an index belongs to, so summing by it counts a
+    // table's own pages and its indexes: an index is most of a narrow table's
+    // growth, and leaving it out would understate what the store holds.
     let sizes: std::collections::HashMap<String, i64> = connection
-        .prepare("SELECT name, SUM(pgsize) FROM dbstat GROUP BY name")
+        .prepare(
+            "SELECT master.tbl_name, SUM(dbstat.pgsize)
+             FROM dbstat JOIN sqlite_master AS master ON master.name = dbstat.name
+             GROUP BY master.tbl_name",
+        )
         .and_then(|mut statement| {
             let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
             rows.collect::<Result<Vec<(String, i64)>, _>>()
@@ -5057,6 +5080,45 @@ mod tests {
     }
 
     #[test]
+    fn stats_count_rows_and_a_tables_indexes_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let connection = open(&path).unwrap();
+        write_turn(
+            &connection,
+            &turn("t", "2026-11-01T10:00:00Z", (10, 2), "completed"),
+        )
+        .unwrap();
+        let index_bytes: i64 = connection
+            .query_row(
+                "SELECT COALESCE(SUM(pgsize), 0) FROM dbstat WHERE name = 'turns_day'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        drop(connection);
+
+        let stats = stats_at(&path).unwrap();
+        let object = |name: &str| {
+            stats["objects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|object| object["name"] == name)
+                .cloned()
+                .unwrap_or_else(|| panic!("{name}"))
+        };
+        assert_eq!(object("turns")["rows"], 1);
+        assert_eq!(object("compactions")["rows"], 0);
+        assert_eq!(object("daily_usage")["rows"], 1, "a view reports its rows");
+        let bytes = object("turns")["bytes"].as_i64().expect("dbstat sizes");
+        assert!(
+            bytes > index_bytes,
+            "the table's pages and its indexes both count: {bytes} <= {index_bytes}"
+        );
+    }
+
+    #[test]
     fn a_compaction_round_trips_and_a_repeated_update_keeps_one_row() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(DATA_FILE);
@@ -5417,6 +5479,65 @@ mod tests {
         assert_eq!(event["fields_json"], payload, "{event}");
         // A 400-day-old turn is still queryable.
         assert_eq!(count_rows(&path, "turns"), 1);
+    }
+
+    #[test]
+    fn a_folded_streaming_row_keeps_its_metadata_and_a_captured_tool_call_its_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let connection = open(&path).unwrap();
+        let coalesced = "{\"coalesced\":42,\"update\":\"command_output\",\"bytes\":900}";
+        let raw_body = format!("{{\"delta\":\"{}\"}}", "x".repeat(900));
+        let chunk_text = format!(
+            "{{\"params\":{{\"update\":{{\"sessionUpdate\":\"agent_message_chunk\",\"content\":\"{}\"}}}}}}",
+            "y".repeat(900)
+        );
+        let captured_tool_call = format!(
+            "{{\"params\":{{\"update\":{{\"sessionUpdate\":\"tool_call_update\",\"rawOutput\":{{\"text\":\"{}\"}}}}}}}}",
+            "z".repeat(900)
+        );
+        let row = |method: &str, payload: &str| {
+            let mut row = rpc_row("t", &days_ago(0), Some(payload));
+            row.method = Some(method.to_owned());
+            row
+        };
+        write_rpc_messages(
+            &connection,
+            &[
+                &row("item/commandExecution/outputDelta", coalesced),
+                &row("item/commandExecution/outputDelta", &raw_body),
+                &row("session/update", &chunk_text),
+                &row("session/update", &captured_tool_call),
+            ],
+        )
+        .unwrap();
+
+        let report = prune_with(&connection, TELEMETRY_MAX_BYTES, None).unwrap();
+        assert_eq!(
+            report.payloads_cleared, 2,
+            "the raw bodies only: {report:?}"
+        );
+        let payloads: Vec<Value> = query_path(
+            &path,
+            "SELECT payload_json FROM harness_rpc_messages ORDER BY id",
+            10,
+        )
+        .unwrap()
+        .rows
+        .into_iter()
+        .map(|row| row["payload_json"].clone())
+        .collect();
+        assert_eq!(
+            payloads[0], coalesced,
+            "a folded chunk keeps its counts: {payloads:?}"
+        );
+        assert!(payloads[1].is_null(), "the raw delta body is gone");
+        assert!(payloads[2].is_null(), "the chunk text is gone");
+        assert_eq!(
+            payloads[3], captured_tool_call,
+            "a captured tool call is not noise: {payloads:?}"
+        );
+        assert_eq!(count_rows(&path, "harness_rpc_messages"), 4);
     }
 
     #[test]

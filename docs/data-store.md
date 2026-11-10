@@ -57,7 +57,7 @@ currency is not converted. Timestamps are RFC 3339 in UTC. Migrations are number
 names, like the thread index: a recorded name that does not match refuses to
 open instead of skipping a step.
 
-## Structured rows grow forever, noise does not
+## Structured rows grow forever, payloads do not
 
 The store is a record of what happened, so the small structured rows are kept:
 `threads`, `turns`, `tool_calls`, `compactions`, `operational_events`,
@@ -67,8 +67,10 @@ They are bytes to a few hundred bytes each.
 Only the raw protocol payloads are bulky, and only they are pruned:
 
 - streaming output (`*/outputDelta`, `agent_message_chunk`,
-  `agent_thought_chunk`, `user_message_chunk`) is coalesced per flush window
-  and, when it slips through as a raw frame, its body is dropped;
+  `agent_thought_chunk`, `user_message_chunk`) is folded per flush window
+  into one row carrying only its counts (`coalesced`, `update`, `bytes`). A
+  raw chunk body over 512 bytes is dropped on every pass; the folded row's
+  counts stay;
 - repeated status pings (`account/rateLimits/updated`,
   `mcpServer/startupStatus/updated`) keep their metadata row and lose their
   body on every pass;
@@ -80,9 +82,15 @@ Only the raw protocol payloads are bulky, and only they are pruned:
   days deletes raw `provider_requests` and `harness_rpc_messages` rows older
   than that; it never deletes a structured row.
 
-That keeps `data.sqlite` proportional to the turns, tool calls and
-compactions a thread actually had, not to the bytes that streamed through it.
-`rustcode data stats` prints each table's row count and size.
+So the payload side is bounded (7 days, under 256 MiB), while the row count
+keeps growing: structured rows are one per turn, tool call, compaction or
+operational event, and raw rows are one per protocol frame, with a folded
+streaming row per flush window and chunk kind instead of one per token. Under
+`forever` nothing deletes those raw rows, so a busy machine still adds
+tens of thousands of them a day (a few megabytes). A number of days in
+`telemetry_retention` bounds that, and structured history stays either way.
+`rustcode data stats` prints each table's row count and size, so the growth
+can be watched and the raw window set from it.
 
 ## Compactions
 
@@ -247,7 +255,7 @@ Metadata is always recorded; payloads are opt-in, and off by default:
 
 `telemetry_retention` (default `"forever"`, or a number of days) is separate
 from those two: it only bounds raw protocol rows, never structured rows
-("Structured rows grow forever, noise does not"). It is global only.
+("Structured rows grow forever, payloads do not"). It is global only.
 
 `debug_verbose_network_logging` is a separate flag for `debug.log` output and
 does not turn any of this on. Project configuration cannot enable either key:
@@ -286,10 +294,10 @@ insert, so a mistake cannot write past the cap.
 
 A pass runs at most once an hour, from the store's open path (every writer
 opens the store) and at the start. Structured rows are never deleted; see
-"Structured rows grow forever, noise does not" above for the policy, and
+"Structured rows grow forever, payloads do not" above for the policy, and
 `telemetry_retention` in `config.toml` for the raw-row window.
 
-- streaming-delta and status-ping payloads are dropped on every pass;
+- streaming-delta bodies and status-ping payloads are dropped on every pass;
 - payload columns of raw rows older than 7 days are set to `NULL`, and the
   metadata row stays;
 - when `telemetry_retention` is a number of days, raw protocol rows older

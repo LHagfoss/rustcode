@@ -1174,6 +1174,37 @@ fn usage_for(params: &Value) -> Option<UsageUpdate> {
     Some(UsageUpdate::new(count("last", "inputTokens"), size).meta(meta))
 }
 
+/// The row for one completed `contextCompaction` item. Codex's own item id is
+/// the `external_id`, so a replayed `item/completed` (a reconnect, a server
+/// that repeats itself) updates its row instead of adding a second one.
+fn compaction_row(
+    thread_id: String,
+    model: Option<String>,
+    manual: bool,
+    item_id: &str,
+) -> crate::data_store::CompactionRow {
+    crate::data_store::CompactionRow {
+        thread_id,
+        turn_id: None,
+        harness: Some("codex".to_owned()),
+        model,
+        at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        duration_ms: None,
+        trigger: if manual { "manual" } else { "harness_auto" }.to_owned(),
+        mode: Some("harness_summary".to_owned()),
+        tokens_before: None,
+        tokens_after: None,
+        messages_before: None,
+        messages_after: None,
+        idle_secs_before: None,
+        count: None,
+        success: true,
+        error_kind: None,
+        external_id: (!item_id.trim().is_empty()).then(|| item_id.to_owned()),
+        source: Some("codex".to_owned()),
+    }
+}
+
 /// Translate one Codex notification into ACP updates.
 fn translate(state: &Mutex<State>, method: &str, params: &Value) -> Vec<SessionUpdate> {
     let item_id = str_field(params, "itemId").unwrap_or_default().to_owned();
@@ -1286,27 +1317,9 @@ fn translate(state: &Mutex<State>, method: &str, params: &Value) -> Vec<SessionU
                     }
                     drop(guard);
                     if let Some(thread_id) = thread_id {
-                        crate::data_store::record_compaction(&crate::data_store::CompactionRow {
-                            thread_id,
-                            turn_id: None,
-                            harness: Some("codex".to_owned()),
-                            model,
-                            at: chrono::Utc::now()
-                                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-                            duration_ms: None,
-                            trigger: if manual { "manual" } else { "harness_auto" }.to_owned(),
-                            mode: Some("harness_summary".to_owned()),
-                            tokens_before: None,
-                            tokens_after: None,
-                            messages_before: None,
-                            messages_after: None,
-                            idle_secs_before: None,
-                            count: None,
-                            success: true,
-                            error_kind: None,
-                            external_id: None,
-                            source: Some("codex".to_owned()),
-                        });
+                        crate::data_store::record_compaction(&compaction_row(
+                            thread_id, model, manual, &id,
+                        ));
                     }
                     vec![crate::acp::usage::compaction_card(
                         None,
