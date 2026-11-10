@@ -71,6 +71,7 @@ import { hasShell } from "../lib/shell";
 import { liveSubagents, type StackAgent } from "../state/agentStack";
 import { type BranchRow, branchKindOf, branchRows } from "../state/branches";
 import { type ChildInfo, childInfo } from "../state/children";
+import { stateOf } from "../state/host";
 import {
   cachedPulls,
   loadPulls,
@@ -1888,13 +1889,16 @@ export function Sidebar() {
   // Every delegated thread's state, as its parent's stack reads it: one string, so a streamed
   // chunk that changes nothing about them does not redraw the list.
   const childStates = useApp((s) => {
-    const linked = new Map(s.links.links.filter((l) => l.started).map((l) => [l.target, l.state] as const));
+    // A child reads by the same live state its own row and the delegate tree use: a link a restart
+    // marked interrupted says nothing when its thread kept working (`state/host.ts` `stateOf`).
+    const linked = new Map(s.links.links.filter((l) => l.started).map((l) => [l.target, l] as const));
     return filtered
       .map((c) => {
         if (!parentOf.has(c.id)) return "";
+        const link = linked.get(c.id);
         const info = childInfo(c.id, {
           status: statusOf(s, c.id),
-          link: linked.get(c.id),
+          link: link ? stateOf(s, link) : undefined,
           failed: !!s.failed[c.id],
         });
         return `${info.id}:${info.state}`;

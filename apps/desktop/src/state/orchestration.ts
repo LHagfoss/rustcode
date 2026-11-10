@@ -97,6 +97,22 @@ export const isActive = (state: LinkState) =>
   state === "queued" || state === "working" || state === "needs_user";
 
 /**
+ * A link's state as the app shows it now, with its target thread's own reading of
+ * what it does (`activity`, the engine's status). The thread's live word wins over
+ * the link's record: a link says what it was doing when it settled, or what a
+ * restart could not resume (`interrupted`), while its thread may have kept
+ * working. A link the user stopped, or one that failed, keeps its word: that
+ * branch's work did not resume. One rule, so the strip, the delegate tree, the
+ * popover and the sidebar read a link the same way.
+ */
+export function liveState(link: Link, activity?: ThreadStatus): LinkState {
+  if (link.state === "failed" || link.state === "cancelled") return link.state;
+  if (activity === "needs_input") return "needs_user";
+  if (activity === "running") return "working";
+  return link.state;
+}
+
+/**
  * One thing that happened to a link, and when: the thread started, the message
  * sent, the turn that began, the question it asked, the answer or the failure,
  * and a merge or a cleanup of its branch. The chip shows the last one as its
@@ -200,15 +216,19 @@ export const linkEventText = (event: LinkEvent): string =>
 
 /**
  * The chip's status word: the latest event's, or its state's for a link made
- * before the app kept events. `state` is the link as it shows now, which is
- * `needs_user` while its child waits on an approval even though the link itself
- * still says `working`.
+ * before the app kept events. `state` is the link as it shows now
+ * ({@link liveState}): `needs_user` while its child waits on an approval even
+ * though the link itself still says `working`, `working` while the thread it was
+ * severed from keeps working, and the event's word only when nothing live speaks.
  */
 export function linkStatusText(link: Link, state: LinkState = link.state): string {
   const last = link.events?.at(-1);
   // A wait reads as the question it asked, whether or not the book kept that event.
   if (state === "needs_user")
     return last?.kind === "asking" ? LINK_EVENT_LABEL.asking : LINK_LABEL.needs_user;
+  // A live state outranks the last event: the `interrupted` mark a restart writes, or the answer of
+  // a turn that ended, is not what the link does now.
+  if (isActive(state)) return LINK_LABEL[state];
   // The wait ended without its own event (a book from before the list): the state's word stands.
   if (last?.kind === "asking") return LINK_LABEL[state];
   return last ? LINK_EVENT_LABEL[last.kind] : LINK_LABEL[state];
@@ -244,10 +264,16 @@ export function linkGroupStatus(counts: LinkCounts): string {
  * The links the strip above the composer shows: everything still working,
  * because that is the live control (Stop lives there), and a settled link with
  * no row of its own in the transcript — a thread this one started reads there,
- * a thread it only messaged reads here.
+ * a thread it only messaged reads here. `states` is what each link shows now
+ * ({@link liveState}, `state/host.ts` `stateOf`), so a link a restart marked
+ * `interrupted` whose thread kept working still has its live row here.
  */
-export function stripLinks(links: Link[], shown: ReadonlySet<string>): Link[] {
-  return links.filter((link) => isActive(link.state) || !shown.has(link.target));
+export function stripLinks(
+  links: readonly Link[],
+  shown: ReadonlySet<string>,
+  states?: readonly LinkState[],
+): Link[] {
+  return links.filter((link, i) => isActive(states?.[i] ?? link.state) || !shown.has(link.target));
 }
 
 /** How many settled delegates the strip's popover lists under "Done"; the rest are one count. */

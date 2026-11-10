@@ -13,7 +13,14 @@ import { diffCounts, stripHarnessMarkup, type TranscriptItem, type TurnUsage } f
 // ---------------------------------------------------------------- folded sections
 
 /** The overview's sections, in the order the panel draws them. */
-export const OVERVIEW_SECTIONS = ["properties", "pulls", "deliverables", "log", "details"] as const;
+export const OVERVIEW_SECTIONS = [
+  "properties",
+  "delegates",
+  "pulls",
+  "deliverables",
+  "log",
+  "details",
+] as const;
 export type OverviewSection = (typeof OVERVIEW_SECTIONS)[number];
 
 /**
@@ -62,6 +69,23 @@ export function writeFolded(folded: readonly OverviewSection[]): void {
   } catch {
     // Not kept in a private window.
   }
+}
+
+/**
+ * The window event a section asks for when something else opens it: the overview
+ * reads the folded sections again and draws its fold open (`ui/ThreadDetails.tsx`).
+ */
+export const FOLDED_EVENT = "rustcode:overview-folded";
+
+/**
+ * Show `id` unfolded in every open overview: the strip's `+2 nested` row sends the
+ * reader to the tree that holds them, and a folded section must not swallow it.
+ */
+export function unfoldSection(id: OverviewSection): void {
+  const folded = readFolded();
+  if (!folded.includes(id)) return;
+  writeFolded(folded.filter((section) => section !== id));
+  window.dispatchEvent(new Event(FOLDED_EVENT));
 }
 
 // ---------------------------------------------------------------- deliverables

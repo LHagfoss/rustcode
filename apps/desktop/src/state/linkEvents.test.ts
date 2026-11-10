@@ -184,6 +184,21 @@ describe("the chip's status text", () => {
     expect(linkStatusText(asking, "working")).toBe("Working");
   });
 
+  test("a live state outranks a stale event", () => {
+    // A restart marks the stored links interrupted (`state/host.ts` `syncLinkBook`) while their
+    // threads keep working on the engine: the row says what the link does now, not what the mark said.
+    const stale: LinkEvent[] = [
+      { kind: "started", at: at(0) },
+      { kind: "working", at: at(1) },
+      { kind: "interrupted", at: at(2) },
+    ];
+    const severed = link({ state: "interrupted", events: stale });
+    expect(linkStatusText(severed, "working")).toBe("Working");
+    expect(linkStatusText(severed, "needs_user")).toBe("Needs you");
+    // Nothing live speaks for it: the event is the word, as before.
+    expect(linkStatusText(severed)).toBe("Interrupted");
+  });
+
   test("an event reads with what it adds", () => {
     expect(linkEventText({ kind: "started", at: at(0), detail: "Pi · deepseek/flash" })).toBe(
       "Started · Pi · deepseek/flash",

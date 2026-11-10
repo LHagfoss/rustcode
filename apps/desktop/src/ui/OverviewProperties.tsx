@@ -13,6 +13,7 @@ import { selectOption } from "../state/harness";
 import { modeLabel } from "../state/permissions";
 import { type AppState, permissionModeOf, statusOf, useApp } from "../state/store";
 import type { ThreadState } from "../state/thread";
+import { useWaiting, waitingLabel, waitingTitle } from "../state/waiting";
 import { HarnessIcon } from "./HarnessIcon";
 import { OverviewSection } from "./OverviewSection";
 import { copyText, cx } from "./primitives";
@@ -108,6 +109,9 @@ export function PropertiesSection({
   onToggle: () => void;
 }) {
   const status = useApp((s) => statusOf(s, thread.id));
+  // No turn of its own runs, but the threads it handed work to still do: the word the sidebar's
+  // chip says for that (`state/sidebarRows.ts` `rowStatus`), rather than calling the thread Idle.
+  const waiting = useWaiting(thread.id);
   const harnessName = useApp((s) =>
     thread.harness
       ? (s.harnesses?.harnesses.find((h) => h.id === thread.harness?.id)?.name ?? thread.harness.id)
@@ -128,13 +132,22 @@ export function PropertiesSection({
       <Property
         icon={<StatusIcon status={status} size={14} />}
         label="Status"
+        title={
+          waiting
+            ? waitingTitle(waiting)
+              ? `${waitingLabel(waiting)}: ${waitingTitle(waiting)}`
+              : waitingLabel(waiting)
+            : undefined
+        }
         value={
-          status === "idle" ? (
-            <span className="text-fg-faint">Idle</span>
-          ) : (
+          status !== "idle" ? (
             <span className="inline-flex items-center">
               <StatusChip status={status} />
             </span>
+          ) : waiting ? (
+            <span className="text-fg-muted">Waiting</span>
+          ) : (
+            <span className="text-fg-faint">Idle</span>
           )
         }
       />

@@ -27,7 +27,7 @@ import {
   Method,
   projectName,
 } from "../acp/types";
-import { V2Method } from "../acp/v2";
+import { type ThreadStatus, V2Method } from "../acp/v2";
 import { hasShell, shellCall } from "../lib/shell";
 import { childTitle, titleFrom } from "../lib/title";
 import { restoreChoice, selectOption, unavailableReason, usableHarnesses } from "./harness";
@@ -76,6 +76,7 @@ import {
   linkResult,
   linksLeft,
   listSessions,
+  liveState,
   MAX_DELEGATES,
   MAX_DELEGATES_PER_THREAD,
   MAX_PROJECTS,
@@ -152,6 +153,7 @@ import {
   searchThreads,
   sendDecisionFor,
   sendQueuedNow,
+  sessionById,
   setConfigOption,
   setPermissionMode,
   setSnoozed,
@@ -2276,9 +2278,23 @@ async function fanOutNow(caller: RuleThread, call: FanOutCall): Promise<JsonObje
   return { links: out, fan_out_id: fanId, links_left: linksLeft(book(), caller.id, delegateLimits()) };
 }
 
-/** A link's state now: a running turn that waits on an approval or a question needs the user. */
+/**
+ * A link's state now: what its target thread does, folded onto the record
+ * ({@link liveState}). A running turn that waits on an approval or a question
+ * needs the user, and a link a restart could not resume reads live again while
+ * its thread keeps working.
+ */
 export function stateOf(s: AppState, link: Link) {
-  return shownState(link, !!s.threads[link.target]?.permissions.length);
+  return liveState(link, activityOfThread(s, link.target));
+}
+
+/** What a thread the app may not have open does now: its live turn, else what the list reports. */
+function activityOfThread(s: AppState, id: string): ThreadStatus | undefined {
+  const open = s.threads[id];
+  if (open?.permissions.length) return "needs_input";
+  if (open?.running) return "running";
+  // The list's index, not a scan: `stateOf` runs in selectors on each store change (state/store.ts).
+  return sessionById(s, id)?.status;
 }
 
 /**

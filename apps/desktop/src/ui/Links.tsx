@@ -11,6 +11,7 @@ import {
   CornerDownRight,
   GitBranch,
   Hand,
+  ListTree,
   LoaderCircle,
   PauseCircle,
   Rows3,
@@ -22,8 +23,11 @@ import { agentActive, agentElapsed, type SubagentInfo, spawnedAgentId } from "..
 import type { StackAgent, StackState } from "../state/agentStack";
 import {
   foldStrip,
+  type StripCounts,
   stripCollapsed,
+  stripCount,
   stripCounts,
+  stripDoing,
   stripFolded,
   stripSummary,
   subscribeStripFold,
@@ -51,7 +55,7 @@ import {
 } from "../state/orchestration";
 import { modeLabel } from "../state/permissions";
 import { emptyCost } from "../state/pricing";
-import { selectThread, setView, useApp } from "../state/store";
+import { selectThread, setView, showPanel, useApp } from "../state/store";
 import { startedLinks } from "../state/thread";
 import {
   AgentGroupHeader,
@@ -62,6 +66,7 @@ import {
   useNow,
 } from "./AgentViews";
 import { useDelegateBranch } from "./DelegateTree";
+import { unfoldSection } from "./overview";
 import { cx, Pill, Spinner, Tooltip } from "./primitives";
 
 const NO_AGENTS: SubagentInfo[] = [];
@@ -93,15 +98,17 @@ export function LinkStateIcon({ state, size = 12 }: { state: LinkState; size?: n
 
 /**
  * One thread this one delegated to, in the strip above the composer and in its
- * popover: the same row as a subagent, plus stop (or remove once settled).
+ * popover: the same row as a subagent, plus stop (or remove once settled). The
+ * popover's rows are one line of columns, so a list of them reads as a table.
  */
-function LinkRow({ link }: { link: Link }) {
+function LinkRow({ link, popover = false }: { link: Link; popover?: boolean }) {
   const state = useApp((s) => stateOf(s, link));
   const active = isActive(state);
   return (
     <ThreadAgentRow
       link={link}
       peek={false}
+      popover={popover}
       action={
         <Tooltip label={active ? "Stop this work in that thread" : "Remove"}>
           <button
@@ -175,9 +182,22 @@ function readStrip(
  * Three or more linked threads in the strip fold into one card header, the same
  * header a group of agents has in the transcript: the strip above the composer
  * has about 800px, and a third of it spent on a made-up title tells the reader
- * nothing. Two stay as rows of their own; they fit.
+ * nothing. Two stay as rows of their own; they fit. The header is also the strip's
+ * folded form — its own count and live summary — so a strip of this many rows has
+ * one header with one chevron, which opens the popover.
  */
-function ManyLinks({ links, threadId, strip }: { links: Link[]; threadId: string; strip: Strip }) {
+function ManyLinks({
+  links,
+  threadId,
+  strip,
+  counts,
+}: {
+  links: Link[];
+  threadId: string;
+  strip: Strip;
+  /** What the strip's rows add up to, the words this header says after the avatars. */
+  counts: StripCounts;
+}) {
   const { views, inTree, states, total, runningSince } = strip;
   // A live clock, not the branch's summed work time: how long the longest thread working now has
   // been at it. Nothing runs once the branch finished, so nothing ticks there.
@@ -193,13 +213,13 @@ function ManyLinks({ links, threadId, strip }: { links: Link[]; threadId: string
     label: view.title,
     since: view.link.createdAt,
   });
-  const liveState = (state: AgentState) => state === "working" || state === "needs";
+  const isLive = (state: AgentState) => state === "working" || state === "needs";
   const marks: StackAgent[] = [
-    ...flattenViews(views).flatMap((view) => (liveState(view.state) ? [mark(view)] : [])),
+    ...flattenViews(views).flatMap((view) => (isLive(view.state) ? [mark(view)] : [])),
     ...links.flatMap((link, i): StackAgent[] => {
       if (inTree.has(link.target)) return [];
       const state = LINK_AGENT_STATE[states[i] ?? "done"];
-      if (!liveState(state)) return [];
+      if (!isLive(state)) return [];
       return [
         {
           id: link.target,
@@ -222,6 +242,13 @@ function ManyLinks({ links, threadId, strip }: { links: Link[]; threadId: string
   // Nothing runs and nothing waits: a settled branch is history the details panel keeps, not a
   // header over the composer.
   if (!bar.show) return null;
+  // The threads the tree holds below the ones the strip draws: the header cannot list them, so it
+  // says how many there are and opens the tree that does (the overview's Delegates section).
+  const nested = Math.max(0, flattenViews(views).length - views.length);
+  const openTree = () => {
+    showPanel("details");
+    unfoldSection("delegates");
+  };
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
@@ -232,8 +259,10 @@ function ManyLinks({ links, threadId, strip }: { links: Link[]; threadId: string
           <AgentGroupHeader
             agents={marks.length ? marks : undefined}
             state={bar.state}
-            label={bar.label}
-            status={bar.status}
+            label={stripCount(counts)}
+            // What the branch does now, nested delegates included: the avatars carry their marks, so
+            // the words beside them must count them too.
+            status={stripDoing({ delegates: counts.delegates, running: bar.working, needs: bar.needs })}
             elapsedMs={bar.longestMs}
             open={false}
             chevron="down"
@@ -246,19 +275,30 @@ function ManyLinks({ links, threadId, strip }: { links: Link[]; threadId: string
           align="start"
           sideOffset={8}
           aria-label="Linked threads"
-          className="elevated z-50 flex max-h-[min(420px,60vh)] w-[340px] flex-col overflow-y-auto p-2 rc-in"
+          className="elevated z-50 flex max-h-[min(420px,60vh)] w-[min(420px,calc(100vw-48px))] flex-col overflow-y-auto p-2 rc-in"
         >
           {links.map((l) => (
-            <LinkRow key={l.id} link={l} />
+            <LinkRow key={l.id} link={l} popover />
           ))}
           {done.length > 0 && (
             <>
               <div className="px-3 pt-2 pb-1 text-caption text-fg-faint">Done</div>
               {done.map((l) => (
-                <LinkRow key={l.id} link={l} />
+                <LinkRow key={l.id} link={l} popover />
               ))}
               {more > 0 && <div className="px-3 py-1 text-caption text-fg-faint">{more} more</div>}
             </>
+          )}
+          {nested > 0 && (
+            <Popover.Close asChild>
+              <button
+                type="button"
+                onClick={openTree}
+                className="mt-1 flex h-7 w-full shrink-0 items-center gap-1.5 rounded-lg px-3 text-left text-caption text-fg-muted hover:bg-fill-subtle active:bg-fill-strong"
+              >
+                <ListTree size={11} aria-hidden className="shrink-0 text-fg-faint" />+{nested} nested
+              </button>
+            </Popover.Close>
           )}
         </Popover.Content>
       </Popover.Portal>
@@ -293,9 +333,14 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
     const mine = book.links.filter((l) => l.orchestrator === threadId);
     return new Set([...startedLinks(items ?? [], mine).values()].map((l) => l.target));
   }, [items, book.links, threadId]);
-  const live = stripLinks(driving, shown);
-  // Joined into one string so the selector's result is stable between renders.
-  const states = useApp((s) => live.map((l) => stateOf(s, l)).join(",")).split(",") as LinkState[];
+  // What each of the thread's links shows now, one string so the selector's result is stable
+  // between renders: a link a restart severed reads live again while its thread works.
+  const drivingStates = useApp((s) => driving.map((l) => stateOf(s, l)).join(",")).split(",") as LinkState[];
+  // A link that reads live keeps its strip row even when the transcript has a row for its thread.
+  const live = stripLinks(driving, shown, drivingStates);
+  // `live` is `driving` minus the rows it drops: the two line up by the link they came from.
+  const kept = new Set(live);
+  const states = drivingStates.filter((_, i) => kept.has(driving[i]!));
   // What the details panel draws as a tree is the authority for the branch: the threads this one
   // started, and the threads those started, at every depth. The strip's own rows only add the
   // threads it messaged, which have a row to stop or dismiss but no node of their own.
@@ -316,9 +361,11 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
   );
   // Folded for the session, per thread: the rows a reader put away stay away while they move
   // between threads, and come back when the app opens again. A fold only holds while the header is
-  // there to unfold it: a strip of one row draws that row, folded thread or not.
+  // there to unfold it: a strip of one row draws that row, folded thread or not, and a group card is
+  // its own header (and already one line), so it has nothing to fold.
+  const group = live.length > 2;
   const folded = useSyncExternalStore(subscribeStripFold, () => stripFolded(threadId));
-  const collapsed = stripCollapsed(counts, folded);
+  const collapsed = !group && stripCollapsed(counts, folded);
   const { working, needs } = strip.total.counts;
   const news = live.length > 0 && working + needs > 0;
   if (!news && !drivenBy && !fanOuts.length && !natives.length && !builtins.length) return null;
@@ -329,10 +376,11 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
     // reads as an overlay on the chat rather than a hole cut in it. Its rows are transparent over it.
     <div className="rc-glass-overlay relative flex flex-col gap-0.5 rounded-xl p-1 rc-in">
       {drivenBy && <WorkingFor link={drivenBy} />}
-      {/* The strip folds to this one line: what it holds and what that work does now. Two or more
-          rows get it, because one row is already one line; folding leaves the header alone, and the
-          transcript takes back the room the rows had (`ChatView.tsx`, the measured stack height). */}
-      {counts.delegates > 1 && (
+      {/* The strip folds to this one line: what it holds and what that work does now. Two rows get
+          it, because one row is already one line; folding leaves the header alone, and the
+          transcript takes back the room the rows had (`ChatView.tsx`, the measured stack height). A
+          group card draws that line itself, so it has no fold row of its own. */}
+      {!group && counts.delegates > 1 && (
         <Tooltip label={folded ? "Show the delegates" : "Fold the delegates into one line"}>
           <button
             type="button"
@@ -359,8 +407,8 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
         // Capped and scrolled on its own: a long run of delegates stops growing over the chat and
         // the strip keeps one height, whatever the branch does.
         <div id={rowsId} className="flex max-h-[min(320px,45vh)] flex-col gap-0.5 overflow-y-auto">
-          {live.length > 2 ? (
-            <ManyLinks links={live} threadId={threadId} strip={strip} />
+          {group ? (
+            <ManyLinks links={live} threadId={threadId} strip={strip} counts={counts} />
           ) : (
             live.map((l) => <LinkRow key={l.id} link={l} />)
           )}
