@@ -7,12 +7,13 @@
 
 import type { Json, JsonObject } from "../acp/jsonrpc";
 import type { ThreadStatus, Worktree } from "../acp/v2";
+import { MAX_ATTACHMENT_FILES } from "./attachments";
 import type { PermissionMode } from "./permissions";
 import { snoozeAt } from "./snooze";
 import { formatDuration, type QueuedPrompt, withWakeMark } from "./thread";
 
 /** What the client advertises in `initialize` while the setting is on. */
-export const CAPABILITY_VERSION = 9;
+export const CAPABILITY_VERSION = 10;
 /** The most of a child's answer `wait_session` carries; beyond it, `read_session` pages the rest. */
 export const MAX_BYTES = 8 * 1024;
 /** The longest prompt or message a thread may hand another one (32 KiB). */
@@ -466,7 +467,8 @@ export interface HarnessChoice {
 export type Call =
   | { tool: "list_sessions"; query: string; allProjects: boolean }
   | { tool: "read_session"; target: string; lastTurns: number; offset: number }
-  | { tool: "message_session"; target: string; text: string }
+  /** `attachments` are absolute paths, under the caller's project or worktree. */
+  | { tool: "message_session"; target: string; text: string; attachments: string[] }
   /** `callId` is the engine's name for this call, so a dropped call can end its wait. */
   | { tool: "wait_session"; links: string[]; timeoutMs: number; callId?: string }
   | {
@@ -500,6 +502,24 @@ export type Call =
   | { tool: "configure_session"; target?: string; model?: string; effort?: string }
   | { tool: "transfer_session"; target: string; harness: string }
   | { tool: "list_pending_requests" }
+  | {
+      tool: "answer_request";
+      target: string;
+      requestId: string;
+      /** For an approval: how far the answer reaches. */
+      choice?: ApprovalChoice;
+      /** For a question: free text, or the id of one of its options. */
+      answer?: string;
+    }
+  | {
+      tool: "organize_threads";
+      targets: string[];
+      title?: string;
+      pinned?: boolean;
+      unread?: boolean;
+      /** `true` settles the threads, `false` brings them back. */
+      archived?: boolean;
+    }
   | { tool: "list_projects" }
   | { tool: "list_pull_requests"; state: PullStateChoice }
   | { tool: "thread_usage"; since?: string; groupBy: UsageGroup; project?: string }
@@ -521,6 +541,12 @@ export type Call =
 /** What `update_session` may set a thread's status to. */
 export type SessionStatusChoice = "active" | "review" | "settled";
 const SESSION_STATUSES: readonly string[] = ["active", "review", "settled"];
+
+/** What `answer_request` may answer an approval with. */
+export type ApprovalChoice = "allow_once" | "allow_always" | "deny";
+const APPROVAL_CHOICES: readonly string[] = ["allow_once", "allow_always", "deny"];
+/** Threads one `organize_threads` call changes. */
+export const MAX_ORGANIZED_THREADS = 50;
 
 /** What `list_pull_requests` may ask for. */
 export type PullStateChoice = "open" | "closed" | "merged" | "all";
@@ -556,6 +582,16 @@ const s = (v: Json | undefined) => (typeof v === "string" ? v : undefined);
 /** `all_projects`: the user's threads in every project, when the setting allows it. */
 const allProjects = (args: JsonObject) => args.all_projects === true;
 const bytes = (text: string) => new TextEncoder().encode(text).length;
+/**
+ * A list of paths, at most `max`: the strings that are one, or null when the
+ * value is not a list of paths within it.
+ */
+function pathsOf(value: Json | undefined, max = MAX_ATTACHMENT_FILES): string[] | null {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > max) return null;
+  const paths = value.flatMap((one) => (typeof one === "string" && one.trim() ? [one.trim()] : []));
+  return paths.length === value.length ? paths : null;
+}
 
 /** The call in a request's params, or the failure to answer with. */
 export function parseCall(params: JsonObject): Call | Failure {
@@ -598,6 +634,57 @@ export function parseCall(params: JsonObject): Call | Failure {
     }
     case "list_pending_requests":
       return { tool: "list_pending_requests" };
+    case "answer_request": {
+      const target = s(args.session_id) ?? "";
+      // The list prints `request_id` as a string, and the engine refuses anything else
+      // (`orchestration.rs`: a name is a non-empty string), so a number is refused here too.
+      const requestId = (s(args.request_id) ?? "").trim();
+      if (!target || !requestId) {
+        return failure(
+          "invalid",
+          "session_id and request_id (as list_pending_requests prints it) are required",
+        );
+      }
+      const choice = s(args.choice);
+      const answer = s(args.answer);
+      if (choice && !APPROVAL_CHOICES.includes(choice)) {
+        return failure("invalid", `choice must be one of ${APPROVAL_CHOICES.join(", ")}`);
+      }
+      if (choice && answer) {
+        return failure("invalid", "give choice for an approval or answer for a question, not both");
+      }
+      if (!choice && !answer?.trim()) {
+        return failure("invalid", "choice (an approval) or answer (a question) is required");
+      }
+      return {
+        tool: "answer_request",
+        target,
+        requestId,
+        ...(choice ? { choice: choice as ApprovalChoice } : {}),
+        ...(answer ? { answer: answer.trim() } : {}),
+      };
+    }
+    case "organize_threads": {
+      const targets = pathsOf(args.session_ids, MAX_ORGANIZED_THREADS);
+      if (!targets?.length) {
+        return failure("invalid", `session_ids must be 1 to ${MAX_ORGANIZED_THREADS} thread ids`);
+      }
+      const title = s(args.title)?.trim();
+      const pinned = typeof args.pinned === "boolean" ? args.pinned : undefined;
+      const unread = typeof args.unread === "boolean" ? args.unread : undefined;
+      const archived = typeof args.archived === "boolean" ? args.archived : undefined;
+      if (!title && pinned === undefined && unread === undefined && archived === undefined) {
+        return failure("invalid", "give at least one of title, pinned, unread or archived");
+      }
+      return {
+        tool: "organize_threads",
+        targets: [...new Set(targets)],
+        title: title || undefined,
+        pinned,
+        unread,
+        archived,
+      };
+    }
     case "thread_usage": {
       const since = s(args.since)?.trim() || undefined;
       if (since && !/^\d{4}-\d{2}(-\d{2})?$/.test(since)) {
@@ -734,7 +821,11 @@ export function parseCall(params: JsonObject): Call | Failure {
       const text = s(args.message) ?? "";
       if (!target || !text.trim()) return failure("invalid", "session_id and message are required");
       if (bytes(text) > MAX_MESSAGE_BYTES) return failure("invalid", "the message is over 32 KiB");
-      return { tool: "message_session", target, text };
+      const attachments = pathsOf(args.attachments);
+      if (attachments === null) {
+        return failure("invalid", `attachments must be at most ${MAX_ATTACHMENT_FILES} absolute paths`);
+      }
+      return { tool: "message_session", target, text, attachments };
     }
     case "wait_session": {
       // One answer per link: a repeated id is asked about once.
@@ -2370,6 +2461,7 @@ export interface GrantAsk {
     | "start"
     | "fan_out"
     | "organize"
+    | "answer"
     | "interrupt"
     | "transfer"
     | "configure"
