@@ -50,14 +50,13 @@ export class AutoRun {
 
 /**
  * The height a frame is drawn at. A measurement that arrives while the pointer is in
- * the page may come from a hover overlay (a tip, a bar's label), so it waits for the
- * pointer to leave instead of moving everything below the view (issue 3304); a
+ * the page may come from a hover overlay (a tip, a bar's label), so it is ignored until the page reports again after the pointer leaves
+ * instead of moving everything below the view (issue 3304); a
  * measurement taken with the pointer elsewhere applies at once, and so does one
  * after a click or key press, which may legitimately open a panel.
  */
 export class HoverSize {
   private shown: number;
-  private held: number | null = null;
   private hovering = false;
   constructor(shown: number) {
     this.shown = shown;
@@ -68,25 +67,17 @@ export class HoverSize {
   /** A height drawn by something else than a measurement (a remembered one, a streaming preview). */
   set(height: number) {
     this.shown = height;
-    this.held = null;
   }
   /**
-   * The pointer entered or left the page. Leaving draws the height held back while it
-   * was there; entering returns null, since nothing may move yet.
+   * Discard hover measurements on leave; the page reports its settled size again.
    */
   hover(over: boolean): number | null {
     this.hovering = over;
-    if (over) return null;
-    const held = this.held;
-    this.held = null;
-    if (held === null || held === this.shown) return null;
-    this.shown = held;
-    return held;
+    return null;
   }
-  /** A measured height: drawn now, or held back while the pointer is in the page. */
+  /** A measured height: drawn now, or ignored while the pointer is in the page. */
   measure(measured: number, interacted = false): number | null {
     if (this.hovering && !interacted && measured !== this.shown) {
-      this.held = measured;
       return null;
     }
     this.set(measured);

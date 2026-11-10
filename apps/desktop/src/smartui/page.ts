@@ -379,6 +379,7 @@ export function runtimeScript(token: string, theme: PageTheme): string {
     if (next === hovering) return;
     hovering = next;
     post({ type: "hover", over: next });
+    if (!next) requestAnimationFrame(() => { last = ""; report(); });
   };
   document.addEventListener("pointerover", () => setHovering(true), true);
   document.addEventListener("pointerout", (event) => { if (!event.relatedTarget) setHovering(false); }, true);

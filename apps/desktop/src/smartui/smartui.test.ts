@@ -213,6 +213,8 @@ describe("smart ui", () => {
     expect(blockProblem("  ")).toMatch(/empty/);
     expect(blockProblem("x".repeat(64 * 1024 + 1))).toMatch(/64 KB/);
     expect(blockProblem("<p>ok</p>")).toBeNull();
+    expect(clampHeight(100.01)).toBe(101);
+    expect(clampHeight(100)).toBe(100);
     expect(clampHeight(10)).toBe(48);
     expect(clampHeight(5000)).toBe(720);
     expect(blockTitle("<title>Runs</title><p>")).toBe("Runs");
@@ -329,8 +331,9 @@ describe("smart ui", () => {
     expect(gate.value).toBe(300);
     // Moving to another tip still does not move the chat below.
     expect(gate.hover(true)).toBeNull();
-    expect(gate.hover(false)).toBe(340);
-    expect(gate.value).toBe(340);
+    expect(gate.hover(false)).toBeNull();
+    expect(gate.value).toBe(300);
+    expect(gate.measure(300)).toBe(300);
     // A click may legitimately open a panel under the pointer.
     gate.hover(true);
     expect(gate.measure(420, true)).toBe(420);
