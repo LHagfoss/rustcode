@@ -305,7 +305,13 @@ describe("smart ui", () => {
     expect(page).toContain('<div id="rc-root"><p>x</p></div>');
     // A reveal, not a layout change: no scrollbar and no display swap under the pointer.
     expect(BASE_CSS).toContain("html { overflow: hidden; }");
-    expect(BASE_CSS).toContain("#rc-root > * + * { margin-top: 12px; }");
+    // The gap is between drawn blocks: a leading <title> must not hand the first block a margin
+    // that collapses out of the root and leaves the measured height 12px short.
+    expect(BASE_CSS).toContain("#rc-root, #rc-stream { display: flow-root; }");
+    expect(BASE_CSS).toContain(
+      "#rc-root > :not(title, style, script, link, meta, template) ~ :not(title, style, script, link, meta, template)",
+    );
+    expect(BASE_CSS).not.toContain("#rc-root > * + *");
     expect(BASE_CSS).toContain(
       ".rc-tip:hover > span, .rc-tip:focus > span { visibility: visible; opacity: 1; }",
     );
