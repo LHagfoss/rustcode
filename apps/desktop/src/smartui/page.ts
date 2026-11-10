@@ -738,7 +738,12 @@ export const previewable = (source: string) => !usesChart(source);
 /** Inline text inside a `<script>` element must not close it. */
 const scriptSafe = (code: string) => code.replace(/<\/script/gi, "<\\/script");
 
-/** The page around a body: policy, variables, stylesheet and the runtime, first. */
+/**
+ * The page around a body: policy, variables, stylesheet and the runtime, first. The `body`
+ * carries the system's text helpers off, inherited by every field the block draws: the frame is
+ * its own document, which the app's sweep (lib/quietNative.ts) cannot reach
+ * (docs/desktop.md › Native text fields).
+ */
 function pageAt(body: string, token: string, theme: PageTheme): string {
   return [
     '<!doctype html><html><head><meta charset="utf-8">',
@@ -747,7 +752,7 @@ function pageAt(body: string, token: string, theme: PageTheme): string {
     `<style id="rc-vars">${varsCss(theme)}</style>`,
     `<style>${BASE_CSS}</style>`,
     `<script>${runtimeScript(token, theme)}</script>`,
-    "</head><body>",
+    '</head><body spellcheck="false" autocorrect="off" autocapitalize="off" writingsuggestions="false">',
     `<div id="rc-root">${body}</div>`,
     "</body></html>",
   ].join("");

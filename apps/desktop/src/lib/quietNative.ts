@@ -7,9 +7,14 @@
 //   `writingsuggestions="false"` turns them off in WebKit (macOS 15+).
 // - Autocorrect, automatic capitalisation and spell checking, which every field
 //   already asks for through `noTextHelpers` (ui/primitives.tsx): set here too,
-//   so a field added without it is still quiet, and a re-render that drops the
-//   attribute is put back on the next sweep (docs/desktop.md › Native text
-//   fields).
+//   so a field drawn without that spread is still quiet (docs/desktop.md ›
+//   Native text fields).
+//
+// The attributes are set on a field when it is added, and not watched: React
+// writes a prop it is given once, at mount, and its diff writes only what
+// changed, so a re-render does not hand them back. Observing them would make
+// every write below re-enter the observer for nothing, on a document that gets
+// a new node per streamed token.
 
 /** The attributes a text field carries, with the system's helpers off. */
 const QUIET_TEXT: [string, string][] = [
@@ -24,7 +29,7 @@ function quietField(el: Element) {
     !(
       el instanceof HTMLTextAreaElement ||
       el instanceof HTMLInputElement ||
-      el.hasAttribute("contenteditable")
+      (el.hasAttribute("contenteditable") && el.getAttribute("contenteditable") !== "false")
     )
   ) {
     return;
@@ -60,7 +65,6 @@ export function quietNativeChrome(): void {
     subtree: true,
     childList: true,
     attributes: true,
-    // A re-render that hands a field back the attributes React had removed is put right again.
-    attributeFilter: ["title", ...QUIET_TEXT.map(([name]) => name)],
+    attributeFilter: ["title"],
   });
 }

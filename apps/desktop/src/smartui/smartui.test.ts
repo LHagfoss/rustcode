@@ -472,6 +472,19 @@ describe("smart ui", () => {
     expect(script).toContain("event.preventDefault()");
   });
 
+  test("the page's fields are left to the block, not to the system's text helpers", () => {
+    const theme = pageTheme("light", () => "#000");
+    // The frame is its own document: the app's sweep (lib/quietNative.ts) never sees it, so the
+    // page itself turns the helpers off, where every field the block draws inherits them.
+    for (const page of [buildPage("<p>x</p>", "tok", theme), buildStreamPage("tok", theme)]) {
+      expect(page).toContain('spellcheck="false"');
+      expect(page).toContain('autocorrect="off"');
+      expect(page).toContain('autocapitalize="off"');
+      expect(page).toContain('writingsuggestions="false"');
+      expect(page).toMatch(/<body [^>]*spellcheck="false"/);
+    }
+  });
+
   test("a streaming fragment is closed, and its script stays inert", () => {
     const theme = pageTheme("light", () => "#000");
     const page = buildStreamPage("tok", theme);

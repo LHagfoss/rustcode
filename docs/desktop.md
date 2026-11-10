@@ -1131,8 +1131,12 @@ off, at three layers, because no single one reaches every macOS version:
   `<textarea>` the app draws): `spellCheck={false}`, `autoCorrect="off"`, `autoCapitalize="off"`,
   `autoComplete="off"`. Plus `writingsuggestions="false"`, which WebKit reads on macOS 15+ to stop
   Apple Intelligence's inline completion. `lib/quietNative.ts` puts the same attributes on any field
-  that mounts without them, and back on a field a re-render hands them to again, which is also how
-  an `<input>` inside a Markdown or Smart UI surface stays quiet.
+  that arrives in the document without them, which is the net under a field added without the
+  spread. It does not watch the attributes: React writes a prop it is given once, at mount, so a
+  re-render does not take them away, and watching them would re-enter the observer for every write
+  it makes itself. Smart UI's frame is a separate sandboxed document the sweep cannot reach, so
+  `src/smartui/page.ts` › `pageAt` puts the same four attributes on the frame's `<body>`, which
+  every field the block draws inherits.
 - **The web view's configuration** (`src-tauri/src/webview.rs`, macOS 15+):
   `WKWebViewConfiguration.writingToolsBehavior = NSWritingToolsBehaviorNone`, so Writing Tools does
   not offer itself on a selection's context menu. It is applied behind
@@ -1156,7 +1160,9 @@ What the platform does not allow: `autoCorrect`, `autoCapitalize` and `autoCompl
 WebKit honours for form fields and nothing else, and there is no public API to stop the system's
 Text Replacement dictionary from expanding on a space — the defaults keys above are the documented
 way, and the field attributes are what remains if a macOS build ignores them. Nothing in the app's
-own chrome is left to the system; a harness's login, which runs in Terminal, is outside it.
+own chrome is left to the system; a harness's login, which runs in Terminal, is outside it. The
+chat composer used to keep spell checking on for prose; it is off there too, like every other
+field, which is the round's point: the app does not tell a prompt from a paragraph.
 
 ## Checks
 

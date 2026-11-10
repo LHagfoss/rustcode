@@ -207,13 +207,13 @@ mod macos {
     use objc2::runtime::{AnyClass, AnyObject, Sel};
     use objc2::{msg_send, sel, MainThreadMarker};
     use objc2_web_kit::WKWebViewConfiguration;
-    use std::ffi::{CStr, CString};
+    use std::ffi::CStr;
 
     const FEATURE: &CStr = c"PreferPageRenderingUpdatesNear60FPSEnabled";
 
     /// `NSWritingToolsBehaviorNone`: Writing Tools ignores the field instead of offering itself on
-    /// the selection's context menu (macOS 15+).
-    pub(crate) const WRITING_TOOLS_NONE: isize = -1;
+    /// the selection's context menu (macOS 15+). An `NSInteger`, so `isize`.
+    const WRITING_TOOLS_NONE: isize = -1;
 
     /// The macOS text helpers no field in this app keeps, named once so `quiet_text_helpers` cannot
     /// miss one: autocorrect (`NSAutomaticSpellingCorrectionEnabled`), automatic capitalisation,
@@ -264,8 +264,9 @@ mod macos {
     }
 
     /// Turns the system's text helpers off in the app's own defaults domain. WebKit reads these when
-    /// it creates an editor, so this runs before the window exists. A defaults write that fails
-    /// (no bundle, a sandbox that refuses it) leaves the attributes on the fields to do the work.
+    /// it creates an editor, so this runs before the window exists. `setBool:forKey:` returns
+    /// nothing, so a write that a sandbox keeps inside the container rather than in the app's plist
+    /// is not something this can see: the attributes on the fields are what remains.
     pub fn quiet_text_helpers() {
         // SAFETY: NSUserDefaults and NSString are always present on macOS, and each is checked.
         unsafe {
@@ -277,10 +278,11 @@ mod macos {
                 return;
             }
             for key in TEXT_HELPERS_OFF {
-                let Ok(key) = CString::new(key.to_bytes()) else {
+                let Some(ns_key) = nsstring(key) else {
                     continue;
                 };
-                let Some(ns_key) = nsstring(&key) else { continue };
+                // The app's own domain: `standardUserDefaults`, never the global one another app
+                // would see.
                 let _: () = msg_send![defaults, setBool: false, forKey: ns_key];
             }
         }
