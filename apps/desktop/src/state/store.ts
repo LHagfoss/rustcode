@@ -168,6 +168,8 @@ import {
   CAPABILITY_VERSION,
   DEFAULT_DELEGATES_PER_THREAD,
   DEFAULT_DELEGATES_TOTAL,
+  failure,
+  failureJson,
   forget,
   type GrantAsk,
   isActive,
@@ -180,7 +182,8 @@ import {
 import { clearPageCache } from "./pageCache";
 import { autoAnswer, effectiveMode, type PermissionMode, parsePermissionMode } from "./permissions";
 import { NO_PAUSES, type PlanPauses, type PlansAsk, pausesAfter, plansAskFor, queueAsks } from "./plans";
-import { projectChoice } from "./projects";
+import { projectChoice } from "./projectBook";
+import { matchProject, projectAt, projectsOn } from "./projects";
 import {
   nextQueued,
   QUEUE_REASON,
@@ -223,6 +226,7 @@ import {
   wakeTurn,
   withContinueMark,
 } from "./thread";
+import { isRemoteThread, LOCAL_HOST, splitThreadKey, threadKey } from "./threadKeys";
 import {
   clear as clearQueue,
   dismiss as dismissInQueue,
@@ -327,6 +331,10 @@ export interface AppState {
   engineLog: string[];
   agent?: AgentInfo;
   sessions: SessionSummary[];
+  /** Each paired machine's name, by host id: the sidebar, the header and a notice say where. */
+  machineNames: Record<string, string>;
+  /** The paired machines whose connection is open now: their threads can be driven, not only read. */
+  connectedHosts: string[];
   sessionsLoaded: boolean;
   /** The session list stopped at the page cap, so some threads may be absent. */
   sessionsCapped: boolean;
@@ -342,6 +350,19 @@ export interface AppState {
   /** The account a new thread on that harness starts on; null is its default login. */
   newThreadAccount: string | null;
   harnesses: HarnessSnapshot | null;
+  /**
+   * The computer the next new thread runs on: `LOCAL_HOST` for this one, or a paired
+   * machine's id (`state/machines.ts`). The composer's **Run on** sets it, and a new
+   * thread started from a machine's group in the sidebar starts there
+   * (docs/desktop.md › Several machines).
+   */
+  newThreadHost: string;
+  /**
+   * Each paired machine's harnesses, models, accounts and defaults, by host id, read over
+   * its own connection. A machine's snapshot is read when the **Run on** picker moves
+   * there, and kept while it is saved, so its harness list does not blink between threads.
+   */
+  remoteHarnesses: Record<string, HarnessSnapshot>;
   /** The engine's own catalog (`_rustcode/commands`), so a new thread's drawer works before it starts. */
   baseCommands: SlashCommand[];
   /** Each harness's last advertised commands, by harness id (kept in app storage). */
@@ -817,6 +838,8 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   status: "connecting",
   engineLog: [],
   sessions: [],
+  machineNames: {},
+  connectedHosts: [],
   sessionsLoaded: false,
   sessionsCapped: false,
   threads: {},
@@ -825,6 +848,8 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   defaultCwd: stored(STORAGE.project) ?? "",
   newThread: null,
   newThreadAccount: null,
+  newThreadHost: LOCAL_HOST,
+  remoteHarnesses: {},
   harnesses: null,
   baseCommands: [],
   harnessCommands: parseHarnessCommands(stored(STORAGE.harnessCommands)),
@@ -965,6 +990,212 @@ function rpcReason(data: Json | undefined): string | null {
 
 let connection: AcpConnection | null = null;
 let transport: Transport | null = null;
+
+// ---------------------------------------------------------------- machines
+//
+// A thread on a paired computer is driven over that computer's own connection
+// (state/machines.ts holds one per machine, the shell's supervisor keeps it).
+// Local threads keep their bare id and this module's `connection`; a remote
+// thread's key carries its machine (`state/threadKeys.ts`), and every call
+// that names it on the machine goes through `connectionForThread` with the
+// key split back into the machine's own session id. Responses to a machine's
+// own requests go back on the same connection they arrived on.
+
+const machineConnections = new Map<string, AcpConnection>();
+const machineOff = new Map<string, () => void>();
+let machineRouting: Promise<void> | null = null;
+/** The machine store's own subscription, kept so a test reset can let it go. */
+let machineMirrorOff: (() => void) | null = null;
+/** `state/machines.ts` `resetMachinesForTests`, once its module is loaded. */
+let machineReset: (() => void) | null = null;
+
+/** The connection a thread's operations go over: this computer's engine, or that machine's own. */
+export function connectionFor(host: string): AcpConnection | null {
+  return host ? (machineConnections.get(host) ?? null) : connection;
+}
+
+/** The same, from a thread key (`state/threadKeys.ts`). */
+export function connectionForThread(key: string): AcpConnection | null {
+  return connectionFor(splitThreadKey(key).host);
+}
+
+/** Whether the thread runs on another computer. */
+export function threadIsRemote(key: string): boolean {
+  return isRemoteThread(key);
+}
+
+/** The name of the machine a remote thread runs on; undefined for this computer. */
+export function machineOfThread(key: string): string | undefined {
+  return get().machineNames[splitThreadKey(key).host];
+}
+
+/** Whether a machine's threads are listed but its connection is not open (read-only). */
+export function threadOffline(key: string | null | undefined): boolean {
+  if (!key) return false;
+  const host = splitThreadKey(key).host;
+  return !!host && !machineConnections.has(host);
+}
+
+/**
+ * The harnesses, models and accounts one computer lists: this one's own, or a paired
+ * machine's read over its connection (`loadMachineHarnesses`). Nothing for a machine that has
+ * not answered yet, which the pickers draw as loading rather than as an empty engine.
+ */
+export function harnessesOn(
+  s: { harnesses: HarnessSnapshot | null; remoteHarnesses?: Record<string, HarnessSnapshot> },
+  host: string | null | undefined,
+): HarnessSnapshot | null {
+  return host ? (s.remoteHarnesses?.[host] ?? null) : s.harnesses;
+}
+
+/** The machine a thread runs on, as the chat's header reads it, and whether it is away now. */
+export function useMachineOfThread(key: string | null | undefined): string | undefined {
+  const names = useApp((s) => s.machineNames);
+  return key ? names[splitThreadKey(key).host] : undefined;
+}
+
+/** A remote thread's machine is away: the row stays, the thread opens read-only (ChatView, Composer). */
+export function useThreadOffline(key: string | null | undefined): boolean {
+  const hosts = useApp((s) => s.connectedHosts);
+  if (!key) return false;
+  const host = splitThreadKey(key).host;
+  return !!host && !hosts.includes(host);
+}
+
+/**
+ * Follow the shell's machines: one inbound subscription per connection (so a
+ * machine's notifications reach the transcript tagged with its key), and its
+ * thread list mirrored into `sessions` whenever it is re-read.
+ */
+export async function startMachineRouting(): Promise<void> {
+  if (machineRouting) return machineRouting;
+  machineRouting = (async () => {
+    // Loaded here, not at the top: state/machines.ts reads this module's `toast` and `askConfirm`.
+    const machines = await import("./machines");
+    machineReset = machines.resetMachinesForTests;
+    machines.onMachineLinks((id, conn) => watchMachineConnection(id, conn));
+    const mirror = () => {
+      const state = machines.useMachines.getState();
+      const names = Object.fromEntries(state.machines.map((machine) => [machine.id, machine.name]));
+      set((s) => {
+        // A machine that was removed takes its kept harnesses with it, and **Run on** naming it
+        // goes back here rather than to a machine that is no longer saved.
+        const snapshots = Object.fromEntries(
+          Object.entries(s.remoteHarnesses).filter(([host]) => !!names[host]),
+        );
+        const named = s.newThreadHost && !names[s.newThreadHost];
+        return {
+          machineNames: names,
+          remoteHarnesses: snapshots,
+          ...(named ? { newThreadHost: LOCAL_HOST, projectCwd: "" } : {}),
+        };
+      });
+      mergeMachineLists(state.sessions);
+    };
+    machineMirrorOff = machines.useMachines.subscribe((state, prev) => {
+      if (state.sessions !== prev.sessions || state.machines !== prev.machines) mirror();
+    });
+    for (const link of machines.machineLinks()) watchMachineConnection(link.machine.id, link.connection);
+    mirror();
+  })();
+  return machineRouting;
+}
+
+/**
+ * Tests only: forget every machine's channel, the threads it listed and the names it had, so one
+ * test file's machines cannot be another's (machinesThreads.test.ts, `resetForTests`).
+ */
+export function resetMachinesForTests(): void {
+  for (const off of machineOff.values()) off();
+  machineOff.clear();
+  machineConnections.clear();
+  machineRouting = null;
+  machineMirrorOff?.();
+  machineMirrorOff = null;
+  // Kept once loaded: a later reset has to clear the machines module too, even after a file
+  // attached machines without ever routing through this module (`state/machines.test.ts`).
+  machineReset?.();
+  set({ connectedHosts: [], machineNames: {}, sessions: [] });
+}
+
+/**
+ * Point the store at a machine's live connection (or at none, when it drops).
+ * `startMachineRouting` calls it for every change `state/machines.ts` announces;
+ * exported so the routing is testable without the app's shell (machinesThreads.test.ts).
+ */
+export function watchMachineConnection(id: string, next: AcpConnection | null): void {
+  const current = machineConnections.get(id) ?? null;
+  if (current === next) return;
+  machineOff.get(id)?.();
+  machineOff.delete(id);
+  if (!next) {
+    machineConnections.delete(id);
+    // Its threads stay listed and keep the copy this window drew, read-only: the last replay is
+    // still the thread. A turn that was running there ended with the connection, and the request
+    // it waited on died with it (the engine keeps no pending-permission replay): its card goes
+    // with the turn's own failure rather than holding an answer no connection can carry. A request
+    // on a thread that was not running goes too, for the same reason (`reply` refuses an answer
+    // made in the moment before this runs).
+    set((s) => ({
+      connectedHosts: [...machineConnections.keys()],
+      threads: Object.fromEntries(
+        Object.entries(s.threads).map(([key, t]) => {
+          if (splitThreadKey(key).host !== id) return [key, t];
+          if (t.running)
+            return [key, finishTurn(t, "failed", Date.now(), "The machine disconnected during this turn.")];
+          return [key, t.permissions.length ? { ...t, permissions: [] } : t];
+        }),
+      ),
+    }));
+    return;
+  }
+  machineConnections.set(id, next);
+  machineOff.set(
+    id,
+    next.onInbound((message) => void handleInbound(scopeInbound(message, id), next, id)),
+  );
+  // Back: a harness or login added there while it was away is in the list a second read gives.
+  if (get().remoteHarnesses[id]) void loadMachineHarnesses(id, { refresh: true });
+  // Back: the copy on screen is from before it went away, so the thread it shows is read again.
+  // Requests of the old connection did not survive the drop (they died with it), so there is
+  // nothing to keep here: the reload is the machine's whole answer about the thread.
+  set((s) => ({
+    connectedHosts: [...machineConnections.keys()],
+    threads: Object.fromEntries(
+      Object.entries(s.threads).map(([key, t]) =>
+        splitThreadKey(key).host === id ? [key, { ...t, loaded: false, running: false }] : [key, t],
+      ),
+    ),
+  }));
+  const selected = get().selectedId;
+  if (selected && splitThreadKey(selected).host === id) void openThread(selected);
+}
+
+/** A machine's ids reach the store as keys: `‹host›/‹sessionId›`. */
+function scopeInbound(message: Inbound, host: string): Inbound {
+  if (message.type === "closed") return message;
+  const sessionId = str(message.params.sessionId);
+  if (!sessionId) return message;
+  return { ...message, params: { ...message.params, sessionId: threadKey(host, sessionId) } };
+}
+
+/** Replaces the sessions of every machine with the list it last gave (this computer's are kept). */
+function mergeMachineLists(lists: Record<string, readonly SessionSummary[]>): void {
+  set((s) => {
+    // A thread the app just started there has the title it was sent with until the machine titles
+    // it from its own history: `session/new` carries no title, and `thread_rename` is this shell's.
+    const known = new Map(s.sessions.map((session) => [session.id, session]));
+    const remote = Object.entries(lists).flatMap(([host, items]) =>
+      items.map((session) => {
+        const id = threadKey(host, session.id);
+        const title = session.title || known.get(id)?.title;
+        return { ...session, id, host, title };
+      }),
+    );
+    return { sessions: byActivity([...s.sessions.filter((x) => !x.host), ...remote]) };
+  });
+}
+
 /** Ignore machine-status reads that started before a newer answer changed remote state. */
 let remoteStatusRevision = 0;
 let remoteStatusReadId = 0;
@@ -1106,6 +1337,8 @@ export async function connect(next: Transport): Promise<void> {
       // The shell (re)started the engine, after a crash too: initialize a fresh connection.
       else if (event.type === "open") void handshake();
     });
+    // The paired computers' supervisors are the shell's too: follow the connections they open.
+    void startMachineRouting();
   } catch (error) {
     set({ status: "closed", statusDetail: errorText(error) });
   }
@@ -1382,9 +1615,14 @@ function onSessionActivity(params: unknown) {
   if (state !== "running") scheduleAutoCompact(id);
 }
 
-async function handleInbound(message: Inbound) {
+async function handleInbound(message: Inbound, conn: AcpConnection | null = connection, host = LOCAL_HOST) {
   switch (message.type) {
     case "closed":
+      if (host) {
+        // One machine's channel closed: this computer's engine is untouched. Its threads stay
+        // listed and read-only (`watchMachineConnection`), and a turn it ran ended with it.
+        return;
+      }
       set((s) => ({
         status: "closed",
         statusDetail: message.reason,
@@ -1407,7 +1645,7 @@ async function handleInbound(message: Inbound) {
       if (message.method === Method.requestPermission) {
         const parsed = parsePermissionRequest(message.id, message.params);
         if (!parsed) {
-          connection?.respond(message.id, permissionCancelled);
+          conn?.respond(message.id, permissionCancelled);
           return;
         }
         // A thread this window has not opened (a child started elsewhere, or a thread after a
@@ -1416,12 +1654,12 @@ async function handleInbound(message: Inbound) {
         if (!get().threads[parsed.sessionId]?.loaded) await openThread(parsed.sessionId);
         const request = { ...parsed, at: Date.now() };
         if (!get().threads[request.sessionId]) {
-          connection?.respond(message.id, permissionCancelled);
+          conn?.respond(message.id, permissionCancelled);
           return;
         }
         const auto = autoAnswer(request, permissionModeOf(get(), request.sessionId));
         if (auto) {
-          connection?.respond(message.id, permissionSelected(auto.id));
+          conn?.respond(message.id, permissionSelected(auto.id));
           return;
         }
         updateThread(request.sessionId, (t) => {
@@ -1438,7 +1676,12 @@ async function handleInbound(message: Inbound) {
         // inbox and the badge leave it out until then (state/inbox.ts, state/notify.ts).
         const asleep = request.sessionId in get().snoozed;
         if (!asleep && request.sessionId !== get().selectedId && get().view.kind !== "inbox") {
-          toast(request.question ? "A thread has a question" : "A thread needs approval", "info");
+          // On another computer, the notice says which one: two machines may run a thread each.
+          const machine = machineOfThread(request.sessionId);
+          toast(
+            `${request.question ? "A thread has a question" : "A thread needs approval"}${machine ? ` on ${machine}` : ""}`,
+            "info",
+          );
         }
         // The system says the same, so a thread waiting behind another window is not forgotten.
         notifyThread(
@@ -1446,7 +1689,7 @@ async function handleInbound(message: Inbound) {
             threadId: request.sessionId,
             kind: request.question ? "question" : "approval",
             key: String(request.rpcId),
-            title: threadName(request.sessionId),
+            title: notifyTitle(request.sessionId),
             detail: request.question?.text,
           },
           get(),
@@ -1456,13 +1699,21 @@ async function handleInbound(message: Inbound) {
         return;
       }
       if (message.method === V2Method.orchestration) {
-        const conn = connection;
+        // A machine's threads are not this app's to orchestrate yet: its `start_session` would
+        // create the child on this computer. Refused until cross-machine delegation lands.
+        if (host) {
+          conn?.respond(
+            message.id,
+            failureJson(failure("not_allowed", "Delegation across machines is not available yet.")),
+          );
+          return;
+        }
         const result = await answerOrchestration(message.params);
         conn?.respond(message.id, result);
         return;
       }
       // Nothing else is advertised; answer so the engine never waits.
-      connection?.respondError(message.id, -32601, `Method not found: ${message.method}`);
+      conn?.respondError(message.id, -32601, `Method not found: ${message.method}`);
       return;
   }
 }
@@ -1562,16 +1813,22 @@ export async function refreshSessions(): Promise<void> {
     }
     // The engine's list is the newer truth about a status.
     reconcileStatusMarks(all);
+    // Another computer's list is its own read: ask each connected machine again, too.
+    void import("./machines").then((m) => m.refreshMachineThreads());
     set((s) => {
       // Threads started here that the engine does not list yet (it lists a session once it saved history).
       const listed = new Set(all.map((x) => x.id));
-      const started = s.sessions.filter((x) => !listed.has(x.id) && s.threads[x.id]);
-      const sessions = byActivity([...started, ...all]);
+      const started = s.sessions.filter((x) => !x.host && !listed.has(x.id) && s.threads[x.id]);
+      // Another machine's threads are listed by that machine (state/machines.ts), kept as they are.
+      const remote = s.sessions.filter((x) => x.host);
+      const sessions = byActivity([...started, ...all, ...remote]);
       return {
         sessions,
         sessionsLoaded: true,
         sessionsCapped: capped,
-        projectCwd: s.projectCwd || sessions[0]?.cwd || "",
+        // The new-thread screen starts in this computer's most recent project: another machine's
+        // folder is not a folder here (**Run on** moves the thread there, with its own project).
+        projectCwd: s.projectCwd || sessions.find((x) => !x.host)?.cwd || "",
       };
     });
     // A thread the engine no longer lists keeps no place in the arrangement. A capped list is not
@@ -1605,7 +1862,7 @@ export function markFinished(id: string, now = Date.now(), failed = false) {
     const delegated = linksOf(get().links, id).drivenBy !== undefined && get().messaged[id] === undefined;
     if (!delegated) {
       notifyThread(
-        { threadId: id, kind: failed ? "failed" : "finished", key: String(now), title: threadName(id) },
+        { threadId: id, kind: failed ? "failed" : "finished", key: String(now), title: notifyTitle(id) },
         get(),
       );
     }
@@ -1616,6 +1873,15 @@ export function markFinished(id: string, now = Date.now(), failed = false) {
 function threadName(id: string): string {
   const s = get();
   return sessionById(s, id)?.title || s.threads[id]?.title || "A thread";
+}
+
+/**
+ * A notification's title: the thread's, and the computer it runs on when that
+ * is not this one, so two machines' "Run the tests" are told apart.
+ */
+function notifyTitle(id: string): string {
+  const machine = machineOfThread(id);
+  return machine ? `${threadName(id)} · ${machine}` : threadName(id);
 }
 
 /**
@@ -1763,18 +2029,37 @@ export function selectThread(id: string | null) {
   if (id) void openThread(id);
 }
 
-export function startNewThread(cwd?: string) {
+export function startNewThread(cwd?: string, host?: string) {
   const s = get();
+  // Where it runs: a machine's group in the sidebar, a machine's folder button, or `/new` in one of
+  // its threads names it; everything else starts here. A folder alone is this computer's, because
+  // it was browsed on this disk (docs/desktop.md › Several machines).
+  const target = host ?? LOCAL_HOST;
   // Where it starts: a folder picked for this one wins, then the default folder (Settings › General,
   // ⌘⇧O), so the sidebar's button, ⌘N and the command palette land where the reader said even while
   // another thread is open; then the folder of the thread they were in, then the last one used.
-  // Picking a folder here does not change the default.
-  const preferred = s.defaultCwd || (s.selectedId ? s.threads[s.selectedId]?.cwd : undefined);
-  const projectCwd = cwd ?? preferred ?? s.projectCwd;
+  // Picking a folder here does not change the default. A thread on a machine starts in that
+  // machine's folders: the same project there when it has one (state/projects.ts), else its most
+  // recent project. A folder of this computer is not a folder there.
+  const selected = s.selectedId ? s.threads[s.selectedId] : undefined;
+  const selectedCwd = selected && splitThreadKey(selected.id).host === target ? selected.cwd : undefined;
+  const mine = projectsOn(s.sessions, target);
+  const wasOn = projectAt(s.sessions, s.projectCwd, s.newThreadHost);
+  const preferred =
+    target === LOCAL_HOST
+      ? s.defaultCwd || selectedCwd || matchProject(wasOn, mine)?.path
+      : mine.find((project) => project.path === selectedCwd)?.path || mine[0]?.path;
+  // The last screen's folder is kept only by that same screen: host and folder are written
+  // together, and a worktree is under no project path (`hostOfProject`), so the host is the
+  // only trustworthy half. Without it, a machine's worktree folder starts a thread here.
+  const remembered =
+    s.newThreadHost === target && hostOfProject(s, s.projectCwd) === target ? s.projectCwd : "";
+  const projectCwd = cwd ?? preferred ?? remembered;
   dismissOverlays();
   set({
     selectedId: null,
     projectCwd,
+    newThreadHost: target,
     // The panel belongs to a thread: the new-thread screen has none, and a
     // thread picked next restores the panel it had.
     panel: null,
@@ -1789,6 +2074,8 @@ export function startNewThread(cwd?: string) {
     view: { kind: "chat" },
     newWorktree: { on: s.newWorktree.on, branch: "", edited: false },
   });
+  // A machine's harnesses are its own, read before the composer's picker can draw them.
+  if (target) void loadMachineHarnesses(target);
 }
 
 /** The folder of the new thread being written (⌘O there, the composer footer's folder menu). */
@@ -1796,9 +2083,108 @@ export function setProjectCwd(cwd: string) {
   set({ projectCwd: cwd });
 }
 
+/**
+ * The computer a folder belongs to: this one when it has a project there, else a paired machine
+ * with it, else this one (a folder this app has not seen). A folder inside a project counts as
+ * that project (a worktree, a subfolder a thread ran in).
+ */
+function hostOfProject(s: Pick<AppState, "sessions" | "machineNames">, path: string): string {
+  if (!path) return LOCAL_HOST;
+  for (const host of [LOCAL_HOST, ...Object.keys(s.machineNames)]) {
+    const found = projectsOn(s.sessions, host).some(
+      (project) => project.path === path || path.startsWith(`${project.path}/`),
+    );
+    if (found) return host;
+  }
+  return LOCAL_HOST;
+}
+
+/** Whether a machine's **Run on** is being changed, so a slow answer for an earlier one is dropped. */
+let runOnSeeks = 0;
+
+/**
+ * **Run on**: the computer the next new thread runs on. The folder follows: the same project
+ * here, found again on that machine by path, then by git remote, then by folder name
+ * (state/projects.ts), else that machine's most recent project. Its harnesses, models and
+ * logins are read over its own connection, as the local picker reads this computer's.
+ */
+export async function setNewThreadHost(host: string): Promise<void> {
+  const seek = ++runOnSeeks;
+  const s = get();
+  if (host === s.newThreadHost) return;
+  const previous = s.newThreadHost;
+  const wasOn = projectAt(s.sessions, s.projectCwd, previous);
+  const projects = projectsOn(s.sessions, host);
+  const match = matchProject(wasOn, projects);
+  set({ newThreadHost: host, projectCwd: match?.path ?? projects[0]?.path ?? "" });
+  if (!host) return;
+  // A fresh read: a harness or login added on the machine while Run on was elsewhere shows.
+  const snapshot = await loadMachineHarnesses(host, { report: false, refresh: true });
+  if (seek !== runOnSeeks || get().newThreadHost !== host) return;
+  if (!snapshot) {
+    // The machine went away before it answered: the choice goes back, so the composer keeps a
+    // thread it can start rather than a machine that cannot answer.
+    // Never the folder the failed move just chose: it belongs to the machine that went away.
+    set({ newThreadHost: previous, projectCwd: wasOn?.path ?? "" });
+    toast(`${getName(host)} is not connected. The thread will run on this computer.`, "error");
+    return;
+  }
+  // A machine that listed nothing when the picker moved may have answered by now.
+  const listed = projectsOn(get().sessions, host);
+  if (!get().projectCwd && listed.length) set({ projectCwd: listed[0]!.path });
+}
+
+/**
+ * Read one machine's harnesses, models, accounts and defaults over its own connection, the call
+ * the local picker gets from `_rustcode/harnesses`. Kept per machine; `refresh` reads it again
+ * (a machine's default harness may have changed on it).
+ */
+export async function loadMachineHarnesses(
+  host: string,
+  options: { report?: boolean; refresh?: boolean } = {},
+): Promise<HarnessSnapshot | null> {
+  if (!host) return get().harnesses;
+  const cached = get().remoteHarnesses[host];
+  if (cached && !options.refresh) return cached;
+  const conn = connectionFor(host);
+  if (!conn) {
+    if (options.report) toast(`${getName(host)} is not connected.`, "error");
+    return cached ?? null;
+  }
+  try {
+    const snapshot = parseHarnessSnapshot(await conn.request(Method.harnesses, {}, 15_000));
+    // It dropped while the answer was coming: a list from a gone machine is not shown.
+    if (connectionFor(host) !== conn) return cached ?? null;
+    set((st) => ({ remoteHarnesses: { ...st.remoteHarnesses, [host]: snapshot } }));
+    return snapshot;
+  } catch (error) {
+    // A machine on an older RustCode has no `_rustcode/harnesses`: it runs the builtin harness,
+    // as this computer's own client says of an engine before harnesses (`fallbackHarnessSnapshot`).
+    if (error instanceof RpcError && error.isMethodNotFound) {
+      const fallback = fallbackHarnessSnapshot();
+      set((st) => ({ remoteHarnesses: { ...st.remoteHarnesses, [host]: fallback } }));
+      return fallback;
+    }
+    if (options.report && !cached) {
+      toast(`Could not read ${getName(host)}'s agents: ${errorText(error)}`, "error");
+    }
+    return cached ?? null;
+  }
+}
+
+/** A paired machine's name, as the composer and its toasts say it. */
+function getName(host: string): string {
+  return get().machineNames[host] ?? "That computer";
+}
+
 /** Where new threads start by default (⌘⇧O, Settings › General); a new thread being written follows. */
 export function setDefaultCwd(cwd: string) {
-  set((s) => ({ defaultCwd: cwd, projectCwd: s.selectedId ? s.projectCwd : cwd }));
+  // The default folder is this computer's, so a new thread being written goes back to it.
+  set((s) => ({
+    defaultCwd: cwd,
+    projectCwd: s.selectedId ? s.projectCwd : cwd,
+    ...(s.selectedId ? {} : { newThreadHost: LOCAL_HOST }),
+  }));
   store(STORAGE.project, cwd);
 }
 
@@ -1819,7 +2205,11 @@ export async function moveThread(id: string, cwd: string): Promise<boolean> {
   }
   if (thread && get().agent?.closeSession) await closeThread(id);
   try {
-    await connection.request(Method.sessionMove, { sessionId: id, cwd }, 10_000);
+    await connectionForThread(id)?.request(
+      Method.sessionMove,
+      { sessionId: splitThreadKey(id).id, cwd },
+      10_000,
+    );
   } catch (error) {
     toast(`Could not move the thread: ${errorText(error)}`, "error");
     if (thread) void openThread(id);
@@ -1845,8 +2235,26 @@ export async function moveThread(id: string, cwd: string): Promise<boolean> {
 export function openThread(id: string): Promise<string | null> {
   const inFlight = opening.get(id);
   if (inFlight) return inFlight;
-  const conn = connection;
+  // Another computer's thread loads over that machine's connection (`state/threadKeys.ts`); an
+  // offline one is not opened at all, and the chat says so instead of a conversation.
+  const conn = connectionForThread(id);
+  const { id: sessionId } = splitThreadKey(id);
   const existing = get().threads[id];
+  // A thread on a machine that is away is still a thread: its row stays and it opens read-only,
+  // with the chat and the composer saying so (docs/desktop.md › Several machines). Without this it
+  // would draw as a new thread, with this computer's folder and controls.
+  if (!conn && threadIsRemote(id)) {
+    if (!existing) {
+      const summary = get().sessions.find((x) => x.id === id);
+      set((s) => ({
+        threads: {
+          ...s.threads,
+          [id]: { ...emptyThread(id, summary?.cwd ?? "", summary?.title), loaded: false },
+        },
+      }));
+    }
+    return Promise.resolve(null);
+  }
   // A copy whose open failed is no copy: opening it again tries again, so a thread that could not
   // be opened once (the engine was restarting, its harness was down) is not refused for good.
   if (!conn || (existing?.loaded && !existing.openFailed) || existing?.loading || loading.has(id))
@@ -1856,7 +2264,7 @@ export function openThread(id: string): Promise<string | null> {
   let pending: Promise<string | null>;
   pending = Promise.resolve().then(async () => {
     try {
-      const result = await conn.request(Method.sessionLoad, { sessionId: id, cwd, mcpServers: [] }, 60_000);
+      const result = await conn.request(Method.sessionLoad, { sessionId, cwd, mcpServers: [] }, 60_000);
       updateThread(id, (t) => ({
         ...finishLoad(t),
         configOptions: parseConfigOptions((result as JsonObject | null)?.configOptions),
@@ -1867,7 +2275,8 @@ export function openThread(id: string): Promise<string | null> {
         claudePlansStarted = true;
         void refreshPlanCache();
       }
-      if (opened && lacksModels(opened)) void ensureHarnessModels(opened.harness!.id);
+      if (opened && lacksModels(opened))
+        void ensureHarnessModels(opened.harness!.id, splitThreadKey(id).host);
       void refreshPlanUsage(id);
       void refreshCheckpoints(id);
       // A thread opened after it went idle can still be before its cache deadline.
@@ -1896,7 +2305,7 @@ export function openThread(id: string): Promise<string | null> {
  * The thread is then opened again; what is left (a folder that is gone) is said.
  */
 export async function repairThread(id: string): Promise<void> {
-  const conn = connection;
+  const conn = connectionForThread(id);
   if (!conn || !get().agent?.sessionRepair) {
     toast("This server cannot repair threads. Update RustCode.", "error");
     return;
@@ -1908,7 +2317,8 @@ export async function repairThread(id: string): Promise<void> {
   await closeThread(id);
   let answer: JsonObject;
   try {
-    answer = ((await conn.request(Method.sessionRepair, { sessionId: id }, 10_000)) ?? {}) as JsonObject;
+    answer = ((await conn.request(Method.sessionRepair, { sessionId: splitThreadKey(id).id }, 10_000)) ??
+      {}) as JsonObject;
   } catch (error) {
     toast(`Could not repair the thread: ${errorText(error)}`, "error");
     return;
@@ -1939,7 +2349,7 @@ export async function repairThread(id: string): Promise<void> {
 
 export async function closeThread(id: string) {
   try {
-    await connection?.request(Method.sessionClose, { sessionId: id }, 10_000);
+    await connectionForThread(id)?.request(Method.sessionClose, { sessionId: splitThreadKey(id).id }, 10_000);
   } catch {
     // Closing is best effort.
   }
@@ -1962,15 +2372,25 @@ export interface NewSession {
   select?: boolean;
   /** The setup this session finishes (state/setup.ts): it is listed and the setup cleared together. */
   pendingId?: string;
+  /**
+   * The computer it runs on (`state/machines.ts`): its own connection is asked for
+   * `session/new`, and the thread is keyed with its host (`state/threadKeys.ts`).
+   * Omitted is this computer.
+   */
+  host?: string;
 }
 
 /** `session/new` with the harness, model, effort and worktree in `_meta.rustcode`; the thread is added to the list. */
 export async function createSession(options: NewSession): Promise<string> {
-  const conn = engine();
+  const host = options.host ?? LOCAL_HOST;
+  // A thread on another computer is made there, over that computer's own connection: its
+  // folder, its harness and its worktree are on that machine, never here.
+  const conn = host ? connectionFor(host) : engine();
+  if (!conn) throw new Error(host ? "That computer is not connected." : "The server is not connected.");
   const s = get();
   const params: JsonObject = { cwd: options.cwd, mcpServers: [] };
   const meta: JsonObject = {};
-  if (options.harness && !s.harnesses?.unsupported) {
+  if (options.harness && !harnessesOn(s, host)?.unsupported) {
     meta.harness = options.harness;
     if (options.account) meta.account = options.account;
     if (options.model) meta.model = options.model;
@@ -1985,13 +2405,15 @@ export async function createSession(options: NewSession): Promise<string> {
   // The engine keeps this in the thread's own metadata, so pruning the link
   // book does not make the child a top-level thread (`state/topLevel.ts`).
   if (options.parent) {
-    meta.parent = options.parent;
+    // The machine's own session id, not a key that names it here (`state/threadKeys.ts`).
+    meta.parent = splitThreadKey(options.parent).id;
     if (options.relationship && options.relationship !== "delegate") meta.relationship = options.relationship;
   }
   if (Object.keys(meta).length) params._meta = { rustcode: meta };
   const result = (await conn.request(Method.sessionNew, params, 120_000)) as JsonObject;
-  const id = str(result.sessionId);
-  if (!id) throw new Error("The server did not return a thread id.");
+  const raw = str(result.sessionId);
+  if (!raw) throw new Error("The server did not return a thread id.");
+  const id = threadKey(host, raw);
   const worktree: Worktree | undefined = parseWorktree(
     ((result._meta as JsonObject | undefined)?.rustcode as JsonObject | undefined)?.worktree,
   );
@@ -2006,6 +2428,9 @@ export async function createSession(options: NewSession): Promise<string> {
   };
   const summary: SessionSummary = {
     id,
+    // The sidebar groups it under the machine it runs on (`ui/Sidebar.tsx`); this computer's
+    // threads carry no host, as they always did.
+    host: host || undefined,
     cwd,
     updatedAt: Date.now(),
     harness: thread.harness?.id ?? options.harness,
@@ -2042,7 +2467,9 @@ export async function createSession(options: NewSession): Promise<string> {
   }));
   // Saved, not only shown: otherwise the thread's first message replaces it at the next list.
   // A pending setup lets its rename run beside it: the message starts the moment the thread is listed.
-  if (options.title) {
+  // A thread on another computer is titled by that machine's own history: only this computer's
+  // folder is renamed from here (`thread_rename` is the shell's).
+  if (options.title && !host) {
     const saved = renameThread(id, options.title);
     if (!pending) await saved;
   }
@@ -2081,8 +2508,15 @@ export function lacksModels(thread: ThreadState): boolean {
 }
 
 /** The new-thread choice: the picked one, else the default harness with its remembered model and effort. */
-export function newThreadChoice(s: Pick<AppState, "newThread" | "harnesses">): NewThreadChoice | null {
-  const snapshot = s.harnesses;
+export function newThreadChoice(
+  s: { newThread: NewThreadChoice | null; harnesses: HarnessSnapshot | null } & {
+    newThreadHost?: string;
+    remoteHarnesses?: Record<string, HarnessSnapshot>;
+  },
+): NewThreadChoice | null {
+  // The computer the thread will run on chooses the harnesses: a machine's default harness,
+  // models and logins are its own (`state/machines.ts`).
+  const snapshot = harnessesOn(s, s.newThreadHost);
   if (!snapshot) return null;
   if (!s.newThread) {
     return restoreChoice(snapshot, snapshot.default.harness, appChoices(snapshot), effortMemory());
@@ -2091,8 +2525,13 @@ export function newThreadChoice(s: Pick<AppState, "newThread" | "harnesses">): N
   // out in Settings): then the screen falls back to the harness a new thread would start on, never
   // to this draft. One that can run is normalized as the picker normalizes it.
   const harness = snapshot.harnesses.find((h) => h.id === s.newThread?.harness);
-  if (harness && !unavailableReason(harness)) return normalizeDefault(snapshot, s.newThread);
-  return preferredDefault(snapshot);
+  if (!harness || unavailableReason(harness)) return preferredDefault(snapshot);
+  const choice = normalizeDefault(snapshot, s.newThread);
+  // A machine's `_rustcode/harnesses` lists only the models a harness has already learned there,
+  // and `_rustcode/harnesses/models` is not on its gateway: with none listed, keep no model, so
+  // the machine's own harness default applies rather than a model picked on this computer.
+  if (s.newThreadHost && !harness.models.length) return { ...choice, model: null, effort: null };
+  return choice;
 }
 
 /**
@@ -2131,6 +2570,8 @@ async function createThread(firstMessage = "", extras: ComposeExtras = emptyExtr
     extras: carriesExtras(extras) ? extras : undefined,
     title: titleFrom(firstMessage, 80) || (hasExtras(extras) ? "Image" : "New thread"),
     cwd: s.projectCwd,
+    // The computer it belongs to: its group in the sidebar, its harnesses, its `session/new`.
+    host: s.newThreadHost,
     worktree: newWorktreeFor(s, s.projectCwd, firstMessage),
   });
   if (!setup) {
@@ -2151,12 +2592,14 @@ async function createThread(firstMessage = "", extras: ComposeExtras = emptyExtr
 
 /** The worktree the new-thread composer asked for, or none. */
 function newWorktreeFor(
-  s: Pick<AppState, "newWorktree" | "features">,
+  s: Pick<AppState, "newWorktree" | "features" | "newThreadHost">,
   cwd: string,
   firstMessage: string,
 ): PendingSetup["worktree"] {
   const wt = s.newWorktree;
-  if (!wt.on || !s.features.worktrees) return undefined;
+  // A worktree is cut on the machine the thread runs on, by that machine's own `session/new`; the
+  // toggle is this computer's, so it is only offered for threads that start here.
+  if (s.newThreadHost || !wt.on || !s.features.worktrees) return undefined;
   return { repo: cwd, branch: wt.branch.trim() || undefined, title: titleFrom(firstMessage, 80) };
 }
 
@@ -2167,13 +2610,25 @@ function newWorktreeFor(
  */
 async function startSetup(setup: PendingSetup): Promise<string | null> {
   const s = get();
-  const choice = projectThreadChoice(s, setup.cwd) ?? newThreadChoice(s);
+  const host = setup.host ?? LOCAL_HOST;
+  // The harness choice belongs to the machine the setup runs on, which may not be the one the
+  // composer shows now (the user moved **Run on** after sending). A project's own default harness
+  // and model are this machine's folders, so they only shape a local setup.
+  const choice =
+    (host === LOCAL_HOST ? projectThreadChoice(s, setup.cwd) : null) ??
+    newThreadChoice({
+      newThread: s.newThread,
+      harnesses: s.harnesses,
+      remoteHarnesses: s.remoteHarnesses,
+      newThreadHost: host,
+    });
   // The login follows the choice `session/new` is given, not a draft it fell back from.
-  const harness = s.harnesses?.harnesses.find((h) => h.id === choice?.harness);
+  const harness = harnessesOn(s, host)?.harnesses.find((h) => h.id === choice?.harness);
   let id: string;
   try {
     id = await createSession({
       cwd: setup.cwd,
+      host,
       harness: choice?.harness,
       // The account shown for the new thread: with named accounts, always one of them.
       account: newThreadAccountOn(harness, s.newThreadAccount, s.signedOutLogins),
@@ -2214,6 +2669,7 @@ export async function retryPendingSetup(): Promise<boolean> {
     extras: failed.extras,
     title: failed.title,
     cwd: failed.cwd,
+    host: failed.host,
     worktree: failed.worktree,
   });
   if (!setup) return false;
@@ -2259,7 +2715,9 @@ async function rewindTo(id: string, itemId: string, text: string): Promise<boole
   const userIndex = userIndexOf(thread, itemId);
   if (userIndex < 0) return false;
   try {
-    await engine().request(Method.rewind, { sessionId: id, userIndex, text }, 10_000);
+    const conn = connectionForThread(id);
+    if (!conn) throw new Error("That computer is not connected.");
+    await conn.request(Method.rewind, { sessionId: splitThreadKey(id).id, userIndex, text }, 10_000);
   } catch (error) {
     toast(`Could not rewind: ${errorText(error)}`, "error");
     return false;
@@ -2399,17 +2857,34 @@ export function setPinned(ids: string[], on: boolean) {
   set({ pinned: next });
   store(STORAGE.pinned, JSON.stringify(next));
   const many = ids.length > 1;
-  if (!get().features.pins || !connection) return;
-  const link = connection;
-  void Promise.all(
-    ids.map((id) =>
-      link.request(V2Method.sessionPin, { session_id: id, pinned: on }, 10_000).then(
-        () => undefined,
-        (error: unknown) => (error instanceof RpcError && error.isMethodNotFound ? undefined : { id, error }),
+  if (!get().features.pins) return;
+  // A pin is kept by the computer the thread runs on: a machine's threads go over that machine's
+  // connection, with the machine's own id (`state/threadKeys.ts`). A local thread with no engine
+  // keeps the app's pin, as before.
+  const groups = new Map<AcpConnection, string[]>();
+  const unreachable: string[] = [];
+  for (const id of ids) {
+    const conn = connectionForThread(id);
+    if (conn) groups.set(conn, [...(groups.get(conn) ?? []), id]);
+    else if (threadIsRemote(id)) unreachable.push(id);
+  }
+  if (!groups.size && !unreachable.length) return;
+  type PinResult = { id: string; ok: true } | { id: string; ok: false; error: unknown };
+  void Promise.all<PinResult>([
+    ...[...groups].flatMap(([conn, group]) =>
+      group.map((id) =>
+        conn.request(V2Method.sessionPin, { session_id: splitThreadKey(id).id, pinned: on }, 10_000).then(
+          (): PinResult => ({ id, ok: true }),
+          (error: unknown): PinResult =>
+            error instanceof RpcError && error.isMethodNotFound ? { id, ok: true } : { id, ok: false, error },
+        ),
       ),
     ),
-  ).then((results) => {
-    const failed = results.filter((r): r is { id: string; error: unknown } => !!r);
+    ...unreachable.map(
+      (id): PinResult => ({ id, ok: false, error: new Error("That computer is not connected.") }),
+    ),
+  ]).then((results) => {
+    const failed = results.filter((r): r is { id: string; ok: false; error: unknown } => !r.ok);
     if (!failed.length) return;
     const refused = new Set(failed.map((f) => f.id));
     // Unpinning: keep what was pinned before, less the ones the engine took. Pinning: drop the
@@ -2487,6 +2962,12 @@ export function setArchived(id: string, on: boolean) {
 }
 
 export async function renameThread(id: string, title: string): Promise<boolean> {
+  // A thread's name lives on the computer that owns it, and renaming one is that computer's
+  // folder (`thread_rename` is this shell's): another machine's thread is not renamed from here.
+  if (threadIsRemote(id)) {
+    toast("A thread on another computer is renamed on that computer.", "info");
+    return false;
+  }
   try {
     const saved = await shellCall<string>("thread_rename", { id, title });
     set((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? { ...x, title: saved } : x)) }));
@@ -2593,10 +3074,13 @@ export function setExtras(key: string, fn: (extras: ComposeExtras) => ComposeExt
 /** The harness a thread runs on, or a new thread would start on. */
 export function threadHarness(thread?: ThreadState) {
   const s = get();
+  // A thread's harness is the one its own machine lists; a new thread's is the one the computer
+  // **Run on** names (docs/desktop.md › Several machines).
+  const snapshot = harnessesOn(s, thread ? splitThreadKey(thread.id).host : s.newThreadHost);
   const id = thread
     ? (thread.harness?.id ?? "rustcode")
-    : (s.newThread?.harness ?? s.harnesses?.default.harness);
-  return s.harnesses?.harnesses.find((h) => h.id === id);
+    : (s.newThread?.harness ?? snapshot?.default.harness);
+  return snapshot?.harnesses.find((h) => h.id === id);
 }
 
 /** Whether the thread's harness takes image blocks. */
@@ -2626,7 +3110,13 @@ export function runCommandAction(text: string, from: string | null): boolean {
       const effort = thread ? selectOption(thread.configOptions, "effort")?.current : choice?.effort;
       const harness =
         thread?.harness?.id ?? (from ? s.sessions.find((x) => x.id === from)?.harness : choice?.harness);
-      startNewThread(thread?.cwd ?? s.projectCwd);
+      // `/new` in a thread starts on that thread's computer, in its folder, even before it is
+      // open; in a new thread, on the current Run on.
+      const listed = from ? s.sessions.find((x) => x.id === from) : undefined;
+      startNewThread(
+        thread?.cwd ?? listed?.cwd ?? (from ? undefined : s.projectCwd),
+        from ? splitThreadKey(from).host : s.newThreadHost,
+      );
       if (harness) setNewThreadChoice({ harness, model: model ?? null, effort: effort ?? null });
       return true;
     }
@@ -2937,9 +3427,12 @@ export async function steer(id: string, text: string, extras?: ComposeExtras): P
       })
     : undefined;
   try {
-    const result = (await engine().request(
+    const conn = connectionForThread(id);
+    if (!conn) return false;
+    const sessionId = splitThreadKey(id).id;
+    const result = (await conn.request(
       Method.steer,
-      prompt ? { sessionId: id, text: full, prompt } : { sessionId: id, text: full },
+      prompt ? { sessionId, text: full, prompt } : { sessionId, text: full },
       10_000,
     )) as JsonObject | null;
     if (result?.accepted !== true) return false;
@@ -3144,7 +3637,12 @@ export async function runPrompt(
     alreadyShown?: boolean;
   } = {},
 ): Promise<TurnOutcome> {
-  const conn = engine();
+  // The turn runs on the thread's own computer, which may have gone away since it was opened.
+  const conn = connectionForThread(id);
+  if (!conn) {
+    toast(threadIsRemote(id) ? "That computer is not connected." : "The server is not connected.", "error");
+    return "skipped";
+  }
   const thread = get().threads[id];
   // The prompt reads as a divider both ways: live, and after a reload from the history the engine
   // kept, which carries the text and not this flag (state/thread.ts `CONTINUE_MARK`).
@@ -3250,7 +3748,7 @@ export async function runPrompt(
   let failure: string | undefined;
   let unused: string[] = [];
   try {
-    const request: JsonObject = { sessionId: id, prompt };
+    const request: JsonObject = { sessionId: splitThreadKey(id).id, prompt };
     if (options.autoCompact) request._meta = { rustcode: { autoCompact: true } };
     const result = (await conn.request(Method.sessionPrompt, request)) as JsonObject | null;
     if (str(result?.stopReason) === "cancelled") outcome = "cancelled";
@@ -3365,15 +3863,16 @@ export async function runPrompt(
 export type TurnOutcome = "completed" | "cancelled" | "failed" | "skipped";
 
 export async function cancel(id = get().selectedId): Promise<void> {
-  if (!id || !connection) return;
+  const conn = id ? connectionForThread(id) : null;
+  if (!id || !conn) return;
   const thread = get().threads[id];
   // Stopping a thread stops the work it gave other threads (M1); turns the user started there go on.
   void stopLinksFrom(id);
   if (!thread?.running) return;
   try {
-    connection.notify(Method.sessionCancel, { sessionId: id });
+    conn.notify(Method.sessionCancel, { sessionId: splitThreadKey(id).id });
     // ACP: after `session/cancel` the client answers outstanding permission requests as cancelled.
-    for (const request of thread.permissions) connection.respond(request.rpcId, permissionCancelled);
+    for (const request of thread.permissions) conn.respond(request.rpcId, permissionCancelled);
     updateThread(id, (t) => settleEveryWait({ ...t, permissions: [] }, Date.now()));
     if (thread.permissions.length) linkWaitEnded(id);
   } catch (error) {
@@ -3394,16 +3893,18 @@ export async function setConfigOption(
   value: string | boolean,
   options: { remember?: boolean } = {},
 ): Promise<void> {
+  // A remote thread's options are its machine's to list and set.
+  const conn = connectionForThread(id);
+  if (!conn) {
+    toast("That computer is not connected.", "error");
+    return;
+  }
   const params: JsonObject =
     typeof value === "boolean"
-      ? { sessionId: id, configId, type: "boolean", value }
-      : { sessionId: id, configId, value };
+      ? { sessionId: splitThreadKey(id).id, configId, type: "boolean", value }
+      : { sessionId: splitThreadKey(id).id, configId, value };
   try {
-    const result = (await engine().request(
-      Method.sessionSetConfigOption,
-      params,
-      15_000,
-    )) as JsonObject | null;
+    const result = (await conn.request(Method.sessionSetConfigOption, params, 15_000)) as JsonObject | null;
     if (result?.configOptions) {
       updateThread(id, (t) => ({ ...t, configOptions: parseConfigOptions(result.configOptions) }));
     }
@@ -3433,11 +3934,29 @@ export interface ResolvedApproval {
 }
 
 /**
+ * Says the thread's computer is away, once, for a caller that would otherwise answer every
+ * pending card with its own refusal. True when there is nothing to answer on.
+ */
+function refuseAway(key: string): boolean {
+  if (connectionForThread(key)) return false;
+  toast(threadIsRemote(key) ? "That computer is not connected." : "The server is not connected.", "error");
+  return true;
+}
+
+/**
  * Answer exactly this request; it leaves the queue before the reply, so a double click cannot
  * answer the next. A question also leaves its answer in the transcript, where the reader can see
  * what was asked and what they said (state/thread.ts `questionItem`).
  */
-function reply(request: PermissionRequest, result: JsonObject, answer?: string) {
+function reply(request: PermissionRequest, result: JsonObject, answer?: string): boolean {
+  // The answer goes back on the connection the request arrived on (`handleInbound`). With the
+  // machine away there is nothing to answer on: the card stays, and an answer made now is refused
+  // rather than dropped.
+  const conn = connectionForThread(request.sessionId);
+  if (!conn) {
+    refuseAway(request.sessionId);
+    return false;
+  }
   updateThread(request.sessionId, (t) => {
     const settled = request.question ? t : settledWait(t, request.toolCallId, Date.now());
     return {
@@ -3448,16 +3967,17 @@ function reply(request: PermissionRequest, result: JsonObject, answer?: string) 
   });
   // Another request of the same thread keeps it waiting; the last one ends the wait.
   if (!get().threads[request.sessionId]?.permissions.length) linkWaitEnded(request.sessionId);
-  connection?.respond(request.rpcId, result);
+  conn.respond(request.rpcId, result);
+  return true;
 }
 
 export function answerPermission(request: PermissionRequest, option: PermissionOption | null) {
-  reply(
+  const answered = reply(
     request,
     option ? permissionSelected(option.id) : permissionCancelled,
     request.question ? (option?.name ?? "Declined") : undefined,
   );
-  if (request.question) return;
+  if (!answered || request.question) return;
   settleApproval(request, option);
   // An hour's grant is the engine's to keep: list it again so the panel shows it.
   if (option && optionScope(option) === "hour") void refreshGrants(connection);
@@ -3527,6 +4047,9 @@ export async function revokeGrant(id: string): Promise<void> {
 
 /** Approve every approval the thread waits on (not questions), each with its "allow once" option. */
 export function approveAll(threadId: string) {
+  // The answers go over the thread's own connection; with the machine away, one refusal is said
+  // once, not once per card.
+  if (refuseAway(threadId)) return;
   const pending = get().threads[threadId]?.permissions.filter((p) => !p.question) ?? [];
   for (const request of pending) {
     const option =
@@ -3569,6 +4092,8 @@ export function setPermissionMode(threadId: string | undefined, mode: Permission
   const modes = { ...get().permissionModes, [threadId]: mode };
   set({ permissionModes: modes });
   store(STORAGE.permissionModes, JSON.stringify(modes));
+  // With the machine away nothing can be answered: one refusal, not one per pending card.
+  if (refuseAway(threadId)) return;
   for (const request of get().threads[threadId]?.permissions ?? []) {
     const option = autoAnswer(request, mode);
     if (option) reply(request, permissionSelected(option.id));
@@ -3656,9 +4181,13 @@ function storeAccount(harness: string, account: string | null) {
   store(STORAGE.harnessAccountChoices, JSON.stringify(all));
 }
 
-/** The named accounts of `harness`, as the snapshot lists them. */
-export function accountsOf(s: Pick<AppState, "harnesses">, harness: string | undefined): HarnessAccount[] {
-  return harness ? (s.harnesses?.harnesses.find((h) => h.id === harness)?.accounts ?? []) : [];
+/** The named accounts of `harness`, as the snapshot lists them, on the computer `host` names. */
+export function accountsOf(
+  s: { harnesses: HarnessSnapshot | null; remoteHarnesses?: Record<string, HarnessSnapshot> },
+  harness: string | undefined,
+  host?: string,
+): HarnessAccount[] {
+  return harness ? (harnessesOn(s, host)?.harnesses.find((h) => h.id === harness)?.accounts ?? []) : [];
 }
 
 /** The domain part of an account name, as the account's id must read. */
@@ -3803,7 +4332,10 @@ const modelsAsked = new Map<string, Promise<void>>();
  * runs. A failure stays quiet (the picker says the harness picks its default)
  * and is not kept: the next ask, such as opening the picker, tries again.
  */
-export function ensureHarnessModels(id: string): Promise<void> {
+export function ensureHarnessModels(id: string, host = LOCAL_HOST): Promise<void> {
+  // A machine lists its own harnesses' models, and only its own `_rustcode/harnesses/models` can
+  // ask (`docs/desktop.md` › Several machines): what its snapshot carries is what the picker has.
+  if (host) return Promise.resolve();
   const harness = get().harnesses?.harnesses.find((h) => h.id === id);
   if (!harness || harness.builtin || harness.models.length || get().status !== "ready")
     return Promise.resolve();
@@ -3927,13 +4459,15 @@ function noteChoice(harness: string, last: HarnessLast) {
  * The user picked a model or effort in the new-thread picker: it is the choice, and the harness's
  * remembered one (`_rustcode/harnesses/remember`, else app storage), so switching harness and back,
  * or a restart, starts there again. The model keeps its own effort for the next time it is picked.
+ * `host` is the computer the thread runs on: a machine's own last choice is its to keep, so only
+ * this computer is asked to remember it.
  */
-export function pickNewThreadChoice(choice: NewThreadChoice) {
+export function pickNewThreadChoice(choice: NewThreadChoice, host = LOCAL_HOST) {
   set({ newThread: choice });
   const last = { model: choice.model, effort: choice.effort };
-  noteChoice(choice.harness, last);
+  if (!host) noteChoice(choice.harness, last);
   rememberModelEffort(choice.harness, choice.model, choice.effort);
-  if (!get().harnesses?.remembers || !connection) return;
+  if (host || !get().harnesses?.remembers || !connection) return;
   void engine()
     .request(Method.harnessRemember, { harness: choice.harness, ...last }, 15_000)
     .catch(() => undefined);
@@ -3941,7 +4475,8 @@ export function pickNewThreadChoice(choice: NewThreadChoice) {
 
 /** Switch the new-thread picker to `harness`, on the model and effort it was last left on. */
 export function switchNewThreadHarness(harness: string) {
-  const snapshot = get().harnesses;
+  // The machine the thread will run on has its own harnesses and its own defaults.
+  const snapshot = harnessesOn(get(), get().newThreadHost);
   if (!snapshot) return;
   const next = snapshot.harnesses.find((h) => h.id === harness);
   const remembered = lastAccountFor(harness);
@@ -3965,11 +4500,14 @@ export async function switchThreadAccount(id: string, account: string | null): P
   if (!thread || thread.running) return false;
   const harness = thread.harness?.id;
   if (!harness) return false;
-  const named = accountsOf(get(), harness).find((a) => a.id === account);
+  const host = splitThreadKey(id).host;
+  const named = accountsOf(get(), harness, host).find((a) => a.id === account);
   try {
-    const result = (await engine().request(
+    const conn = connectionForThread(id);
+    if (!conn) throw new Error("That computer is not connected.");
+    const result = (await conn.request(
       Method.sessionHarness,
-      { sessionId: id, harness, account },
+      { sessionId: splitThreadKey(id).id, harness, account },
       30_000,
     )) as JsonObject | null;
     const next = parseSessionHarness(result) ?? thread.harness;
@@ -3981,7 +4519,7 @@ export async function switchThreadAccount(id: string, account: string | null): P
     set((s) => ({
       sessions: s.sessions.map((x) => (x.id === id ? { ...x, account: next?.account } : x)),
     }));
-    const harnessName = get().harnesses?.harnesses.find((h) => h.id === harness)?.name ?? harness;
+    const harnessName = harnessesOn(get(), host)?.harnesses.find((h) => h.id === harness)?.name ?? harness;
     toast(
       named
         ? `This thread now runs on ${named.name}. The conversation so far moves over as a summary with your next message.`
@@ -4012,12 +4550,15 @@ export async function switchThreadHarness(
 ): Promise<boolean> {
   const thread = get().threads[id];
   if (!thread || thread.running) return false;
-  const last = get().harnesses?.harnesses.find((h) => h.id === harness)?.last;
+  const host = splitThreadKey(id).host;
+  const last = harnessesOn(get(), host)?.harnesses.find((h) => h.id === harness)?.last;
   try {
-    const result = (await engine().request(
+    const conn = connectionForThread(id);
+    if (!conn) throw new Error("That computer is not connected.");
+    const result = (await conn.request(
       Method.sessionHarness,
       {
-        sessionId: id,
+        sessionId: splitThreadKey(id).id,
         harness,
         account: account ?? null,
         model: last?.model ?? null,
@@ -4025,7 +4566,7 @@ export async function switchThreadHarness(
       },
       30_000,
     )) as JsonObject | null;
-    const listed = get().harnesses?.harnesses.find((h) => h.id === harness);
+    const listed = harnessesOn(get(), host)?.harnesses.find((h) => h.id === harness);
     const next =
       parseSessionHarness(result) ?? (listed && { id: harness, capabilities: listed.capabilities });
     updateThread(id, (t) => ({
@@ -4040,7 +4581,7 @@ export async function switchThreadHarness(
     }));
     if (harness === CLAUDE_CODE) claudePlansStarted = true;
     const opened = get().threads[id];
-    if (opened && lacksModels(opened)) void ensureHarnessModels(harness);
+    if (opened && lacksModels(opened)) void ensureHarnessModels(harness, host);
     void refreshPlanUsage(id);
     void refreshPlanCache();
     return true;
@@ -4635,15 +5176,25 @@ export async function setThreadsStatus(ids: string[], status: "review" | "done" 
   if (status === "idle") for (const id of ids) clearStatusMark(id);
   else saveMarks({ ...get().statusMarks, ...Object.fromEntries(ids.map((id) => [id, status])) });
   for (const id of ids) scheduleAutoCompact(id);
-  if (!get().features.status || !connection) return 0;
-  const link = connection;
+  if (!get().features.status) return 0;
+  // The status is kept by the computer the thread runs on, one request each on its own connection.
+  const groups = new Map<AcpConnection, string[]>();
   const errors: unknown[] = [];
   for (const id of ids) {
-    try {
-      await link.request(V2Method.sessionStatus, { session_id: id, status }, 10_000);
-      // The engine keeps it now; the app's mark only covers the gap until the list says so.
-    } catch (error) {
-      if (!(error instanceof RpcError && error.isMethodNotFound)) errors.push(error);
+    const conn = connectionForThread(id);
+    if (conn) groups.set(conn, [...(groups.get(conn) ?? []), id]);
+    // A local thread with no engine keeps the mark in the app only, as before; a machine's thread
+    // that cannot be reached is said, since the machine will not have it.
+    else if (threadIsRemote(id)) errors.push(new Error("That computer is not connected."));
+  }
+  for (const [conn, group] of groups) {
+    for (const id of group) {
+      try {
+        await conn.request(V2Method.sessionStatus, { session_id: splitThreadKey(id).id, status }, 10_000);
+        // The engine keeps it now; the app's mark only covers the gap until the list says so.
+      } catch (error) {
+        if (!(error instanceof RpcError && error.isMethodNotFound)) errors.push(error);
+      }
     }
   }
   if (errors.length) {
@@ -4807,7 +5358,8 @@ export async function removeWorktree(id: string): Promise<void> {
 // ---------------------------------------------------------------- checkpoints
 
 export async function refreshCheckpoints(id: string): Promise<void> {
-  if (!connection || !get().features.checkpoints) return;
+  // Checkpoints are files on the machine that ran the turn: this computer cannot read another's.
+  if (threadIsRemote(id) || !connection || !get().features.checkpoints) return;
   try {
     const list = parseCheckpoints(
       await connection.request(V2Method.checkpointList, { session_id: id }, 15_000),
@@ -5091,10 +5643,11 @@ export function hasAgents(thread?: ThreadState): boolean {
 
 export async function refreshAgents(id: string): Promise<SubagentInfo[]> {
   const thread = get().threads[id];
-  if (!connection || !hasAgents(thread)) return [];
+  const conn = connectionForThread(id);
+  if (!conn || !hasAgents(thread)) return [];
   try {
     const agents = parseAgentList(
-      await connection.request(Method.agents, { sessionId: id, action: "list" }, 10_000),
+      await conn.request(Method.agents, { sessionId: splitThreadKey(id).id, action: "list" }, 10_000),
     );
     set((s) => ({ agents: { ...s.agents, [id]: agents } }));
     return agents;
@@ -5105,9 +5658,11 @@ export async function refreshAgents(id: string): Promise<SubagentInfo[]> {
 
 /** A child's conversation, folded like a replayed thread. */
 export async function agentHistory(id: string, agentId: number): Promise<ThreadState> {
-  const result = (await engine().request(
+  const conn = connectionForThread(id);
+  if (!conn) throw new Error("That computer is not connected.");
+  const result = (await conn.request(
     Method.agents,
-    { sessionId: id, action: "history", id: agentId },
+    { sessionId: splitThreadKey(id).id, action: "history", id: agentId },
     15_000,
   )) as JsonObject | null;
   let state = emptyThread(`${id}#${agentId}`, get().threads[id]?.cwd ?? "");
@@ -5142,10 +5697,14 @@ const planUsageInFlight = new Set<string>();
  * thread will start on.
  */
 export function harnessOf(
-  s: Pick<AppState, "threads" | "sessions" | "newThread" | "harnesses">,
+  s: Pick<AppState, "threads" | "sessions" | "newThread" | "harnesses"> & {
+    newThreadHost?: string;
+    remoteHarnesses?: Record<string, HarnessSnapshot>;
+  },
   threadId?: string,
 ): string | undefined {
-  if (!threadId) return s.newThread?.harness ?? s.harnesses?.default.harness ?? "rustcode";
+  if (!threadId)
+    return s.newThread?.harness ?? harnessesOn(s, s.newThreadHost)?.default.harness ?? "rustcode";
   return s.threads[threadId]?.harness?.id ?? s.sessions.find((x) => x.id === threadId)?.harness;
 }
 
@@ -5174,12 +5733,12 @@ export function accountOn(
   s: Pick<
     AppState,
     "threads" | "sessions" | "newThread" | "newThreadAccount" | "harnesses" | "signedOutLogins"
-  >,
+  > & { newThreadHost?: string; remoteHarnesses?: Record<string, HarnessSnapshot> },
   threadId?: string,
 ): string | null {
   if (!threadId) {
     const harness = harnessOf(s);
-    const known = s.harnesses?.harnesses.find((h) => h.id === harness);
+    const known = harnessesOn(s, s.newThreadHost)?.harnesses.find((h) => h.id === harness);
     return newThreadAccountOn(known, s.newThreadAccount, s.signedOutLogins);
   }
   const own = s.threads[threadId]?.harness?.account;
@@ -5191,7 +5750,7 @@ export function accountOn(
 type CommandsSource = Pick<
   AppState,
   "threads" | "sessions" | "newThread" | "harnesses" | "baseCommands" | "harnessCommands" | "sessionCommands"
->;
+> & { newThreadHost?: string; remoteHarnesses?: Record<string, HarnessSnapshot> };
 
 /**
  * The slash commands a composer offers: an open thread reads its session's own list, a new one the
@@ -5204,7 +5763,9 @@ export function commandsFor(s: CommandsSource, threadId?: string | null): SlashC
   // A session's own list is the harness's, which leaves out the skills RustCode discovered itself.
   if (own) return withSkills(own, s.baseCommands);
   const harness = harnessOf(s, threadId ?? undefined);
-  const known = s.harnesses?.harnesses.find((h) => h.id === harness);
+  const known = harnessesOn(s, threadId ? undefined : s.newThreadHost)?.harnesses.find(
+    (h) => h.id === harness,
+  );
   return menuCommands({
     base: s.baseCommands,
     seen: harness ? s.harnessCommands[harness] : undefined,
@@ -5358,10 +5919,13 @@ function commitPlans(incoming: Record<string, CachedPlan>) {
  * answer without windows (the harness has no plan usage) clears them.
  */
 export async function refreshPlanUsage(id: string): Promise<void> {
-  if (!connection || planUsageInFlight.has(id)) return;
+  const conn = connectionForThread(id);
+  if (!conn || planUsageInFlight.has(id)) return;
   planUsageInFlight.add(id);
   try {
-    const usage = parsePlanUsage(await connection.request(Method.usageLimits, { sessionId: id }, 10_000));
+    const usage = parsePlanUsage(
+      await conn.request(Method.usageLimits, { sessionId: splitThreadKey(id).id }, 10_000),
+    );
     const fetchedAt = Date.now();
     set((s) => ({ planUsage: { ...s.planUsage, [id]: usage && { ...usage, fetchedAt } } }));
     // The same numbers serve every thread on that harness; a thread that has
@@ -5841,6 +6405,9 @@ export async function revokeRemoteDevice(id: string): Promise<void> {
 
 /** Test hook: reset to a clean slate. */
 export function resetForTests() {
+  // A machine's channel and its threads are process-global too: one test file's MockMachine must
+  // not answer the next one's `openThread` (machinesThreads.test.ts › findings 1).
+  resetMachinesForTests();
   lastFocusListAt = 0;
   remoteStatusRevision += 1;
   remoteStatusReadId = 0;
@@ -5877,6 +6444,8 @@ export function resetForTests() {
     projectCwd: "",
     defaultCwd: "",
     newThread: null,
+    newThreadHost: LOCAL_HOST,
+    remoteHarnesses: {},
     harnesses: null,
     baseCommands: [],
     harnessCommands: {},

@@ -52,17 +52,61 @@ Next, in rough order:
 5. The rest of [Not yet ported](#not-yet-ported).
 
 Several machines (#3202): Settings › **Machines** pairs the app with another
-computer's RustCode server and keeps the connection, so one app can reach its
-own threads here and other machines' threads there. This step ships the page,
-the pairing flow and the connection itself — the state of each machine, the
-route it is reached over, and its thread count from `session/list`; listing
-and driving those threads in the sidebar is the next step. The Rust shell
-owns one connection supervisor per machine (`src-tauri/src/machines.rs`,
-`rustcode/client`) and the webview gives each a channel (`MachineTransport` in
-`src/acp/transport.ts`, `src/state/machines.ts`), because a web view cannot
-dial a gateway and the pairing token belongs in the credential store.
-`?machines=paired|connect|offline|revoked` in the mock walks the page without a
-second computer.
+computer's RustCode server and keeps the connection, so one app reaches its
+own threads here and other machines' threads there. The sidebar lists every
+machine in a group of its own — this computer first, then each paired machine
+with ● connected, ○ offline or ⚠ revoked — and its threads by project inside.
+A thread key carries its machine (`local` keeps its bare id, another one reads
+`‹host›/‹id›`, `src/state/threadKeys.ts`), and every operation on it goes over
+that machine's own connection: `connectionFor` in `src/state/store.ts` returns
+the local engine or the machine's `AcpConnection`, open the thread and its
+permission answers travel there, and its `session/update` stream keeps it live.
+A machine that is away keeps its threads listed and read-only: the chat says
+"Not connected. Last updated HH:MM", the composer is disabled, and the
+header shows `Runs on ‹machine› · ‹harness› · ‹model›`; the controls that read
+this computer (terminal, working tree, pull requests, Finder, worktrees,
+checkpoints and undo) stay disabled with "Runs on ‹machine›" where the action
+would be. The Rust shell owns one connection supervisor per machine
+(`src-tauri/src/machines.rs`, `rustcode/client`) and the webview gives each a
+channel (`MachineTransport` in `src/acp/transport.ts`, `src/state/machines.ts`),
+because a web view cannot dial a gateway and the pairing token belongs in the
+credential store. `?machines=paired|connect|offline|revoked` in the mock walks
+the page without a second computer; `paired` is two computers with threads.
+
+**Run on** is the new-thread composer's own choice of machine
+(`src/ui/Composer.tsx`), in the strip beside the folder: this computer first,
+then each paired machine with its connection state, and a machine that is away
+disabled with "Offline". It is hidden until a second computer is paired. Moving
+it reads that machine's `_rustcode/harnesses` — its harnesses, models, logins
+and default — over the machine's own connection and keeps the answer per
+machine (`remoteHarnesses` in `src/state/store.ts`), so the model picker, the
+`@` agents and the harness defaults are the machine's; this computer's list is
+untouched. `New thread` inside a machine's group in the sidebar starts there
+with that group's folder (`startNewThread(folder, host)`), and any other new
+thread starts here. A folder picked on this disk — "Choose Folder…", "New
+Thread in Folder…", the palette's Add project folder — always starts here: a
+path alone never names a machine, so two Macs that share a checkout path cannot
+mistake each other; ⌘O with no thread open starts here in the folder it picks. "New Thread Here" in a thread's folder menu and `/new` in
+its composer keep that thread's machine and folder.
+
+The project follows the machine: `src/state/projects.ts` finds the same project
+there by path, then by git remote (`_meta.rustcode.remote`, normalized so
+`git@…` and `https://…` compare equal), then by folder name, and otherwise the
+composer offers that machine's most recent project and its other folders from
+its thread list ("Choose Folder…" stays this computer's, since no code here can
+browse a machine's disk). An engine that does not report a remote falls back to
+the folder name; the mock's Studio reports one. `session/new` is sent over the
+machine's connection with its folder and harness, and the thread is keyed with
+its host, so it appears under the machine's group at once; a thread created
+there is titled by that machine's history (`thread_rename` is this shell's).
+A machine on an older RustCode that does not answer `_rustcode/harnesses` is
+shown as the builtin harness, as this computer's engine is, so a thread can
+still start there. A harness whose models that machine has not learned yet
+keeps no model from here: the machine's own default decides. Removing a
+machine in Settings › Machines sends Run on back to this computer and drops
+the harness list kept for it. Reopening a thread uses its own machine's
+connection (`openThread`), including a thread listed before its machine went
+away.
 
 Item 4 and the rest of the orchestration work move the domain model from
 sessions to an execution graph:

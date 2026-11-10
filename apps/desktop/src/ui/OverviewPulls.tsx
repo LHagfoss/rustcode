@@ -94,6 +94,7 @@ function PullRow({ pull, onOpen }: { pull: PullRequest; onOpen: () => void }) {
 
 export function PullRequestsSection({
   cwd,
+  host,
   branches,
   branch,
   folded,
@@ -101,6 +102,8 @@ export function PullRequestsSection({
 }: {
   /** The project the reads go to: the worktree's repository, else the thread's folder. */
   cwd: string | undefined;
+  /** The thread's computer: the ask starts there, where the folder is. */
+  host: string;
   /** The branches whose pulls belong here: the thread's own first. */
   branches: string[];
   /** The thread's branch, for the ask that opens a pull. */
@@ -117,7 +120,7 @@ export function PullRequestsSection({
 
   const askForPull = () => {
     if (!cwd) return;
-    startNewThread(cwd);
+    startNewThread(cwd, host || undefined);
     setDraft(
       "new",
       `Open a pull request${branch ? ` from ${branch}` : ""}: write up what changed, push the branch and open the PR.`,

@@ -19,7 +19,7 @@ import {
 import type { PullRequest } from "../acp/rustcode";
 import { projectName, type SessionSummary } from "../acp/types";
 import { pickFolder } from "../lib/native";
-import { registerProject } from "../state/projects";
+import { registerProject } from "../state/projectBook";
 import { cachedPulls, pullForBranch } from "../state/pulls";
 import { PREF, readPref, writePref } from "../state/sidebarPrefs";
 import { shelfKey } from "../state/sidebarRows";

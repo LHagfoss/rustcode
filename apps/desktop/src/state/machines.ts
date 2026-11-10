@@ -5,15 +5,17 @@
 // stands, and one ACP client per machine (the same class the local engine
 // uses), so a connected machine's `session/list` gives its thread count.
 //
-// Step 1.9 of the machine network plan merges those threads into the sidebar;
-// this step only lists the machines and their counts.
+// The store routes every thread operation over the same connection this module
+// opens (`state/store.ts` `connectionFor`), and the sidebar lists each machine's
+// threads in one group (docs/desktop.md › Several machines).
 //
 // A machine is a computer, a route is one way to reach it, and the server is
 // what runs on it (docs/terminology.md).
 
 import { create } from "zustand";
-import { AcpConnection, arr, type Json, obj } from "../acp/jsonrpc";
+import { AcpConnection } from "../acp/jsonrpc";
 import { isTauri, MachineTransport } from "../acp/transport";
+import { parseSessionList, type SessionSummary } from "../acp/types";
 import { hasShell, shellCall } from "../lib/shell";
 import { askConfirm, toast } from "./store";
 
@@ -99,6 +101,8 @@ interface MachinesStore {
   machines: Machine[];
   /** Each connected machine's thread count, from its own `session/list`. */
   counts: Record<string, number>;
+  /** Last successfully fetched thread list per machine, retained across disconnects. */
+  sessions: Record<string, SessionSummary[]>;
   discovered: DiscoveredMachine[] | null;
   discovering: boolean;
   discoverError: string | null;
@@ -111,6 +115,7 @@ export const useMachines = create<MachinesStore>(() => ({
   error: null,
   machines: [],
   counts: {},
+  sessions: {},
   discovered: null,
   discovering: false,
   discoverError: null,
@@ -259,10 +264,14 @@ export function codeComplete(code: string, length: number): boolean {
 interface Link {
   transport: MachineTransport;
   connection: AcpConnection | null;
+  /** The connection has answered `initialize`: a later listing only asks for sessions. */
+  ready: boolean;
 }
 
 const links = new Map<string, Link>();
 const opening = new Set<string>();
+/** Hear when a machine's connection opens or drops, so the store can route its threads there. */
+const linkListeners = new Set<(id: string, connection: AcpConnection | null) => void>();
 let started = false;
 /** Counts asks, so an answer that arrives after Cancel is ignored. */
 let asks = 0;
@@ -312,13 +321,16 @@ async function attach(machine: Machine): Promise<void> {
   if (links.has(machine.id) || opening.has(machine.id)) return;
   opening.add(machine.id);
   const transport = new MachineTransport(machine.id, machine.name);
-  const link: Link = { transport, connection: null };
+  const link: Link = { transport, connection: null, ready: false };
   try {
     await transport.start((event) => {
       if (event.type === "open") {
         const connection = new AcpConnection((line) => transport.send(line));
         link.connection = connection;
-        void readThreads(machine.id, connection);
+        link.ready = false;
+        markMachine(machine.id, "connected", null);
+        announce(machine.id, connection);
+        void readThreads(machine.id, connection, link);
       } else if (event.type === "line") {
         link.connection?.receive(event.line);
       } else if (event.type === "lines") {
@@ -326,6 +338,10 @@ async function attach(machine: Machine): Promise<void> {
       } else if (event.type === "closed") {
         link.connection?.close(event.reason);
         link.connection = null;
+        link.ready = false;
+        // The sidebar and the chat say the same as the shell's supervisor: it is away, read-only.
+        markMachine(machine.id, "offline", event.reason || null);
+        announce(machine.id, null);
         useMachines.setState((state) => {
           const counts = { ...state.counts };
           delete counts[machine.id];
@@ -341,33 +357,139 @@ async function attach(machine: Machine): Promise<void> {
   }
 }
 
+/**
+ * What the supervisor saw: the row, the sidebar group and the chat read it from here. A pairing
+ * the shell says was revoked stays revoked, and a supervisor still backing off keeps the state and
+ * retry clock `machines_list` gave it: only a machine that was connected turns offline here, and
+ * nothing but `machines_list` writes `retryInSecs`.
+ */
+function markMachine(id: string, state: MachineState, detail: string | null): void {
+  useMachines.setState((current) => ({
+    machines: current.machines.map((machine) => {
+      if (machine.id !== id) return machine;
+      if (state === "connected")
+        return { ...machine, state, detail: null, lastConnectedAt: new Date().toISOString() };
+      if (machine.state !== "connected") return machine;
+      return { ...machine, state: "offline", detail: detail ?? machine.detail };
+    }),
+  }));
+}
+
+/**
+ * Tests only: drop every channel and the lists they gave, as a freshly started app would. The
+ * app's own store calls this through `resetForTests` (`state/store.ts`), so one test file's
+ * machines never reach another's.
+ */
+export function resetMachinesForTests(): void {
+  for (const [id, link] of [...links]) {
+    link.connection?.close("The app reset its machines.");
+    void link.transport.stop();
+    announce(id, null);
+  }
+  links.clear();
+  opening.clear();
+  linkListeners.clear();
+  started = false;
+  useMachines.setState({
+    ready: false,
+    error: null,
+    machines: [],
+    counts: {},
+    sessions: {},
+    discovered: null,
+    discovering: false,
+    discoverError: null,
+    pairing: null,
+    pairingError: null,
+  });
+}
+
 /** Stop a machine's channel: the shell stops its supervisor with it. */
 function detach(id: string): void {
   const link = links.get(id);
   links.delete(id);
   if (!link) return;
   link.connection?.close("The machine was removed.");
+  announce(id, null);
   void link.transport.stop();
   useMachines.setState((state) => {
     const counts = { ...state.counts };
+    const sessions = { ...state.sessions };
     delete counts[id];
-    return { counts };
+    delete sessions[id];
+    return { counts, sessions };
   });
 }
 
 /**
- * The machine's thread count, from its own `session/list`. A count is a
- * nicety: a machine that does not answer it is still listed as connected.
+ * The machine's threads, from its own `session/list`. The count is a nicety: a
+ * machine that does not answer it is still listed as connected. `initialize`
+ * is asked once per connection, so re-listing (a focus, a reconnect) is one
+ * request.
  */
-async function readThreads(id: string, connection: AcpConnection): Promise<void> {
+async function readThreads(id: string, connection: AcpConnection, link?: Link): Promise<void> {
   try {
-    await connection.request("initialize", { protocolVersion: 1 }, 10_000);
-    const answer = (await connection.request("session/list", {}, 10_000)) as Json;
-    const sessions = arr(obj(answer)?.sessions);
-    useMachines.setState((state) => ({ counts: { ...state.counts, [id]: sessions.length } }));
+    if (!link?.ready) {
+      await connection.request("initialize", { protocolVersion: 1 }, 10_000);
+      if (link) link.ready = true;
+    }
+    const sessions: SessionSummary[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 10; page++) {
+      const answer = await connection.request("session/list", cursor ? { cursor } : {}, 10_000);
+      const result = parseSessionList(answer);
+      sessions.push(...result.sessions);
+      cursor = result.nextCursor;
+      if (!cursor) break;
+    }
+    if (connection.isClosed) return;
+    useMachines.setState((state) => ({
+      counts: { ...state.counts, [id]: sessions.length },
+      sessions: { ...state.sessions, [id]: sessions },
+    }));
   } catch {
     // An older machine, or one whose ACP is not allowed yet: no count.
   }
+}
+
+// ---------------------------------------------------------------- live links
+
+/** One saved machine and the ACP connection its supervisor currently holds. */
+export interface MachineLink {
+  machine: Machine;
+  connection: AcpConnection | null;
+}
+
+/** The connection to one machine, while it is open. */
+export function machineConnection(id: string): AcpConnection | null {
+  return links.get(id)?.connection ?? null;
+}
+
+/** Every saved machine with its connection, in the sidebar's order. */
+export function machineLinks(): MachineLink[] {
+  return useMachines.getState().machines.map((machine) => ({
+    machine,
+    connection: links.get(machine.id)?.connection ?? null,
+  }));
+}
+
+/**
+ * Hear when a machine's connection opens or drops. The store listens to route
+ * that machine's thread operations over its own connection (state/store.ts
+ * `connectionFor`), and to keep its threads listed while it is away.
+ */
+export function onMachineLinks(listener: (id: string, connection: AcpConnection | null) => void): () => void {
+  linkListeners.add(listener);
+  return () => linkListeners.delete(listener);
+}
+
+function announce(id: string, connection: AcpConnection | null): void {
+  for (const listener of linkListeners) listener(id, connection);
+}
+
+/** Re-read every connected machine's thread list (a window focus, a reconnect). */
+export function refreshMachineThreads(): void {
+  for (const [id, link] of links) if (link.connection) void readThreads(id, link.connection, link);
 }
 
 // ---------------------------------------------------------------- actions

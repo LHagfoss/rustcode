@@ -3,7 +3,7 @@
 // `machines_pair` put the page in. The shell is a stand-in that answers the
 // way `src-tauri/src/machines.rs` and the mock do.
 
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Transport } from "../acp/transport";
 import { setShellTransport } from "../lib/shell";
 import {
@@ -19,6 +19,7 @@ import {
   pairMachine,
   platformName,
   refreshMachines,
+  resetMachinesForTests,
   routeLabel,
   stateLabel,
   stateTone,
@@ -128,6 +129,13 @@ beforeEach(() => {
     pairing: null,
     pairingError: null,
   });
+});
+
+afterEach(() => {
+  // The machines and their channels are the module's, not this file's: another file's engine must
+  // not inherit them (`resetForTests` clears the same state when a file connects through the store).
+  resetMachinesForTests();
+  setShellTransport(null);
 });
 
 /** Wait for a state the page only learns after a round trip. */

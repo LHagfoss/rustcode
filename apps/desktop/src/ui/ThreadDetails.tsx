@@ -11,6 +11,7 @@ import { modelName } from "../acp/types";
 import { type GitChanges, gitChanges } from "../lib/native";
 import { selectOption } from "../state/harness";
 import { useApp, worktreeOf } from "../state/store";
+import { splitThreadKey } from "../state/threadKeys";
 import { delegateBranchCount } from "./DelegateTree";
 import { DelegatesSection } from "./OverviewDelegates";
 import { DeliverablesSection } from "./OverviewDeliverables";
@@ -123,6 +124,7 @@ export function ThreadDetails() {
         {pullsOn && (
           <PullRequestsSection
             cwd={project}
+            host={splitThreadKey(id).host}
             branches={branches}
             branch={branch}
             folded={isFolded("pulls")}

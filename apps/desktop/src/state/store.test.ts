@@ -30,7 +30,7 @@ import {
   type Link,
 } from "./orchestration";
 import { pendingRequestsOn } from "./pending";
-import { projectEntry, updateProjectEntry } from "./projects";
+import { projectEntry, updateProjectEntry } from "./projectBook";
 import { QUEUE_REASON } from "./queue";
 import {
   type AppState,
