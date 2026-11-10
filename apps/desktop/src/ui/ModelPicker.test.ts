@@ -1,9 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { BUILTIN_CAPABILITIES, type ConfigOption, type Harness } from "../acp/types";
 import {
+  type CardSize,
   clampEffort,
   dedupeModels,
   filterModelRows,
+  measureCard,
   modelDisplayName,
   modelProviderOf,
   modelThreadWrites,
@@ -423,5 +425,110 @@ describe("model picker navigation", () => {
     expect(pillLabel("Sonnet 5.5")).toBe("Sonnet 5.5");
     expect(pillLabel(null)).toBe("Default model");
     expect(pillLabel("claude-sonnet-5-5-long", true)).toBe("claude-sonnet…");
+  });
+});
+
+describe("measuring the card", () => {
+  const g = globalThis as Record<string, unknown>;
+  const saved = {
+    observer: g.ResizeObserver,
+    frame: g.requestAnimationFrame,
+    cancel: g.cancelAnimationFrame,
+  };
+
+  afterEach(() => {
+    g.ResizeObserver = saved.observer;
+    g.requestAnimationFrame = saved.frame;
+    g.cancelAnimationFrame = saved.cancel;
+  });
+
+  /** A stand-in for the browser's observer: it holds its callback until the test delivers a frame. */
+  function stubObservers() {
+    const frames = new Map<number, () => void>();
+    let nextFrame = 1;
+    const watched: { element: Element | null; notify: () => void; stopped: boolean }[] = [];
+    g.requestAnimationFrame = (callback: () => void) => {
+      const id = nextFrame++;
+      frames.set(id, callback);
+      return id;
+    };
+    g.cancelAnimationFrame = (id: number) => {
+      frames.delete(id);
+    };
+    g.ResizeObserver = class {
+      private readonly entry: { element: Element | null; notify: () => void; stopped: boolean };
+      constructor(callback: () => void) {
+        this.entry = { element: null, notify: callback, stopped: false };
+        watched.push(this.entry);
+      }
+      observe(element: Element) {
+        this.entry.element = element;
+      }
+      disconnect() {
+        this.entry.stopped = true;
+      }
+    };
+    /** The frames the observer asked for, run once each, as the browser would. */
+    const frame = () => {
+      for (const [id, callback] of [...frames]) {
+        frames.delete(id);
+        callback();
+      }
+    };
+    return { watched, frame };
+  }
+
+  /** A node whose box the test can change, as the card's own element reads to the browser. */
+  function node(size: { width: number; height: number }) {
+    const own = { ...size };
+    const element = {
+      getBoundingClientRect: () => ({ ...own, top: 0, left: 0, right: 0, bottom: 0, x: 0, y: 0 }),
+    };
+    return {
+      element: element as unknown as HTMLElement,
+      resize: (w: number, h: number) => Object.assign(own, { width: w, height: h }),
+    };
+  }
+
+  test("reports the node's size the moment it mounts, without a frame", () => {
+    stubObservers();
+    const sizes: CardSize[] = [];
+    const { element } = node({ width: 360, height: 320 });
+    measureCard(element, (size) => sizes.push(size));
+    // The card's first open is painted from this measurement, so it cannot wait for the observer.
+    expect(sizes).toEqual([{ width: 360, height: 320 }]);
+  });
+
+  test("reports a changed size on a frame of its own, not inside the observer's delivery", () => {
+    const { watched, frame } = stubObservers();
+    const sizes: CardSize[] = [];
+    const box = node({ width: 360, height: 320 });
+    measureCard(box.element, (size) => sizes.push(size));
+    box.resize(240, 209);
+    watched[0]!.notify();
+    // Writing the measured size inside the delivery is what the browser reports as a loop.
+    expect(sizes).toHaveLength(1);
+    frame();
+    expect(sizes[1]).toEqual({ width: 240, height: 209 });
+  });
+
+  test("stops when the node goes, so a closed card is not measured", () => {
+    const { watched } = stubObservers();
+    const sizes: CardSize[] = [];
+    const box = node({ width: 240, height: 209 });
+    const stop = measureCard(box.element, (size) => sizes.push(size));
+    stop();
+    expect(watched[0]!.stopped).toBe(true);
+    watched[0]!.notify();
+    expect(sizes).toHaveLength(1);
+  });
+
+  test("no node, no observer, and nothing to call back", () => {
+    const { watched } = stubObservers();
+    const stop = measureCard(null, () => {
+      throw new Error("a card that mounted nothing has nothing to report");
+    });
+    expect(watched).toHaveLength(0);
+    expect(() => stop()).not.toThrow();
   });
 });

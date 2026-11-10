@@ -9,7 +9,7 @@
 // glides between the two, anchored to the pill.
 
 import { Check, ChevronLeft, ChevronRight, ChevronUp, Lock, RotateCcw, UserRound, Zap } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   type ConfigOption,
   effortLabel,
@@ -20,6 +20,7 @@ import {
 } from "../acp/types";
 import { clip } from "../lib/clip";
 import { matchModels } from "../lib/modelSearch";
+import { observeSize } from "../lib/resize";
 import {
   controlDisabledReason,
   defaultEffort,
@@ -221,6 +222,31 @@ export function repeatedModelNames(models: Choice[]): Set<string> {
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
+}
+
+/** The card's own size in px: the step it shows, measured rather than guessed. */
+export interface CardSize {
+  width: number;
+  height: number;
+}
+
+/**
+ * Reports the size `node` has as soon as it is given one, and again whenever it changes, until the
+ * returned call. The card's step is in a portal Radix mounts after this component's own effects, so
+ * an effect on `open` runs before there is anything to measure: the card measures itself from its
+ * ref, which React calls exactly when the node mounts and with `null` when it goes.
+ */
+export function measureCard(node: HTMLElement | null, onSize: (size: CardSize) => void): () => void {
+  if (!node) return () => {};
+  const measure = () => {
+    const rect = node.getBoundingClientRect();
+    onSize({ width: rect.width, height: rect.height });
+  };
+  // The opening size is measured mid-commit, so it paints without the transition; later changes
+  // come from `observeSize`, which reports on a frame of its own rather than inside the observer's
+  // delivery (writing layout there is what raises a ResizeObserver loop warning).
+  measure();
+  return observeSize(node, measure);
 }
 
 /** One harness's models in the list, with what the list needs to offer them. */
@@ -985,32 +1011,26 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   // The card's own size: whatever step it shows, measured rather than guessed, so the two steps
   // (the wide list, the narrow effort menu) glide into each other instead of jumping. The size an
   // opening lands on is painted without the transition; only a step changing after it animates.
-  const body = useRef<HTMLDivElement>(null);
-  const [box, setBox] = useState<{ width: number; height: number } | null>(null);
+  const [box, setBox] = useState<CardSize | null>(null);
   const [gliding, setGliding] = useState(false);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the step's node mounts with the card, so `open` is what re-measures it
-  useLayoutEffect(() => {
-    const node = body.current;
+  const stopMeasuring = useRef<(() => void) | null>(null);
+  const glideFrame = useRef(0);
+  // The card's step mounts with the portal, after this component's own effects, so the measurement
+  // hangs off the node's ref instead of an effect on `open`: it starts when the node is there.
+  const measureBody = useCallback((node: HTMLDivElement | null) => {
+    stopMeasuring.current?.();
+    stopMeasuring.current = null;
+    cancelAnimationFrame(glideFrame.current);
     if (!node) return;
-    const measure = () => {
-      const rect = node.getBoundingClientRect();
+    stopMeasuring.current = measureCard(node, (size) =>
       setBox((current) =>
-        current && current.width === rect.width && current.height === rect.height
-          ? current
-          : { width: rect.width, height: rect.height },
-      );
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(node);
+        current && current.width === size.width && current.height === size.height ? current : size,
+      ),
+    );
     // Radix publishes the room it has a frame after the card mounts, and that first size is not a
     // step change: it is committed with the transition still off.
-    const frame = requestAnimationFrame(() => setGliding(true));
-    return () => {
-      cancelAnimationFrame(frame);
-      observer.disconnect();
-    };
-  }, [open]);
+    glideFrame.current = requestAnimationFrame(() => setGliding(true));
+  }, []);
 
   // Nothing to show until the engine lists harnesses (or the thread its options): a placeholder pill.
   if (!harnesses && !thread?.configOptions.length) {
@@ -1077,7 +1097,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
             would make the clipped card taller than the room it has, and nothing would scroll. Capped,
             the body hands the list the room left under the note, and the list scrolls in it. */}
         <div
-          ref={body}
+          ref={measureBody}
           style={{ maxHeight: CARD_MAX }}
           className="flex w-max max-w-[min(360px,calc(100vw-32px))] flex-col"
         >
