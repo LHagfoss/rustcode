@@ -54,6 +54,16 @@ pub const MANAGE_QUEUE: &str = "manage_queue";
 pub const THREAD_STATUS: &str = "thread_status";
 pub const MERGE_WHEN_GREEN: &str = "merge_when_green";
 pub const CLEANUP_WORKTREE: &str = "cleanup_worktree";
+/// Version 10: the user's projects, and the scheduler daemon's work.
+pub const READ_PROJECT: &str = "read_project";
+pub const CREATE_PROJECT: &str = "create_project";
+pub const CLONE_PROJECT: &str = "clone_project";
+pub const UPDATE_PROJECT: &str = "update_project";
+pub const REMOVE_PROJECT: &str = "remove_project";
+pub const SCHEDULE_TASK: &str = "schedule_task";
+pub const LIST_SCHEDULED_TASKS: &str = "list_scheduled_tasks";
+pub const DELETE_SCHEDULED_TASK: &str = "delete_scheduled_task";
+pub const RUN_SCHEDULED_TASK_NOW: &str = "run_scheduled_task_now";
 /// The M1 tools, what a client advertising version 1 gets.
 pub const TOOL_NAMES: [&str; 3] = [LIST_SESSIONS, MESSAGE_SESSION, WAIT_SESSION];
 /// Added by version 2.
@@ -79,8 +89,22 @@ pub const V6_TOOL_NAMES: [&str; 1] = [READ_ACTIVITY];
 pub const V7_TOOL_NAMES: [&str; 1] = [MANAGE_QUEUE];
 /// Added by version 9: a delegate's pull request, merging and cleanup.
 pub const V9_TOOL_NAMES: [&str; 3] = [THREAD_STATUS, MERGE_WHEN_GREEN, CLEANUP_WORKTREE];
+/// Added by version 10: the user's projects and the daemon's scheduled work.
+pub const V10_TOOL_NAMES: [&str; 9] = [
+    READ_PROJECT,
+    CREATE_PROJECT,
+    CLONE_PROJECT,
+    UPDATE_PROJECT,
+    REMOVE_PROJECT,
+    SCHEDULE_TASK,
+    LIST_SCHEDULED_TASKS,
+    DELETE_SCHEDULED_TASK,
+    RUN_SCHEDULED_TASK_NOW,
+];
 /// The newest version this engine speaks.
-pub const VERSION: u8 = 9;
+pub const VERSION: u8 = 10;
+/// What `schedule_task` may ask the scheduler for.
+pub const SCHEDULE_KINDS: [&str; 2] = ["cron", "at"];
 /// Version 5 adds named account targeting to the existing `start_session` and
 /// `fan_out` args. No tool is added, but a client that advertised less never
 /// sees the `account` field and has it refused, so an older app cannot quietly
@@ -171,6 +195,10 @@ pub const PROMPT_HINT_V8: &str = "\n\nRustCode's threads: `list_sessions`, `sear
 /// [`PROMPT_HINT_V8`] for version 9 clients, which can finish a delegate's work.
 pub const PROMPT_HINT_V9: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. `thread_status` reports a delegate's worktree, branch, pull request and checks; `merge_when_green` merges it once green; `cleanup_worktree` removes its worktree and branch and settles it. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those, merge and cleanup change other threads, so do them only when the user asks; the user approves. Stay lean: every call resends this thread's context, so leave reading code, diffs, logs and CI to delegates, and check their pull requests with `thread_status`. Wait on all links in one `wait_session` with `link_ids`, or end the turn: the app wakes this thread when a child finishes. Call `list_harnesses` once.";
 
+/// [`PROMPT_HINT_V9`] for version 10 clients, which can manage projects and
+/// the scheduler daemon's work.
+pub const PROMPT_HINT_V10: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. `thread_status` reports a delegate's worktree, branch, pull request and checks; `merge_when_green` merges it once green; `cleanup_worktree` removes its worktree and branch and settles it. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those, merge and cleanup change other threads, so do them only when the user asks; the user approves. Stay lean: every call resends this thread's context, so leave reading code, diffs, logs and CI to delegates, and check their pull requests with `thread_status`. Wait on all links in one `wait_session` with `link_ids`, or end the turn: the app wakes this thread when a child finishes. Call `list_harnesses` once. Projects: `read_project` reads a folder's git remote, branch and default branch; `create_project` registers a folder (an empty one gets `git init`), `clone_project` clones a URL into a parent folder, `update_project` sets a project's display name or the harness and model new threads in it start on, and `remove_project` unregisters one without deleting any files. Scheduled work: `schedule_task` adds a prompt that runs on a cron expression or once at an ISO time, `list_scheduled_tasks`, `delete_scheduled_task` and `run_scheduled_task_now` manage what the scheduler daemon holds; the daemon is `rustcode daemon start`, and without it nothing runs. Do both only when the user asks; the user approves.";
+
 /// The prompt hint a client of `version` gets.
 pub fn prompt_hint(version: u8) -> &'static str {
     match version {
@@ -183,7 +211,8 @@ pub fn prompt_hint(version: u8) -> &'static str {
         6 => PROMPT_HINT_V6,
         7 => PROMPT_HINT_V7,
         8 => PROMPT_HINT_V8,
-        _ => PROMPT_HINT_V9,
+        9 => PROMPT_HINT_V9,
+        _ => PROMPT_HINT_V10,
     }
 }
 
@@ -196,6 +225,7 @@ pub fn is_tool(name: &str) -> bool {
         || V6_TOOL_NAMES.contains(&name)
         || V7_TOOL_NAMES.contains(&name)
         || V9_TOOL_NAMES.contains(&name)
+        || V10_TOOL_NAMES.contains(&name)
 }
 
 /// Whether `name` needs a version 2 client.
@@ -226,6 +256,11 @@ pub fn is_v7_tool(name: &str) -> bool {
 /// Whether `name` needs a version 9 client (delegate pull requests and cleanup).
 pub fn is_v9_tool(name: &str) -> bool {
     V9_TOOL_NAMES.contains(&name)
+}
+
+/// Whether `name` needs a version 10 client (projects and scheduled tasks).
+pub fn is_v10_tool(name: &str) -> bool {
+    V10_TOOL_NAMES.contains(&name)
 }
 
 /// The tools a client of `version` gets, in order.
@@ -266,9 +301,14 @@ pub fn tool_names(version: u8) -> Vec<&'static str> {
         }
         // Version 8 adds native-subagent guidance to the hint, not another tool.
         8 => tool_names(7),
-        _ => {
+        9 => {
             let mut names = tool_names(8);
             names.extend(V9_TOOL_NAMES);
+            names
+        }
+        _ => {
+            let mut names = tool_names(9);
+            names.extend(V10_TOOL_NAMES);
             names
         }
     }
@@ -466,6 +506,16 @@ fn optional_title(args: &Value) -> Result<(), String> {
     }
 }
 
+/// `path`: the absolute folder of an existing project, which every project
+/// tool names.
+fn absolute_project(args: &Value) -> Result<(), String> {
+    match args.get("path") {
+        Some(Value::String(path)) if std::path::Path::new(path).is_absolute() => Ok(()),
+        Some(Value::String(_)) => Err("path must be an absolute folder".to_owned()),
+        _ => Err("path is required".to_owned()),
+    }
+}
+
 /// Check the arguments before they leave the engine.
 pub fn validate(name: &str, args: &Value) -> Result<(), String> {
     match name {
@@ -657,6 +707,68 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             required_name(args, "session_id")?;
             optional_flag(args, "settle")
         }
+        READ_PROJECT | REMOVE_PROJECT => absolute_project(args),
+        CREATE_PROJECT => {
+            absolute_project(args)?;
+            optional_flag(args, "init")
+        }
+        CLONE_PROJECT => {
+            required_name(args, "url")?;
+            match args.get("parent") {
+                None | Some(Value::Null) => Ok(()),
+                Some(Value::String(path)) if std::path::Path::new(path).is_absolute() => Ok(()),
+                Some(_) => Err("parent must be an absolute folder".to_owned()),
+            }?;
+            optional_name(args, "name")
+        }
+        UPDATE_PROJECT => {
+            absolute_project(args)?;
+            for key in ["name", "harness", "model"] {
+                optional_name(args, key)?;
+            }
+            if !["name", "harness", "model"]
+                .iter()
+                .any(|key| !matches!(args.get(*key), None | Some(Value::Null)))
+            {
+                return Err("give at least one of name, harness or model".to_owned());
+            }
+            Ok(())
+        }
+        SCHEDULE_TASK => {
+            bounded_text(args, "prompt")?;
+            optional_name(args, "name")?;
+            optional_name(args, "model_profile")?;
+            match args.get("project") {
+                None | Some(Value::Null) => {}
+                Some(Value::String(path)) if std::path::Path::new(path).is_absolute() => {}
+                Some(_) => return Err("project must be an absolute path".to_owned()),
+            }
+            let Some(schedule) = args.get("schedule").filter(|value| value.is_object()) else {
+                return Err("schedule is required".to_owned());
+            };
+            match schedule.get("kind").and_then(Value::as_str) {
+                Some(kind) if SCHEDULE_KINDS.contains(&kind) => {}
+                _ => return Err(format!("schedule.kind must be one of {SCHEDULE_KINDS:?}")),
+            }
+            match schedule.get("expression") {
+                None | Some(Value::Null) => {}
+                Some(Value::String(expression)) if expression.split_whitespace().count() == 5 => {}
+                Some(_) => {
+                    return Err(
+                        "schedule.expression must be a five-field cron expression".to_owned()
+                    );
+                }
+            }
+            match schedule.get("at") {
+                None | Some(Value::Null) => Ok(()),
+                Some(Value::String(at)) if chrono::DateTime::parse_from_rfc3339(at).is_ok() => {
+                    Ok(())
+                }
+                Some(_) => Err("schedule.at must be an ISO 8601 time with its offset".to_owned()),
+            }
+        }
+        LIST_SCHEDULED_TASKS => Ok(()),
+        DELETE_SCHEDULED_TASK | RUN_SCHEDULED_TASK_NOW => required_name(args, "id"),
         START_SESSION => {
             bounded_text(args, "prompt")?;
             optional_title(args)?;
@@ -972,7 +1084,7 @@ mod tests {
         assert_eq!(version(json!({"rustcode": {"orchestration": 1}})), 1);
         assert_eq!(version(json!({"rustcode": {"orchestration": 2}})), 2);
         // A newer client gets what this engine speaks.
-        assert_eq!(version(json!({"rustcode": {"orchestration": 9}})), VERSION);
+        assert_eq!(version(json!({"rustcode": {"orchestration": 12}})), VERSION);
         assert_eq!(version(json!({"rustcode": {"preview": 1}})), 0);
         assert_eq!(client_meta_version(None), 0);
     }
@@ -1009,7 +1121,7 @@ mod tests {
 
     #[test]
     fn version_four_adds_the_data_store_tools_only_for_its_clients() {
-        assert_eq!(VERSION, 9);
+        assert_eq!(VERSION, 10);
         let v3 = tool_names(3);
         assert!(v3.iter().all(|name| !is_v4_tool(name)), "{v3:?}");
         let v4 = tool_names(4);
@@ -1029,11 +1141,25 @@ mod tests {
             tool_names(9),
             [tool_names(8), V9_TOOL_NAMES.to_vec()].concat()
         );
+        // Version 10 adds the projects and the scheduler's work.
         assert_eq!(
             tool_names(10),
-            tool_names(9),
+            [tool_names(9), V10_TOOL_NAMES.to_vec()].concat()
+        );
+        assert_eq!(
+            tool_names(11),
+            tool_names(10),
             "a newer client gets what this engine speaks"
         );
+        for name in V10_TOOL_NAMES {
+            assert!(is_tool(name) && is_v10_tool(name), "{name}");
+            assert!(
+                !is_v9_tool(name) && !tool_names(9).contains(&name),
+                "{name} is v10 only"
+            );
+            assert!(PROMPT_HINT_V10.contains(name), "{name}");
+            assert!(!PROMPT_HINT_V9.contains(name), "{name} is v10 only");
+        }
         for name in [THREAD_USAGE, QUERY_DATA] {
             assert!(is_tool(name) && is_v4_tool(name));
             assert!(PROMPT_HINT_V4.contains(name), "{name}");
@@ -1081,19 +1207,19 @@ mod tests {
         assert_eq!(prompt_hint(7), PROMPT_HINT_V7);
         assert_eq!(prompt_hint(8), PROMPT_HINT_V8);
         assert_eq!(prompt_hint(9), PROMPT_HINT_V9);
-        assert_eq!(prompt_hint(10), PROMPT_HINT_V9);
+        assert_eq!(prompt_hint(10), PROMPT_HINT_V10);
         assert_eq!(prompt_hint(0), "");
         // Accounts arrived in 5: a v4 hint promises nothing it cannot do.
         assert!(!PROMPT_HINT_V4.contains("account"));
         assert!(PROMPT_HINT_V5.contains("account"));
         assert_eq!(
             client_meta_version(Some(
-                &json!({"rustcode": {"orchestration": 9}})
+                &json!({"rustcode": {"orchestration": 10}})
                     .as_object()
                     .cloned()
                     .unwrap()
             )),
-            9
+            10
         );
         assert_eq!(
             client_meta_version(Some(
@@ -1110,7 +1236,7 @@ mod tests {
         // activity read, v7 the queue control, v8 that native subagents go
         // through RustCode's tools, v9 a delegate's pull request.
 
-        let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V9);
+        let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V10);
         println!(
             "prompt hints: v3 {} tokens, v4 {} tokens, v5 {} tokens, v6 {} tokens, v9 {tokens} tokens",
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V3),
@@ -1121,7 +1247,7 @@ mod tests {
         // v9 adds the three delegate pull-request tools, all named with their use,
         // and how an orchestrator keeps its own context small: those few lines
         // save far more than they cost on each request.
-        assert!(tokens < 540, "{tokens}");
+        assert!(tokens < 700, "{tokens}");
     }
 
     #[test]
@@ -1172,6 +1298,78 @@ mod tests {
             ),
             deadline
         );
+    }
+
+    #[test]
+    fn project_and_scheduled_task_arguments_are_checked() {
+        let ok = |name: &str, args: Value| validate(name, &args).is_ok();
+        assert!(ok(READ_PROJECT, json!({"path": "/abs/project"})));
+        assert!(!ok(READ_PROJECT, json!({"path": "project"})));
+        assert!(!ok(READ_PROJECT, json!({})));
+        assert!(ok(
+            CREATE_PROJECT,
+            json!({"path": "/abs/new", "init": false})
+        ));
+        assert!(!ok(
+            CREATE_PROJECT,
+            json!({"path": "/abs/new", "init": "yes"})
+        ));
+        assert!(ok(CLONE_PROJECT, json!({"url": "git@github.com:o/r.git"})));
+        assert!(ok(
+            CLONE_PROJECT,
+            json!({"url": "git@github.com:o/r.git", "parent": "/abs/code", "name": "r"})
+        ));
+        assert!(!ok(CLONE_PROJECT, json!({"url": " "})));
+        assert!(!ok(
+            CLONE_PROJECT,
+            json!({"url": "git@github.com:o/r.git", "parent": "code"})
+        ));
+        assert!(ok(
+            UPDATE_PROJECT,
+            json!({"path": "/abs/p", "name": "RustCode"})
+        ));
+        assert!(ok(
+            UPDATE_PROJECT,
+            json!({"path": "/abs/p", "model": "opus"})
+        ));
+        assert!(!ok(UPDATE_PROJECT, json!({"path": "/abs/p"})));
+        assert!(ok(REMOVE_PROJECT, json!({"path": "/abs/p"})));
+
+        let task = json!({
+            "prompt": "Check the build",
+            "schedule": {"kind": "cron", "expression": "0 9 * * 1-5", "timezone": "Europe/Oslo"},
+            "project": "/abs/project",
+        });
+        assert!(ok(SCHEDULE_TASK, task.clone()));
+        assert!(ok(
+            SCHEDULE_TASK,
+            json!({"prompt": "Once", "schedule": {"kind": "at", "at": "2026-03-04T09:30:00+01:00"}})
+        ));
+        assert!(!ok(
+            SCHEDULE_TASK,
+            json!({"schedule": task["schedule"].clone()})
+        ));
+        assert!(!ok(
+            SCHEDULE_TASK,
+            json!({"prompt": "Check", "schedule": {"kind": "daily", "hour": 9}})
+        ));
+        assert!(!ok(
+            SCHEDULE_TASK,
+            json!({"prompt": "Check", "schedule": {"kind": "cron", "expression": "0 9 * *"}})
+        ));
+        assert!(!ok(
+            SCHEDULE_TASK,
+            json!({"prompt": "Check", "schedule": {"kind": "at", "at": "tomorrow"}})
+        ));
+        assert!(!ok(
+            SCHEDULE_TASK,
+            json!({"prompt": "Check", "schedule": {"kind": "at", "at": "2026-03-04T09:30:00+01:00"}, "project": "relative"})
+        ));
+        assert!(ok(LIST_SCHEDULED_TASKS, json!({})));
+        assert!(ok(DELETE_SCHEDULED_TASK, json!({"id": "task-1"})));
+        assert!(!ok(DELETE_SCHEDULED_TASK, json!({})));
+        assert!(ok(RUN_SCHEDULED_TASK_NOW, json!({"id": "task-1"})));
+        assert!(!ok(RUN_SCHEDULED_TASK_NOW, json!({"id": " "})));
     }
 
     #[test]

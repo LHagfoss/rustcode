@@ -3219,6 +3219,85 @@ export class MockEngine {
             ],
           },
         };
+      case "_rustcode/project/read": {
+        // The engine's `_rustcode/project/read`: a folder's git facts.
+        const path = str(obj(params)?.path) || "/Users/me/code/rustcode";
+        return {
+          path,
+          name: path.split("/").filter(Boolean).pop() ?? path,
+          is_git: true,
+          remote: "https://github.com/LHagfoss/rustcode.git",
+          branch: "main",
+          default_branch: "main",
+        };
+      }
+      case "_rustcode/project/create": {
+        const path = str(obj(params)?.path) || "/Users/me/code/new-project";
+        const init = obj(params)?.init !== false;
+        return {
+          path,
+          name: path.split("/").filter(Boolean).pop() ?? path,
+          is_git: init,
+          remote: null,
+          branch: init ? "main" : null,
+          default_branch: init ? "main" : null,
+          created: true,
+          initialized: init,
+        };
+      }
+      case "_rustcode/project/clone": {
+        const ask = obj(params) ?? {};
+        const parent = str(ask.parent) || "/Users/me/code";
+        const name =
+          str(ask.name) ||
+          String(str(ask.url) ?? "cloned")
+            .replace(/\/+$/, "")
+            .split(/[/:]/)
+            .pop()!
+            .replace(/\.git$/, "");
+        return {
+          path: `${parent}/${name}`,
+          name,
+          is_git: true,
+          remote: str(ask.url) ?? null,
+          branch: "main",
+          default_branch: "main",
+          created: true,
+        };
+      }
+      case "_rustcode/scheduled/list":
+        return {
+          daemon_running: true,
+          tasks: [
+            {
+              id: "task-morning",
+              name: "Morning build check",
+              paused: false,
+              schedule: { kind: "cron", expression: "0 9 * * 1-5", timezone: "Europe/Oslo" },
+              workspace: "/Users/me/code/rustcode",
+              next_due_at: new Date(new Date().setHours(9, 0, 0, 0) + 86_400_000).toISOString(),
+            },
+          ],
+        };
+      case "_rustcode/scheduled/create": {
+        const ask = obj(params) ?? {};
+        const prompt = str(ask.prompt) ?? "Scheduled work";
+        return {
+          daemon_running: true,
+          task: {
+            id: `task-${this.counter}`,
+            name: str(ask.name) || prompt.split("\n")[0]!.slice(0, 60),
+            paused: false,
+            schedule: ask.schedule ?? { kind: "cron", expression: "0 9 * * *" },
+            workspace: str(ask.workspace) ?? "",
+            next_due_at: new Date(Date.now() + 86_400_000).toISOString(),
+          },
+        };
+      }
+      case "_rustcode/scheduled/delete":
+        return { id: str(obj(params)?.id) ?? "", deleted: true };
+      case "_rustcode/scheduled/run":
+        return { id: str(obj(params)?.id) ?? "", state: "claimed" };
       case "_rustcode/pulls/state": {
         const branch = str(obj(params)?.branch) || "feat/delegate-pull";
         return {

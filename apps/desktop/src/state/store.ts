@@ -180,6 +180,7 @@ import {
 import { clearPageCache } from "./pageCache";
 import { autoAnswer, effectiveMode, type PermissionMode, parsePermissionMode } from "./permissions";
 import { NO_PAUSES, type PlanPauses, type PlansAsk, pausesAfter, plansAskFor, queueAsks } from "./plans";
+import { projectChoice } from "./projects";
 import {
   nextQueued,
   QUEUE_REASON,
@@ -2095,6 +2096,26 @@ export function newThreadChoice(s: Pick<AppState, "newThread" | "harnesses">): N
 }
 
 /**
+ * The new-thread choice a project set for `cwd`: a harness that can run now,
+ * on the project's model when that harness offers it. A folder with no
+ * project default, or one whose harness is turned off or signed out, starts a
+ * thread the way every other folder does; a harness the user picked wins.
+ */
+export function projectThreadChoice(
+  s: Pick<AppState, "newThread" | "harnesses">,
+  cwd: string,
+): NewThreadChoice | null {
+  if (s.newThread || !s.harnesses) return null;
+  const { harness, model } = projectChoice(cwd);
+  if (!harness) return null;
+  const found = s.harnesses.harnesses.find((h) => h.id === harness);
+  if (!found || unavailableReason(found)) return null;
+  const restored = restoreChoice(s.harnesses, harness);
+  const offered = !!model && (!found.models.length || found.models.some((m) => m.id === model));
+  return { ...restored, model: offered ? model : restored.model };
+}
+
+/**
  * Creates a thread with the new-thread choice (or the default harness) and worktree toggle, and
  * selects it. `session/new` starts a harness there (and a worktree, when the toggle is on), which
  * takes a moment: the setup, with the message and its attachments, is shown before it is asked for,
@@ -2146,7 +2167,7 @@ function newWorktreeFor(
  */
 async function startSetup(setup: PendingSetup): Promise<string | null> {
   const s = get();
-  const choice = newThreadChoice(s);
+  const choice = projectThreadChoice(s, setup.cwd) ?? newThreadChoice(s);
   // The login follows the choice `session/new` is given, not a draft it fell back from.
   const harness = s.harnesses?.harnesses.find((h) => h.id === choice?.harness);
   let id: string;

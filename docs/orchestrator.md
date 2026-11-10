@@ -919,6 +919,66 @@ writing the same path overwrote each other's pull request bodies (#3143,
 The app advertises 9 from `CAPABILITY_VERSION` (`state/orchestration.ts`),
 and a v8 app keeps exactly the v8 set and `PROMPT_HINT_V8`.
 
+## Orchestration tools v10
+
+Built. Clients advertising `_meta.rustcode.orchestration >= 10` also get the
+user's projects and the scheduler daemon's work. The version is bumped for the
+same reason as v4, v6, v7 and v9: the app asks the user and carries the call
+out, and a v9 app has neither the code nor the engine methods.
+
+| Tool | Args | Answer | Approval |
+| --- | --- | --- | --- |
+| `read_project` | `{ path }` | `{ project: { path, name, is_git, remote?, branch?, default_branch?, threads, working, harness?, model?, registered } }` | None: a read, of this project or any while **Let agents read threads in other projects** is on |
+| `create_project` | `{ path, init? }` — `init` is true by default | `{ project: { …, created, initialized } }`: an existing folder is registered, a missing one is made, and a folder that is not a repository gets `git init` unless `init: false` | Asked, allowed by Full access, grant `project:<path>` |
+| `clone_project` | `{ url, parent?, name? }` | `{ project: { …, created: true } }`; a ten-minute `git clone`, then the folder is registered | Asked, allowed by Full access, grant `project:clone:<url>` |
+| `update_project` | `{ path, name?, harness?, model? }`, at least one | `{ project: { path, name, harness?, model? } }` | Asked, allowed by Full access, grant `project:<path>` |
+| `remove_project` | `{ path }` | `{ path, removed: true, known, files_deleted: false }` | Asked, allowed by Full access, grant `remove-project:<path>` |
+| `schedule_task` | `{ prompt, schedule, project?, name?, model_profile? }` — `schedule` is `{ kind: "cron", expression, timezone? }` or `{ kind: "at", at }` (ISO 8601 with its offset) | `{ daemon_running: true, task: { id, name, paused, schedule, workspace, next_due_at } }`; the prompt is never echoed back | Asked, allowed by Full access, grant `schedule:new` |
+| `list_scheduled_tasks` | none | `{ daemon_running, tasks: [{ id, name, paused, schedule, workspace, next_due_at }], omitted_tasks? }`, at most 100. `daemon_running: false` means nothing will run until `rustcode daemon start` | None |
+| `delete_scheduled_task` | `{ id }` | `{ id, deleted: true }` | Asked, allowed by Full access, grant `schedule:delete:<id>` |
+| `run_scheduled_task_now` | `{ id }` | `{ id, state }` (`claimed`, …), with the schedule left as it is | Asked, allowed by Full access, grant `schedule:run:<id>` |
+
+A project is still what v3 says it is — the repository a thread runs for — so
+a project tool never invents a second table. `list_projects` counts threads and
+sorts by when they last moved; the app keeps the rest in app storage
+(`state/projects.ts`): a display name, the harness and model new threads in
+that folder start on, and folders registered before any thread runs there, so
+`create_project` and `clone_project` land in `list_projects` with `threads: 0`.
+The display name is what the sidebar's project group says
+(`projectLabel`), and the harness and model are applied by `projectThreadChoice`
+when a thread is created in that folder — a harness that is turned off or
+signed out falls back to the usual default rather than failing the start.
+`remove_project` only forgets the entry: the folder, every file in it and its
+threads stay, and the description says so.
+
+The engine does the filesystem work, since the app is a web view with none:
+`_rustcode/project/read`, `_rustcode/project/create` and
+`_rustcode/project/clone` (`engine/src/acp/projects.rs`) read git
+(`remote get-url origin`, the branch `HEAD` is on, `origin/HEAD` else `main`
+then `master`) and run `git clone` through the same `worktrees::git` the
+worktree tools use, bounded at ten minutes. `read_project` is refused for
+another project while the setting is off, like the other reads; the four
+changing tools ask first.
+
+Scheduled work goes through `_rustcode/scheduled/list|create|delete|run`
+(`engine/src/acp/scheduled.rs`) and the daemon client `rustcode cron` and
+`manage_scheduled_jobs` already use (`docs/daemon.md`): there is no second
+scheduler, and the jobs are the same store the CLI lists. A job is created as
+a `prompt` action on the built-in harness (`raw_cli::build_scheduled_state`),
+which is why `harness`, `account` and per-task model choice are not arguments:
+a schedule that ran on an external harness would need that harness's process,
+which the daemon does not own. `model_profile` names a config profile, as the
+CLI's `--action` does. A cron with no `timezone` is read in the user's own zone,
+which the app fills in from `Intl.DateTimeFormat().resolvedOptions().timeZone`
+before the call; a machine-only caller gets the engine's guess (`TZ`, else
+`/etc/localtime`, else UTC). An `at` time is ISO 8601 with its offset, so it is
+never ambiguous. Nothing starts the daemon: `list_scheduled_tasks` answers
+`daemon_running: false` and the three changing calls refuse with "run
+`rustcode daemon start`".
+
+The app advertises 10 from `CAPABILITY_VERSION` (`state/orchestration.ts`),
+and a v9 app keeps exactly the v9 set and `PROMPT_HINT_V9`.
+
 ## External harnesses as orchestrators
 
 Built (`rustcode/engine/src/orchestration/{hub,mcp_server}.rs`). When the
@@ -999,10 +1059,11 @@ can inject the server (unix), and in a thread's answer whether it did.
 engine does both); a thread's answer sets `checkpoints` to whether its cwd is
 in a git repository. `initialize` also advertises `_meta.rustcode.worktrees`,
 `checkpoints` and `threadStatus` (each `1`). The app advertises
-`_meta.rustcode.orchestration = 9` while threads may orchestrate
+`_meta.rustcode.orchestration = 10` while threads may orchestrate
 (`state/orchestration.ts` `CAPABILITY_VERSION`), and the newest client gets the
-v4 data-store tools, the v6 activity read, the v7 queue control and the v9
-delegate pull-request tools; v8 adds no tool, only its prompt hint.
+v4 data-store tools, the v6 activity read, the v7 queue control, the v9
+delegate pull-request tools and the v10 project and scheduled-task tools; v8
+adds no tool, only its prompt hint.
 
 ## Keeping an orchestrator's context small
 

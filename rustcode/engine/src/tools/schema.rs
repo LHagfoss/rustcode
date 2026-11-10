@@ -159,6 +159,9 @@ pub struct ToolSchemaPolicy {
     /// `manage_queue`, for a client that advertises orchestration version 7.
     pub(crate) include_orchestration_v7_tools: bool,
     pub(crate) include_orchestration_v9_tools: bool,
+    /// `read_project` and the other project tools, plus the scheduler's four,
+    /// for a client that advertises orchestration version 10.
+    pub(crate) include_orchestration_v10_tools: bool,
     /// What the client advertised, capped at [`crate::orchestration::VERSION`]:
     /// the tool set follows the flags above, and the args follow this one.
     pub(crate) orchestration_version: u8,
@@ -228,6 +231,7 @@ impl ToolSchemaPolicy {
             include_orchestration_v6_tools: false,
             include_orchestration_v7_tools: false,
             include_orchestration_v9_tools: false,
+            include_orchestration_v10_tools: false,
             orchestration_version: 0,
             profile: ToolSchemaProfile::Coding,
             compact_text_prompt: false,
@@ -257,6 +261,7 @@ impl ToolSchemaPolicy {
             include_orchestration_v6_tools: false,
             include_orchestration_v7_tools: false,
             include_orchestration_v9_tools: false,
+            include_orchestration_v10_tools: false,
             orchestration_version: 0,
             profile: ToolSchemaProfile::ReadOnlyInspection,
             compact_text_prompt: false,
@@ -279,6 +284,7 @@ impl ToolSchemaPolicy {
             include_orchestration_v6_tools: false,
             include_orchestration_v7_tools: false,
             include_orchestration_v9_tools: false,
+            include_orchestration_v10_tools: false,
             orchestration_version: 0,
             profile: ToolSchemaProfile::ReadOnlySubagent,
             compact_text_prompt: false,
@@ -338,6 +344,7 @@ impl ToolSchemaPolicy {
         self.include_orchestration_v6_tools = self.include_orchestration_tools && version >= 6;
         self.include_orchestration_v7_tools = self.include_orchestration_tools && version >= 7;
         self.include_orchestration_v9_tools = self.include_orchestration_tools && version >= 9;
+        self.include_orchestration_v10_tools = self.include_orchestration_tools && version >= 10;
         self.orchestration_version = version.min(crate::orchestration::VERSION);
         self
     }
@@ -886,6 +893,15 @@ const ROOT_ONLY_TOOLS: &[&str] = &[
     crate::orchestration::THREAD_STATUS,
     crate::orchestration::MERGE_WHEN_GREEN,
     crate::orchestration::CLEANUP_WORKTREE,
+    crate::orchestration::READ_PROJECT,
+    crate::orchestration::CREATE_PROJECT,
+    crate::orchestration::CLONE_PROJECT,
+    crate::orchestration::UPDATE_PROJECT,
+    crate::orchestration::REMOVE_PROJECT,
+    crate::orchestration::SCHEDULE_TASK,
+    crate::orchestration::LIST_SCHEDULED_TASKS,
+    crate::orchestration::DELETE_SCHEDULED_TASK,
+    crate::orchestration::RUN_SCHEDULED_TASK_NOW,
 ];
 
 /// Whether a read-only child agent's gate runs `tool`, so it is worth
@@ -932,6 +948,7 @@ fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
         || (crate::orchestration::is_v6_tool(tool.name) && !policy.include_orchestration_v6_tools)
         || (crate::orchestration::is_v7_tool(tool.name) && !policy.include_orchestration_v7_tools)
         || (crate::orchestration::is_v9_tool(tool.name) && !policy.include_orchestration_v9_tools)
+        || (crate::orchestration::is_v10_tool(tool.name) && !policy.include_orchestration_v10_tools)
         || (policy.compact_text_prompt
             && !TEXT_CODING_TOOLS.contains(&tool.name)
             && !(policy.include_agent_tools

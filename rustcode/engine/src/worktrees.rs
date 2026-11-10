@@ -133,6 +133,12 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     git_with(dir, args, &[], Duration::from_secs(60))
 }
 
+/// A git call with its own wait: `git clone` of a large repository takes
+/// minutes, where a status or a rev-parse takes a moment.
+pub(crate) fn git_timed(dir: &Path, args: &[&str], timeout: Duration) -> Result<String, String> {
+    git_with(dir, args, &[], timeout)
+}
+
 /// A lookup that only reads (which repository a folder belongs to) runs off
 /// the create/remove path, so it must never hold a caller for long.
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);

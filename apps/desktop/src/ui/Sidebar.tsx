@@ -72,6 +72,7 @@ import { liveSubagents, type StackAgent } from "../state/agentStack";
 import { type BranchRow, branchKindOf, branchRows } from "../state/branches";
 import { type ChildInfo, childInfo } from "../state/children";
 import { stateOf } from "../state/host";
+import { projectLabel } from "../state/projects";
 import {
   cachedPulls,
   loadPulls,
@@ -1756,7 +1757,7 @@ export function Sidebar() {
       byProject && byKey.size > 1
         ? [...byKey.entries()].map(([key, items]) => ({
             key,
-            label: key ? projectName(key) : "No folder",
+            label: key ? projectLabel(key) : "No folder",
             items,
           }))
         : undefined;

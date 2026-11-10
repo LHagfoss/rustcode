@@ -30,6 +30,7 @@ import {
   type Link,
 } from "./orchestration";
 import { pendingRequestsOn } from "./pending";
+import { projectEntry, updateProjectEntry } from "./projects";
 import { QUEUE_REASON } from "./queue";
 import {
   type AppState,
@@ -82,6 +83,7 @@ import {
   planKeyFor,
   planNow,
   plansToCache,
+  projectThreadChoice,
   prunePanels,
   prunePlans,
   quoteMessage,
@@ -5028,5 +5030,149 @@ describe("a delegate whose turn failed", () => {
     expect(target in useApp.getState().failed).toBe(true);
     await setThreadStatus(target, "done");
     expect(target in useApp.getState().failed).toBe(false);
+  });
+});
+
+describe("projects and scheduled work", () => {
+  /** A ready app with a caller thread, and a call answered as the engine would answer it. */
+  async function ready() {
+    setOrchestration(true);
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+    const session = useApp.getState().sessions[0]!;
+    const call = (tool: string, args: JsonObject) =>
+      answerOrchestration({ sessionId: session.id, tool, args });
+    return { caller: session.id, folder: session.cwd ?? "", call };
+  }
+
+  test("a project reads without asking, and every change is asked first", async () => {
+    // The project book lives in app storage, as the app's own settings do.
+    const storage = testStorage();
+    try {
+      const { caller, folder, call } = await ready();
+      const read = await call("read_project", { path: folder });
+      expect(useApp.getState().grant).toBeNull();
+      expect(read.project).toMatchObject({
+        path: folder,
+        is_git: true,
+        remote: "https://github.com/LHagfoss/rustcode.git",
+        default_branch: "main",
+      });
+
+      const path = "/tmp/rc-project-book";
+      const creating = call("create_project", { path });
+      await until(() => useApp.getState().grant !== null);
+      expect(useApp.getState().grant).toMatchObject({ kind: "project", target: path });
+      resolveGrant("once");
+      const created = await creating;
+      expect((created.project as JsonObject).path).toBe(path);
+      expect(projectEntry(path)?.registeredAt).toBeGreaterThan(0);
+      // A folder registered before its first thread is listed, with none.
+      const listed = await call("list_projects", {});
+      const entries = listed.projects as { path: string; threads: number }[];
+      expect(entries.find((p) => p.path === path)?.threads).toBe(0);
+
+      const updating = call("update_project", { path, name: "Book", harness: "rustcode" });
+      await until(() => useApp.getState().grant !== null);
+      expect(useApp.getState().grant?.detail).toContain("Book");
+      resolveGrant("once");
+      const updated = await updating;
+      expect(updated.project).toMatchObject({ path, name: "Book", harness: "rustcode" });
+      // A harness the app does not have is refused without a card.
+      const unknown = await call("update_project", { path, harness: "nope" });
+      expect((unknown.error as { code?: string }).code).toBe("not_found");
+      expect(useApp.getState().grant).toBeNull();
+
+      // A refusal changes nothing; the same call allowed only forgets the folder.
+      const removing = call("remove_project", { path });
+      await until(() => useApp.getState().grant !== null);
+      expect(useApp.getState().grant?.detail).toContain("stay on disk");
+      resolveGrant("deny");
+      expect((await removing).error).toMatchObject({ code: "denied" });
+      expect(projectEntry(path)).toBeDefined();
+      const again = call("remove_project", { path });
+      await until(() => useApp.getState().grant !== null);
+      resolveGrant("once");
+      expect(await again).toMatchObject({ path, removed: true, files_deleted: false });
+      expect(projectEntry(path)).toBeUndefined();
+
+      // Full access answers the card itself.
+      setPermissionMode(caller, "full");
+      expect((await call("create_project", { path: "/tmp/rc-project-full" })).project).toBeDefined();
+      expect(useApp.getState().grant).toBeNull();
+    } finally {
+      storage.done();
+    }
+  });
+
+  test("a clone asks, lands in the parent folder, and is registered", async () => {
+    const storage = testStorage();
+    try {
+      const { call } = await ready();
+      const cloning = call("clone_project", {
+        url: "https://github.com/owner/repo.git",
+        parent: "/Users/you/code",
+      });
+      await until(() => useApp.getState().grant !== null);
+      expect(useApp.getState().grant?.kind).toBe("project");
+      expect(useApp.getState().grant?.detail).toContain("git clone");
+      resolveGrant("once");
+      const cloned = await cloning;
+      expect(cloned.project).toMatchObject({ path: "/Users/you/code/repo", is_git: true });
+      expect(projectEntry("/Users/you/code/repo")?.registeredAt).toBeGreaterThan(0);
+    } finally {
+      storage.done();
+    }
+  });
+
+  test("a project's default harness and model start its new threads", async () => {
+    const storage = testStorage();
+    try {
+      const { folder } = await ready();
+      updateProjectEntry(folder, { harness: "rustcode", model: "chatgpt/gpt-6-luna" });
+      expect(projectThreadChoice(useApp.getState(), folder)).toMatchObject({
+        harness: "rustcode",
+        model: "chatgpt/gpt-6-luna",
+      });
+      // A model the harness does not list falls back to the one it would start on.
+      updateProjectEntry(folder, { model: "nope" });
+      expect(projectThreadChoice(useApp.getState(), folder)?.model).not.toBe("nope");
+      // A harness that cannot run a thread starts one the usual way instead.
+      updateProjectEntry("/tmp/rc-project-off", { harness: "claude-code" });
+      expect(projectThreadChoice(useApp.getState(), "/tmp/rc-project-off")).toBeNull();
+    } finally {
+      storage.done();
+    }
+  });
+
+  test("scheduled work reads freely and asks before it is added, run or deleted", async () => {
+    const { call } = await ready();
+    const listed = await call("list_scheduled_tasks", {});
+    expect(useApp.getState().grant).toBeNull();
+    expect((listed.tasks as { id: string }[])[0]?.id).toBe("task-morning");
+
+    const creating = call("schedule_task", {
+      prompt: "Check the build",
+      schedule: { kind: "cron", expression: "0 9 * * 1-5" },
+    });
+    await until(() => useApp.getState().grant !== null);
+    expect(useApp.getState().grant?.kind).toBe("schedule");
+    expect(useApp.getState().grant?.detail).toContain("0 9 * * 1-5");
+    resolveGrant("once");
+    const created = await creating;
+    const task = created.task as { id: string; schedule: { timezone?: string } };
+    expect(task.id).toBeTruthy();
+    // A cron with no zone is read in the user's own, which the app fills in.
+    expect(task.schedule.timezone).toBeTruthy();
+
+    const denied = call("delete_scheduled_task", { id: "task-morning" });
+    await until(() => useApp.getState().grant !== null);
+    resolveGrant("deny");
+    expect((await denied).error).toMatchObject({ code: "denied" });
+
+    const running = call("run_scheduled_task_now", { id: "task-morning" });
+    await until(() => useApp.getState().grant !== null);
+    resolveGrant("once");
+    expect(await running).toMatchObject({ id: "task-morning", state: "claimed" });
   });
 });

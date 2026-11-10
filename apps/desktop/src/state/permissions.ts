@@ -52,7 +52,9 @@ export function delegationAllowed(
     | "transfer"
     | "configure"
     | "merge"
-    | "cleanup",
+    | "cleanup"
+    | "project"
+    | "schedule",
 ): boolean {
   if (mode === "full") return true;
   return mode === "edits" && (kind === "read" || kind === "organize");

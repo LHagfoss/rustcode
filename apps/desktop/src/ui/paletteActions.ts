@@ -19,6 +19,7 @@ import {
 import type { PullRequest } from "../acp/rustcode";
 import { projectName, type SessionSummary } from "../acp/types";
 import { pickFolder } from "../lib/native";
+import { registerProject } from "../state/projects";
 import { cachedPulls, pullForBranch } from "../state/pulls";
 import { PREF, readPref, writePref } from "../state/sidebarPrefs";
 import { shelfKey } from "../state/sidebarRows";
@@ -136,7 +137,14 @@ export function sidebarActions(now = Date.now()): PaletteAction[] {
       detail: "Open a folder and start a thread in it",
       icon: FolderPlus,
       words: "open add folder directory workspace project",
-      run: () => void pickFolder(s.projectCwd || undefined).then((p) => p && startNewThread(p)),
+      run: () =>
+        void pickFolder(s.projectCwd || undefined).then((p) => {
+          if (!p) return;
+          // The same store the project tools write: a folder picked here is a
+          // project before its first thread exists.
+          registerProject(p);
+          startNewThread(p);
+        }),
     },
     {
       id: "pulls",
