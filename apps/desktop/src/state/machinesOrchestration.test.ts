@@ -1,8 +1,9 @@
-// Agents across machines (orchestration version 10): a call that names a
+// Agents across machines (orchestration version 11): a call that names a
 // paired machine is executed over that machine's own connection, an id it
 // returns carries the machine (`state/threadKeys.ts`), a call without one
-// stays here, an offline machine is refused by name, and a delegate that
-// finishes there wakes its parent here as a local one does.
+// stays here, an offline machine is refused by name, a delegate that finishes
+// there wakes its parent here as a local one does, and an answer about a
+// keyed thread names the machine that thread runs on.
 //
 // Everything this file attaches is process-global (the shell transport, the
 // machines module's links, the store's machine map): `afterAll` resets it.
@@ -21,6 +22,7 @@ const LINUX_NAME = "Lars's Linux box";
 const LINUX_PROJECT = "/home/lars/code/rustcode";
 const CALLER = "caller-1";
 const CALLER_PROJECT = "/Users/lars/code/rustcode";
+const REMOTE = `${LINUX}/remote-1`;
 
 function machine(id: string, name: string, state: Machine["state"] = "connected"): Machine {
   return {
@@ -87,10 +89,11 @@ const snapshot = {
  * A machine's connection whose writes the test can read: the machine answers
  * a harness listing and `session/new`, and every other request as a no-op.
  */
-function recordingConnection(sessionId = "remote-1"): {
+function recordingConnection(sessionId: string | (() => string) = "remote-1"): {
   conn: AcpConnection;
   sent: () => JsonObject[];
 } {
+  const next = typeof sessionId === "function" ? sessionId : () => sessionId;
   const writes: string[] = [];
   let conn!: AcpConnection;
   conn = new AcpConnection((line) => {
@@ -102,7 +105,7 @@ function recordingConnection(sessionId = "remote-1"): {
         ? snapshot
         : frame.method === "session/new"
           ? {
-              sessionId,
+              sessionId: next(),
               configOptions: [],
               _meta: { rustcode: { harness: { id: "claude-code", capabilities: {} } } },
             }
@@ -152,6 +155,60 @@ function listed(): void {
       fanOuts: [],
     },
   });
+}
+
+/** The machine's thread as a copy this app has open, and the grants a read, message or stop needs. */
+function withRemoteThread(): void {
+  useApp.setState((s) => ({
+    sessions: [
+      ...s.sessions.filter((x) => x.id !== REMOTE),
+      {
+        id: REMOTE,
+        cwd: LINUX_PROJECT,
+        title: "Run the tests there",
+        updatedAt: Date.now(),
+        harness: "claude-code",
+      },
+    ],
+    threads: {
+      ...s.threads,
+      [REMOTE]: {
+        id: REMOTE,
+        cwd: LINUX_PROJECT,
+        title: "Run the tests there",
+        items: [
+          { kind: "user", text: "run it" },
+          { kind: "assistant", text: "done" },
+        ],
+        queue: [],
+        permissions: [],
+        running: false,
+        loaded: true,
+        loading: false,
+      },
+    } as never,
+    links: {
+      ...s.links,
+      grants: {
+        ...s.links.grants,
+        [CALLER]: [...(s.links.grants[CALLER] ?? []), REMOTE, `interrupt:${REMOTE}`],
+      },
+    },
+  }));
+}
+
+/** A link from the caller to a thread, for the calls that read the link book. */
+function link(id: string, target: string) {
+  return {
+    id: `${CALLER}/${id}`,
+    orchestrator: CALLER,
+    target,
+    orchestratorTitle: "Work the machine network",
+    targetTitle: "child",
+    message: "go",
+    state: "working" as const,
+    createdAt: Date.now(),
+  };
 }
 
 beforeAll(async () => {
@@ -258,6 +315,141 @@ describe("a call on another machine", () => {
     expect(listed.error).toBeUndefined();
     expect(listed.machine).toBe(LINUX_NAME);
     expect(listed.sessions).toMatchObject([{ session_id: `${LINUX}/remote-1`, machine: LINUX_NAME }]);
+  });
+
+  test("a call on a keyed id names that thread's machine, without machine", async () => {
+    withRemoteThread();
+    const read = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "read_session",
+      args: { session_id: REMOTE },
+    });
+    expect(read.error).toBeUndefined();
+    expect(read.machine).toBe(LINUX_NAME);
+    expect(read.machine_id).toBe(LINUX);
+    expect(String(read.text)).toContain("run it");
+
+    const { conn, sent } = recordingConnection();
+    watchMachineConnection(LINUX, conn);
+    const message = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "message_session",
+      args: { session_id: REMOTE, message: "again" },
+    });
+    expect(message.error).toBeUndefined();
+    expect(message.machine).toBe(LINUX_NAME);
+    // It went to the machine's own session id, never the key.
+    const prompted = sent().find((frame) => frame.method === "session/prompt");
+    expect(prompted?.params).toMatchObject({ sessionId: "remote-1" });
+
+    const interrupt = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "interrupt_session",
+      args: { session_id: REMOTE },
+    });
+    expect(interrupt.error).toBeUndefined();
+    expect(interrupt.machine).toBe(LINUX_NAME);
+
+    const status = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "thread_status",
+      args: { session_id: REMOTE },
+    });
+    expect(status.error).toBeUndefined();
+    expect(status.machine).toBe(LINUX_NAME);
+  });
+
+  test("thread_status without a target reports only the named machine's delegates", async () => {
+    useApp.setState((s) => ({
+      sessions: [
+        ...s.sessions,
+        { id: "local-2", cwd: CALLER_PROJECT, title: "Local child", updatedAt: Date.now() },
+      ],
+      links: { ...s.links, links: [link("9", "local-2"), link("10", REMOTE)] },
+    }));
+    const answer = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "thread_status",
+      args: { machine: LINUX },
+    });
+    expect(answer.error).toBeUndefined();
+    expect(answer.machine).toBe(LINUX_NAME);
+    expect((answer.delegates as JsonObject[]).map((entry) => entry.session_id)).toEqual([REMOTE]);
+  });
+
+  test("wait_session refuses a link that is not on the machine it names", async () => {
+    useApp.setState((s) => ({
+      sessions: [
+        ...s.sessions,
+        { id: "local-2", cwd: CALLER_PROJECT, title: "Local child", updatedAt: Date.now() },
+      ],
+      links: { ...s.links, links: [link("9", "local-2")] },
+    }));
+    const answer = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "wait_session",
+      args: { link_id: `${CALLER}/9`, machine: LINUX },
+    });
+    expect(answer.error).toMatchObject({ code: "invalid" });
+    expect(String((answer.error as JsonObject).message)).toContain(`${CALLER}/9`);
+    expect(String((answer.error as JsonObject).message)).toContain(LINUX_NAME);
+  });
+
+  test("a wait on an offline machine's link waits rather than refusing it", async () => {
+    const { conn } = recordingConnection();
+    watchMachineConnection(LINUX, conn);
+    const started = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "start_session",
+      args: { prompt: "Run the tests there", machine: LINUX },
+    });
+    const id = String(started.link_id);
+    // The link is still this app's to read: only the machine went away.
+    watchMachineConnection(LINUX, null);
+    const answer = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "wait_session",
+      args: { link_id: id, machine: LINUX, timeout_ms: 1 },
+    });
+    expect(answer.error).toBeUndefined();
+    expect(answer.machine).toBe(LINUX_NAME);
+    // A timeout or the link's own state, never an offline refusal.
+    expect(Array.isArray(answer.links) || typeof answer.status === "string").toBe(true);
+  });
+
+  test("fan_out names the project on that machine", async () => {
+    let n = 0;
+    const { conn, sent } = recordingConnection(() => `fan-${++n}`);
+    watchMachineConnection(LINUX, conn);
+    // The grant names that folder there, as a remote start in it would.
+    useApp.setState((s) => ({
+      links: {
+        ...s.links,
+        grants: {
+          ...s.links.grants,
+          [CALLER]: [...(s.links.grants[CALLER] ?? []), `start@${LINUX}:/home/lars/other`],
+        },
+      },
+    }));
+    const answer = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "fan_out",
+      args: {
+        prompt: "Run the tests there",
+        machine: LINUX,
+        project: "/home/lars/other",
+        harnesses: [
+          { harness: "claude-code", model: "sonnet-5.5" },
+          { harness: "claude-code", effort: "high" },
+        ],
+      },
+    });
+    expect(answer.error).toBeUndefined();
+    expect(answer.machine).toBe(LINUX_NAME);
+    const cwds = sent()
+      .filter((frame) => frame.method === "session/new")
+      .map((frame) => (frame.params as JsonObject).cwd);
+    expect(cwds).toEqual(["/home/lars/other", "/home/lars/other"]);
   });
 
   test("an offline machine is refused by name and when it went away", async () => {

@@ -981,21 +981,25 @@ is the follow-up (§10, phases 3.1 and 3.2).
 | Tool | With `machine` |
 | --- | --- |
 | `list_machines` | This computer (`current: true`) and each paired machine: `{ id, name, platform, state, route?, last_connected?, harnesses, projects }`. `harnesses` is that machine's list (`[{ id, name, available }]`), `projects` its project names |
-| `start_session`, `fan_out` | Start on that machine, in its project. `harness`, `model`, `effort` and `account` are that machine's own (never this app's logins or remembered choices). Without `project`, the caller's path when the machine has it, else a folder with the same project name, else its only project; otherwise the error lists what it has |
+| `start_session`, `fan_out` | Start on that machine, in its project. `harness`, `model`, `effort` and `account` are that machine's own (never this app's logins or remembered choices). `project` is an absolute path there; without it, the caller's path when the machine has it, else a folder with the same project name, else its only project; otherwise the error lists what it has |
 | `list_harnesses` | That machine's harnesses, models and named accounts, without this app's plan numbers |
 | `list_projects`, `list_sessions` | That machine's projects or threads. Its folders are not this one's, so its threads are listed whether or not they share this project |
-| `read_session`, `message_session`, `interrupt_session` | On that machine's thread |
-| `wait_session` | Any: link ids carry their machine already; `machine` checks it is there |
-| `thread_status`, `list_pending_requests` | That machine's delegates or waiting requests |
+| `read_session`, `message_session`, `interrupt_session` | On that machine's thread. A machine's threads are not narrowed to the caller's project: the user named the machine, and the approval card is the gate. A thread the caller started on a machine is reachable even when `machine` is omitted |
+| `wait_session` | Any: the link ids carry their machine already. `machine` must match every link, and a mismatch is refused naming each link's machine; it does not require the machine to be online, so a wait on a link that went away still reports what it last said |
+| `thread_status` | With `session_id`, that thread's machine; without one, the named machine's delegates (this computer's when `machine` is omitted), and `omitted` counts the rest of that set |
+| `list_pending_requests` | That machine's waiting requests. Without `machine`, every thread this thread reaches, wherever it runs (the v10 answer) |
 
 A thread id answers as `‹machine id›/‹thread id›` (`state/threadKeys.ts`), so
 every later call on it routes without `machine`; `machine` also refuses an id
 that carries another machine. Answers carry `machine` (the name) and
-`machine_id`, so an agent can say where a thread runs.
+`machine_id`, read from the target's key rather than the call: a call on a
+keyed id without `machine` still says where the thread runs, and a wait's
+answer names the one machine its links share when they all do.
 
 An offline machine is refused by name and the time it was last connected
 (`Studio is offline since 09:12; nothing was sent`), and a machine that is no
-longer paired says to pair it again. Nothing falls back to this computer.
+longer paired says to pair it again; a `wait_session` on its links still waits,
+as its row above says. Nothing falls back to this computer.
 
 Acting on another machine is a call that changes other threads, so the same
 approval gate applies, and the card names the machine ("On Studio, not this

@@ -898,6 +898,12 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
                 }
                 seen.push(key);
             }
+            // The project on that machine, as `start_session` takes it.
+            match args.get("project") {
+                None | Some(Value::Null) => Ok(()),
+                Some(Value::String(path)) if std::path::Path::new(path).is_absolute() => Ok(()),
+                Some(_) => Err("project must be an absolute path".to_owned()),
+            }?;
             optional_request_id(args)
         }
         WAIT_SESSION => {
@@ -1886,6 +1892,15 @@ mod tests {
             json!({"prompt": "a", "harnesses": [{"model": "x"}, {"harness": "b"}]})
         ));
         assert!(!ok(FAN_OUT, json!({"harnesses": two})));
+        // A fan-out names the project on that machine as a start does.
+        assert!(ok(
+            FAN_OUT,
+            json!({"prompt": "a", "harnesses": two, "project": "/home/lars/code/rustcode"})
+        ));
+        assert!(!ok(
+            FAN_OUT,
+            json!({"prompt": "a", "harnesses": two, "project": "rustcode"})
+        ));
 
         assert_eq!(timeout(START_SESSION, &json!({})), START_TIMEOUT);
         assert_eq!(timeout(FAN_OUT, &json!({})), START_TIMEOUT);

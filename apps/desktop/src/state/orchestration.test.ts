@@ -304,6 +304,18 @@ describe("orchestration rules", () => {
       args: { prompt: "do it", harnesses: [{ harness: "rustcode" }, { harness: "codex", model: "m" }] },
     });
     expect(!isFailure(fan) && fan.tool === "fan_out" && fan.harnesses.length).toBe(2);
+    // A fan-out names the project on the machine it runs on, as a start does.
+    expect(
+      parseCall({
+        tool: "fan_out",
+        args: {
+          prompt: "go",
+          harnesses: [{ harness: "a" }, { harness: "b" }],
+          project: "/srv/app",
+          machine: "Studio",
+        },
+      }),
+    ).toMatchObject({ project: "/srv/app", machine: "Studio" });
     // A named login rides on start_session and each fan_out entry.
     const started = parseCall({
       tool: "start_session",

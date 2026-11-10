@@ -656,6 +656,27 @@ function machineFields(machine: MachineRef): JsonObject {
   return { machine: machine.name, machine_id: machine.id };
 }
 
+/** A host key ("" is this computer), as an answer about a thread there names it. */
+function machineOfHost(host: string): MachineRef {
+  if (!host) return localMachine();
+  const saved = useMachines.getState().machines.find((m) => m.id === host);
+  return {
+    host,
+    id: host,
+    name: useApp.getState().machineNames[host] ?? saved?.name ?? host,
+    platform: saved?.platform ?? "unknown",
+  };
+}
+
+/** The machine a thread key names: an answer about a keyed thread says where it runs. */
+const machineOfThread = (id: string) => machineOfHost(splitThreadKey(id).host);
+
+/** The one machine a wait's links act on, when they all do. */
+function waitMachine(links: Link[]): MachineRef | undefined {
+  const hosts = new Set(links.map((link) => splitThreadKey(link.target).host));
+  return hosts.size === 1 ? machineOfHost([...hosts][0]!) : undefined;
+}
+
 /**
  * A thread id as the named machine knows it: an id that already carries a
  * machine is kept (and must be that machine's), and a bare one is prefixed
@@ -1035,7 +1056,7 @@ async function fanOutOnMachine(
   if (refused) return failureJson(refused);
   const snapshot = await remoteSnapshot(machine);
   if (isFailure(snapshot)) return failureJson(snapshot);
-  const project = projectOnMachine(machine, caller, undefined);
+  const project = projectOnMachine(machine, caller, call.project);
   if (isFailure(project)) return failureJson(project);
   const chosen: { harness: Harness; model?: string; effort?: string; account?: string | null }[] = [];
   const targets = new Set<string>();
@@ -1056,12 +1077,14 @@ async function fanOutOnMachine(
   }
   const title = call.title ?? titleFrom(call.prompt, 60);
   const access = childMode(caller);
-  const no = await permitted(caller, `start@${machine.id}`, {
+  const other = !sameProject(project, projectOf(caller));
+  const no = await permitted(caller, `start@${machine.id}${other ? `:${project}` : ""}`, {
     kind: "fan_out",
     caller: caller.id,
     callerTitle: caller.title,
     target: title,
     detail: call.prompt,
+    project: other ? project : undefined,
     harnesses: chosen.map((h) => choiceLabel(h.harness.name, h.account ?? undefined, h.model, h.effort)),
     access,
     worktree: true,
@@ -1311,28 +1334,49 @@ async function perform(
       };
     }
     case "read_session": {
-      const machine = checkedMachine(call.machine);
+      // The key names the thread's machine when the call does not: a call on a keyed id
+      // from another computer routes there, as every later call on it does.
+      const machine = checkedMachine(call.machine ?? (splitThreadKey(call.target).host || undefined));
       if (isFailure(machine)) return failureJson(machine);
       const target = scopedTarget(machine, call.target);
       if (isFailure(target)) return failureJson(target);
+      // The id decides where the thread runs: an id that carries its machine answers with it
+      // even when the call omitted `machine` (the key every later call routes by).
       const answer = await read(caller, target, call.lastTurns, call.offset);
-      return answer.error ? answer : { ...answer, ...machineFields(machine) };
+      return answer.error ? answer : { ...answer, ...machineFields(machineOfThread(target)) };
     }
     case "message_session": {
-      const machine = checkedMachine(call.machine);
+      const machine = checkedMachine(call.machine ?? (splitThreadKey(call.target).host || undefined));
       if (isFailure(machine)) return failureJson(machine);
       const target = scopedTarget(machine, call.target);
       if (isFailure(target)) return failureJson(target);
       const answer = await message(caller, target, call.text, call.attachments);
-      return answer.error ? answer : { ...answer, ...machineFields(machine) };
+      return answer.error ? answer : { ...answer, ...machineFields(machineOfThread(target)) };
     }
     case "manage_queue":
       return manageQueue(caller, call);
     case "wait_session": {
-      const machine = checkedMachine(call.machine);
-      if (isFailure(machine)) return failureJson(machine);
+      // A named machine checks where each link runs, not whether it can be reached: a wait on
+      // a machine that just went away still reports what its links last said, and settles if
+      // they do. Naming the wrong machine for a link is a mistake worth saying.
+      const named = call.machine?.trim() ? resolveMachine(call.machine) : undefined;
+      if (named && isFailure(named)) return failureJson(named);
+      const links = call.links
+        .map((id) => book().links.find((link) => link.id === id))
+        .filter((link): link is Link => !!link && link.orchestrator === caller.id);
+      if (named) {
+        const elsewhere = links.filter((link) => splitThreadKey(link.target).host !== named.host);
+        if (elsewhere.length) {
+          const said = elsewhere
+            .map((link) => `${link.id} waits on ${machineOfThread(link.target).name}`)
+            .join(", ");
+          return failureJson(failure("invalid", `${said}, not on ${named.name}`));
+        }
+      }
       const answer = await wait(caller.id, call.links, call.timeoutMs, call.callId);
-      return answer.error ? answer : { ...answer, ...machineFields(machine) };
+      if (answer.error) return answer;
+      const at = waitMachine(links);
+      return at ? { ...answer, ...machineFields(at) } : answer;
     }
     case "start_session": {
       const machine = checkedMachine(call.machine);
@@ -1373,12 +1417,12 @@ async function perform(
     case "update_session":
       return updateSession(caller, call);
     case "interrupt_session": {
-      const machine = checkedMachine(call.machine);
+      const machine = checkedMachine(call.machine ?? (splitThreadKey(call.target).host || undefined));
       if (isFailure(machine)) return failureJson(machine);
       const target = scopedTarget(machine, call.target);
       if (isFailure(target)) return failureJson(target);
       const answer = await interruptSession(caller, target);
-      return answer.error ? answer : { ...answer, ...machineFields(machine) };
+      return answer.error ? answer : { ...answer, ...machineFields(machineOfThread(target)) };
     }
     case "configure_session":
       return configureSession(caller, call);
@@ -1387,19 +1431,23 @@ async function perform(
     case "list_pending_requests": {
       const machine = checkedMachine(call.machine);
       if (isFailure(machine)) return failureJson(machine);
-      return listPendingRequests(caller, machine);
+      return listPendingRequests(caller, call.machine ? machine : undefined);
     }
     case "answer_request":
       return answerRequest(caller, call);
     case "organize_threads":
       return organizeThreads(caller, call);
     case "thread_status": {
-      const machine = checkedMachine(call.machine);
+      const machine = checkedMachine(
+        call.machine ?? (call.target ? splitThreadKey(call.target).host || undefined : undefined),
+      );
       if (isFailure(machine)) return failureJson(machine);
       const target = call.target ? scopedTarget(machine, call.target) : undefined;
       if (isFailure(target)) return failureJson(target);
-      const answer = await threadStatus(caller, target);
-      return answer.error ? answer : { ...answer, ...machineFields(machine) };
+      const answer = await threadStatus(caller, target, machine.host);
+      return answer.error
+        ? answer
+        : { ...answer, ...machineFields(target ? machineOfThread(target) : machine) };
     }
     case "merge_when_green":
       return mergeWhenGreen(caller, call);
@@ -1753,13 +1801,14 @@ async function delegatePull(
 }
 
 /**
- * The delegates a thread has: the targets of its links, newest first, one row
- * each, capped so the gh reads stay well inside the request timeout.
+ * The delegates a thread has on `host` ("" is this computer): the targets of
+ * its links, newest first, one row each, capped so the gh reads stay well
+ * inside the request timeout.
  */
-function delegateTargets(caller: RuleThread): { targets: RuleThread[]; omitted: number } {
+function delegateTargets(caller: RuleThread, host: string): { targets: RuleThread[]; omitted: number } {
   const ids = new Set(
     book()
-      .links.filter((link) => link.orchestrator === caller.id)
+      .links.filter((link) => link.orchestrator === caller.id && splitThreadKey(link.target).host === host)
       .map((l) => l.target),
   );
   ids.delete(caller.id);
@@ -1773,8 +1822,12 @@ function delegateTargets(caller: RuleThread): { targets: RuleThread[]; omitted: 
  * and a shell poll of `gh pr checks`. A read: no approval, same project. The
  * delegates are read concurrently, so a dozen do not add up to a timeout.
  */
-async function threadStatus(caller: RuleThread, target?: string): Promise<JsonObject> {
-  const asked = target ? undefined : delegateTargets(caller);
+async function threadStatus(
+  caller: RuleThread,
+  target: string | undefined,
+  host: string,
+): Promise<JsonObject> {
+  const asked = target ? undefined : delegateTargets(caller, host);
   const targets = target ? [manageTarget(caller, target, true)] : (asked?.targets ?? []);
   const entries: RuleThread[] = [];
   for (const entry of targets) {
@@ -2684,10 +2737,10 @@ async function messageNow(
 ): Promise<JsonObject> {
   const state = useApp.getState();
   const target = ruleThread(state, targetId);
-  // Messaging another machine's thread is the one rule its own machine cannot
-  // state here: the user named it, and the card below is the gate.
+  // A thread on another machine is not this app's project topic to check: the
+  // user named that machine, and the card below is the gate.
   const remote = isRemoteThread(targetId);
-  const refused = checkMessage(caller, target, book(), false, remote, delegateLimits());
+  const refused = checkMessage(caller, target, book(), false, false, delegateLimits(), remote);
   if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
   const unavailable = messageTargetRefusal(state, targetId);
   if (unavailable) return failureJson(unavailable);
@@ -2711,7 +2764,7 @@ async function messageNow(
   // The user took their time: look again.
   const afterPermission = useApp.getState();
   const current = ruleThread(afterPermission, targetId);
-  const again = checkMessage(caller, current, book(), false, remote, delegateLimits());
+  const again = checkMessage(caller, current, book(), false, false, delegateLimits(), remote);
   if (again) return failureJson(again);
   const stopped = messageTargetRefusal(afterPermission, targetId);
   if (stopped) return failureJson(stopped);
@@ -2721,7 +2774,15 @@ async function messageNow(
   const openError = await openThread(target.id);
   const afterOpen = useApp.getState();
   const openedTarget = ruleThread(afterOpen, targetId);
-  const noLongerReachable = checkMessage(caller, openedTarget, book(), false, remote, delegateLimits());
+  const noLongerReachable = checkMessage(
+    caller,
+    openedTarget,
+    book(),
+    false,
+    false,
+    delegateLimits(),
+    remote,
+  );
   if (noLongerReachable) return failureJson(noLongerReachable);
   const noLongerAvailable = messageTargetRefusal(afterOpen, targetId);
   if (noLongerAvailable) return failureJson(noLongerAvailable);
@@ -3252,15 +3313,18 @@ async function fanOutNow(caller: RuleThread, call: FanOutCall): Promise<JsonObje
     targets.add(key);
     chosen.push({ harness: h, model, effort: entry.effort, account });
   }
-  const project = projectOf(caller);
+  const project = projectFor(caller, call.project);
+  if (isFailure(project)) return failureJson(project);
   const title = call.title ?? titleFrom(call.prompt, 60);
   const access = childMode(caller);
-  const no = await permitted(caller, "start", {
+  const other = !sameProject(project, projectOf(caller));
+  const no = await permitted(caller, other ? `start:${project}` : "start", {
     kind: "fan_out",
     caller: caller.id,
     callerTitle: caller.title,
     target: title,
     detail: call.prompt,
+    project: other ? project : undefined,
     harnesses: chosen.map((h) =>
       choiceLabel(h.harness.name, accountLabelOf(h.harness, h.account), h.model, h.effort),
     ),

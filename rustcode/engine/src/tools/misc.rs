@@ -410,7 +410,7 @@ pub const START_SESSION: Tool = Tool {
 
 pub const FAN_OUT: Tool = Tool {
     name: crate::orchestration::FAN_OUT,
-    description: "Start the same task on 2-4 harnesses, each in its own worktree thread, so the user can compare the results. Pass `machine` (id or name from list_machines) to run them on another paired computer; omit it for this one. Pass the whole task as the shared prompt: they do not see this conversation. Carry the repository rules (tell each to read AGENTS.md) and acceptance criteria, and bound commands that can block: a delegated shell has no TTY or default timeout. Each entry may name a harness, model, effort and named account as list_harnesses lists them. The user is asked first. Returns one link per thread for wait_session.",
+    description: "Start the same task on 2-4 harnesses, each in its own worktree thread, so the user can compare the results. Pass `machine` (id or name from list_machines) to run them on another paired computer; omit it for this one (with `project`, its absolute path there). Pass the whole task as the shared prompt: they do not see this conversation. Carry the repository rules (tell each to read AGENTS.md) and acceptance criteria, and bound commands that can block: a delegated shell has no TTY or default timeout. Each entry may name a harness, model, effort and named account as list_harnesses lists them. The user is asked first. Returns one link per thread for wait_session.",
     arguments: r#"{"prompt": "the task", "harnesses": [{"harness": "codex"}, {"harness": "claude-code"}], "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -436,6 +436,7 @@ pub const FAN_OUT: Tool = Tool {
                         "additionalProperties": false
                     }
                 },
+                "project": {"type": "string", "description": "absolute path of the project on that machine"},
                 "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines; omitted is this computer"},
                 "client_request_id": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_CLIENT_REQUEST_ID_CHARS, "description": "Retry key: a repeat returns the first result"}
             },

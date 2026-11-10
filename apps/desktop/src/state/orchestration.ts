@@ -437,7 +437,15 @@ export type Call =
       /** The paired machine it runs on; omitted is this computer. */
       machine?: string;
     }
-  | { tool: "fan_out"; prompt: string; title?: string; harnesses: HarnessChoice[]; machine?: string }
+  | {
+      tool: "fan_out";
+      prompt: string;
+      title?: string;
+      harnesses: HarnessChoice[];
+      /** The project on that machine; without one, the caller's path there or its only project. */
+      project?: string;
+      machine?: string;
+    }
   /** `harness` narrows to one harness, `model` to the models whose id or name matches. */
   | { tool: "list_harnesses"; harness?: string; model?: string; machine?: string }
   | { tool: "search_sessions"; query: string; allProjects: boolean }
@@ -860,6 +868,7 @@ export function parseCall(params: JsonObject): Call | Failure {
         prompt,
         title: s(args.title)?.trim() || undefined,
         harnesses,
+        project: s(args.project),
         ...machineField(args),
       };
     }
@@ -979,7 +988,9 @@ export function listSessions(
 /**
  * Whether `caller` may message (or read) `target`, before the user is asked.
  * Reading reaches any project while the app allows it; everything that writes,
- * or that opens a thread to another, stays in the caller's own project.
+ * or that opens a thread to another, stays in the caller's own project — except
+ * a thread on a machine the call named (`remote`), whose folders are not this
+ * project's and whose card is the gate.
  */
 export function checkMessage(
   caller: RuleThread,
@@ -988,11 +999,12 @@ export function checkMessage(
   read = false,
   acrossProjects = false,
   limits: DelegateLimits = DEFAULT_DELEGATE_LIMITS,
+  remote = false,
 ): Failure | null {
   if (!target) return failure("not_found", "no thread has that id; use list_sessions");
   if (target.id === caller.id)
     return failure("not_allowed", `a thread cannot ${read ? "read" : "message"} itself`);
-  if (!(read && acrossProjects) && !reachesThread(caller, target)) {
+  if (!remote && !(read && acrossProjects) && !reachesThread(caller, target)) {
     return failure(
       "not_allowed",
       "that thread is in another project; only this project's threads can be reached",
