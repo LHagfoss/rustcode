@@ -1718,6 +1718,11 @@ fn start_pull_watching(clients: &clients::Clients) {
                 crate::pull_watch::check_due(&store, |watch, events| {
                     // A worktree thread whose pull request merged is done.
                     crate::thread_status::on_pull_watch(watch);
+                    // A change its thread has not been told about wants the
+                    // user's look: the thread's status says so in every
+                    // client, and its next `status` call hands the events
+                    // over (#3369).
+                    crate::thread_status::on_pull_events(&watch.session_id, events);
                     notify.publish(
                         clients::Topic::PullWatches,
                         PullWatchNotification {

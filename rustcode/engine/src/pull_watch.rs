@@ -33,7 +33,8 @@ pub const MAX_BACKOFF_SECS: i64 = 30 * 60;
 pub const MAX_FAILURES: u32 = 6;
 /// A watch stops by itself after this long.
 pub const MAX_AGE_SECS: i64 = 7 * 24 * 60 * 60;
-/// Watching at once, across every thread.
+/// Manual watches at once, across every thread. Links have their own budget
+/// ([`MAX_LINKS`]) and do not take these slots.
 pub const MAX_WATCHES: usize = 10;
 /// Events kept on a watch, newest last.
 pub const MAX_EVENTS: usize = 20;
@@ -312,18 +313,20 @@ impl Watch {
         self.stopped_at = Some(chrono::Utc::now().timestamp());
     }
 
-    fn push_event(&mut self, kind: String, message: String, now: i64) {
-        self.events.push(WatchEvent {
+    fn push_event(&mut self, kind: String, message: String, now: i64) -> WatchEvent {
+        let event = WatchEvent {
             kind,
             message,
             at: chrono::DateTime::from_timestamp(now, 0)
                 .map(|time| time.to_rfc3339())
                 .unwrap_or_default(),
-        });
+        };
+        self.events.push(event.clone());
         let extra = self.events.len().saturating_sub(MAX_EVENTS);
         self.events.drain(..extra);
         // The cursor counts from the front, so it moves with the dropped ones.
         self.delivered = self.delivered.saturating_sub(extra);
+        event
     }
 
     /// Take one check's answer: what changed, now that `value` was read at
@@ -339,24 +342,29 @@ impl Watch {
         if let Some(url) = value.get("url").and_then(Value::as_str) {
             self.url = url.to_owned();
         }
-        let before = self.events.len();
+        // The events this answer produced, exactly the ones pushed here: an
+        // older event dropped off the front of `events` must not take a new one
+        // with it, or the check would report nothing to deliver.
+        let mut fresh = Vec::new();
         match &self.snapshot {
             Some(old) => {
                 let authors = authors_since(value, &old.last_activity);
                 for (kind, message) in changes(old, &new, &authors, self.interests) {
-                    self.push_event(kind, message, now);
+                    fresh.push(self.push_event(kind, message, now));
                 }
             }
             None if new.state != "open" => {
-                self.push_event(
-                    "closed".to_owned(),
-                    if new.state == "merged" {
-                        "Already merged"
-                    } else {
-                        "Already closed"
-                    }
-                    .to_owned(),
-                    now,
+                fresh.push(
+                    self.push_event(
+                        "closed".to_owned(),
+                        if new.state == "merged" {
+                            "Already merged"
+                        } else {
+                            "Already closed"
+                        }
+                        .to_owned(),
+                        now,
+                    ),
                 );
             }
             None => {}
@@ -377,16 +385,16 @@ impl Watch {
         self.checked_at = Some(now);
         self.next_check_at = now + INTERVAL_SECS;
         if failed > 0 {
-            self.push_event(
+            fresh.push(self.push_event(
                 "sync_recovered".to_owned(),
                 format!(
                     "GitHub reads work again after {failed} failed check{}",
                     if failed == 1 { "" } else { "s" }
                 ),
                 now,
-            );
+            ));
         }
-        self.events[before..].to_vec()
+        fresh
     }
 
     /// Take a failed check: wait longer each time, and stop after
@@ -401,28 +409,46 @@ impl Watch {
             self.stop(format!(
                 "GitHub could not be read {MAX_FAILURES} times in a row: {message}"
             ));
-            self.push_event(
+            return vec![self.push_event(
                 "stopped".to_owned(),
                 "Stopped watching: GitHub could not be read".to_owned(),
                 now,
-            );
-            return self.events.last().cloned().into_iter().collect();
+            )];
         }
         Vec::new()
     }
 
+    /// Stop a watch GitHub will not answer again (the folder is no repository,
+    /// there is no sign-in, or `gh` is missing), and tell the thread why once:
+    /// a link that silently stops is one the thread waits on for nothing.
+    pub fn stop_unreadable(&mut self, message: String, now: i64) -> Vec<WatchEvent> {
+        self.failures += 1;
+        self.last_error = Some(message.clone());
+        self.stop(message.clone());
+        vec![self.push_event(
+            "stopped".to_owned(),
+            format!("Stopped watching: {message}"),
+            now,
+        )]
+    }
+
     /// Stop a watch that ran past its limit: [`MAX_LINK_AGE_SECS`] for a link,
-    /// [`MAX_AGE_SECS`] for a one-off watch.
-    pub fn expire(&mut self, now: i64) -> bool {
+    /// [`MAX_AGE_SECS`] for a one-off watch. The thread hears why, once.
+    pub fn expire(&mut self, now: i64) -> Vec<WatchEvent> {
         if !self.past_limit(now) {
-            return false;
+            return Vec::new();
         }
-        self.stop(if self.link {
+        let reason = if self.link {
             "linked for 14 days"
         } else {
             "watched for 7 days"
-        });
-        true
+        };
+        self.stop(reason);
+        vec![self.push_event(
+            "stopped".to_owned(),
+            format!("Stopped watching: {reason}"),
+            now,
+        )]
     }
 }
 
@@ -500,8 +526,19 @@ impl WatchStore {
         now: i64,
     ) -> Result<Watch, String> {
         self.update(|watches| {
-            watches.retain(|watch| !(watch.session_id == session_id && watch.number == number));
-            if watches.iter().filter(|watch| watch.is_watching()).count() >= MAX_WATCHES {
+            // Restarting a manual watch replaces it; a link the thread keeps
+            // is a different record (`repo`, its own limit) and stays.
+            watches.retain(|watch| {
+                !(!watch.link && watch.session_id == session_id && watch.number == number)
+            });
+            // Links are their own budget (`MAX_LINKS`): a thread that linked a
+            // pull request must not fill the manual watches' slots.
+            if watches
+                .iter()
+                .filter(|watch| watch.is_watching() && !watch.link)
+                .count()
+                >= MAX_WATCHES
+            {
                 return Err(format!(
                     "At most {MAX_WATCHES} pull requests are watched at once; stop one first."
                 ));
@@ -550,9 +587,13 @@ impl WatchStore {
         let repo = repo.trim().to_owned();
         self.update(|watches| {
             // Linking again is not a new link: what the thread saw stays seen,
-            // and a stopped link starts checking again.
+            // and a stopped link starts checking again. A manual watch of the
+            // same pull request is a different record and is left alone.
             if let Some(existing) = watches.iter_mut().find(|watch| {
-                watch.session_id == session_id && watch.number == number && watch.repo == repo
+                watch.link
+                    && watch.session_id == session_id
+                    && watch.number == number
+                    && watch.repo == repo
             }) {
                 if existing.is_watching() {
                     return Ok(existing.clone());
@@ -670,6 +711,19 @@ impl WatchStore {
         })
     }
 
+    /// Forget a thread's link to `number`, and only its link: a manual watch
+    /// of the same pull request from the same thread stays.
+    pub fn unlink(&self, session_id: &str, number: u64) -> std::io::Result<Option<Watch>> {
+        self.update(|watches| {
+            let index = watches.iter().position(|watch| {
+                watch.link && watch.session_id == session_id && watch.number == number
+            })?;
+            let mut watch = watches.remove(index);
+            watch.stop("unlinked");
+            Some(watch)
+        })
+    }
+
     pub fn list(&self, session_id: Option<&str>) -> Vec<Watch> {
         self.load()
             .into_iter()
@@ -754,8 +808,8 @@ where
             None
         };
         for mut watch in group {
-            let events = if watch.expire(now) {
-                Vec::new()
+            let events = if watch.past_limit(now) {
+                watch.expire(now)
             } else {
                 match &answer {
                     Some(Ok(value)) => watch.apply(value, chrono::Utc::now().timestamp()),
@@ -765,8 +819,7 @@ where
                             "not_a_repository" | "not_connected" | "gh_missing"
                         ) =>
                     {
-                        watch.stop(error.message.clone());
-                        Vec::new()
+                        watch.stop_unreadable(error.message.clone(), chrono::Utc::now().timestamp())
                     }
                     Some(Err(error)) => {
                         watch.fail(error.message.clone(), chrono::Utc::now().timestamp())
@@ -789,15 +842,9 @@ async fn read(group: &[Watch]) -> Result<Value, crate::pull_requests::PullError>
         .first()
         .map(|watch| watch.repo.as_str())
         .unwrap_or_default();
-    let mut folders: Vec<&Path> = Vec::new();
-    for watch in group {
-        if !folders.contains(&watch.cwd.as_path()) {
-            folders.push(watch.cwd.as_path());
-        }
-    }
     let mut error = None;
-    for folder in folders {
-        match crate::pull_requests::watch_view_on(folder, repo, number).await {
+    for folder in read_folders(group) {
+        match crate::pull_requests::watch_view_on(&folder, repo, number).await {
             Ok(value) => return Ok(value),
             // Not this folder's repository: another one of the group's may be.
             Err(failed) if failed.code == "not_a_repository" => error = Some(failed),
@@ -808,6 +855,32 @@ async fn read(group: &[Watch]) -> Result<Value, crate::pull_requests::PullError>
         code: "failed",
         message: "there is no folder to read the pull request in".to_owned(),
     }))
+}
+
+/// The folders one group's read tries, in order. A folder that was removed
+/// cannot run `gh` at all (and `gh` would report that as a missing binary), so
+/// it is left to the others. A link names its repository and `gh --repo`
+/// answers from any folder, so with no folder left the engine's own is used; a
+/// manual watch reads through its own folder and gets no stand-in, since
+/// `gh pr view` there would read another repository's pull request.
+fn read_folders(group: &[Watch]) -> Vec<PathBuf> {
+    let repo = group
+        .first()
+        .map(|watch| watch.repo.as_str())
+        .unwrap_or_default();
+    let mut folders: Vec<PathBuf> = Vec::new();
+    for watch in group {
+        if watch.cwd.is_dir() && !folders.contains(&watch.cwd) {
+            folders.push(watch.cwd.clone());
+        }
+    }
+    if folders.is_empty()
+        && crate::pull_requests::is_repository(repo)
+        && let Ok(cwd) = std::env::current_dir()
+    {
+        folders.push(cwd);
+    }
+    folders
 }
 
 /// A pull request number the caller sent as a number or as digits.
@@ -901,7 +974,7 @@ pub async fn answer(args: &Value, session_id: &str, cwd: &Path) -> Result<String
         _ => {
             let number = number_of(args)?.ok_or("number is required to unlink a pull request")?;
             let removed = store
-                .stop(session_id, number, true)
+                .unlink(session_id, number)
                 .map_err(|error| error.to_string())?;
             let unlinked = removed.is_some();
             Ok(serde_json::to_string_pretty(&json!({
@@ -1107,8 +1180,10 @@ mod tests {
         );
         assert!(store.due(now).len() <= PER_ROUND);
         let mut watch = store.list(None).remove(0);
-        assert!(watch.expire(now + MAX_AGE_SECS));
+        let events = watch.expire(now + MAX_AGE_SECS);
         assert!(!watch.is_watching());
+        assert_eq!(events[0].kind, "stopped", "a watch that runs out says so");
+        assert!(events[0].message.contains("7 days"));
     }
 
     fn open() -> Value {
@@ -1326,12 +1401,14 @@ mod tests {
         let now = chrono::Utc::now().timestamp();
         let mut link = linked(&store, "s1", "/repo", now);
         assert_eq!(link.limit_secs(), MAX_LINK_AGE_SECS);
-        assert!(!link.expire(now + MAX_AGE_SECS));
-        assert!(link.expire(now + MAX_LINK_AGE_SECS));
+        assert!(link.expire(now + MAX_AGE_SECS).is_empty());
+        let events = link.expire(now + MAX_LINK_AGE_SECS);
         assert_eq!(link.stop_reason.as_deref(), Some("linked for 14 days"));
+        assert_eq!(events[0].kind, "stopped");
+        assert!(events[0].message.contains("14 days"));
 
         let mut watch = watch(&store);
-        assert!(watch.expire(now + MAX_AGE_SECS));
+        assert_eq!(watch.expire(now + MAX_AGE_SECS).len(), 1);
         assert_eq!(watch.stop_reason.as_deref(), Some("watched for 7 days"));
     }
 
@@ -1376,8 +1453,143 @@ mod tests {
         assert!(number_of(&json!({"number": 0})).is_err());
         assert!(number_of(&json!({"number": "seven"})).is_err());
         assert!(crate::pull_requests::is_repository("LHagfoss/rustcode"));
+        assert!(crate::pull_requests::is_repository("o/r.mirror"));
         assert!(!crate::pull_requests::is_repository("/Users/me/repo"));
         assert!(!crate::pull_requests::is_repository("rustcode"));
+        assert!(!crate::pull_requests::is_repository("o/"));
+        assert!(!crate::pull_requests::is_repository("/r"));
+        assert!(!crate::pull_requests::is_repository("o/r/extra"));
+        assert!(!crate::pull_requests::is_repository("../r"));
+    }
+
+    #[test]
+    fn a_change_at_the_event_cap_is_still_delivered() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WatchStore::new(dir.path());
+        let now = chrono::Utc::now().timestamp();
+        let mut watch = linked(&store, "s1", "/repo", now);
+        // The list is full, so the oldest events drop as new ones arrive.
+        for n in 0..MAX_EVENTS {
+            watch.push_event("activity".into(), format!("old {n}"), now);
+        }
+        watch.deliver();
+        let failing = view(
+            "open",
+            "a1",
+            json!([check("test", "FAILURE")]),
+            "MERGEABLE",
+            json!([]),
+        );
+        let events = watch.apply(&failing, now + INTERVAL_SECS);
+        assert_eq!(events.len(), 1, "the change is what this check produced");
+        assert_eq!(events[0].kind, "checks_failed");
+        assert_eq!(
+            watch.events.len(),
+            MAX_EVENTS,
+            "the oldest went, not the newest"
+        );
+        assert_eq!(
+            watch.pending().len(),
+            1,
+            "and it is still there to hand over"
+        );
+    }
+
+    #[test]
+    fn a_link_and_a_manual_watch_of_one_pull_request_are_separate() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WatchStore::new(dir.path());
+        let now = chrono::Utc::now().timestamp();
+        linked(&store, "s1", "/repo", now);
+        // The app watches the same pull request from the same thread: the
+        // manual watch neither replaces the link nor is mistaken for it.
+        store
+            .start("s1", Path::new("/repo"), 7, Interests::default(), now)
+            .unwrap();
+        assert_eq!(store.list(Some("s1")).len(), 2);
+        let stopped = store.unlink("s1", 7).unwrap().expect("the link");
+        assert_eq!(stopped.stop_reason.as_deref(), Some("unlinked"));
+        let left = store.list(Some("s1"));
+        assert_eq!(left.len(), 1, "unlinking forgets only the link");
+        assert!(!left[0].link);
+        assert!(left[0].is_watching());
+        assert!(store.unlink("s1", 7).unwrap().is_none());
+    }
+
+    #[test]
+    fn links_do_not_fill_the_manual_watch_slots() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WatchStore::new(dir.path());
+        let now = chrono::Utc::now().timestamp();
+        let mut number = 1;
+        let mut session = 0;
+        let mut created = 0;
+        while created < MAX_LINKS {
+            store
+                .link(
+                    &format!("s{session}"),
+                    Path::new("/r"),
+                    "o/r",
+                    number,
+                    &open(),
+                    now,
+                )
+                .unwrap();
+            number += 1;
+            created += 1;
+            if created.is_multiple_of(MAX_LINKS_PER_THREAD) {
+                session += 1;
+            }
+        }
+        assert!(
+            store
+                .start("s9", Path::new("/r"), 7, Interests::default(), now)
+                .is_ok(),
+            "the manual budget is its own"
+        );
+    }
+
+    #[test]
+    fn a_link_github_will_not_answer_stops_with_a_reason_and_one_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WatchStore::new(dir.path());
+        let now = chrono::Utc::now().timestamp();
+        let mut watch = linked(&store, "s1", "/repo", now);
+        let events = watch.stop_unreadable("The GitHub CLI (gh) is not installed".into(), now);
+        assert!(!watch.is_watching());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "stopped");
+        assert!(events[0].message.contains("not installed"));
+        assert_eq!(
+            watch.last_error.as_deref(),
+            Some("The GitHub CLI (gh) is not installed")
+        );
+    }
+
+    #[test]
+    fn a_read_falls_back_to_the_engine_folder_only_for_a_named_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WatchStore::new(dir.path());
+        let now = chrono::Utc::now().timestamp();
+        let gone = dir.path().join("gone");
+        let link = store.link("s1", &gone, "o/r", 7, &open(), now).unwrap();
+        // The named repository is read from anywhere: the removed worktree is
+        // no reason to stop a link.
+        assert_eq!(
+            read_folders(&[link.clone()]),
+            std::env::current_dir()
+                .map(|cwd| vec![cwd])
+                .unwrap_or_default()
+        );
+        // A manual watch has no repository to name, so with its folder gone it
+        // is left with nothing to read rather than another repository's #7.
+        let mut manual = link.clone();
+        manual.repo = String::new();
+        assert!(read_folders(&[manual]).is_empty());
+        // A link whose folder still exists reads there.
+        let mut live = link;
+        live.cwd = dir.path().to_path_buf();
+        assert_eq!(read_folders(&[live]), vec![dir.path().to_path_buf()]);
     }
 
     #[test]

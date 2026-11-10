@@ -81,6 +81,9 @@ while git checks it out.
 - A thread whose worktree branch has a PR that merges becomes `done`
   automatically (engine checks via the existing PR watch, `_rustcode/pulls/watch`),
   and sends `session/update` with `_meta.rustcode.status`.
+- A watched pull request that changed in a way its thread has not read marks
+  the thread `review` the same way (#3369), so the user sees it without a turn
+  running.
 
 Built (`rustcode/engine/src/thread_status.rs`). Every change of a thread's
 status, derived or stored, is sent as `session/update` with a
@@ -154,18 +157,37 @@ Lifecycle and limits:
   `sync_recovered`), or after two weeks (`linked for 14 days`).
 - A thread keeps at most 5 links and 20 are linked across the engine; a link
   counts against the same schedule as a manual watch, which keeps working as
-  before with its own 7-day limit and `_rustcode/pulls/watch*` methods.
+  before with its own 7-day limit, its own 10 slots and `_rustcode/pulls/watch*`
+  methods. A manual watch and a link of the same pull request in one thread are
+  separate records: unlinking the one leaves the other.
 - GitHub is read at most three pull requests per round, one round every 30 s
   (`PER_ROUND`), so polling is bounded whatever the list holds: a fully linked
   engine (20) is swept every few minutes, and one pull request several threads
   link is read once per round with each of them getting its own events, so no
   thread sees the same event twice and no pull request is read twice.
 - A link records `owner/name` and is read with `gh --repo`, so it keeps working
-  after the worktree it was made in was removed; when several threads of one
-  pull request are in different folders, the first that answers is used.
-- The events are also published to a client subscribed to
-  `_rustcode/pulls/watch`, unchanged; a worktree thread whose linked pull
-  request merges becomes `done` (`thread_status::on_pull_watch`).
+  after the worktree it was made in was removed (a folder that is gone, or
+  belongs to another repository, is skipped for the next one; with none left
+  the engine's own folder is used when the link names its repository).
+- A change the thread has not read marks its thread `review` — the existing
+  stored status, sent to every connected client as `session_info_update` — so
+  the user sees that the link wants a look even with the thread closed. A
+  thread with a turn running is left alone (the mark would be cleared when the
+  turn ends); the events wait for its next turn either way. The thread then
+  reads them, one delivery each, with `manage_pull_links status`; nothing is
+  replayed.
+- Every stop the engine makes by itself is delivered as one event, never
+  silently: the pull request merging or closing as `closed`, six failed reads,
+  an unreadable GitHub (no `gh`, sign-in or repository) and the 14-day limit as
+  `stopped` with the reason; `failures`, `lastError` and `stopReason` stay on
+  the link for `status` to report. Unlinking is the caller's own action, so it
+  needs no event.
+- The events are also published on `_rustcode/pulls/watch` to a client that
+  subscribed (`_rustcode/pulls/watch/start` or `_rustcode/pulls/watches`); the
+  Tauri app has not ported watches yet, so this is not how a linked thread
+  hears about a change today — the `review` status and the next `status` call
+  are. A worktree thread whose linked pull request merges becomes `done`
+  (`thread_status::on_pull_watch`).
 
 ## Checkpoints
 

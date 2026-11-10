@@ -108,7 +108,7 @@ pub(crate) enum Capability {
 pub(crate) enum Topic {
     /// `_rustcode/themes/changed`, after `_rustcode/themes`.
     Themes,
-    /// `_rustcode/pulls/watch/event`, after a watch request.
+    /// `_rustcode/pulls/watch`, after a watch request.
     PullWatches,
 }
 

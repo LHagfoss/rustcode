@@ -191,10 +191,17 @@ pub(crate) async fn watch_view_on(cwd: &Path, repo: &str, number: u64) -> Result
 }
 
 /// Whether `text` is an `owner/name` repository, the only spelling `gh --repo`
-/// takes.
+/// takes: two non-empty parts and no `.` segment.
 pub(crate) fn is_repository(text: &str) -> bool {
     let text = text.trim();
-    text.split('/').count() == 2
+    let mut parts = text.split('/');
+    let (Some(owner), Some(name), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    !owner.is_empty()
+        && !name.is_empty()
+        && !matches!(owner, "." | "..")
+        && !matches!(name, "." | "..")
         && text
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
