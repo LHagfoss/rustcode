@@ -86,6 +86,8 @@ import { PREF, usePref, useRowLayout } from "../state/sidebarPrefs";
 import {
   cleanFolds,
   contextRow,
+  type HiddenKind,
+  hiddenKind,
   isShelf,
   keepListed,
   listedPicks,
@@ -1220,7 +1222,8 @@ interface Section {
   id: SectionId;
   label: string;
   items: SessionSummary[];
-  /** What a folded section hides: a thread that needs you, else one that works, else one just finished. */
+  /** What a folded section hides: a thread that needs you, else one that works, else one just
+   * finished — and nothing for Snoozed (`state/sidebarRows.ts` `hiddenKind`). */
   hidden?: HiddenKind;
   /** Threads, split by project when there are several. */
   projects?: { key: string; label: string; items: SessionSummary[] }[];
@@ -1316,8 +1319,6 @@ function BranchRows({
     </>
   );
 }
-
-type HiddenKind = "needs" | "working" | "finished";
 
 /** The dot a folded group shows for what it hides. */
 function HiddenDot({ kind }: { kind?: HiddenKind }) {
@@ -1771,13 +1772,16 @@ export function Sidebar() {
       projects: id === "threads" ? projects : undefined,
     }));
     for (const g of all) {
-      g.hidden = g.items.some((x) => flagged.has(`${x.id}:n`))
-        ? "needs"
-        : g.items.some((x) => works(x.id))
-          ? "working"
-          : g.items.some((x) => isFresh(x.id))
-            ? "finished"
-            : undefined;
+      // A Snoozed shelf advertises nothing: what its rows did while asleep is not news
+      // (state/sidebarRows.ts `hiddenKind`).
+      g.hidden = hiddenKind(
+        g.id,
+        g.items.map((x) => ({
+          needs: flagged.has(`${x.id}:n`),
+          working: works(x.id),
+          unseen: isFresh(x.id),
+        })),
+      );
     }
     return all.filter((g) => g.items.length);
   }, [

@@ -3,6 +3,7 @@ import type { FileDiff } from "../acp/types";
 import {
   cleanFolds,
   contextRow,
+  hiddenKind,
   isShelf,
   keepListed,
   listedPicks,
@@ -370,16 +371,21 @@ describe("which section a thread is drawn under", () => {
     expect(place({ needs: true })).toBe("threads");
     expect(place({ needs: true, working: true })).toBe("threads");
     expect(place({ needs: true, aged: true })).toBe("threads");
-    expect(place({ needs: true, snoozed: true })).toBe("threads");
     expect(place({ needs: true, settled: true, fresh: true })).toBe("threads");
     expect(place({ needs: true, layout: "shelf" })).toBe("threads");
   });
 
-  test("a snoozed thread sleeps until it needs you or works", () => {
+  test("a snoozed thread sleeps through a turn, a request and a finish", () => {
     expect(place({ snoozed: true })).toBe("snoozed");
-    expect(place({ snoozed: true, needs: true })).toBe("threads");
-    expect(place({ snoozed: true, working: true })).toBe("threads");
-    expect(place({ snoozed: true, working: true, layout: "shelf" })).toBe("working");
+    // What it does in the background is not a reason to come back: the snooze says where it is.
+    expect(place({ snoozed: true, needs: true })).toBe("snoozed");
+    expect(place({ snoozed: true, working: true })).toBe("snoozed");
+    expect(place({ snoozed: true, working: true, layout: "shelf" })).toBe("snoozed");
+    expect(place({ snoozed: true, fresh: true })).toBe("snoozed");
+    expect(place({ snoozed: true, needs: true, working: true, fresh: true })).toBe("snoozed");
+    // A pinned thread is still where the user put it, and a settled one stays settled.
+    expect(place({ snoozed: true, pinned: true })).toBe("pinned");
+    expect(place({ snoozed: true, settled: true })).toBe("settled");
   });
 
   test("a thread untouched for days is Settled, a freshly finished one is not", () => {
@@ -407,6 +413,26 @@ describe("which section a thread is drawn under", () => {
   test("neither layout draws a separate Needs you section: the chip is the whole of it", () => {
     expect(sectionsOf("top") as readonly string[]).not.toContain("needs");
     expect(sectionsOf("shelf") as readonly string[]).not.toContain("needs");
+  });
+});
+
+describe("the dot a folded group shows", () => {
+  const row = (needs: boolean, working: boolean, unseen: boolean) => ({ needs, working, unseen });
+
+  test("a Snoozed shelf says nothing, whatever its rows did while asleep", () => {
+    // The user put them away: a request, work or a turn that ended is not news until the snooze
+    // ends, and the shelf's count alone says it has rows.
+    expect(hiddenKind("snoozed", [row(true, true, true)])).toBeUndefined();
+    expect(hiddenKind("snoozed", [row(false, true, false), row(false, false, true)])).toBeUndefined();
+    expect(hiddenKind("snoozed", [])).toBeUndefined();
+  });
+
+  test("the other shelves still say it, strongest first", () => {
+    expect(hiddenKind("settled", [row(false, false, true), row(true, false, false)])).toBe("needs");
+    expect(hiddenKind("working", [row(false, true, false), row(false, false, true)])).toBe("working");
+    expect(hiddenKind("settled", [row(false, false, true)])).toBe("finished");
+    expect(hiddenKind("threads", [row(false, false, false)])).toBeUndefined();
+    expect(hiddenKind("threads", [])).toBeUndefined();
   });
 });
 
