@@ -221,6 +221,34 @@ fn payload_capture_defaults_off_and_round_trips() {
 }
 
 #[test]
+fn telemetry_retention_defaults_to_forever_and_round_trips_days() {
+    assert_eq!(AppConfig::default().telemetry_retention, "forever");
+
+    let dir = temp_dir("telemetry-retention");
+    fs::write(
+        dir.join(CONFIG_TOML_FILE),
+        "version = 1\ntelemetry_retention = \"30\"\n",
+    )
+    .unwrap();
+    let (_, _, config) = load_config_from(&dir);
+    assert_eq!(config.telemetry_retention, "30");
+
+    let mut saved = AppConfig::default();
+    saved.telemetry_retention = "90".to_owned();
+    save_config_to_result(&dir, &saved).unwrap();
+    let (_, _, reloaded) = load_config_from(&dir);
+    assert_eq!(reloaded.telemetry_retention, "90");
+}
+
+#[test]
+fn a_project_config_cannot_shorten_telemetry_retention() {
+    let mut config = AppConfig::default();
+    let file: TomlConfig = toml::from_str("telemetry_retention = \"1\"").unwrap();
+    apply_project_toml_config(&mut config, file);
+    assert_eq!(config.telemetry_retention, "forever");
+}
+
+#[test]
 fn project_config_cannot_capture_payloads() {
     let mut config = AppConfig::default();
     let file: TomlConfig =

@@ -1436,6 +1436,14 @@ pub struct AppConfig {
     /// default.
     #[serde(default = "default_false")]
     pub capture_harness_rpc_payloads: bool,
+    /// How long raw protocol rows (`provider_requests`,
+    /// `harness_rpc_messages`) are kept: `forever` (the default, keeping their
+    /// metadata and aging only their payloads) or a number of days. Structured
+    /// rows — turns, tool calls, compactions, operational events, threads and
+    /// links — are never deleted by the retention pass either way. Global only:
+    /// a checked-out project must not shorten the user's history.
+    #[serde(default = "default_telemetry_retention")]
+    pub telemetry_retention: String,
     #[serde(default = "default_theme")]
     pub theme: String,
     /// Extra directories scanned for skills, in addition to the project,
@@ -1723,6 +1731,8 @@ struct TomlConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     capture_harness_rpc_payloads: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    telemetry_retention: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     theme: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     extra_skill_dirs: Option<Vec<PathBuf>>,
@@ -1744,6 +1754,10 @@ struct TomlConfig {
 
 fn default_false() -> bool {
     false
+}
+
+fn default_telemetry_retention() -> String {
+    "forever".to_owned()
 }
 
 fn default_max_tool_rounds() -> usize {
@@ -1886,6 +1900,7 @@ impl Default for AppConfig {
             debug_verbose_network_logging: false,
             capture_provider_payloads: false,
             capture_harness_rpc_payloads: false,
+            telemetry_retention: default_telemetry_retention(),
             theme: default_theme(),
             extra_skill_dirs: Vec::new(),
             disabled_skills: Vec::new(),
@@ -2329,6 +2344,7 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         debug_verbose_network_logging: Some(config.debug_verbose_network_logging),
         capture_provider_payloads: Some(config.capture_provider_payloads),
         capture_harness_rpc_payloads: Some(config.capture_harness_rpc_payloads),
+        telemetry_retention: Some(config.telemetry_retention.clone()),
         theme: Some(config.theme.clone()),
         extra_skill_dirs: Some(config.extra_skill_dirs.clone()),
         disabled_skills: (!config.disabled_skills.is_empty())
@@ -2504,6 +2520,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     if let Some(enabled) = file.capture_harness_rpc_payloads {
         config.capture_harness_rpc_payloads = enabled;
     }
+    if let Some(retention) = file.telemetry_retention {
+        config.telemetry_retention = retention;
+    }
     if let Some(theme) = file.theme {
         config.theme = theme;
     }
@@ -2573,6 +2592,8 @@ fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
     // user's own data, so a checked-out project cannot turn it on.
     file.capture_provider_payloads = None;
     file.capture_harness_rpc_payloads = None;
+    // Retention is about the user's whole history, not one checkout.
+    file.telemetry_retention = None;
     // Skill toggles are user-scoped (#2165): one explicit place to look.
     file.disabled_skills = None;
     // A harness entry names a command to run; only the user may choose one.
@@ -2654,6 +2675,9 @@ fn preserve_project_overrides(persisted: &mut AppConfig, global: &AppConfig, fil
     if file.capture_harness_rpc_payloads.is_some() {
         persisted.capture_harness_rpc_payloads = global.capture_harness_rpc_payloads;
     }
+    if file.telemetry_retention.is_some() {
+        persisted.telemetry_retention = global.telemetry_retention.clone();
+    }
     if file.theme.is_some() {
         persisted.theme = global.theme.clone();
     }
@@ -2713,6 +2737,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         debug_verbose_network_logging: None,
         capture_provider_payloads: None,
         capture_harness_rpc_payloads: None,
+        telemetry_retention: None,
         theme: None,
         extra_skill_dirs: None,
         disabled_skills: None,

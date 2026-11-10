@@ -89,12 +89,25 @@ fn streamed_update(method: &str, params: &Value) -> Option<String> {
                 .then(|| update.to_owned())
         }
         // `codex app-server` streams in its own notifications (`harness/codex.rs`).
+        // Command output is the bulk of the store and RustCode does not even
+        // render it: it is folded like text, so only bytes are kept.
+        "item/commandExecution/outputDelta" | "item/fileChange/outputDelta" => {
+            Some("command_output".to_owned())
+        }
         "item/agentMessage/delta" => Some("agent_message_chunk".to_owned()),
         "item/reasoning/summaryTextDelta"
         | "item/reasoning/summaryPartAdded"
         | "item/reasoning/textDelta" => Some("agent_thought_chunk".to_owned()),
         _ => None,
     }
+}
+
+/// Whether a frame's body is bulky, repeated noise: streaming output and
+/// status pings. The caller keeps the metadata row and drops only the body.
+fn is_noise_payload(method: Option<&str>) -> bool {
+    method.is_some_and(|method| {
+        method.ends_with("/outputDelta") || crate::data_store::NOISE_METHODS.contains(&method)
+    })
 }
 
 /// A request whose answer has not been seen yet.
@@ -296,7 +309,9 @@ impl RpcRecorder {
             _ => None,
         };
         let Some(streamed) = streamed else {
-            if self.capture_payloads {
+            // A repeated status ping is noise: its row (method, at, size) is
+            // worth keeping, its body is not.
+            if self.capture_payloads && !is_noise_payload(method.as_deref()) {
                 let (payload, truncated) = prepare_payload(message, MAX_RPC_PAYLOAD_BYTES);
                 row.payload_json = Some(payload);
                 row.payload_truncated = truncated;

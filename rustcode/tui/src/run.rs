@@ -740,6 +740,35 @@ fn run_data_command(command: &crate::cli::DataCommands) -> Result<(), String> {
                 );
             }
         }
+        DataCommands::Stats { json } => {
+            let stats = rustcode::data_store::stats()?;
+            if *json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&stats).map_err(|error| error.to_string())?
+                );
+                return Ok(());
+            }
+            let objects = stats["objects"].as_array().cloned().unwrap_or_default();
+            let rows: Vec<Vec<String>> = objects
+                .iter()
+                .map(|object| {
+                    let text = |key: &str| {
+                        object
+                            .get(key)
+                            .filter(|value| !value.is_null())
+                            .map(cell_text)
+                            .unwrap_or_else(|| "—".to_owned())
+                    };
+                    vec![text("type"), text("name"), text("rows"), text("bytes")]
+                })
+                .collect();
+            print_rows(&["type", "name", "rows", "bytes"], &rows);
+            if let Some(total) = stats["total_bytes"].as_u64() {
+                println!("\ndata.sqlite: {total} bytes");
+            }
+            return Ok(());
+        }
         DataCommands::Schema => {
             let result = rustcode::data_store::query(
                 "SELECT type, name, sql FROM sqlite_master

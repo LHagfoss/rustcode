@@ -9,7 +9,7 @@ use super::transcript::Transcript;
 use super::{HarnessKind, HarnessModel, ResolvedHarness, acp_child, codex, process, watchdog};
 use agent_client_protocol::schema::v1::{
     ContentBlock, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SessionConfigOption, SessionUpdate, StopReason, TextContent, UsageUpdate,
+    SessionConfigOption, SessionUpdate, StopReason, TextContent, ToolCallStatus, UsageUpdate,
 };
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -733,6 +733,8 @@ impl ExternalSession {
         let transcript = Arc::new(StdMutex::new(Transcript::new(history)));
         let progress = watchdog::Progress::new();
         let idle = IdleState::share();
+        let thread_id = id.clone();
+        let harness_id = harness.id.clone();
         {
             let transcript = Arc::clone(&transcript);
             let progress = Arc::clone(&progress);
@@ -749,6 +751,11 @@ impl ExternalSession {
                                 .lock()
                                 .unwrap_or_else(|error| error.into_inner())
                                 .observe(&update);
+                            if let Some(row) =
+                                Self::harness_compaction(&update, &thread_id, &harness_id)
+                            {
+                                crate::data_store::record_compaction(&row);
+                            }
                             sink.update(update);
                         }
                         Output::Marker(update) => sink.update(update),
@@ -1331,6 +1338,87 @@ impl ExternalSession {
         }
     }
 
+    /// A compaction an ACP harness reported. Claude Code's adapter presents one as
+    /// the synthetic tool call `Compact conversation` (`_meta.claudeCode.toolName
+    /// = "compact"`), with the trigger, tokens and duration in `rawOutput` on its
+    /// terminal update. RustCode does not advertise the newer `compaction_update`
+    /// capability, so this is the shape a Claude Code thread sends. `None` for any
+    /// other update, and for a compaction still running: only the terminal state
+    /// is a row.
+    fn harness_compaction(
+        update: &SessionUpdate,
+        thread_id: &str,
+        harness: &str,
+    ) -> Option<crate::data_store::CompactionRow> {
+        let (id, status, facts, meta, title) = match update {
+            SessionUpdate::ToolCall(call) => (
+                call.tool_call_id.0.as_ref(),
+                Some(call.status),
+                call.raw_output.as_ref(),
+                call.meta.as_ref(),
+                Some(call.title.as_str()),
+            ),
+            SessionUpdate::ToolCallUpdate(update) => (
+                update.tool_call_id.0.as_ref(),
+                update.fields.status,
+                update.fields.raw_output.as_ref(),
+                update.meta.as_ref(),
+                update.fields.title.as_deref(),
+            ),
+            _ => return None,
+        };
+        let completed = matches!(
+            status,
+            Some(ToolCallStatus::Completed | ToolCallStatus::Failed)
+        );
+        if !completed {
+            return None;
+        }
+        let named_compaction = meta
+            .and_then(|meta| meta.get("claudeCode"))
+            .and_then(|claude| claude.get("toolName"))
+            .and_then(serde_json::Value::as_str)
+            == Some("compact");
+        if !named_compaction && title != Some("Compact conversation") {
+            return None;
+        }
+        let number = |name: &str| {
+            facts
+                .and_then(|facts| facts.get(name))
+                .and_then(serde_json::Value::as_i64)
+        };
+        let trigger = match facts
+            .and_then(|facts| facts.get("trigger"))
+            .and_then(serde_json::Value::as_str)
+        {
+            Some("manual") => "manual",
+            Some("idle") => "cache_expiry",
+            // Claude Code's own automatic compaction.
+            _ => "harness_auto",
+        };
+        Some(crate::data_store::CompactionRow {
+            thread_id: thread_id.to_owned(),
+            turn_id: None,
+            harness: Some(harness.to_owned()),
+            model: None,
+            at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            duration_ms: number("durationMs"),
+            trigger: trigger.to_owned(),
+            mode: Some("harness_summary".to_owned()),
+            tokens_before: number("preTokens"),
+            tokens_after: number("postTokens"),
+            messages_before: None,
+            messages_after: None,
+            idle_secs_before: None,
+            count: None,
+            success: status != Some(ToolCallStatus::Failed),
+            error_kind: (status == Some(ToolCallStatus::Failed))
+                .then(|| "harness_failed".to_owned()),
+            external_id: Some(id.to_owned()),
+            source: Some(harness.to_owned()),
+        })
+    }
+
     /// One row per turn in `data.sqlite` (`crate::data_store`): what the
     /// session spent, its outcome and its tool calls. Metadata only; a failure
     /// is logged there and never fails the turn.
@@ -1369,6 +1457,17 @@ impl ExternalSession {
                         success: Some(recorded.success),
                         exit_code: recorded.exit_code.map(i64::from),
                         at: (!message.timestamp.is_empty()).then(|| message.timestamp.clone()),
+                        started_at: None,
+                        duration_ms: None,
+                        output_bytes: Some(message.content.len() as i64),
+                        truncated: Some(recorded.truncated || recorded.payload_truncated),
+                        mcp_server: None,
+                        command_name: recorded
+                            .command
+                            .as_deref()
+                            .and_then(|command| command.split_whitespace().next())
+                            .map(str::to_owned),
+                        error_kind: recorded.error_kind.clone(),
                     })
                 })
                 .collect::<Vec<_>>();
@@ -1420,6 +1519,26 @@ impl ExternalSession {
             }
         }
         let finished_at = chrono::Utc::now();
+        let context_tokens = usage
+            .as_ref()
+            .and_then(|usage| usage.get("used"))
+            .and_then(serde_json::Value::as_u64)
+            .map(|used| used as i64);
+        let context_window = usage
+            .as_ref()
+            .and_then(|usage| usage.get("size"))
+            .and_then(serde_json::Value::as_u64)
+            .filter(|size| *size > 0)
+            .map(|size| size as i64);
+        let stop_reason = match result {
+            Ok(StopReason::EndTurn) => "end_turn",
+            Ok(StopReason::Cancelled) => "cancelled",
+            Ok(StopReason::MaxTokens) => "max_tokens",
+            Ok(StopReason::MaxTurnRequests) => "max_turn_requests",
+            Ok(StopReason::Refusal) => "refused",
+            Ok(_) => "completed",
+            Err(_) => "failed",
+        };
         crate::data_store::record_cumulative_turn(
             &crate::data_store::TurnRow {
                 thread_id: self.id.clone(),
@@ -1441,6 +1560,13 @@ impl ExternalSession {
                     Ok(_) => "completed".to_owned(),
                     Err(_) => "failed".to_owned(),
                 },
+                duration_ms: Some((finished_at - started_at).num_milliseconds().max(0)),
+                time_to_first_token_ms: None,
+                model_time_ms: None,
+                tool_time_ms: None,
+                context_tokens,
+                context_window,
+                stop_reason: Some(stop_reason.to_owned()),
                 tool_calls,
             },
             cumulative,
@@ -1630,6 +1756,86 @@ mod launch_tests {
             name: Some("Paral 2".to_owned()),
             config_dir: dir.to_owned(),
         }
+    }
+
+    fn session_update(value: serde_json::Value) -> SessionUpdate {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn a_claude_compaction_tool_call_becomes_a_compaction_row() {
+        let update = session_update(serde_json::json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "compact-1",
+            "status": "completed",
+            "rawOutput": {
+                "trigger": "manual",
+                "preTokens": 120_000,
+                "postTokens": 18_000,
+                "durationMs": 2_400,
+            },
+            "_meta": {"claudeCode": {"toolName": "compact"}},
+        }));
+        let row = ExternalSession::harness_compaction(&update, "thread-1", "claude-code")
+            .expect("a terminal compaction is recorded");
+        assert_eq!(row.thread_id, "thread-1");
+        assert_eq!(row.harness.as_deref(), Some("claude-code"));
+        assert_eq!(row.trigger, "manual");
+        assert_eq!(row.mode.as_deref(), Some("harness_summary"));
+        assert_eq!(row.tokens_before, Some(120_000));
+        assert_eq!(row.tokens_after, Some(18_000));
+        assert_eq!(row.duration_ms, Some(2_400));
+        assert_eq!(row.external_id.as_deref(), Some("compact-1"));
+        assert!(row.success);
+
+        // Claude's automatic pass and the adapter's idle compaction keep
+        // their distinct triggers.
+        let automatic = session_update(serde_json::json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "compact-2",
+            "title": "Compact conversation",
+            "status": "completed",
+            "rawOutput": {"trigger": "automatic"},
+        }));
+        let row = ExternalSession::harness_compaction(&automatic, "thread-1", "claude-code")
+            .expect("the title is enough");
+        assert_eq!(row.trigger, "harness_auto");
+        let idle = session_update(serde_json::json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "compact-3",
+            "status": "completed",
+            "rawOutput": {"trigger": "idle"},
+            "_meta": {"claudeCode": {"toolName": "compact"}},
+        }));
+        assert_eq!(
+            ExternalSession::harness_compaction(&idle, "thread-1", "claude-code")
+                .unwrap()
+                .trigger,
+            "cache_expiry"
+        );
+    }
+
+    #[test]
+    fn a_compaction_still_running_or_another_tool_is_not_a_row() {
+        let running = session_update(serde_json::json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "compact-1",
+            "title": "Compact conversation",
+            "status": "in_progress",
+        }));
+        assert!(ExternalSession::harness_compaction(&running, "thread-1", "claude-code").is_none());
+        let other = session_update(serde_json::json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "call-1",
+            "title": "Read file",
+            "status": "completed",
+        }));
+        assert!(ExternalSession::harness_compaction(&other, "thread-1", "claude-code").is_none());
+        let text = session_update(serde_json::json!({
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": "done"},
+        }));
+        assert!(ExternalSession::harness_compaction(&text, "thread-1", "claude-code").is_none());
     }
 
     #[test]
