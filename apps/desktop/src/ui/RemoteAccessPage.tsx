@@ -113,9 +113,9 @@ export function RemoteAccessPage() {
 
   /**
    * Turning network access on also makes sure the RustCode server is
-   * installed: threads that live in a service keep running when the app
-   * closes, which is the point of sharing them. Nothing is installed before
-   * the owner agrees, and a running turn is never ended for it.
+   * installed: the shared engine threads run in stays up when the app closes,
+   * which is what sharing needs once the app uses it. Nothing is installed
+   * before the owner agrees, and a running turn is never ended for it.
    */
   const toggle = (next: boolean) => {
     if (!next) {
