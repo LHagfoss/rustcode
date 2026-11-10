@@ -104,9 +104,13 @@ body { position: relative; max-height: ${MAX_HEIGHT}px; overflow-y: auto; color:
 :focus { outline: none; }
 :root[data-keyboard-nav] :focus-visible { outline: 2px solid color-mix(in srgb, var(--rc-accent) 60%, transparent); outline-offset: 1px; }
 /* One vertical rhythm for whatever the view writes, kit block or bare tag: the gaps
-   between blocks are the page's, not each class's own. */
-#rc-root > * + * { margin-top: 12px; }
-#rc-stream > * + * { margin-top: 12px; }
+   between blocks are the page's, not each class's own. The gap goes between drawn blocks only: a leading <title> or <style> is an element too,
+   and a plain \`* + *\` gave the first visible block a 12px margin that collapsed out of the
+   root, so the measured height came up 12px short and the view's foot was clipped.
+   \`flow-root\` keeps any child margin inside the root, where the measurement sees it. */
+#rc-root, #rc-stream { display: flow-root; }
+#rc-root > :not(title, style, script, link, meta, template) ~ :not(title, style, script, link, meta, template),
+#rc-stream > :not(title, style, script, link, meta, template) ~ :not(title, style, script, link, meta, template) { margin-top: 12px; }
 h1, h2, h3, h4 { margin: 0; font-size: var(--rc-text-size); font-weight: 600; line-height: 1.3; }
 h1 { font-size: var(--rc-text-size-title); }
 p { margin: 0; } p + p { margin-top: 8px; }
