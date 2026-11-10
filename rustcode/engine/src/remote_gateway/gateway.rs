@@ -7,7 +7,8 @@
 //! connections. Nothing awaits while the lock is held.
 
 use super::address::{
-    AdvertisedAddress, Candidate, ListenPlan, alternate_addresses, candidate_addresses,
+    AdvertisedAddress, Candidate, HostRoute, ListenPlan, alternate_addresses, candidate_addresses,
+    host_routes,
 };
 use super::connect::{ConnectRequests, OpenError, Outcome, RequestEnd, RequestState};
 use super::control::{
@@ -622,6 +623,7 @@ impl Shared {
                 .as_ref()
                 .map(|issued| rfc3339(issued.access_expires_at)),
             wire_names: None,
+            routes: routes_now(self),
         };
         Ok(self.register(&mut state, &record, welcome))
     }
@@ -727,6 +729,7 @@ impl Shared {
                 .as_ref()
                 .and_then(|issued| issued.rotation_id.clone()),
             wire_names: None,
+            routes: routes_now(self),
         };
         Ok(self.register(&mut state, &record, welcome))
     }
@@ -1104,6 +1107,20 @@ fn replace_approved(state: &mut State, now: Instant) {
 /// RFC 3339 in UTC, seconds precision, as every handshake timestamp is sent.
 fn rfc3339(at: chrono::DateTime<chrono::Utc>) -> String {
     at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// The addresses this host answers on right now, for a handshake and for
+/// `remote status`: the advertised one, the machine's LAN and mesh addresses,
+/// and its `.local` name. A device keeps them as routes, so it can reconnect
+/// over another network after pairing once.
+fn routes_now(shared: &Shared) -> Vec<HostRoute> {
+    let advertised = shared.advertised.borrow().clone();
+    let label = super::discovery::host_label(&shared.gateway_id);
+    host_routes(
+        &advertised,
+        &candidate_addresses(),
+        Some(label.trim_end_matches('.')),
+    )
 }
 
 fn busy(message: impl Into<String>) -> HandshakeResponse {
@@ -1501,6 +1518,7 @@ fn status(shared: &Shared, started: Instant) -> GatewayStatus {
             .into_iter()
             .map(|Candidate { interface, address }| format!("{address}  ({interface})"))
             .collect(),
+        routes: routes_now(shared),
         devices: state
             .devices
             .list()

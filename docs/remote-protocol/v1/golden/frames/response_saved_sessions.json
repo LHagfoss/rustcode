@@ -8,6 +8,7 @@
       {
         "session_id": "20260714-091502-3fa2c1",
         "title": "Fix the parser",
+        "project": "/Users/example/projects/parser",
         "workspace": "/Users/example/projects/parser",
         "updated_at": "2026-07-14T09:40:12Z",
         "message_count": 42,
@@ -16,6 +17,7 @@
       {
         "session_id": "5f0c2d9e-7a41-4c1b-9d55-0b6c1f2a3e44",
         "title": "Refactor the session store",
+        "project": "/Users/example/projects/rustcode",
         "workspace": "/Users/example/projects/rustcode",
         "updated_at": "2026-07-14T08:02:55Z",
         "message_count": 118,

@@ -6,5 +6,19 @@
   "device_id": "0011223344556677",
   "device_name": "Lars's iPhone",
   "host_name": "studio",
-  "expires_at": "2026-08-22T09:15:00Z"
+  "expires_at": "2026-08-22T09:15:00Z",
+  "routes": [
+    {
+      "address": "192.168.1.20:17879",
+      "kind": "lan"
+    },
+    {
+      "address": "100.92.13.44:17879",
+      "kind": "vpn"
+    },
+    {
+      "address": "rustcode-8e1f4b7a.local:17879",
+      "kind": "hostname"
+    }
+  ]
 }

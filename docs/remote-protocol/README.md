@@ -154,6 +154,14 @@ Host → client:
   and keeping the pairing alive never means pairing again.
 - `host_name` is optional: the machine's own name, for display. It is a
   label, not an identity.
+- `routes` is optional on both answers: the addresses this host answers on
+  right now, best first, each `{ "address": "host:port", "kind": "lan" }`.
+  The kinds are `lan` (a private IPv4 address on a local interface), `vpn` (a
+  `100.64.0.0/10` NetBird or Tailscale address), `hostname` (a name, such as
+  the machine's `.local` name) and `public`. A client keeps them as the routes
+  it knows for this host and dials the first that answers, so pairing once is
+  enough to reconnect on another network. Absent from an older gateway, and
+  when the listener is loopback only.
 - `device_name` in the answer is the name as the host stored it (trimmed and
   bounded), which may differ from what was sent.
 - `install_id` in `pair` is optional: a random identifier the app generates
@@ -940,9 +948,10 @@ nothing holds.
 session was started; pass `next_cursor` back as `cursor` for the next page.
 `limit` is 1 to 100 (30 when absent). `query` keeps sessions whose title,
 workspace or ID contains it, ignoring case. Each entry has `session_id`,
-`title`, `workspace` (absent for sessions that predate workspace recording),
-`updated_at` (when the transcript was last written), `message_count` and
-`state`:
+`title`, `project` (the recorded workspace directory, so a client groups
+threads by project; absent when unknown), `workspace` (absent for sessions
+that predate workspace recording), `updated_at` (when the transcript was last
+written), `message_count` and `state`:
 
 | `state` | Meaning | What the client does |
 | --- | --- | --- |

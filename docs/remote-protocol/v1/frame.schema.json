@@ -1668,6 +1668,13 @@
           ],
           "description": "What has an `open` session open, when the host knows. Absent from\nolder hosts and when the holder did not say; clients then name no\nplace."
         },
+        "project": {
+          "description": "The project the thread belongs to: its recorded workspace directory,\nso a device can group threads of one project together. Absent for a\nsession that predates workspace recording; such a session cannot be\nresumed from a device.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "session_id": {
           "type": "string"
         },
@@ -1685,7 +1692,7 @@
           ]
         },
         "workspace": {
-          "description": "The recorded working directory. Absent for a session that predates\nworkspace recording; such a session cannot be resumed from a device.",
+          "description": "The recorded working directory, when a device can reopen the session\nin it. Absent for a session that predates workspace recording.",
           "type": [
             "string",
             "null"

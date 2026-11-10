@@ -789,8 +789,14 @@ pub struct RemoteChangedFile {
 pub struct RemoteSavedSession {
     pub session_id: String,
     pub title: String,
-    /// The recorded working directory. Absent for a session that predates
-    /// workspace recording; such a session cannot be resumed from a device.
+    /// The project the thread belongs to: its recorded workspace directory,
+    /// so a device can group threads of one project together. Absent for a
+    /// session that predates workspace recording; such a session cannot be
+    /// resumed from a device.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// The recorded working directory, when a device can reopen the session
+    /// in it. Absent for a session that predates workspace recording.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
     /// RFC 3339 time the transcript was last written.

@@ -5,6 +5,8 @@
 //! is a wildcard, so an unspecified address is never advertised and an
 //! ambiguous choice is never guessed.
 
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 
@@ -466,6 +468,125 @@ pub fn alternate_addresses(
         .take(MAX_ALTERNATES)
         .map(|host| host.with_port(advertised.port()).to_string())
         .collect()
+}
+
+/// How a device reaches this host over one route. A gateway reports each
+/// address it answers on with the kind of network it is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HostRouteKind {
+    /// A private IPv4 address on a local network interface (Wi-Fi, Ethernet).
+    Lan,
+    /// A `100.64.0.0/10` mesh address, as NetBird and Tailscale hand out.
+    Vpn,
+    /// A host name: the machine's `.local` name, or another advertised name.
+    Hostname,
+    /// A public address or name. Plain LAN traffic is unencrypted, so a
+    /// client should prefer the other kinds.
+    Public,
+}
+
+/// One address a device can dial this host at, as the handshake reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HostRoute {
+    /// `host:port` a device dials.
+    pub address: String,
+    pub kind: HostRouteKind,
+}
+
+/// Most routes one handshake reports, so the frame stays small.
+pub const MAX_ROUTES: usize = 8;
+
+/// Which kind a local address is, when a device could plausibly dial it.
+/// Global IPv4 is left out: a NAT usually stops it, and the host reports the
+/// names it is reachable by instead. Unique-local IPv6 counts as a VPN.
+fn route_kind(address: IpAddr) -> Option<HostRouteKind> {
+    match address {
+        IpAddr::V4(ip) if is_shared_address_space(ip) => Some(HostRouteKind::Vpn),
+        IpAddr::V4(ip) if ip.is_private() => Some(HostRouteKind::Lan),
+        IpAddr::V4(_) => None,
+        IpAddr::V6(ip) if (ip.segments()[0] & 0xfe00) == 0xfc00 => Some(HostRouteKind::Vpn),
+        IpAddr::V6(_) => None,
+    }
+}
+
+/// The addresses a device can reach this gateway at, best first: the
+/// advertised one, then every LAN and mesh address the machine has, then its
+/// `.local` name. The pairing QR code carries the same set as `alternates`;
+/// this is the live list a connected device learns and adds to its own routes.
+/// Empty for a loopback-only listener: no other machine can reach it.
+pub fn host_routes(
+    advertised: &AdvertisedAddress,
+    candidates: &[Candidate],
+    local_name: Option<&str>,
+) -> Vec<HostRoute> {
+    if advertised.host().is_loopback() {
+        return Vec::new();
+    }
+    let port = advertised.port();
+    let mut routes = Vec::new();
+    let advertised_kind = match advertised.host() {
+        host if host.ip().is_none() => HostRouteKind::Hostname,
+        host => host
+            .ip()
+            .and_then(route_kind)
+            .unwrap_or(HostRouteKind::Public),
+    };
+    routes.push(HostRoute {
+        address: advertised.to_string(),
+        kind: advertised_kind,
+    });
+    let mut ranked: Vec<(u8, HostRoute)> = eligible_candidates(candidates)
+        .into_iter()
+        .filter_map(|candidate| {
+            let kind = route_kind(candidate.address.to_canonical())?;
+            let rank = match kind {
+                HostRouteKind::Lan => 0,
+                HostRouteKind::Vpn => 1,
+                HostRouteKind::Hostname => 2,
+                HostRouteKind::Public => 3,
+            };
+            Some((
+                rank,
+                HostRoute {
+                    address: format!(
+                        "{}",
+                        AdvertisedHost::from_ip(candidate.address)
+                            .ok()?
+                            .with_port(port)
+                    ),
+                    kind,
+                },
+            ))
+        })
+        .collect();
+    ranked.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then(left.1.address.cmp(&right.1.address))
+    });
+    for (_, route) in ranked {
+        if routes.len() >= MAX_ROUTES {
+            break;
+        }
+        if routes.iter().all(|known| known.address != route.address) {
+            routes.push(route);
+        }
+    }
+    if let Some(name) = local_name.map(str::trim).filter(|name| !name.is_empty()) {
+        let address = if name.contains(':') {
+            format!("[{name}]:{port}")
+        } else {
+            format!("{name}:{port}")
+        };
+        if routes.len() < MAX_ROUTES && routes.iter().all(|known| known.address != address) {
+            routes.push(HostRoute {
+                address,
+                kind: HostRouteKind::Hostname,
+            });
+        }
+    }
+    routes
 }
 
 /// 100.64.0.0/10, the shared address space mesh VPNs (NetBird, Tailscale)
@@ -957,6 +1078,37 @@ mod tests {
         let advertised = AdvertisedAddress::new("100.90.16.237", 17879).unwrap();
         let bind: IpAddr = "100.90.16.237".parse().unwrap();
         assert!(alternate_addresses(bind, &advertised, &machine()).is_empty());
+    }
+
+    #[test]
+    fn host_routes_put_the_lan_first_then_the_mesh_and_the_local_name() {
+        let advertised = AdvertisedAddress::new("192.168.31.185", 17879).unwrap();
+        let routes = host_routes(&advertised, &machine(), Some("rustcode-8e1f4b7a.local"));
+        assert_eq!(
+            routes
+                .iter()
+                .map(|route| (route.address.as_str(), route.kind))
+                .collect::<Vec<_>>(),
+            [
+                ("192.168.31.185:17879", HostRouteKind::Lan),
+                ("10.8.0.2:17879", HostRouteKind::Lan),
+                ("100.90.16.237:17879", HostRouteKind::Vpn),
+                ("[fd00::1]:17879", HostRouteKind::Vpn),
+                ("rustcode-8e1f4b7a.local:17879", HostRouteKind::Hostname),
+            ],
+        );
+    }
+
+    #[test]
+    fn host_routes_name_an_advertised_name_and_skip_a_loopback_listener() {
+        let named = AdvertisedAddress::new("mac.netbird.cloud", 17879).unwrap();
+        let routes = host_routes(&named, &[], None);
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].kind, HostRouteKind::Hostname);
+        assert_eq!(routes[0].address, "mac.netbird.cloud:17879");
+
+        let loopback = AdvertisedAddress::new("127.0.0.1", 17879).unwrap();
+        assert!(host_routes(&loopback, &machine(), Some("studio.local")).is_empty());
     }
 
     #[test]

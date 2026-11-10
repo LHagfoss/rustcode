@@ -112,6 +112,18 @@ export interface RemotePairing {
   challenge?: number;
 }
 
+/** How a device reaches this Mac over one route. */
+export type RemoteRouteKind = "lan" | "vpn" | "hostname" | "public" | "unknown";
+
+const ROUTE_KINDS: readonly RemoteRouteKind[] = ["lan", "vpn", "hostname", "public"];
+
+/** One address the phone can dial this Mac at, as the gateway reports it. */
+export interface RemoteRoute {
+  /** `host:port`. */
+  address: string;
+  kind: RemoteRouteKind;
+}
+
 /** Where the gateway listens and who is on it. */
 export interface RemoteGateway {
   connected: boolean;
@@ -123,6 +135,12 @@ export interface RemoteGateway {
   listenAddress?: string;
   /** Only this machine can reach it (a Simulator or a test client). */
   loopbackOnly: boolean;
+  /**
+   * The addresses a phone can dial this Mac at, best first: its LAN
+   * addresses, a mesh VPN address and its `.local` name. Empty from an older
+   * engine and while the gateway listens on loopback only.
+   */
+  routes: RemoteRoute[];
   /** The devices attached to this thread, by name. */
   attachedDevices: string[];
   /** The devices connected to the gateway, by name. */
@@ -333,6 +351,22 @@ function parsePairing(value: Json | undefined): RemotePairing | undefined {
   };
 }
 
+/** The routes the gateway answers on, dropping anything malformed. */
+function parseRoutes(value: Json | undefined): RemoteRoute[] {
+  return (
+    arr(value)
+      ?.map((entry) => {
+        const route = obj(entry);
+        const address = str(route?.address);
+        if (!route || !address) return undefined;
+        const received = str(route.kind);
+        const kind = ROUTE_KINDS.find((known) => known === received) ?? "unknown";
+        return { address, kind };
+      })
+      .filter((route): route is RemoteRoute => route !== undefined) ?? []
+  );
+}
+
 function parseGateway(value: Json | undefined): RemoteGateway | undefined {
   const gateway = obj(value);
   if (!gateway) return undefined;
@@ -342,6 +376,7 @@ function parseGateway(value: Json | undefined): RemoteGateway | undefined {
     advertisedAddress: str(gateway.advertisedAddress),
     listenAddress: str(gateway.listenAddress),
     loopbackOnly: bool(gateway.loopbackOnly) ?? false,
+    routes: parseRoutes(gateway.routes),
     attachedDevices: names(gateway.attachedDevices),
     connectedDevices: names(gateway.connectedDevices),
     pairedDevices: num(gateway.pairedDevices),

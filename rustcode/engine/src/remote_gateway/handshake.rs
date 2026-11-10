@@ -10,6 +10,7 @@
 //! Every frame is one JSON object in one WebSocket text frame, tagged by
 //! `type`. Unknown fields are ignored, so fields can be added.
 
+use super::address::HostRoute;
 use super::devices::DeviceProfile;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -382,6 +383,13 @@ pub enum HandshakeResponse {
         /// thread names; absent means the v1 names.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         wire_names: Option<String>,
+        /// The addresses this host answers on right now, best first: its LAN
+        /// addresses, a mesh VPN (`100.64.0.0/10`) address and its `.local`
+        /// name. A device adds them to the routes it knows for this host, so
+        /// pairing once is enough to reach it on another network. Absent from
+        /// an older gateway and when the listener is loopback only.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        routes: Vec<HostRoute>,
     },
     /// The device token was accepted, or, for a rotating device, the access
     /// token or refresh token it presented was.
@@ -415,6 +423,9 @@ pub enum HandshakeResponse {
         /// thread names; absent means the v1 names.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         wire_names: Option<String>,
+        /// The addresses this host answers on right now, as in `paired`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        routes: Vec<HostRoute>,
     },
     Error {
         code: ErrorCode,
@@ -688,6 +699,7 @@ mod tests {
             access_token: None,
             access_expires_at: None,
             wire_names: None,
+            routes: Vec::new(),
         };
         assert_eq!(
             paired.to_text(),
@@ -706,6 +718,7 @@ mod tests {
             access_token: Some(Secret::new("A1")),
             access_expires_at: Some("2026-01-01T00:15:00Z".into()),
             wire_names: None,
+            routes: Vec::new(),
         };
         assert_eq!(
             rotating.to_text(),
@@ -724,6 +737,7 @@ mod tests {
             access_expires_at: None,
             rotation_id: None,
             wire_names: None,
+            routes: Vec::new(),
         };
         assert_eq!(
             authenticated.to_text(),
@@ -742,6 +756,7 @@ mod tests {
             access_expires_at: Some("2026-01-01T00:15:00Z".into()),
             rotation_id: Some("5be1c4a07d2e9f63".into()),
             wire_names: None,
+            routes: Vec::new(),
         };
         assert_eq!(
             rotated.to_text(),
@@ -855,6 +870,7 @@ mod tests {
             access_token: Some(Secret::new(needle)),
             access_expires_at: None,
             wire_names: None,
+            routes: Vec::new(),
         };
         assert!(!format!("{pair:?}").contains(needle));
         assert!(!format!("{paired:?}").contains(needle));
