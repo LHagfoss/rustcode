@@ -3876,8 +3876,9 @@ export class MockEngine {
       await call("list_projects", {});
       await call("list_pull_requests", { state: "open" });
       await call("update_session", { title: "Managed by its agent", pinned: true });
+      await call("organize_threads", { session_ids: [sid], pinned: true, unread: true });
       await call("configure_session", { effort: "high" });
-      return "Renamed and pinned this thread, and raised its effort.";
+      return "Renamed and pinned this thread, marked it unread, and raised its effort.";
     }
     const tool = /fan.?out/i.test(prompt)
       ? "fan_out"
@@ -5260,6 +5261,26 @@ export class MockTransport implements Transport {
         throw new Error("Pictures outside the thread's folder are not shown.");
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="200" viewBox="0 0 480 200"><rect width="480" height="200" rx="12" fill="#18181a"/><polyline fill="none" stroke="#93a3e8" stroke-width="3" points="20,180 80,170 140,150 200,110 260,40 320,40 380,40 440,40"/><text x="20" y="28" fill="#a1a1a1" font-family="-apple-system" font-size="14">${path}</text></svg>`;
       return { name: path.split("/").pop(), mimeType: "image/svg+xml", data: btoa(svg) };
+    }
+    if (command === "attached_files") {
+      // The shell's `attached_files` (native.rs), with the same rules: inside the roots,
+      // a file, at most ten of them and 5 MB each. A canned size stands in for the file.
+      const paths = Array.isArray(args.paths) ? args.paths.map(String) : [];
+      const absolute = (path: string) => /^(?:[A-Za-z]:)?[\\/]/.test(path);
+      const one = (path: string) => path.replace(/\\/g, "/");
+      const roots = Array.isArray(args.roots) ? args.roots.map(String).filter(absolute) : [];
+      if (paths.length > 10) throw new Error("A message attaches at most 10 files.");
+      if (!roots.length) throw new Error("This thread has no folder to attach a file from.");
+      return paths.map((path) => {
+        if (!absolute(path)) throw new Error(`${path} is not an absolute path.`);
+        const file = one(path);
+        const root = roots.find((r) => {
+          const base = one(r).replace(/\/+$/, "");
+          return file === base || file.startsWith(`${base}/`);
+        });
+        if (!root) throw new Error(`${path} is outside this thread's project.`);
+        return { path, name: file.split("/").pop() ?? path, bytes: 1024 };
+      });
     }
     if (command === "skill_create") return `~/.config/rustcode/skills/${String(args.name)}/SKILL.md`;
     // The mock window has no system clipboard to paste from, and no picture to stand in for.

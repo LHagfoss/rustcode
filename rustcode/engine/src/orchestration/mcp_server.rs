@@ -385,6 +385,16 @@ async fn call(
             ),
         };
     }
+    // The same for a file an older app would drop, instead of attaching it silently
+    // nowhere.
+    if version < super::ATTACHMENT_VERSION && super::carries_attachments(tool, &args) {
+        return CallAnswer {
+            success: false,
+            content: format!(
+                "error: {tool} with attachments needs a newer RustCode app. Nothing was sent."
+            ),
+        };
+    }
     let limit = super::requested_wait(tool, &args).map(|wait| {
         wait + if tool == super::WAIT_SESSION {
             super::WAIT_SERVER_GRACE
