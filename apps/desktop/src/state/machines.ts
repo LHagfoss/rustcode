@@ -357,21 +357,51 @@ async function attach(machine: Machine): Promise<void> {
   }
 }
 
-/** What the supervisor saw: the row, the sidebar group and the chat read it from here. */
+/**
+ * What the supervisor saw: the row, the sidebar group and the chat read it from here. A pairing
+ * the shell says was revoked stays revoked, and a supervisor still backing off keeps the state and
+ * retry clock `machines_list` gave it: only a machine that was connected turns offline here, and
+ * nothing but `machines_list` writes `retryInSecs`.
+ */
 function markMachine(id: string, state: MachineState, detail: string | null): void {
   useMachines.setState((current) => ({
-    machines: current.machines.map((machine) =>
-      machine.id === id
-        ? {
-            ...machine,
-            state,
-            detail,
-            retryInSecs: null,
-            lastConnectedAt: state === "connected" ? new Date().toISOString() : machine.lastConnectedAt,
-          }
-        : machine,
-    ),
+    machines: current.machines.map((machine) => {
+      if (machine.id !== id) return machine;
+      if (state === "connected")
+        return { ...machine, state, detail: null, lastConnectedAt: new Date().toISOString() };
+      if (machine.state !== "connected") return machine;
+      return { ...machine, state: "offline", detail: detail ?? machine.detail };
+    }),
   }));
+}
+
+/**
+ * Tests only: drop every channel and the lists they gave, as a freshly started app would. The
+ * app's own store calls this through `resetForTests` (`state/store.ts`), so one test file's
+ * machines never reach another's.
+ */
+export function resetMachinesForTests(): void {
+  for (const [id, link] of [...links]) {
+    link.connection?.close("The app reset its machines.");
+    void link.transport.stop();
+    announce(id, null);
+  }
+  links.clear();
+  opening.clear();
+  linkListeners.clear();
+  started = false;
+  useMachines.setState({
+    ready: false,
+    error: null,
+    machines: [],
+    counts: {},
+    sessions: {},
+    discovered: null,
+    discovering: false,
+    discoverError: null,
+    pairing: null,
+    pairingError: null,
+  });
 }
 
 /** Stop a machine's channel: the shell stops its supervisor with it. */

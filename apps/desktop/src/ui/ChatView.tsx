@@ -367,9 +367,20 @@ function Header({
     const Icon = entry.icon;
     const node =
       machine && LOCAL_ONLY_BUTTONS.has(id) ? (
-        <ClusterButton key={id} label={entry.label} tooltip={`Runs on ${machine}`} disabled>
-          <Icon size={14} />
-        </ClusterButton>
+        // A disabled button takes no pointer, so the tooltip hangs on a span that can: it says
+        // where the action lives instead of leaving a dead icon.
+        <Tooltip key={id} label={`Runs on ${machine}`}>
+          <span className="inline-flex">
+            <button
+              type="button"
+              aria-label={entry.label}
+              disabled
+              className="inline-flex h-6 w-8 items-center justify-center rounded-full text-fg-muted opacity-40"
+            >
+              <Icon size={14} />
+            </button>
+          </span>
+        </Tooltip>
       ) : (
         <entry.Button key={id} thread={thread} />
       );
@@ -919,6 +930,11 @@ export function ChatView() {
                       ? ` Last updated ${new Date(offUpdated).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}.`
                       : ""}{" "}
                     This thread is read-only until the computer is back.
+                    {ownRequest
+                      ? ownRequest.question
+                        ? " It is waiting for your answer there."
+                        : " It is waiting for your approval there."
+                      : ""}
                   </Callout>
                 </LaneItem>
               )}
@@ -952,7 +968,7 @@ export function ChatView() {
                   <ReportPanel text={report.text} />
                 </LaneItem>
               )}
-              {ownRequest && (
+              {ownRequest && !offline && (
                 <LaneItem over>
                   <AttentionCard
                     request={ownRequest}

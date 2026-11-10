@@ -168,6 +168,8 @@ import {
   CAPABILITY_VERSION,
   DEFAULT_DELEGATES_PER_THREAD,
   DEFAULT_DELEGATES_TOTAL,
+  failure,
+  failureJson,
   forget,
   type GrantAsk,
   isActive,
@@ -985,6 +987,10 @@ let transport: Transport | null = null;
 const machineConnections = new Map<string, AcpConnection>();
 const machineOff = new Map<string, () => void>();
 let machineRouting: Promise<void> | null = null;
+/** The machine store's own subscription, kept so a test reset can let it go. */
+let machineMirrorOff: (() => void) | null = null;
+/** `state/machines.ts` `resetMachinesForTests`, once its module is loaded. */
+let machineReset: (() => void) | null = null;
 
 /** The connection a thread's operations go over: this computer's engine, or that machine's own. */
 export function connectionFor(host: string): AcpConnection | null {
@@ -1037,6 +1043,7 @@ export async function startMachineRouting(): Promise<void> {
   machineRouting = (async () => {
     // Loaded here, not at the top: state/machines.ts reads this module's `toast` and `askConfirm`.
     const machines = await import("./machines");
+    machineReset = machines.resetMachinesForTests;
     machines.onMachineLinks((id, conn) => watchMachineConnection(id, conn));
     const mirror = () => {
       const state = machines.useMachines.getState();
@@ -1045,13 +1052,29 @@ export async function startMachineRouting(): Promise<void> {
       });
       mergeMachineLists(state.sessions);
     };
-    machines.useMachines.subscribe((state, prev) => {
+    machineMirrorOff = machines.useMachines.subscribe((state, prev) => {
       if (state.sessions !== prev.sessions || state.machines !== prev.machines) mirror();
     });
     for (const link of machines.machineLinks()) watchMachineConnection(link.machine.id, link.connection);
     mirror();
   })();
   return machineRouting;
+}
+
+/**
+ * Tests only: forget every machine's channel, the threads it listed and the names it had, so one
+ * test file's machines cannot be another's (machinesThreads.test.ts, `resetForTests`).
+ */
+export function resetMachinesForTests(): void {
+  for (const off of machineOff.values()) off();
+  machineOff.clear();
+  machineConnections.clear();
+  machineRouting = null;
+  machineMirrorOff?.();
+  machineMirrorOff = null;
+  machineReset?.();
+  machineReset = null;
+  set({ connectedHosts: [], machineNames: {}, sessions: [] });
 }
 
 /**
@@ -1086,13 +1109,13 @@ export function watchMachineConnection(id: string, next: AcpConnection | null): 
     next.onInbound((message) => void handleInbound(scopeInbound(message, id), next, id)),
   );
   // Back: the copy on screen is from before it went away, so the thread it shows is read again.
+  // A request it was waiting on stays: the machine re-asks it with the replay, and until then the
+  // card is still what the thread wants from the user (`reply` refuses to answer without a channel).
   set((s) => ({
     connectedHosts: [...machineConnections.keys()],
     threads: Object.fromEntries(
       Object.entries(s.threads).map(([key, t]) =>
-        splitThreadKey(key).host === id
-          ? [key, { ...t, loaded: false, running: false, permissions: [] }]
-          : [key, t],
+        splitThreadKey(key).host === id ? [key, { ...t, loaded: false, running: false }] : [key, t],
       ),
     ),
   }));
@@ -1619,6 +1642,15 @@ async function handleInbound(message: Inbound, conn: AcpConnection | null = conn
         return;
       }
       if (message.method === V2Method.orchestration) {
+        // A machine's threads are not this app's to orchestrate yet: its `start_session` would
+        // create the child on this computer. Refused until cross-machine delegation lands.
+        if (host) {
+          conn?.respond(
+            message.id,
+            failureJson(failure("not_allowed", "Delegation across machines is not available yet.")),
+          );
+          return;
+        }
         const result = await answerOrchestration(message.params);
         conn?.respond(message.id, result);
         return;
@@ -2029,6 +2061,21 @@ export function openThread(id: string): Promise<string | null> {
   const conn = connectionForThread(id);
   const { id: sessionId } = splitThreadKey(id);
   const existing = get().threads[id];
+  // A thread on a machine that is away is still a thread: its row stays and it opens read-only,
+  // with the chat and the composer saying so (docs/desktop.md › Several machines). Without this it
+  // would draw as a new thread, with this computer's folder and controls.
+  if (!conn && threadIsRemote(id)) {
+    if (!existing) {
+      const summary = get().sessions.find((x) => x.id === id);
+      set((s) => ({
+        threads: {
+          ...s.threads,
+          [id]: { ...emptyThread(id, summary?.cwd ?? "", summary?.title), loaded: false },
+        },
+      }));
+    }
+    return Promise.resolve(null);
+  }
   // A copy whose open failed is no copy: opening it again tries again, so a thread that could not
   // be opened once (the engine was restarting, its harness was down) is not refused for good.
   if (!conn || (existing?.loaded && !existing.openFailed) || existing?.loading || loading.has(id))
@@ -2564,17 +2611,34 @@ export function setPinned(ids: string[], on: boolean) {
   set({ pinned: next });
   store(STORAGE.pinned, JSON.stringify(next));
   const many = ids.length > 1;
-  if (!get().features.pins || !connection) return;
-  const link = connection;
-  void Promise.all(
-    ids.map((id) =>
-      link.request(V2Method.sessionPin, { session_id: id, pinned: on }, 10_000).then(
-        () => undefined,
-        (error: unknown) => (error instanceof RpcError && error.isMethodNotFound ? undefined : { id, error }),
+  if (!get().features.pins) return;
+  // A pin is kept by the computer the thread runs on: a machine's threads go over that machine's
+  // connection, with the machine's own id (`state/threadKeys.ts`). A local thread with no engine
+  // keeps the app's pin, as before.
+  const groups = new Map<AcpConnection, string[]>();
+  const unreachable: string[] = [];
+  for (const id of ids) {
+    const conn = connectionForThread(id);
+    if (conn) groups.set(conn, [...(groups.get(conn) ?? []), id]);
+    else if (threadIsRemote(id)) unreachable.push(id);
+  }
+  if (!groups.size && !unreachable.length) return;
+  type PinResult = { id: string; ok: true } | { id: string; ok: false; error: unknown };
+  void Promise.all<PinResult>([
+    ...[...groups].flatMap(([conn, group]) =>
+      group.map((id) =>
+        conn.request(V2Method.sessionPin, { session_id: splitThreadKey(id).id, pinned: on }, 10_000).then(
+          (): PinResult => ({ id, ok: true }),
+          (error: unknown): PinResult =>
+            error instanceof RpcError && error.isMethodNotFound ? { id, ok: true } : { id, ok: false, error },
+        ),
       ),
     ),
-  ).then((results) => {
-    const failed = results.filter((r): r is { id: string; error: unknown } => !!r);
+    ...unreachable.map(
+      (id): PinResult => ({ id, ok: false, error: new Error("That computer is not connected.") }),
+    ),
+  ]).then((results) => {
+    const failed = results.filter((r): r is { id: string; ok: false; error: unknown } => !r.ok);
     if (!failed.length) return;
     const refused = new Set(failed.map((f) => f.id));
     // Unpinning: keep what was pinned before, less the ones the engine took. Pinning: drop the
@@ -3613,7 +3677,17 @@ export interface ResolvedApproval {
  * answer the next. A question also leaves its answer in the transcript, where the reader can see
  * what was asked and what they said (state/thread.ts `questionItem`).
  */
-function reply(request: PermissionRequest, result: JsonObject, answer?: string) {
+function reply(request: PermissionRequest, result: JsonObject, answer?: string): boolean {
+  // The answer goes back on the connection the request arrived on (`handleInbound`). With the
+  // machine away there is nothing to answer on: the card stays, and the turn keeps waiting there.
+  const conn = connectionForThread(request.sessionId);
+  if (!conn) {
+    toast(
+      threadIsRemote(request.sessionId) ? "That computer is not connected." : "The server is not connected.",
+      "error",
+    );
+    return false;
+  }
   updateThread(request.sessionId, (t) => {
     const settled = request.question ? t : settledWait(t, request.toolCallId, Date.now());
     return {
@@ -3624,17 +3698,17 @@ function reply(request: PermissionRequest, result: JsonObject, answer?: string) 
   });
   // Another request of the same thread keeps it waiting; the last one ends the wait.
   if (!get().threads[request.sessionId]?.permissions.length) linkWaitEnded(request.sessionId);
-  // The answer goes back on the connection the request arrived on (`handleInbound`).
-  connectionForThread(request.sessionId)?.respond(request.rpcId, result);
+  conn.respond(request.rpcId, result);
+  return true;
 }
 
 export function answerPermission(request: PermissionRequest, option: PermissionOption | null) {
-  reply(
+  const answered = reply(
     request,
     option ? permissionSelected(option.id) : permissionCancelled,
     request.question ? (option?.name ?? "Declined") : undefined,
   );
-  if (request.question) return;
+  if (!answered || request.question) return;
   settleApproval(request, option);
   // An hour's grant is the engine's to keep: list it again so the panel shows it.
   if (option && optionScope(option) === "hour") void refreshGrants(connection);
@@ -4816,15 +4890,25 @@ export async function setThreadsStatus(ids: string[], status: "review" | "done" 
   if (status === "idle") for (const id of ids) clearStatusMark(id);
   else saveMarks({ ...get().statusMarks, ...Object.fromEntries(ids.map((id) => [id, status])) });
   for (const id of ids) scheduleAutoCompact(id);
-  if (!get().features.status || !connection) return 0;
-  const link = connection;
+  if (!get().features.status) return 0;
+  // The status is kept by the computer the thread runs on, one request each on its own connection.
+  const groups = new Map<AcpConnection, string[]>();
   const errors: unknown[] = [];
   for (const id of ids) {
-    try {
-      await link.request(V2Method.sessionStatus, { session_id: id, status }, 10_000);
-      // The engine keeps it now; the app's mark only covers the gap until the list says so.
-    } catch (error) {
-      if (!(error instanceof RpcError && error.isMethodNotFound)) errors.push(error);
+    const conn = connectionForThread(id);
+    if (conn) groups.set(conn, [...(groups.get(conn) ?? []), id]);
+    // A local thread with no engine keeps the mark in the app only, as before; a machine's thread
+    // that cannot be reached is said, since the machine will not have it.
+    else if (threadIsRemote(id)) errors.push(new Error("That computer is not connected."));
+  }
+  for (const [conn, group] of groups) {
+    for (const id of group) {
+      try {
+        await conn.request(V2Method.sessionStatus, { session_id: splitThreadKey(id).id, status }, 10_000);
+        // The engine keeps it now; the app's mark only covers the gap until the list says so.
+      } catch (error) {
+        if (!(error instanceof RpcError && error.isMethodNotFound)) errors.push(error);
+      }
     }
   }
   if (errors.length) {
@@ -6029,6 +6113,9 @@ export async function revokeRemoteDevice(id: string): Promise<void> {
 
 /** Test hook: reset to a clean slate. */
 export function resetForTests() {
+  // A machine's channel and its threads are process-global too: one test file's MockMachine must
+  // not answer the next one's `openThread` (machinesThreads.test.ts › findings 1).
+  resetMachinesForTests();
   lastFocusListAt = 0;
   remoteStatusRevision += 1;
   remoteStatusReadId = 0;

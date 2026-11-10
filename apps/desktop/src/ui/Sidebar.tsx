@@ -36,6 +36,7 @@ import {
   GitPullRequestArrow,
   GitPullRequestClosed,
   GitPullRequestDraft,
+  Laptop,
   MessageCircleQuestion,
   MessageSquareQuote,
   PanelLeft,
@@ -237,6 +238,10 @@ function ThreadMenuItems({
   const bulkSettled = useApp((s) => (bulk ?? []).some((x) => statusOf(s, x.id) === "done"));
   const bulkAllSettled = useApp((s) => !!bulk?.length && bulk.every((x) => statusOf(s, x.id) === "done"));
   const canFiles = hasShell();
+  // A thread on another computer: its folder, its git and its shell are there, so this menu drops
+  // what would act on this computer's copy of the path (`revealPath`, `worktree_remove`, review).
+  const machineName = useMachines((s) => s.machines.find((m) => m.id === session.host)?.name);
+  const remote = !!session.host;
   // The selection's menu: every hook is read above, so the early return keeps the hooks in order.
   if (bulk && bulk.length > 1) {
     const n = bulk.length;
@@ -345,9 +350,11 @@ function ThreadMenuItems({
           </Menu.Portal>
         </Menu.Sub>
       )}
-      <Item className={menuItem} onSelect={() => setView({ kind: "review", threadId: session.id })}>
-        <FileDiff size={13} /> Review Changes
-      </Item>
+      {!remote && (
+        <Item className={menuItem} onSelect={() => setView({ kind: "review", threadId: session.id })}>
+          <FileDiff size={13} /> Review Changes
+        </Item>
+      )}
       <Item className={menuItem} onSelect={() => setAutoCompactForThread(session.id, autoCompactOff)}>
         <Sparkles size={13} /> {autoCompactOff ? "Turn On Auto-compact" : "Turn Off Auto-compact"}
       </Item>
@@ -359,63 +366,80 @@ function ThreadMenuItems({
         {pinned ? <PinOff size={13} /> : <Pin size={13} />}
         {pinned ? "Unpin" : "Pin"}
       </Item>
-      <Item className={menuItem} disabled={!canFiles} onSelect={onRename}>
-        <Pencil size={13} /> Rename…
-      </Item>
+      {!remote && (
+        <Item className={menuItem} disabled={!canFiles} onSelect={onRename}>
+          <Pencil size={13} /> Rename…
+        </Item>
+      )}
       <Item className={menuItem} onSelect={() => void repairThread(session.id)}>
         <Wrench size={13} /> Repair Thread
       </Item>
       <Item className={menuItem} onSelect={() => copyText(session.id, "Thread ID copied")}>
         <Copy size={13} /> Copy Thread ID
       </Item>
-      <Item
-        className={menuItem}
-        disabled={!canFiles}
-        onSelect={() =>
-          void openThreadLog(session.id).catch((e) =>
-            toast(`Could not open the thread log: ${errorText(e)}`, "error"),
-          )
-        }
-      >
-        <FileText size={13} /> Open Thread Log
-      </Item>
+      {!remote && (
+        <Item
+          className={menuItem}
+          disabled={!canFiles}
+          onSelect={() =>
+            void openThreadLog(session.id).catch((e) =>
+              toast(`Could not open the thread log: ${errorText(e)}`, "error"),
+            )
+          }
+        >
+          <FileText size={13} /> Open Thread Log
+        </Item>
+      )}
       {worktree && (
         <>
           <Separator className={menuSeparator} />
           <div className="flex items-center gap-1.5 px-2 pt-0.5 pb-1 text-caption text-fg-muted">
             <GitBranch size={11} /> <span className="truncate font-mono">{worktree.branch}</span>
           </div>
-          <Item className={menuItem} disabled={!canFiles} onSelect={() => revealPath(worktree.path)}>
-            <FolderOpen size={13} /> Open in {fileManagerName()}
-          </Item>
+          {!remote && (
+            <>
+              <Item className={menuItem} disabled={!canFiles} onSelect={() => revealPath(worktree.path)}>
+                <FolderOpen size={13} /> Open in {fileManagerName()}
+              </Item>
+              <Item
+                className={menuItem}
+                disabled={!canFiles}
+                onSelect={() => void openTerminalAt(worktree.path).catch((e) => toast(String(e), "error"))}
+              >
+                <SquareTerminal size={13} /> Open in Terminal
+              </Item>
+              <Item className={cx(menuItem, menuItemDanger)} onSelect={() => void removeWorktree(session.id)}>
+                <FolderX size={13} /> Remove Worktree…
+              </Item>
+            </>
+          )}
+        </>
+      )}
+      {!remote && (
+        <>
+          <Separator className={menuSeparator} />
           <Item
-            className={menuItem}
+            className={cx(menuItem, menuItemDanger)}
             disabled={!canFiles}
-            onSelect={() => void openTerminalAt(worktree.path).catch((e) => toast(String(e), "error"))}
+            onSelect={() =>
+              askConfirm({
+                title: "Move this thread to the Trash?",
+                message: `"${session.title || "New thread"}" and its history move to the Trash, where you can still get them back.`,
+                action: "Move to Trash",
+                destructive: true,
+                run: () => void trashThread(session.id),
+              })
+            }
           >
-            <SquareTerminal size={13} /> Open in Terminal
-          </Item>
-          <Item className={cx(menuItem, menuItemDanger)} onSelect={() => void removeWorktree(session.id)}>
-            <FolderX size={13} /> Remove Worktree…
+            <Trash2 size={13} /> Move to Trash
           </Item>
         </>
       )}
-      <Separator className={menuSeparator} />
-      <Item
-        className={cx(menuItem, menuItemDanger)}
-        disabled={!canFiles}
-        onSelect={() =>
-          askConfirm({
-            title: "Move this thread to the Trash?",
-            message: `"${session.title || "New thread"}" and its history move to the Trash, where you can still get them back.`,
-            action: "Move to Trash",
-            destructive: true,
-            run: () => void trashThread(session.id),
-          })
-        }
-      >
-        <Trash2 size={13} /> Move to Trash
-      </Item>
+      {remote && machineName && (
+        <div className="px-2 pt-1 pb-0.5 text-caption text-fg-faint">
+          Files, git and the shell run on {machineName}.
+        </div>
+      )}
     </>
   );
 }
@@ -626,6 +650,7 @@ const ThreadRow = memo(function ThreadRow({
   selected,
   context,
   grouped,
+  machine,
   now,
   hint,
   pull,
@@ -646,6 +671,8 @@ const ThreadRow = memo(function ThreadRow({
   dragging?: boolean;
   /** Under its project's heading: the row leaves out the mark and the name it would repeat. */
   grouped: boolean;
+  /** The computer the thread runs on, when that is not this one: the hover card says so. */
+  machine?: string;
   now: number;
   /** No parent row above it (a search result, or a filtered-out parent): the thread it belongs under. */
   hint?: string;
@@ -876,6 +903,7 @@ const ThreadRow = memo(function ThreadRow({
           <ThreadHoverCard
             session={session}
             project={project}
+            machine={machine}
             harness={harnessName}
             model={modelName(session.model)}
             status={chip?.label ?? (done ? "Settled" : "Idle")}
@@ -932,6 +960,15 @@ const ThreadRow = memo(function ThreadRow({
                     {!grouped && <ProjectMark name={project} size={14} className={markTint} />}
                     {glyphs}
                     <span className={titleTint}>{session.title || "New thread"}</span>
+                    {machine && !grouped && (
+                      <span
+                        className="flex shrink-0 items-center gap-0.5 text-fg-faint"
+                        title={`Runs on ${machine}`}
+                      >
+                        <Laptop size={10} />
+                        <span className="max-w-[84px] truncate">{machine}</span>
+                      </span>
+                    )}
                     {stateSlot(false)}
                   </span>
                   {/* The second line, only when there is something to say: the branch it works in,
@@ -986,6 +1023,15 @@ const ThreadRow = memo(function ThreadRow({
                       <ProjectMark name={project} size={14} className={markTint} />
                     )}
                     <span className="min-w-0 flex-1 truncate">{grouped ? (harnessName ?? "") : project}</span>
+                    {machine && !grouped && (
+                      <span
+                        className="flex shrink-0 items-center gap-0.5 text-fg-faint"
+                        title={`Runs on ${machine}`}
+                      >
+                        <Laptop size={10} />
+                        <span className="max-w-[84px] truncate">{machine}</span>
+                      </span>
+                    )}
                     {stateSlot(true)}
                   </span>
                   {/* The title, in the weight of what the thread wants. */}
@@ -1825,11 +1871,13 @@ export function Sidebar() {
     }
     // One group per machine once a computer is paired: this one first, then each machine with the
     // state of its connection, and the threads by project inside (docs/desktop.md › Several machines).
-    let projects: ProjectGroup[] | undefined;
-    if (machines.length) {
-      projects = [];
+    // Working and Pinned are grouped too, so a running thread on another computer is never drawn
+    // beside a local one as if it were here.
+    const machineGroups = (id: SectionId, items: SessionSummary[]): ProjectGroup[] | undefined => {
+      if (!machines.length) return undefined;
+      const groups: ProjectGroup[] = [];
       for (const host of [LOCAL_HOST, ...machines.map((m) => m.id)]) {
-        const mine = active.filter((s) => (s.host ?? LOCAL_HOST) === host);
+        const mine = items.filter((s) => (s.host ?? LOCAL_HOST) === host);
         if (!mine.length && host === LOCAL_HOST) continue;
         const saved = machines.find((m) => m.id === host);
         const head: MachineHead = saved
@@ -1838,7 +1886,7 @@ export function Sidebar() {
         // A machine that has not listed a thread yet (away, or just paired) keeps its heading, so
         // the list still says it is there.
         if (!mine.length) {
-          projects.push({
+          groups.push({
             key: `${host}\u0000`,
             label: "",
             items: [],
@@ -1854,12 +1902,12 @@ export function Sidebar() {
           perProject.set(key, [...(perProject.get(key) ?? []), s]);
         }
         let first = true;
-        for (const [project, items] of perProject) {
+        for (const [project, rows] of perProject) {
           const key = `${host}\u0000${project}`;
-          projects.push({
+          groups.push({
             key,
             label: project ? projectName(project) : "No folder",
-            items: arranged("threads", items, key),
+            items: arranged(id, rows, key),
             machine: head,
             first,
             only: perProject.size === 1,
@@ -1867,7 +1915,12 @@ export function Sidebar() {
           first = false;
         }
       }
-    } else if (byProject && byKey.size > 1) {
+      return groups;
+    };
+    // The Threads list's project groups: by machine when one is paired, else by the preference.
+    let projects: ProjectGroup[] | undefined;
+    if (machines.length) projects = machineGroups("threads", active);
+    else if (byProject && byKey.size > 1) {
       projects = [...byKey.entries()].map(([key, items]) => ({
         key,
         label: key ? projectName(key) : "No folder",
@@ -1884,7 +1937,12 @@ export function Sidebar() {
       id,
       label: LABELS[id],
       items: arranged(id, placed[id]),
-      projects: id === "threads" ? projects : undefined,
+      projects:
+        id === "threads"
+          ? projects
+          : id === "working" || id === "pinned"
+            ? machineGroups(id, placed[id])
+            : undefined,
     }));
     for (const g of all) {
       // A Snoozed shelf advertises nothing: what its rows did while asleep is not news
@@ -2322,6 +2380,7 @@ export function Sidebar() {
   const rowFor = (s: SessionSummary, grouped: boolean, hint = true) => (
     <ThreadRow
       session={s}
+      machine={s.host ? machines.find((m) => m.id === s.host)?.name : undefined}
       selected={s.id === selectedId}
       context={s.id === contextSelected && s.id !== selectedId}
       // A row being dragged shows no hover card and takes no pointer.
