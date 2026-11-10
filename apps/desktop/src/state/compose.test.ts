@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
+  commandSuggestions,
   composedText,
   emptyExtras,
   hasTokens,
+  insertCommand,
   messageCollapses,
   promptBlocks,
   sentAttachments,
   sentMessages,
+  slashToken,
   splitImageMarkers,
   splitSlashCommand,
   splitTokens,
@@ -131,6 +134,74 @@ describe("tokens in the draft", () => {
     expect(hasTokens("https://x.dev")).toBe(true);
     // Two calls in a row on the same draft: the mirrors' patterns carry no `lastIndex` state.
     expect(hasTokens("@src/a.ts")).toBe(true);
+  });
+});
+
+describe("the slash token", () => {
+  test("opens at the start or after whitespace, at any line", () => {
+    expect(slashToken("/", 1)).toEqual({ start: 0, query: "" });
+    expect(slashToken("/rev", 4)).toEqual({ start: 0, query: "rev" });
+    expect(slashToken("please /rev", 11)).toEqual({ start: 7, query: "rev" });
+    expect(slashToken("one\ntwo /rel", 12)).toEqual({ start: 8, query: "rel" });
+  });
+
+  test("a path, an email-like word or a finished token is not one", () => {
+    expect(slashToken("/usr/bin", 8)).toBeNull();
+    expect(slashToken("and/or", 7)).toBeNull();
+    expect(slashToken("/rev fix it", 11)).toBeNull();
+    expect(slashToken("no slash here", 13)).toBeNull();
+  });
+
+  test("the caret inside a word opens nothing", () => {
+    expect(slashToken("/review", 3)).toBeNull();
+  });
+});
+
+describe("command suggestions", () => {
+  const commands = [
+    {
+      name: "/review",
+      description: "Review the diff",
+      takesArguments: false,
+      report: false,
+      action: "execute",
+    },
+    {
+      name: "/release-automation",
+      description: "Cut a release",
+      takesArguments: true,
+      report: false,
+      action: "skill",
+    },
+    { name: "/status", description: "Show status", takesArguments: false, report: true, action: "execute" },
+  ];
+
+  test("names that start with what is typed come first, then the ones that contain it", () => {
+    expect(commandSuggestions("re", commands).map((c) => c.name)).toEqual(["/review", "/release-automation"]);
+    expect(commandSuggestions("status", commands).map((c) => c.name)).toEqual(["/status"]);
+    expect(commandSuggestions("", commands).map((c) => c.name)).toEqual([
+      "/review",
+      "/release-automation",
+      "/status",
+    ]);
+  });
+
+  test("it keeps to a bound and drops what does not match", () => {
+    expect(commandSuggestions("zzz", commands)).toEqual([]);
+    expect(commandSuggestions("", commands, 2)).toHaveLength(2);
+  });
+});
+
+describe("inserting a command token", () => {
+  test("replaces the token and leaves a space to keep typing", () => {
+    expect(insertCommand("please /rel now", { start: 7, query: "rel" }, "/release-automation")).toEqual({
+      text: "please /release-automation now",
+      caret: 27,
+    });
+  });
+
+  test("at the start it becomes the leading command", () => {
+    expect(insertCommand("/rev", { start: 0, query: "rev" }, "/review").text).toBe("/review ");
   });
 });
 

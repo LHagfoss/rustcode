@@ -498,6 +498,7 @@ export interface SlashCommand {
   description: string;
   takesArguments: boolean;
   report: boolean;
+  /** Who answers it: `execute`, an app action (`new_session`, `model_picker`…), or `skill`. */
   action: string;
 }
 

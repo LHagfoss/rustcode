@@ -39,6 +39,20 @@ export function menuCommands({
 }
 
 /**
+ * `commands`, then the skills the engine lists (`action: "skill"`) that the
+ * harness's own list does not already have. Skills are RustCode's catalog, not
+ * a harness's: Claude Code only advertises the ones under `.claude/skills`, so
+ * a skill in `~/.agents/skills` would otherwise never reach the drawer.
+ */
+export function withSkills(commands: SlashCommand[], base: SlashCommand[]): SlashCommand[] {
+  const present = new Set(commands.map((command) => command.name.toLowerCase()));
+  const skills = base.filter(
+    (command) => command.action === "skill" && !present.has(command.name.toLowerCase()),
+  );
+  return skills.length ? [...commands, ...skills] : commands;
+}
+
+/**
  * `commands` as the harness's latest list: it moves to the most recent end of
  * the map, and both the map and its list are trimmed to their bounds.
  */

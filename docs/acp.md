@@ -253,6 +253,14 @@ the commands before it has a session to advertise them on: the desktop app's
 new thread shows its drawer from it, then follows the harness that thread
 starts on.
 
+Every enabled skill is advertised too, with `_meta.rustcode.action: "skill"`
+and an arguments input, so a client can offer `/release-automation` by name.
+`discover_skills` leaves a harness's own roots out: Claude Code advertises the
+skills under `.claude/skills` itself, and the app adds the engine's beside
+them. A client sends a skill as `/name arguments`; the built-in harness keeps
+that text as a prompt rather than reading it as an unknown command, and
+`skills::skill_routing_hint` points the model at `use_skill`.
+
 ## Themes
 
 `_rustcode/themes` (`{"cwd"?}`) answers `{"active", "themes": [{"name",

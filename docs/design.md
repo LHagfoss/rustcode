@@ -241,9 +241,10 @@ rather than a `hover:bg-…` utility a class rule would beat.
 
 The composer floats over the transcript as one card: the field, and under it one control row with
 every control the send needs. Its slash and `@` menus are a solid drawer attached to the box's top
-edge. Everything in the card starts on one left edge: the field, the chips, the thumbnails and the
-hint rows at 20px (`px-5`); the tray at 12px (`px-3`), because its round controls carry 8px of their
-own, which puts their icons on that same edge.
+edge, each opened by the token at the caret, at the start of the message or after whitespace
+anywhere in it. Everything in the card starts on one left edge: the field, the chips, the
+thumbnails and the hint rows at 20px (`px-5`); the tray at 12px (`px-3`), because its round
+controls carry 8px of their own, which puts their icons on that same edge.
 
 The composer takes the shared glass in the sidebar's own hue: `--rc-glass-alpha` of
 `--rc-sidebar` behind the shared filter, a step denser while focused or over a
