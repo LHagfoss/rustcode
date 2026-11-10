@@ -68,9 +68,22 @@ terminal exits; `rustcode remote stop` stops it.
 ## Automatic address selection
 
 Without `--bind` or a configured bind, `auto` chooses an active Wi-Fi/Ethernet
-address, preferring private IPv4 LAN addresses over VPN addresses. The OS route
-breaks ties between LAN interfaces. Virtual bridges and link-local addresses
-are excluded. The listener binds only the selected address and advertises it.
+address to advertise, preferring private IPv4 LAN addresses over VPN addresses.
+The OS route breaks ties between LAN interfaces. Virtual bridges and
+link-local addresses are excluded.
+
+The same plan also opens a listener on every other LAN address and on every
+overlay address a tunnel interface has: a `100.64.0.0/10` address as NetBird,
+Tailscale and ZeroTier hand out, and Tailscale's `fd7a:115c:a1e0::/48`. The
+machine therefore answers at home on the LAN and away from home over the mesh,
+without `--bind` or `--advertise`. Tunnel interfaces are recognised by name on
+every OS (`utun*`, `tun*`, `wg*`, `wt0`, `tailscale0`, `zt*`, `wintun`, and the
+Windows adapter names `NetBird`, `Tailscale`, `WireGuard Tunnel`,
+`ZeroTier One`); a private address on one of them is an overlay address, and on
+Wi-Fi or Ethernet it is the LAN. A `100.64.0.0/10` address on Wi-Fi or
+Ethernet is a carrier's CGNAT address, not a mesh one: it is never a candidate,
+never bound, and never reported as a route. `--advertise` still replaces the
+address pairing details name.
 
 To prefer the mesh instead (stable across Wi-Fi changes, reachable off-LAN),
 set `[remote] prefer_interface = "netbird"` — or
@@ -86,10 +99,12 @@ access for a Simulator or test client.
 
 The selection is repeated every five seconds while the gateway runs. When the
 answer changes (DHCP handed out another address, the machine joined another
-network, Wi-Fi came up after the gateway did) the listener moves to the new
-address on the same port, without a restart: pairing details, the QR code,
-`remote status` and `/remote status` name the new address, shared sessions
-stay registered and devices stay paired. A device that still dials the old address
+network, Wi-Fi came up after the gateway did, a mesh VPN came up or went down)
+the listeners follow on the same port, without a restart: the primary listener
+moves to the new LAN address and the extra LAN and overlay listeners open and
+close with their interfaces. Pairing details, the QR code, `remote status` and
+`/remote status` name the new address, shared sessions stay registered and
+devices stay paired. A device that still dials the old address
 needs the new one: on the same network the app finds it by itself from the
 Bonjour announcement, without a code; otherwise a fresh QR code gives it. An explicit `--bind <ip>` is never moved.
 
@@ -138,7 +153,8 @@ kept.
 
 | In the app | What it does |
 | --- | --- |
-| **Remote access › Network access** | On: starts the gateway and lets paired devices reach every thread on this computer. Off: stops it. |
+| **Remote access › Network access** | On: starts the gateway and lets paired devices reach every thread on this computer, and installs the RustCode server as a background service first if it is not installed (after a confirmation: it stays up when the app closes and starts when you log in, see [server](server.md)). Off: stops the gateway. |
+| **Remote access › RustCode server** | Whether the RustCode server is installed to run in the background (*Installed · Running*), with *Install* when it is not. Installed, the shared engine stays up when the app closes and starts when you log in; the threads this app starts are still its own engine's and end with it, until the app is switched to the server. |
 | **Remote access › Gateway address** | The `host:port` a device dials, how many devices are connected, and whether it is reachable from another machine at all. |
 | **Remote access › Pair a device** | Calls the same pairing challenge as `/remote pair`: a QR code, the address, the manual code, the countdown and the wrong codes left. Remote access is switched on first if it was off. |
 | **Pairing** | The challenge on screen, its countdown, the wrong codes left, a lockout, and *Paired ‹name›* once a device pairs. |
@@ -146,7 +162,7 @@ kept.
 | **Remote access › Asking to connect** | The same requests with the same answers, while any are open. |
 | **Paired devices** | How many devices are paired, with their names and when each was last seen. *Revoke* forgets one and disconnects it at once, as `rustcode remote revoke` does. |
 | **Remote access › Refused connections** | Devices the gateway turned away, newest first, for a quarter of an hour after each stopped trying: an app that speaks another remote protocol version, a pairing code that did not work, an unknown or revoked pairing, or an app that was refused before it could say anything. Each says what happened and what to do, so a phone whose only message is that it cannot connect is answered here. See [Refused connections](#refused-connections). |
-| **Routes** | The addresses the phone can dial this computer at, best first: each LAN address, a NetBird or Tailscale `100.64.0.0/10` address, and the machine's `.local` name. The handshake reports the same list, so a phone learns it and keeps using the first route that answers. |
+| **Routes** | The addresses the phone can dial this computer at, best first: each LAN address it listens on, each overlay address (NetBird, Tailscale or ZeroTier, with its provider when the interface name says) and the machine's `.local` name. The handshake reports the same list, so a phone learns it and keeps using the first route that answers. |
 | A thread's header chip | Shown while a thread is shared; it carries the number of devices attached to that thread. |
 
 Each shared thread tells a device which harness runs it and its model
@@ -179,8 +195,8 @@ of `0` and `1`, quiet zone included), `target` (the harness a shared thread
 runs on), `notShared` (why this thread is held back on a thread's answer, the
 count of held-back threads on the machine's) and, for the machine,
 `gateway.pairing`, `gateway.connectedDevices` and `gateway.routes` (each
-route's `address` and `kind` `lan`, `vpn`, `hostname` or `public`) from the
-gateway's own status, plus `devices` (each paired device's `id`, `name`, `kind` `phone`,
+route's `address`, `kind` `lan`, `overlay`, `hostname` or `public`, and the
+`provider` of an overlay address) from the gateway's own status, plus `devices` (each paired device's `id`, `name`, `kind` `phone`,
 `desktop` or `cli`, `platform`, `hostId`, `lastSeenAt` and, on the machine's
 answer, `connected`), `connectRequests` (open: `id`, `deviceName`,
 `deviceKind`, `platform`,
@@ -275,29 +291,43 @@ that pairing details tell a device to dial; it takes an IP address or host
 name and uses the listener's port.
 
 - A loopback or specific bind advertises itself unless `--advertise` is given.
-- `auto` selects one local address as described above; `bind = "auto"` also
-  works in the user configuration.
+- `auto` selects the LAN-first address to advertise and opens the other LAN
+  and overlay listeners, as described above; `bind = "auto"` also works in the
+  user configuration.
 - `0.0.0.0` and `::` are never advertised. Binding a wildcard requires
   `--advertise` unless exactly one interface address is a candidate; the
   error lists the candidates.
-- A wildcard bind also lists the listener's other addresses in the pairing
-  details and the QR code (`alternates`), so a phone that cannot reach the
-  advertised address (say, a mesh address on a phone without the mesh VPN)
-  tries the LAN instead: private IPv4 on Wi-Fi/Ethernet first, then mesh
-  addresses in 100.64.0.0/10, then global IPv6, at most four. The advertised
-  address, loopback, link-local and container/VM bridges are left out. A bind
-  to one address has none.
+- The pairing details and the QR code carry the listener's other addresses as
+  `alternates`, so a device that cannot reach the advertised address (say, a
+  mesh address on a phone without the mesh VPN) tries the LAN instead: private
+  IPv4 on Wi-Fi/Ethernet first, then private and mesh addresses on tunnel
+  interfaces (100.64.0.0/10 included), then global IPv6, at most four. The
+  advertised address, loopback, link-local and container/VM bridges are left
+  out. A wildcard bind offers every candidate of its family; an `auto` bind
+  offers the addresses it opened; a specific bind offers none.
 - The `[remote]` section is read from the user configuration only. A project's
   `.rustcode/config.toml` cannot choose the interface your sessions are
   exposed on.
 
-After authentication the gateway reports its current routes (`routes` on
-`paired` and `authenticated`): the advertised address, each LAN IPv4 address,
-a `100.64.0.0/10` mesh address and the machine's `.local` name, each with its
-kind. A device adds them to the routes it keeps for this host, so pairing once
-is enough to reach it on another network, and it tries them in order. The same
-list is in `rustcode remote status` and Settings › Remote access; the pairing
-QR code's `alternates` stay compatible with it.
+After authentication the gateway reports every address it answers on
+(`routes` on `paired` and `authenticated`), best first: the advertised
+address, each LAN address, each overlay address on a tunnel interface, and the
+machine's `.local` name. Each is `{ "address": "host:port", "kind": … }`, where
+`kind` is one of
+
+| Kind | What it is |
+| --- | --- |
+| `lan` | a private IPv4 address on Wi-Fi or Ethernet |
+| `overlay` | an overlay or VPN address, with `provider` `netbird`, `tailscale` or `zerotier` when the interface name says which; absent on macOS's shared `utunN` |
+| `hostname` | a name, such as the machine's `.local` name |
+| `public` | a public address or name; a client refuses to send a token over one until there is encrypted transport (#2651) |
+
+Only addresses the gateway is actually listening on are reported: an address
+it does not answer on is not a route. A device adds them to the routes it
+keeps for this host, so pairing once is enough to reach it on another network.
+The same list is in `rustcode remote status` and Settings › Remote access; the
+pairing QR code's `alternates` stay compatible with it, and with an `auto` bind
+they name the LAN and overlay addresses a device may dial instead.
 
 ## Pairing
 
@@ -468,7 +498,7 @@ fills in the same saved machines.
 | --- | --- |
 | `rustcode machines add <address> [--name <name>] [--code <digits>]` | Ask the machine to let this one in; the code is exactly the eight digits it shows (spaces and dashes are ignored). It shows *‹name› wants to connect* on that machine; accept it there, then type the eight-digit code it shows (or pass `--code`). Prints `Waiting for … to accept…` while the request is open. Pairs, stores the token and saves the machine. |
 | `rustcode machines add --discover` | The same, choosing the machine from Bonjour when exactly one answers. |
-| `rustcode machines list [--threads] [--json]` | Name, platform, the route in use and whether the machine answers now. The platform is `unknown` until the gateway reports one, which it does not yet. With `--threads`, each connected machine's thread titles over ACP (`session/list`). `--json` for scripts. |
+| `rustcode machines list [--threads] [--json]` | Name, platform, the route in use and whether the machine answers now. Under a machine that is reachable one way and not another, it prints the hint: e.g. `Not reachable over NetBird (100.90.16.237:17879). On that machine, check that NetBird allows inbound connections and that an access policy allows TCP 17879 between the two machines.` The platform is `unknown` until the gateway reports one. With `--threads`, each connected machine's thread titles over ACP (`session/list`). `--json` for scripts, with the same hint under `hint`. |
 | `rustcode machines remove <name-or-id>` | Forget a machine and delete its token. It still lists this computer until it is revoked there. |
 | `rustcode machines discover [--secs <n>] [--json]` | Machines on this network whose record lists `caps=desktops`: name, address and machine id. |
 
@@ -490,8 +520,14 @@ holds until encrypted transport (#2651) lands.
 - Saved machines live in `machines.json` in the configuration directory
   (`0600` on Unix). Each is keyed by the machine's stable `host_id` — its
   gateway identifier — with an ordered list of routes (`lan`, `vpn`,
-  `tailscale`, `public`), the device record and when it was added and last
-  connected. The first machine saved is the **main** one. A change takes
+  `tailscale`, `public`), the device record, the RustCode version it last
+  reported, and when it was added and last connected. The version is an
+  optional field of the `paired` and `authenticated` frames
+  (`docs/remote-protocol`); an older gateway sends none, and the row says
+  nothing about a version rather than guessing one. A route keeps the product
+  an overlay address is on (`netbird`,
+  `zerotier`; a Tailscale address is its own kind and provider). The first
+  machine saved is the **main** one. A change takes
   `machines.lock` next to the file and re-reads it first, so two
   `rustcode machines` runs cannot drop each other's machine.
 - Tokens are kept in the operating system credential store (Keychain,
@@ -511,26 +547,50 @@ holds until encrypted transport (#2651) lands.
   fallback, instead of doing so after the other machine has accepted the
   request and enrolled this computer (#3325). The token write after the code is
   bounded the same way.
-- Routes are tried in the saved order; the first that authenticates *as the
-  machine we saved* — same `host_id`, and the device record the token belongs
-  to — is used. An address that now belongs to another computer is refused
-  rather than trusted. Racing routes, learning new addresses and moving back to
-  a better route are not implemented yet; the saved order decides.
+- Routes are raced, not walked in order. Every LAN route starts at once; after
+  one second the overlay routes start too; the first connection that
+  authenticates *as the machine we saved* — same `host_id`, and the device
+  record the token belongs to — wins, and the rest are cancelled. The whole
+  race ends after five seconds. An address that now belongs to another
+  computer is refused rather than trusted. Because a connection that drops is
+  re-raced, the client moves to a route that works again (a LAN after
+  returning home, an overlay after leaving it) on the next attempt.
+- The addresses a machine reports after authentication are learned and
+  saved: a new LAN address goes before the overlay routes, a new overlay
+  address after them, and an address already saved only updates its kind and
+  product. Pairing once is therefore enough to reach a machine on a network it
+  was not paired on.
+- The app's Add sheet lists more than Bonjour: a saved machine's overlay
+  address, learned from its handshake, is listed too, so a machine away from
+  home is one click rather than a typed IP. The two sources are merged by host
+  id, one row per machine, and an address found that way never needs typing.
+  `rustcode machines discover` itself stays Bonjour only, since it is a
+  one-shot browse with no saved machines behind it.
+- A hint is shown when one *kind* of route answers and another does not, in
+  `machines list` and in the app's machine status: an overlay address that
+  fails while the LAN works names the product and what to check there (and a
+  LAN that fails while the overlay works is expected away from home). The
+  overlay probe is a plain TCP connect after the LAN wins — it never carries a
+  token — so the diagnosis costs nothing when there is no overlay route.
 
 ### In the desktop app
 
 Settings › **Machines** is the same pairing without a terminal: *This Mac* (or
 *This PC*) first — the app's own RustCode server — then one row per saved
-machine. `?machines=paired|connect|offline|revoked` in the mock shows the page
-without a second computer.
+machine, then the machines found for adding. `?machines=paired|connect|offline|revoked`
+in the mock shows the page without a second computer; `connect` starts with one
+saved machine on an older RustCode reached over NetBird and the background
+server not installed, so the add sheet, the version skew line and the install
+are all visible at once.
 
 | In the app | What it does |
 | --- | --- |
-| **Add machine › Machines on this network** | Bonjour, the same browse as `machines discover`: every machine whose record lists `caps=desktops`, with *Ask to connect*. |
-| **Add machine › Enter an address** | The `host:port` a machine is reached on when it is not announced (an overlay, or another subnet). |
+| **Machines found** | The machines the Add sheet lists without an address typed, filled in when the page opens (*Look again* to repeat): Bonjour, the same browse as `machines discover`, for every machine whose record lists `caps=desktops`; and the *saved* machines whose handshake reported a NetBird, Tailscale or ZeroTier address, which no browse on the LAN can hear. One machine found both ways is one row, merged by its host id. Each row names the machine, its platform, the RustCode version it runs, the network its address is on (`LAN`, `NetBird`, `Tailscale`, `VPN`, `Public`) and the address. A machine not yet paired has *Ask to connect*; one already saved is *Saved*. When the local browse itself fails (a container or a network without multicast), the rows from the saved machines are still listed and the sheet says *Could not look for machines on this network* with the reason. |
+| **Machines found › Enter an address** | The `host:port` a machine is reached on when it is not announced (an overlay, or another subnet). The fallback, never the first step. |
 | **Waiting for ‹host› to accept on that machine…** | The request is on that machine's screen; *Cancel* drops it. Once its owner accepts, the eight digits it shows are typed here, one box per digit. |
 | **Checking the code** | The code is being checked with that machine, which answers within ten seconds. After half a minute the page stops waiting and says so — *‹host› did not answer* — with **Ask again** and **Cancel**: a machine that accepted the code but could not store the token still lists this computer as a device, so it is removed there and the pairing started again. No stage of the flow is a spinner without a way out. |
-| A machine row | Its name and platform, the state chip at the row's top right — *Connected*, *Connecting*, *Offline · retrying in N s*, *Needs pairing* — the route **in use** under the name as `LAN · Unencrypted` or `Tailscale`/`VPN · Encrypted`, then whether it is the main machine, when it was last reached and how many threads it has. **Main machine** and **Remove** sit in a row of their own below. |
+| A machine row | Its name and platform, the state chip at the row's top right — *Connected*, *Connecting*, *Offline · retrying in N s*, *Needs pairing* — the route **in use** under the name as `LAN · Unencrypted` or `NetBird`/`Tailscale`/`VPN · Encrypted`, then whether it is the main machine, when it was last reached and how many threads it has. **Main machine** and **Remove** sit in a row of their own below. Under the route, the hint for one kind of route that answers while another does not (see [Machines](#machines)), and a version skew line when that machine runs another RustCode: *RustCode 0.96.0 on that machine — update it there: Settings › About › Check for updates, or `brew upgrade rustcode`* (the platform's own way, from [install](install.md#updating); a development build never shows the line), or *update RustCode here* when that machine is newer. |
+| **This computer · RustCode server** | Whether the RustCode server is installed as a background service: *Server: Installed · Running*, or *Not installed* with **Install server**. Installed, that engine stays up when the app closes and starts when you log in; the threads this app starts still run in its own engine and end with it. What `rustcode server status` reports, including a running version that differs from the app's, is on the same line. |
 | **Main machine** | The machine listed first and the default **Run on**. One at a time. |
 | **Remove** | Forgets it here: token, routes and its threads' rows go. The machine keeps listing this computer until it is revoked there. |
 | **Pair again** | On a machine whose pairing it ended (*Needs pairing*): asks it again, so a new code can be typed. |
@@ -690,11 +750,20 @@ next start installs it with the current environment.
   the machine has no LAN IPv4 address. Link-local `fe80::` addresses are never
   used: they need a scope the phone cannot know. `--bind <ipv6>` chooses one
   explicitly; pairing details then show it as `[address]:port`.
-- **Away from home, or a name that never changes:** NetBird. On both devices
-  join the same NetBird network, then on the Mac
-  `rustcode remote stop && rustcode remote serve --bind <netbird ip> --advertise <host>.netbird.cloud`
-  (or the same two values as `[remote] bind` and `advertise`). On Linux
-  `--prefer-interface netbird` finds the address by itself.
+- **Away from home:** join the same NetBird, Tailscale or ZeroTier network on
+  both machines. With an `auto` bind the gateway already listens on the
+  overlay address (see [Automatic address selection](#automatic-address-selection)),
+  and a paired client learns it from `routes` and tries it after the LAN
+  (see [Machines](#machines)). Nothing has to be typed. If the overlay still
+  does not answer, `rustcode machines list` says what to check on that machine:
+  NetBird's **Block inbound connections**, a NetBird access policy that allows
+  TCP `17879` between the two machines, Tailscale's ACLs or grants for that
+  port, or ZeroTier's flow rules.
+- **A fixed setup:** `rustcode remote serve --bind <netbird ip> --advertise <host>.netbird.cloud`
+  (or the same two values as `[remote] bind` and `advertise`) pins the mesh
+  address and a name that never changes. On Linux `--prefer-interface netbird`
+  makes the mesh address the advertised one while LAN and overlay listeners
+  stay open.
 - **Bonjour** announces the service name, port, protocol version,
   gateway identifier and optional handshakes (`caps=connect_requests,desktops`), but
   no address on purpose: the phone resolves the

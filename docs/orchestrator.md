@@ -938,8 +938,9 @@ A delegated thread writes temporary files in its own directory under
 writing the same path overwrote each other's pull request bodies (#3143,
 #3144). The delegation guidance says so, and the v9 prompt hint repeats it.
 
-The app advertises 9 from `CAPABILITY_VERSION` (`state/orchestration.ts`),
-and a v8 app keeps exactly the v8 set and `PROMPT_HINT_V8`.
+The app advertised 9 from `CAPABILITY_VERSION` (`state/orchestration.ts`)
+while v9 was newest, and a v8 app keeps exactly the v8 set and
+`PROMPT_HINT_V8`; v10 and v11 are below.
 
 ## Orchestration tools v10
 
@@ -984,11 +985,143 @@ composer's own `file` attachment — so an attachment that waits in a busy
 thread's queue still carries its files when it starts.
 
 The app advertises 10 from `CAPABILITY_VERSION` (`state/orchestration.ts`),
-and a v9 app keeps exactly the v9 set and `PROMPT_HINT_V9`.
+and a v9 app keeps exactly the v9 set and `PROMPT_HINT_V9`; v11 and v12 are
+below.
 
 ## Orchestration tools v11
 
 Built. Clients advertising `_meta.rustcode.orchestration >= 11` also get the
+user's projects and the scheduler daemon's work. The version is bumped for the
+same reason as v4, v6, v7, v9 and v10: the app asks the user and carries the
+call out, and a v10 app has neither the code nor the engine methods.
+
+| Tool | Args | Answer | Approval |
+| --- | --- | --- | --- |
+| `read_project` | `{ path }` | `{ project: { path, name, is_git, remote?, branch?, default_branch?, threads, working, harness?, model?, registered } }` | None: a read, of this project or any while **Let agents read threads in other projects** is on |
+| `create_project` | `{ path, init? }` — `init` is true by default | `{ project: { …, created, initialized } }`: an existing folder is registered, a missing one is made, and a folder that is not a repository gets `git init` unless `init: false` | Asked, allowed by Full access, grant `project:<path>` |
+| `clone_project` | `{ url, parent?, name? }` | `{ project: { …, created: true } }`; a ten-minute `git clone`, then the folder is registered | Asked, allowed by Full access, grant `project:clone:<url>` |
+| `update_project` | `{ path, name?, harness?, model? }`, at least one | `{ project: { path, name, harness?, model? } }` | Asked, allowed by Full access, grant `project:<path>` |
+| `remove_project` | `{ path }` | `{ path, removed: true, known, files_deleted: false }` | Asked, allowed by Full access, grant `remove-project:<path>` |
+| `schedule_task` | `{ prompt, schedule, project?, name?, model_profile? }` — `schedule` is `{ kind: "cron", expression, timezone? }` or `{ kind: "at", at }` (ISO 8601 with its offset) | `{ daemon_running: true, task: { id, name, paused, schedule, workspace, next_due_at } }`; the prompt is never echoed back | Asked, allowed by Full access, grant `schedule:new` |
+| `list_scheduled_tasks` | none | `{ daemon_running, tasks: [{ id, name, paused, schedule, workspace, next_due_at }], omitted_tasks? }`, at most 100. `daemon_running: false` means nothing will run until `rustcode daemon start` | None |
+| `delete_scheduled_task` | `{ id }` | `{ id, deleted: true }` | Asked, allowed by Full access, grant `schedule:delete:<id>` |
+| `run_scheduled_task_now` | `{ id }` | `{ id, state }` (`claimed`, …), with the schedule left as it is | Asked, allowed by Full access, grant `schedule:run:<id>` |
+
+A project is still what v3 says it is — the repository a thread runs for — so
+a project tool never invents a second table. `list_projects` counts threads and
+sorts by when they last moved; the app keeps the rest in app storage
+(`state/projectBook.ts`, since `state/projects.ts` is the cross-machine lookup
+#3403 added): a display name, the harness and model new threads in that folder
+start on, and folders registered before any thread runs there, so
+`create_project` and `clone_project` land in `list_projects` with `threads: 0`.
+The display name is what the sidebar's project group says (`projectLabel`), and
+the harness and model are what the new-thread screen shows and ⏎ starts
+(`newThreadChoice` and `projectThreadChoice`, in that order of precedence) — a
+harness that is turned off or signed out falls back to the usual default rather
+than failing the start. A new harness with no model clears the stored model, so
+the pair always names one the harness offers.
+`remove_project` only forgets the entry: the folder, every file in it and its
+threads stay, and the description says so.
+
+The engine does the filesystem work, since the app is a web view with none:
+`_rustcode/project/read`, `_rustcode/project/create` and
+`_rustcode/project/clone` (`engine/src/acp/projects.rs`) read git
+(`remote get-url origin`, the branch `HEAD` is on, `origin/HEAD` else `main`
+then `master`) and run `git clone` through the same `worktrees::git` the
+worktree tools use, bounded at ten minutes. `read_project` is refused for
+another project while the setting is off, like the other reads; the four
+changing tools ask first.
+
+Scheduled work goes through `_rustcode/scheduled/list|create|delete|run`
+(`engine/src/acp/scheduled.rs`) and the daemon client `rustcode cron` and
+`manage_scheduled_jobs` already use (`docs/daemon.md`): there is no second
+scheduler, and the jobs are the same store the CLI lists. A job is created as
+a `prompt` action on the built-in harness (`raw_cli::build_scheduled_state`),
+which is why `harness`, `account` and per-task model choice are not arguments:
+a schedule that ran on an external harness would need that harness's process,
+which the daemon does not own. `model_profile` names a config profile, as the
+CLI's `--action` does. A cron with no `timezone` is read in the user's own zone,
+which the app fills in from `Intl.DateTimeFormat().resolvedOptions().timeZone`
+before the call; a machine-only caller gets the engine's guess (`TZ`, else
+`/etc/localtime`, else UTC). An `at` time is ISO 8601 with its offset, so it is
+never ambiguous. Nothing starts the daemon: `list_scheduled_tasks` answers
+`daemon_running: false` and the three changing calls refuse with "run
+`rustcode daemon start`".
+
+The app advertises 11 from `CAPABILITY_VERSION` (`state/orchestration.ts`),
+and a v10 app keeps exactly the v10 set and `PROMPT_HINT_V10`.
+
+## Orchestration tools v12: other machines
+
+Built. Clients advertising `_meta.rustcode.orchestration >= 12` also get
+`list_machines`, and the eleven tools that read or act on a thread take an
+optional `machine`: the id or name `list_machines` returned. A call without it
+is this computer, never a "main" machine. This is the app-routed v1 of the
+machine network (design §8, linked machines): the desktop app already holds one
+connection per paired machine
+(`state/store.ts` `connectionFor`, #3400), so it executes the call over that
+machine's connection. A server-to-server link that works with this app closed
+is the follow-up (§10, phases 3.1 and 3.2).
+
+| Tool | With `machine` |
+| --- | --- |
+| `list_machines` | This computer (`current: true`) and each paired machine: `{ id, name, platform, state, route?, last_connected?, harnesses, projects }`. `harnesses` is that machine's list (`[{ id, name, available }]`), `projects` its project names |
+| `start_session`, `fan_out` | Start on that machine, in its project. `harness`, `model`, `effort` and `account` are that machine's own (never this app's logins or remembered choices). `project` is an absolute path there; without it, the caller's path when the machine has it, else a folder with the same project name, else its only project; otherwise the error lists what it has |
+| `list_harnesses` | That machine's harnesses, models and named accounts, without this app's plan numbers |
+| `list_projects`, `list_sessions` | That machine's projects or threads. Its folders are not this one's, so its threads are listed whether or not they share this project |
+| `read_session`, `message_session`, `interrupt_session` | On that machine's thread. A machine's threads are not narrowed to the caller's project: the user named the machine, and the approval card is the gate. A thread the caller started on a machine is reachable even when `machine` is omitted |
+| `wait_session` | Any: the link ids carry their machine already. `machine` must match every link, and a mismatch is refused naming each link's machine; it does not require the machine to be online, so a wait on a link that went away still reports what it last said |
+| `thread_status` | With `session_id`, that thread's machine; without one, the named machine's delegates (this computer's when `machine` is omitted), and `omitted` counts the rest of that set |
+| `list_pending_requests` | That machine's waiting requests. Without `machine`, every thread this thread reaches, wherever it runs (the v10 answer) |
+
+A thread id answers as `‹machine id›/‹thread id›` (`state/threadKeys.ts`), so
+every later call on it routes without `machine`; `machine` also refuses an id
+that carries another machine. Answers carry `machine` (the name) and
+`machine_id`, read from the target's key rather than the call: a call on a
+keyed id without `machine` still says where the thread runs, and a wait's
+answer names the one machine its links share when they all do.
+
+An offline machine is refused by name and the time it was last connected
+(`Studio is offline since 09:12; nothing was sent`), and a machine that is no
+longer paired says to pair it again; a `wait_session` on its links still waits,
+as its row above says. Nothing falls back to this computer.
+
+Acting on another machine is a call that changes other threads, so the same
+approval gate applies, and the card names the machine ("On Studio, not this
+computer"). The grant is per machine (`start@‹machine id›[:‹project›]`,
+`interrupt:‹machine id›/‹thread›`), so a grant for a local start never allows a
+remote one. Running a thread at the caller's access level still applies: a
+remote delegate is never broader than its parent here.
+
+A delegate started on another machine is a link like any other: nested under
+the caller (no row of its own while it works, and its row and its parent's
+stack mark say `Studio`), settled by the turn that runs there, and its parent
+is woken with the answer exactly as for a local one. Read-only threads on a
+disconnected machine stay readable and refused to act on.
+
+Limits of v1, and what is left:
+
+- The machine's own app need not run: the engine runs the threads. But this
+  app must: with it closed nothing is answered.
+- `merge_when_green`, `cleanup_worktree`, `transfer_session`, `update_session`
+  and `configure_session` have no `machine` yet; they refuse a thread on
+  another machine with "runs on ‹machine›: do that there", and
+  `thread_status` for a remote thread reports its branch but no pull-request
+  checks (those are read by this app's `gh`, not that machine's folders).
+- A link's access mode (full vs only threads it starts) arrives with machine
+  links (§8.1); until then every paired machine is at the user's own trust, as
+  the rest of the multi-machine app is.
+- A thread started on another machine takes its title from its first message
+  there: the rename this app does for a local child is its own shell's write.
+  It is renamed by the user or itself there.
+
+The app advertises 12 from `CAPABILITY_VERSION` (`state/orchestration.ts`);
+a v11 app keeps exactly the v11 set and `PROMPT_HINT_V11`, and this engine
+refuses `machine` from it rather than acting on the wrong computer.
+
+## Orchestration tools v13
+
+Built. Clients advertising `_meta.rustcode.orchestration >= 13` also get the
 pair that answers "where does this work stand, and can the user continue it
 here?" without a shell: `worktree_status` reads it, `handoff_worktree` moves it.
 Before them an orchestrator ran `git status`, `git log` and `gh pr list` in a
@@ -996,7 +1129,7 @@ Before them an orchestrator ran `git status`, `git log` and `gh pr list` in a
 then remembering to `git switch` in the checkout, which is exactly the step
 that loses a user's uncommitted work when it is done carelessly. The version is
 bumped for the same reason as v4, v6, v7 and v9: the *client* reads the threads,
-asks the user and carries the calls out, and a v10 app has neither the code nor
+asks the user and carries the calls out, and a v12 app has neither the code nor
 the engine methods.
 
 | Tool | Args | Answer | Approval |
@@ -1051,16 +1184,23 @@ A grant is per thread and direction, so the same user who allowed a delegate to
 be started still answers one card before their checkout is switched. The app
 refuses before asking when it already knows the answer — the thread has no
 worktree, is in one already, or is working — and the engine refuses again on
-the real git state, which may have changed since the app read it.
+the real git state, which may have changed since the app read it. Both act on
+this computer's folders: a thread on a paired machine is answered "that runs on
+<machine>: do that there", as `merge_when_green` and `cleanup_worktree` are,
+because the git that decides a handoff is the one holding the worktree.
 
 Like v9's three tools, the pair reaches an orchestrator through the `rustcode`
 MCP server an external harness runs. The built-in schema's byte cap is already
 exceeded at v9, so the built-in harness's own threads do not list these either;
-a v10 client loses none of the tools it had at v9
-(`version_eleven_adds_tools_without_taking_any_away`).
+a v12 client loses none of the tools it had at v11
+(`the_orchestration_tools_fit_the_hard_cap`, which loops every
+version).
 
-The app advertises 11 from `CAPABILITY_VERSION` (`state/orchestration.ts`), and
-a v10 app keeps exactly the v10 set and `PROMPT_HINT_V10`.
+The app advertises 13 from `CAPABILITY_VERSION` (`state/orchestration.ts`); a
+v12 app keeps exactly the v12 set and `PROMPT_HINT_V12`.
+
+
+
 ## External harnesses as orchestrators
 
 Built (`rustcode/engine/src/orchestration/{hub,mcp_server}.rs`). When the
@@ -1081,7 +1221,7 @@ v3 app is never offered `thread_usage` or `query_data`, which it could not
 answer, a v5 app is never offered `read_activity`, a v6 app is never offered
 `manage_queue`, a v9 app is never offered `answer_request` or
 `organize_threads` nor told that `message_session` takes `attachments`, and a
-v10 app is never offered the v11 worktree pair.
+v12 app is never offered the v13 worktree pair.
 
 While the user has Smart UI on, the same environment carries
 `RUSTCODE_SMART_UI=1` and the server also lists **`smart_ui_check`**
@@ -1143,10 +1283,11 @@ can inject the server (unix), and in a thread's answer whether it did.
 engine does both); a thread's answer sets `checkpoints` to whether its cwd is
 in a git repository. `initialize` also advertises `_meta.rustcode.worktrees`,
 `checkpoints` and `threadStatus` (each `1`). The app advertises
-`_meta.rustcode.orchestration = 11` while threads may orchestrate
+`_meta.rustcode.orchestration = 13` while threads may orchestrate
 (`state/orchestration.ts` `CAPABILITY_VERSION`), and the newest client gets the
 v4 data-store tools, the v6 activity read, the v7 queue control, the v9
-delegate pull-request tools, the v10 answers and batching and the v11 worktree
+delegate pull-request tools, v10's `answer_request` and `organize_threads`, the
+v11 project and scheduled-task tools, the v12 machine tools and the v13 worktree
 pair; v8 adds no tool, only its prompt hint.
 
 ## Keeping an orchestrator's context small
@@ -1156,10 +1297,10 @@ reads costs again on each later call. In measured Opus orchestrator threads,
 most of that context came from the orchestrator reading diffs, files and logs
 itself, then from delegates' final answers. Four things keep it small:
 
-- The version 9 hint tells the orchestrator to leave reading, reviews and CI
-  triage to delegates, check pull requests with `thread_status`, wait on all
-  links in one long `wait_session` (or end the turn and be woken), and call
-  `list_harnesses` once. Version 11 adds where worktrees stand
+- The version 10, 11, 12 and 13 hints tell the orchestrator to leave reading,
+  reviews and CI triage to delegates, check pull requests with `thread_status`,
+  wait on all links in one long `wait_session` (or end the turn and be woken),
+  and call `list_harnesses` once. Version 13 adds where worktrees stand
   (`worktree_status`) and handing one back to the user (`handoff_worktree`),
   which replace a `run_command` per worktree and the shell steps that used to
   move work by hand.

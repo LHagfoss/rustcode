@@ -154,14 +154,25 @@ Host → client:
   and keeping the pairing alive never means pairing again.
 - `host_name` is optional: the machine's own name, for display. It is a
   label, not an identity.
+- `version` is optional on both answers: the RustCode version running on the
+  host (`1.28.0`), so an app connected to several machines can say which one is
+  older and what updates it. A label, never a gate: a client does not refuse a
+  machine over it, and an older gateway leaves it out.
 - `routes` is optional on both answers: the addresses this host answers on
-  right now, best first, each `{ "address": "host:port", "kind": "lan" }`.
-  The kinds are `lan` (a private IPv4 address on a local interface), `vpn` (a
-  `100.64.0.0/10` NetBird or Tailscale address), `hostname` (a name, such as
-  the machine's `.local` name) and `public`. A client keeps them as the routes
-  it knows for this host and dials the first that answers, so pairing once is
-  enough to reconnect on another network. Absent from an older gateway, and
-  when the listener is loopback only.
+  right now, best first, each
+  `{ "address": "host:port", "kind": "lan", "provider": null }`.
+  The kinds are `lan` (a private IPv4 address on Wi-Fi or Ethernet), `overlay`
+  (a private overlay or VPN address: `100.64.0.0/10`, or a tunnel-facing
+  unique-local address), `hostname` (a name, such as the machine's `.local`
+  name) and `public`. An `overlay` entry may carry `provider`: `netbird`,
+  `tailscale` or `zerotier`, when the interface name says which product the
+  address belongs to; absent on macOS's shared `utunN`. A gateway before the
+  `overlay` kind sends `vpn`, which a client still accepts; the schema lists
+  only `overlay` because it names what this version sends, not every value it
+  reads. A client keeps the entries as the routes it knows for this host and
+  races them, so pairing once is enough to reconnect on another network. Only addresses the gateway listens
+  on are reported. Absent from an older gateway, and when the listener is
+  loopback only.
 - `device_name` in the answer is the name as the host stored it (trimmed and
   bounded), which may differ from what was sent.
 - `install_id` in `pair` is optional: a random identifier the app generates

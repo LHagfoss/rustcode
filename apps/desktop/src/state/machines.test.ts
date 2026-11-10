@@ -12,31 +12,44 @@ import {
   codeCheckOverdue,
   codeComplete,
   codeDigits,
+  DEV_APP_VERSION,
+  discoverMachines,
+  forgetLocalAppVersion,
+  installServer,
   lastSeen,
+  localAppVersion,
   type Machine,
   machineLine,
+  mergeDiscovered,
   PAIR_DEADLINE_MS,
   pairMachine,
   platformName,
   refreshMachines,
+  refreshServerService,
   resetMachinesForTests,
   routeLabel,
+  routeName,
+  serverLine,
   stateLabel,
   stateTone,
   threadCount,
   threadLabel,
+  updateAdvice,
   useMachines,
+  versionSkew,
 } from "./machines";
 
 const MACHINE: Machine = {
   id: "gw-7c1d9e4f2a8b6d30",
   name: "Lars's Linux box",
   platform: "linux",
+  version: "1.28.0",
   main: false,
   routes: [{ kind: "lan", address: "192.168.1.31:17879", encrypted: false }],
   route: { kind: "lan", address: "192.168.1.31:17879", encrypted: false },
   state: "connected",
   detail: null,
+  hint: null,
   retryInSecs: null,
   addedAt: "2026-11-02T09:00:00+00:00",
   lastConnectedAt: "2026-11-08T09:00:00+00:00",
@@ -56,6 +69,29 @@ class FakeShell implements Transport {
   pairError: Error | null = null;
   /** `machines_ask` waits for `finishAsk`, as the shell does while the owner decides. */
   askHangs = false;
+  /** What `machines_discover` finds. */
+  discovered: {
+    name: string;
+    source: "bonjour" | "overlay";
+    address: string | null;
+    addresses: string[];
+    gatewayId: string | null;
+    platform?: string | null;
+    version?: string | null;
+    routeKind?: string;
+    hint?: string | null;
+    saved: boolean;
+  }[] = [];
+  /** What the local search says when it failed; the overlay rows are still listed. */
+  discoverNotice: string | null = null;
+  /** Whether the background server reads as installed. */
+  serverInstalled = true;
+  /** What `server_service_install` refuses with, when it does. */
+  installError: Error | null = null;
+  /** Whether the install reports back as not installed (the CLI's partial answer). */
+  installAnswersInstalled = true;
+  /** What the shell answers for `app_version` (a dev build in a browser). */
+  appVersion: string | null = "1.28.0";
   private pendingAsk: ((value: unknown) => void) | null = null;
 
   finishAsk(value: unknown): void {
@@ -85,6 +121,16 @@ class FakeShell implements Transport {
         this.machines = [paired];
         return paired;
       }
+      case "machines_discover":
+        return { rows: this.discovered, notice: this.discoverNotice };
+      case "server_service_status":
+        return this.serverService();
+      case "server_service_install":
+        if (this.installError) throw this.installError;
+        this.serverInstalled = this.installAnswersInstalled;
+        return this.serverService();
+      case "app_version":
+        return this.appVersion;
       case "machines_remove":
         this.machines = this.machines.filter((machine) => machine.id !== args.id);
         return null;
@@ -94,6 +140,24 @@ class FakeShell implements Transport {
       default:
         throw new Error(`The fake shell does not run ${command}.`);
     }
+  }
+
+  /** `server_service_status`, as `src-tauri/src/service.rs` answers it. */
+  private serverService() {
+    const installed = this.serverInstalled;
+    return {
+      installed,
+      running: installed,
+      version: installed ? "1.28.0" : null,
+      cliVersion: "1.28.0",
+      problems: [],
+      // The shell that installs and still reads "not installed" keeps the
+      // command's own words here.
+      error:
+        installed || this.installAnswersInstalled
+          ? null
+          : "The RustCode server was installed but does not read as installed yet.",
+    };
   }
 
   command(name: string): Record<string, unknown> | undefined {
@@ -128,7 +192,10 @@ beforeEach(() => {
     discoverError: null,
     pairing: null,
     pairingError: null,
+    server: null,
+    serverInstalling: false,
   });
+  forgetLocalAppVersion();
 });
 
 afterEach(() => {
@@ -303,6 +370,14 @@ describe("machines rows", () => {
   test("a row under the name says what the connection is doing", () => {
     // The state is the row's chip; the line under the name is the route.
     expect(machineLine(MACHINE)).toBe("LAN · Unencrypted");
+    // The shell's hint is shown too: a machine reachable over the LAN whose
+    // NetBird address is blocked says what to check.
+    const hinted = machineLine({
+      ...MACHINE,
+      hint: "Not reachable over NetBird (100.90.16.237:17879). On that machine, check that NetBird allows inbound connections.",
+    });
+    expect(hinted).toStartWith("LAN · Unencrypted. ");
+    expect(hinted).toContain("NetBird allows inbound connections");
     expect(machineLine({ ...MACHINE, state: "connecting" })).toContain("Connecting");
     expect(
       machineLine({
@@ -339,6 +414,187 @@ describe("machines rows", () => {
     expect(threadLabel(3)).toBe("3 threads");
     expect(threadLabel(1)).toBe("1 thread");
     expect(threadLabel(undefined)).toBeUndefined();
+  });
+});
+
+describe("the machines a browse and a handshake find", () => {
+  const studio = {
+    name: "Studio",
+    source: "bonjour" as const,
+    address: "192.168.1.20:17879",
+    addresses: ["192.168.1.20"],
+    gatewayId: "gw-8e1f4b7a5c2d4e6f",
+    platform: "macos",
+    version: "0.96.0",
+    routeKind: "lan",
+    hint: null,
+    saved: true,
+  };
+  const studioOverlay = {
+    ...studio,
+    source: "overlay" as const,
+    address: "100.90.16.237:17879",
+    addresses: ["100.90.16.237:17879"],
+    routeKind: "netbird",
+    hint: "Not reachable over NetBird (100.90.16.237:17879).",
+  };
+
+  test("one machine found both ways is one row, with what either source knows", () => {
+    const rows = mergeDiscovered([studio, studioOverlay]);
+    expect(rows).toHaveLength(1);
+    // The LAN row keeps the route it had; the overlay address is not lost.
+    expect(rows[0]?.address).toBe("192.168.1.20:17879");
+    expect(rows[0]?.addresses).toEqual(["192.168.1.20", "100.90.16.237:17879"]);
+    expect(rows[0]?.version).toBe("0.96.0");
+    expect(rows[0]?.hint).toContain("NetBird");
+  });
+
+  test("a machine with no host id yet is one row by name, and different names stay apart", () => {
+    const unnamed = { ...studio, gatewayId: null, saved: false };
+    const rows = mergeDiscovered([
+      unnamed,
+      { ...unnamed, source: "bonjour" },
+      { ...studioOverlay, name: "Lars's Linux box", gatewayId: "gw-7c1d9e4f2a8b6d30" },
+    ]);
+    expect(rows.map((row) => row.name)).toEqual(["Studio", "Lars's Linux box"]);
+  });
+
+  test("the browse is what fills the sheet", async () => {
+    shell.discovered = [studio, studioOverlay];
+    await discoverMachines();
+    expect(useMachines.getState().discovered).toHaveLength(1);
+    expect(useMachines.getState().discovering).toBe(false);
+  });
+
+  test("a browse that fails still lists the overlay rows, and says why", async () => {
+    // The shell answers with the saved machine's overlay row and the reason its
+    // local search found nothing (mDNS cannot bind in a container, say).
+    shell.discovered = [studioOverlay];
+    shell.discoverNotice = "Could not look for machines on this network: no multicast interface";
+    await discoverMachines();
+    expect(useMachines.getState().discovered?.map((row) => row.name)).toEqual(["Studio"]);
+    expect(useMachines.getState().discoverError).toContain("no multicast interface");
+    expect(useMachines.getState().discovering).toBe(false);
+    // Looking again clears the notice once the browse answers.
+    shell.discoverNotice = null;
+    await discoverMachines();
+    expect(useMachines.getState().discovered).toHaveLength(1);
+    expect(useMachines.getState().discoverError).toBeNull();
+  });
+
+  test("an overlay address says which product made it", () => {
+    expect(routeName(null, "netbird")).toBe("NetBird");
+    expect(routeName(null, "tailscale")).toBe("Tailscale");
+    expect(routeName(null, "zerotier")).toBe("ZeroTier");
+    expect(routeName(null, "lan")).toBe("LAN");
+    expect(routeName(null, "vpn")).toBe("VPN");
+    expect(
+      routeName({ kind: "vpn", address: "100.90.16.237:17879", provider: "netbird", encrypted: true }),
+    ).toBe("NetBird");
+    expect(routeName(null)).toBe("No route saved");
+  });
+});
+
+describe("a machine on another RustCode version", () => {
+  test("an older machine says what to update, and how on its platform", () => {
+    expect(versionSkew("0.96.0", "1.28.0", "macos")).toBe(
+      "RustCode 0.96.0 on that machine — update it there: Settings › About › Check for updates, or `brew upgrade rustcode`",
+    );
+    expect(versionSkew("0.96.0", "1.28.0", "linux")).toContain("install the new AppImage");
+    expect(versionSkew("0.96.0", "1.28.0", "windows")).toContain("run the RustCode installer");
+    expect(updateAdvice("")).toBe("install the newer RustCode");
+    // The app is the one to update when the machine is ahead.
+    expect(versionSkew("1.30.0", "1.28.0", "macos")).toBe(
+      "RustCode 1.30.0 on that machine — update RustCode here",
+    );
+  });
+
+  test("the same version, or one nothing reported, says nothing", () => {
+    expect(versionSkew("1.28.0", "1.28.0")).toBeNull();
+    expect(versionSkew("1.28.0", null)).toBeNull();
+    expect(versionSkew(null, "1.28.0")).toBeNull();
+    // A beta of the same release is older, and says so.
+    expect(versionSkew("1.28.0-beta.2", "1.28.0")).toContain("update it there");
+  });
+
+  test("a development build does not call every released machine newer", () => {
+    // `tauri dev` reports tauri.conf.json's placeholder; the mock reports 1.28.0.
+    expect(versionSkew("1.28.0", DEV_APP_VERSION)).toBeNull();
+    expect(versionSkew(DEV_APP_VERSION, "1.28.0")).toContain("update it there");
+  });
+
+  test("this app's version is read once, from the shell when it is not the app", async () => {
+    forgetLocalAppVersion();
+    shell.appVersion = "1.28.0";
+    expect(await localAppVersion()).toBe("1.28.0");
+    shell.appVersion = "1.29.0";
+    expect(await localAppVersion()).toBe("1.28.0");
+    forgetLocalAppVersion();
+  });
+});
+
+describe("the RustCode server in the background", () => {
+  test("its state reads as installed and running, or what is missing", () => {
+    expect(serverLine(null)).toBe("Not checked yet");
+    expect(
+      serverLine({
+        installed: false,
+        running: false,
+        version: null,
+        cliVersion: "1.28.0",
+        problems: [],
+        error: null,
+      }),
+    ).toBe("Not installed");
+    expect(
+      serverLine({
+        installed: true,
+        running: true,
+        version: "1.28.0",
+        cliVersion: "1.28.0",
+        problems: [],
+        error: null,
+      }),
+    ).toBe("Installed · Running");
+    expect(
+      serverLine({
+        installed: true,
+        running: false,
+        version: null,
+        cliVersion: "1.28.0",
+        problems: [],
+        error: null,
+      }),
+    ).toBe("Installed · Not running");
+  });
+
+  test("reading it, then installing it, leaves the page knowing it runs", async () => {
+    await refreshServerService();
+    expect(useMachines.getState().server?.installed).toBe(true);
+    shell.serverInstalled = false;
+    await refreshServerService();
+    expect(useMachines.getState().server?.installed).toBe(false);
+    expect(await installServer()).toBe(true);
+    expect(useMachines.getState().server?.running).toBe(true);
+    expect(useMachines.getState().serverInstalling).toBe(false);
+    expect(updateAdvice("macos")).toContain("brew upgrade rustcode");
+  });
+
+  test("an install that fails says why, and leaves the page without a server", async () => {
+    shell.serverInstalled = false;
+    shell.installError = new Error("a development build; run `rustcode server install` from a release");
+    expect(await installServer()).toBe(false);
+    expect(useMachines.getState().serverInstalling).toBe(false);
+    // Nothing is claimed installed that the shell never confirmed.
+    expect(useMachines.getState().server?.installed ?? false).toBe(false);
+  });
+
+  test("an install that answers not-installed keeps the CLI's reason on the page", async () => {
+    shell.serverInstalled = false;
+    shell.installAnswersInstalled = false;
+    expect(await installServer()).toBe(false);
+    expect(useMachines.getState().server?.error).toContain("installed but");
+    expect(useMachines.getState().serverInstalling).toBe(false);
   });
 });
 

@@ -27,6 +27,7 @@ export const ORCHESTRATION_TOOLS = [
   "answer_request",
   "organize_threads",
   "list_projects",
+  "list_machines",
   "list_pull_requests",
   "manage_queue",
   "thread_status",
@@ -34,6 +35,15 @@ export const ORCHESTRATION_TOOLS = [
   "cleanup_worktree",
   "worktree_status",
   "handoff_worktree",
+  "read_project",
+  "create_project",
+  "clone_project",
+  "update_project",
+  "remove_project",
+  "schedule_task",
+  "list_scheduled_tasks",
+  "delete_scheduled_task",
+  "run_scheduled_task_now",
 ] as const;
 
 /** `mcp__server__tool`, `server__tool`, `server.tool`, `server/tool`, `server:tool`. */
@@ -162,7 +172,9 @@ function orchestrationLabel(
       const named = text(args.title) || prompt;
       // What it was told to run on, in the order the approval card names them.
       const harness = [text(args.harness), text(args.account), text(args.model)].filter(Boolean).join(" ");
-      const summary = [named ? cut(named, 60) : "", harness].filter(Boolean).join(" · ");
+      // Where it runs, when not this computer: the row says it as the sidebar does.
+      const where = text(args.machine) ? `on ${text(args.machine)}` : "";
+      const summary = [named ? cut(named, 60) : "", harness, where].filter(Boolean).join(" · ");
       return { title: "Started thread", summary: summary || undefined };
     }
     case "message_session": {
@@ -214,7 +226,9 @@ function orchestrationLabel(
       };
     }
     case "list_projects":
-      return { title: "Listed projects" };
+      return { title: "Listed projects", summary: text(args.machine) || undefined };
+    case "list_machines":
+      return { title: "Listed machines" };
     case "list_pull_requests": {
       const state = text(args.state) || "open";
       return { title: "Listed pull requests", summary: state };
@@ -231,6 +245,24 @@ function orchestrationLabel(
       return text(args.to) === "worktree"
         ? { title: "Moved thread to a worktree" }
         : { title: "Moved work to the checkout" };
+    case "read_project":
+      return { title: "Read project", summary: text(args.path) || undefined };
+    case "create_project":
+      return { title: "Registered project", summary: text(args.path) || undefined };
+    case "clone_project":
+      return { title: "Cloned project", summary: text(args.url) || undefined };
+    case "update_project":
+      return { title: "Updated project", summary: text(args.name) || text(args.path) || undefined };
+    case "remove_project":
+      return { title: "Removed project", summary: text(args.path) || undefined };
+    case "schedule_task":
+      return { title: "Scheduled a task", summary: text(args.name) || text(args.prompt) || undefined };
+    case "list_scheduled_tasks":
+      return { title: "Listed scheduled tasks" };
+    case "delete_scheduled_task":
+      return { title: "Deleted a scheduled task", summary: text(args.id) || undefined };
+    case "run_scheduled_task_now":
+      return { title: "Ran a scheduled task", summary: text(args.id) || undefined };
     case "update_session":
       return { title: "Updated thread", summary: text(args.title) || text(args.status) || undefined };
     case "interrupt_session":

@@ -18,16 +18,21 @@
 //! rotation is acknowledged, so a crash between the two leaves the previous
 //! token valid as the retry the machine makes idempotent.
 //!
-//! A machine can be reached by several routes. [`Connector::connect`] tries
-//! them in the saved order and takes the first that authenticates as the
-//! machine we expect; the route racing, learning and moving back between
-//! routes are the machine network's step 1.8.
+//! A machine can be reached by several routes. [`Connector::connect`] races
+//! them ([`crate::routes`]): every LAN route at once, the overlay routes
+//! after a second, and the first that authenticates as the machine we expect.
+//! Every attempt hands back the addresses the machine reports, which
+//! [`Connector::connect`] callers save as learned routes, so pairing once is
+//! enough to reach the machine on another network.
 
 use crate::protocol::{
     CAPABILITY_TOKEN_ROTATION, DEVICE_KIND_CLI, DEVICE_KIND_DESKTOP, HANDSHAKE_PROTOCOL_VERSION,
-    HandshakeRequest, HandshakeResponse, PairingMethod, Secret,
+    HandshakeRequest, HandshakeResponse, HostRoute, PairingMethod, Secret,
 };
-use crate::registry::{Machine, Route, may_send_secrets, plain_ws_refusal, write_private_json};
+use crate::registry::{
+    Machine, Route, RouteKind, may_send_secrets, plain_ws_refusal, write_private_json,
+};
+use crate::routes::{DialFailure, Race, RaceSettings, RouteFailure, race};
 use crate::tokens::{Access, TokenStore};
 use crate::transport::{AcpChannel, Connection};
 use anyhow::{Context, Result, bail, ensure};
@@ -196,6 +201,14 @@ pub struct Connector {
     /// Per-route deadline used when choosing a route. Short: a route that does
     /// not answer is skipped rather than waited on.
     pub route_timeout: Duration,
+    /// One credential presentation at a time, across the routes of one race.
+    /// A rotating refresh token presented on two sockets at once looks like a
+    /// replay to the machine, which revokes the pairing; the lock is taken
+    /// *after* a route's socket opens, so a dead LAN dial does not hold the
+    /// overlay attempt up, and the presentation under it is bounded by
+    /// [`Connector::route_timeout`], so a socket that never answers does not
+    /// hold the next route either.
+    credentials: tokio::sync::Mutex<()>,
 }
 
 impl Connector {
@@ -205,7 +218,17 @@ impl Connector {
             identity: Identity::load(config_dir)?,
             timeout: crate::transport::CONNECT_TIMEOUT,
             route_timeout: ROUTE_TIMEOUT,
+            credentials: tokio::sync::Mutex::new(()),
         })
+    }
+
+    /// The same connector with other timeouts, for a glance like
+    /// `rustcode machines list` that skips a route that does not answer in
+    /// seconds instead of waiting on it.
+    pub fn with_timeouts(mut self, route_timeout: Duration, timeout: Duration) -> Self {
+        self.route_timeout = route_timeout;
+        self.timeout = timeout;
+        self
     }
 
     /// Ask `address` to let this client pair: send `connect_request` and wait
@@ -262,9 +285,27 @@ impl Connector {
         machine: &Machine,
         tokens: &TokenStore,
     ) -> Result<Session> {
+        // One presentation at a time: a refresh token rotated concurrently
+        // would be a replay, and a replay revokes the pairing.
+        let _serialized = self.credentials.lock().await;
+        self.authenticate_with(None, address, machine, tokens).await
+    }
+
+    /// Authenticate on `first` when the caller already dialled it, so a race
+    /// can open the sockets concurrently and still present the credential on
+    /// one at a time. A caller that holds no lock must use
+    /// [`Connector::authenticate`].
+    async fn authenticate_with(
+        &self,
+        first: Option<Connection>,
+        address: &str,
+        machine: &Machine,
+        tokens: &TokenStore,
+    ) -> Result<Session> {
         if !may_send_secrets(address) {
             return Err(plain_ws_refusal(address));
         }
+        let mut first = first;
         let stored = tokens.get(&machine.host_id)?.with_context(|| {
             format!("{} has no pairing token; pair with it again", machine.name)
         })?;
@@ -276,7 +317,11 @@ impl Connector {
             .filter(|access| access.is_valid_at(Utc::now()))
         {
             let (connection, answer) = self
-                .exchange(address, &authenticate_access(machine, access.token()))
+                .exchange_or(
+                    first.take(),
+                    address,
+                    &authenticate_access(machine, access.token()),
+                )
                 .await?;
             match answer {
                 HandshakeResponse::Error {
@@ -303,7 +348,11 @@ impl Connector {
         //    paired with before rotation keeps working: the machine answers a
         //    refresh credential for a non-rotating record with that record.
         let (connection, answer) = self
-            .exchange(address, &authenticate_refresh(machine, &stored))
+            .exchange_or(
+                first.take(),
+                address,
+                &authenticate_refresh(machine, &stored),
+            )
             .await?;
         if let HandshakeResponse::Error {
             code: crate::protocol::ErrorCode::InvalidFrame,
@@ -330,15 +379,28 @@ impl Connector {
         }
     }
 
-    /// Send one handshake frame on a fresh socket and read the answer. Error
-    /// frames come back as the frame, not as an error, so the caller can read
-    /// the code and try the next credential.
+    /// Send one handshake frame and read the answer, on `first` when the
+    /// caller already opened it and on a fresh socket otherwise. Error frames
+    /// come back as the frame, not as an error, so the caller can read the
+    /// code and try the next credential.
     async fn exchange(
         &self,
         address: &str,
         frame: &HandshakeRequest,
     ) -> Result<(Connection, HandshakeResponse)> {
-        let mut connection = Connection::open_with_timeout(address, self.route_timeout).await?;
+        self.exchange_or(None, address, frame).await
+    }
+
+    async fn exchange_or(
+        &self,
+        first: Option<Connection>,
+        address: &str,
+        frame: &HandshakeRequest,
+    ) -> Result<(Connection, HandshakeResponse)> {
+        let mut connection = match first {
+            Some(connection) => connection,
+            None => Connection::open_with_timeout(address, self.route_timeout).await?,
+        };
         connection.send_handshake(frame).await?;
         let answer = connection.next_handshake(self.timeout).await?;
         Ok((connection, answer))
@@ -368,6 +430,8 @@ impl Connector {
             access_expires_at,
             rotation_id,
             wire_names,
+            version,
+            routes,
             ..
         } = answer
         else {
@@ -421,6 +485,8 @@ impl Connector {
                 host_name,
                 expires_at,
                 wire_names,
+                version,
+                routes: learned_routes(&routes),
             },
             access,
         })
@@ -436,6 +502,17 @@ impl Connector {
         machine: &Machine,
         tokens: &TokenStore,
     ) -> Result<(Session, Route)> {
+        let connected = self.connect_raced(machine, tokens).await?;
+        Ok((connected.session, connected.route))
+    }
+
+    /// The same connection, with what the race learned: the routes that did
+    /// not answer and the addresses the machine reports it answers on now.
+    ///
+    /// The race ([`crate::routes`]) starts every LAN route at once, starts
+    /// the overlay routes after a second if none answered, and takes the
+    /// first that authenticates as this machine.
+    pub async fn connect_raced(&self, machine: &Machine, tokens: &TokenStore) -> Result<Connected> {
         ensure!(
             !machine.routes.is_empty(),
             "{} has no route to try; add one",
@@ -443,44 +520,129 @@ impl Connector {
         );
         // A public route would carry the tokens in the clear; it is not tried
         // at all, and a machine reachable only that way says why (#2651).
-        let routes: Vec<&Route> = machine
+        let routes: Vec<Route> = machine
             .routes
             .iter()
             .filter(|route| may_send_secrets(&route.address))
+            .cloned()
             .collect();
         if routes.is_empty() {
             return Err(plain_ws_refusal(&machine.routes[0].address));
         }
-        let mut attempts = Vec::new();
-        let mut refused = None;
-        for route in routes {
-            let result = match self.authenticate(&route.address, machine, tokens).await {
-                Ok(session) => session.check(machine).map(|()| session),
-                Err(error) => Err(error),
-            };
-            match result {
-                Ok(session) => return Ok((session, route.clone())),
-                Err(error) => {
-                    if let Some(refusal) = error.downcast_ref::<Refusal>() {
-                        refused = Some(refusal.code);
-                        if refusal.code.revoked_pairing() {
-                            // The machine revoked this pairing (or a token it
-                            // retired came back): the saved token is worthless,
-                            // and keeping it would only present it again.
-                            let _ = tokens.remove(&machine.host_id);
-                            attempts.push(format!("{}: {error:#}", route.address));
-                            break;
-                        }
+        let settings = RaceSettings::default();
+        let outcome = race(&routes, &settings, |route| async move {
+            // Dial before taking the credential lock: a LAN route that hangs
+            // must not keep the overlay route from opening its socket.
+            let connection =
+                match Connection::open_with_timeout(&route.address, self.route_timeout).await {
+                    Ok(connection) => connection,
+                    Err(error) => {
+                        return Err(DialFailure::unreachable(format!("{error:#}")));
                     }
-                    attempts.push(format!("{}: {error:#}", route.address));
+                };
+            let _serialized = self.credentials.lock().await;
+            // Bound the locked section: a route that completes the WebSocket
+            // upgrade and then never answers holds this lock through the
+            // per-frame timeout, and every other route behind it. Ending it
+            // at the route timeout keeps the race's own deadline in charge.
+            let resolved = match tokio::time::timeout(
+                self.route_timeout,
+                self.authenticate_with(Some(connection), &route.address, machine, tokens),
+            )
+            .await
+            {
+                Ok(result) => result.and_then(|session| session.check(machine).map(|()| session)),
+                Err(_) => Err(anyhow::anyhow!(
+                    "the credential handshake did not finish in {:.1}s",
+                    self.route_timeout.as_secs_f64()
+                )),
+            };
+            match resolved {
+                Ok(session) => Ok(session),
+                Err(error) => {
+                    let refusal = error.downcast_ref::<Refusal>().map(|refusal| refusal.code);
+                    if refusal.is_some_and(|code| code.revoked_pairing()) {
+                        // The machine revoked this pairing (or a token it
+                        // retired came back): the saved token is worthless,
+                        // and keeping it would only present it again.
+                        let _ = tokens.remove(&machine.host_id);
+                    }
+                    Err(DialFailure {
+                        reason: format!("{error:#}"),
+                        refusal,
+                    })
                 }
             }
+        })
+        .await;
+        match outcome {
+            Race::Won {
+                value,
+                route,
+                failures,
+            } => Ok(Connected {
+                learned: value.welcome.routes.clone(),
+                session: value,
+                route,
+                failed: failures,
+            }),
+            Race::Lost { failures } => {
+                let refused = failures.iter().find_map(|failure| failure.refusal);
+                Err(anyhow::Error::new(Unreachable {
+                    machine: machine.name.clone(),
+                    attempts: failures
+                        .iter()
+                        .map(|failure| format!("{}: {}", failure.route.address, failure.reason))
+                        .collect(),
+                    refused,
+                }))
+            }
         }
-        Err(anyhow::Error::new(Unreachable {
-            machine: machine.name.clone(),
-            attempts,
-            refused,
-        }))
+    }
+
+    /// Try the machine's overlay routes without using them, after a LAN route
+    /// answered. The race stops once the LAN wins, so an overlay that accepts
+    /// no inbound connections is only visible by asking: a plain TCP connect
+    /// answers that question without a token or a handshake (#3202).
+    pub async fn probe_overlay_routes(
+        &self,
+        machine: &Machine,
+        in_use: &Route,
+    ) -> Vec<RouteFailure> {
+        let probes = machine.routes.iter().filter(|route| {
+            matches!(route.kind, RouteKind::Vpn | RouteKind::Tailscale)
+                && route.address != in_use.address
+                && may_send_secrets(&route.address)
+        });
+        let attempts = probes.map(|route| async move {
+            let Ok(target) = crate::transport::dial_target(&route.address) else {
+                return Some(RouteFailure {
+                    route: route.clone(),
+                    reason: "not an address this client can dial".to_owned(),
+                    refusal: None,
+                });
+            };
+            let reason = match tokio::time::timeout(
+                self.route_timeout,
+                tokio::net::TcpStream::connect(&target),
+            )
+            .await
+            {
+                Ok(Ok(_)) => return None,
+                Ok(Err(error)) => format!("{error}"),
+                Err(_) => "the address did not answer".to_owned(),
+            };
+            Some(RouteFailure {
+                route: route.clone(),
+                reason,
+                refusal: None,
+            })
+        });
+        futures_util::future::join_all(attempts)
+            .await
+            .into_iter()
+            .flatten()
+            .collect()
     }
 
     /// Connect and read the titles of the machine's threads, as ACP's
@@ -494,6 +656,28 @@ impl Connector {
         let (session, _route) = self.connect(machine, tokens).await?;
         let mut acp = session.acp().await?;
         thread_titles(&mut acp).await
+    }
+}
+
+/// A connection that answered, with what the race around it learned.
+pub struct Connected {
+    pub session: Session,
+    /// The route that answered.
+    pub route: Route,
+    /// Routes that did not answer before it did. A LAN win stops the race
+    /// before the overlay attempts start, so this is empty for the usual home
+    /// connection; [`Connector::probe_overlay_routes`] asks about them.
+    pub failed: Vec<RouteFailure>,
+    /// Addresses the machine reports it answers on now, wrapped as routes for
+    /// [`MachineRegistry::learn_routes`](crate::registry::MachineRegistry::learn_routes).
+    pub learned: Vec<Route>,
+}
+
+impl Connected {
+    /// The hint for a route that does not answer while another one does, as
+    /// `rustcode machines list` and the app show it.
+    pub fn hint(&self) -> Option<String> {
+        crate::routes::route_hint(&self.route, &self.failed)
     }
 }
 
@@ -635,6 +819,8 @@ impl Approved {
                 access_token,
                 access_expires_at,
                 wire_names,
+                version,
+                routes,
                 ..
             } => {
                 // A gateway that takes the capability sends a refresh token;
@@ -659,6 +845,8 @@ impl Approved {
                             host_name,
                             expires_at,
                             wire_names,
+                            version,
+                            routes: learned_routes(&routes),
                         },
                         access: None,
                     },
@@ -726,6 +914,13 @@ pub struct Welcome {
     pub host_name: Option<String>,
     pub expires_at: Option<String>,
     pub wire_names: Option<String>,
+    /// The RustCode version that machine reported: the row it appears on says
+    /// which machine needs updating. `None` from a gateway that predates it.
+    pub version: Option<String>,
+    /// The addresses the machine reports it answers on, wrapped as routes.
+    /// Empty from a gateway before the handshake carried them, and from a
+    /// loopback-only listener no other machine can reach.
+    pub routes: Vec<Route>,
 }
 
 impl Welcome {
@@ -980,16 +1175,42 @@ pub fn normalize_code(code: &str) -> String {
 /// A machine record built from a pairing: the route it paired over, the
 /// machine's name and the device record the token belongs to.
 pub fn machine_from_pairing(welcome: &Welcome, route: Route, name: Option<String>) -> Machine {
-    Machine::new(
+    let mut machine = Machine::new(
         &welcome.gateway_id,
         name.unwrap_or_else(|| welcome.machine_name()),
-        // The gateway does not report its platform yet (step 1.7 adds it);
-        // `unknown` is honest, and a later pairing fills it in.
+        // The gateway does not report its platform yet; `unknown` is honest,
+        // and a later pairing fills it in.
         "unknown",
         &welcome.device_id,
         route,
         chrono::Utc::now(),
-    )
+    );
+    for learned in &welcome.routes {
+        machine.learn_route(learned.clone());
+    }
+    machine
+}
+
+/// The handshake's `routes` as saved routes: the address, the machine's kind
+/// and, when it named one, the mesh product. A public address is left out: a
+/// credential is never sent over one, so saving it would only add a route
+/// that always refuses.
+fn learned_routes(reported: &[HostRoute]) -> Vec<Route> {
+    let mut routes: Vec<Route> = Vec::new();
+    for reported in reported {
+        let route = Route::reported(
+            reported.address.clone(),
+            &reported.kind,
+            reported.provider.as_deref(),
+        );
+        if route.kind == RouteKind::Public
+            || routes.iter().any(|known| known.address == route.address)
+        {
+            continue;
+        }
+        routes.push(route);
+    }
+    routes
 }
 
 #[cfg(test)]
@@ -1181,6 +1402,11 @@ mod tests {
             host_name: Some("Studio".into()),
             expires_at: None,
             wire_names: None,
+            version: None,
+            routes: vec![
+                Route::with_kind(RouteKind::Vpn, "100.90.16.237:17879"),
+                Route::with_kind(RouteKind::Lan, "192.168.1.20:17879"),
+            ],
         };
         let machine = machine_from_pairing(&welcome, Route::new("192.168.1.20:17879"), None);
         assert_eq!(machine.host_id, "gw-8e1f4b7a");
@@ -1206,6 +1432,8 @@ mod tests {
             host_name: None,
             expires_at: None,
             wire_names: None,
+            version: None,
+            routes: Vec::new(),
         };
         let mut machine = Machine::new(
             "gw-a",

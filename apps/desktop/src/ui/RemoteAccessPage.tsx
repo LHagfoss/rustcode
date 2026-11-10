@@ -21,9 +21,11 @@ import {
 } from "../acp/remote";
 import { encodeQr } from "../lib/qr";
 import { deviceLabel, lastSeenLabel } from "../state/connectRequests";
+import { installServer, refreshServerService, serverLine, useMachines } from "../state/machines";
 import { refusalAgo, refusalCopy } from "../state/refusals";
 import { activeChallenge, remainingPairingSeconds } from "../state/remotePairing";
 import {
+  askConfirm,
   dismissRemoteChallenge,
   errorText,
   pairRemoteDevice,
@@ -54,6 +56,8 @@ export function RemoteAccessPage() {
   const remoteError = useApp((s) => s.remoteError);
   const [busy, setBusy] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const server = useMachines((s) => s.server);
+  const installing = useMachines((s) => s.serverInstalling);
   const challenge = useApp((s) => s.remoteChallenge);
   const paired = useApp((s) => s.remotePaired);
   const [pairAskedAt, setPairAskedAt] = useState<number | null>(null);
@@ -65,6 +69,9 @@ export function RemoteAccessPage() {
   useEffect(() => {
     if (engine !== "ready") return;
     void refresh();
+    // The background server is what keeps threads running with the app closed
+    // once RustCode uses it, so its state is read with the gateway's.
+    void refreshServerService();
     const timer = setInterval(() => void refresh(), POLL_MS);
     return () => clearInterval(timer);
   }, [engine, refresh]);
@@ -104,8 +111,31 @@ export function RemoteAccessPage() {
     }
   };
 
+  /**
+   * Turning network access on also makes sure the RustCode server is
+   * installed: it stays up when the app closes, so the threads that live in it
+   * keep running once the app uses it. Nothing is installed before the owner
+   * agrees, and a running turn is never ended for it.
+   */
   const toggle = (next: boolean) => {
-    void run("toggle", () => setRemoteAccess(next));
+    if (!next) {
+      void run("toggle", () => setRemoteAccess(false));
+      return;
+    }
+    const turnOn = () => void run("toggle", () => setRemoteAccess(true));
+    const server = useMachines.getState().server;
+    if (server === null) {
+      void refreshServerService().then(() => {
+        if (useMachines.getState().server?.installed) turnOn();
+        else askInstallThenTurnOn(turnOn);
+      });
+      return;
+    }
+    if (server.installed) {
+      turnOn();
+      return;
+    }
+    askInstallThenTurnOn(turnOn);
   };
 
   const pair = () => {
@@ -149,6 +179,20 @@ export function RemoteAccessPage() {
             disabled={unavailable || busy !== null}
             onChange={toggle}
           />
+        </Row>
+        <Row
+          title="RustCode server"
+          subtitle="Installs the RustCode server as a background service: it stays up when the app closes, and starts when you log in. Threads that live in it keep running; the threads this app starts still run in its own engine and end with it, until RustCode uses the server. Turning network access on installs it when it is not installed."
+          status={serverLine(server)}
+        >
+          {server === null ? null : server.installed ? (
+            <Chip tone={server.running ? "ok" : "warn"}>{server.running ? "Running" : "Not running"}</Chip>
+          ) : (
+            <Action disabled={busy !== null || installing} onClick={() => void installServer()}>
+              {installing ? <Spinner /> : null}
+              Install
+            </Action>
+          )}
         </Row>
         <Row
           title="Gateway address"
@@ -271,8 +315,8 @@ export function RemoteAccessPage() {
           gateway.routes.map((route) => (
             <Row
               key={route.address}
-              title={routeLabel(route.kind)}
-              subtitle={routeHint(route.kind)}
+              title={routeLabel(route)}
+              subtitle={routeHint(route)}
               status={<span className="font-mono">{route.address}</span>}
             >
               {route.address === gateway.advertisedAddress && <Chip tone="ok">Advertised</Chip>}
@@ -297,6 +341,24 @@ export function RemoteAccessPage() {
       </Group>
     </>
   );
+}
+
+/**
+ * Ask before installing the server on the way to turning network access on,
+ * in the words that explain it. A failed install does not stop network access:
+ * the reason is a message of its own.
+ */
+function askInstallThenTurnOn(turnOn: () => void) {
+  askConfirm({
+    title: "Install the RustCode server too?",
+    message:
+      "Network access lets paired devices reach this computer's threads. RustCode also installs its server as a background service: it stays up when the app closes and starts when you log in, so the threads that live in it keep running. The threads this app starts itself still run in its own engine and end with it, until RustCode uses the server. Threads, settings and pairings stay as they are. Network access turns on either way.",
+    action: "Turn on and install",
+    run: () => {
+      turnOn();
+      void installServer();
+    },
+  });
 }
 
 /**
@@ -340,13 +402,21 @@ export function RefusedConnectionsGroup({ refused }: { refused: RemoteRefusedCon
   );
 }
 
-/** A route's kind, in the words the page shows. */
-function routeLabel(kind: RemoteRoute["kind"]): string {
-  switch (kind) {
+/** The mesh product an overlay route runs on, in the spelling the product uses. */
+const PROVIDER_NAMES: Record<NonNullable<RemoteRoute["provider"]>, string> = {
+  netbird: "NetBird",
+  tailscale: "Tailscale",
+  zerotier: "ZeroTier",
+};
+
+/** A route, in the words the page shows. An overlay names its product when the engine says. */
+function routeLabel(route: RemoteRoute): string {
+  switch (route.kind) {
     case "lan":
       return "Local network";
+    case "overlay":
     case "vpn":
-      return "VPN";
+      return (route.provider && PROVIDER_NAMES[route.provider]) ?? "Overlay network";
     case "hostname":
       return "Host name";
     case "public":
@@ -356,13 +426,16 @@ function routeLabel(kind: RemoteRoute["kind"]): string {
   }
 }
 
-/** What a kind of route means for the phone. */
-function routeHint(kind: RemoteRoute["kind"]): string {
-  switch (kind) {
+/** What a route means for the phone. */
+function routeHint(route: RemoteRoute): string {
+  switch (route.kind) {
     case "lan":
       return "The phone's own Wi-Fi or Ethernet network. Not encrypted.";
+    case "overlay":
     case "vpn":
-      return "A NetBird or Tailscale address, reachable away from home and encrypted by the tunnel.";
+      return route.provider
+        ? `A ${PROVIDER_NAMES[route.provider]} address, reachable away from home and encrypted by the overlay network.`
+        : "A NetBird, Tailscale or ZeroTier address, reachable away from home and encrypted by the tunnel.";
     case "hostname":
       return "A name that follows this computer when its address changes.";
     case "public":

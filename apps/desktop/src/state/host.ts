@@ -39,6 +39,7 @@ import {
   type WorktreeState,
 } from "../acp/v2";
 import { optionScope } from "../lib/approval";
+import { currentPlatform } from "../lib/platform";
 import { hasShell, shellCall } from "../lib/shell";
 import { childTitle, titleFrom } from "../lib/title";
 import {
@@ -58,6 +59,7 @@ import {
   childAccountFor,
   newThreadAccountOn,
 } from "./logins";
+import { LOCAL_MACHINE_ID, type Machine, offlineSinceLabel, selfName, useMachines } from "./machines";
 import {
   type ApprovalChoice,
   activeDescendants,
@@ -70,6 +72,7 @@ import {
   checkMessage,
   checkQueryData,
   checkStart,
+  cleanProjectPath,
   contextNote,
   type DelegateLimits,
   delegated,
@@ -143,6 +146,15 @@ import {
   wakesDue,
 } from "./orchestration";
 import { delegationAllowed, effectiveMode, modeLabel, type PermissionMode } from "./permissions";
+import {
+  forgetProject,
+  projectEntry,
+  projectLabel,
+  registeredProjects,
+  registerProject,
+  updateProjectEntry,
+} from "./projectBook";
+import { projectsOn } from "./projects";
 import { rememberPullSummaries } from "./pullQueries";
 import { QUEUE_REASON, wakeDelivery } from "./queue";
 import {
@@ -161,11 +173,14 @@ import {
   answerQuestionText,
   cancel,
   clearFinished,
+  connectionFor,
   createSession,
   effortMemory,
   ensureHarnessModels,
   errorText,
+  harnessesOn,
   lastAccountFor,
+  loadMachineHarnesses,
   localChoices,
   markUnread,
   openThread,
@@ -205,6 +220,7 @@ import {
   type TranscriptItem,
   turnCompletion,
 } from "./thread";
+import { isRemoteThread, LOCAL_HOST, splitThreadKey, threadKey } from "./threadKeys";
 import { orchestrationTool } from "./toolNames";
 
 const BOOK_KEY = "rustcode.threadLinks";
@@ -489,6 +505,10 @@ export function verb(q: GrantAsk): string {
       return `clean up “${q.target}”`;
     case "handoff":
       return `hand off “${q.target}”`;
+    case "project":
+      return `change the project “${q.target}”`;
+    case "schedule":
+      return `schedule “${q.target}”`;
   }
 }
 
@@ -514,6 +534,8 @@ const TOOL_OF_KIND: Record<GrantAsk["kind"], string> = {
   merge: "merge_when_green",
   cleanup: "cleanup_worktree",
   handoff: "handoff_worktree",
+  project: "update_project",
+  schedule: "schedule_task",
 };
 
 /** What the app did on the thread's behalf, when its call's row is not in flight to say it. */
@@ -530,6 +552,8 @@ const ALLOWED_NOTICE: Record<GrantAsk["kind"], string> = {
   merge: "Merged a delegate's pull request",
   cleanup: "Cleaned up a delegate's worktree",
   handoff: "Handed a worktree off",
+  project: "Changed a project",
+  schedule: "Changed scheduled work",
 };
 
 async function permitted(
@@ -576,8 +600,594 @@ async function permitted(
   return null;
 }
 
+// ---------------------------------------------------------------- machines
+
+/**
+ * The computer a call acts on: this one, or a machine the app is paired with
+ * (`state/machines.ts`). `machine` is an id or name from `list_machines`; a
+ * call without one is this computer, never a "main" machine.
+ */
+export interface MachineRef {
+  /** `""` for this computer, else the machine's id (`state/threadKeys.ts`). */
+  host: string;
+  /** What `list_machines` calls it: `local`, or the machine's id. */
+  id: string;
+  name: string;
+  /** `macos`, `windows`, `linux`, or `unknown`. */
+  platform: string;
+}
+
+/** This computer, as a call names it (`list_machines` `current: true`). */
+export function localMachine(): MachineRef {
+  const platform = currentPlatform();
+  return {
+    host: LOCAL_HOST,
+    id: LOCAL_MACHINE_ID,
+    name: selfName(),
+    platform: platform === "mac" ? "macos" : platform,
+  };
+}
+
+/** A paired machine, as a call names it. */
+function machineRef(machine: Machine): MachineRef {
+  return { host: machine.id, id: machine.id, name: machine.name, platform: machine.platform };
+}
+
+/**
+ * The machine a `machine` argument names: this computer when it is absent,
+ * else a paired machine by id or name, any case. A name is what the user says
+ * ("Studio"); an id is what a previous answer gave. Several machines with one
+ * name are refused rather than guessed between.
+ */
+export function resolveMachine(asked: string | undefined): MachineRef | Failure {
+  const wanted = asked?.trim().toLowerCase();
+  if (!wanted) return localMachine();
+  const local = localMachine();
+  if (wanted === LOCAL_MACHINE_ID || wanted === local.name.toLowerCase()) return local;
+  const machines = useMachines.getState().machines;
+  const byId = machines.filter((machine) => machine.id.toLowerCase() === wanted);
+  const found = byId.length ? byId : machines.filter((machine) => machine.name.toLowerCase() === wanted);
+  if (!found.length) {
+    const names = [local.name, ...machines.map((machine) => machine.name)];
+    return failure("not_found", `no machine “${asked}”; list_machines has ${names.join(", ")}`);
+  }
+  if (found.length > 1) {
+    return failure(
+      "invalid",
+      `“${asked}” names ${found.length} machines; pass the id: ${found.map((machine) => machine.id).join(", ")}`,
+    );
+  }
+  return machineRef(found[0]!);
+}
+
+/**
+ * Whether a call can act on `machine` now. An offline one says so by name and
+ * when it went away, never silently falls back to this computer.
+ */
+export function machineUnavailable(machine: MachineRef): Failure | null {
+  if (!machine.host) {
+    return connectionFor(LOCAL_HOST)
+      ? null
+      : failure("unavailable", "this computer's RustCode server is not connected; nothing was sent");
+  }
+  if (connectionFor(machine.host)) return null;
+  const saved = useMachines.getState().machines.find((m) => m.id === machine.host);
+  if (saved?.state === "needsPairing") {
+    return failure(
+      "offline",
+      `${machine.name} is no longer paired with this computer; pair it again in Settings › Machines. Nothing was sent`,
+    );
+  }
+  const since = offlineSinceLabel(useMachines.getState().offlineSince[machine.host]);
+  return failure("offline", `${machine.name} is offline${since ? ` since ${since}` : ""}; nothing was sent`);
+}
+
+/** What every machine-aware answer carries, so an agent can tell where a thread runs. */
+function machineFields(machine: MachineRef): JsonObject {
+  return { machine: machine.name, machine_id: machine.id };
+}
+
+/** A host key ("" is this computer), as an answer about a thread there names it. */
+function machineOfHost(host: string): MachineRef {
+  if (!host) return localMachine();
+  const saved = useMachines.getState().machines.find((m) => m.id === host);
+  return {
+    host,
+    id: host,
+    name: useApp.getState().machineNames[host] ?? saved?.name ?? host,
+    platform: saved?.platform ?? "unknown",
+  };
+}
+
+/** The machine a thread key names: an answer about a keyed thread says where it runs. */
+const machineOfThread = (id: string) => machineOfHost(splitThreadKey(id).host);
+
+/** The one machine a wait's links act on, when they all do. */
+function waitMachine(links: Link[]): MachineRef | undefined {
+  const hosts = new Set(links.map((link) => splitThreadKey(link.target).host));
+  return hosts.size === 1 ? machineOfHost([...hosts][0]!) : undefined;
+}
+
+/**
+ * A thread id as the named machine knows it: an id that already carries a
+ * machine is kept (and must be that machine's), and a bare one is prefixed
+ * with the machine the call named.
+ */
+function scopedTarget(machine: MachineRef, target: string): string | Failure {
+  const { host } = splitThreadKey(target);
+  if (host) {
+    if (machine.host && machine.host !== host) {
+      const other = useApp.getState().machineNames[host] ?? host;
+      return failure("invalid", `“${target}” runs on ${other}, not ${machine.name}`);
+    }
+    return target;
+  }
+  return threadKey(machine.host, target);
+}
+
+/** A machine and the connection a call on it needs, or the failure to answer with. */
+function checkedMachine(asked: string | undefined): MachineRef | Failure {
+  const machine = resolveMachine(asked);
+  if (isFailure(machine)) return machine;
+  return machineUnavailable(machine) ?? machine;
+}
+
+/** A machine as `list_machines` describes it: what it is, where it stands, what it has. */
+async function machineEntry(machine: MachineRef): Promise<JsonObject> {
+  const saved = useMachines.getState().machines.find((m) => m.id === machine.id);
+  const connected = !!connectionFor(machine.host);
+  const state = connected ? "connected" : saved?.state === "needsPairing" ? "revoked" : "offline";
+  return {
+    id: machine.id,
+    name: machine.name,
+    platform: machine.platform,
+    ...(machine.host ? {} : { current: true }),
+    state,
+    ...(saved?.route
+      ? { route: { kind: saved.route.kind, address: saved.route.address, encrypted: saved.route.encrypted } }
+      : {}),
+    ...(saved?.lastConnectedAt ? { last_connected: saved.lastConnectedAt } : {}),
+    harnesses: await machineHarnesses(machine),
+    projects: projectsOn(useApp.getState().sessions, machine.host).map((project) => project.name),
+  };
+}
+
+/** `list_machines`: this computer and each paired machine, one call. */
+async function listMachines(): Promise<JsonObject> {
+  const local = localMachine();
+  const machines = [local, ...useMachines.getState().machines.map(machineRef)];
+  return { current: local.id, machines: await Promise.all(machines.map(machineEntry)) };
+}
+
+/** The harnesses one machine can run: this app's own snapshot, or that machine's. */
+async function machineHarnesses(machine: MachineRef): Promise<JsonObject[] | null> {
+  const snapshot = machine.host
+    ? await loadMachineHarnesses(machine.host)
+    : harnessesOn(useApp.getState(), LOCAL_HOST);
+  if (!snapshot) return null;
+  return snapshot.harnesses.map((h) => ({
+    id: h.id,
+    name: h.name,
+    available: !unavailableReason(h),
+  }));
+}
+
+/** Another machine's harnesses, read over its own connection (kept per machine). */
+async function remoteSnapshot(machine: MachineRef): Promise<HarnessSnapshot | Failure> {
+  const snapshot = await loadMachineHarnesses(machine.host);
+  if (snapshot) return snapshot;
+  return machineUnavailable(machine) ?? failure("failed", `could not read ${machine.name}'s harnesses`);
+}
+
+/** One harness of a named machine, by id else name, refused with what can run there. */
+function harnessOn(
+  snapshot: HarnessSnapshot,
+  asked: string | undefined,
+  machine: MachineRef,
+): Harness | Failure {
+  const wanted = asked?.trim().toLowerCase();
+  const all = snapshot.harnesses;
+  const usable = (h: Harness) => !unavailableReason(h);
+  if (!wanted) {
+    const fallback = snapshot.default.harness;
+    const h =
+      all.find((x) => x.id === fallback && usable(x)) ??
+      all.find(usable) ??
+      all.find((x) => x.id === fallback);
+    if (!h) return failure("not_allowed", `${machine.name} has no harness that can run a thread`);
+    const reason = unavailableReason(h);
+    if (reason) {
+      return failure("not_allowed", `${h.name} cannot run a thread on ${machine.name}: ${reason}`);
+    }
+    return h;
+  }
+  const byId = all.filter((h) => h.id.toLowerCase() === wanted);
+  const named = byId.length ? byId : all.filter((h) => h.name.toLowerCase() === wanted);
+  if (!named.length) {
+    return failure(
+      "invalid",
+      `no harness “${asked}” on ${machine.name}; it has ${all.map((h) => h.id).join(", ")}`,
+    );
+  }
+  if (named.length > 1) {
+    return failure(
+      "invalid",
+      `“${asked}” names ${named.length} harnesses on ${machine.name}; pass the id: ${named.map((h) => h.id).join(", ")}`,
+    );
+  }
+  const h = named[0]!;
+  const reason = unavailableReason(h);
+  if (reason) return failure("not_allowed", `${h.name} cannot run a thread on ${machine.name}: ${reason}`);
+  return h;
+}
+
+/**
+ * `list_projects` on a machine: the projects it has threads in. This
+ * computer's answer also counts a project's unopened threads; another
+ * machine's is what its listed threads say, which is what it knows here.
+ */
+function projectsOnMachine(machine: MachineRef): JsonObject {
+  if (!machine.host) return { ...machineFields(machine), ...listProjects(useApp.getState()) };
+  const rows = new Map<
+    string,
+    { path: string; name: string; threads: number; working: boolean; updatedAt: number }
+  >();
+  for (const x of useApp.getState().sessions) {
+    if ((x.host ?? LOCAL_HOST) !== machine.host) continue;
+    const path = x.worktree?.repo || x.repo || x.cwd;
+    if (!path) continue;
+    const entry = rows.get(path) ?? {
+      path,
+      name: projectName(path),
+      threads: 0,
+      working: false,
+      updatedAt: 0,
+    };
+    entry.threads += 1;
+    entry.working ||= !!useApp.getState().threads[x.id]?.running || x.status === "running";
+    entry.updatedAt = Math.max(entry.updatedAt, x.updatedAt ?? 0);
+    rows.set(path, entry);
+  }
+  const projects = [...rows.values()]
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, MAX_PROJECTS)
+    .map((p) => ({ path: p.path, name: p.name, threads: p.threads, working: p.working }));
+  return { ...machineFields(machine), projects };
+}
+
+/**
+ * `list_harnesses` on a machine: its snapshot, trimmed to what picks a thread
+ * (id, name, availability, models and named accounts), never another
+ * machine's plan numbers or this app's remembered choices.
+ */
+async function listHarnessesOn(
+  machine: MachineRef,
+  asked: { harness?: string; model?: string },
+): Promise<JsonObject> {
+  const snapshot = await remoteSnapshot(machine);
+  if (isFailure(snapshot)) return failureJson(snapshot);
+  const harness = harnessOn(snapshot, asked.harness, machine);
+  // A filter that matches nothing names what is there, like the start it would serve.
+  if (isFailure(harness) && asked.harness) return failureJson(harness);
+  const filter = asked.model?.toLowerCase();
+  const listed = isFailure(harness) ? snapshot.harnesses : [harness];
+  return {
+    ...machineFields(machine),
+    current: {
+      harness: snapshot.default.harness,
+      ...(snapshot.default.model ? { model: snapshot.default.model } : {}),
+    },
+    harnesses: listed.map((h): JsonObject => {
+      const reason = unavailableReason(h);
+      if (reason) return { id: h.id, name: h.name, available: false, reason };
+      const models = (
+        filter ? h.models.filter((m) => `${m.id} ${m.name}`.toLowerCase().includes(filter)) : h.models
+      )
+        .slice(0, filter ? FILTERED_MODELS : LISTED_MODELS)
+        .map((m) => ({ id: m.id, name: m.name, ...(m.efforts.length ? { efforts: m.efforts } : {}) }));
+      return {
+        id: h.id,
+        name: h.name,
+        available: true,
+        ...(h.accounts?.length
+          ? {
+              accounts: h.accounts.map((a) => ({
+                id: a.id,
+                name: a.name,
+                auth: a.auth,
+                ...(accountSignedOut(h.id, a.id, useApp.getState().signedOutLogins)
+                  ? { signed_out: true }
+                  : {}),
+              })),
+            }
+          : {}),
+        models,
+        ...(models.length < h.models.length ? { omitted_models: h.models.length - models.length } : {}),
+      };
+    }),
+  };
+}
+
+/**
+ * `list_sessions` on a machine: its threads, newest first, with the machine
+ * each one is on. Another machine's threads are not narrowed to this
+ * project: its folders are not this one's, and the user named the machine.
+ */
+function sessionsOnMachine(
+  machine: MachineRef,
+  caller: RuleThread,
+  query: string,
+  allProjects: boolean,
+): JsonObject {
+  const s = useApp.getState();
+  const among = { ...s, sessions: s.sessions.filter((x) => (x.host ?? LOCAL_HOST) === machine.host) };
+  const threads = among.sessions.flatMap((x) => ruleThread(among, x.id) ?? []);
+  const listed = listSessions(threads, caller, query, true);
+  const sessions = (Array.isArray(listed.sessions) ? listed.sessions : []).map((entry) => {
+    const item = obj(entry) ?? {};
+    return {
+      ...item,
+      ...machineFields(machine),
+      ...(allProjects || machine.host ? { project: item.project ?? "" } : {}),
+    };
+  });
+  return { ...machineFields(machine), sessions };
+}
+
+/**
+ * The project a thread starts in on a machine: the agent's own path, else the
+ * caller's when that machine has it, else a folder with the caller's project
+ * name, else its only project. A machine that has listed nothing yet needs
+ * the path.
+ */
+function projectOnMachine(
+  machine: MachineRef,
+  caller: RuleThread,
+  asked: string | undefined,
+): string | Failure {
+  // A path the agent names is its own choice, and the machine's engine refuses
+  // one that is not a folder there: this app only knows what it has listed.
+  if (asked?.trim()) return asked.trim().replace(/\/+$/, "");
+  const paths = projectsOn(useApp.getState().sessions, machine.host).map((project) => project.path);
+  if (!paths.length) {
+    return failure(
+      "invalid",
+      `${machine.name} has no project listed yet; pass project with its absolute path there`,
+    );
+  }
+  const own = projectOf(caller);
+  if (paths.some((path) => sameProject(path, own))) return own;
+  const name = projectName(own);
+  const byName = paths.filter((path) => projectName(path) === name);
+  if (byName.length === 1) return byName[0]!;
+  if (paths.length === 1) return paths[0]!;
+  return failure(
+    "invalid",
+    `${machine.name} has no project at ${own}; pass project as one of: ${paths.join(", ")}`,
+  );
+}
+
+/** `session/new` on a machine, with the worktree fallback a folder outside git needs. */
+async function threadOnMachine(
+  machine: MachineRef,
+  project: string,
+  harness: string,
+  options: {
+    model?: string;
+    effort?: string;
+    account?: string | null;
+    title: string;
+    worktree?: boolean;
+    parent?: string;
+  },
+): Promise<string> {
+  const wantWorktree = (options.worktree ?? true) && !!useApp.getState().features.worktrees;
+  const ask = (worktree: boolean) =>
+    createSession({
+      host: machine.host,
+      cwd: project,
+      harness,
+      account: options.account ?? undefined,
+      model: options.model,
+      effort: options.effort,
+      title: options.title,
+      parent: options.parent,
+      worktree: worktree ? { repo: project, title: options.title } : undefined,
+    });
+  try {
+    return await ask(wantWorktree);
+  } catch (error) {
+    if (wantWorktree && options.worktree === undefined && /git|repositor/i.test(errorText(error))) {
+      return ask(false);
+    }
+    throw error;
+  }
+}
+
+/** `start_session` on a paired machine: its harness, its project, its thread, this thread's link. */
+async function startOnMachine(machine: MachineRef, caller: RuleThread, call: StartCall): Promise<JsonObject> {
+  const refused = checkStart(caller, book(), 1, delegateLimits());
+  if (refused) return failureJson(refused);
+  const project = projectOnMachine(machine, caller, call.project);
+  if (isFailure(project)) return failureJson(project);
+  const snapshot = await remoteSnapshot(machine);
+  if (isFailure(snapshot)) return failureJson(snapshot);
+  const harness = harnessOn(snapshot, call.harness, machine);
+  if (isFailure(harness)) return failureJson(harness);
+  const title = call.title ?? titleFrom(call.prompt, 60);
+  const access = childMode(caller);
+  const other = !sameProject(project, projectOf(caller));
+  const no = await permitted(caller, `start@${machine.id}${other ? `:${project}` : ""}`, {
+    kind: "start",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: title,
+    detail: call.prompt,
+    project: other ? project : undefined,
+    harnesses: [choiceLabel(harness.name, call.account ?? undefined, call.model, call.effort)],
+    access,
+    worktree: call.worktree ?? true,
+    machine: machine.name,
+  });
+  if (no) return failureJson(no);
+  const again = checkStart(caller, book(), 1, delegateLimits());
+  if (again) return failureJson(again);
+  let id: string;
+  try {
+    id = await threadOnMachine(machine, project, harness.id, {
+      model: call.model,
+      effort: call.effort,
+      // The login is that machine's own: never resolve it against this app's.
+      account: call.account ?? null,
+      title,
+      worktree: call.worktree,
+      parent: caller.id,
+    });
+    // Before its first turn, so nothing it does runs broader than the thread that started it.
+    setPermissionMode(id, access);
+  } catch (error) {
+    return failureJson(
+      failure("failed", `the thread could not start on ${machine.name}: ${errorText(error)}`),
+    );
+  }
+  const link = addLink({
+    orchestrator: caller.id,
+    target: id,
+    orchestratorTitle: caller.title,
+    targetTitle: title,
+    message: call.prompt,
+    state: "working",
+    started: true,
+    harness: harness.id,
+    harnessName: harness.name,
+    model: call.model,
+    account: call.account,
+    machine: machine.name,
+  });
+  deliver(id, delegated(call.prompt, caller.title), link, caller.id);
+  return {
+    session_id: id,
+    link_id: link,
+    receipt: "started",
+    title,
+    harness: harness.id,
+    access: accessOf(id),
+    ...machineFields(machine),
+    links_left: linksLeft(book(), caller.id, delegateLimits()),
+  };
+}
+
+/** `fan_out` on a paired machine: the same task on its harnesses, one link each. */
+async function fanOutOnMachine(
+  machine: MachineRef,
+  caller: RuleThread,
+  call: FanOutCall,
+): Promise<JsonObject> {
+  const refused = checkStart(caller, book(), call.harnesses.length, delegateLimits());
+  if (refused) return failureJson(refused);
+  const snapshot = await remoteSnapshot(machine);
+  if (isFailure(snapshot)) return failureJson(snapshot);
+  const project = projectOnMachine(machine, caller, call.project);
+  if (isFailure(project)) return failureJson(project);
+  const chosen: { harness: Harness; model?: string; effort?: string; account?: string | null }[] = [];
+  const targets = new Set<string>();
+  for (const entry of call.harnesses) {
+    const h = harnessOn(snapshot, entry.harness, machine);
+    if (isFailure(h)) return failureJson(h);
+    const key = [h.id, entry.model ?? "", entry.effort ?? "", entry.account ?? ""].join("\u0000");
+    if (targets.has(key)) {
+      return failureJson(
+        failure(
+          "invalid",
+          `harnesses resolves to the same target twice on ${machine.name}: ${choiceLabel(h.name, entry.account, entry.model, entry.effort)}; give each entry a different harness, model, effort or account`,
+        ),
+      );
+    }
+    targets.add(key);
+    chosen.push({ harness: h, model: entry.model, effort: entry.effort, account: entry.account ?? null });
+  }
+  const title = call.title ?? titleFrom(call.prompt, 60);
+  const access = childMode(caller);
+  const other = !sameProject(project, projectOf(caller));
+  const no = await permitted(caller, `start@${machine.id}${other ? `:${project}` : ""}`, {
+    kind: "fan_out",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: title,
+    detail: call.prompt,
+    project: other ? project : undefined,
+    harnesses: chosen.map((h) => choiceLabel(h.harness.name, h.account ?? undefined, h.model, h.effort)),
+    access,
+    worktree: true,
+    machine: machine.name,
+  });
+  if (no) return failureJson(no);
+  const again = checkStart(caller, book(), chosen.length, delegateLimits());
+  if (again) return failureJson(again);
+  const fanId = localId("fan");
+  const out: JsonObject[] = [];
+  const linkIds: string[] = [];
+  for (const h of chosen) {
+    const threadTitle = [title, h.harness.name, h.account].filter(Boolean).join(" · ");
+    try {
+      const id = await threadOnMachine(machine, project, h.harness.id, {
+        model: h.model,
+        effort: h.effort,
+        account: h.account,
+        title: threadTitle,
+        parent: caller.id,
+      });
+      setPermissionMode(id, access);
+      const link = addLink({
+        orchestrator: caller.id,
+        target: id,
+        orchestratorTitle: caller.title,
+        targetTitle: threadTitle,
+        message: call.prompt,
+        state: "working",
+        started: true,
+        harness: h.harness.id,
+        harnessName: h.harness.name,
+        model: h.model,
+        account: h.account ?? undefined,
+        fanOut: fanId,
+        machine: machine.name,
+      });
+      linkIds.push(link);
+      out.push({
+        session_id: id,
+        link_id: link,
+        harness: h.harness.id,
+        access: accessOf(id),
+        ...machineFields(machine),
+      });
+      deliver(id, delegated(call.prompt, caller.title), link, caller.id);
+    } catch (error) {
+      out.push({ harness: h.harness.id, ...failureJson(failure("failed", errorText(error))) });
+    }
+  }
+  if (linkIds.length) {
+    const group: FanOut = {
+      id: fanId,
+      orchestrator: caller.id,
+      title,
+      prompt: call.prompt,
+      links: linkIds,
+      createdAt: Date.now(),
+    };
+    setBook((b) => ({ ...b, fanOuts: [...b.fanOuts, group] }));
+  }
+  return {
+    ...machineFields(machine),
+    links: out,
+    fan_out_id: fanId,
+    links_left: linksLeft(book(), caller.id, delegateLimits()),
+  };
+}
+
 // ---------------------------------------------------------------- the calls
 
+/** Answer one `_rustcode/orchestration` request: a result, or `{ error }` the agent reads. */
 /** Answer one `_rustcode/orchestration` request: a result, or `{ error }` the agent reads. */
 export async function answerOrchestration(params: JsonObject): Promise<JsonObject> {
   try {
@@ -740,53 +1350,158 @@ async function perform(
   const acrossProjects = () => useApp.getState().readAcrossProjects;
   const threads = allThreads;
   switch (call.tool) {
-    case "list_sessions":
-      if (call.allProjects && !acrossProjects()) return reachRefused();
-      return listSessions(threads(), caller, call.query, call.allProjects);
-    case "read_session":
-      return read(caller, call.target, call.lastTurns, call.offset);
-    case "message_session":
-      return message(caller, call.target, call.text, call.attachments);
+    case "list_sessions": {
+      const machine = checkedMachine(call.machine);
+      if (isFailure(machine)) return failureJson(machine);
+      if (!machine.host && call.allProjects && !acrossProjects()) return reachRefused();
+      if (machine.host) return sessionsOnMachine(machine, caller, call.query, call.allProjects);
+      const listed = listSessions(threads(), caller, call.query, call.allProjects);
+      return {
+        ...machineFields(machine),
+        sessions: (Array.isArray(listed.sessions) ? listed.sessions : []).map((entry) => ({
+          ...(obj(entry) ?? {}),
+          ...machineFields(machine),
+        })),
+      };
+    }
+    case "read_session": {
+      // The key names the thread's machine when the call does not: a call on a keyed id
+      // from another computer routes there, as every later call on it does.
+      const machine = checkedMachine(call.machine ?? (splitThreadKey(call.target).host || undefined));
+      if (isFailure(machine)) return failureJson(machine);
+      const target = scopedTarget(machine, call.target);
+      if (isFailure(target)) return failureJson(target);
+      // The id decides where the thread runs: an id that carries its machine answers with it
+      // even when the call omitted `machine` (the key every later call routes by).
+      const answer = await read(caller, target, call.lastTurns, call.offset);
+      return answer.error ? answer : { ...answer, ...machineFields(machineOfThread(target)) };
+    }
+    case "message_session": {
+      const machine = checkedMachine(call.machine ?? (splitThreadKey(call.target).host || undefined));
+      if (isFailure(machine)) return failureJson(machine);
+      const target = scopedTarget(machine, call.target);
+      if (isFailure(target)) return failureJson(target);
+      const answer = await message(caller, target, call.text, call.attachments);
+      return answer.error ? answer : { ...answer, ...machineFields(machineOfThread(target)) };
+    }
     case "manage_queue":
       return manageQueue(caller, call);
-    case "wait_session":
-      return wait(caller.id, call.links, call.timeoutMs, call.callId);
-    case "start_session":
-      return start(caller, call);
-    case "fan_out":
-      return fanOut(caller, call);
-    case "list_harnesses":
-      return listHarnesses(caller, call);
+    case "wait_session": {
+      // A named machine checks where each link runs, not whether it can be reached: a wait on
+      // a machine that just went away still reports what its links last said, and settles if
+      // they do. Naming the wrong machine for a link is a mistake worth saying.
+      const named = call.machine?.trim() ? resolveMachine(call.machine) : undefined;
+      if (named && isFailure(named)) return failureJson(named);
+      const links = call.links
+        .map((id) => book().links.find((link) => link.id === id))
+        .filter((link): link is Link => !!link && link.orchestrator === caller.id);
+      if (named) {
+        const elsewhere = links.filter((link) => splitThreadKey(link.target).host !== named.host);
+        if (elsewhere.length) {
+          const said = elsewhere
+            .map((link) => `${link.id} waits on ${machineOfThread(link.target).name}`)
+            .join(", ");
+          return failureJson(failure("invalid", `${said}, not on ${named.name}`));
+        }
+      }
+      const answer = await wait(caller.id, call.links, call.timeoutMs, call.callId);
+      if (answer.error) return answer;
+      const at = waitMachine(links);
+      return at ? { ...answer, ...machineFields(at) } : answer;
+    }
+    case "start_session": {
+      const machine = checkedMachine(call.machine);
+      if (isFailure(machine)) return failureJson(machine);
+      if (machine.host) return startOnMachine(machine, caller, call);
+      const answer = await start(caller, call);
+      return answer.error ? answer : { ...answer, ...machineFields(machine) };
+    }
+    case "fan_out": {
+      const machine = checkedMachine(call.machine);
+      if (isFailure(machine)) return failureJson(machine);
+      if (machine.host) return fanOutOnMachine(machine, caller, call);
+      const answer = await fanOut(caller, call);
+      return answer.error ? answer : { ...answer, ...machineFields(machine) };
+    }
+    case "list_harnesses": {
+      const machine = checkedMachine(call.machine);
+      if (isFailure(machine)) return failureJson(machine);
+      if (machine.host) return listHarnessesOn(machine, call);
+      const answer = await listHarnesses(caller, call);
+      return answer.error ? answer : { ...answer, ...machineFields(machine) };
+    }
+    case "list_machines":
+      return listMachines();
     case "search_sessions":
       if (call.allProjects && !acrossProjects()) return reachRefused();
       return searchSessions(threads(), caller, call.query, call.allProjects);
     case "list_worktrees":
       if (call.allProjects && !acrossProjects()) return reachRefused();
       return listWorktrees(threads(), caller, call.allProjects);
-    case "list_projects":
-      return listProjects(useApp.getState());
+    case "list_projects": {
+      const machine = checkedMachine(call.machine);
+      if (isFailure(machine)) return failureJson(machine);
+      return projectsOnMachine(machine);
+    }
+    case "read_project":
+      return readProject(caller, call.path);
+    case "create_project":
+      return createProject(caller, call);
+    case "clone_project":
+      return cloneProject(caller, call);
+    case "update_project":
+      return updateProject(caller, call);
+    case "remove_project":
+      return removeProject(caller, call);
+    case "schedule_task":
+      return scheduleTask(caller, call);
+    case "list_scheduled_tasks":
+      return listScheduledTasks();
+    case "delete_scheduled_task":
+      return deleteScheduledTask(caller, call.id);
+    case "run_scheduled_task_now":
+      return runScheduledTaskNow(caller, call.id);
     case "list_pull_requests":
       return listPullRequests(caller, call.state);
     case "update_session":
       return updateSession(caller, call);
-    case "interrupt_session":
-      return interruptSession(caller, call.target);
+    case "interrupt_session": {
+      const machine = checkedMachine(call.machine ?? (splitThreadKey(call.target).host || undefined));
+      if (isFailure(machine)) return failureJson(machine);
+      const target = scopedTarget(machine, call.target);
+      if (isFailure(target)) return failureJson(target);
+      const answer = await interruptSession(caller, target);
+      return answer.error ? answer : { ...answer, ...machineFields(machineOfThread(target)) };
+    }
     case "configure_session":
       return configureSession(caller, call);
     case "transfer_session":
       return transferSession(caller, call.target, call.harness);
-    case "list_pending_requests":
-      return listPendingRequests(caller);
+    case "list_pending_requests": {
+      const machine = checkedMachine(call.machine);
+      if (isFailure(machine)) return failureJson(machine);
+      return listPendingRequests(caller, call.machine ? machine : undefined);
+    }
     case "answer_request":
       return answerRequest(caller, call);
     case "organize_threads":
       return organizeThreads(caller, call);
-    case "thread_status":
-      return threadStatus(caller, call.target);
     case "worktree_status":
       return worktreeStatus(caller, call);
     case "handoff_worktree":
       return handoffWorktree(caller, call);
+    case "thread_status": {
+      const machine = checkedMachine(
+        call.machine ?? (call.target ? splitThreadKey(call.target).host || undefined : undefined),
+      );
+      if (isFailure(machine)) return failureJson(machine);
+      const target = call.target ? scopedTarget(machine, call.target) : undefined;
+      if (isFailure(target)) return failureJson(target);
+      const answer = await threadStatus(caller, target, machine.host);
+      return answer.error
+        ? answer
+        : { ...answer, ...machineFields(target ? machineOfThread(target) : machine) };
+    }
     case "merge_when_green":
       return mergeWhenGreen(caller, call);
     case "cleanup_worktree":
@@ -1058,7 +1773,11 @@ function listWorktrees(all: RuleThread[], caller: RuleThread, allProjects = fals
   };
 }
 
-/** `list_projects`: every project the user has a thread in, most recently updated first. */
+/**
+ * `list_projects`: every project the user has a thread in or registered,
+ * most recently updated first. A registered folder with no thread yet shows
+ * with 0, so a project created or cloned before its first thread is there.
+ */
 function listProjects(s: AppState): JsonObject {
   const byPath = new Map<string, { path: string; threads: number; working: boolean; updatedAt: number }>();
   for (const x of s.sessions) {
@@ -1070,11 +1789,327 @@ function listProjects(s: AppState): JsonObject {
     entry.updatedAt = Math.max(entry.updatedAt, x.updatedAt ?? 0);
     byPath.set(path, entry);
   }
+  for (const { path, entry } of registeredProjects()) {
+    if (byPath.has(path)) continue;
+    byPath.set(path, {
+      path,
+      threads: 0,
+      working: false,
+      updatedAt: entry.registeredAt ?? 0,
+    });
+  }
   const projects = [...byPath.values()]
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, MAX_PROJECTS)
-    .map((p) => ({ path: p.path, name: projectName(p.path), threads: p.threads, working: p.working }));
+    .map((p) => ({ path: p.path, name: projectLabel(p.path), threads: p.threads, working: p.working }));
   return { projects };
+}
+
+// ---------------------------------------------------------------- projects
+
+/** A folder as the project book files it, the same rule `projectOf` reads. */
+const projectPath = (path: string) => cleanProjectPath(path);
+
+/** The threads that run in `path`, for a project's row: never a worktree's other repository. */
+function projectThreads(path: string): { threads: number; working: boolean } {
+  const s = useApp.getState();
+  let threads = 0;
+  let working = false;
+  for (const x of s.sessions) {
+    if (projectOf({ folder: x.cwd, worktree: x.worktree }) !== path) continue;
+    threads += 1;
+    working ||= !!s.threads[x.id]?.running || x.status === "running";
+  }
+  return { threads, working };
+}
+
+/** A path as the engine resolved it: what `_rustcode/project/*` answered. */
+function projectAnswer(facts: JsonObject, path: string, extra: JsonObject = {}): JsonObject {
+  const entry = projectEntry(path);
+  return {
+    project: {
+      ...facts,
+      path,
+      name: projectLabel(path),
+      ...projectThreads(path),
+      ...(entry?.harness ? { harness: entry.harness } : {}),
+      ...(entry?.model ? { model: entry.model } : {}),
+      registered: !!entry?.registeredAt,
+      ...extra,
+    },
+  };
+}
+
+/** The engine's project call, answered as a failure the agent can read. */
+async function askProject(
+  method: string,
+  params: JsonObject,
+  timeoutMs: number,
+): Promise<JsonObject | Failure> {
+  try {
+    return await request<JsonObject>(method, params, timeoutMs);
+  } catch (error) {
+    if (error instanceof RpcError) {
+      // -32602 is JSON-RPC's `invalid_params`: the folder is not there.
+      return failure(error.code === -32602 ? "not_found" : "target_unavailable", error.message);
+    }
+    return failure("target_unavailable", `the project could not be read: ${errorText(error)}`);
+  }
+}
+
+/** Why a path may not be read: this thread's project, or another while the setting allows it. */
+function projectRefusal(caller: RuleThread, path: string): Failure | null {
+  if (sameProject(path, reachOf(caller))) return null;
+  if (useApp.getState().readAcrossProjects) return null;
+  return failure(
+    "not_allowed",
+    "that project is outside this thread's; turn on “Let agents read threads in other projects” in Settings › Harnesses",
+  );
+}
+
+/**
+ * `read_project`: one folder's git facts and the app's own entry for it —
+ * display name, default harness and model, thread count. A read: no approval.
+ */
+async function readProject(caller: RuleThread, path: string): Promise<JsonObject> {
+  const asked = projectPath(path);
+  const refused = projectRefusal(caller, asked);
+  if (refused) return failureJson(refused);
+  const facts = await askProject(Method.projectRead, { path: asked }, 15_000);
+  if (isFailure(facts)) return failureJson(facts);
+  return projectAnswer(facts, projectPath(String(facts.path ?? asked)));
+}
+
+/** `create_project`: register an existing folder, or make a new one a repository. */
+async function createProject(
+  caller: RuleThread,
+  call: { path: string; init?: boolean },
+): Promise<JsonObject> {
+  const path = projectPath(call.path);
+  const no = await permitted(caller, `project:${path}`, {
+    kind: "project",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: path,
+    detail: `It would register ${path} as a project${call.init === false ? "" : ", making it a git repository if it is not one"}.`,
+  });
+  if (no) return failureJson(no);
+  const facts = await askProject(Method.projectCreate, { path, init: call.init ?? true }, 60_000);
+  if (isFailure(facts)) return failureJson(facts);
+  const resolved = projectPath(String(facts.path ?? path));
+  registerProject(resolved);
+  return projectAnswer(facts, resolved, { created: true });
+}
+
+/** `clone_project`: `git clone` into a parent folder, through the engine, then register it. */
+async function cloneProject(
+  caller: RuleThread,
+  call: { url: string; parent?: string; name?: string },
+): Promise<JsonObject> {
+  const s = useApp.getState();
+  const parent = projectPath(call.parent || projectOf(caller) || s.projectCwd || s.defaultCwd);
+  if (!parent) {
+    return failureJson(failure("failed", "there is no folder to clone into; pass parent"));
+  }
+  const no = await permitted(caller, `project:clone:${call.url}`, {
+    kind: "project",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: call.name ? `${parent}/${call.name}` : parent,
+    detail: `It would run git clone on ${call.url} in ${parent} and register the result as a project. A large repository over a slow link can take minutes.`,
+  });
+  if (no) return failureJson(no);
+  const facts = await askProject(
+    Method.projectClone,
+    { url: call.url, parent, ...(call.name ? { name: call.name } : {}) },
+    620_000,
+  );
+  if (isFailure(facts)) return failureJson(facts);
+  const resolved = projectPath(String(facts.path ?? parent));
+  registerProject(resolved);
+  return projectAnswer(facts, resolved, { created: true });
+}
+
+/** `update_project`: a display name, and the harness and model new threads there start on. */
+async function updateProject(
+  caller: RuleThread,
+  call: { path: string; name?: string; harness?: string; model?: string },
+): Promise<JsonObject> {
+  const path = projectPath(call.path);
+  const harnesses = useApp.getState().harnesses?.harnesses ?? [];
+  if (call.harness && !harnesses.some((h) => h.id === call.harness)) {
+    return failureJson(
+      failure(
+        "not_found",
+        `no harness ${call.harness}; list_harnesses shows the ids${harnesses.length ? ` (${harnesses.map((h) => h.id).join(", ")})` : ""}`,
+      ),
+    );
+  }
+  // A model without a harness still says what it is: the folder's new threads start on it.
+  const on = call.harness ?? call.model;
+  const no = await permitted(caller, `project:${path}`, {
+    kind: "project",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: path,
+    detail: `It would ${[
+      call.name && `call it “${call.name}”`,
+      on && `start new threads there on ${on}${call.harness && call.model ? ` with ${call.model}` : ""}`,
+    ]
+      .filter(Boolean)
+      .join(" and ")}. The folder itself is not touched.`,
+  });
+  if (no) return failureJson(no);
+  const entry = updateProjectEntry(path, {
+    name: call.name,
+    harness: call.harness,
+    model: call.model,
+  });
+  return projectAnswer({}, path, {
+    ...(entry.name ? { name: entry.name } : {}),
+  });
+}
+
+/** `remove_project`: forget the folder; its files and its threads stay. */
+async function removeProject(caller: RuleThread, call: { path: string }): Promise<JsonObject> {
+  const path = projectPath(call.path);
+  const no = await permitted(caller, `remove-project:${path}`, {
+    kind: "project",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: path,
+    detail: `It would unregister ${path} as a project. The folder and every file in it stay on disk, and its threads stay; only its display name and defaults go.`,
+  });
+  if (no) return failureJson(no);
+  const known = forgetProject(path);
+  return { path, removed: true, known, files_deleted: false };
+}
+
+// ---------------------------------------------------------------- scheduled work
+
+/** The user's IANA time zone, which a cron with none is read in. */
+function userTimeZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** How a schedule reads in the approval card. */
+function scheduleText(schedule: {
+  kind: "cron" | "at";
+  expression?: string;
+  timezone?: string;
+  at?: string;
+}): string {
+  if (schedule.kind === "cron") {
+    return `every cron ${schedule.expression}${schedule.timezone ? ` (${schedule.timezone})` : ""}`;
+  }
+  return `once at ${schedule.at}`;
+}
+
+/** The engine's scheduler call, answered as a failure the agent can read. */
+async function askScheduler(method: string, params: JsonObject, timeoutMs = 30_000): Promise<JsonObject> {
+  try {
+    return await request<JsonObject>(method, params, timeoutMs);
+  } catch (error) {
+    if (error instanceof RpcError) {
+      return failureJson(failure("target_unavailable", error.message));
+    }
+    return failureJson(failure("target_unavailable", `the scheduler did not answer: ${errorText(error)}`));
+  }
+}
+
+/** `schedule_task`: a prompt the daemon runs on its schedule, with no thread open. */
+async function scheduleTask(
+  caller: RuleThread,
+  call: {
+    prompt: string;
+    schedule: { kind: "cron"; expression: string; timezone?: string } | { kind: "at"; at: string };
+    project?: string;
+    name?: string;
+    modelProfile?: string;
+  },
+): Promise<JsonObject> {
+  const workspace = projectPath(call.project || projectOf(caller) || useApp.getState().projectCwd);
+  if (!workspace) {
+    return failureJson(failure("failed", "this thread has no project folder; pass project"));
+  }
+  // A cron is read in the user's own zone unless the call named one: the app knows it, the engine only guesses.
+  const timezone = call.schedule.kind === "cron" ? call.schedule.timezone || userTimeZone() : undefined;
+  const schedule =
+    call.schedule.kind === "cron"
+      ? {
+          kind: "cron" as const,
+          expression: call.schedule.expression,
+          ...(timezone ? { timezone } : {}),
+        }
+      : call.schedule;
+  const title = call.name || call.prompt.trim().split("\n")[0]?.slice(0, 60) || "this task";
+  const no = await permitted(caller, "schedule:new", {
+    kind: "schedule",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: title,
+    detail: `It would add “${title}” to the scheduler: ${scheduleText(schedule)}, running in ${workspace} with no thread open. The daemon must be running for it to fire.`,
+  });
+  if (no) return failureJson(no);
+  return askScheduler(Method.scheduledCreate, {
+    prompt: call.prompt,
+    workspace,
+    schedule,
+    ...(call.name ? { name: call.name } : {}),
+    ...(call.modelProfile ? { modelProfile: call.modelProfile } : {}),
+  });
+}
+
+/** `list_scheduled_tasks`: what the daemon holds, and whether it is running. */
+async function listScheduledTasks(): Promise<JsonObject> {
+  return askScheduler(Method.scheduledList, {}, 20_000);
+}
+
+/**
+ * What the list says a task is called and where it runs, so a card names it
+ * rather than a `task-1723…` id. The daemon may not answer: the changing call
+ * then reads as it did before, still naming the id it was given.
+ */
+async function scheduledTaskName(id: string): Promise<string> {
+  const listed = await askScheduler(Method.scheduledList, {}, 20_000);
+  const tasks = Array.isArray(listed.tasks) ? listed.tasks : [];
+  const task = tasks.find((entry) => obj(entry)?.id === id);
+  const name = str(obj(task)?.name);
+  const workspace = str(obj(task)?.workspace);
+  if (!name && !workspace) return "that scheduled task";
+  return `“${name ?? id}”${workspace ? `, which runs in ${workspace}` : ""}`;
+}
+
+/** `delete_scheduled_task`: the task leaves the scheduler at once. */
+async function deleteScheduledTask(caller: RuleThread, id: string): Promise<JsonObject> {
+  const task = await scheduledTaskName(id);
+  const no = await permitted(caller, `schedule:delete:${id}`, {
+    kind: "schedule",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: id,
+    detail: `It would delete ${task}. It stops at once, and its run history goes with it.`,
+  });
+  if (no) return failureJson(no);
+  return askScheduler(Method.scheduledDelete, { id });
+}
+
+/** `run_scheduled_task_now`: one run now, with the schedule left as it is. */
+async function runScheduledTaskNow(caller: RuleThread, id: string): Promise<JsonObject> {
+  const task = await scheduledTaskName(id);
+  const no = await permitted(caller, `schedule:run:${id}`, {
+    kind: "schedule",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: id,
+    detail: `It would run ${task} now, and keep its schedule. Its prompt runs with no thread open.`,
+  });
+  if (no) return failureJson(no);
+  return askScheduler(Method.scheduledRun, { id });
 }
 
 /** Why a pull request read failed, in the shape the agent reads: `{ error: { code, message } }`. */
@@ -1139,13 +2174,14 @@ async function delegatePull(
 }
 
 /**
- * The delegates a thread has: the targets of its links, newest first, one row
- * each, capped so the gh reads stay well inside the request timeout.
+ * The delegates a thread has on `host` ("" is this computer): the targets of
+ * its links, newest first, one row each, capped so the gh reads stay well
+ * inside the request timeout.
  */
-function delegateTargets(caller: RuleThread): { targets: RuleThread[]; omitted: number } {
+function delegateTargets(caller: RuleThread, host: string): { targets: RuleThread[]; omitted: number } {
   const ids = new Set(
     book()
-      .links.filter((link) => link.orchestrator === caller.id)
+      .links.filter((link) => link.orchestrator === caller.id && splitThreadKey(link.target).host === host)
       .map((l) => l.target),
   );
   ids.delete(caller.id);
@@ -1159,9 +2195,13 @@ function delegateTargets(caller: RuleThread): { targets: RuleThread[]; omitted: 
  * and a shell poll of `gh pr checks`. A read: no approval, same project. The
  * delegates are read concurrently, so a dozen do not add up to a timeout.
  */
-async function threadStatus(caller: RuleThread, target?: string): Promise<JsonObject> {
-  const asked = target ? undefined : delegateTargets(caller);
-  const targets = target ? [manageTarget(caller, target)] : (asked?.targets ?? []);
+async function threadStatus(
+  caller: RuleThread,
+  target: string | undefined,
+  host: string,
+): Promise<JsonObject> {
+  const asked = target ? undefined : delegateTargets(caller, host);
+  const targets = target ? [manageTarget(caller, target, true)] : (asked?.targets ?? []);
   const entries: RuleThread[] = [];
   for (const entry of targets) {
     if (isFailure(entry)) return failureJson(entry);
@@ -1174,6 +2214,20 @@ async function threadStatus(caller: RuleThread, target?: string): Promise<JsonOb
   }
   const settled = await Promise.allSettled(
     entries.map(async (entry) => {
+      // Another machine's branch and pull request are not this app's to read
+      // (they live in that machine's engine and folders): its status is what
+      // its thread list and this machine's reports say.
+      if (isRemoteThread(entry.id)) {
+        return {
+          entry,
+          state: { branch: entry.worktree?.branch } as {
+            branch?: string;
+            pull?: DelegatePull;
+            error?: Failure;
+          },
+          activity: null,
+        };
+      }
       const [state, activity] = await Promise.all([
         delegatePull(entry),
         entry.running
@@ -1204,6 +2258,7 @@ async function threadStatus(caller: RuleThread, target?: string): Promise<JsonOb
     delegates.push({
       session_id: entry.id,
       title: entry.title,
+      ...(targetMachine(entry.id) ? { machine: targetMachine(entry.id) } : {}),
       status: entry.status ?? (entry.running ? "running" : "idle"),
       ...(entry.running && lastAt !== undefined ? { idle_ms: Math.max(0, Date.now() - lastAt) } : {}),
       ...(entry.running && activity?.last_provider_error
@@ -1448,6 +2503,11 @@ async function cleanupWorktree(
  * engine call; the `gh` reads are bounded like `thread_status`'s. A read: no
  * approval.
  */
+/** The worktree threads this computer runs, and so can read git for. */
+function localWorktrees(): RuleThread[] {
+  return allThreads().filter((t) => t.worktree && !isRemoteThread(t.id));
+}
+
 async function worktreeStatus(
   caller: RuleThread,
   call: Extract<ReturnType<typeof parseCall>, { tool: "worktree_status" }>,
@@ -1463,12 +2523,12 @@ async function worktreeStatus(
     }
     entries.push(target);
   } else {
-    const rows = allThreads().filter((t) => t.worktree && (call.allProjects || reachesThread(caller, t)));
+    // This computer's folders only: a remote thread's worktree is read by the
+    // engine on that machine, which this call does not reach.
+    const rows = localWorktrees().filter((t) => call.allProjects || reachesThread(caller, t));
     entries.push(...rows.slice(0, MAX_WORKTREES));
   }
-  const omitted = call.target
-    ? 0
-    : Math.max(0, allThreads().filter((t) => t.worktree).length - entries.length);
+  const omitted = call.target ? 0 : Math.max(0, localWorktrees().length - entries.length);
   if (!entries.length) {
     return {
       worktrees: [],
@@ -1655,9 +2715,29 @@ type ConfigureCall = Extract<ReturnType<typeof parseCall>, { tool: "configure_se
 const STATUS_OF_CHOICE = { active: "idle", review: "review", settled: "done" } as const;
 
 /** The thread a management tool acts on: the caller's own when none is named. */
-function manageTarget(caller: RuleThread, id: string | undefined): RuleThread | Failure {
+/**
+ * The thread a management call acts on. A thread on another machine is only
+ * reachable when the call named that machine (`machine`): the app refuses to
+ * act there by a bare guess, and the tools that cannot work across machines
+ * say where the thread runs instead (`targetMachine`).
+ */
+function manageTarget(caller: RuleThread, id: string | undefined, machine = false): RuleThread | Failure {
   const target = id ? ruleThread(useApp.getState(), id) : caller;
-  return checkManage(caller, target) ?? (target as RuleThread);
+  if (!target) return failure("not_found", "no thread has that id; use list_sessions");
+  if (isRemoteThread(target.id) && !machine) {
+    return failure(
+      "not_allowed",
+      `“${target.title}” runs on ${targetMachine(target.id) ?? "another computer"}: do that there`,
+    );
+  }
+  if (isRemoteThread(target.id)) return target;
+  return checkManage(caller, target) ?? target;
+}
+
+/** The machine a thread key names, as people say it; undefined for this computer. */
+function targetMachine(id: string): string | undefined {
+  const { host } = splitThreadKey(id);
+  return host ? useApp.getState().machineNames[host] : undefined;
 }
 
 /** The changes `update_session` and `organize_threads` share, as one list. */
@@ -1981,7 +3061,7 @@ async function organizeThreads(caller: RuleThread, call: OrganizeCall): Promise<
 }
 
 async function interruptSession(caller: RuleThread, id: string): Promise<JsonObject> {
-  const target = manageTarget(caller, id);
+  const target = manageTarget(caller, id, true);
   if (isFailure(target)) return failureJson(target);
   if (target.id === caller.id) return failureJson(failure("not_allowed", "a thread cannot stop itself"));
   if (!target.running) return { session_id: target.id, interrupted: false, status: target.status ?? "idle" };
@@ -1992,6 +3072,7 @@ async function interruptSession(caller: RuleThread, id: string): Promise<JsonObj
     target: target.title,
     detail:
       "Its current turn stops, and the threads it is working through stop with it. The thread stays and can be messaged again.",
+    machine: targetMachine(target.id),
   });
   if (no) return failureJson(no);
   // What goes down with it, counted before the cascade starts.
@@ -2076,18 +3157,26 @@ async function transferSession(caller: RuleThread, id: string, harness: string):
 }
 
 /** What this project's open threads wait on. Only what they ask: answering stays with the user. */
-function listPendingRequests(caller: RuleThread): JsonObject {
+function listPendingRequests(caller: RuleThread, machine?: MachineRef): JsonObject {
   const s = useApp.getState();
+  const rank = machine?.host;
   const waiting = Object.values(s.threads)
     .filter((t) => t.permissions.length)
     .map((thread) => ({ thread, rule: ruleThread(s, thread.id) }))
-    .filter(({ rule }) => rule && reachesThread(caller, rule))
+    .filter(({ rule }) => {
+      if (!rule) return false;
+      // A named machine is the whole answer; without one, every thread this
+      // thread reaches, wherever it runs.
+      if (machine) return splitThreadKey(rule.id).host === rank;
+      return reachesThread(caller, rule);
+    })
     .flatMap(({ thread, rule }) => thread.permissions.map((request) => ({ thread, rule, request })))
     // Oldest first, as docs/orchestrator.md says: the card that has waited longest comes first.
     .sort((a, b) => (a.request.at ?? 0) - (b.request.at ?? 0));
   const requests = waiting.map(({ thread, rule, request }) => ({
     session_id: thread.id,
     request_id: String(request.rpcId),
+    ...(targetMachine(thread.id) ? { machine: targetMachine(thread.id) } : {}),
     title: rule?.title ?? "",
     kind: request.question ? "question" : "approval",
     asks: request.question?.text ?? request.title,
@@ -2104,7 +3193,15 @@ async function read(
   offset: number,
 ): Promise<JsonObject> {
   const target = ruleThread(useApp.getState(), targetId);
-  const refused = checkMessage(caller, target, book(), true, useApp.getState().readAcrossProjects);
+  // Reading another machine's thread is that machine's to allow; the app adds
+  // nothing to the rule, since the user named the machine and approves the read.
+  const refused = checkMessage(
+    caller,
+    target,
+    book(),
+    true,
+    useApp.getState().readAcrossProjects || isRemoteThread(targetId),
+  );
   if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
   // Its project only matters to the user when it is not the caller's.
   const elsewhere = sameProject(projectOf(target), projectOf(caller))
@@ -2116,6 +3213,7 @@ async function read(
     callerTitle: caller.title,
     target: target.title,
     detail: `Its last ${lastTurns} turn${lastTurns === 1 ? "" : "s"}: your messages and its replies, no tool output.${elsewhere}`,
+    machine: targetMachine(target.id),
   });
   if (no) return failureJson(no);
   const openError = await openThread(target.id);
@@ -2223,7 +3321,10 @@ async function messageNow(
 ): Promise<JsonObject> {
   const state = useApp.getState();
   const target = ruleThread(state, targetId);
-  const refused = checkMessage(caller, target, book(), false, false, delegateLimits());
+  // A thread on another machine is not this app's project topic to check: the
+  // user named that machine, and the card below is the gate.
+  const remote = isRemoteThread(targetId);
+  const refused = checkMessage(caller, target, book(), false, false, delegateLimits(), remote);
   if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
   const unavailable = messageTargetRefusal(state, targetId);
   if (unavailable) return failureJson(unavailable);
@@ -2241,12 +3342,13 @@ async function messageNow(
     callerTitle: caller.title,
     target: target.title,
     detail: withFiles,
+    machine: targetMachine(target.id),
   });
   if (no) return failureJson(no);
   // The user took their time: look again.
   const afterPermission = useApp.getState();
   const current = ruleThread(afterPermission, targetId);
-  const again = checkMessage(caller, current, book(), false, false, delegateLimits());
+  const again = checkMessage(caller, current, book(), false, false, delegateLimits(), remote);
   if (again) return failureJson(again);
   const stopped = messageTargetRefusal(afterPermission, targetId);
   if (stopped) return failureJson(stopped);
@@ -2256,7 +3358,15 @@ async function messageNow(
   const openError = await openThread(target.id);
   const afterOpen = useApp.getState();
   const openedTarget = ruleThread(afterOpen, targetId);
-  const noLongerReachable = checkMessage(caller, openedTarget, book(), false, false, delegateLimits());
+  const noLongerReachable = checkMessage(
+    caller,
+    openedTarget,
+    book(),
+    false,
+    false,
+    delegateLimits(),
+    remote,
+  );
   if (noLongerReachable) return failureJson(noLongerReachable);
   const noLongerAvailable = messageTargetRefusal(afterOpen, targetId);
   if (noLongerAvailable) return failureJson(noLongerAvailable);
@@ -2787,15 +3897,18 @@ async function fanOutNow(caller: RuleThread, call: FanOutCall): Promise<JsonObje
     targets.add(key);
     chosen.push({ harness: h, model, effort: entry.effort, account });
   }
-  const project = projectOf(caller);
+  const project = projectFor(caller, call.project);
+  if (isFailure(project)) return failureJson(project);
   const title = call.title ?? titleFrom(call.prompt, 60);
   const access = childMode(caller);
-  const no = await permitted(caller, "start", {
+  const other = !sameProject(project, projectOf(caller));
+  const no = await permitted(caller, other ? `start:${project}` : "start", {
     kind: "fan_out",
     caller: caller.id,
     callerTitle: caller.title,
     target: title,
     detail: call.prompt,
+    project: other ? project : undefined,
     harnesses: chosen.map((h) =>
       choiceLabel(h.harness.name, accountLabelOf(h.harness, h.account), h.model, h.effort),
     ),
@@ -3767,6 +4880,16 @@ export function dismissLink(id: string) {
   setBook((b) => ({ ...b, links: b.links.filter((l) => l.id !== id || isActive(l.state)) }));
 }
 
+/** Forget a finished thread's messages: the strip draws one row however many it got. */
+export function dismissLinkThread(orchestrator: string, target: string) {
+  setBook((b) => ({
+    ...b,
+    links: b.links.filter(
+      (link) => link.orchestrator !== orchestrator || link.target !== target || isActive(link.state),
+    ),
+  }));
+}
+
 /** "Keep this": the fan-out's other threads are done, and the kept one goes to review. */
 export async function keepFanOut(fanId: string, keep: string) {
   const group = book().fanOuts.find((f) => f.id === fanId);
@@ -3786,5 +4909,3 @@ export function linksOf(b: LinkBook, id: string) {
     drivenBy: [...b.links].reverse().find((l) => l.target === id && isActive(l.state)),
   };
 }
-
-export const projectLabel = (path: string) => projectName(path);

@@ -16,8 +16,11 @@ import { create } from "zustand";
 import { AcpConnection } from "../acp/jsonrpc";
 import { isTauri, MachineTransport } from "../acp/transport";
 import { parseSessionList, type SessionSummary } from "../acp/types";
+import { currentPlatform } from "../lib/platform";
 import { hasShell, shellCall } from "../lib/shell";
+import { appVersion } from "../lib/updater";
 import { askConfirm, toast } from "./store";
+import { compareVersions } from "./updates";
 
 /** Where a machine stands, as the shell reports it. */
 export type MachineState = "connecting" | "connected" | "offline" | "needsPairing" | "stopped";
@@ -26,6 +29,8 @@ export type MachineState = "connecting" | "connected" | "offline" | "needsPairin
 export interface MachineRoute {
   kind: string;
   address: string;
+  /** The mesh product the address is on (`netbird`, `tailscale`, `zerotier`), when the machine named it. */
+  provider?: string | null;
   /** The network encrypts the traffic (Tailscale, a VPN); a LAN route does not. */
   encrypted: boolean;
 }
@@ -36,6 +41,8 @@ export interface Machine {
   name: string;
   /** `macos`, `windows`, `linux`, or `unknown`. */
   platform: string;
+  /** The RustCode version it reported when it last answered, or null. */
+  version: string | null;
   /** The main machine is listed first and is the default **Run on**. */
   main: boolean;
   routes: MachineRoute[];
@@ -43,20 +50,67 @@ export interface Machine {
   route: MachineRoute | null;
   state: MachineState;
   detail: string | null;
+  /**
+   * What to check when the machine is reachable one way and not another, e.g.
+   * the LAN works while the NetBird address does not. Set by the shell; the
+   * page may show it next to `detail`.
+   */
+  hint: string | null;
   /** Seconds until the next attempt, while it waits. */
   retryInSecs: number | null;
   addedAt: string;
   lastConnectedAt: string | null;
 }
 
-/** A machine Bonjour found on this network, as `machines_discover` reports it. */
+/**
+ * A machine the Add sheet can list without an address typed, as
+ * `machines_discover` reports it: one Bonjour found on this network, or one
+ * whose own handshake reported an overlay address (NetBird, Tailscale) that
+ * this app saved for it.
+ */
 export interface DiscoveredMachine {
   name: string;
+  /** `bonjour` for a machine announcing itself here, `overlay` for a saved one reached over a tunnel. */
+  source?: "bonjour" | "overlay";
   address: string | null;
   addresses: string[];
   gatewayId: string | null;
+  /** The machine's platform, when it is saved and has said. */
+  platform?: string | null;
+  /** The RustCode version it runs, when it is saved and has answered. */
+  version?: string | null;
+  /** `lan`, `netbird`, `tailscale`, `zerotier`, `vpn` or `public`. */
+  routeKind?: string;
+  /** What to check when one kind of route does not answer (PR 3402). */
+  hint?: string | null;
   /** This app already has it saved. */
   saved: boolean;
+}
+
+/**
+ * What `machines_discover` answers: the rows, and what to say when the local
+ * search failed — the overlay rows come from this app's registry and are in
+ * `rows` either way.
+ */
+export interface Discovery {
+  rows: DiscoveredMachine[];
+  notice: string | null;
+}
+
+/** The RustCode server as this computer runs it in the background (`server status`). */
+export interface ServerService {
+  /** A service is in place, so the server starts when you log in. */
+  installed: boolean;
+  /** A server answers on its socket now. */
+  running: boolean;
+  /** The running server's version. */
+  version: string | null;
+  /** The version of the `rustcode` that answered. */
+  cliVersion: string | null;
+  /** `linger-disabled`, `version-mismatch` and the rest, as `server status` words them. */
+  problems: { code: string; message: string }[];
+  /** Why the status could not be read, when it could not. */
+  error: string | null;
 }
 
 /** An accepted connection request, waiting for the code the machine shows. */
@@ -99,6 +153,12 @@ interface MachinesStore {
   ready: boolean;
   error: string | null;
   machines: Machine[];
+  /**
+   * When each machine was first seen away, in ms: what an offline answer says
+   * ("Studio is offline since 09:12"). Seeded from `lastConnectedAt` the first
+   * time a machine is seen offline, so it reads as the last time it answered.
+   */
+  offlineSince: Record<string, number>;
   /** Each connected machine's thread count, from its own `session/list`. */
   counts: Record<string, number>;
   /** Last successfully fetched thread list per machine, retained across disconnects. */
@@ -108,12 +168,17 @@ interface MachinesStore {
   discoverError: string | null;
   pairing: Pairing | null;
   pairingError: string | null;
+  /** This computer's RustCode server as a background service, once asked. */
+  server: ServerService | null;
+  /** An install is running now. */
+  serverInstalling: boolean;
 }
 
 export const useMachines = create<MachinesStore>(() => ({
   ready: false,
   error: null,
   machines: [],
+  offlineSince: {},
   counts: {},
   sessions: {},
   discovered: null,
@@ -121,9 +186,35 @@ export const useMachines = create<MachinesStore>(() => ({
   discoverError: null,
   pairing: null,
   pairingError: null,
+  server: null,
+  serverInstalling: false,
 }));
 
 // ---------------------------------------------------------------- labels
+
+/** The id `list_machines` gives this computer: the machine a call is on when it names none. */
+export const LOCAL_MACHINE_ID = "local";
+
+/**
+ * This computer's name as people say it (docs/terminology.md): the local entry
+ * `list_machines` returns, and what an approval card calls it.
+ */
+export function selfName(): string {
+  switch (currentPlatform()) {
+    case "mac":
+      return "This Mac";
+    case "windows":
+      return "This PC";
+    default:
+      return "This computer";
+  }
+}
+
+/** When a machine went away, as `09:12`: the time `offlineSince` holds, or undefined. */
+export function offlineSinceLabel(at: number | undefined): string | undefined {
+  if (at === undefined) return undefined;
+  return new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
 
 /** The words a row's state chip uses. */
 export function stateLabel(machine: Pick<Machine, "state" | "retryInSecs">): string {
@@ -160,19 +251,31 @@ export function stateTone(machine: Pick<Machine, "state">): "ok" | "warn" | "bad
 const ROUTE_NAME: Record<string, string> = {
   lan: "LAN",
   tailscale: "Tailscale",
+  netbird: "NetBird",
+  zerotier: "ZeroTier",
   vpn: "VPN",
   public: "Public",
 };
 
 /**
- * One route as people read it: `LAN · Unencrypted`, `Tailscale · Encrypted`.
+ * The network a route travels over, as people know it: `LAN`, `NetBird`,
+ * `Tailscale`, `ZeroTier`, `VPN`, `Public`. The product the machine named wins
+ * over the generic kind: `100.64.0.0/10` is shared by several overlays (PR 3402).
+ */
+export function routeName(route: MachineRoute | null | undefined, kind?: string): string {
+  const wire = route?.provider || route?.kind || kind;
+  if (!wire) return "No route saved";
+  return ROUTE_NAME[wire] ?? ROUTE_NAME[kind ?? ""] ?? wire;
+}
+
+/**
+ * One route as people read it: `LAN · Unencrypted`, `NetBird · Encrypted`.
  * Only a LAN route is plain: everything else travels through a network that
  * encrypts it.
  */
 export function routeLabel(route: MachineRoute | null | undefined): string {
   if (!route) return "No route saved";
-  const name = ROUTE_NAME[route.kind] ?? route.kind;
-  return `${name} · ${route.encrypted ? "Encrypted" : "Unencrypted"}`;
+  return `${routeName(route)} · ${route.encrypted ? "Encrypted" : "Unencrypted"}`;
 }
 
 /**
@@ -181,8 +284,12 @@ export function routeLabel(route: MachineRoute | null | undefined): string {
  */
 export function machineLine(machine: Machine): string {
   switch (machine.state) {
-    case "connected":
-      return routeLabel(machine.route);
+    case "connected": {
+      const line = routeLabel(machine.route);
+      // Why another route to the same machine is not used, when the shell
+      // knows: the LAN works and NetBird does not, or the other way round.
+      return machine.hint ? `${line}. ${machine.hint}` : line;
+    }
     case "connecting":
       return `Connecting over ${routeLabel(machine.route)}`;
     case "needsPairing":
@@ -192,6 +299,106 @@ export function machineLine(machine: Machine): string {
     case "stopped":
       return "Not connected.";
   }
+}
+
+/**
+ * The hint a machine carries when one kind of route answers and another does
+ * not (PR 3402): e.g. the overlay address failed while the LAN works, and what
+ * to check on that machine. Absent when every route behaves the same.
+ */
+export function machineHint(machine: Pick<Machine, "hint">): string | null {
+  return machine.hint ?? null;
+}
+
+/**
+ * This app's own version, for the rows that compare it with another machine's.
+ * The app knows it without the network (`tauri getVersion`); a dev build in a
+ * browser asks the mock instead, so a mismatched row still shows there.
+ */
+let localVersion: string | null | undefined;
+export async function localAppVersion(): Promise<string | null> {
+  if (localVersion !== undefined) return localVersion;
+  const own = await appVersion().catch(() => null);
+  localVersion = own ?? (hasShell() ? await shellCall<string | null>("app_version").catch(() => null) : null);
+  return localVersion;
+}
+
+/** For tests: forget the version this app read. */
+export function forgetLocalAppVersion(): void {
+  localVersion = undefined;
+}
+
+/**
+ * The version `tauri.conf.json` gives a development build; a released app is
+ * stamped with its own version by `scripts/bundle-version.ts`. Every machine
+ * would read as newer against it, so the skew line is not shown in a `tauri
+ * dev` build (the mock reports a released version and does show it).
+ */
+export const DEV_APP_VERSION = "0.1.0";
+
+/**
+ * A machine running another RustCode version, in words: an older one is
+ * updated there, a newer one means this app is the one to update. Version
+ * skew is how the Mac Studio kept talking RustCode 0.96 to a 1.28 app without
+ * either end saying so.
+ */
+export function versionSkew(
+  remote: string | null | undefined,
+  local: string | null | undefined,
+  platform?: string | null,
+): string | null {
+  if (!remote || !local || local === DEV_APP_VERSION) return null;
+  const order = compareVersions(remote, local);
+  if (order === 0) return null;
+  return order < 0
+    ? `RustCode ${remote} on that machine — update it there: ${updateAdvice(platform ?? "")}`
+    : `RustCode ${remote} on that machine — update RustCode here`;
+}
+
+/**
+ * How RustCode is updated on a machine of that platform, as docs/install.md
+ * gives it: the app's own updater or Homebrew on a Mac, the app's updater or a
+ * new AppImage on Linux, the installer on Windows.
+ */
+export function updateAdvice(platform: string): string {
+  switch (platformName(platform)?.toLowerCase()) {
+    case "mac":
+      return "Settings › About › Check for updates, or `brew upgrade rustcode`";
+    case "windows":
+      return "run the RustCode installer";
+    case "linux":
+      return "install the new AppImage, or run `rustcode --update`";
+    default:
+      return "install the newer RustCode";
+  }
+}
+
+/**
+ * One row per machine, however many ways it was found: Bonjour hears a machine
+ * on the LAN, and its own handshake reported the overlay address saved for it.
+ * The first row keeps its route (the LAN one, when there is one) and takes
+ * what only the other source knew — the version it runs, the platform, the
+ * hint — so the Add sheet lists each machine once with everything known of it.
+ */
+export function mergeDiscovered(rows: DiscoveredMachine[]): DiscoveredMachine[] {
+  const byMachine = new Map<string, DiscoveredMachine>();
+  for (const row of rows) {
+    const key = row.gatewayId ?? row.name;
+    const known = byMachine.get(key);
+    if (!known) {
+      byMachine.set(key, row);
+      continue;
+    }
+    byMachine.set(key, {
+      ...known,
+      addresses: [...new Set([...known.addresses, ...row.addresses])],
+      platform: known.platform ?? row.platform,
+      version: known.version ?? row.version,
+      hint: known.hint ?? row.hint,
+      saved: known.saved || row.saved,
+    });
+  }
+  return [...byMachine.values()];
 }
 
 /** The platform as people say it: Mac, Windows, Linux, or nothing when unknown. */
@@ -302,7 +509,25 @@ export async function refreshMachines(): Promise<void> {
   if (!hasShell()) return;
   try {
     const machines = await shellCall<Machine[]>("machines_list");
-    useMachines.setState({ machines, ready: true, error: null });
+    const now = Date.now();
+    const since = { ...useMachines.getState().offlineSince };
+    // A machine that was removed leaves nothing behind.
+    for (const id of Object.keys(since)) {
+      if (!machines.some((machine) => machine.id === id)) delete since[id];
+    }
+    for (const machine of machines) {
+      if (machine.state === "connected") {
+        delete since[machine.id];
+        continue;
+      }
+      // The first time this window sees it away: the last time it answered is
+      // the closest the shell gives to when it stopped.
+      if (since[machine.id] === undefined) {
+        const last = Date.parse(machine.lastConnectedAt ?? "");
+        since[machine.id] = Number.isNaN(last) ? now : last;
+      }
+    }
+    useMachines.setState({ machines, offlineSince: since, ready: true, error: null });
     for (const machine of machines) void attach(machine);
     for (const id of [...links.keys()]) {
       if (!machines.some((machine) => machine.id === id)) detach(id);
@@ -394,6 +619,7 @@ export function resetMachinesForTests(): void {
     ready: false,
     error: null,
     machines: [],
+    offlineSince: {},
     counts: {},
     sessions: {},
     discovered: null,
@@ -401,6 +627,8 @@ export function resetMachinesForTests(): void {
     discoverError: null,
     pairing: null,
     pairingError: null,
+    server: null,
+    serverInstalling: false,
   });
 }
 
@@ -498,11 +726,88 @@ export function refreshMachineThreads(): void {
 export async function discoverMachines(): Promise<void> {
   useMachines.setState({ discovering: true, discoverError: null });
   try {
-    const discovered = await shellCall<DiscoveredMachine[]>("machines_discover");
-    useMachines.setState({ discovered, discovering: false });
+    const { rows, notice } = await shellCall<Discovery>("machines_discover");
+    // A failed browse still lists the overlay rows: the notice says why the
+    // local search found nothing, and the saved machines are below it.
+    useMachines.setState({ discovered: mergeDiscovered(rows), discoverError: notice, discovering: false });
   } catch (error) {
     useMachines.setState({ discovering: false, discoverError: errorText(error) });
   }
+}
+
+/**
+ * This computer's RustCode server as a background service. The page asks when
+ * it opens and after an install; nothing polls it, because reading it starts
+ * a process (`rustcode server status --json`).
+ */
+export async function refreshServerService(): Promise<void> {
+  if (!hasShell()) return;
+  try {
+    useMachines.setState({ server: await shellCall<ServerService>("server_service_status") });
+  } catch (error) {
+    useMachines.setState({
+      server: {
+        installed: false,
+        running: false,
+        version: null,
+        cliVersion: null,
+        problems: [],
+        error: errorText(error),
+      },
+    });
+  }
+}
+
+/**
+ * Install the server as a background service: it stays up when the app closes
+ * and starts when you log in, so threads that live in it keep running. The
+ * app's own threads stay in its engine until the app is switched to the server. It is the
+ * CLI's own `rustcode server install`, so a development build is refused there
+ * with the reason shown here. Answers whether it ended up installed.
+ */
+export async function installServer(): Promise<boolean> {
+  useMachines.setState({ serverInstalling: true });
+  try {
+    const server = await shellCall<ServerService>("server_service_install");
+    useMachines.setState({ server, serverInstalling: false });
+    if (server.installed) {
+      toast(
+        "The RustCode server is installed as a background service and starts when you log in.",
+        "success",
+      );
+    } else {
+      toast(server.error ?? "The RustCode server is installed but is not running yet.", "error");
+    }
+    return server.installed;
+  } catch (error) {
+    useMachines.setState({ serverInstalling: false });
+    toast(`Could not install the RustCode server: ${errorText(error)}`, "error");
+    return false;
+  }
+}
+
+/**
+ * Ask before installing the server, in the words that say what it does: it is
+ * where threads can live instead of the app, it stays up when the app closes,
+ * and it starts when you log in. The app's own threads are still its engine's.
+ */
+export function askInstallServer(): void {
+  askConfirm({
+    title: "Install the RustCode server?",
+    message:
+      "The RustCode server is where threads can live instead of the app: as a background service it stays up when the app closes and starts when you log in, so those threads keep running. The threads this app starts itself still run in its own engine and end with it, until RustCode uses the server. Threads, settings and pairings stay as they are.",
+    action: "Install",
+    run: () => void installServer(),
+  });
+}
+
+/** The background server in one line: `Installed · Running`, or what is wrong. */
+export function serverLine(server: ServerService | null): string {
+  if (!server) return "Not checked yet";
+  if (server.error && !server.installed && !server.running) return server.error;
+  const installed = server.installed ? "Installed" : "Not installed";
+  if (!server.installed) return installed;
+  return `${installed} · ${server.running ? "Running" : "Not running"}`;
 }
 
 /**

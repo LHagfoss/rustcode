@@ -13,7 +13,7 @@ import { snoozeAt } from "./snooze";
 import { formatDuration, type QueuedPrompt, withWakeMark } from "./thread";
 
 /** What the client advertises in `initialize` while the setting is on. */
-export const CAPABILITY_VERSION = 11;
+export const CAPABILITY_VERSION = 13;
 /** The most of a child's answer `wait_session` carries; beyond it, `read_session` pages the rest. */
 export const MAX_BYTES = 8 * 1024;
 /** The longest prompt or message a thread may hand another one (32 KiB). */
@@ -305,6 +305,56 @@ export function doneLinks(
   return { shown: all.slice(0, most), more: Math.max(0, all.length - most) };
 }
 
+/** One thread in a thread's links: the link that speaks for it now, and every message. */
+export interface LinkThread {
+  /** The thread the row opens. */
+  target: string;
+  /** The link that speaks for it now: live first, else the newest. */
+  link: Link;
+  /** What that link shows now, from the caller's reading or its own record. */
+  state: LinkState;
+  /** Every link to it, in the order given: a follow-up is the same delegate. */
+  links: Link[];
+}
+
+/**
+ * The threads `links` name, one row each, however many times one was messaged. A
+ * follow-up is the same delegate: its row takes a live link when it has one, so
+ * a settled message cannot make a busy thread read answered, and otherwise the
+ * newest, so the row shows the latest state and time.
+ */
+export function linkThreads(links: readonly Link[], states?: readonly LinkState[]): LinkThread[] {
+  const groups = new Map<string, { links: Link[]; states: LinkState[] }>();
+  links.forEach((link, i) => {
+    const state = states?.[i] ?? link.state;
+    const group = groups.get(link.target);
+    if (group) {
+      group.links.push(link);
+      group.states.push(state);
+    } else {
+      groups.set(link.target, { links: [link], states: [state] });
+    }
+  });
+  return [...groups].map(([target, group]) => {
+    let best = 0;
+    for (let i = 1; i < group.links.length; i++) {
+      const live = isActive(group.states[i]!);
+      const bestLive = isActive(group.states[best]!);
+      if (live !== bestLive) {
+        if (live) best = i;
+        continue;
+      }
+      if (group.links[i]!.createdAt >= group.links[best]!.createdAt) best = i;
+    }
+    return {
+      target,
+      link: group.links[best]!,
+      state: group.states[best]!,
+      links: group.links,
+    };
+  });
+}
+
 /** One thread working for another: from the message (or the start) to the answer. */
 export interface Link {
   /** `<orchestrator>/<n>`. */
@@ -320,6 +370,8 @@ export interface Link {
   harness?: string;
   /** The harness's display name, as the notice writes it (Pi, Codex, Claude Code). */
   harnessName?: string;
+  /** The paired machine the target runs on; absent for this computer. */
+  machine?: string;
   /** The named login the thread runs on, when it is not the harness's default. */
   account?: string;
   /** The model it runs on, for the first event's `harness · model`. */
@@ -417,12 +469,12 @@ export interface HarnessChoice {
 }
 
 export type Call =
-  | { tool: "list_sessions"; query: string; allProjects: boolean }
-  | { tool: "read_session"; target: string; lastTurns: number; offset: number }
+  | { tool: "list_sessions"; query: string; allProjects: boolean; machine?: string }
+  | { tool: "read_session"; target: string; lastTurns: number; offset: number; machine?: string }
   /** `attachments` are absolute paths, under the caller's project or worktree. */
-  | { tool: "message_session"; target: string; text: string; attachments: string[] }
+  | { tool: "message_session"; target: string; text: string; attachments: string[]; machine?: string }
   /** `callId` is the engine's name for this call, so a dropped call can end its wait. */
-  | { tool: "wait_session"; links: string[]; timeoutMs: number; callId?: string }
+  | { tool: "wait_session"; links: string[]; timeoutMs: number; callId?: string; machine?: string }
   | {
       tool: "start_session";
       prompt: string;
@@ -434,10 +486,20 @@ export type Call =
       account?: string;
       worktree?: boolean;
       project?: string;
+      /** The paired machine it runs on; omitted is this computer. */
+      machine?: string;
     }
-  | { tool: "fan_out"; prompt: string; title?: string; harnesses: HarnessChoice[] }
+  | {
+      tool: "fan_out";
+      prompt: string;
+      title?: string;
+      harnesses: HarnessChoice[];
+      /** The project on that machine; without one, the caller's path there or its only project. */
+      project?: string;
+      machine?: string;
+    }
   /** `harness` narrows to one harness, `model` to the models whose id or name matches. */
-  | { tool: "list_harnesses"; harness?: string; model?: string }
+  | { tool: "list_harnesses"; harness?: string; model?: string; machine?: string }
   | { tool: "search_sessions"; query: string; allProjects: boolean }
   | { tool: "list_worktrees"; allProjects: boolean }
   | {
@@ -450,10 +512,10 @@ export type Call =
       /** When it comes back, in ms; `null` brings it back now. */
       snoozedUntil?: number | null;
     }
-  | { tool: "interrupt_session"; target: string }
+  | { tool: "interrupt_session"; target: string; machine?: string }
   | { tool: "configure_session"; target?: string; model?: string; effort?: string }
   | { tool: "transfer_session"; target: string; harness: string }
-  | { tool: "list_pending_requests" }
+  | { tool: "list_pending_requests"; machine?: string }
   | {
       tool: "answer_request";
       target: string;
@@ -472,7 +534,7 @@ export type Call =
       /** `true` settles the threads, `false` brings them back. */
       archived?: boolean;
     }
-  | { tool: "list_projects" }
+  | { tool: "list_projects"; machine?: string }
   | { tool: "list_pull_requests"; state: PullStateChoice }
   | { tool: "thread_usage"; since?: string; groupBy: UsageGroup; project?: string }
   | { tool: "query_data"; sql: string; limit: number }
@@ -486,13 +548,37 @@ export type Call =
       /** What it says instead, for `edit`. */
       text?: string;
     }
-  | { tool: "thread_status"; target?: string }
+  | { tool: "thread_status"; target?: string; machine?: string }
   | { tool: "merge_when_green"; target: string; timeoutMs: number; callId?: string }
   | { tool: "cleanup_worktree"; target: string; settle: boolean }
   /** Where worktrees stand: one thread's, or every worktree this thread reaches. */
   | { tool: "worktree_status"; target?: string; allProjects: boolean }
   /** Move a thread's work between the user's checkout and a worktree of its own. */
-  | { tool: "handoff_worktree"; target: string; to: HandoffTarget };
+  | { tool: "handoff_worktree"; target: string; to: HandoffTarget }
+  /** The computers this RustCode is paired with (orchestration version 12). */
+  | { tool: "list_machines" }
+  | { tool: "read_project"; path: string }
+  | { tool: "create_project"; path: string; init?: boolean }
+  | { tool: "clone_project"; url: string; parent?: string; name?: string }
+  | {
+      tool: "update_project";
+      path: string;
+      name?: string;
+      harness?: string;
+      model?: string;
+    }
+  | { tool: "remove_project"; path: string }
+  | {
+      tool: "schedule_task";
+      prompt: string;
+      schedule: TaskSchedule;
+      project?: string;
+      name?: string;
+      modelProfile?: string;
+    }
+  | { tool: "list_scheduled_tasks" }
+  | { tool: "delete_scheduled_task"; id: string }
+  | { tool: "run_scheduled_task_now"; id: string };
 
 /** What `update_session` may set a thread's status to. */
 export type SessionStatusChoice = "active" | "review" | "settled";
@@ -528,6 +614,11 @@ export const MAX_QUEUE_ITEMS = 50;
 /** How much of a queued message a list shows: enough to know which one it is. */
 export const QUEUE_PREVIEW_CHARS = 200;
 
+/** What `schedule_task` may ask the scheduler for: a cron, or one time. */
+export type TaskSchedule =
+  | { kind: "cron"; expression: string; timezone?: string }
+  | { kind: "at"; at: string };
+
 /** How long `merge_when_green` waits for checks by default, and at most: 25 minutes a call, like `wait_session`. */
 export const DEFAULT_MERGE_MS = MAX_WAIT_MS;
 export const MAX_MERGE_MS = MAX_WAIT_MS;
@@ -546,6 +637,13 @@ const s = (v: Json | undefined) => (typeof v === "string" ? v : undefined);
 /** `all_projects`: the user's threads in every project, when the setting allows it. */
 const allProjects = (args: JsonObject) => args.all_projects === true;
 const bytes = (text: string) => new TextEncoder().encode(text).length;
+/** The paired machine a call acts on: an id or name `list_machines` gave, absent for this one. */
+const machineOf = (args: JsonObject) => s(args.machine)?.trim() || undefined;
+/** The optional field, present only when the call named a machine. */
+const machineField = (args: JsonObject) => {
+  const machine = machineOf(args);
+  return machine ? { machine } : {};
+};
 /**
  * A list of paths, at most `max`: the strings that are one, or null when the
  * value is not a list of paths within it.
@@ -561,13 +659,24 @@ function pathsOf(value: Json | undefined, max = MAX_ATTACHMENT_FILES): string[] 
 export function parseCall(params: JsonObject): Call | Failure {
   const raw = params.args;
   const args = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
-  switch (s(params.tool)) {
+  const tool = s(params.tool) ?? "";
+  switch (tool) {
     case "list_sessions":
-      return { tool: "list_sessions", query: s(args.query) ?? "", allProjects: allProjects(args) };
+      return {
+        tool: "list_sessions",
+        query: s(args.query) ?? "",
+        allProjects: allProjects(args),
+        ...machineField(args),
+      };
     case "list_harnesses": {
       const harness = s(args.harness)?.trim() || undefined;
       const model = s(args.model)?.trim() || undefined;
-      return { tool: "list_harnesses", ...(harness ? { harness } : {}), ...(model ? { model } : {}) };
+      return {
+        tool: "list_harnesses",
+        ...(harness ? { harness } : {}),
+        ...(model ? { model } : {}),
+        ...machineField(args),
+      };
     }
     case "list_worktrees":
       return { tool: "list_worktrees", allProjects: allProjects(args) };
@@ -591,7 +700,9 @@ export function parseCall(params: JsonObject): Call | Failure {
       return { tool: "handoff_worktree", target, to: to as HandoffTarget };
     }
     case "list_projects":
-      return { tool: "list_projects" };
+      return { tool: "list_projects", ...machineField(args) };
+    case "list_machines":
+      return { tool: "list_machines" };
     case "list_pull_requests": {
       const state = s(args.state) ?? "open";
       if (!PULL_STATES.includes(state)) {
@@ -607,7 +718,7 @@ export function parseCall(params: JsonObject): Call | Failure {
     case "interrupt_session": {
       const target = s(args.session_id) ?? "";
       if (!target) return failure("invalid", "session_id is required");
-      return { tool: "interrupt_session", target };
+      return { tool: "interrupt_session", target, ...machineField(args) };
     }
     case "transfer_session": {
       const target = s(args.session_id) ?? "";
@@ -616,7 +727,7 @@ export function parseCall(params: JsonObject): Call | Failure {
       return { tool: "transfer_session", target, harness };
     }
     case "list_pending_requests":
-      return { tool: "list_pending_requests" };
+      return { tool: "list_pending_requests", ...machineField(args) };
     case "answer_request": {
       const target = s(args.session_id) ?? "";
       // The list prints `request_id` as a string, and the engine refuses anything else
@@ -692,7 +803,7 @@ export function parseCall(params: JsonObject): Call | Failure {
     }
     case "thread_status": {
       const target = s(args.session_id)?.trim() || undefined;
-      return { tool: "thread_status", target };
+      return { tool: "thread_status", target, ...machineField(args) };
     }
     case "merge_when_green": {
       const target = s(args.session_id) ?? "";
@@ -797,7 +908,7 @@ export function parseCall(params: JsonObject): Call | Failure {
       // Bytes into the rendered output: a page is a UTF-8 slice of it, never a character split.
       if (!Number.isFinite(offset) || offset < 0)
         return failure("invalid", "offset must be a whole number of bytes");
-      return { tool: "read_session", target, lastTurns: n, offset };
+      return { tool: "read_session", target, lastTurns: n, offset, ...machineField(args) };
     }
     case "message_session": {
       const target = s(args.session_id) ?? "";
@@ -808,7 +919,7 @@ export function parseCall(params: JsonObject): Call | Failure {
       if (attachments === null) {
         return failure("invalid", `attachments must be at most ${MAX_ATTACHMENT_FILES} absolute paths`);
       }
-      return { tool: "message_session", target, text, attachments };
+      return { tool: "message_session", target, text, attachments, ...machineField(args) };
     }
     case "wait_session": {
       // One answer per link: a repeated id is asked about once.
@@ -824,6 +935,7 @@ export function parseCall(params: JsonObject): Call | Failure {
         links,
         timeoutMs: Math.min(Math.max(asked, 1), MAX_WAIT_MS),
         callId: s(params.callId),
+        ...machineField(args),
       };
     }
     case "start_session": {
@@ -840,6 +952,7 @@ export function parseCall(params: JsonObject): Call | Failure {
         account: s(args.account)?.trim() || undefined,
         worktree: typeof args.worktree === "boolean" ? args.worktree : undefined,
         project: s(args.project),
+        ...machineField(args),
       };
     }
     case "fan_out": {
@@ -861,11 +974,110 @@ export function parseCall(params: JsonObject): Call | Failure {
       }
       if (harnesses.length < 2 || harnesses.length > 4)
         return failure("invalid", "harnesses takes 2 to 4 entries");
-      return { tool: "fan_out", prompt, title: s(args.title)?.trim() || undefined, harnesses };
+      return {
+        tool: "fan_out",
+        prompt,
+        title: s(args.title)?.trim() || undefined,
+        harnesses,
+        project: s(args.project),
+        ...machineField(args),
+      };
+    }
+    case "read_project":
+    case "remove_project": {
+      const path = (s(args.path) ?? "").trim();
+      if (!path) return failure("invalid", "path is required");
+      return tool === "read_project" ? { tool: "read_project", path } : { tool: "remove_project", path };
+    }
+    case "create_project": {
+      const path = (s(args.path) ?? "").trim();
+      if (!path) return failure("invalid", "path is required");
+      return {
+        tool: "create_project",
+        path,
+        init: typeof args.init === "boolean" ? args.init : undefined,
+      };
+    }
+    case "clone_project": {
+      const url = (s(args.url) ?? "").trim();
+      if (!url) return failure("invalid", "url is required");
+      return {
+        tool: "clone_project",
+        url,
+        parent: s(args.parent)?.trim() || undefined,
+        name: s(args.name)?.trim() || undefined,
+      };
+    }
+    case "update_project": {
+      const path = (s(args.path) ?? "").trim();
+      if (!path) return failure("invalid", "path is required");
+      const change = {
+        name: s(args.name)?.trim() || undefined,
+        harness: s(args.harness)?.trim() || undefined,
+        model: s(args.model)?.trim() || undefined,
+      };
+      if (!change.name && !change.harness && !change.model) {
+        return failure("invalid", "give at least one of name, harness or model");
+      }
+      return { tool: "update_project", path, ...change };
+    }
+    case "schedule_task": {
+      const prompt = s(args.prompt) ?? "";
+      if (!prompt.trim()) return failure("invalid", "prompt is required");
+      if (bytes(prompt) > MAX_MESSAGE_BYTES) return failure("invalid", "the prompt is over 32 KiB");
+      const raw =
+        args.schedule && typeof args.schedule === "object" && !Array.isArray(args.schedule)
+          ? (args.schedule as Record<string, unknown>)
+          : {};
+      const schedule = parseSchedule(raw);
+      if (typeof schedule === "string") return failure("invalid", schedule);
+      return {
+        tool: "schedule_task",
+        prompt,
+        schedule,
+        project: s(args.project)?.trim() || undefined,
+        name: s(args.name)?.trim() || undefined,
+        modelProfile: s(args.model_profile)?.trim() || undefined,
+      };
+    }
+    case "list_scheduled_tasks":
+      return { tool: "list_scheduled_tasks" };
+    case "delete_scheduled_task":
+    case "run_scheduled_task_now": {
+      const id = (s(args.id) ?? "").trim();
+      if (!id) return failure("invalid", "id is required");
+      return tool === "delete_scheduled_task"
+        ? { tool: "delete_scheduled_task", id }
+        : { tool: "run_scheduled_task_now", id };
     }
     default:
       return failure("invalid", "unknown tool");
   }
+}
+
+/**
+ * `schedule_task`'s schedule, checked here the way the engine checks it: a
+ * five-field cron for a repeating task, an ISO 8601 time with its offset for
+ * one that runs once.
+ */
+export function parseSchedule(raw: Record<string, unknown>): TaskSchedule | string {
+  const kind = typeof raw.kind === "string" ? raw.kind : "";
+  if (kind === "cron") {
+    const expression = typeof raw.expression === "string" ? raw.expression.trim() : "";
+    if (expression.split(/\s+/).filter(Boolean).length !== 5) {
+      return "schedule.expression must be a five-field cron expression";
+    }
+    const timezone = typeof raw.timezone === "string" ? raw.timezone.trim() : "";
+    return { kind: "cron", expression, ...(timezone ? { timezone } : {}) };
+  }
+  if (kind === "at") {
+    const at = typeof raw.at === "string" ? raw.at.trim() : "";
+    if (!at || Number.isNaN(Date.parse(at))) {
+      return "schedule.at must be an ISO 8601 time with its offset";
+    }
+    return { kind: "at", at };
+  }
+  return "schedule.kind must be cron or at";
 }
 
 export function isFailure(value: unknown): value is Failure {
@@ -889,11 +1101,13 @@ export interface RuleThread {
 }
 
 // macOS links /tmp, /var and /etc into /private, and the engine reports the resolved path: one place.
-const clean = (path: string) =>
+export const cleanProjectPath = (path: string) =>
   path
     .replace(/\/+$/, "")
     .replace(/\/\.\//g, "/")
     .replace(/^\/private(?=\/(?:tmp|var|etc)(?:\/|$))/, "");
+
+const clean = cleanProjectPath;
 
 /** A thread's project: its worktree's repository, else its folder. */
 export const projectOf = (t: Pick<RuleThread, "folder" | "worktree">) => clean(t.worktree?.repo || t.folder);
@@ -979,7 +1193,9 @@ export function listSessions(
 /**
  * Whether `caller` may message (or read) `target`, before the user is asked.
  * Reading reaches any project while the app allows it; everything that writes,
- * or that opens a thread to another, stays in the caller's own project.
+ * or that opens a thread to another, stays in the caller's own project — except
+ * a thread on a machine the call named (`remote`), whose folders are not this
+ * project's and whose card is the gate.
  */
 export function checkMessage(
   caller: RuleThread,
@@ -988,11 +1204,12 @@ export function checkMessage(
   read = false,
   acrossProjects = false,
   limits: DelegateLimits = DEFAULT_DELEGATE_LIMITS,
+  remote = false,
 ): Failure | null {
   if (!target) return failure("not_found", "no thread has that id; use list_sessions");
   if (target.id === caller.id)
     return failure("not_allowed", `a thread cannot ${read ? "read" : "message"} itself`);
-  if (!(read && acrossProjects) && !reachesThread(caller, target)) {
+  if (!remote && !(read && acrossProjects) && !reachesThread(caller, target)) {
     return failure(
       "not_allowed",
       "that thread is in another project; only this project's threads can be reached",
@@ -2450,7 +2667,9 @@ export interface GrantAsk {
     | "configure"
     | "merge"
     | "cleanup"
-    | "handoff";
+    | "handoff"
+    | "project"
+    | "schedule";
   caller: string;
   callerTitle: string;
   /** The thread messaged or read, or the new thread's title. */
@@ -2461,6 +2680,8 @@ export interface GrantAsk {
   /** The access a new thread starts at (`start`, `fan_out`): never more than the caller's own. */
   access?: PermissionMode;
   worktree?: boolean;
+  /** The paired machine a start or a message acts on, named on the card; absent for this computer. */
+  machine?: string;
 }
 
 export type GrantChoice = "always" | "once" | "deny";

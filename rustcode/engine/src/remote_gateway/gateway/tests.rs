@@ -76,14 +76,29 @@ impl Harness {
     }
 
     async fn start_with(limits: Limits, router: RecordingRouter) -> Self {
+        Self::start_on(
+            plan_listen("127.0.0.1", None, &[]).unwrap(),
+            None,
+            limits,
+            router,
+        )
+        .await
+    }
+
+    async fn start_on(
+        plan: ListenPlan,
+        replan: Option<Replan>,
+        limits: Limits,
+        router: RecordingRouter,
+    ) -> Self {
         let dir = tempfile::tempdir_in("/tmp").unwrap();
         let lifecycle = RemoteLifecycle::new(dir.path());
         let router = Arc::new(router);
         let gateway = Gateway::bind(
             &lifecycle,
             GatewayConfig {
-                replan: None,
-                plan: plan_listen("127.0.0.1", None, &[]).unwrap(),
+                replan,
+                plan,
                 port: 0,
                 router: router.clone(),
                 sessions: None,
@@ -1606,5 +1621,103 @@ async fn a_device_pairing_with_the_code_says_what_it_is() {
     assert_eq!(device.kind, DeviceKind::Cli);
     assert_eq!(device.platform, "linux");
     assert_eq!(device.host_id.as_deref(), Some("host-fedcba9876543210"));
+    harness.stop().await;
+}
+
+/// An `auto` gateway listens on every address it answers on, and an extra
+/// listener serves the same gateway: a device that can only reach the overlay
+/// address pairs and authenticates exactly like one on the LAN (#3202).
+#[tokio::test]
+async fn an_extra_listener_serves_the_same_gateway() {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let lifecycle = RemoteLifecycle::new(dir.path());
+    // The machine's own network address, where there is one: macOS binds only
+    // 127.0.0.1 on loopback, Linux and Windows would take another alias, and
+    // production extras are exactly these interface addresses.
+    let Some(extra) = crate::remote_gateway::address::candidate_addresses()
+        .into_iter()
+        .find(|candidate| candidate.address.is_ipv4() && !candidate.address.is_loopback())
+        .map(|candidate| candidate.address)
+    else {
+        return;
+    };
+    let mut plan = plan_listen("127.0.0.1", None, &[]).unwrap();
+    plan.also.push(extra);
+    let gateway = Gateway::bind(
+        &lifecycle,
+        GatewayConfig {
+            replan: None,
+            plan,
+            port: 0,
+            router: Arc::new(RecordingRouter::default()),
+            sessions: None,
+            limits: Limits::default(),
+        },
+    )
+    .await
+    .unwrap();
+    let port = gateway.local_addr().port();
+    let shutdown = gateway.shutdown_token();
+    let task = tokio::spawn(gateway.run());
+
+    let offer = bounded(lifecycle.pair()).await.unwrap();
+    let mut client = Client::connect(SocketAddr::new(extra, port)).await;
+    client
+        .send(json!({
+            "type": "pair",
+            "protocol_version": 1,
+            "method": "credential",
+            "secret": offer.credential.expose(),
+            "device_name": "overlay device",
+        }))
+        .await;
+    let paired = client.next_json().await;
+    assert_eq!(paired["type"], "paired", "{paired}");
+
+    shutdown.cancel();
+    bounded(task).await.unwrap().unwrap();
+}
+
+/// A replan can move the primary onto an address an extra already held, which
+/// is what `prefer_interface = "netbird"` does when NetBird goes down: the LAN
+/// address that was the extra becomes the primary. The extra must be released
+/// (and its task awaited) before the bind, or EADDRINUSE leaves the plan stuck
+/// on the old address forever.
+#[tokio::test]
+async fn a_replan_whose_primary_was_an_extra_releases_it_before_binding() {
+    let ipv4: IpAddr = "127.0.0.1".parse().unwrap();
+    let ipv6: IpAddr = "::1".parse().unwrap();
+    let mut first = plan_listen("127.0.0.1", None, &[]).unwrap();
+    first.also.push(ipv6);
+    let next = plan_listen("::1", None, &[]).unwrap();
+    let replan: Replan = Arc::new(move || Some(next.clone()));
+    let limits = Limits {
+        replan_interval: Duration::from_millis(20),
+        ..Limits::default()
+    };
+    let harness = Harness::start_on(first, Some(replan), limits, RecordingRouter::default()).await;
+    let port = harness.addr.port();
+    let wanted = SocketAddr::new(ipv6, port);
+    let status = bounded(async {
+        loop {
+            let status = harness.status().await;
+            if status.listen_address == wanted.to_string() {
+                break status;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert_eq!(status.advertised_address, wanted.to_string());
+    assert!(
+        TcpStream::connect(wanted).await.is_ok(),
+        "the new primary answers on {wanted}"
+    );
+    assert!(
+        TcpStream::connect(SocketAddr::new(ipv4, port))
+            .await
+            .is_err(),
+        "the old primary and the extra task that held {wanted} are gone"
+    );
     harness.stop().await;
 }

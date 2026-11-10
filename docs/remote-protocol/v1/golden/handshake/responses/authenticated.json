@@ -7,6 +7,7 @@
   "device_name": "Lars's iPhone",
   "host_name": "studio",
   "expires_at": "2026-08-22T09:15:00Z",
+  "version": "1.28.0",
   "routes": [
     {
       "address": "192.168.1.20:17879",
@@ -14,7 +15,8 @@
     },
     {
       "address": "100.92.13.44:17879",
-      "kind": "vpn"
+      "kind": "overlay",
+      "provider": "netbird"
     },
     {
       "address": "rustcode-8e1f4b7a.local:17879",

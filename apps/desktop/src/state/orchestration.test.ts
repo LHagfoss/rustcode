@@ -48,6 +48,7 @@ import {
   linkGroupStatus,
   linkResult,
   linksLeft,
+  linkThreads,
   listSessions,
   MAX_ACTIVITY_ITEMS,
   MAX_DATA_ROWS,
@@ -139,6 +140,88 @@ describe("management tools", () => {
       state: "merged",
     });
     expect(isFailure(parseCall({ tool: "list_pull_requests", args: { state: "draft" } }))).toBe(true);
+    // v11: the project tools and the scheduler's four.
+    expect(parseCall({ tool: "read_project", args: { path: " /abs/project " } })).toEqual({
+      tool: "read_project",
+      path: "/abs/project",
+    });
+    expect(isFailure(parseCall({ tool: "read_project", args: { path: " " } }))).toBe(true);
+    expect(parseCall({ tool: "create_project", args: { path: "/abs/new" } })).toEqual({
+      tool: "create_project",
+      path: "/abs/new",
+      init: undefined,
+    });
+    expect(parseCall({ tool: "create_project", args: { path: "/abs/new", init: false } })).toMatchObject({
+      init: false,
+    });
+    expect(parseCall({ tool: "clone_project", args: { url: "git@github.com:o/r.git", name: "r" } })).toEqual({
+      tool: "clone_project",
+      url: "git@github.com:o/r.git",
+      parent: undefined,
+      name: "r",
+    });
+    expect(isFailure(parseCall({ tool: "clone_project", args: {} }))).toBe(true);
+    expect(parseCall({ tool: "update_project", args: { path: "/abs/p", harness: " codex " } })).toEqual({
+      tool: "update_project",
+      path: "/abs/p",
+      name: undefined,
+      harness: "codex",
+      model: undefined,
+    });
+    expect(isFailure(parseCall({ tool: "update_project", args: { path: "/abs/p" } }))).toBe(true);
+    expect(parseCall({ tool: "remove_project", args: { path: "/abs/p" } })).toEqual({
+      tool: "remove_project",
+      path: "/abs/p",
+    });
+    expect(
+      parseCall({
+        tool: "schedule_task",
+        args: {
+          prompt: "Check the build",
+          schedule: { kind: "cron", expression: "0 9 * * 1-5", timezone: "Europe/Oslo" },
+          project: "/abs/project",
+        },
+      }),
+    ).toEqual({
+      tool: "schedule_task",
+      prompt: "Check the build",
+      schedule: { kind: "cron", expression: "0 9 * * 1-5", timezone: "Europe/Oslo" },
+      project: "/abs/project",
+      name: undefined,
+      modelProfile: undefined,
+    });
+    expect(
+      parseCall({
+        tool: "schedule_task",
+        args: { prompt: "Once", schedule: { kind: "at", at: "2026-03-04T09:30:00+01:00" } },
+      }),
+    ).toMatchObject({ schedule: { kind: "at", at: "2026-03-04T09:30:00+01:00" } });
+    expect(
+      isFailure(parseCall({ tool: "schedule_task", args: { prompt: "x", schedule: { kind: "daily" } } })),
+    ).toBe(true);
+    expect(
+      isFailure(
+        parseCall({
+          tool: "schedule_task",
+          args: { prompt: "x", schedule: { kind: "cron", expression: "0 9 * *" } },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isFailure(
+        parseCall({ tool: "schedule_task", args: { prompt: "x", schedule: { kind: "at", at: "later" } } }),
+      ),
+    ).toBe(true);
+    expect(parseCall({ tool: "list_scheduled_tasks", args: {} })).toEqual({ tool: "list_scheduled_tasks" });
+    expect(parseCall({ tool: "delete_scheduled_task", args: { id: " task-1 " } })).toEqual({
+      tool: "delete_scheduled_task",
+      id: "task-1",
+    });
+    expect(parseCall({ tool: "run_scheduled_task_now", args: { id: "task-1" } })).toEqual({
+      tool: "run_scheduled_task_now",
+      id: "task-1",
+    });
+    expect(isFailure(parseCall({ tool: "run_scheduled_task_now", args: {} }))).toBe(true);
     expect(parseCall({ tool: "update_session", args: { pinned: false, status: "settled" } })).toMatchObject({
       pinned: false,
       status: "settled",
@@ -268,9 +351,46 @@ describe("management tools", () => {
 
 describe("orchestration rules", () => {
   test("the app advertises the version whose arguments it answers", () => {
-    // The engine strips `account` below 5 and `attachments` below 10, and refuses a call that
-    // carries one: the app speaks the newest, so it is offered both.
-    expect(CAPABILITY_VERSION).toBe(11);
+    // The engine strips `account` below 5, `attachments` below 10 and `machine` below 12, and
+    // refuses a call that carries one: the app speaks the newest, so it is offered all three.
+    expect(CAPABILITY_VERSION).toBe(13);
+  });
+
+  test("a machine is read from any call that takes one, and absent when it is not named", () => {
+    // An id or a name `list_machines` gave; whitespace is not a machine.
+    expect(parseCall({ tool: "list_sessions", args: { machine: " Studio " } })).toMatchObject({
+      machine: "Studio",
+    });
+    expect(parseCall({ tool: "list_sessions", args: { machine: "  " } })).toEqual({
+      tool: "list_sessions",
+      query: "",
+      allProjects: false,
+    });
+    expect(parseCall({ tool: "list_machines", args: {} })).toEqual({ tool: "list_machines" });
+    expect(parseCall({ tool: "list_projects", args: { machine: "gw-1" } })).toMatchObject({
+      machine: "gw-1",
+    });
+    expect(
+      parseCall({ tool: "start_session", args: { prompt: "run it", machine: "Lars's Linux box" } }),
+    ).toMatchObject({ machine: "Lars's Linux box", prompt: "run it" });
+    expect(parseCall({ tool: "wait_session", args: { link_id: "a/1", machine: "Studio" } })).toMatchObject({
+      machine: "Studio",
+    });
+    // A call that acts on a thread takes it too; the id may carry the machine itself.
+    expect(
+      parseCall({ tool: "interrupt_session", args: { session_id: "gw-1/t", machine: "Studio" } }),
+    ).toEqual({ tool: "interrupt_session", target: "gw-1/t", machine: "Studio" });
+    expect(parseCall({ tool: "thread_status", args: { session_id: "t", machine: "Studio" } })).toEqual({
+      tool: "thread_status",
+      target: "t",
+      machine: "Studio",
+    });
+    // The tools that cannot work across machines take no machine at all.
+    expect(parseCall({ tool: "merge_when_green", args: { session_id: "t", machine: "Studio" } })).toEqual({
+      tool: "merge_when_green",
+      target: "t",
+      timeoutMs: DEFAULT_MERGE_MS,
+    });
   });
 
   test("parses the v2 calls and refuses bad arguments", () => {
@@ -292,6 +412,18 @@ describe("orchestration rules", () => {
       args: { prompt: "do it", harnesses: [{ harness: "rustcode" }, { harness: "codex", model: "m" }] },
     });
     expect(!isFailure(fan) && fan.tool === "fan_out" && fan.harnesses.length).toBe(2);
+    // A fan-out names the project on the machine it runs on, as a start does.
+    expect(
+      parseCall({
+        tool: "fan_out",
+        args: {
+          prompt: "go",
+          harnesses: [{ harness: "a" }, { harness: "b" }],
+          project: "/srv/app",
+          machine: "Studio",
+        },
+      }),
+    ).toMatchObject({ project: "/srv/app", machine: "Studio" });
     // A named login rides on start_session and each fan_out entry.
     const started = parseCall({
       tool: "start_session",
@@ -1692,6 +1824,56 @@ describe("a group of threads", () => {
     expect(capped.shown.map((l) => l.target)).toEqual(["newer", "refused"]);
     expect(capped.more).toBe(1);
     expect(doneLinks(links, "a", 0)).toEqual({ shown: [], more: 3 });
+  });
+});
+
+describe("one row per delegate thread", () => {
+  const messages = (target: string, state: Link["state"], createdAt: number, id: string): Link => ({
+    ...link("a", target, state),
+    id,
+    createdAt,
+  });
+
+  test("several links to one session are one row, and the other threads keep theirs", () => {
+    const rows = linkThreads([
+      messages("b", "done", 100, "a/1"),
+      messages("c", "working", 200, "a/2"),
+      messages("b", "working", 300, "a/3"),
+    ]);
+    expect(rows.map((row) => [row.target, row.state, row.link.id, row.links.length])).toEqual([
+      ["b", "working", "a/3", 2],
+      ["c", "working", "a/2", 1],
+    ]);
+  });
+
+  test("a live message speaks for its thread, so a settled one never reads as working", () => {
+    const settled = messages("b", "done", 100, "a/1");
+    const running = messages("b", "working", 200, "a/2");
+    const rows = linkThreads([settled, running]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.state).toBe("working");
+    expect(rows[0]!.link.id).toBe("a/2");
+
+    // The shown state can differ from the record: a restart's `interrupted` link whose thread runs.
+    const [shown] = linkThreads([{ ...settled, state: "interrupted" }], ["working"]);
+    expect(shown!.state).toBe("working");
+  });
+
+  test("a session idle after answering takes its newest answer and that link's time", () => {
+    const older = messages("b", "done", 100, "a/1");
+    const newer = messages("b", "done", 300, "a/2");
+    const [row] = linkThreads([newer, older]);
+    expect(row!.state).toBe("done");
+    expect(row!.link.id).toBe("a/2");
+    expect(row!.link.createdAt).toBe(300);
+    expect(row!.links).toHaveLength(2);
+  });
+
+  test("a session waiting on the user is one row with its latest state", () => {
+    const rows = linkThreads([messages("b", "done", 100, "a/1"), messages("b", "needs_user", 200, "a/2")]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.state).toBe("needs_user");
+    expect(rows[0]!.link.id).toBe("a/2");
   });
 });
 

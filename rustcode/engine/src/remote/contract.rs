@@ -13,7 +13,7 @@
 
 use crate::controller::ApprovalChoice;
 
-use crate::remote_gateway::address::{HostRoute, HostRouteKind};
+use crate::remote_gateway::address::{HostRoute, HostRouteKind, OverlayProvider};
 use crate::remote_gateway::handshake::{
     CAPABILITY_TOKEN_ROTATION, ErrorCode, HANDSHAKE_PROTOCOL_VERSION, HandshakeRequest,
     HandshakeResponse, PairingMethod, Secret, TokenAck, WIRE_NAMES_THREAD,
@@ -258,6 +258,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 access_token: None,
                 access_expires_at: None,
                 wire_names: None,
+                version: Some(CONTRACT_VERSION.to_owned()),
                 routes: Vec::new(),
             },
         ),
@@ -278,6 +279,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 access_token: Some(Secret::new("ZXhhbXBsZS1hY2Nlc3MtdG9rZW4tbm90LXJlYWw")),
                 access_expires_at: Some("2026-08-22T09:15:00Z".to_owned()),
                 wire_names: None,
+                version: None,
                 routes: Vec::new(),
             },
         ),
@@ -296,18 +298,22 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 access_expires_at: None,
                 rotation_id: None,
                 wire_names: None,
+                version: Some(CONTRACT_VERSION.to_owned()),
                 routes: vec![
                     HostRoute {
                         address: "192.168.1.20:17879".to_owned(),
                         kind: HostRouteKind::Lan,
+                        provider: None,
                     },
                     HostRoute {
                         address: "100.92.13.44:17879".to_owned(),
-                        kind: HostRouteKind::Vpn,
+                        kind: HostRouteKind::Overlay,
+                        provider: Some(OverlayProvider::Netbird),
                     },
                     HostRoute {
                         address: "rustcode-8e1f4b7a.local:17879".to_owned(),
                         kind: HostRouteKind::Hostname,
+                        provider: None,
                     },
                 ],
             },
@@ -327,6 +333,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 access_expires_at: None,
                 rotation_id: None,
                 wire_names: Some(WIRE_NAMES_THREAD.to_owned()),
+                version: None,
                 routes: Vec::new(),
             },
         ),
@@ -347,6 +354,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 access_expires_at: Some("2026-08-22T09:15:00Z".to_owned()),
                 rotation_id: Some("5be1c4a07d2e9f63".to_owned()),
                 wire_names: None,
+                version: None,
                 routes: Vec::new(),
             },
         ),
@@ -367,6 +375,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 access_expires_at: Some("2026-08-22T09:15:00Z".to_owned()),
                 rotation_id: None,
                 wire_names: None,
+                version: None,
                 routes: Vec::new(),
             },
         ),
@@ -439,6 +448,8 @@ fn request(
 
 const SESSION: (&str, u64) = ("5f0c2d9e-7a41-4c1b-9d55-0b6c1f2a3e44", 3);
 const SAVED_SESSION: &str = "20260714-091502-3fa2c1";
+/// The RustCode version the golden `paired` and `authenticated` frames name.
+const CONTRACT_VERSION: &str = "1.28.0";
 const GATEWAY: &str = "gw-8e1f4b7a";
 const INSTANCE: &str = "inst-41c07d92";
 const TURN: &str = "turn:48213:12";

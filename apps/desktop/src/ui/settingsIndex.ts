@@ -198,6 +198,12 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "remote",
+    title: "RustCode server",
+    keywords:
+      "server background service launchd systemd login install reachable app closed closing quits installed running",
+  },
+  {
+    section: "remote",
     title: "Pair a device",
     keywords: "pair pairing qr code scan phone device mobile address eight digit two minutes",
   },
@@ -222,7 +228,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     section: "machines",
     title: "Machines",
     keywords:
-      "this computer this mac this pc local server runs here main machine route lan tailscale vpn unencrypted encrypted connected offline retrying pairing expired revoked last seen threads remove forget pair again",
+      "this computer this mac this pc local server runs here install background service main machine route lan netbird tailscale vpn unencrypted encrypted connected offline retrying pairing expired revoked last seen threads remove forget pair again version update",
   },
   {
     section: "machines",
@@ -236,8 +242,9 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "machines",
-    title: "Machines on this network",
-    keywords: "bonjour discover find look network lan nearby machine add",
+    title: "Machines found",
+    keywords:
+      "bonjour discover find look network lan nearby machine add netbird tailscale zerotier overlay vpn saved version update older",
   },
   {
     section: "machines",

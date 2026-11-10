@@ -736,3 +736,35 @@ async fn a_spoofed_gateway_cannot_overwrite_the_saved_token_or_get_an_ack() {
         server.abort();
     }
 }
+
+/// Two routes to one machine race, and only one presents the rotating
+/// refresh token. Presenting it twice at once looks like a replay to the
+/// machine, which revokes the pairing, so the race must serialize the
+/// credential and let the loser be cancelled.
+#[tokio::test]
+async fn racing_routes_present_the_refresh_token_once() {
+    let host = Host::start().await;
+    let config = tempfile::tempdir_in("/tmp").unwrap();
+    let connector = Connector::new(config.path(), ClientKind::Desktop).unwrap();
+    let (mut machine, tokens, paired) = pair(&host, &connector, config.path()).await;
+    drop(paired);
+    // The same gateway under two names, raced as two LAN routes: the second
+    // socket opens, then waits for the credential the first one presents.
+    machine.routes = vec![
+        Route::new(host.address()),
+        Route::new(format!("localhost:{}", host.addr.port())),
+    ];
+    let connected = connector
+        .connect_raced(&machine, &tokens)
+        .await
+        .expect("one of the two routes wins");
+    drop(connected);
+    // Present the durable token again. A concurrent replay would have revoked
+    // the family, and this would fail as `revoked`.
+    tokens.forget_access(&machine.host_id);
+    connector
+        .connect(&machine, &tokens)
+        .await
+        .expect("the pairing survived the race");
+    host.stop().await;
+}

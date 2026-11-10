@@ -73,6 +73,20 @@ The harness tool exposes the same operations as `create`, `list`, `pause`,
 also bounded by interval, maximum runs, and deadline; it does not create a
 shell `sleep` loop or ask the model to repeatedly poll.
 
+## From an agent
+
+An orchestrating thread can schedule work with the same client
+(`docs/orchestrator.md` v10): `schedule_task` adds a prompt on a cron
+expression or once at an ISO time, and `list_scheduled_tasks`,
+`delete_scheduled_task` and `run_scheduled_task_now` manage what is there.
+They go through `_rustcode/scheduled/*` (`engine/src/acp/scheduled.rs`), the
+same socket and protocol `rustcode cron` uses — one scheduler, one store — and
+each changing call asks the user first. A scheduled prompt runs on the
+built-in harness in a recorded session, so it takes `model_profile` rather
+than a harness or account. Nothing starts the daemon for them: without
+`rustcode daemon start`, `list_scheduled_tasks` says `daemon_running: false`
+and the other calls refuse with that instruction.
+
 ## Safety and recovery
 
 Every run is durably claimed with a lease and fence. A daemon crash after an
