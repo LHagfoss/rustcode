@@ -73,7 +73,7 @@ import { liveSubagents, type StackAgent } from "../state/agentStack";
 import { type BranchRow, branchKindOf, branchRows } from "../state/branches";
 import { type ChildInfo, childInfo } from "../state/children";
 import { stateOf } from "../state/host";
-import { type Machine, type MachineState, stateLabel, useMachines } from "../state/machines";
+import { stateLabel, useMachines } from "../state/machines";
 import {
   cachedPulls,
   loadPulls,
@@ -84,6 +84,7 @@ import {
   subscribePulls,
 } from "../state/pulls";
 import { type PendingSetup, pendingSummary } from "../state/setup";
+import { type MachineHead, machineGroups, type ProjectGroup } from "../state/sidebarGroups";
 import { applyOrder, moveBy, reorder, sectionOrderKey } from "../state/sidebarOrder";
 import { PREF, usePref, useRowLayout } from "../state/sidebarPrefs";
 import {
@@ -1278,30 +1279,6 @@ interface Section {
   projects?: ProjectGroup[];
 }
 
-/** One project's rows in the list, and the machine they run on (docs/desktop.md › Several machines). */
-interface ProjectGroup {
-  key: string;
-  label: string;
-  items: SessionSummary[];
-  /** The folder a thread starts in here: what **New thread** under this group starts on. */
-  project?: string;
-  /** The machine it belongs to, whose heading is drawn above its first project. */
-  machine?: MachineHead;
-  /** The first project of its machine: the machine's name goes here. */
-  first?: boolean;
-  /** The machine's only project: its rows are drawn under the machine's name, with no folder. */
-  only?: boolean;
-}
-
-/** What the list says a machine is: this computer, or another one and how it stands. */
-interface MachineHead {
-  id: string;
-  name: string;
-  state: MachineState;
-  /** Seconds until the next attempt, while it waits (`state/machines.ts` `stateLabel`). */
-  retryInSecs: Machine["retryInSecs"];
-}
-
 /**
  * A machine's name above its threads: `● Connected`, `○ Offline`, `⚠ Revoked`, or
  * nothing for this computer. The dot and the words say the same thing twice, so
@@ -1886,55 +1863,17 @@ export function Sidebar() {
     // One group per machine once a computer is paired: this one first, then each machine with the
     // state of its connection, and the threads by project inside (docs/desktop.md › Several machines).
     // Working and Pinned are grouped too, so a running thread on another computer is never drawn
-    // beside a local one as if it were here.
-    const machineGroups = (id: SectionId, items: SessionSummary[]): ProjectGroup[] | undefined => {
+    // beside a local one as if it were here; a machine with no rows keeps a heading only in Threads
+    // (state/sidebarGroups.ts `machineGroups`).
+    const groupsFor = (id: SectionId, rows: SessionSummary[]): ProjectGroup[] | undefined => {
       if (!machines.length) return undefined;
-      const groups: ProjectGroup[] = [];
-      for (const host of [LOCAL_HOST, ...machines.map((m) => m.id)]) {
-        const mine = items.filter((s) => (s.host ?? LOCAL_HOST) === host);
-        if (!mine.length && host === LOCAL_HOST) continue;
-        const saved = machines.find((m) => m.id === host);
-        const head: MachineHead = saved
-          ? { id: saved.id, name: saved.name, state: saved.state, retryInSecs: saved.retryInSecs }
-          : { id: LOCAL_HOST, name: "This computer", state: "connected", retryInSecs: null };
-        // A machine that has not listed a thread yet (away, or just paired) keeps its heading, so
-        // the list still says it is there.
-        if (!mine.length) {
-          groups.push({
-            key: `${host}\u0000`,
-            label: "",
-            items: [],
-            machine: head,
-            first: true,
-            only: true,
-          });
-          continue;
-        }
-        const perProject = new Map<string, SessionSummary[]>();
-        for (const s of mine) {
-          const key = s.worktree?.repo || s.cwd || "";
-          perProject.set(key, [...(perProject.get(key) ?? []), s]);
-        }
-        let first = true;
-        for (const [project, rows] of perProject) {
-          const key = `${host}\u0000${project}`;
-          groups.push({
-            key,
-            label: project ? projectName(project) : "No folder",
-            project: project || undefined,
-            items: arranged(id, rows, key),
-            machine: head,
-            first,
-            only: perProject.size === 1,
-          });
-          first = false;
-        }
-      }
+      const groups = machineGroups(id, rows, machines);
+      for (const group of groups) group.items = arranged(id, group.items, group.key);
       return groups;
     };
     // The Threads list's project groups: by machine when one is paired, else by the preference.
     let projects: ProjectGroup[] | undefined;
-    if (machines.length) projects = machineGroups("threads", active);
+    if (machines.length) projects = groupsFor("threads", active);
     else if (byProject && byKey.size > 1) {
       projects = [...byKey.entries()].map(([key, items]) => ({
         key,
@@ -1957,7 +1896,7 @@ export function Sidebar() {
         id === "threads"
           ? projects
           : id === "working" || id === "pinned"
-            ? machineGroups(id, placed[id])
+            ? groupsFor(id, placed[id])
             : undefined,
     }));
     for (const g of all) {
