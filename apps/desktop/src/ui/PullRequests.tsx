@@ -36,7 +36,7 @@ import { pullState } from "../state/pulls";
 import { openSettings, request, setDraft, setPanel, startNewThread, toast, useApp } from "../state/store";
 import { relativeAge } from "../state/thread";
 import { Markdown } from "./Markdown";
-import { Cluster, ClusterButton, cx, Pill, Segments, Skeleton, Spinner } from "./primitives";
+import { Cluster, ClusterButton, cx, noTextHelpers, Pill, Segments, Skeleton, Spinner } from "./primitives";
 
 /**
  * Reads a row's detail when the pointer or focus rests on it, so the click has
@@ -149,6 +149,7 @@ function ReviewForm({ cwd, pull, onDone }: { cwd: string; pull: PullRequest; onD
         rows={4}
         placeholder="What you want to say about this pull request"
         aria-label="Review"
+        {...noTextHelpers}
         className="w-full resize-y rounded-md bg-fill-subtle p-2 text-body outline-none"
       />
       <div className="mt-2 flex items-center gap-2">

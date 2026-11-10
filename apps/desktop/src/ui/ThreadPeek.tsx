@@ -10,7 +10,7 @@ import { modelName, relationshipOf } from "../acp/types";
 import { cancel, runPrompt, selectThread, setDraft, useApp } from "../state/store";
 import { PermissionMenu } from "./Composer";
 import { HarnessIcon } from "./HarnessIcon";
-import { Pill, Spinner } from "./primitives";
+import { noTextHelpers, Pill, Spinner } from "./primitives";
 import { Transcript } from "./Transcript";
 
 /** The peeked thread's composer when it is a side chat: send, or stop the turn it is running. */
@@ -38,6 +38,7 @@ function SideChatField({ id }: { id: string }) {
         rows={Math.min(8, Math.max(2, draft.split("\n").length))}
         placeholder="Ask in the side chat…"
         aria-label="Message the side chat"
+        {...noTextHelpers}
         onChange={(e) => setDraft(id, e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {

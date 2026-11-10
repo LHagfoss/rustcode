@@ -38,7 +38,7 @@ import {
   useMachines,
 } from "../state/machines";
 import { toast, useApp } from "../state/store";
-import { cx, Spinner, Switch } from "./primitives";
+import { cx, noTextHelpers, Spinner, Switch } from "./primitives";
 import { Action, Chip, fieldClass, Group, Loading, Row } from "./settingsKit";
 
 /** How often the page asks the shell where the machines stand. */
@@ -259,9 +259,7 @@ function AddMachine({ error }: { error: string | null }) {
             }}
             placeholder="192.168.1.20 or studio.local:17879"
             aria-label="Machine address"
-            spellCheck={false}
-            autoCapitalize="off"
-            autoComplete="off"
+            {...noTextHelpers}
             className={cx(fieldClass, "min-w-0 flex-1 font-mono")}
           />
           <Action onClick={ask}>Ask to connect</Action>

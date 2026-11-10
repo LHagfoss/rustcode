@@ -60,7 +60,7 @@ import {
   sidebarActions,
   threadHaystack,
 } from "./paletteActions";
-import { cx, Kbd } from "./primitives";
+import { cx, Kbd, noTextHelpers } from "./primitives";
 
 export type { PaletteAction };
 
@@ -393,6 +393,7 @@ export function CommandPalette() {
               }}
               placeholder="Search threads, branches and pull requests, or > for actions…"
               aria-label="Search threads and actions"
+              {...noTextHelpers}
               className="flex-1 bg-transparent text-title3 outline-none placeholder:text-fg-faint"
             />
           </div>

@@ -1,4 +1,5 @@
-//! The native web view's frame rate (docs/desktop.md › Native frame rate).
+//! The native web view's frame rate (docs/desktop.md › Native frame rate) and its text helpers
+//! (docs/desktop.md › Native text fields).
 //!
 //! WebKit's "Prefer Page Rendering Updates near 60fps" feature is on by
 //! default, so on a 120 Hz (ProMotion) display a WKWebView runs
@@ -14,6 +15,11 @@
 //!
 //! Low Power Mode is a separate cap (30 fps) WebKit applies whatever this
 //! says; `display_info` reports it so the dev overlay can tell the two apart.
+//!
+//! Writing Tools, autocorrection and the inline text helpers are turned off on
+//! that same configuration (macOS 15+) and in the app's own defaults domain for
+//! the rest: the fields in this app hold prompts, paths and branch names, where
+//! a system that rewrites the words is noise.
 
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
@@ -117,8 +123,11 @@ pub fn build_main_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow
     if let Some((width, height)) = saved_size(app.handle()) {
         builder = builder.inner_size(width, height);
     }
+    // Before the web view exists: WebKit reads the system's text helpers when it creates an editor.
     #[cfg(target_os = "macos")]
-    let builder = match macos::full_frame_rate_configuration() {
+    macos::quiet_text_helpers();
+    #[cfg(target_os = "macos")]
+    let builder = match macos::window_configuration() {
         Some(configuration) => builder.with_webview_configuration(configuration),
         None => builder,
     };
@@ -202,22 +211,88 @@ mod macos {
 
     const FEATURE: &CStr = c"PreferPageRenderingUpdatesNear60FPSEnabled";
 
+    /// `NSWritingToolsBehaviorNone`: Writing Tools ignores the field instead of offering itself on
+    /// the selection's context menu (macOS 15+). An `NSInteger`, so `isize`.
+    const WRITING_TOOLS_NONE: isize = -1;
+
+    /// The macOS text helpers no field in this app keeps, named once so `quiet_text_helpers` cannot
+    /// miss one: autocorrect (`NSAutomaticSpellingCorrectionEnabled`), automatic capitalisation,
+    /// smart quotes, dashes and the double-space period, Text Replacement, inline predictions
+    /// (Apple Intelligence's completion in the field), and WebKit's own spell and grammar checking,
+    /// which draws the red underline and its suggestion.
+    pub(crate) const TEXT_HELPERS_OFF: &[&CStr] = &[
+        c"NSAutomaticCapitalizationEnabled",
+        c"NSAutomaticDashSubstitutionEnabled",
+        c"NSAutomaticInlinePredictionEnabled",
+        c"NSAutomaticPeriodSubstitutionEnabled",
+        c"NSAutomaticQuoteSubstitutionEnabled",
+        c"NSAutomaticSpellingCorrectionEnabled",
+        c"NSAutomaticTextReplacementEnabled",
+        c"WebAutomaticSpellingCorrectionEnabled",
+        c"WebAutomaticTextReplacementEnabled",
+        c"WebContinuousSpellCheckingEnabled",
+        c"WebGrammarCheckingEnabled",
+    ];
+
     unsafe fn responds(object: *mut AnyObject, selector: Sel) -> bool {
         !object.is_null() && msg_send![object, respondsToSelector: selector]
     }
 
-    /// A fresh configuration with the 60 fps preference off (None off the main
-    /// thread or when this WebKit has no such feature).
-    pub fn full_frame_rate_configuration() -> Option<Retained<WKWebViewConfiguration>> {
+    /// A main window configuration with the 60 fps preference off and Writing Tools off (None
+    /// off the main thread, when this WebKit has no such feature, or on a macOS without
+    /// Writing Tools).
+    pub fn window_configuration() -> Option<Retained<WKWebViewConfiguration>> {
         let mtm = MainThreadMarker::new()?;
-        // SAFETY: a new configuration, on the main thread; `feature` checks every selector.
+        // SAFETY: a new configuration, on the main thread; every call below checks its selector.
         unsafe {
             let configuration = WKWebViewConfiguration::new(mtm);
+            quiet_writing_tools(Retained::as_ptr(&configuration) as *mut AnyObject);
             let prefs = Retained::as_ptr(&configuration.preferences()) as *mut AnyObject;
-            let (prefs, feature) = feature(prefs)?;
-            let _: () = msg_send![prefs, _setEnabled: false, forFeature: feature];
+            if let Some((prefs, feature)) = feature(prefs) {
+                let _: () = msg_send![prefs, _setEnabled: false, forFeature: feature];
+            }
             Some(configuration)
         }
+    }
+
+    /// Writing Tools off for the fields this web view draws (`writingToolsBehavior`, macOS 15+).
+    unsafe fn quiet_writing_tools(configuration: *mut AnyObject) {
+        if !responds(configuration, sel!(setWritingToolsBehavior:)) {
+            return;
+        }
+        let _: () = msg_send![configuration, setWritingToolsBehavior: WRITING_TOOLS_NONE];
+    }
+
+    /// Turns the system's text helpers off in the app's own defaults domain. WebKit reads these when
+    /// it creates an editor, so this runs before the window exists. `setBool:forKey:` returns
+    /// nothing, so a write that a sandbox keeps inside the container rather than in the app's plist
+    /// is not something this can see: the attributes on the fields are what remains.
+    pub fn quiet_text_helpers() {
+        // SAFETY: NSUserDefaults and NSString are always present on macOS, and each is checked.
+        unsafe {
+            let Some(defaults_class) = AnyClass::get(c"NSUserDefaults") else {
+                return;
+            };
+            let defaults: *mut AnyObject = msg_send![defaults_class, standardUserDefaults];
+            if defaults.is_null() {
+                return;
+            }
+            for key in TEXT_HELPERS_OFF {
+                let Some(ns_key) = nsstring(key) else {
+                    continue;
+                };
+                // The app's own domain: `standardUserDefaults`, never the global one another app
+                // would see.
+                let _: () = msg_send![defaults, setBool: false, forKey: ns_key];
+            }
+        }
+    }
+
+    /// An `NSString` for a NUL-terminated key (None when there is no `NSString` class).
+    unsafe fn nsstring(text: &CStr) -> Option<*mut AnyObject> {
+        let class = AnyClass::get(c"NSString")?;
+        let string: *mut AnyObject = msg_send![class, stringWithUTF8String: text.as_ptr()];
+        (!string.is_null()).then_some(string)
     }
 
     /// The WKPreferences of a web view's configuration.
@@ -232,7 +307,8 @@ mod macos {
         msg_send![config, preferences]
     }
 
-    /// The preferences and the `_WKFeature` for the 60 fps preference.
+    /// The preferences and the `_WKFeature` for the 60 fps preference (None when this WebKit has
+    /// no such feature, which leaves the preference as it was).
     unsafe fn feature(prefs: *mut AnyObject) -> Option<(*mut AnyObject, *mut AnyObject)> {
         let class = AnyClass::get(c"WKPreferences")?;
         let class_object = class as *const AnyClass as *mut AnyObject;
@@ -324,6 +400,32 @@ mod tests {
     #[test]
     fn a_missing_file_is_no_size() {
         assert_eq!(read_size(&temp("missing")), None);
+    }
+
+    // The keys the app turns off in its own defaults domain, each named once, and the ones a
+    // complaint about the system rewriting a prompt comes down to.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn every_text_helper_is_turned_off_once() {
+        let keys: Vec<&str> = macos::TEXT_HELPERS_OFF
+            .iter()
+            .map(|key| key.to_str().unwrap())
+            .collect();
+        for named in [
+            "NSAutomaticSpellingCorrectionEnabled",
+            "NSAutomaticCapitalizationEnabled",
+            "NSAutomaticTextReplacementEnabled",
+            "NSAutomaticQuoteSubstitutionEnabled",
+            "NSAutomaticDashSubstitutionEnabled",
+            "NSAutomaticInlinePredictionEnabled",
+            "WebContinuousSpellCheckingEnabled",
+        ] {
+            assert!(keys.contains(&named), "{named} is not turned off");
+        }
+        let mut unique = keys.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), keys.len(), "a key is listed twice");
     }
 
     // Linux's WebKitGTK paints `backdrop-filter` with accelerated compositing only, and these are

@@ -49,6 +49,7 @@ import {
   menuItem,
   menuLabel,
   menuSeparator,
+  noTextHelpers,
   Pill,
   Tooltip,
 } from "./primitives";
@@ -513,6 +514,7 @@ export function QuestionCard({
           onChange={(e) => setText(e.target.value)}
           placeholder="Or write your own answer…"
           aria-label="Your own answer"
+          {...noTextHelpers}
           className="h-[30px] flex-1 rounded-full bg-fill-subtle px-3 text-body outline-none placeholder:text-fg-faint hover:bg-fill focus:bg-fill"
         />
         <Pill prominent type="submit" disabled={!text.trim()}>

@@ -114,7 +114,7 @@ import { openLightbox } from "./Lightbox";
 import { LinkChip } from "./LinkChip";
 import { ModelPicker } from "./ModelPicker";
 import { PasteChip } from "./PasteChip";
-import { cx, MenuSearchField, MenuShortcut, Pill, Tooltip } from "./primitives";
+import { cx, MenuSearchField, MenuShortcut, noTextHelpers, Pill, Tooltip } from "./primitives";
 import { QueuedAnnouncer } from "./QueuedMessages";
 
 // The field's line box: 14px at 1.5 (`leading-normal`), a hair tighter than a reply's, which is what
@@ -1011,7 +1011,7 @@ export const Composer = memo(function Composer({
                 rows={1}
                 placeholder={placeholder}
                 aria-label="Message"
-                spellCheck
+                {...noTextHelpers}
                 style={fadeStyle}
                 className={cx(
                   "rc-field-fade relative block w-full resize-none bg-transparent py-1.5 text-body leading-normal outline-none transition-[height] duration-150 ease-snappy placeholder:text-fg-faint",
@@ -1302,7 +1302,7 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
           onChange={(e) => setNewWorktree({ branch: e.target.value, edited: true })}
           aria-label="Branch name"
           aria-invalid={!valid}
-          spellCheck={false}
+          {...noTextHelpers}
           placeholder={suggested}
           size={Math.min(32, Math.max(12, wt.branch.length + 1))}
           className={cx(

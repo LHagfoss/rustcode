@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { dayStart, localDateTime, monthDays } from "./dateTime";
-import { inputClass } from "./primitives";
+import { inputClass, noTextHelpers } from "./primitives";
 
 export function DateTimePicker({ value, onChange }: { value: Date; onChange: (value: Date | null) => void }) {
   const [month, setMonth] = useState(value);
@@ -76,6 +76,7 @@ export function DateTimePicker({ value, onChange }: { value: Date; onChange: (va
           className={inputClass}
           value={time}
           onChange={(e) => update(day, e.target.value)}
+          {...noTextHelpers}
           onKeyDown={(e) => {
             if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
             e.preventDefault();

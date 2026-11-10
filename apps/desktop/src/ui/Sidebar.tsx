@@ -165,6 +165,7 @@ import {
   menuLabel,
   menuSeparator,
   menuSurface,
+  noTextHelpers,
   Pill,
   Skeleton,
   Spinner,
@@ -727,6 +728,7 @@ const ThreadRow = memo(function ThreadRow({
             if (e.key === "Escape") setRenaming(false);
           }}
           aria-label="Thread title"
+          {...noTextHelpers}
           className="w-full rounded-sm bg-surface-2 px-1.5 py-0.5 text-body shadow-1"
         />
       </div>
