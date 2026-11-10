@@ -127,7 +127,7 @@ export function contextOf(state: NoticeState, focused = windowFocused()): Notify
 
 /**
  * The one thing a thread that slept has to say now its snooze is over, or null when it has
- * nothing: what it waits on the user for first, else a turn that ended unseen. Any event is at
+ * nothing: what it waits on the user for first, else the turn it ended with unseen. Any event is at
  * most one, so a thread coming back cannot stack a request and a finish into two notifications.
  *
  * A thread that slept through nothing that concerns the user simply returns, which is the common
@@ -142,6 +142,12 @@ export function wakeEvent(read: {
   finishedAt?: number;
   /** When a turn of its own failed unseen (`failed`), if one did. */
   failedAt?: number;
+  /**
+   * A thread another one runs, where the user has not written themselves (`markFinished`): what it
+   * ended with is its parent's news, said in the wake message and in the strip above that parent's
+   * composer, so it is not said here too. What it waits on the user for still is.
+   */
+  delegated?: boolean;
 }): NotifyEvent | null {
   if (read.request) {
     const question = read.request.question;
@@ -153,11 +159,15 @@ export function wakeEvent(read: {
       detail: question?.text,
     };
   }
-  if (read.failedAt !== undefined) {
-    return { threadId: read.threadId, kind: "failed", key: String(read.failedAt), title: read.title };
+  if (read.delegated) return null;
+  const { failedAt, finishedAt } = read;
+  // The newer of the two: a finish clears the failure before it, but a thread marked unread by hand
+  // keeps both, and the last thing it did is the news.
+  if (failedAt !== undefined && (finishedAt === undefined || failedAt >= finishedAt)) {
+    return { threadId: read.threadId, kind: "failed", key: String(failedAt), title: read.title };
   }
-  if (read.finishedAt !== undefined) {
-    return { threadId: read.threadId, kind: "finished", key: String(read.finishedAt), title: read.title };
+  if (finishedAt !== undefined) {
+    return { threadId: read.threadId, kind: "finished", key: String(finishedAt), title: read.title };
   }
   return null;
 }

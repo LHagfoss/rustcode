@@ -1677,6 +1677,9 @@ export function snoozeWakeEvent(id: string): NotifyEvent | null {
     request: s.threads[id]?.permissions[0],
     finishedAt: s.finished[id],
     failedAt: s.failed[id],
+    // The same read `markFinished` makes: a delegate's own ending is its parent's news, not a
+    // notification of its own with a row the user cannot find.
+    delegated: linksOf(s.links, id).drivenBy !== undefined && s.messaged[id] === undefined,
   });
 }
 

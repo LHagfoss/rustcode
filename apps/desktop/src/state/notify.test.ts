@@ -205,6 +205,24 @@ describe("what a thread that slept has to say", () => {
     expect(wakeEvent({ ...read, finishedAt: 1_000 })).toMatchObject({ kind: "finished", key: "1000" });
   });
 
+  test("the last turn it ended with is the one said, not an older one", () => {
+    // A finish clears the failure before it, but a thread marked unread by hand keeps both.
+    expect(wakeEvent({ ...read, finishedAt: 2_000, failedAt: 1_000 })).toMatchObject({
+      kind: "finished",
+      key: "2000",
+    });
+    expect(wakeEvent({ ...read, failedAt: 2_000, finishedAt: 2_000 })).toMatchObject({ kind: "failed" });
+  });
+
+  test("a delegate's own ending is its parent's news, not a notification", () => {
+    expect(wakeEvent({ ...read, delegated: true, finishedAt: 1_000 })).toBeNull();
+    expect(wakeEvent({ ...read, delegated: true, failedAt: 2_000 })).toBeNull();
+    // What it waits on the user for is theirs, whoever started it.
+    expect(wakeEvent({ ...read, delegated: true, request: { rpcId: 9 } })).toMatchObject({
+      kind: "approval",
+    });
+  });
+
   test("a quiet return says nothing at all", () => {
     expect(wakeEvent(read)).toBeNull();
   });
