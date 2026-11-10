@@ -88,6 +88,48 @@
         }
       ]
     },
+    "HostRoute": {
+      "description": "One address a device can dial this host at, as the handshake reports it.",
+      "properties": {
+        "address": {
+          "description": "`host:port` a device dials.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/HostRouteKind"
+        }
+      },
+      "required": [
+        "address",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "HostRouteKind": {
+      "description": "How a device reaches this host over one route. A gateway reports each\naddress it answers on with the kind of network it is on.",
+      "oneOf": [
+        {
+          "const": "lan",
+          "description": "A private IPv4 address on a local network interface (Wi-Fi, Ethernet).",
+          "type": "string"
+        },
+        {
+          "const": "vpn",
+          "description": "A `100.64.0.0/10` mesh address, as NetBird and Tailscale hand out.",
+          "type": "string"
+        },
+        {
+          "const": "hostname",
+          "description": "A host name: the machine's `.local` name, or another advertised name.",
+          "type": "string"
+        },
+        {
+          "const": "public",
+          "description": "A public address or name. Plain LAN traffic is unencrypted, so a\nclient should prefer the other kinds.",
+          "type": "string"
+        }
+      ]
+    },
     "Secret": {
       "description": "A pairing credential, manual code or device token. Serializes as a plain\nstring; `Debug` never prints the value, so it cannot reach logs or error\nstrings through a derived impl.",
       "type": "string"
@@ -239,6 +281,13 @@
           ],
           "description": "The rotating device's first refresh token; shown exactly once and\nstored durably."
         },
+        "routes": {
+          "description": "The addresses this host answers on right now, best first: its LAN\naddresses, a mesh VPN (`100.64.0.0/10`) address and its `.local`\nname. A device adds them to the routes it knows for this host, so\npairing once is enough to reach it on another network. Absent from\nan older gateway and when the listener is loopback only.",
+          "items": {
+            "$ref": "#/$defs/HostRoute"
+          },
+          "type": "array"
+        },
         "token": {
           "anyOf": [
             {
@@ -340,6 +389,13 @@
             "string",
             "null"
           ]
+        },
+        "routes": {
+          "description": "The addresses this host answers on right now, as in `paired`.",
+          "items": {
+            "$ref": "#/$defs/HostRoute"
+          },
+          "type": "array"
         },
         "type": {
           "const": "authenticated",

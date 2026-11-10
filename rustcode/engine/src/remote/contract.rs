@@ -13,6 +13,7 @@
 
 use crate::controller::ApprovalChoice;
 
+use crate::remote_gateway::address::{HostRoute, HostRouteKind};
 use crate::remote_gateway::handshake::{
     CAPABILITY_TOKEN_ROTATION, ErrorCode, HANDSHAKE_PROTOCOL_VERSION, HandshakeRequest,
     HandshakeResponse, PairingMethod, Secret, TokenAck, WIRE_NAMES_THREAD,
@@ -257,6 +258,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 access_token: None,
                 access_expires_at: None,
                 wire_names: None,
+                routes: Vec::new(),
             },
         ),
         (
@@ -276,6 +278,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 access_token: Some(Secret::new("ZXhhbXBsZS1hY2Nlc3MtdG9rZW4tbm90LXJlYWw")),
                 access_expires_at: Some("2026-08-22T09:15:00Z".to_owned()),
                 wire_names: None,
+                routes: Vec::new(),
             },
         ),
         (
@@ -293,6 +296,20 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 access_expires_at: None,
                 rotation_id: None,
                 wire_names: None,
+                routes: vec![
+                    HostRoute {
+                        address: "192.168.1.20:17879".to_owned(),
+                        kind: HostRouteKind::Lan,
+                    },
+                    HostRoute {
+                        address: "100.92.13.44:17879".to_owned(),
+                        kind: HostRouteKind::Vpn,
+                    },
+                    HostRoute {
+                        address: "rustcode-8e1f4b7a.local:17879".to_owned(),
+                        kind: HostRouteKind::Hostname,
+                    },
+                ],
             },
         ),
         (
@@ -310,6 +327,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 access_expires_at: None,
                 rotation_id: None,
                 wire_names: Some(WIRE_NAMES_THREAD.to_owned()),
+                routes: Vec::new(),
             },
         ),
         (
@@ -329,6 +347,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 access_expires_at: Some("2026-08-22T09:15:00Z".to_owned()),
                 rotation_id: Some("5be1c4a07d2e9f63".to_owned()),
                 wire_names: None,
+                routes: Vec::new(),
             },
         ),
         (
@@ -348,6 +367,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 access_expires_at: Some("2026-08-22T09:15:00Z".to_owned()),
                 rotation_id: None,
                 wire_names: None,
+                routes: Vec::new(),
             },
         ),
     ];
@@ -1078,6 +1098,7 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
                     RemoteSavedSession {
                         session_id: SAVED_SESSION.to_owned(),
                         title: "Fix the parser".to_owned(),
+                        project: Some("/Users/example/projects/parser".to_owned()),
                         workspace: Some("/Users/example/projects/parser".to_owned()),
                         updated_at: Some("2026-07-14T09:40:12Z".to_owned()),
                         message_count: 42,
@@ -1087,6 +1108,7 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
                     RemoteSavedSession {
                         session_id: SESSION.0.to_owned(),
                         title: "Refactor the session store".to_owned(),
+                        project: Some("/Users/example/projects/rustcode".to_owned()),
                         workspace: Some("/Users/example/projects/rustcode".to_owned()),
                         updated_at: Some("2026-07-14T08:02:55Z".to_owned()),
                         message_count: 118,
@@ -1096,6 +1118,7 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
                     RemoteSavedSession {
                         session_id: "20260713-171233-9b0e44".to_owned(),
                         title: "Untitled".to_owned(),
+                        project: None,
                         workspace: None,
                         updated_at: None,
                         message_count: 3,

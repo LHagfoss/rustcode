@@ -126,22 +126,26 @@ paired.
 ## In the desktop app
 
 Settings › **Remote access** is the same switch, without a terminal. Turn it
-on and every thread the app has open is shared: on the built-in harness and on
-Codex, Claude Code, Pi, OpenCode or any other external harness
-([harnesses](harnesses.md)). A thread opened later is shared as soon as it
-exists, and closing it ends its share. Switching it off stops the gateway and
-every device, exactly as `/remote off` does; pairings are kept.
+on and every thread this computer has is listed for paired devices — across
+all projects, from the thread store, not only the ones the app has open. Every
+open thread is shared live as well, on the built-in harness and on Codex, Claude
+Code, Pi, OpenCode or any other external harness ([harnesses](harnesses.md)); a
+thread opened later is shared as soon as it exists, and closing it ends its
+live share. Opening a thread that is not open reopens it the way a device
+reopens a saved one (see [Saved sessions](#saved-sessions)). Switching it off
+stops the gateway and every device, exactly as `/remote off` does; pairings are
+kept.
 
 | In the app | What it does |
 | --- | --- |
-| **Remote access › Share this Mac's threads with a phone** | On: starts the gateway and shares every open thread. Off: stops it. |
+| **Remote access › Network access** | On: starts the gateway and lets paired devices reach every thread on this computer. Off: stops it. |
 | **Remote access › Gateway address** | The `host:port` a device dials, how many devices are connected, and whether it is reachable from another machine at all. |
 | **Remote access › Pair a device** | Calls the same pairing challenge as `/remote pair`: a QR code, the address, the manual code, the countdown and the wrong codes left. Remote access is switched on first if it was off. |
 | **Pairing** | The challenge on screen, its countdown, the wrong codes left, a lockout, and *Paired ‹name›* once a device pairs. |
 | **A phone asking to connect** | A card in the window's corner, over any page: *‹name› wants to connect*, the platform and address, *Deny* and *Accept*. Accept shows the code to enter on the phone (large, with *Copy* and its countdown) until the phone pairs or the code runs out. See [Connection requests](#connection-requests). |
 | **Remote access › Asking to connect** | The same requests with the same answers, while any are open. |
-| **Paired devices** | How many devices are paired, with their names. *Revoke* forgets one and disconnects it at once, as `rustcode remote revoke` does. |
-| **Open threads** | Each open thread with its harness, whether it is shared and how many devices are attached, or why the host holds it back. |
+| **Paired devices** | How many devices are paired, with their names and when each was last seen. *Revoke* forgets one and disconnects it at once, as `rustcode remote revoke` does. |
+| **Routes** | The addresses the phone can dial this computer at, best first: each LAN address, a NetBird or Tailscale `100.64.0.0/10` address, and the machine's `.local` name. The handshake reports the same list, so a phone learns it and keeps using the first route that answers. |
 | A thread's header chip | Shown while a thread is shared; it carries the number of devices attached to that thread. |
 
 Each shared thread tells a device which harness runs it and its model
@@ -157,11 +161,13 @@ One rough edge: an approval a device resolves leaves the app's approval card
 on screen until the turn ends, because ACP has no way to withdraw a request
 already sent to the client.
 
-A host shares at most 32 threads at once. When more are open, the ones used
-most recently are shared and the rest say why they are not (`notShared`), the
-same reason `rustcode remote status` gives for a session the gateway refused.
-Prompts a device queues on a thread are dropped when sharing ends, and a share
-the gateway turns down is retried no more than once a minute.
+A host streams at most 32 live shares at once, the threads used most recently.
+That bound limits streaming, not what a device sees: every thread on the
+machine is in the paged `list_saved_sessions` list, newest first, with its
+project, title, last write and state, and a device opens one that is not
+shared with `resume_session` (see [Saved sessions](#saved-sessions)). Prompts a
+device queues on a thread are dropped when sharing ends, and a share the
+gateway turns down is retried no more than once a minute.
 
 The ACP methods behind the page (`_rustcode/remote`, `/start`, `/pair`,
 `/stop`, `/answer`, `/revoke`, in `engine/src/acp/remote.rs`) take an
@@ -171,8 +177,9 @@ switch, gateway and challenge. Their answers add `qrRows` (the QR code as rows
 of `0` and `1`, quiet zone included), `target` (the harness a shared thread
 runs on), `notShared` (why this thread is held back on a thread's answer, the
 count of held-back threads on the machine's) and, for the machine,
-`gateway.pairing` and `gateway.connectedDevices` from the gateway's own
-status, plus `devices` (each paired device's `id`, `name`, `kind` `phone`,
+`gateway.pairing`, `gateway.connectedDevices` and `gateway.routes` (each
+route's `address` and `kind` `lan`, `vpn`, `hostname` or `public`) from the
+gateway's own status, plus `devices` (each paired device's `id`, `name`, `kind` `phone`,
 `desktop` or `cli`, `platform`, `hostId`, `lastSeenAt` and, on the machine's
 answer, `connected`), `connectRequests` (open: `id`, `deviceName`,
 `deviceKind`, `platform`,
@@ -279,6 +286,14 @@ name and uses the listener's port.
 - The `[remote]` section is read from the user configuration only. A project's
   `.rustcode/config.toml` cannot choose the interface your sessions are
   exposed on.
+
+After authentication the gateway reports its current routes (`routes` on
+`paired` and `authenticated`): the advertised address, each LAN IPv4 address,
+a `100.64.0.0/10` mesh address and the machine's `.local` name, each with its
+kind. A device adds them to the routes it keeps for this host, so pairing once
+is enough to reach it on another network, and it tries them in order. The same
+list is in `rustcode remote status` and Settings › Remote access; the pairing
+QR code's `alternates` stay compatible with it.
 
 ## Pairing
 

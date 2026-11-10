@@ -144,6 +144,15 @@ pub enum HandshakeRequest {
     TokenAck { rotation_id: String },
 }
 
+/// An address the host answers on, as a handshake reports it. The kind is the
+/// host's own word (`lan`, `vpn`, `hostname`, `public`); a kind this client
+/// does not know is still a route it may try.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostRoute {
+    pub address: String,
+    pub kind: String,
+}
+
 /// Frames the gateway sends during the handshake, and the error frame that
 /// precedes a close.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -194,6 +203,10 @@ pub enum HandshakeResponse {
         access_expires_at: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         wire_names: Option<String>,
+        /// The addresses this machine answers on now, best first. A newer
+        /// gateway sends them; an older one leaves the field out.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        routes: Vec<HostRoute>,
     },
     /// The presented credential was accepted.
     Authenticated {
@@ -221,6 +234,10 @@ pub enum HandshakeResponse {
         rotation_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         wire_names: Option<String>,
+        /// The addresses this machine answers on now, best first, as in
+        /// `paired`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        routes: Vec<HostRoute>,
     },
     Error {
         code: ErrorCode,

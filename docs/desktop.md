@@ -599,13 +599,15 @@ composer's keys stay outside the table.
   9.4:1 and 4.3:1. A thread is read line by line and a new thread is not. They are kept with the
   banner (`lib/banner.ts`).
 - **Remote access.** Settings › Remote access ([remote.md](remote.md)) is the
-  machine's switch: turned on it starts the remote gateway and shares every
-  thread this app has open with the paired devices — on the built-in harness
-  and on Codex, Claude Code, Pi or any other external harness — and a prompt,
-  cancel, question or approval from the phone acts on the desktop thread. The
-  page shows the gateway's address, the pairing QR code and the eight-digit
-  code with the challenge's countdown and the wrong codes left, and the paired
-  devices. A new device appears as *Paired ‹name›* and the used code is taken
+  machine's switch: **Network access** turned on starts the remote gateway and
+  lets paired devices reach every thread on this computer, across all
+  projects, not only the ones open here; open threads are also streamed live —
+  on the built-in harness and on Codex, Claude Code, Pi or any other external
+  harness — and a prompt, cancel, question or approval from the phone acts on
+  the desktop thread. The page shows the gateway's address and its **Routes**
+  (the LAN, VPN and host-name addresses a phone can dial, best first), the
+  pairing QR code and the eight-digit code with the challenge's countdown and
+  the wrong codes left, and the paired devices with when each was last seen. A new device appears as *Paired ‹name›* and the used code is taken
   down, not left until it expires. A phone that asks to connect gets a card
   in the window's corner over any page (`src/ui/ConnectRequests.tsx`):
   *‹name› wants to connect*, Deny or Accept; Accept shows the code with
@@ -618,11 +620,11 @@ composer's keys stay outside the table.
   switch and pairing; the engine owns the gateway, the shares and pairing
   (`rustcode/engine/src/acp/remote.rs`). The QR code is the engine's own rows
   (`qrRows`) when it sends them, else it is encoded in the app
-  (`src/lib/qr.ts`), so no pairing material leaves it. Its *Open threads*
-  group says which threads are shared, how many devices are attached to each,
-  and why a thread the host holds back (it shares at most 32 at once, most
-  recently used first) is not. A thread's header carries a chip while it is
-  shared, with its attached count.
+  (`src/lib/qr.ts`), so no pairing material leaves it. Its *Routes* group lists
+  the addresses the gateway reports, marking the advertised one; the phone
+  learns the same list from the handshake and reconnects over whichever
+  answers. A thread's header carries a chip while it is shared, with its
+  attached count.
 - **Terminal.** ⌘J: xterm.js on the shell's PTY in the thread's folder, one
   per folder, kept while hidden, following the app's colours.
 - **Window.** The window opens at the size it was last closed with

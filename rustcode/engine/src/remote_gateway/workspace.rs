@@ -359,6 +359,10 @@ fn list_saved_sessions(
             .flatten()
             .flatten()
             .map(saved_session_holder);
+        let workspace = meta
+            .workspace_cwd
+            .as_ref()
+            .map(|cwd| cwd.to_string_lossy().into_owned());
         let session = RemoteSavedSession {
             state,
             open_in,
@@ -367,10 +371,8 @@ fn list_saved_sessions(
                 .chars()
                 .take(MAX_SAVED_SESSION_TITLE_CHARS)
                 .collect(),
-            workspace: meta
-                .workspace_cwd
-                .as_ref()
-                .map(|cwd| cwd.to_string_lossy().into_owned()),
+            project: workspace.clone(),
+            workspace,
             updated_at,
             message_count: meta.message_count as u64,
             session_id,
@@ -1999,8 +2001,11 @@ mod tests {
                 .is_some_and(|at| at.ends_with('Z'))
         );
         assert!(first[0].workspace.is_some());
+        // `project` groups a phone's thread list; it is the recorded workspace.
+        assert_eq!(first[0].project, first[0].workspace);
         assert_eq!(first[1].state, SavedSessionState::Shared);
         assert_eq!(first[1].workspace, None);
+        assert_eq!(first[1].project, None);
         let (second, next) = saved_page(
             list_saved_sessions(config.path(), state_of, cursor.as_deref(), Some(2), None).unwrap(),
         );

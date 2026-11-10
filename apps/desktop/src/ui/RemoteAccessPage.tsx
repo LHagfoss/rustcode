@@ -12,7 +12,7 @@
 
 import { Copy, RefreshCw, Smartphone, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { heldBackCount, heldBackReason, type RemoteOffer, type RemotePairing } from "../acp/remote";
+import { heldBackReason, type RemoteOffer, type RemotePairing, type RemoteRoute } from "../acp/remote";
 import { encodeQr } from "../lib/qr";
 import { deviceLabel, lastSeenLabel } from "../state/connectRequests";
 import { activeChallenge, remainingPairingSeconds } from "../state/remotePairing";
@@ -41,48 +41,19 @@ const PAIR_DEADLINE_MS = 20_000;
 /** Wrong codes one challenge tolerates (`remote_gateway/pairing.rs`). */
 const WRONG_CODES_ALLOWED = 5;
 
-interface OpenThread {
-  id: string;
-  title: string;
-  /** The harness the thread runs on; the engine shares either kind. */
-  harness: string;
-}
-
 export function RemoteAccessPage() {
   const engine = useApp((s) => s.status);
-  const sessions = useApp((s) => s.sessions);
-  const threads = useApp((s) => s.threads);
   const remote = useApp((s) => s.remote);
   const remoteError = useApp((s) => s.remoteError);
-  const byThread = useApp((s) => s.remoteByThread);
   const [busy, setBusy] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const challenge = useApp((s) => s.remoteChallenge);
   const paired = useApp((s) => s.remotePaired);
   const [pairAskedAt, setPairAskedAt] = useState<number | null>(null);
 
-  // The app's open threads, with the harness each runs on. Both kinds are
-  // shared: the built-in harness from its ACP session, an external one from
-  // the mirror of the updates it sends.
-  const open = useMemo<OpenThread[]>(
-    () =>
-      sessions
-        .filter((session) => threads[session.id]?.loaded)
-        .map((session) => ({
-          id: session.id,
-          title: session.title || "Untitled thread",
-          harness: threads[session.id]?.harness?.id ?? session.harness ?? "",
-        })),
-    [sessions, threads],
-  );
-  const idsKey = open.map((thread) => thread.id).join("|");
-
   const refresh = useCallback(async () => {
     await refreshRemote();
-    // One read per open thread, so the *Open threads* rows and the thread
-    // headers say what the engine says about that thread's own share.
-    for (const id of idsKey ? idsKey.split("|") : []) void refreshRemote(id);
-  }, [idsKey]);
+  }, []);
 
   useEffect(() => {
     if (engine !== "ready") return;
@@ -103,7 +74,6 @@ export function RemoteAccessPage() {
   const pairing = gateway?.pairing;
   const unavailable = remote?.available === false;
   const enabled = remote?.enabled === true;
-  const heldBack = heldBackCount(remote);
   const pending = busy === "pair" || remote?.pairingPending === true;
   const expired = remote?.pairingExpired === true;
   const pairingError = remote?.pairingError;
@@ -139,15 +109,15 @@ export function RemoteAccessPage() {
     return <Loading error={remoteError} />;
   }
 
-  const shared = open.filter((thread) => byThread[thread.id]?.shared);
+  const sharedCount = gateway?.sessions ?? 0;
   const status = unavailable
     ? "Remote access is not available on this host."
     : ended
       ? ended
       : enabled
-        ? shared.length
-          ? `Sharing ${shared.length === 1 ? "this thread" : `these ${shared.length} threads`} with paired devices.`
-          : "Remote access is on for this computer. An open thread is shared from the next pass."
+        ? sharedCount > 0
+          ? `Sharing ${sharedCount === 1 ? "one thread" : `${sharedCount} threads`} with paired devices.`
+          : "Remote access is on for this computer. Every thread on it is listed for paired devices."
         : "Nothing is shared from this app.";
 
   return (
@@ -161,12 +131,12 @@ export function RemoteAccessPage() {
         footer="Shared with the RustCode app on your phone through the remote gateway (docs/remote.md). Plain LAN traffic is authenticated but not encrypted: use NetBird away from a trusted network."
       >
         <Row
-          title="Share this computer's threads with a phone"
-          subtitle="Starts the gateway and shares every thread this app has open — on the built-in harness or on Codex, Claude Code, Pi or any other — with the paired devices. Turning it off stops remote access for this computer, including a share a terminal started; paired devices stay paired."
+          title="Network access"
+          subtitle="Starts the gateway and lets paired devices reach every thread on this computer, across all projects, not only the ones open here. Turning it off stops remote access for this computer, including a share a terminal started; paired devices stay paired."
           status={status}
         >
           <Switch
-            label="Remote access"
+            label="Network access"
             checked={enabled}
             disabled={unavailable || busy !== null}
             onChange={toggle}
@@ -221,15 +191,6 @@ export function RemoteAccessPage() {
             Pair a device
           </Action>
         </Row>
-        {heldBack > 0 && (
-          <Row
-            title="Held back threads"
-            subtitle={`This computer shares at most 32 threads at once, the ones used most recently. ${heldBack === 1 ? "One open thread is" : `${heldBack} open threads are`} held back; each says why under Open threads.`}
-            status={heldBack === 1 ? "1 thread" : `${heldBack} threads`}
-          >
-            <Chip tone="warn">Over the limit</Chip>
-          </Row>
-        )}
       </Group>
 
       {paired ? (
@@ -292,51 +253,72 @@ export function RemoteAccessPage() {
         )}
       </Group>
 
-      <Group title="Open threads">
-        {open.length ? (
-          open.map((thread) => {
-            const reading = byThread[thread.id];
-            const isShared = reading?.shared === true;
-            const attached = reading?.gateway?.attachedDevices.length ?? 0;
-            const reason = heldBackReason(reading);
-            return (
-              <Row
-                key={thread.id}
-                title={thread.title}
-                status={reason}
-                subtitle={
-                  isShared
-                    ? attached > 0
-                      ? `${attached} device${attached === 1 ? "" : "s"} attached.`
-                      : "Visible in the phone app; no device is attached right now."
-                    : reason
-                      ? undefined
-                      : enabled
-                        ? "Not shared yet: the gateway picks it up on its next pass."
-                        : "Not shared with paired devices."
-                }
+      <Group
+        title="Routes"
+        footer="Your phone tries these addresses in order and keeps using the first that answers. It learns them here, so pairing once is enough to reconnect on another network. Plain LAN traffic is authenticated but not encrypted: prefer the VPN or host name away from a trusted network."
+      >
+        {gateway?.routes && gateway.routes.length > 0 ? (
+          gateway.routes.map((route) => (
+            <Row
+              key={route.address}
+              title={routeLabel(route.kind)}
+              subtitle={routeHint(route.kind)}
+              status={<span className="font-mono">{route.address}</span>}
+            >
+              {route.address === gateway.advertisedAddress && <Chip tone="ok">Advertised</Chip>}
+              <Action
+                aria-label={`Copy the route ${route.address}`}
+                onClick={() => void copyText(route.address)}
               >
-                <Chip>{thread.harness || "harness"}</Chip>
-                {isShared ? (
-                  <>
-                    <Chip tone="ok">Shared</Chip>
-                    {attached > 0 && <Chip>{attached} attached</Chip>}
-                  </>
-                ) : (
-                  <Chip tone={reason ? "warn" : "idle"}>{reason ? "Held back" : "Not shared"}</Chip>
-                )}
-              </Row>
-            );
-          })
+                <Copy size={12} /> Copy
+              </Action>
+            </Row>
+          ))
         ) : (
           <Row
-            title="No thread is open"
-            subtitle="Open a thread and it is shared with your phone while remote access is on."
+            title="No route yet"
+            subtitle={
+              enabled
+                ? "The gateway has not announced an address a phone can dial. Give it a LAN or NetBird address (docs/remote.md › Automatic address selection)."
+                : "Turn network access on to start the gateway and announce this computer's addresses."
+            }
           />
         )}
       </Group>
     </>
   );
+}
+
+/** A route's kind, in the words the page shows. */
+function routeLabel(kind: RemoteRoute["kind"]): string {
+  switch (kind) {
+    case "lan":
+      return "Local network";
+    case "vpn":
+      return "VPN";
+    case "hostname":
+      return "Host name";
+    case "public":
+      return "Public";
+    default:
+      return "Address";
+  }
+}
+
+/** What a kind of route means for the phone. */
+function routeHint(kind: RemoteRoute["kind"]): string {
+  switch (kind) {
+    case "lan":
+      return "The phone's own Wi-Fi or Ethernet network. Not encrypted.";
+    case "vpn":
+      return "A NetBird or Tailscale address, reachable away from home and encrypted by the tunnel.";
+    case "hostname":
+      return "A name that follows this computer when its address changes.";
+    case "public":
+      return "Reachable from the internet. Plain LAN traffic is not encrypted: avoid it.";
+    default:
+      return "An address the gateway reports.";
+  }
 }
 
 function mmss(seconds: number): string {

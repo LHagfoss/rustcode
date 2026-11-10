@@ -983,6 +983,7 @@ mod tests {
             loopback_only: false,
             sessions: Some(Vec::new()),
             candidates: vec!["192.168.31.185  (en0)".into()],
+            routes: vec![],
             devices: vec![
                 DeviceSummary {
                     id: "aa".into(),

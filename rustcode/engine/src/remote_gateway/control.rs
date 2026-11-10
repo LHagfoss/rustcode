@@ -103,6 +103,10 @@ pub struct GatewayStatus {
     /// listen address that is not among them has gone stale.
     #[serde(default)]
     pub candidates: Vec<String>,
+    /// The addresses a device can dial this gateway at, best first, each with
+    /// the kind of network it is on. The handshake reports the same list.
+    #[serde(default)]
+    pub routes: Vec<crate::remote_gateway::address::HostRoute>,
     /// Paired devices, connected or not. Never a token.
     #[serde(default)]
     pub devices: Vec<DeviceSummary>,

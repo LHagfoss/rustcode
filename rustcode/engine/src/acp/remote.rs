@@ -1199,6 +1199,7 @@ async fn host_status() -> Value {
             "advertisedAddress": status.advertised_address,
             "listenAddress": status.listen_address,
             "loopbackOnly": status.loopback_only,
+            "routes": status.routes,
             "connectedDevices": status.connections.iter().map(|connection| connection.device_name.clone()).collect::<Vec<_>>(),
             "attachedDevices": Vec::<String>::new(),
             "pairedDevices": status.paired_devices,
