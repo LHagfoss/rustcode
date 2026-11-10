@@ -16,6 +16,7 @@ import { create } from "zustand";
 import { AcpConnection } from "../acp/jsonrpc";
 import { isTauri, MachineTransport } from "../acp/transport";
 import { parseSessionList, type SessionSummary } from "../acp/types";
+import { currentPlatform } from "../lib/platform";
 import { hasShell, shellCall } from "../lib/shell";
 import { appVersion } from "../lib/updater";
 import { askConfirm, toast } from "./store";
@@ -152,6 +153,12 @@ interface MachinesStore {
   ready: boolean;
   error: string | null;
   machines: Machine[];
+  /**
+   * When each machine was first seen away, in ms: what an offline answer says
+   * ("Studio is offline since 09:12"). Seeded from `lastConnectedAt` the first
+   * time a machine is seen offline, so it reads as the last time it answered.
+   */
+  offlineSince: Record<string, number>;
   /** Each connected machine's thread count, from its own `session/list`. */
   counts: Record<string, number>;
   /** Last successfully fetched thread list per machine, retained across disconnects. */
@@ -171,6 +178,7 @@ export const useMachines = create<MachinesStore>(() => ({
   ready: false,
   error: null,
   machines: [],
+  offlineSince: {},
   counts: {},
   sessions: {},
   discovered: null,
@@ -183,6 +191,30 @@ export const useMachines = create<MachinesStore>(() => ({
 }));
 
 // ---------------------------------------------------------------- labels
+
+/** The id `list_machines` gives this computer: the machine a call is on when it names none. */
+export const LOCAL_MACHINE_ID = "local";
+
+/**
+ * This computer's name as people say it (docs/terminology.md): the local entry
+ * `list_machines` returns, and what an approval card calls it.
+ */
+export function selfName(): string {
+  switch (currentPlatform()) {
+    case "mac":
+      return "This Mac";
+    case "windows":
+      return "This PC";
+    default:
+      return "This computer";
+  }
+}
+
+/** When a machine went away, as `09:12`: the time `offlineSince` holds, or undefined. */
+export function offlineSinceLabel(at: number | undefined): string | undefined {
+  if (at === undefined) return undefined;
+  return new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
 
 /** The words a row's state chip uses. */
 export function stateLabel(machine: Pick<Machine, "state" | "retryInSecs">): string {
@@ -477,7 +509,25 @@ export async function refreshMachines(): Promise<void> {
   if (!hasShell()) return;
   try {
     const machines = await shellCall<Machine[]>("machines_list");
-    useMachines.setState({ machines, ready: true, error: null });
+    const now = Date.now();
+    const since = { ...useMachines.getState().offlineSince };
+    // A machine that was removed leaves nothing behind.
+    for (const id of Object.keys(since)) {
+      if (!machines.some((machine) => machine.id === id)) delete since[id];
+    }
+    for (const machine of machines) {
+      if (machine.state === "connected") {
+        delete since[machine.id];
+        continue;
+      }
+      // The first time this window sees it away: the last time it answered is
+      // the closest the shell gives to when it stopped.
+      if (since[machine.id] === undefined) {
+        const last = Date.parse(machine.lastConnectedAt ?? "");
+        since[machine.id] = Number.isNaN(last) ? now : last;
+      }
+    }
+    useMachines.setState({ machines, offlineSince: since, ready: true, error: null });
     for (const machine of machines) void attach(machine);
     for (const id of [...links.keys()]) {
       if (!machines.some((machine) => machine.id === id)) detach(id);
@@ -569,6 +619,7 @@ export function resetMachinesForTests(): void {
     ready: false,
     error: null,
     machines: [],
+    offlineSince: {},
     counts: {},
     sessions: {},
     discovered: null,

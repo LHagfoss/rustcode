@@ -1534,6 +1534,7 @@ pub const TOOLS: &[Tool] = &[
     misc::INTERRUPT_SESSION,
     misc::CONFIGURE_SESSION,
     misc::LIST_PROJECTS,
+    misc::LIST_MACHINES,
     misc::LIST_PULL_REQUESTS,
     misc::TRANSFER_SESSION,
     misc::LIST_PENDING_REQUESTS,

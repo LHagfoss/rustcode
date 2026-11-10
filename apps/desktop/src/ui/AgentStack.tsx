@@ -65,6 +65,11 @@ function StackTip({ view }: { view: AgentStackView }) {
             </span>
             <span className="line-clamp-2 min-w-0 break-words text-fg-muted">{agent.label ?? "Thread"}</span>
             {agent.kind && <span className="shrink-0 text-fg-faint">{agent.kind}</span>}
+            {agent.machine && (
+              <span className="shrink-0 text-fg-faint" title={`Runs on ${agent.machine}`}>
+                {agent.machine}
+              </span>
+            )}
             {elapsed && <span className="ml-auto shrink-0 text-fg-faint tabular">{elapsed}</span>}
           </span>
         );

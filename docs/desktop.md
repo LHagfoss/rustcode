@@ -73,6 +73,15 @@ because a web view cannot dial a gateway and the pairing token belongs in the
 credential store. `?machines=paired|connect|offline|revoked` in the mock walks
 the page without a second computer; `paired` is two computers with threads.
 
+Agents across machines: the orchestration tools take a `machine` (v12), so a
+thread here can list the paired computers (`list_machines`), start, message,
+read, wait on and stop threads there, and be woken when a remote delegate
+finishes — the delegate is nested under its caller and its stack mark names the
+machine. The app executes those calls over the machine's own connection; see
+`docs/orchestrator.md` › Orchestration tools v12 for the tool set, the approval
+card and what v1 leaves out (this app must be running, and a remote delegate
+keeps the title its first message gives it there).
+
 **Run on** is the new-thread composer's own choice of machine
 (`src/ui/Composer.tsx`), in the strip beside the folder: this computer first,
 then each paired machine with its connection state, and a machine that is away

@@ -27,6 +27,7 @@ export const ORCHESTRATION_TOOLS = [
   "answer_request",
   "organize_threads",
   "list_projects",
+  "list_machines",
   "list_pull_requests",
   "manage_queue",
   "thread_status",
@@ -169,7 +170,9 @@ function orchestrationLabel(
       const named = text(args.title) || prompt;
       // What it was told to run on, in the order the approval card names them.
       const harness = [text(args.harness), text(args.account), text(args.model)].filter(Boolean).join(" ");
-      const summary = [named ? cut(named, 60) : "", harness].filter(Boolean).join(" · ");
+      // Where it runs, when not this computer: the row says it as the sidebar does.
+      const where = text(args.machine) ? `on ${text(args.machine)}` : "";
+      const summary = [named ? cut(named, 60) : "", harness, where].filter(Boolean).join(" · ");
       return { title: "Started thread", summary: summary || undefined };
     }
     case "message_session": {
@@ -221,7 +224,9 @@ function orchestrationLabel(
       };
     }
     case "list_projects":
-      return { title: "Listed projects" };
+      return { title: "Listed projects", summary: text(args.machine) || undefined };
+    case "list_machines":
+      return { title: "Listed machines" };
     case "list_pull_requests": {
       const state = text(args.state) || "open";
       return { title: "Listed pull requests", summary: state };
