@@ -1617,12 +1617,30 @@ export function markMessaged(id: string) {
   store(STORAGE.messaged, JSON.stringify(messaged));
 }
 
-/** Take a thread out of the list until `at`, or bring it back now with `null`. */
-export function snoozeThread(id: string, at: number | null) {
+/** Take a thread out of the list until `at`, or bring it back now with `null`: the write alone. */
+export function setSnoozed(id: string, at: number | null) {
   const { [id]: _, ...rest } = get().snoozed;
   const snoozed = at === null ? rest : { ...rest, [id]: at };
   set({ snoozed });
   store(STORAGE.snoozed, JSON.stringify(snoozed));
+}
+
+/**
+ * Snoozes a thread because the user asked — the sidebar's menu, the command
+ * palette, the custom dialog — or wakes one with `null`.
+ *
+ * Snoozing the thread on screen in the chat leaves it, with the panel, for the
+ * new-thread screen in the same folder, the way settling or archiving it does;
+ * the board, review and compare have no new-thread screen, so snoozing there
+ * stays on that view. Snoozing another thread changes nothing on screen, and
+ * waking a thread never navigates. A caller that is not the user — an agent's
+ * `update_session`, a wake whose time has come — calls `setSnoozed` instead,
+ * which never moves the screen.
+ */
+export function snoozeThread(id: string, at: number | null) {
+  setSnoozed(id, at);
+  const s = get();
+  if (at !== null && s.view.kind === "chat" && s.selectedId === id) startNewThread();
 }
 
 export function askCustomSnooze(id: string | null) {
@@ -1632,7 +1650,7 @@ export function askCustomSnooze(id: string | null) {
 /** Bring back the threads whose time has come, each marked unread so it is noticed. */
 export function wakeSnoozed(now = Date.now()) {
   for (const id of dueSnoozes(get().snoozed, now)) {
-    snoozeThread(id, null);
+    setSnoozed(id, null);
     markUnread(id);
     const title = get().sessions.find((s) => s.id === id)?.title || "A thread";
     toast(`“${title}” is back`, "info");
@@ -3083,7 +3101,7 @@ export async function runPrompt(
   // A queued wake reports its links now, as its turn starts: late enough that a restart before this
   // point brings the wake back, early enough that nothing in the turn reports it again.
   if (options.wake && options.wakeLinks?.length) wakeDelivered(options.wakeLinks, options.wakeAsking ?? []);
-  if (!options.autoCompact && id in get().snoozed) snoozeThread(id, null);
+  if (!options.autoCompact && id in get().snoozed) setSnoozed(id, null);
   // The message the transcript shows: the command, links and typed text, with each long paste back
   // where it was pasted. The prompt's blocks say the same thing (below).
   const shown = composedText(text, extras);
