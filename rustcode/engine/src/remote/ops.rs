@@ -41,7 +41,7 @@ pub enum OwnerFollowUp {
     FinishCancel,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SessionMutation {
     pub result: RemoteResult,
     pub follow_up: OwnerFollowUp,

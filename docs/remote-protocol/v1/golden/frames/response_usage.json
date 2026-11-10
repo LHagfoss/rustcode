@@ -1,0 +1,58 @@
+{
+  "kind": "response",
+  "protocol_version": 1,
+  "request_id": "req-usage",
+  "result": {
+    "type": "usage",
+    "since": "2026-06-15",
+    "until": "2026-07-14",
+    "totals": {
+      "input_tokens": 120000,
+      "output_tokens": 9000,
+      "cached_tokens": 40000,
+      "cache_write_tokens": 8000,
+      "cost_usd": 1.42,
+      "turns": 12
+    },
+    "by_day": [
+      {
+        "day": "2026-07-14",
+        "usage": {
+          "input_tokens": 20000,
+          "output_tokens": 1500,
+          "cached_tokens": 6000,
+          "cache_write_tokens": 1000,
+          "cost_usd": 0.24,
+          "turns": 2
+        }
+      }
+    ],
+    "by_harness": [
+      {
+        "harness": "codex",
+        "usage": {
+          "input_tokens": 90000,
+          "output_tokens": 7000,
+          "cached_tokens": 30000,
+          "cache_write_tokens": 6000,
+          "cost_usd": 1.1,
+          "turns": 8
+        }
+      }
+    ],
+    "by_model": [
+      {
+        "harness": "codex",
+        "model": "gpt-5.5",
+        "usage": {
+          "input_tokens": 90000,
+          "output_tokens": 7000,
+          "cached_tokens": 30000,
+          "cache_write_tokens": 6000,
+          "cost_usd": 1.1,
+          "turns": 8
+        }
+      }
+    ]
+  }
+}

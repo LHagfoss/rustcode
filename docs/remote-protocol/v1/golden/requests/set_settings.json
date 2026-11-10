@@ -1,0 +1,12 @@
+{
+  "protocol_version": 1,
+  "request_id": "req-set-settings",
+  "operation": {
+    "type": "set_settings",
+    "settings": {
+      "harness": "codex",
+      "model": "gpt-5.5",
+      "effort": "high"
+    }
+  }
+}
