@@ -19,7 +19,7 @@ import {
   setAutoCompactForThread,
   setAutoCompactMode,
   setAutoCompactThreshold,
-  snoozeThread,
+  setSnoozed,
   trashThread,
   updateThread,
   useApp,
@@ -119,7 +119,7 @@ describe("auto-compaction in the store", () => {
   test("a snoozed thread is a guard and stays snoozed through an automatic compaction", async () => {
     const id = await openClaudeThread();
     endedTurn(id, Date.now(), 30_000);
-    snoozeThread(id, Date.now() + 60 * 60_000);
+    setSnoozed(id, Date.now() + 60 * 60_000);
 
     scheduleAutoCompact(id);
     await settle(80);
