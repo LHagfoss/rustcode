@@ -7,10 +7,10 @@
 //! service managers (launchd, systemd --user, Task Scheduler), and nothing here
 //! writes a unit file: the CLI is the source of truth for all three systems.
 //!
-//! What that service is today: the RustCode server that answers paired devices
-//! and other machines with RustCode closed, and that starts when the user logs
-//! in. The threads this app itself runs stay in the app's own engine, so closing
-//! the app still ends them; switching the app to the server is a later step
+//! What that service is today: the shared engine that threads can run in, kept
+//! up by the service manager and started when the user logs in. The threads this
+//! app itself runs stay in the app's own `--acp` engine, so closing the app
+//! still ends them; switching the app to the server is a later step
 //! (`docs/server.md`). The words the page shows say that and no more.
 //!
 //! An AppImage runs its bundled `rustcode` from a mount that goes away with the
@@ -80,9 +80,9 @@ pub async fn server_service_status() -> Result<ServiceStatus, String> {
     read_status().await
 }
 
-/// Install the RustCode server as a background service — the server that keeps
-/// this computer reachable with the app closed, and that starts when the user
-/// logs in — and answer the state after it. The install is the CLI's own: a
+/// Install the RustCode server as a background service — the shared engine that
+/// stays up when the app closes and starts when the user logs in — and answer
+/// the state after it. The install is the CLI's own: a
 /// development build is refused there, and a server another process runs is
 /// never stopped while a turn is running — the install says so instead, and
 /// `--yes` stays a decision for a terminal.
