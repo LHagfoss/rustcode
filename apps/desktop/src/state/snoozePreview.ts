@@ -17,10 +17,12 @@ export function stageSnoozedWorking(): boolean {
   const s = useApp.getState();
   const row = s.sessions.find((x) => x.id !== s.selectedId) ?? s.sessions[0];
   if (!row) return false;
-  setSnoozed(row.id, Date.now() + HOUR);
-  void openThread(row.id);
-  // The mock keeps this turn running for two minutes, well past a look.
-  void runPrompt(row.id, "keep working");
+  void openThread(row.id).then(() => {
+    // The turn starts first, so the snooze is the user's wish about a thread already at work: a
+    // prompt sent after it would bring the thread back (`runPrompt`).
+    void runPrompt(row.id, "keep working");
+    setSnoozed(row.id, Date.now() + HOUR);
+  });
   return true;
 }
 
