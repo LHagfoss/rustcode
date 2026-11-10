@@ -5,7 +5,7 @@
 // with the engine's `smart-ui` skill (docs/smart-ui.md, "Runtime").
 
 import { KIT_SCRIPT } from "./kit";
-import { MAX_HEIGHT, stripEmptyTags } from "./parse";
+import { stripEmptyTags } from "./parse";
 
 export const PAGE_CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; " +
@@ -93,12 +93,13 @@ export function varsCss(theme: PageTheme): string {
 }
 
 export const BASE_CSS = `
-/* The document itself never scrolls, so no scrollbar can appear, narrow the layout and
-   re-wrap the text under the pointer. Only a view past the app's 720 px clamp scrolls,
-   inside the body, where that scrollbar is the one that lets it be read. */
+/* Nothing in the page scrolls by itself: the document never does, and the body takes its
+   content's full height so the app grows the frame to it. A scrollbar would narrow the
+   layout and re-wrap the text under the pointer. Scrolling is opt-in (the .rc-scroll block,
+   or the view's own overflow), which is what keeps a long block readable without a nested card. */
 html { overflow: hidden; }
 html, body { margin: 0; background: transparent; }
-body { position: relative; max-height: ${MAX_HEIGHT}px; overflow-y: auto; color: var(--rc-text); font: var(--rc-text-size)/1.5 var(--rc-font);
+body { position: relative; color: var(--rc-text); font: var(--rc-text-size)/1.5 var(--rc-font);
   padding: 1px 0 2px; overflow-wrap: anywhere; -webkit-font-smoothing: antialiased; }
 * { box-sizing: border-box; }
 :focus { outline: none; }

@@ -54,8 +54,9 @@ self-contained HTML fragment:
   per page, even with several tags. It doesn't count against the 64 KB limit,
   which applies to the block as written. An unknown name stays as written, and
   the policy blocks it.
-- Limits: 64 KB of source and 5,000 elements. The view is 48–720 pt tall and
-  fits its content; taller content scrolls inside the card.
+- Limits: 64 KB of source and 5,000 elements. The view is at least 48 pt
+  tall and grows to its content's full height; it scrolls only where the view
+  asks, with `.rc-scroll` (320 pt) or its own overflow.
 
 Only assistant replies run blocks, and only while Smart UI is on. User
 messages, tool output, `html` fences, a fence without `v1`, and a fence
@@ -118,7 +119,7 @@ in both.
 | Kit: traces and folding | `.rc-steps` of `li.rc-step` with `.rc-done`, `.rc-active`, `.rc-failed` or `.rc-todo`; `details.rc-details` with a chevron drawn in CSS, `.rc-tree` for nested ones, `.rc-file` rows; `.rc-term`, a terminal block. |
 | Kit: actions and citations | `.rc-chip`, a pill follow-up button; `.rc-tabs`; `<span class="rc-tip" tabindex="0">1<span>Source</span></span>`, opening on hover and focus inside the page's width. |
 | Kit: behaviour, no script | One delegated listener: click, Enter or Space on a `th` of `table.rc-table[data-rc-sort]` sorts that column in place (numbers by value, otherwise the locale's collation; `data-rc-sort="text"` on a `th` forces text), `aria-sort` marks the column and its direction, and the rows are moved, not rebuilt, so ids and controls in them survive. Every `.rc-spark[data-values="1,4,2,8"]` gets an inline SVG line from its numbers (`.rc-spark-line`, `.rc-spark-area`), once, and again after a streamed update. Then: `data-rc-send="text"` calls `rustcode.send`, with the same gesture check; on a `<form data-rc-send="text">`, or on a control inside one, the form's named fields are sent after the text as `name: value` lines (a form sends when submitted, never on a click into it, and never navigates). `data-rc-copy="text"` calls `rustcode.copy`, and the element says "Copied" for 1.5 s. `<div class="rc-tabs"><div role="tablist"><button role="tab" data-rc-tab="a">A</button></div><section data-rc-panel="a">…</section></div>`: the first tab is active at load, click and arrow keys switch, and `aria-selected` and `hidden` follow. |
-| Height | The page reports its content, not the document: the in-flow `#rc-root`'s height plus its margins. A hover overlay (`.rc-tip > span`, a bar's `data-rc-tip`) is `position: absolute` and only revealed with `visibility`, so it never changes that number; The document never scrolls (`html { overflow: hidden }`), so a scrollbar cannot appear, narrow the layout and re-wrap the text under the pointer; only a view past the 720 px clamp scrolls, inside the body. The page also says when the pointer is in it, and the app holds a measurement taken then until it leaves (a click or key press applies at once), so moving the pointer over a view never moves the chat below it. Collapsing a `<details>` or moving to a shorter tab shrinks the frame. A page sized to the frame (`html, body { height: 100% }`) still cannot shrink, and stays at the reserved height. |
+| Height | The page reports its content, not the document: the in-flow `#rc-root`'s height plus its margins. A hover overlay (`.rc-tip > span`, a bar's `data-rc-tip`) is `position: absolute` and only revealed with `visibility`, so it never changes that number; The document never scrolls (`html { overflow: hidden }`) and the body has no cap, so a scrollbar cannot appear, narrow the layout and re-wrap the text under the pointer: the frame grows to the content's full height, never below 48 px. Only `.rc-scroll` (320 px) or the view's own overflow scrolls. The page also says when the pointer is in it, and the app holds a measurement taken then until it leaves (a click or key press applies at once), so moving the pointer over a view never moves the chat below it. Collapsing a `<details>` or moving to a shorter tab shrinks the frame. A page sized to the frame (`html, body { height: 100% }`) still cannot shrink, and stays at the reserved height. |
 | Chart.js | `<script src="rustcode-lib:chart.js"></script>` as before. `Chart.defaults` are themed from the variables (text, grid lines, font, the eight series colours), so agents set no colours; a page that needs one reads it with `getComputedStyle(document.documentElement).getPropertyValue('--rc-…')`. Tooltips appear on hover with a dot in each series' own colour, a bar under the pointer is a step lighter, the legend toggles a series on click, and the chart sizes to its box (200 px, or 140/260 with `data-size=\"sm\"/\"lg\"`). A line is filled from its colour down (`.rc-chart`); under `prefers-reduced-motion` animation is off. Colour changes are applied at once rather than tweened: Chart.js tweens colours through interpolators keyed by type, and a canvas gradient is an object with none, so the animator threw `this._fn is not a function` on its first tick and the chart never drew. System colour keywords (`CanvasText`, `AccentColor`) work in CSS but not on a canvas, which draws nothing with them. |
 | `window.rustcode` | `send(text, context?)`: sends `text` as the user's next message in the thread, for follow-ups such as "Show details for X"; `context`, a JSON-serialisable object, follows the text as a fenced `json` block, so a view sends values back structured rather than in prose. The whole message is capped at 2,000 characters, and it works only inside a click or key press handler. `copy(text)`: copies to the clipboard. `theme`: `"light"` or `"dark"`. `onThemeChange(callback)`: called with the new theme. |
 
@@ -278,13 +279,12 @@ advertises `smartUi = 2`, and the engine offers root sessions a
 `# Smart UI preview` prompt hint. The tool forwards the block body as a
 `_rustcode/smartUi/preview` request. `SmartUIPreviewRenderer`
 (`macos/Sources/RustCode/SmartUIPreviewRenderer.swift`) loads it in the same
-sandbox configuration as the live view, at `SmartUI.previewWidth` (560 pt)
-and the card's height limits, in a borderless window placed off every
-screen. It answers with:
+sandbox configuration as the live view, at `SmartUI.previewWidth` (560 pt) in
+a borderless window placed off every screen. It answers with:
 
 - a screenshot, attached to the conversation after the tool batch like a
   `localhost_preview` one;
-- the content height, the card's max height and the element count;
+- the content height and the element count;
 - what the page threw: `error` and `unhandledrejection` events,
   `console.error` and CSP violations, which a document-start script records.
   This script runs only in previews, never in the transcript's live view.
