@@ -204,8 +204,10 @@ pub struct Connector {
     /// One credential presentation at a time, across the routes of one race.
     /// A rotating refresh token presented on two sockets at once looks like a
     /// replay to the machine, which revokes the pairing; the lock is taken
-    /// *after* a route's socket opens, so a dead LAN route does not hold the
-    /// overlay attempt up.
+    /// *after* a route's socket opens, so a dead LAN dial does not hold the
+    /// overlay attempt up, and the presentation under it is bounded by
+    /// [`Connector::route_timeout`], so a socket that never answers does not
+    /// hold the next route either.
     credentials: tokio::sync::Mutex<()>,
 }
 
@@ -539,10 +541,22 @@ impl Connector {
                     }
                 };
             let _serialized = self.credentials.lock().await;
-            let resolved = self
-                .authenticate_with(Some(connection), &route.address, machine, tokens)
-                .await
-                .and_then(|session| session.check(machine).map(|()| session));
+            // Bound the locked section: a route that completes the WebSocket
+            // upgrade and then never answers holds this lock through the
+            // per-frame timeout, and every other route behind it. Ending it
+            // at the route timeout keeps the race's own deadline in charge.
+            let resolved = match tokio::time::timeout(
+                self.route_timeout,
+                self.authenticate_with(Some(connection), &route.address, machine, tokens),
+            )
+            .await
+            {
+                Ok(result) => result.and_then(|session| session.check(machine).map(|()| session)),
+                Err(_) => Err(anyhow::anyhow!(
+                    "the credential handshake did not finish in {:.1}s",
+                    self.route_timeout.as_secs_f64()
+                )),
+            };
             match resolved {
                 Ok(session) => Ok(session),
                 Err(error) => {

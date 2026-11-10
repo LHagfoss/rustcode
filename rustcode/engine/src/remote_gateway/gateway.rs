@@ -1750,19 +1750,32 @@ async fn apply_plan(
 ) -> Result<bool> {
     let port = listener.local_addr()?.port();
     let mut changed = false;
+    // Release the extras the plan dropped before moving the primary: the new
+    // primary may be an address an extra still holds (NetBird went down, so
+    // the LAN address that was an extra becomes the primary), and binding it
+    // while the extra is open fails with EADDRINUSE on every round. Awaiting
+    // the aborted task is what actually closes its socket, and it returns as
+    // soon as the task is dropped.
+    let removed: Vec<IpAddr> = extra
+        .keys()
+        .filter(|address| !plan.also.contains(address))
+        .copied()
+        .collect();
+    let mut closing = Vec::new();
+    for address in removed {
+        if let Some(task) = extra.remove(&address) {
+            task.abort();
+            closing.push(task);
+            changed = true;
+        }
+    }
+    for task in closing {
+        let _ = task.await;
+    }
     if listener.local_addr()?.ip() != plan.bind {
         *listener = TcpListener::bind(SocketAddr::new(plan.bind, port)).await?;
         changed = true;
     }
-    extra.retain(|address, task| {
-        if plan.also.contains(address) {
-            true
-        } else {
-            task.abort();
-            changed = true;
-            false
-        }
-    });
     for address in &plan.also {
         if extra.contains_key(address) {
             continue;

@@ -167,9 +167,10 @@ Host → client:
   name) and `public`. An `overlay` entry may carry `provider`: `netbird`,
   `tailscale` or `zerotier`, when the interface name says which product the
   address belongs to; absent on macOS's shared `utunN`. A gateway before the
-  `overlay` kind sends `vpn`, which a client still accepts. A client keeps the
-  entries as the routes it knows for this host and races them, so pairing once
-  is enough to reconnect on another network. Only addresses the gateway listens
+  `overlay` kind sends `vpn`, which a client still accepts; the schema lists
+  only `overlay` because it names what this version sends, not every value it
+  reads. A client keeps the entries as the routes it knows for this host and
+  races them, so pairing once is enough to reconnect on another network. Only addresses the gateway listens
   on are reported. Absent from an older gateway, and when the listener is
   loopback only.
 - `device_name` in the answer is the name as the host stored it (trimmed and

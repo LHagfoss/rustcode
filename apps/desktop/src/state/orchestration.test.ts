@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { Json } from "../acp/jsonrpc";
 import {
   checkpointsByTurn,
   parseTurnDiff,
@@ -47,6 +48,7 @@ import {
   linkGroupStatus,
   linkResult,
   linksLeft,
+  linkThreads,
   listSessions,
   MAX_ACTIVITY_ITEMS,
   MAX_DATA_ROWS,
@@ -152,6 +154,56 @@ describe("management tools", () => {
     });
     expect(isFailure(parseCall({ tool: "transfer_session", args: { session_id: "a" } }))).toBe(true);
     expect(parseCall({ tool: "list_pending_requests", args: {} })).toEqual({ tool: "list_pending_requests" });
+    // Answering what a thread waits on: an approval's choice, or a question's answer.
+    expect(
+      parseCall({ tool: "answer_request", args: { session_id: "c1", request_id: "7", choice: "deny" } }),
+    ).toEqual({ tool: "answer_request", target: "c1", requestId: "7", choice: "deny" });
+    expect(
+      parseCall({
+        tool: "answer_request",
+        args: { session_id: "c1", request_id: " 7 ", answer: "  yes, run it " },
+      }),
+    ).toEqual({ tool: "answer_request", target: "c1", requestId: "7", answer: "yes, run it" });
+    for (const args of [
+      {},
+      { session_id: "c1" },
+      // The engine's name check refuses a number, so the app does too, as it is printed.
+      { session_id: "c1", request_id: 7, choice: "allow_once" },
+      { session_id: "c1", request_id: "7" },
+      { session_id: "c1", request_id: "7", choice: "allow_hour" },
+      { session_id: "c1", request_id: "7", choice: "deny", answer: "no" },
+      { session_id: "c1", request_id: "7", answer: "  " },
+    ] as Record<string, Json>[])
+      expect(isFailure(parseCall({ tool: "answer_request", args }))).toBe(true);
+    // Organizing several at once: one change set, at least one thread.
+    expect(
+      parseCall({ tool: "organize_threads", args: { session_ids: ["a", "b", "a"], pinned: true } }),
+    ).toEqual({ tool: "organize_threads", targets: ["a", "b"], pinned: true });
+    for (const args of [
+      {},
+      { session_ids: [] },
+      { session_ids: ["a"] },
+      { session_ids: ["a"], pinned: "yes" },
+      { session_ids: [1], unread: true },
+    ] as Record<string, Json>[])
+      expect(isFailure(parseCall({ tool: "organize_threads", args }))).toBe(true);
+    // Attachments are absolute paths in a list, at most ten.
+    expect(
+      parseCall({
+        tool: "message_session",
+        args: { session_id: "b", message: "look", attachments: ["/repo/a.png", " /repo/b.log "] },
+      }),
+    ).toEqual({
+      tool: "message_session",
+      target: "b",
+      text: "look",
+      attachments: ["/repo/a.png", "/repo/b.log"],
+    });
+    expect(
+      isFailure(
+        parseCall({ tool: "message_session", args: { session_id: "b", message: "x", attachments: "a" } }),
+      ),
+    ).toBe(true);
     // A delegate's pull request: report it, merge it, clean up after it.
     expect(parseCall({ tool: "thread_status", args: {} })).toEqual({
       tool: "thread_status",
@@ -191,9 +243,10 @@ describe("management tools", () => {
 });
 
 describe("orchestration rules", () => {
-  test("the app advertises the version whose account argument it answers", () => {
-    // The engine strips `account` below this version and refuses a call that carries one.
-    expect(CAPABILITY_VERSION).toBe(9);
+  test("the app advertises the version whose arguments it answers", () => {
+    // The engine strips `account` below 5 and `attachments` below 10, and refuses a call that
+    // carries one: the app speaks the newest, so it is offered both.
+    expect(CAPABILITY_VERSION).toBe(10);
   });
 
   test("parses the v2 calls and refuses bad arguments", () => {
@@ -1615,6 +1668,56 @@ describe("a group of threads", () => {
     expect(capped.shown.map((l) => l.target)).toEqual(["newer", "refused"]);
     expect(capped.more).toBe(1);
     expect(doneLinks(links, "a", 0)).toEqual({ shown: [], more: 3 });
+  });
+});
+
+describe("one row per delegate thread", () => {
+  const messages = (target: string, state: Link["state"], createdAt: number, id: string): Link => ({
+    ...link("a", target, state),
+    id,
+    createdAt,
+  });
+
+  test("several links to one session are one row, and the other threads keep theirs", () => {
+    const rows = linkThreads([
+      messages("b", "done", 100, "a/1"),
+      messages("c", "working", 200, "a/2"),
+      messages("b", "working", 300, "a/3"),
+    ]);
+    expect(rows.map((row) => [row.target, row.state, row.link.id, row.links.length])).toEqual([
+      ["b", "working", "a/3", 2],
+      ["c", "working", "a/2", 1],
+    ]);
+  });
+
+  test("a live message speaks for its thread, so a settled one never reads as working", () => {
+    const settled = messages("b", "done", 100, "a/1");
+    const running = messages("b", "working", 200, "a/2");
+    const rows = linkThreads([settled, running]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.state).toBe("working");
+    expect(rows[0]!.link.id).toBe("a/2");
+
+    // The shown state can differ from the record: a restart's `interrupted` link whose thread runs.
+    const [shown] = linkThreads([{ ...settled, state: "interrupted" }], ["working"]);
+    expect(shown!.state).toBe("working");
+  });
+
+  test("a session idle after answering takes its newest answer and that link's time", () => {
+    const older = messages("b", "done", 100, "a/1");
+    const newer = messages("b", "done", 300, "a/2");
+    const [row] = linkThreads([newer, older]);
+    expect(row!.state).toBe("done");
+    expect(row!.link.id).toBe("a/2");
+    expect(row!.link.createdAt).toBe(300);
+    expect(row!.links).toHaveLength(2);
+  });
+
+  test("a session waiting on the user is one row with its latest state", () => {
+    const rows = linkThreads([messages("b", "done", 100, "a/1"), messages("b", "needs_user", 200, "a/2")]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.state).toBe("needs_user");
+    expect(rows[0]!.link.id).toBe("a/2");
   });
 });
 

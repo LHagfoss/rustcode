@@ -263,13 +263,21 @@ pub fn plan_listen_with_preference(
 }
 
 /// Every address an `auto` listener opens besides its primary one: the LAN
-/// addresses and the overlay addresses on tunnel interfaces. Deterministic
-/// and deduplicated, so a replanned set compares equal when nothing changed.
+/// addresses and the overlay addresses on tunnel interfaces. A globally
+/// routable address is not one of them: the gateway has no TLS, so opening a
+/// public IPv6 or IPv4 address would put the plaintext, authenticated port on
+/// the internet without ever reporting it as a route. Deterministic and
+/// deduplicated, so a replanned set compares equal when nothing changed.
 fn other_listen_addresses(bind: IpAddr, candidates: &[Candidate]) -> Vec<IpAddr> {
+    let bind = bind.to_canonical();
     let mut also: Vec<IpAddr> = eligible_candidates(candidates)
         .into_iter()
-        .map(|candidate| candidate.address.to_canonical())
-        .filter(|address| *address != bind.to_canonical())
+        .filter_map(|candidate| {
+            let address = candidate.address.to_canonical();
+            let (kind, _) = route_kind_for(&candidate.interface, address)?;
+            matches!(kind, HostRouteKind::Lan | HostRouteKind::Overlay).then_some(address)
+        })
+        .filter(|address| *address != bind)
         .collect();
     also.sort();
     also.dedup();
@@ -947,6 +955,10 @@ mod tests {
             candidate("tailscale0", "100.101.1.2"),
             candidate("zt0", "10.147.20.5"),
             candidate("bridge100", "192.168.64.1"),
+            // Globally routable addresses are never extra listeners: the
+            // gateway has no TLS, and it would not report them as routes.
+            candidate("en0", "2001:db8::1"),
+            candidate("en1", "203.0.113.9"),
         ];
         let plan = plan_listen("auto", None, &candidates).unwrap();
         // One LAN address is what pairing details advertise; every other LAN
@@ -971,6 +983,12 @@ mod tests {
             !also.contains(&"192.168.64.1".to_owned()),
             "a VM bridge is not"
         );
+        for public in ["2001:db8::1", "203.0.113.9"] {
+            assert!(
+                !also.contains(&public.to_owned()),
+                "an extra listener never opens a globally routable address: {public} in {also:?}"
+            );
+        }
         // A specific bind answers on that address only, and a wildcard
         // already answers on all of them.
         let fixed = plan_listen("192.168.1.20", None, &candidates).unwrap();

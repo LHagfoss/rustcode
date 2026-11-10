@@ -239,6 +239,7 @@ export function AgentRow({
   label,
   status,
   description,
+  note,
   onClick,
   expanded,
   showWord = true,
@@ -255,6 +256,8 @@ export function AgentRow({
   status?: string;
   /** What an informational row says in words, for the group it exposes to assistive tech. */
   description?: string;
+  /** A short count before the row's controls: `7 messages` for a thread messaged again. */
+  note?: string;
   /** The row's trailing slot: how long it has run, or a thread's status mark and age. */
   elapsed?: ReactNode;
   tooltip?: ReactNode;
@@ -323,6 +326,7 @@ export function AgentRow({
           {elapsed}
         </span>
       )}
+      {note && <span className="shrink-0 text-caption text-fg-faint">{note}</span>}
     </>
   );
   return (
@@ -391,12 +395,15 @@ function useAgentMeta(harness: string | undefined, model: string | undefined): s
 export function ThreadAgentRow({
   link,
   model,
+  messages,
   action,
   peek = true,
   popover = false,
 }: {
   link: Link;
   model?: string;
+  /** How many links this thread has: a message sent again is still one row. */
+  messages?: number;
   /** A control of the caller's, after the row's own: stop this work, or dismiss it. */
   action?: ReactNode;
   /**
@@ -444,6 +451,7 @@ export function ThreadAgentRow({
           : firstLine(stripHarnessMarkup(link.answer ?? ""))
       }
       elapsed={elapsed}
+      note={messages !== undefined && messages > 1 ? `${messages} messages` : undefined}
       label={`Open ${title}`}
       tooltip={
         <AgentTip

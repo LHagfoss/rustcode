@@ -57,6 +57,29 @@ describe("remote access", () => {
     ]);
   });
 
+  test("an overlay route keeps its kind and the mesh product it is on", () => {
+    const status = parseRemoteStatus({
+      available: true,
+      gateway: {
+        connected: true,
+        routes: [
+          { address: "192.168.1.24:17879", kind: "lan" },
+          { address: "100.90.16.237:17879", kind: "overlay", provider: "netbird" },
+          { address: "100.101.1.2:17879", kind: "vpn" },
+          { address: "100.64.0.8:17879", kind: "overlay", provider: "toaster" },
+        ],
+      },
+    });
+    expect(status.gateway?.routes).toEqual([
+      { address: "192.168.1.24:17879", kind: "lan" },
+      { address: "100.90.16.237:17879", kind: "overlay", provider: "netbird" },
+      // An older engine calls the same tunnel `vpn`.
+      { address: "100.101.1.2:17879", kind: "vpn" },
+      // A product this app does not know is dropped, not shown as a kind.
+      { address: "100.64.0.8:17879", kind: "overlay" },
+    ]);
+  });
+
   test("paired devices carry their kind, platform, host and last seen, as acp/remote.rs sends them", () => {
     const status = parseRemoteStatus({
       available: true,
