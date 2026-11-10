@@ -86,7 +86,7 @@ with that group's folder (`startNewThread(folder, host)`), and any other new
 thread starts here. A folder picked on this disk — "Choose Folder…", "New
 Thread in Folder…", the palette's Add project folder — always starts here: a
 path alone never names a machine, so two Macs that share a checkout path cannot
-mistake each other. "New Thread Here" in a thread's folder menu and `/new` in
+mistake each other; ⌘O with no thread open starts here in the folder it picks. "New Thread Here" in a thread's folder menu and `/new` in
 its composer keep that thread's machine and folder.
 
 The project follows the machine: `src/state/projects.ts` finds the same project

@@ -3,7 +3,7 @@
 // (`moveThread`). ⌘⇧O picks where new threads start by default.
 
 import { pickFolder } from "../lib/native";
-import { moveThread, setDefaultCwd, setProjectCwd, toast, useApp } from "./store";
+import { moveThread, setDefaultCwd, startNewThread, toast, useApp } from "./store";
 
 export async function chooseFolder(asDefault: boolean): Promise<void> {
   const s = useApp.getState();
@@ -23,5 +23,7 @@ export async function chooseFolder(asDefault: boolean): Promise<void> {
   const picked = await pickFolder((id ? s.threads[id]?.cwd : undefined) ?? s.projectCwd);
   if (!picked) return;
   if (id) void moveThread(id, picked);
-  else setProjectCwd(picked);
+  // No thread open: the folder is on this disk, so it starts a new thread here rather than
+  // leaving a machine named over a path that machine may not have.
+  else startNewThread(picked);
 }

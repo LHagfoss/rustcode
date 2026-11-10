@@ -2048,9 +2048,11 @@ export function startNewThread(cwd?: string, host?: string) {
     target === LOCAL_HOST
       ? s.defaultCwd || selectedCwd || matchProject(wasOn, mine)?.path
       : mine.find((project) => project.path === selectedCwd)?.path || mine[0]?.path;
-  // The folder the last screen left is only a candidate for the same computer: a machine's folder
-  // must never become a thread here (the reverse screen names its own).
-  const remembered = hostOfProject(s, s.projectCwd) === target ? s.projectCwd : "";
+  // The last screen's folder is kept only by that same screen: host and folder are written
+  // together, and a worktree is under no project path (`hostOfProject`), so the host is the
+  // only trustworthy half. Without it, a machine's worktree folder starts a thread here.
+  const remembered =
+    s.newThreadHost === target && hostOfProject(s, s.projectCwd) === target ? s.projectCwd : "";
   const projectCwd = cwd ?? preferred ?? remembered;
   dismissOverlays();
   set({

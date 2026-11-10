@@ -168,6 +168,18 @@ describe("the default Run on", () => {
     expect(useApp.getState().projectCwd).toBe("");
   });
 
+  test("a machine worktree folder from New Thread Here is not kept by a thread here", () => {
+    localThreads();
+    const worktree = "/Users/lars/.config/rustcode/worktrees/rustcode/feat-x";
+    // "New Thread Here" on a Studio worktree thread, then ⌘N: a worktree is under no project
+    // path, so the folder guard needs the screen's computer, not just the path.
+    startNewThread(worktree, STUDIO);
+    expect(useApp.getState().projectCwd).toBe(worktree);
+    startNewThread();
+    expect(useApp.getState().newThreadHost).toBe(LOCAL_HOST);
+    expect(useApp.getState().projectCwd).toBe("");
+  });
+
   test("a machine that does not answer rolls Run on back without its folder", async () => {
     localThreads();
     useApp.setState({ selectedId: null, newThreadHost: LOCAL_HOST, projectCwd: "/Users/lars/code/notes" });
@@ -317,6 +329,30 @@ describe("a machine's own operations", () => {
     await until(() => useApp.getState().newThreadHost === LOCAL_HOST);
     expect(useApp.getState().projectCwd).toBe("");
     expect(useApp.getState().remoteHarnesses[gone]).toBeUndefined();
+  });
+
+  test("a machine that reconnects is read again, not shown its list from before", async () => {
+    const id = "gw-reconnect";
+    const before = fallbackHarnessSnapshot();
+    useApp.setState((s) => ({ remoteHarnesses: { ...s.remoteHarnesses, [id]: before } }));
+    let connection: AcpConnection;
+    connection = new AcpConnection((line) => {
+      const frame = JSON.parse(line) as { id?: number; method?: string };
+      const result =
+        frame.method === "_rustcode/harnesses"
+          ? {
+              default: { harness: "codex" },
+              harnesses: [
+                { id: "codex", name: "Codex", enabled: true, known: true, installed: true, auth: "ok" },
+              ],
+            }
+          : {};
+      queueMicrotask(() => connection.receive(JSON.stringify({ jsonrpc: "2.0", id: frame.id, result })));
+    });
+    watchMachineConnection(id, connection);
+    await until(() => useApp.getState().remoteHarnesses[id] !== before);
+    expect(useApp.getState().remoteHarnesses[id]?.harnesses.map((h) => h.id)).toEqual(["codex"]);
+    watchMachineConnection(id, null);
   });
 
   test("a machine on an older engine lists the builtin harness instead of refusing", async () => {
