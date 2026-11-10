@@ -196,9 +196,12 @@ const RAIL_CHROME_PX = 8;
  * The card's floor: as tall as the longest harness's list (or the rail, when it is longer), so
  * moving along the rail never makes the card jump. `CARD_MAX` still caps it to the window's room.
  */
-export function panelHeight(groups: { models: unknown[] }[]): number {
+export function panelHeight(groups: { models: unknown[] }[], hasTraits = false): number {
   const rows = Math.max(1, ...groups.map((group) => group.models.length));
-  return Math.max(LIST_CHROME_PX + rows * ROW_PX, RAIL_CHROME_PX + groups.length * RAIL_ITEM_PX);
+  return (
+    Math.max(LIST_CHROME_PX + rows * ROW_PX, RAIL_CHROME_PX + groups.length * RAIL_ITEM_PX) +
+    (hasTraits ? 40 : 0)
+  );
 }
 
 /**
@@ -416,136 +419,145 @@ function ModelPanel({
   };
   const railButtons = () => [...(rail.current?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
   return (
-    <div className="flex min-h-0 flex-1" style={{ minHeight: `min(${panelHeight(groups)}px, ${CARD_MAX})` }}>
-      <div
-        ref={rail}
-        role="toolbar"
-        aria-orientation="vertical"
-        aria-label="Providers"
-        className="flex w-11 shrink-0 flex-col gap-1 overflow-y-auto p-1 [scrollbar-width:none]"
-        onKeyDown={(e) => {
-          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-            e.preventDefault();
-            const buttons = railButtons();
-            const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
-            buttons[movePickerIndex(at, e.key === "ArrowDown" ? 1 : -1, buttons.length)]?.focus();
-          } else if (e.key === "ArrowRight") {
-            e.preventDefault();
-            field.current?.focus();
-          }
-        }}
-      >
-        {groups.map((g) => {
-          const selected = provider === g.harness.id && !searching;
-          return (
-            <Tooltip
-              key={g.harness.id}
-              label={g.blocked ? `${g.harness.name}: ${g.blocked}` : g.harness.name}
-              side="left"
-            >
-              <button
-                type="button"
-                aria-label={g.harness.name}
-                aria-pressed={selected}
-                onClick={() => browse(g.harness.id)}
-                className={cx(
-                  "relative flex size-9 shrink-0 items-center justify-center rounded-lg hover:bg-fill focus-visible:bg-fill",
-                  selected && "bg-fill",
-                  g.blocked && "opacity-45",
-                )}
-              >
-                <HarnessIcon id={g.harness.id} name={g.harness.name} size={18} />
-                {selected && (
-                  <span aria-hidden className="absolute inset-y-2 -right-1 w-0.5 rounded-full bg-accent" />
-                )}
-              </button>
-            </Tooltip>
-          );
-        })}
-      </div>
-      <div
-        className="flex min-h-0 min-w-0 flex-1 flex-col"
-        onKeyDown={(e) => {
-          if (e.key === "ArrowLeft") {
-            if (!caretAtStart()) return;
-            e.preventDefault();
-            const buttons = railButtons();
-            (buttons.find((b) => b.getAttribute("aria-pressed") === "true") ?? buttons[0])?.focus();
-          } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-            e.preventDefault();
-            highlight(movePickerIndex(active, e.key === "ArrowDown" ? 1 : -1, rows.length));
-          } else if (e.key === "Enter") {
-            if (row && !row.group.blocked) {
+    <div
+      className="flex min-h-0 flex-1 flex-col"
+      style={{ minHeight: `min(${panelHeight(groups, !!traits)}px, ${CARD_MAX})` }}
+    >
+      {traits && onTraits && (
+        <div className="shrink-0 px-3 pt-3">
+          <button
+            type="button"
+            onClick={onTraits}
+            className="flex h-7 w-full min-w-0 items-center gap-2 rounded-md px-2 text-body hover:bg-fill focus-visible:bg-fill"
+          >
+            <span className="min-w-0 flex-1 truncate text-start text-fg-muted">Effort and account</span>
+            <span className="shrink-0 text-fg">{traits}</span>
+            <ChevronRight size={13} strokeWidth={2.5} className="shrink-0 text-fg-faint" />
+          </button>
+        </div>
+      )}
+      <div className="flex min-h-0 flex-1">
+        <div
+          ref={rail}
+          role="toolbar"
+          aria-orientation="vertical"
+          aria-label="Providers"
+          className="flex w-11 shrink-0 flex-col gap-1 overflow-y-auto p-1 [scrollbar-width:none]"
+          onKeyDown={(e) => {
+            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
               e.preventDefault();
-              onPick(row.group, row.model.value);
+              const buttons = railButtons();
+              const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+              buttons[movePickerIndex(at, e.key === "ArrowDown" ? 1 : -1, buttons.length)]?.focus();
+            } else if (e.key === "ArrowRight") {
+              e.preventDefault();
+              field.current?.focus();
             }
-          }
-        }}
-      >
-        <div className="p-1">
-          <MenuSearchField
-            value={filter}
-            onChange={setFilter}
-            placeholder="Search models"
-            label="Search models"
-            inputRef={field}
-            controls="model-list"
-            activeDescendant={rows[active] ? `model-row-${active}` : undefined}
-          />
+          }}
+        >
+          {groups.map((g) => {
+            const selected = provider === g.harness.id && !searching;
+            return (
+              <Tooltip
+                key={g.harness.id}
+                label={g.blocked ? `${g.harness.name}: ${g.blocked}` : g.harness.name}
+                side="left"
+              >
+                <button
+                  type="button"
+                  aria-label={g.harness.name}
+                  aria-pressed={selected}
+                  onClick={() => browse(g.harness.id)}
+                  className={cx(
+                    "relative flex size-9 shrink-0 items-center justify-center rounded-lg hover:bg-fill focus-visible:bg-fill",
+                    selected && "bg-fill",
+                    g.blocked && "opacity-45",
+                  )}
+                >
+                  <HarnessIcon id={g.harness.id} name={g.harness.name} size={18} />
+                  {selected && (
+                    <span aria-hidden className="absolute inset-y-2 -right-1 w-0.5 rounded-full bg-accent" />
+                  )}
+                </button>
+              </Tooltip>
+            );
+          })}
         </div>
         <div
-          ref={scroller}
-          id="model-list"
-          role="listbox"
-          aria-label="Models"
-          className="scroll-stable min-h-0 min-w-0 flex-1 p-1"
+          className="flex min-h-0 min-w-0 flex-1 flex-col"
+          onKeyDown={(e) => {
+            if (e.key === "ArrowLeft") {
+              if (!caretAtStart()) return;
+              e.preventDefault();
+              const buttons = railButtons();
+              (buttons.find((b) => b.getAttribute("aria-pressed") === "true") ?? buttons[0])?.focus();
+            } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+              e.preventDefault();
+              highlight(movePickerIndex(active, e.key === "ArrowDown" ? 1 : -1, rows.length));
+            } else if (e.key === "Enter") {
+              if (row && !row.group.blocked) {
+                e.preventDefault();
+                onPick(row.group, row.model.value);
+              }
+            }
+          }}
         >
-          {rows.map((item, i) => (
-            <div
-              key={`${item.group.harness.id}:${item.model.value}`}
-              id={`model-row-${i}`}
-              role="option"
-              tabIndex={-1}
-              aria-selected={item.group.harness.id === groups[0]?.harness.id && item.model.value === current}
-              aria-disabled={!!item.group.blocked}
-              onMouseEnter={() => highlight(i)}
-              onClick={() => !item.group.blocked && onPick(item.group, item.model.value)}
-              className={cx(
-                "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1",
-                i === active && "bg-fill",
-                item.group.blocked && "opacity-45",
-              )}
-            >
-              {searching && (
-                <HarnessIcon id={item.group.harness.id} name={item.group.harness.name} size={14} />
-              )}
-              <span className="min-w-0 flex-1 truncate text-body">{item.model.name || item.model.value}</span>
-              {item.group.harness.id === groups[0]?.harness.id && item.model.value === current && (
-                <Check size={13} className="shrink-0 text-accent" />
-              )}
-            </div>
-          ))}
-          {!rows.length && (
-            <div className="px-2 py-3 text-center text-callout text-fg-muted">
-              {searching
-                ? "No matching models"
-                : (groups.find((g) => g.harness.id === provider)?.blocked ?? "No models listed")}
-            </div>
-          )}
-        </div>
-        {traits && onTraits && (
-          <div className="shrink-0 p-1">
-            <button
-              type="button"
-              onClick={onTraits}
-              className="flex h-7 w-full min-w-0 items-center gap-2 rounded-md px-2 text-body hover:bg-fill focus-visible:bg-fill"
-            >
-              <span className="min-w-0 flex-1 truncate text-start text-fg-muted">Effort and account</span>
-              <span className="shrink-0 text-fg">{traits}</span>
-              <ChevronRight size={13} strokeWidth={2.5} className="shrink-0 text-fg-faint" />
-            </button>
+          <div className="p-1">
+            <MenuSearchField
+              value={filter}
+              onChange={setFilter}
+              placeholder="Search models"
+              label="Search models"
+              inputRef={field}
+              controls="model-list"
+              activeDescendant={rows[active] ? `model-row-${active}` : undefined}
+            />
           </div>
-        )}
+          <div
+            ref={scroller}
+            id="model-list"
+            role="listbox"
+            aria-label="Models"
+            className="scroll-stable min-h-0 min-w-0 flex-1 p-1"
+          >
+            {rows.map((item, i) => (
+              <div
+                key={`${item.group.harness.id}:${item.model.value}`}
+                id={`model-row-${i}`}
+                role="option"
+                tabIndex={-1}
+                aria-selected={
+                  item.group.harness.id === groups[0]?.harness.id && item.model.value === current
+                }
+                aria-disabled={!!item.group.blocked}
+                onMouseEnter={() => highlight(i)}
+                onClick={() => !item.group.blocked && onPick(item.group, item.model.value)}
+                className={cx(
+                  "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1",
+                  i === active && "bg-fill",
+                  item.group.blocked && "opacity-45",
+                )}
+              >
+                {searching && (
+                  <HarnessIcon id={item.group.harness.id} name={item.group.harness.name} size={14} />
+                )}
+                <span className="min-w-0 flex-1 truncate text-body">
+                  {item.model.name || item.model.value}
+                </span>
+                {item.group.harness.id === groups[0]?.harness.id && item.model.value === current && (
+                  <Check size={13} className="shrink-0 text-accent" />
+                )}
+              </div>
+            ))}
+            {!rows.length && (
+              <div className="px-2 py-3 text-center text-callout text-fg-muted">
+                {searching
+                  ? "No matching models"
+                  : (groups.find((g) => g.harness.id === provider)?.blocked ?? "No models listed")}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -874,7 +886,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
       // that scrolls. The effort step is a narrower menu.
       className={cx(
         // The card itself never scrolls (the popover's own `overflow-y-auto` would win over a plain
-        // `overflow-hidden`): only the model list does, so the search, the rail and the footer stay put.
+        // `overflow-hidden`): only the model list does, so the header, search and rail stay put.
         "flex flex-col overflow-hidden!",
         traitsStep ? "w-[240px] p-0" : "w-[min(360px,calc(100vw-32px))] p-0",
       )}
