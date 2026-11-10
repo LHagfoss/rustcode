@@ -1113,14 +1113,21 @@ fn rfc3339(at: chrono::DateTime<chrono::Utc>) -> String {
 /// `remote status`: the advertised one, the machine's LAN and mesh addresses,
 /// and its `.local` name. A device keeps them as routes, so it can reconnect
 /// over another network after pairing once.
+///
+/// A listener bound to one address answers on nothing else, so it reports
+/// only the advertised address, as the QR code's `alternates` do.
 fn routes_now(shared: &Shared) -> Vec<HostRoute> {
     let advertised = shared.advertised.borrow().clone();
+    let bind = *shared.bind.borrow();
+    if !bind.is_unspecified() {
+        return host_routes(&advertised, &[], None);
+    }
+    let candidates: Vec<Candidate> = candidate_addresses()
+        .into_iter()
+        .filter(|candidate| bind.is_ipv6() || candidate.address.is_ipv4())
+        .collect();
     let label = super::discovery::host_label(&shared.gateway_id);
-    host_routes(
-        &advertised,
-        &candidate_addresses(),
-        Some(label.trim_end_matches('.')),
-    )
+    host_routes(&advertised, &candidates, Some(label.trim_end_matches('.')))
 }
 
 fn busy(message: impl Into<String>) -> HandshakeResponse {
