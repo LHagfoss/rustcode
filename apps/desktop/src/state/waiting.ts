@@ -80,18 +80,33 @@ export function useWaiting(threadId: string): Waiting | undefined {
   const running = useMemo(() => new Set(turns.split(" ")), [turns]);
   const commands = useApp((s) => s.threads[threadId]?.waiting ?? 0);
   const links = useApp((s) => s.links.links);
+  // The links this thread handed out: the ones `waitingOn` asks about, and no other thread's.
+  const mine = useMemo(() => links.filter((link) => link.orchestrator === threadId), [links, threadId]);
+  // What each of them shows now, as one string: a link reads its target's own status (`stateOf`), so
+  // a delegate starting, asking or finishing changes this even when no turn of this thread's moves.
+  const shown = useApp((s) => mine.map((link) => stateOf(s, link)).join(" "));
+  const states = useMemo(() => statesOf(mine, shown), [mine, shown]);
   return useMemo(
     () =>
       waitingOn({
         id: threadId,
         running: running.has(threadId),
         commands,
-        links,
-        state: (link) => stateOf(useApp.getState(), link),
+        links: mine,
+        state: (link) => states.get(link.id) ?? link.state,
         quiet: subtreeQuiet,
       }),
-    [threadId, running, commands, links],
+    [threadId, running, commands, mine, states],
   );
+}
+
+/**
+ * The links' shown states, read back from the joined reading the hooks watch (`stateOf`, one word
+ * per link in book order): the dependency they need, and the answer per link.
+ */
+function statesOf(links: readonly Link[], shown: string): Map<string, LinkState> {
+  const words = shown.split(" ");
+  return new Map(links.map((link, i) => [link.id, (words[i] as LinkState | undefined) ?? link.state]));
 }
 
 /** What {@link waitingIds} reads of the app: one {@link waitingOn} for every thread at once. */
@@ -148,6 +163,9 @@ export function useWaitingIds(ids: readonly string[]): ReadonlySet<string> {
       .join(" "),
   );
   const links = useApp((s) => s.links.links);
+  // The links' shown states, so a delegate that starts, asks or finishes redraws this set.
+  const shown = useApp((s) => links.map((link) => stateOf(s, link)).join(" "));
+  const states = useMemo(() => statesOf(links, shown), [links, shown]);
   return useMemo(() => {
     const counts = new Map<string, number>();
     for (const row of parked.split(" ")) {
@@ -160,8 +178,8 @@ export function useWaitingIds(ids: readonly string[]): ReadonlySet<string> {
       running,
       parked: counts,
       links,
-      state: (link) => stateOf(useApp.getState(), link),
+      state: (link) => states.get(link.id) ?? link.state,
       quiet: subtreeQuiet,
     });
-  }, [ids, running, parked, links]);
+  }, [ids, running, parked, links, states]);
 }

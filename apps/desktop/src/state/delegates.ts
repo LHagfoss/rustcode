@@ -18,7 +18,7 @@
 
 import { agentActive, type SubagentInfo } from "../acp/rustcode";
 import type { ThreadStatus } from "../acp/v2";
-import { isActive, type Link, type LinkState, MAX_DEPTH } from "./orchestration";
+import { isActive, type Link, type LinkState, liveState, MAX_DEPTH } from "./orchestration";
 import { type CostTotals, emptyCost, formatCost } from "./pricing";
 import { subagentOf, type TranscriptItem } from "./thread";
 
@@ -51,20 +51,13 @@ export type ThreadActivity = ThreadStatus | undefined;
 const settled = (state: AgentState) => state === "done" || state === "failed" || state === "stopped";
 
 /**
- * What a node shows. The thread's own live status wins over the link's record:
- * a link says what it was doing when it settled, while its thread may already
- * be working again (a follow-up, a wake) or waiting for the user. A link the
+ * What a node shows: the thread's own live status wins over the link's record
+ * ({@link liveState}), the same answer the strip and the sidebar read. A link the
  * user stopped, or one that failed, keeps its word even if that thread is busy
- * with something else: this branch's work did not resume. An interrupted link
- * is a book that a restart could not resume (`state/host.ts`), so its thread's
- * own status speaks for it.
+ * with something else: this branch's work did not resume.
  */
 export function agentStateOf(link: Link, activity?: ThreadActivity): AgentState {
-  const recorded = LINK_AGENT_STATE[link.state];
-  if (recorded === "failed" || link.state === "cancelled") return recorded;
-  if (activity === "needs_input") return "needs";
-  if (activity === "running") return "working";
-  return recorded;
+  return LINK_AGENT_STATE[liveState(link, activity)];
 }
 
 /** What the clock of one node counts. */

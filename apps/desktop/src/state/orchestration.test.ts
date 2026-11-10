@@ -1589,6 +1589,13 @@ describe("a group of threads", () => {
     expect(stripLinks(links, new Set(["b", "c", "d"]))).toEqual([working]);
   });
 
+  test("a link a restart severed still has its strip place while its thread works", () => {
+    // The book says interrupted, the thread says running: the row that reads live is the live one.
+    const severed = { ...link("a", "b", "interrupted"), started: true };
+    expect(stripLinks([severed], new Set(["b"]))).toEqual([]);
+    expect(stripLinks([severed], new Set(["b"]), ["working"])).toEqual([severed]);
+  });
+
   test("the done list is one row per thread, newest first, and a count for the rest", () => {
     const links = [
       { ...link("a", "older", "done"), started: true, settledAt: 100 },

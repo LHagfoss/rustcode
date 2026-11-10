@@ -11,6 +11,8 @@ import { modelName } from "../acp/types";
 import { type GitChanges, gitChanges } from "../lib/native";
 import { selectOption } from "../state/harness";
 import { useApp, worktreeOf } from "../state/store";
+import { delegateBranchCount } from "./DelegateTree";
+import { DelegatesSection } from "./OverviewDelegates";
 import { DeliverablesSection } from "./OverviewDeliverables";
 import { DetailsSection } from "./OverviewDetails";
 import { ExecutionLogSection } from "./OverviewLog";
@@ -18,6 +20,7 @@ import { PropertiesSection } from "./OverviewProperties";
 import { PullRequestsSection } from "./OverviewPulls";
 import {
   delegatedIds,
+  FOLDED_EVENT,
   isFolded as isFoldedOf,
   pullBranches,
   readFolded,
@@ -66,6 +69,14 @@ export function ThreadDetails() {
   const changes = useChanges(thread?.cwd, !!thread?.running);
   // Which sections are folded away: the reader's habit, kept for every thread.
   const [folded, setFolded] = useState<SectionId[]>(readFolded);
+  // A row elsewhere (`+2 nested` in the strip's popover) opens a section: the fold is read again.
+  useEffect(() => {
+    const reread = () => setFolded(readFolded());
+    window.addEventListener(FOLDED_EVENT, reread);
+    return () => window.removeEventListener(FOLDED_EVENT, reread);
+  }, []);
+  // The whole branch the thread handed work to, for the Delegates section's count.
+  const delegates = useMemo(() => (id ? delegateBranchCount(id, links) : 0), [id, links]);
   const toggle = (section: SectionId) => {
     setFolded((current) => {
       const next = toggleFolded(current, section);
@@ -101,6 +112,14 @@ export function ThreadDetails() {
           folded={isFolded("properties")}
           onToggle={() => toggle("properties")}
         />
+        {delegates > 0 && (
+          <DelegatesSection
+            threadId={id}
+            count={delegates}
+            folded={isFolded("delegates")}
+            onToggle={() => toggle("delegates")}
+          />
+        )}
         {pullsOn && (
           <PullRequestsSection
             cwd={project}
