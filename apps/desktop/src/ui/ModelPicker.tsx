@@ -422,7 +422,7 @@ function ModelPanel({
         role="toolbar"
         aria-orientation="vertical"
         aria-label="Providers"
-        className="flex w-11 shrink-0 flex-col gap-1 overflow-y-auto border-border border-r p-1 [scrollbar-width:none]"
+        className="flex w-11 shrink-0 flex-col gap-1 overflow-y-auto p-1 [scrollbar-width:none]"
         onKeyDown={(e) => {
           if (e.key === "ArrowDown" || e.key === "ArrowUp") {
             e.preventDefault();
@@ -534,7 +534,7 @@ function ModelPanel({
           )}
         </div>
         {traits && onTraits && (
-          <div className="shrink-0 border-border border-t p-1">
+          <div className="shrink-0 p-1">
             <button
               type="button"
               onClick={onTraits}
@@ -873,7 +873,9 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
       // As tall as the longest list up to the room the window has: the model list is the one part
       // that scrolls. The effort step is a narrower menu.
       className={cx(
-        "flex flex-col overflow-hidden",
+        // The card itself never scrolls (the popover's own `overflow-y-auto` would win over a plain
+        // `overflow-hidden`): only the model list does, so the search, the rail and the footer stay put.
+        "flex flex-col overflow-hidden!",
         traitsStep ? "w-[240px] p-0" : "w-[min(360px,calc(100vw-32px))] p-0",
       )}
       style={{ maxHeight: CARD_MAX }}
