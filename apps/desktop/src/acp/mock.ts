@@ -4799,6 +4799,32 @@ function mockMachine(state: "connected" | "offline" | "needsPairing", addedAt: n
   };
 }
 
+/** A second computer on the same network, with threads of its own (`?machines=paired`). */
+const MOCK_STUDIO = {
+  id: "gw-8e1f4b7a5c2d4e6f",
+  name: "Studio",
+  platform: "macos",
+  route: "192.168.1.20:17879",
+  threads: 2,
+};
+
+/** The Studio row: a Mac on the LAN, connected (or not) like the Linux box. */
+function mockStudio(state: "connected" | "offline", addedAt: number): JsonObject {
+  return {
+    id: MOCK_STUDIO.id,
+    name: MOCK_STUDIO.name,
+    platform: MOCK_STUDIO.platform,
+    main: false,
+    routes: [{ kind: "lan", address: MOCK_STUDIO.route, encrypted: false }],
+    route: { kind: "lan", address: MOCK_STUDIO.route, encrypted: false },
+    state,
+    detail: state === "offline" ? "Not connected. Retrying in 8 s." : null,
+    retryInSecs: state === "offline" ? 8 : null,
+    addedAt: new Date(addedAt).toISOString(),
+    lastConnectedAt: new Date(addedAt).toISOString(),
+  };
+}
+
 /** The saved machines `?machines=` starts with. */
 function mockMachineList(option: MockOptions["machines"]): JsonObject[] {
   const savedAt = Date.now() - 1000 * 60 * 60 * 24 * 6;
@@ -4810,8 +4836,9 @@ function mockMachineList(option: MockOptions["machines"]): JsonObject[] {
     case "revoked":
       return [mockMachine("needsPairing", savedAt)];
     case "paired":
-      // Saved during this session: the row says "just now".
-      return [mockMachine("connected", Date.now())];
+      // Saved during this session: the row says "just now". Two computers, so the sidebar's
+      // machine groups (this one, then each paired machine) are what the mock window shows.
+      return [mockMachine("connected", Date.now()), mockStudio("connected", savedAt)];
     default:
       return [mockMachine("connected", savedAt)];
   }
@@ -4875,7 +4902,7 @@ function mockDiscovered(saved: JsonObject[]): JsonObject[] {
 export class MockMachine {
   constructor(
     private readonly name: string,
-    private readonly threads = MOCK_MACHINE.threads,
+    private readonly threads?: number,
   ) {}
 
   /** The frames this machine sends back for one line the page wrote. */
@@ -4894,6 +4921,27 @@ export class MockMachine {
       return [JSON.stringify({ jsonrpc: "2.0", id, result: { protocolVersion: 1, agentCapabilities: {} } })];
     if (frame.method === "session/list")
       return [JSON.stringify({ jsonrpc: "2.0", id, result: { sessions: this.sessions() } })];
+    if (frame.method === "session/load") return this.load(id, frame.params);
+    if (frame.method === "session/prompt") {
+      const sessionId = str(obj(frame.params)?.sessionId);
+      const reply = [
+        sessionId
+          ? JSON.stringify({
+              jsonrpc: "2.0",
+              method: "session/update",
+              params: {
+                sessionId,
+                update: {
+                  sessionUpdate: "agent_message_chunk",
+                  content: { type: "text", text: `Ran it on ${this.name}. The answer stays there.` },
+                },
+              },
+            })
+          : null,
+        JSON.stringify({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } }),
+      ];
+      return reply.filter((x): x is string => x !== null);
+    }
     return [
       JSON.stringify({
         jsonrpc: "2.0",
@@ -4906,17 +4954,47 @@ export class MockMachine {
     ];
   }
 
+  /** Opening one of its threads: a two-line history, then the answer. */
+  private load(id: number, params: Json | undefined): string[] {
+    const sessionId = str(obj(params)?.sessionId);
+    const title = this.sessions().find((s) => s.sessionId === sessionId)?.title ?? "A thread";
+    const update = (u: JsonObject) =>
+      JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update: u } });
+    return [
+      update({
+        sessionUpdate: "user_message_chunk",
+        content: { type: "text", text: `Run "${title}" on ${this.name}.` },
+      }),
+      update({
+        sessionUpdate: "agent_message_chunk",
+        content: {
+          type: "text",
+          text: `This thread lives on ${this.name}. Its workspace, its files and its shell are there; this window reads and drives it over the machine network.`,
+        },
+      }),
+      JSON.stringify({ jsonrpc: "2.0", id, result: { configOptions: [] } }),
+    ];
+  }
+
   private sessions(): JsonObject[] {
-    const titles = ["Run the tests", "Fix the flaky CI job", "Draft the release notes"];
+    const studio = this.name === MOCK_STUDIO.name;
+    const titles = studio
+      ? ["Ship the mock window shots", "Review the machine groups"]
+      : ["Run the tests", "Fix the flaky CI job", "Draft the release notes"];
     const now = Date.now();
-    return titles.slice(0, this.threads).map((title, index) => ({
-      sessionId: `mock-linux-${index + 1}`,
-      cwd: "/home/lars/code/rustcode",
-      title,
-      updatedAt: now - index * 60_000,
-      harness: "claude",
-      model: "sonnet-5.5",
-    }));
+    return titles
+      .slice(0, this.threads ?? (studio ? MOCK_STUDIO.threads : MOCK_MACHINE.threads))
+      .map((title, index) => ({
+        sessionId: `${studio ? "mock-studio" : "mock-linux"}-${index + 1}`,
+        cwd: studio ? "/Users/lars/code/notes" : "/home/lars/code/rustcode",
+        title,
+        updatedAt: new Date(now - index * 60_000).toISOString(),
+        // The shape `session/list` really carries (`acp/types.ts` `parseSessionList`).
+        _meta: {
+          model: studio ? "gpt-5.5" : "sonnet-5.5",
+          rustcode: { harness: studio ? "codex" : "claude" },
+        },
+      }));
   }
 }
 

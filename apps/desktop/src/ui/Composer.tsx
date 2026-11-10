@@ -121,6 +121,8 @@ import {
   threadHarness,
   toast,
   useApp,
+  useMachineOfThread,
+  useThreadOffline,
 } from "../state/store";
 import { localId, shortAge, type ThreadState } from "../state/thread";
 import { UsageMeter } from "./ComposerUsage";
@@ -432,6 +434,10 @@ export const Composer = memo(function Composer({
   const [dropping, setDropping] = useState(false);
 
   const running = thread?.running ?? false;
+  // A thread on a paired computer that is not connected now is read-only: its turns run there,
+  // and the header and a note over the field say which computer it is (state/store.ts `threadOffline`).
+  const offline = useThreadOffline(thread?.id);
+  const offMachine = useMachineOfThread(thread?.id);
   // What ⌘⏎ would do with what is in the field now, by the same rule the queued row uses: the
   // placeholder says it, so a message that will wait does not read as one that steers.
   const decision = thread ? sendDecisionFor(thread, extras) : undefined;
@@ -796,6 +802,7 @@ export const Composer = memo(function Composer({
 
   const approval = thread?.permissions.find((p) => !p.question);
   const send = (steer: boolean) => {
+    if (offline) return;
     haptic("generic");
     // ⏎ on a queued message being edited saves it in the queue: nothing is sent.
     if (queuedEdit) {
@@ -1079,19 +1086,21 @@ export const Composer = memo(function Composer({
     });
   };
 
-  const placeholder = queuedEdit
-    ? "Edit the queued message: ⏎ saves it in the queue, esc leaves it…"
-    : extras.command
-      ? extras.command.description || "Arguments…"
-      : approval
-        ? "Send a message to decline and redirect the agent…"
-        : running
-          ? decision?.action === "steer"
-            ? `⏎ queues it for the next turn, ${formatBinding("mod+enter")} steers this one…`
-            : decision?.action === "interruptRestart"
-              ? "⏎ stops this turn and starts a new one…"
-              : "⏎ queues it for the next turn…"
-          : `Message ${speakingTo}…`;
+  const placeholder = offline
+    ? `Not connected${offMachine ? ` to ${offMachine}` : ""}. This thread is read-only until it is back…`
+    : queuedEdit
+      ? "Edit the queued message: ⏎ saves it in the queue, esc leaves it…"
+      : extras.command
+        ? extras.command.description || "Arguments…"
+        : approval
+          ? "Send a message to decline and redirect the agent…"
+          : running
+            ? decision?.action === "steer"
+              ? `⏎ queues it for the next turn, ${formatBinding("mod+enter")} steers this one…`
+              : decision?.action === "interruptRestart"
+                ? "⏎ stops this turn and starts a new one…"
+                : "⏎ queues it for the next turn…"
+            : `Message ${speakingTo}…`;
 
   // The drawer over the box: the commands `/` is looking for, the threads `#` is, or the agents and
   // files `@` is. A token that matches nothing still opens it and says so, where the field is about
@@ -1484,6 +1493,7 @@ export const Composer = memo(function Composer({
                 rows={1}
                 placeholder={placeholder}
                 aria-label="Message"
+                readOnly={offline}
                 {...noTextHelpers}
                 style={fadeStyle}
                 className={cx(
@@ -1567,7 +1577,7 @@ export const Composer = memo(function Composer({
                   <button
                     type="button"
                     aria-label="Send"
-                    disabled={!canSend || status !== "ready" || (!thread && !projectCwd)}
+                    disabled={!canSend || offline || status !== "ready" || (!thread && !projectCwd)}
                     onPointerEnter={(e) => !e.currentTarget.disabled && haptic("alignment")}
                     onClick={() => send(false)}
                     className="flex size-9 items-center justify-center rounded-full bg-fg text-bg transition-[background-color,opacity] duration-150 enabled:hover:bg-fg/85 disabled:bg-fill-strong disabled:text-fg-muted sm:size-8"
@@ -1803,6 +1813,7 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
  */
 function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
   const sessions = useApp((s) => s.sessions);
+  const threadMachine = useMachineOfThread(thread?.id);
   const [filter, setFilter] = useState("");
   const sources = useMemo(
     () => sessions.map((s) => ({ cwd: s.cwd, worktree: s.worktree, updatedAt: s.updatedAt })),
@@ -1846,7 +1857,7 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
       }
     >
       {thread ? (
-        <FolderActions cwd={cwd} />
+        <FolderActions cwd={cwd} remote={!!threadMachine} />
       ) : (
         <>
           {/* The folders scroll under a search that filters them; "Choose Folder…" stays pinned
@@ -1901,17 +1912,22 @@ function FolderMenu({ thread, cwd }: { thread?: ThreadState; cwd: string }) {
   );
 }
 
-/** What the folder of an existing thread offers. */
-function FolderActions({ cwd }: { cwd: string }) {
+/**
+ * What the folder of an existing thread offers. A thread on another computer has its folder there:
+ * this one can copy the path, but neither Finder nor a terminal on this Mac can open it.
+ */
+function FolderActions({ cwd, remote }: { cwd: string; remote?: boolean }) {
   return (
     <>
       <div className="truncate px-3 pt-1 pb-1.5 text-caption text-fg-muted">
         {middleEllipsis(cwd, PATH_CHARS + 10)}
       </div>
-      <CardMenuItem onSelect={() => openPath(cwd)}>
-        <FolderOpen size={13} className="text-fg-muted" /> Open in {fileManagerName()}
-      </CardMenuItem>
-      {canOpenTerminal() && (
+      {!remote && (
+        <CardMenuItem onSelect={() => openPath(cwd)}>
+          <FolderOpen size={13} className="text-fg-muted" /> Open in {fileManagerName()}
+        </CardMenuItem>
+      )}
+      {!remote && canOpenTerminal() && (
         <CardMenuItem onSelect={() => void openTerminalAt(cwd).catch((e) => toast(String(e), "error"))}>
           <SquareTerminal size={13} className="text-fg-muted" /> Open in Terminal
         </CardMenuItem>

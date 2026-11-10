@@ -183,6 +183,11 @@ export function initializeParams(
 
 export interface SessionSummary {
   id: string;
+  /**
+   * The machine it runs on (`state/threadKeys.ts`): absent on this computer, the
+   * machine's id when its list came through that machine's own connection.
+   */
+  host?: string;
   cwd: string;
   title?: string;
   updatedAt?: number;
