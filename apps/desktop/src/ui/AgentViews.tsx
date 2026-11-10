@@ -274,7 +274,12 @@ export function AgentRow({
   const bottom = detail ?? status ?? AGENT_LABEL[state];
   // The row's own text starts where the composer's does: the card's 4px and the row's 12px.
   const rowClass = "flex w-full min-w-0 flex-1 items-center gap-2 rounded-lg py-1.5 pr-2 pl-3 text-left";
+  // A row that opens draws its way in as its own control: the arrow answers the pointer and the
+  // keyboard, and says in words where it goes. A row that folds (a subagent and its steps) says
+  // what the arrow does in its own words, and still turns it as it opens.
+  const opens = onClick !== undefined && expanded === undefined;
   const chevron = onClick !== undefined || expanded !== undefined;
+  const chevronWord = opens ? `Open ${title}` : expanded ? "Hide the steps" : "Show the steps";
   const body = (
     <>
       <AgentAvatar harness={harness} state={state} />
@@ -294,6 +299,14 @@ export function AgentRow({
           )}
         >
           {word}
+        </span>
+      )}
+      {/* The clock is part of the row the pointer opens, not a dead patch beside it. Its slot is
+          wide enough for any length it takes and right-aligned, so a second ticking over never
+          shifts the arrow beside it. */}
+      {elapsed && (
+        <span className="flex min-w-10 shrink-0 items-center justify-end text-caption text-fg-faint tabular">
+          {elapsed}
         </span>
       )}
     </>
@@ -319,20 +332,27 @@ export function AgentRow({
           </button>
         )}
       </Tooltip>
-      {/* How long, the way in, and the control beside it, in one cluster: at 4px apart they read as
-          the row's own tail instead of two islands at the card's edge. */}
-      {(elapsed || chevron || action) && (
-        <span className="flex shrink-0 items-center gap-1 pr-0.5 pl-1">
-          {elapsed && <span className="shrink-0 text-caption text-fg-faint tabular">{elapsed}</span>}
-          {chevron && (
-            <ChevronRight
-              size={14}
-              aria-hidden
-              className={cx(
-                "shrink-0 text-fg-faint transition-transform duration-200 group-hover:text-fg",
-                expanded && "rotate-90",
-              )}
-            />
+      {/* The way in and the control beside it, in one cluster: 4px apart, after the row's own
+          right padding, so they read as the row's tail rather than two islands at the card's edge.
+          The arrow is a control like the one beside it, never a mark that ignores a press. */}
+      {(chevron || action) && (
+        <span className="flex shrink-0 items-center justify-end gap-1 pr-0.5">
+          {chevron && onClick !== undefined && (
+            <Tooltip label={chevronWord}>
+              <button
+                type="button"
+                aria-label={chevronWord}
+                aria-expanded={expanded}
+                onClick={onClick}
+                className="flex size-[22px] shrink-0 items-center justify-center rounded-sm text-fg-faint hover:bg-fill hover:text-fg active:bg-fill-strong"
+              >
+                <ChevronRight
+                  size={14}
+                  aria-hidden
+                  className={cx("transition-transform duration-200", expanded && "rotate-90")}
+                />
+              </button>
+            </Tooltip>
           )}
           {action}
         </span>
