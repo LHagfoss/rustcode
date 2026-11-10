@@ -154,6 +154,26 @@ describe("the needs-you inbox", () => {
       ["delegate", "child", "The delegated one"],
     ]);
   });
+
+  test("a thread the user snoozed waits until its snooze is over", () => {
+    const read = {
+      sessions,
+      threads: {
+        one: { permissions: [request("one", 1, NOW - 60_000)] },
+        two: { permissions: [], items: [{ kind: "turnEnd", outcome: "failed", at: NOW - 500 }] },
+      },
+      failed: { one: NOW - 1_000 },
+      links: [] as Link[],
+    };
+    expect(deriveInbox(read, NOW).map((item) => item.threadId)).toEqual(["two", "one", "one"]);
+    // Both threads sleep: nothing of theirs is a row, and the sidebar's count goes with them.
+    const asleep = deriveInbox({ ...read, snoozed: { one: NOW + 100, two: NOW + 100 } }, NOW);
+    expect(asleep).toEqual([]);
+    expect(showsNeedsYou(asleep)).toBe(false);
+    // One wakes and keeps its request: its own row is back, the other's still waits.
+    const partly = deriveInbox({ ...read, snoozed: { two: NOW + 100 } }, NOW);
+    expect(partly.every((item) => item.threadId === "one")).toBe(true);
+  });
 });
 
 describe("the sidebar's Needs you row", () => {

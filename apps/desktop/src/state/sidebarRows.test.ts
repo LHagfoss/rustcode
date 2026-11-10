@@ -370,16 +370,21 @@ describe("which section a thread is drawn under", () => {
     expect(place({ needs: true })).toBe("threads");
     expect(place({ needs: true, working: true })).toBe("threads");
     expect(place({ needs: true, aged: true })).toBe("threads");
-    expect(place({ needs: true, snoozed: true })).toBe("threads");
     expect(place({ needs: true, settled: true, fresh: true })).toBe("threads");
     expect(place({ needs: true, layout: "shelf" })).toBe("threads");
   });
 
-  test("a snoozed thread sleeps until it needs you or works", () => {
+  test("a snoozed thread sleeps through a turn, a request and a finish", () => {
     expect(place({ snoozed: true })).toBe("snoozed");
-    expect(place({ snoozed: true, needs: true })).toBe("threads");
-    expect(place({ snoozed: true, working: true })).toBe("threads");
-    expect(place({ snoozed: true, working: true, layout: "shelf" })).toBe("working");
+    // What it does in the background is not a reason to come back: the snooze says where it is.
+    expect(place({ snoozed: true, needs: true })).toBe("snoozed");
+    expect(place({ snoozed: true, working: true })).toBe("snoozed");
+    expect(place({ snoozed: true, working: true, layout: "shelf" })).toBe("snoozed");
+    expect(place({ snoozed: true, fresh: true })).toBe("snoozed");
+    expect(place({ snoozed: true, needs: true, working: true, fresh: true })).toBe("snoozed");
+    // A pinned thread is still where the user put it, and a settled one stays settled.
+    expect(place({ snoozed: true, pinned: true })).toBe("pinned");
+    expect(place({ snoozed: true, settled: true })).toBe("settled");
   });
 
   test("a thread untouched for days is Settled, a freshly finished one is not", () => {

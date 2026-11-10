@@ -58,6 +58,11 @@ export interface InboxRead {
   archived?: Readonly<Record<string, number>>;
   /** The link book, for delegates that ask for the user. */
   links: readonly Link[];
+  /**
+   * Threads asleep until a time (state/store.ts `snoozed`): the user put them away, so a request,
+   * a failure or a delegate of theirs is not a row until the snooze ends.
+   */
+  snoozed?: Readonly<Record<string, number>>;
   /** Rows put away by hand, which stay away until their thread asks again. */
   dismissed?: InboxDismissals;
 }
@@ -187,9 +192,13 @@ export function deriveInbox(read: InboxRead, now = Date.now()): InboxItem[] {
   }
 
   // A row the user put away is not one to answer: it leaves the list, and with it the
-  // sidebar's count, until the thread asks again (state/inboxDismissed.ts).
+  // sidebar's count, until the thread asks again (state/inboxDismissed.ts). A row of a thread the
+  // user snoozed is not one either: it waits until the snooze ends, then takes its place again.
   const dismissed = read.dismissed ?? {};
-  return items.filter((item) => !isDismissed(dismissed, item)).sort((a, b) => b.at - a.at);
+  const asleep = read.snoozed ?? {};
+  return items
+    .filter((item) => !(item.threadId in asleep) && !isDismissed(dismissed, item))
+    .sort((a, b) => b.at - a.at);
 }
 
 /** Consecutive rows from one thread, under the header that names it once. */

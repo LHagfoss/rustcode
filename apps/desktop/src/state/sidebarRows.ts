@@ -337,12 +337,15 @@ export interface Placement {
 
 /**
  * The section a thread is drawn under. A settled thread never sits under Pinned, whatever it was
- * pinned as (the pin returns when it is unsettled); a thread that needs you or works stays out of
- * the shelves that would hide it.
+ * pinned as (the pin returns when it is unsettled); a thread asleep after a snooze stays in Snoozed
+ * whatever it does.
  *
  * Pinned wins over what asks you and over Working, so a pinned thread stays where the user put it
- * and says what it is doing in its chip, rather than being drawn twice. Everything that asks you
- * or works leaves Snoozed and Settled at once, and comes back when it is answered or done.
+ * and says what it is doing in its chip, rather than being drawn twice. A snoozed thread is the
+ * same bargain with the user, and a stronger one: it works in the background, waits on an approval
+ * or a question, and finishes there without coming back to the list, because its snooze is what
+ * says where it is. It comes back when its snooze ends, with the state it reached then, and
+ * everything that asks you then is drawn as it always was.
  *
  * The default layout draws one Threads list, so what works and what asks you stay in it and the
  * row's chip is the whole of either state. The shelf layout still gives Working its own shelf at
@@ -352,8 +355,9 @@ export function placeThread(p: Placement): SectionId {
   const busy = p.needs || p.working;
   if (p.settled && !busy && !p.fresh) return "settled";
   if (p.pinned) return "pinned";
+  // Asleep: nothing it does moves it out of the shelf the user put it in.
+  if (p.snoozed) return "snoozed";
   if (p.needs) return "threads";
-  if (p.snoozed && !busy) return "snoozed";
   if (p.working) return p.layout === "shelf" ? "working" : "threads";
   if ((p.settled || p.aged) && !busy && !p.fresh) return "settled";
   return "threads";

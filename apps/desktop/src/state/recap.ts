@@ -61,6 +61,8 @@ export interface RecapRead {
   threads: Readonly<Record<string, { title?: string }>>;
   /** When the user left. */
   since: number;
+  /** Threads asleep until a time: what they do is not in the card until their snooze ends. */
+  snoozed?: Readonly<Record<string, number>>;
 }
 
 function titleOf(read: RecapRead, id: string): string {
@@ -73,8 +75,9 @@ function projectOf(read: RecapRead, id: string): string {
 }
 
 function sinceGroup(read: RecapRead, at: Readonly<Record<string, number>>, from: number): RecapThread[] {
+  const asleep = read.snoozed ?? {};
   return Object.entries(at)
-    .filter(([, when]) => when >= from)
+    .filter(([threadId, when]) => when >= from && !(threadId in asleep))
     .map(([threadId, when]) => ({
       threadId,
       title: titleOf(read, threadId),

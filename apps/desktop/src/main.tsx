@@ -76,6 +76,10 @@ if (!catalog)
 // `?queuePreview` in a dev browser with the mock: a thread's queue, for screenshots (state/queuePreview.ts).
 if (import.meta.env.DEV) void import("./state/queuePreview").then((m) => m.installQueuePreview());
 
+// `?snoozed=working` in a dev browser with the mock: a thread that works while it sleeps
+// (state/snoozePreview.ts).
+if (import.meta.env.DEV) void import("./state/snoozePreview").then((m) => m.installSnoozePreview());
+
 // A draft written in the last moment before the window closes still reaches app storage.
 window.addEventListener("beforeunload", () => store.flushDrafts());
 

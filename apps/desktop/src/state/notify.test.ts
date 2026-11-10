@@ -7,6 +7,7 @@ import {
   type NotifyContext,
   type NotifyEvent,
   WARMUP_MS,
+  wakeEvent,
   warmingUp,
 } from "./notify";
 
@@ -61,6 +62,20 @@ describe("which moments notify", () => {
   test("notifications turned off says nothing, whatever the window does", () => {
     const gate = createNotifyGate();
     expect(gate.take(event(), context({ enabled: false, windowFocused: false }))).toBeNull();
+  });
+
+  test("a snoozed thread says nothing, and keeps what it has to say for later", () => {
+    const gate = createNotifyGate();
+    const behind = context({ windowFocused: false });
+    const asleep = context({ windowFocused: false, snoozed: { a: 2_000 } });
+    // A turn that ends, a request that arrives: neither is news while it sleeps.
+    expect(gate.take(event({ kind: "finished", key: "1000" }), asleep)).toBeNull();
+    expect(gate.take(event(), asleep)).toBeNull();
+    // Its snooze is over: the same event is said once, then never again.
+    expect(gate.take(event(), behind)?.kind).toBe("approval");
+    expect(gate.take(event(), behind)).toBeNull();
+    // Another thread is unaffected by its sleep.
+    expect(gate.take(event({ threadId: "b" }), asleep)).not.toBeNull();
   });
 });
 
@@ -153,5 +168,44 @@ describe("the Dock badge", () => {
 
   test("nothing needing the user clears it", () => {
     expect(badgeCount({ threads: { a: { permissions: [] } }, finished: {}, failed: {} })).toBe(0);
+  });
+
+  test("a snoozed thread is not counted until its snooze ends", () => {
+    const state = {
+      threads: { a: { permissions: [{}] }, b: { permissions: [] } },
+      finished: { b: 10 },
+      failed: { c: 20 },
+    };
+    expect(badgeCount({ ...state, snoozed: { a: 5, b: 5 } })).toBe(1);
+    expect(badgeCount({ ...state, snoozed: { a: 5, b: 5, c: 5 } })).toBe(0);
+  });
+});
+
+describe("what a thread that slept has to say", () => {
+  const read = { threadId: "a", title: "Fix the sidebar" };
+
+  test("one thing at most: a request first, then a failure, then a finish", () => {
+    expect(
+      wakeEvent({
+        ...read,
+        request: { rpcId: 7 },
+        finishedAt: 1_000,
+        failedAt: 2_000,
+      }),
+    ).toMatchObject({ kind: "approval", key: "7" });
+    expect(wakeEvent({ ...read, request: { rpcId: 8, question: { text: "Which runner?" } } })).toMatchObject({
+      kind: "question",
+      key: "8",
+      detail: "Which runner?",
+    });
+    expect(wakeEvent({ ...read, failedAt: 2_000, finishedAt: 1_000 })).toMatchObject({
+      kind: "failed",
+      key: "2000",
+    });
+    expect(wakeEvent({ ...read, finishedAt: 1_000 })).toMatchObject({ kind: "finished", key: "1000" });
+  });
+
+  test("a quiet return says nothing at all", () => {
+    expect(wakeEvent(read)).toBeNull();
   });
 });

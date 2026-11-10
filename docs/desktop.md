@@ -721,7 +721,14 @@ composer's keys stay outside the table.
   Settled holds the threads marked Settled and threads untouched for three
   days unless they wait for review (`idleSettled`), folded by default, 5 at a
   time then *Show 25 more*. A thread that works, waits or needs you stays in
-  the list and says so in its row. The default row is the roomy two-line one,
+  the list and says so in its row, unless it is Snoozed: a sleeping thread
+  keeps its place in the Snoozed shelf while its turn runs, while it waits on an
+  approval or a question, and after it finishes, and none of that marks it
+  unread, counts in *Needs you*, badges the Dock or notifies the system. It
+  comes back when its snooze ends, or when you write in it, with the state it
+  reached then and one notification at most (`snoozed` in the store;
+  `state/store.ts` `wakeSnoozed`, `state/sidebarRows.ts` `placeThread`). The
+  default row is the roomy two-line one,
   `py-2` with `rounded-xl` and 2px between rows: the 14px mark of where it
   runs, its title, and one slot at the right, as wide as what it says — the
   age (`5m`, `3h`), the running turn's spinner and clock, *Waiting*, *Needs
@@ -866,11 +873,15 @@ composer's keys stay outside the table.
   (on by default; a toast says it there instead), and each event once — an
   approval by its request id, a turn's end by its time — so a state seen twice
   says nothing twice and a launch says nothing about the past. A click brings
-  the window forward and opens that thread. Settings › General › *System
+  the window forward and opens that thread. A thread the user snoozed is out of
+  all of it until its snooze ends: the gate is told which threads sleep, so a
+  request or a finished turn on one says nothing now and says its one thing when
+  the snooze ends (`wakeEvent`, `wakeSnoozed`). Settings › General › *System
   notifications* (on by default) turns them off; the system's own permission
   is asked the first time one is due, from the shell, so nothing on startup
   prompts. The Dock badge counts the threads that need the user, the unread
-  finished ones and the failed ones, and clears as they are opened. The
+  finished ones and the failed ones, and clears as they are opened; a sleeping
+  thread is counted when it wakes, not before. The
   shell shows them: the page calls `notify_show`, `notify_permission` and
   `notify_badge`, and the webview's capabilities gain no notification
   permission.

@@ -1,8 +1,10 @@
 // System notifications and the Dock badge: a thread that needs the user (an
 // approval, a question, a usage limit, a failed turn) or that finished while
 // they looked elsewhere gets one notification, and the Dock shows how many
-// threads want them. The shell (`src-tauri/src/notify.rs`) shows them, so the
-// permission the OS asks for belongs to the app, not to the page.
+// threads want them. A thread asleep after a snooze is neither: it says its one
+// thing when its snooze ends (state/store.ts `wakeSnoozed`). The shell
+// (`src-tauri/src/notify.rs`) shows them, so the permission the OS asks for
+// belongs to the app, not to the page.
 
 import { isTauri } from "../acp/transport";
 import { shellCall } from "../lib/shell";
@@ -35,6 +37,11 @@ export interface NotifyContext {
   windowFocused: boolean;
   /** The thread on screen. */
   onScreen: string | null;
+  /**
+   * Threads asleep until a time (state/store.ts `snoozed`): the user put them away, so nothing they
+   * do is news before their snooze ends. Absent or empty when nothing sleeps.
+   */
+  snoozed?: Readonly<Record<string, number>>;
 }
 
 /** The line under the title: short, and never the whole question. */
@@ -74,6 +81,9 @@ export function createNotifyGate() {
     /** The event to show now, or null when it is a repeat or the moment is wrong. */
     take(event: NotifyEvent, context: NotifyContext): NotifyEvent | null {
       if (!context.enabled) return null;
+      // Asleep: the user asked not to hear from it. Nothing is spent here, so the one thing it has
+      // to say is said when its snooze ends (state/store.ts `wakeSnoozed`).
+      if (context.snoozed && event.threadId in context.snoozed) return null;
       // The window in front, on that thread: the screen already says it.
       if (context.windowFocused && context.onScreen === event.threadId) return null;
       // ...and with this setting, the window in front at all: a toast is enough there.
@@ -100,6 +110,8 @@ export interface NoticeState {
   systemNotifications: boolean;
   notificationsBackgroundOnly: boolean;
   selectedId: string | null;
+  /** Threads asleep until a time; a caller reading only part of the state may leave it out. */
+  snoozed?: Readonly<Record<string, number>>;
 }
 
 /** The context one event is judged in, from the store's slice and the window. */
@@ -109,7 +121,45 @@ export function contextOf(state: NoticeState, focused = windowFocused()): Notify
     backgroundOnly: state.notificationsBackgroundOnly,
     windowFocused: focused,
     onScreen: state.selectedId,
+    snoozed: state.snoozed,
   };
+}
+
+/**
+ * The one thing a thread that slept has to say now its snooze is over, or null when it has
+ * nothing: what it waits on the user for first, else a turn that ended unseen. Any event is at
+ * most one, so a thread coming back cannot stack a request and a finish into two notifications.
+ *
+ * A thread that slept through nothing that concerns the user simply returns, which is the common
+ * case: its turn went on or ended fine, and the row says so in the list.
+ */
+export function wakeEvent(read: {
+  threadId: string;
+  title: string;
+  /** The oldest request it waits on, if one does. */
+  request?: { rpcId: number | string; question?: { text: string } };
+  /** When a turn of its own finished unseen (`finished`), if one did. */
+  finishedAt?: number;
+  /** When a turn of its own failed unseen (`failed`), if one did. */
+  failedAt?: number;
+}): NotifyEvent | null {
+  if (read.request) {
+    const question = read.request.question;
+    return {
+      threadId: read.threadId,
+      kind: question ? "question" : "approval",
+      key: String(read.request.rpcId),
+      title: read.title,
+      detail: question?.text,
+    };
+  }
+  if (read.failedAt !== undefined) {
+    return { threadId: read.threadId, kind: "failed", key: String(read.failedAt), title: read.title };
+  }
+  if (read.finishedAt !== undefined) {
+    return { threadId: read.threadId, kind: "finished", key: String(read.finishedAt), title: read.title };
+  }
+  return null;
 }
 
 /** Whether the app's window has the keyboard: a notification would only repeat the screen. */
@@ -171,12 +221,18 @@ export interface BadgeState {
   threads: Record<string, { permissions: readonly unknown[] }>;
   finished: Record<string, number>;
   failed: Record<string, number>;
+  /** Threads asleep until a time: they are not counted until their snooze ends. */
+  snoozed?: Readonly<Record<string, number>>;
 }
 
+/** The threads the Dock counts, once each: what asks you and what ended unseen, never a sleeping one. */
 export function badgeCount(state: BadgeState): number {
-  const ids = new Set<string>([...Object.keys(state.failed), ...Object.keys(state.finished)]);
+  const asleep = state.snoozed ?? {};
+  const ids = new Set<string>(
+    [...Object.keys(state.failed), ...Object.keys(state.finished)].filter((id) => !(id in asleep)),
+  );
   for (const [id, thread] of Object.entries(state.threads)) {
-    if (thread.permissions.length > 0) ids.add(id);
+    if (thread.permissions.length > 0 && !(id in asleep)) ids.add(id);
   }
   return ids.size;
 }

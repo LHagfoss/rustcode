@@ -654,9 +654,14 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   one project), New thread, Add project folder, Open Settings, Open Git, Open
   Usage and Statistics, each with the shortcut it has. A snoozed row shows when
   it wakes where the age goes. Snooze (presets, or Custom…) is a submenu of the
-  row's menu; a thread comes back on time, marked unread, or sooner when it
-  needs you, works or is messaged. Section and project headers are one 32px
-  line of `text-body` (`14px`) in `fg-muted`, with 14px folder icons: the label,
+  row's menu. A snoozed thread keeps its place in the shelf until its time is
+  up: it works, waits on an approval or a question, and finishes there without
+  coming back to the list, counting in Needs you, badging the Dock or notifying
+  the system, and nothing it does marks it unread. It comes back when its snooze
+  ends — or when the user writes in it — with the state it reached then, and one
+  notification at most, for a request that waits or a turn that ended unseen.
+  Section and project headers are one 32px line of `text-body` (`14px`) in
+  `fg-muted`, with 14px folder icons: the label,
   a dot for what a folded group hides, a count only while it is folded, then
   the chevron.
 - **Sidebar rows:** the default is the roomy two-line row, `py-2` with
