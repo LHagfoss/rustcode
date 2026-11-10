@@ -866,7 +866,11 @@ describe("Claude Code subagents", () => {
     // The turn ending, and a task ending later, leave the row as it answered.
     t = finishTurn(t, "completed");
     t = applyUpdate(t, result({ toolCallId: "b1", status: "completed" }));
-    expect(t.items.find((i) => i.id === "b1")).toMatchObject({ status: "completed", background: "command" });
+    expect(t.items.find((i) => i.id === "b1")).toMatchObject({
+      status: "completed",
+      background: "command",
+      output: "Command running in background with ID: bc82qcgu4.",
+    });
   });
 
   test("a backgrounded command that failed is a failed row, not a spinner", () => {
