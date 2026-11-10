@@ -82,8 +82,8 @@ Windows adapter names `NetBird`, `Tailscale`, `WireGuard Tunnel`,
 `ZeroTier One`); a private address on one of them is an overlay address, and on
 Wi-Fi or Ethernet it is the LAN. A `100.64.0.0/10` address on Wi-Fi or
 Ethernet is a carrier's CGNAT address, not a mesh one: it is never a candidate,
-never bound, and never reported. `--advertise` still replaces the address
-pairing details name.
+never bound, and never reported as a route. `--advertise` still replaces the
+address pairing details name.
 
 To prefer the mesh instead (stable across Wi-Fi changes, reachable off-LAN),
 set `[remote] prefer_interface = "netbird"` — or
@@ -741,8 +741,9 @@ next start installs it with the current environment.
   and a paired client learns it from `routes` and tries it after the LAN
   (see [Machines](#machines)). Nothing has to be typed. If the overlay still
   does not answer, `rustcode machines list` says what to check on that machine:
-  NetBird's **Block inbound connections**, or an access policy that allows
-  TCP `17879` between the two machines.
+  NetBird's **Block inbound connections**, a NetBird access policy that allows
+  TCP `17879` between the two machines, Tailscale's ACLs or grants for that
+  port, or ZeroTier's flow rules.
 - **A fixed setup:** `rustcode remote serve --bind <netbird ip> --advertise <host>.netbird.cloud`
   (or the same two values as `[remote] bind` and `advertise`) pins the mesh
   address and a name that never changes. On Linux `--prefer-interface netbird`

@@ -14,7 +14,7 @@
 //! drops re-orders itself without any extra state.
 
 use crate::protocol::ErrorCode;
-use crate::registry::{Route, RouteKind};
+use crate::registry::{OverlayProvider, Route, RouteKind};
 use crate::transport::port_or_default;
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
@@ -246,29 +246,39 @@ pub fn route_hint(in_use: &Route, failures: &[RouteFailure]) -> Option<String> {
 
 fn overlay_hint(route: &Route) -> String {
     let port = port_or_default(&route.address);
-    match route.provider {
-        Some(provider) => {
-            let name = provider.display_name();
-            format!(
-                "Not reachable over {name} ({address}). On that machine, check that {name} allows \
-                 inbound connections and that an access policy allows TCP {port} between the two \
-                 machines.",
-                address = route.address,
-            )
-        }
-        None => format!(
+    let Some(provider) = route.provider else {
+        return format!(
             "Not reachable over the VPN ({address}). On that machine, check that the VPN allows \
              inbound connections and that a firewall or access policy allows TCP {port} between \
              the two machines.",
             address = route.address,
+        );
+    };
+    let name = provider.display_name();
+    // Each product has its own control for this. Naming NetBird's inbound
+    // toggle on Tailscale would send the user looking for a setting that does
+    // not exist there.
+    let check = match provider {
+        OverlayProvider::Netbird => format!(
+            "check that NetBird allows inbound connections and that an access policy allows TCP \
+             {port} between the two machines"
         ),
-    }
+        OverlayProvider::Tailscale => {
+            format!("check that Tailscale's ACLs or grants allow TCP {port} to that machine")
+        }
+        OverlayProvider::Zerotier => {
+            format!("check that ZeroTier's flow rules allow TCP {port} to that machine")
+        }
+    };
+    format!(
+        "Not reachable over {name} ({address}). On that machine, {check}.",
+        address = route.address,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registry::OverlayProvider;
     use std::collections::HashMap;
 
     fn lan(address: &str) -> Route {
@@ -541,6 +551,41 @@ mod tests {
              NetBird allows inbound connections and that an access policy allows TCP 17879 \
              between the two machines."
         );
+    }
+
+    #[test]
+    fn a_tailscale_hint_names_tailscales_own_control() {
+        let hint = route_hint(
+            &lan("192.168.1.20:17879"),
+            &[RouteFailure {
+                route: overlay("100.101.1.2:17879", Some(OverlayProvider::Tailscale)),
+                reason: "timed out".into(),
+                refusal: None,
+            }],
+        )
+        .expect("a hint");
+        assert!(
+            hint.contains("Tailscale's ACLs or grants allow TCP 17879"),
+            "{hint}"
+        );
+        assert!(
+            !hint.contains("inbound connections"),
+            "NetBird's toggle does not exist on Tailscale: {hint}"
+        );
+    }
+
+    #[test]
+    fn a_zerotier_hint_names_flow_rules() {
+        let hint = route_hint(
+            &lan("192.168.1.20:17879"),
+            &[RouteFailure {
+                route: overlay("10.147.20.5:17879", Some(OverlayProvider::Zerotier)),
+                reason: "timed out".into(),
+                refusal: None,
+            }],
+        )
+        .expect("a hint");
+        assert!(hint.contains("ZeroTier's flow rules"), "{hint}");
     }
 
     #[test]

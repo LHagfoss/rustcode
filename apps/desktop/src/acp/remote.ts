@@ -157,15 +157,23 @@ export interface RemotePairing {
 }
 
 /** How a device reaches this Mac over one route. */
-export type RemoteRouteKind = "lan" | "vpn" | "hostname" | "public" | "unknown";
+export type RemoteRouteKind = "lan" | "overlay" | "vpn" | "hostname" | "public" | "unknown";
 
-const ROUTE_KINDS: readonly RemoteRouteKind[] = ["lan", "vpn", "hostname", "public"];
+/** `vpn` is what an engine before overlay networks called an overlay route. */
+const ROUTE_KINDS: readonly RemoteRouteKind[] = ["lan", "overlay", "vpn", "hostname", "public"];
+
+/** The mesh product an overlay address belongs to, when the interface names one. */
+export type OverlayProvider = "netbird" | "tailscale" | "zerotier";
+
+const OVERLAY_PROVIDERS: readonly OverlayProvider[] = ["netbird", "tailscale", "zerotier"];
 
 /** One address the phone can dial this Mac at, as the gateway reports it. */
 export interface RemoteRoute {
   /** `host:port`. */
   address: string;
   kind: RemoteRouteKind;
+  /** Which overlay product the address is on; absent on LAN, public and older engines. */
+  provider?: OverlayProvider;
 }
 
 /** Where the gateway listens and who is on it. */
@@ -432,7 +440,9 @@ function parseRoutes(value: Json | undefined): RemoteRoute[] {
         if (!route || !address) return undefined;
         const received = str(route.kind);
         const kind = ROUTE_KINDS.find((known) => known === received) ?? "unknown";
-        return { address, kind };
+        const receivedProvider = str(route.provider);
+        const provider = OVERLAY_PROVIDERS.find((known) => known === receivedProvider);
+        return provider ? { address, kind, provider } : { address, kind };
       })
       .filter((route): route is RemoteRoute => route !== undefined) ?? []
   );
