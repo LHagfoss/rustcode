@@ -704,9 +704,9 @@ export async function refreshServerService(): Promise<void> {
 }
 
 /**
- * Install the server as a background service: the shared engine threads run in
- * stays up when the app closes, and starts when you log in. The app's own
- * threads stay in its engine until the app is switched to the server. It is the
+ * Install the server as a background service: it stays up when the app closes
+ * and starts when you log in, so threads that live in it keep running. The
+ * app's own threads stay in its engine until the app is switched to the server. It is the
  * CLI's own `rustcode server install`, so a development build is refused there
  * with the reason shown here. Answers whether it ended up installed.
  */
@@ -733,14 +733,14 @@ export async function installServer(): Promise<boolean> {
 
 /**
  * Ask before installing the server, in the words that say what it does: it is
- * the shared engine threads run in, it stays up when the app closes, and it
- * starts when you log in. The app's own threads are still its engine's.
+ * where threads can live instead of the app, it stays up when the app closes,
+ * and it starts when you log in. The app's own threads are still its engine's.
  */
 export function askInstallServer(): void {
   askConfirm({
     title: "Install the RustCode server?",
     message:
-      "The RustCode server is the engine threads run in: as a background service it stays up when the app closes, and it starts when you log in. The threads this app starts itself still run in the app's engine and end with it, until RustCode uses the server. Threads, settings and pairings stay as they are.",
+      "The RustCode server is where threads can live instead of the app: as a background service it stays up when the app closes and starts when you log in, so those threads keep running. The threads this app starts itself still run in its own engine and end with it, until RustCode uses the server. Threads, settings and pairings stay as they are.",
     action: "Install",
     run: () => void installServer(),
   });

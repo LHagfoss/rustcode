@@ -153,7 +153,7 @@ kept.
 
 | In the app | What it does |
 | --- | --- |
-| **Remote access › Network access** | On: starts the gateway and lets paired devices reach every thread on this computer, and installs the RustCode server as a background service first if it is not installed (after a confirmation: the engine threads run in stays up when the app closes, see [server](server.md)). Off: stops the gateway. |
+| **Remote access › Network access** | On: starts the gateway and lets paired devices reach every thread on this computer, and installs the RustCode server as a background service first if it is not installed (after a confirmation: it stays up when the app closes and starts when you log in, see [server](server.md)). Off: stops the gateway. |
 | **Remote access › RustCode server** | Whether the RustCode server is installed to run in the background (*Installed · Running*), with *Install* when it is not. Installed, the shared engine stays up when the app closes and starts when you log in; the threads this app starts are still its own engine's and end with it, until the app is switched to the server. |
 | **Remote access › Gateway address** | The `host:port` a device dials, how many devices are connected, and whether it is reachable from another machine at all. |
 | **Remote access › Pair a device** | Calls the same pairing challenge as `/remote pair`: a QR code, the address, the manual code, the countdown and the wrong codes left. Remote access is switched on first if it was off. |

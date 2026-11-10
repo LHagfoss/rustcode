@@ -117,8 +117,8 @@ rustcode server uninstall   # remove the service
   running (`--yes` skips the question).
 - **The app installs it** when Settings › Remote access › *Network access* is
   turned on and the server is not installed, after one confirmation that says
-  what it is for: the engine threads run in stays up when the app closes, and
-  it starts when you log in. Threads the app starts itself are still its own
+  what it is for: it stays up when the app closes and starts when you log
+  in, so the threads that live in it keep running. Threads the app starts itself are still its own
   engine's and end with it, until the app is switched to the server (a later
   step: the app runs its own `rustcode --acp`, not a client of this one). The
   app runs the same `rustcode server install` with the `rustcode` the app

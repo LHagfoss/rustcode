@@ -113,9 +113,9 @@ export function RemoteAccessPage() {
 
   /**
    * Turning network access on also makes sure the RustCode server is
-   * installed: the shared engine threads run in stays up when the app closes,
-   * which is what sharing needs once the app uses it. Nothing is installed
-   * before the owner agrees, and a running turn is never ended for it.
+   * installed: it stays up when the app closes, so the threads that live in it
+   * keep running once the app uses it. Nothing is installed before the owner
+   * agrees, and a running turn is never ended for it.
    */
   const toggle = (next: boolean) => {
     if (!next) {
@@ -182,7 +182,7 @@ export function RemoteAccessPage() {
         </Row>
         <Row
           title="RustCode server"
-          subtitle="Installs the RustCode server as a background service: the engine threads run in stays up when the app closes, and it starts when you log in. Threads this app starts still run in its own engine and end with it, until RustCode uses the server. Turning network access on installs it when it is not installed."
+          subtitle="Installs the RustCode server as a background service: it stays up when the app closes, and starts when you log in. Threads that live in it keep running; the threads this app starts still run in its own engine and end with it, until RustCode uses the server. Turning network access on installs it when it is not installed."
           status={serverLine(server)}
         >
           {server === null ? null : server.installed ? (
@@ -352,7 +352,7 @@ function askInstallThenTurnOn(turnOn: () => void) {
   askConfirm({
     title: "Install the RustCode server too?",
     message:
-      "Network access lets paired devices reach this computer's threads. RustCode also installs its server as a background service: the engine threads run in stays up when the app closes, and it starts when you log in. The threads this app starts itself still run in its own engine and end with it, until RustCode uses the server. Threads, settings and pairings stay as they are. Network access turns on either way.",
+      "Network access lets paired devices reach this computer's threads. RustCode also installs its server as a background service: it stays up when the app closes and starts when you log in, so the threads that live in it keep running. The threads this app starts itself still run in its own engine and end with it, until RustCode uses the server. Threads, settings and pairings stay as they are. Network access turns on either way.",
     action: "Turn on and install",
     run: () => {
       turnOn();
