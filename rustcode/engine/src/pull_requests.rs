@@ -175,8 +175,36 @@ pub async fn view(cwd: &Path, number: u64) -> Result<PullDetail, PullError> {
 /// What a watch compares (#2648): the pull request's state, checks,
 /// mergeability, reviews and comments, without its body and files.
 pub(crate) async fn watch_view(cwd: &Path, number: u64) -> Result<Value, PullError> {
+    watch_view_on(cwd, "", number).await
+}
+
+/// The same read for `repo` (`owner/name`) when one is named: `gh --repo`
+/// answers without the folder being that repository, so a link (#3369) keeps
+/// working after the worktree it was made in is gone.
+pub(crate) async fn watch_view_on(cwd: &Path, repo: &str, number: u64) -> Result<Value, PullError> {
     let number = number.to_string();
-    gh_json(cwd, &["pr", "view", &number, "--json", WATCH_FIELDS]).await
+    let mut args = vec!["pr", "view", &number, "--json", WATCH_FIELDS];
+    if is_repository(repo) {
+        args.extend(["--repo", repo]);
+    }
+    gh_json(cwd, &args).await
+}
+
+/// Whether `text` is an `owner/name` repository, the only spelling `gh --repo`
+/// takes: two non-empty parts and no `.` segment.
+pub(crate) fn is_repository(text: &str) -> bool {
+    let text = text.trim();
+    let mut parts = text.split('/');
+    let (Some(owner), Some(name), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    !owner.is_empty()
+        && !name.is_empty()
+        && !matches!(owner, "." | "..")
+        && !matches!(name, "." | "..")
+        && text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
 }
 
 const WATCH_FIELDS: &str = "number,title,author,state,isDraft,reviewDecision,statusCheckRollup,headRefName,baseRefName,headRefOid,updatedAt,url,additions,deletions,changedFiles,mergeable,reviews,comments";

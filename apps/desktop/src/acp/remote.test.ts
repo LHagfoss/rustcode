@@ -105,6 +105,54 @@ describe("remote access", () => {
     expect(status.connectRequests[0]?.deviceKind).toBe("desktop");
   });
 
+  test("refused connections keep their reason, the device and the versions", () => {
+    const status = parseRemoteStatus({
+      available: true,
+      enabled: true,
+      shared: false,
+      refusedConnections: [
+        {
+          reason: "unsupported_version",
+          attempts: 3,
+          deviceName: "Lars's iPhone",
+          deviceKind: "phone",
+          platform: "ios",
+          protocolVersion: 2,
+          supportedVersions: [1],
+          remoteAddr: "192.168.1.31",
+          refusedSecsAgo: 40,
+        },
+        { reason: "from_the_future", platform: "android", remoteAddr: "192.168.1.44" },
+      ],
+    });
+    expect(status.refusedConnections[0]).toEqual({
+      reason: "unsupported_version",
+      attempts: 3,
+      deviceName: "Lars's iPhone",
+      deviceKind: "phone",
+      platform: "ios",
+      protocolVersion: 2,
+      supportedVersions: [1],
+      remoteAddr: "192.168.1.31",
+      refusedSecsAgo: 40,
+    });
+    // A reason from a newer engine still reads as a refusal, with one try, a
+    // phone and no version, so the page can still say something.
+    expect(status.refusedConnections[1]).toEqual({
+      reason: "unknown",
+      attempts: 1,
+      deviceName: undefined,
+      deviceKind: "phone",
+      platform: "android",
+      protocolVersion: undefined,
+      supportedVersions: [],
+      remoteAddr: "192.168.1.44",
+      refusedSecsAgo: 0,
+    });
+    // An engine that does not keep refusals answers without the field.
+    expect(parseRemoteStatus({ available: true }).refusedConnections).toEqual([]);
+  });
+
   test("an idle answer has no gateway or offer, and still lists the devices", () => {
     const status = parseRemoteStatus({
       available: true,

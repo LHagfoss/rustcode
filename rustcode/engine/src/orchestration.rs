@@ -1208,9 +1208,33 @@ mod tests {
         };
         assert!(tool(THREAD_USAGE).description.contains("group_by"));
         assert!(tool(THREAD_USAGE).description.contains("never a price"));
-        for table in ["threads(", "turns(", "tool_calls(", "daily_usage("] {
+        for table in [
+            "threads(",
+            "turns(",
+            "tool_calls(",
+            "compactions(",
+            "daily_usage",
+        ] {
             assert!(tool(QUERY_DATA).description.contains(table), "{table}");
         }
+        // Columns an agent will write SQL against, by their real names: the
+        // description is the only place it learns them.
+        for column in [
+            "input_tokens",
+            "output_tokens",
+            "context_tokens",
+            "stop_reason",
+            "tokens_before",
+            "tokens_after",
+        ] {
+            assert!(tool(QUERY_DATA).description.contains(column), "{column}");
+        }
+        // No invented column: `turns.tokens` does not exist.
+        assert!(
+            !tool(QUERY_DATA)
+                .description
+                .contains("model, tokens, cost_usd")
+        );
         assert!(tool(QUERY_DATA).description.contains("read-only"));
         assert!((tool(QUERY_DATA).schema)()["properties"]["limit"]["maximum"] == 1000);
     }

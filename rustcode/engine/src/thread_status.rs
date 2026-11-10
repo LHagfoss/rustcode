@@ -302,6 +302,23 @@ pub(crate) fn on_pull_watch(watch: &crate::pull_watch::Watch) {
     }
 }
 
+/// A watched or linked pull request (#2648, #3369) was checked and changed in
+/// a way its thread has not been told about: mark the thread for review, the
+/// engine's existing way of telling every client that a thread wants a look
+/// (`review` is stored in `status.json` and surfaced by the apps). The events
+/// themselves stay on the watch, so the thread's next
+/// `manage_pull_links status` hands over exactly the ones it has not seen.
+///
+/// A thread with a turn running is not marked: its status is `running` now and
+/// the turn ends `idle`, so a stored mark would only be cleared, and the events
+/// wait for the thread's next turn either way.
+pub(crate) fn on_pull_events(session_id: &str, events: &[crate::pull_watch::WatchEvent]) {
+    if events.is_empty() || current(session_id) != Status::Idle {
+        return;
+    }
+    let _ = set(session_id, "review");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,5 +423,39 @@ mod tests {
         });
         assert!(merged_means_done(&watch, Some(&worktree)));
         assert!(!merged_means_done(&watch, None));
+    }
+
+    #[test]
+    fn a_link_event_marks_an_idle_thread_for_review_once() {
+        let id = crate::config::create_detached_session();
+        let event = crate::pull_watch::WatchEvent {
+            kind: "checks_failed".into(),
+            message: "Checks failed: test".into(),
+            at: String::new(),
+        };
+        on_pull_events(&id, &[]);
+        assert_eq!(
+            current(&id),
+            Status::Idle,
+            "nothing changed, nothing to say"
+        );
+
+        on_pull_events(&id, std::slice::from_ref(&event));
+        assert_eq!(current(&id), Status::Review);
+
+        // A settled thread stays settled: an old link does not reopen it.
+        set(&id, "done").unwrap();
+        on_pull_events(&id, std::slice::from_ref(&event));
+        assert_eq!(current(&id), Status::Done);
+
+        // A thread with a turn running is not marked: the turn ends as it
+        // would, and the events wait for the thread's next `status`.
+        set(&id, "idle").unwrap();
+        {
+            let _turn = turn(&id);
+            on_pull_events(&id, std::slice::from_ref(&event));
+            assert_eq!(current(&id), Status::Running);
+        }
+        assert_eq!(current(&id), Status::Idle);
     }
 }

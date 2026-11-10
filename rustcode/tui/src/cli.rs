@@ -726,6 +726,12 @@ pub enum DataCommands {
     },
     /// Print the tables and views of the data store with their columns
     Schema,
+    /// Show each table's row count and size, so growth can be tracked
+    Stats {
+        /// Print the report as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(clap::Subcommand, Debug)]

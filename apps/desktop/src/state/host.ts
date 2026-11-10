@@ -154,8 +154,8 @@ import {
   sendQueuedNow,
   setConfigOption,
   setPermissionMode,
+  setSnoozed,
   setThreadStatus,
-  snoozeThread,
   statusOf,
   steer,
   steeringOf,
@@ -1436,7 +1436,7 @@ async function updateSession(caller: RuleThread, call: UpdateCall): Promise<Json
   }
   if (call.unread) markUnread(target.id);
   if (call.status) await setThreadStatus(target.id, STATUS_OF_CHOICE[call.status]);
-  if (call.snoozedUntil !== undefined) snoozeThread(target.id, call.snoozedUntil);
+  if (call.snoozedUntil !== undefined) setSnoozed(target.id, call.snoozedUntil);
   const after = ruleThread(useApp.getState(), target.id);
   const until = useApp.getState().snoozed[target.id];
   return {

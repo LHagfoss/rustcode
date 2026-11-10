@@ -58,6 +58,9 @@ enum TurnEnd {
 
 #[derive(Default)]
 struct State {
+    /// The RustCode thread this Codex thread runs for, so a compaction it
+    /// reports can be stored against it.
+    thread_id: Option<String>,
     models: Vec<CodexModel>,
     model: Option<String>,
     effort: Option<String>,
@@ -230,7 +233,10 @@ impl CodexAdapter {
         options: StartOptions,
         out: OutputSender,
     ) -> Result<Self, String> {
-        let state = Arc::new(Mutex::new(State::default()));
+        let state = Arc::new(Mutex::new(State {
+            thread_id: options.thread_id.clone(),
+            ..State::default()
+        }));
         tokio::spawn(relay(incoming, Arc::clone(&peer), Arc::clone(&state), out));
         let describe = |error: RpcError| format!("{}: {}", harness.name, error.describe());
         peer.request_within(
@@ -1168,6 +1174,37 @@ fn usage_for(params: &Value) -> Option<UsageUpdate> {
     Some(UsageUpdate::new(count("last", "inputTokens"), size).meta(meta))
 }
 
+/// The row for one completed `contextCompaction` item. Codex's own item id is
+/// the `external_id`, so a replayed `item/completed` (a reconnect, a server
+/// that repeats itself) updates its row instead of adding a second one.
+fn compaction_row(
+    thread_id: String,
+    model: Option<String>,
+    manual: bool,
+    item_id: &str,
+) -> crate::data_store::CompactionRow {
+    crate::data_store::CompactionRow {
+        thread_id,
+        turn_id: None,
+        harness: Some("codex".to_owned()),
+        model,
+        at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        duration_ms: None,
+        trigger: if manual { "manual" } else { "harness_auto" }.to_owned(),
+        mode: Some("harness_summary".to_owned()),
+        tokens_before: None,
+        tokens_after: None,
+        messages_before: None,
+        messages_after: None,
+        idle_secs_before: None,
+        count: None,
+        success: true,
+        error_kind: None,
+        external_id: (!item_id.trim().is_empty()).then(|| item_id.to_owned()),
+        source: Some("codex".to_owned()),
+    }
+}
+
 /// Translate one Codex notification into ACP updates.
 fn translate(state: &Mutex<State>, method: &str, params: &Value) -> Vec<SessionUpdate> {
     let item_id = str_field(params, "itemId").unwrap_or_default().to_owned();
@@ -1269,6 +1306,9 @@ fn translate(state: &Mutex<State>, method: &str, params: &Value) -> Vec<SessionU
                     // A compaction asked for with `/compact` runs no turn of its own
                     // that ends the wait; its completed item does.
                     let mut guard = lock(state);
+                    let manual = guard.compacting;
+                    let thread_id = guard.thread_id.clone();
+                    let model = guard.model.clone();
                     if guard.compacting {
                         guard.compacting = false;
                         if let Some(waiter) = guard.waiter.take() {
@@ -1276,6 +1316,11 @@ fn translate(state: &Mutex<State>, method: &str, params: &Value) -> Vec<SessionU
                         }
                     }
                     drop(guard);
+                    if let Some(thread_id) = thread_id {
+                        crate::data_store::record_compaction(&compaction_row(
+                            thread_id, model, manual, &id,
+                        ));
+                    }
                     vec![crate::acp::usage::compaction_card(
                         None,
                         None,

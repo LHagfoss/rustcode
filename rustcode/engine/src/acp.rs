@@ -1718,6 +1718,11 @@ fn start_pull_watching(clients: &clients::Clients) {
                 crate::pull_watch::check_due(&store, |watch, events| {
                     // A worktree thread whose pull request merged is done.
                     crate::thread_status::on_pull_watch(watch);
+                    // A change its thread has not been told about wants the
+                    // user's look: the thread's status says so in every
+                    // client, and its next `status` call hands the events
+                    // over (#3369).
+                    crate::thread_status::on_pull_events(&watch.session_id, events);
                     notify.publish(
                         clients::Topic::PullWatches,
                         PullWatchNotification {
@@ -1996,9 +2001,12 @@ impl AcpEngine {
         // Metadata for `rustcode usage` and `rustcode data query`; a background
         // backfill of the existing threads runs once, on first open.
         crate::data_store::warm();
-        Ok(Self {
-            server: AcpServer::new(auto_approve)?,
-        })
+        let server = AcpServer::new(auto_approve)?;
+        // Linked pull requests from before a restart carry on from here, and
+        // one made by a tool during this run is picked up on the next round
+        // (#3369). Without this a link would be stored and never checked.
+        start_pull_watching(&server.clients);
+        Ok(Self { server })
     }
 
     /// An engine that starts and defers nothing (tests): the default

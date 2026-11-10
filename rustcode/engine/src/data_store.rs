@@ -14,7 +14,7 @@
 //! on `capture_provider_payloads` or `capture_harness_rpc_payloads`, and even
 //! then it is redacted and clipped ([`redact`]) before it is written, kept for
 //! [`PAYLOAD_RETENTION_DAYS`] days, and pruned to a byte budget
-//! ([`prune_telemetry`]).
+//! ([`prune`]).
 //!
 //! Writes never fail a turn: [`record_turn`] logs and returns. Reads go
 //! through [`query`], a read-only connection with a two-second cap, a single
@@ -222,6 +222,89 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         PRIMARY KEY (thread_id, harness, series)
     );",
     ),
+    (
+        7,
+        "durable_telemetry",
+        "ALTER TABLE turns ADD COLUMN duration_ms INTEGER;
+    ALTER TABLE turns ADD COLUMN time_to_first_token_ms INTEGER;
+    ALTER TABLE turns ADD COLUMN model_time_ms INTEGER;
+    ALTER TABLE turns ADD COLUMN tool_time_ms INTEGER;
+    ALTER TABLE turns ADD COLUMN context_tokens INTEGER;
+    ALTER TABLE turns ADD COLUMN context_window INTEGER;
+    ALTER TABLE turns ADD COLUMN stop_reason TEXT;
+    ALTER TABLE tool_calls ADD COLUMN started_at TEXT;
+    ALTER TABLE tool_calls ADD COLUMN duration_ms INTEGER;
+    ALTER TABLE tool_calls ADD COLUMN output_bytes INTEGER;
+    ALTER TABLE tool_calls ADD COLUMN truncated INTEGER;
+    ALTER TABLE tool_calls ADD COLUMN mcp_server TEXT;
+    ALTER TABLE tool_calls ADD COLUMN command_name TEXT;
+    ALTER TABLE tool_calls ADD COLUMN error_kind TEXT;
+    CREATE INDEX tool_calls_name ON tool_calls(tool_name);
+    CREATE INDEX harness_rpc_messages_method ON harness_rpc_messages(method);
+    CREATE TABLE compactions (
+        id INTEGER PRIMARY KEY,
+        thread_id TEXT NOT NULL,
+        turn_id TEXT,
+        harness TEXT,
+        model TEXT,
+        at TEXT NOT NULL,
+        duration_ms INTEGER,
+        trigger TEXT NOT NULL,
+        mode TEXT,
+        tokens_before INTEGER,
+        tokens_after INTEGER,
+        messages_before INTEGER,
+        messages_after INTEGER,
+        idle_secs_before INTEGER,
+        count INTEGER,
+        success INTEGER NOT NULL DEFAULT 1,
+        error_kind TEXT,
+        external_id TEXT,
+        source TEXT,
+        UNIQUE(thread_id, external_id)
+    );
+    CREATE INDEX compactions_thread ON compactions(thread_id, at);
+    CREATE INDEX compactions_at ON compactions(at);
+    CREATE VIEW daily_compactions AS
+        SELECT date(at) AS day, harness, trigger,
+               COUNT(*) AS compactions,
+               SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS failed,
+               SUM(tokens_before) AS tokens_before,
+               SUM(tokens_after) AS tokens_after,
+               SUM(CASE WHEN tokens_before IS NOT NULL AND tokens_after IS NOT NULL
+                        THEN tokens_before - tokens_after END) AS reclaimed_tokens,
+               AVG(duration_ms) AS mean_duration_ms
+        FROM compactions
+        GROUP BY day, harness, trigger;
+    CREATE VIEW tool_failure_rates AS
+        SELECT date(at) AS day, tool_name,
+               COUNT(*) AS calls,
+               SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS failures,
+               CASE WHEN COUNT(*) > 0
+                    THEN 1.0 * SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) / COUNT(*)
+               END AS failure_rate,
+               AVG(duration_ms) AS mean_duration_ms,
+               SUM(CASE WHEN truncated = 1 THEN 1 ELSE 0 END) AS truncated
+        FROM tool_calls
+        WHERE at IS NOT NULL
+        GROUP BY day, tool_name;
+    CREATE VIEW turn_latency_daily AS
+        SELECT date(started_at) AS day, harness, model,
+               COUNT(*) AS turns,
+               AVG(duration_ms) AS mean_duration_ms,
+               AVG(time_to_first_token_ms) AS mean_time_to_first_token_ms,
+               AVG(model_time_ms) AS mean_model_time_ms,
+               AVG(tool_time_ms) AS mean_tool_time_ms,
+               AVG(context_tokens) AS mean_context_tokens
+        FROM turns
+        WHERE duration_ms IS NOT NULL
+        GROUP BY day, harness, model;",
+    ),
+    (
+        8,
+        "tool_calls_turn_index",
+        "CREATE INDEX IF NOT EXISTS tool_calls_turn ON tool_calls(turn_id);",
+    ),
 ];
 
 /// One turn's token totals. Each is optional: a harness that reports no count
@@ -345,7 +428,20 @@ pub struct ToolCallRow {
     pub tool_name: String,
     pub success: Option<bool>,
     pub exit_code: Option<i64>,
+    /// When the call finished, from the transcript's message timestamp.
     pub at: Option<String>,
+    /// When the call started, when a duration could be subtracted from `at`.
+    pub started_at: Option<String>,
+    pub duration_ms: Option<i64>,
+    /// Bytes of the result text, not the text itself.
+    pub output_bytes: Option<i64>,
+    pub truncated: Option<bool>,
+    /// The MCP server in an `mcp__<server>__<tool>` name.
+    pub mcp_server: Option<String>,
+    /// The first word of a shell command (`cargo`, `git`, `bun`), never the
+    /// whole command.
+    pub command_name: Option<String>,
+    pub error_kind: Option<String>,
 }
 
 /// One turn to record. `started_at` and `finished_at` are RFC 3339 in UTC,
@@ -364,6 +460,19 @@ pub struct TurnRow {
     pub cache_write_tokens: Option<i64>,
     pub cost_usd: Option<f64>,
     pub status: String,
+    /// Wall time of the whole turn, when the caller measured it.
+    pub duration_ms: Option<i64>,
+    pub time_to_first_token_ms: Option<i64>,
+    pub model_time_ms: Option<i64>,
+    pub tool_time_ms: Option<i64>,
+    /// Tokens the model's context held at the turn's last measurement.
+    pub context_tokens: Option<i64>,
+    /// The model's context window in tokens, as the profile or harness said.
+    pub context_window: Option<i64>,
+    /// How the model's turn ended (`completed`, `cancelled`, `max_tokens`,
+    /// `refused`, `recovery_failed`, …), when the caller knows more than
+    /// `status`.
+    pub stop_reason: Option<String>,
     pub tool_calls: Vec<ToolCallRow>,
 }
 
@@ -1375,8 +1484,10 @@ fn write_turn_in(transaction: &Connection, turn: &TurnRow) -> Result<(), String>
         .execute(
             "INSERT INTO turns (thread_id, started_at, finished_at, harness, model,
                     input_tokens, output_tokens, cached_tokens, cache_write_tokens,
-                    cost_usd, tool_calls, status)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                    cost_usd, tool_calls, status, duration_ms, time_to_first_token_ms,
+                    model_time_ms, tool_time_ms, context_tokens, context_window, stop_reason)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                     ?15, ?16, ?17, ?18, ?19)
              ON CONFLICT(thread_id, started_at) DO UPDATE SET
                 finished_at = excluded.finished_at,
                 harness = COALESCE(excluded.harness, turns.harness),
@@ -1387,7 +1498,15 @@ fn write_turn_in(transaction: &Connection, turn: &TurnRow) -> Result<(), String>
                 cache_write_tokens = excluded.cache_write_tokens,
                 cost_usd = excluded.cost_usd,
                 tool_calls = excluded.tool_calls,
-                status = excluded.status",
+                status = excluded.status,
+                duration_ms = COALESCE(excluded.duration_ms, turns.duration_ms),
+                time_to_first_token_ms = COALESCE(
+                    excluded.time_to_first_token_ms, turns.time_to_first_token_ms),
+                model_time_ms = COALESCE(excluded.model_time_ms, turns.model_time_ms),
+                tool_time_ms = COALESCE(excluded.tool_time_ms, turns.tool_time_ms),
+                context_tokens = COALESCE(excluded.context_tokens, turns.context_tokens),
+                context_window = COALESCE(excluded.context_window, turns.context_window),
+                stop_reason = COALESCE(excluded.stop_reason, turns.stop_reason)",
             params![
                 turn.thread_id,
                 turn.started_at,
@@ -1401,6 +1520,13 @@ fn write_turn_in(transaction: &Connection, turn: &TurnRow) -> Result<(), String>
                 turn.cost_usd,
                 turn.tool_calls.len() as i64,
                 turn.status,
+                turn.duration_ms,
+                turn.time_to_first_token_ms,
+                turn.model_time_ms,
+                turn.tool_time_ms,
+                turn.context_tokens,
+                turn.context_window,
+                turn.stop_reason,
             ],
         )
         .map_err(|error| error.to_string())?;
@@ -1417,10 +1543,17 @@ fn write_turn_in(transaction: &Connection, turn: &TurnRow) -> Result<(), String>
         .execute("DELETE FROM tool_calls WHERE turn_id = ?1", [turn_id])
         .map_err(|error| error.to_string())?;
     for call in &turn.tool_calls {
+        let mcp_server = call
+            .mcp_server
+            .clone()
+            .or_else(|| mcp_server_of(&call.tool_name).map(str::to_owned));
+        let command_name = call.command_name.clone();
         transaction
             .execute(
-                "INSERT INTO tool_calls (thread_id, turn_id, tool_name, success, exit_code, at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO tool_calls (thread_id, turn_id, tool_name, success, exit_code, at,
+                        started_at, duration_ms, output_bytes, truncated, mcp_server,
+                        command_name, error_kind)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![
                     turn.thread_id,
                     turn_id,
@@ -1428,11 +1561,25 @@ fn write_turn_in(transaction: &Connection, turn: &TurnRow) -> Result<(), String>
                     call.success,
                     call.exit_code,
                     call.at,
+                    call.started_at,
+                    call.duration_ms,
+                    call.output_bytes,
+                    call.truncated,
+                    mcp_server,
+                    command_name,
+                    call.error_kind,
                 ],
             )
             .map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+/// The server in an `mcp__<server>__<tool>` tool name, if it is one.
+fn mcp_server_of(tool_name: &str) -> Option<&str> {
+    let rest = tool_name.strip_prefix("mcp__")?;
+    let (server, _) = rest.split_once("__")?;
+    (!server.is_empty()).then_some(server)
 }
 
 /// What is known about the thread outside the store: its title, where it
@@ -1919,8 +2066,19 @@ pub const MAX_EVENT_FIELDS_BYTES: usize = 8 * 1024;
 /// to NULL and the metadata row stays.
 pub const PAYLOAD_RETENTION_DAYS: i64 = 7;
 
-/// How long a telemetry row itself is kept.
-pub const ROW_RETENTION_DAYS: i64 = 30;
+/// Payloads of streaming deltas and repeated status pings are dropped on
+/// every pass, whatever their age: they are the bulk of the store and carry
+/// no question an agent asks. The metadata row stays.
+pub const NOISE_METHODS: [&str; 2] = [
+    "account/rateLimits/updated",
+    "mcpServer/startupStatus/updated",
+];
+
+/// A streaming row's payload above this size is a raw frame body, not the
+/// `{coalesced, update, bytes}` metadata a recorder writes for a folded chunk
+/// (`harness/rpc_capture.rs`). Only the raw body is noise; the metadata is how
+/// the folded row can be read at all and is kept.
+pub const STREAMED_PAYLOAD_BODY_BYTES: i64 = 512;
 
 /// How long a command receipt stays usable: an orchestration call retried
 /// inside this window is answered from its receipt, and one retried later is
@@ -1935,8 +2093,8 @@ pub const COMMAND_RECEIPT_MAX_ROWS: i64 = 10_000;
 /// or `fan_out` answer is a few hundred bytes, so more is a mistake.
 pub const MAX_RECEIPT_RESULT_BYTES: usize = 16 * 1024;
 
-/// What `provider_requests`, `harness_rpc_messages` and `operational_events`
-/// may hold together in payload bytes before the oldest payloads are dropped.
+/// What `provider_requests` and `harness_rpc_messages` may hold together in
+/// payload bytes before the oldest payloads are dropped.
 pub const TELEMETRY_MAX_BYTES: i64 = 256 * 1024 * 1024;
 
 /// The `direction` of a message that came from the harness.
@@ -1953,6 +2111,37 @@ pub const KIND_NOTIFICATION: &str = "notification";
 /// `store_meta` key holding when the last pass ran, in Unix seconds.
 const PRUNE_META_KEY: &str = "telemetry_pruned_at";
 const PRUNE_INTERVAL_SECS: i64 = 60 * 60;
+
+/// One compaction of a thread's history, from whichever side ran it.
+///
+/// `trigger` says why (`auto_context`, `manual`, `cache_expiry`,
+/// `harness_auto`); `mode` how (`ai_summary`, `deterministic_record`,
+/// `harness_summary`). Token counts stay `NULL` when the source did not say,
+/// never `0`. `external_id` is the harness's own id for the event, so a
+/// repeated protocol update updates its row instead of adding another one.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CompactionRow {
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    pub harness: Option<String>,
+    pub model: Option<String>,
+    pub at: String,
+    pub duration_ms: Option<i64>,
+    pub trigger: String,
+    pub mode: Option<String>,
+    pub tokens_before: Option<i64>,
+    pub tokens_after: Option<i64>,
+    pub messages_before: Option<i64>,
+    pub messages_after: Option<i64>,
+    pub idle_secs_before: Option<i64>,
+    /// How many compactions the session had performed, this one included.
+    pub count: Option<i64>,
+    pub success: bool,
+    pub error_kind: Option<String>,
+    pub external_id: Option<String>,
+    /// Where the record came from: `rustcode`, `codex`, `claude-code`, …
+    pub source: Option<String>,
+}
 
 /// One built-in provider HTTP attempt: what was asked, where, how long it
 /// took, and — only when `capture_provider_payloads` is on — a redacted,
@@ -2276,6 +2465,92 @@ fn write_operational_event(
         .map_err(|error| error.to_string())
 }
 
+/// Records one compaction off the caller's path, logging and swallowing a
+/// failure like every other telemetry write: a compaction that already
+/// happened must not fail because its row could not be written.
+pub fn record_compaction(row: &CompactionRow) {
+    if !wants_row(&row.thread_id, &row.at) || row.trigger.trim().is_empty() {
+        return;
+    }
+    let Some(path) = data_path() else { return };
+    let row = row.clone();
+    // Opening the store and inserting must not stall a turn, as with an
+    // operational event (`crate::logger`).
+    let write = move || {
+        if let Err(error) = record_compaction_at(&path, &row) {
+            crate::dbg_log!(
+                "data store: compaction of {} not recorded: {error}",
+                row.thread_id
+            );
+        }
+    };
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            let _ = handle.spawn_blocking(write);
+        }
+        Err(_) => write(),
+    }
+}
+
+/// [`record_compaction`] against one store file (tests), answering the row id.
+pub fn record_compaction_at(path: &Path, row: &CompactionRow) -> Result<i64, String> {
+    let connection = open(path)?;
+    write_compaction(&connection, row)
+}
+
+fn write_compaction(connection: &Connection, row: &CompactionRow) -> Result<i64, String> {
+    if !wants_row(&row.thread_id, &row.at) || row.trigger.trim().is_empty() {
+        return Ok(0);
+    }
+    connection
+        .execute(
+            "INSERT INTO compactions (thread_id, turn_id, harness, model, at, duration_ms,
+                    trigger, mode, tokens_before, tokens_after, messages_before, messages_after,
+                    idle_secs_before, count, success, error_kind, external_id, source)
+             VALUES (?1, ?2,
+                    COALESCE(?3, (SELECT harness FROM threads WHERE id = ?1)),
+                    COALESCE(?4, (SELECT model FROM threads WHERE id = ?1)),
+                    ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+             ON CONFLICT(thread_id, external_id) DO UPDATE SET
+                at = excluded.at,
+                harness = COALESCE(excluded.harness, compactions.harness),
+                model = COALESCE(excluded.model, compactions.model),
+                duration_ms = COALESCE(excluded.duration_ms, compactions.duration_ms),
+                trigger = excluded.trigger,
+                mode = COALESCE(excluded.mode, compactions.mode),
+                tokens_before = COALESCE(excluded.tokens_before, compactions.tokens_before),
+                tokens_after = COALESCE(excluded.tokens_after, compactions.tokens_after),
+                messages_before = COALESCE(excluded.messages_before, compactions.messages_before),
+                messages_after = COALESCE(excluded.messages_after, compactions.messages_after),
+                count = COALESCE(excluded.count, compactions.count),
+                success = excluded.success,
+                error_kind = COALESCE(excluded.error_kind, compactions.error_kind),
+                source = COALESCE(excluded.source, compactions.source)",
+            params![
+                row.thread_id,
+                row.turn_id,
+                row.harness,
+                row.model,
+                at_rfc3339(&row.at),
+                row.duration_ms,
+                row.trigger,
+                row.mode,
+                row.tokens_before,
+                row.tokens_after,
+                row.messages_before,
+                row.messages_after,
+                row.idle_secs_before,
+                row.count,
+                row.success,
+                row.error_kind,
+                row.external_id,
+                row.source,
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(connection.last_insert_rowid())
+}
+
 /// A row is only worth storing when it names a thread and a time.
 fn wants_row(thread_id: &str, at: &str) -> bool {
     !thread_id.trim().is_empty()
@@ -2349,45 +2624,67 @@ pub struct PruneReport {
     pub bytes_after: i64,
 }
 
-/// Applies the retention policy to the store, logging and swallowing a
-/// failure like every other write.
-pub fn prune_telemetry() {
-    let Some(path) = data_path() else { return };
-    if let Err(error) = prune_telemetry_at(&path) {
-        crate::dbg_log!("data store: telemetry not pruned: {error}");
-    }
-}
-
-/// [`prune_telemetry`] against one store file, answering what it did.
+/// [`prune`] against one store file, answering what it did.
 pub fn prune_telemetry_at(path: &Path) -> Result<PruneReport, String> {
     let connection = open(path)?;
     prune(&connection)
 }
 
-/// The retention policy: payloads older than [`PAYLOAD_RETENTION_DAYS`] are
-/// dropped, rows older than [`ROW_RETENTION_DAYS`] deleted, and the three
-/// tables held under [`TELEMETRY_MAX_BYTES`] by dropping the oldest payloads
-/// first. Command receipts have their own, shorter window
-/// ([`COMMAND_RECEIPT_RETENTION_DAYS`], [`COMMAND_RECEIPT_MAX_ROWS`]): they
-/// exist to make a retry safe for a while, not to keep history. The file is
-/// then checkpointed (and vacuumed only when the database already vacuums
-/// incrementally) so deleting rows actually frees space.
+/// The retention policy: structured rows are the history and are never
+/// deleted; only the bulky raw protocol payloads age out. Payloads older than
+/// [`PAYLOAD_RETENTION_DAYS`] are dropped, streaming-delta and status-ping
+/// payloads are dropped on every pass, and the raw tables are held under
+/// [`TELEMETRY_MAX_BYTES`] by dropping payloads before rows. When
+/// `telemetry_retention` in `config.toml` names a number of days, raw
+/// `provider_requests` and `harness_rpc_messages` rows older than that are
+/// deleted too; the default `forever` keeps their metadata. Command receipts
+/// have their own, shorter window ([`COMMAND_RECEIPT_RETENTION_DAYS`],
+/// [`COMMAND_RECEIPT_MAX_ROWS`]): they exist to make a retry safe for a while,
+/// not to keep history. The file is then checkpointed (and vacuumed only when
+/// the database already vacuums incrementally) so deleting rows actually frees
+/// space.
 pub fn prune(connection: &Connection) -> Result<PruneReport, String> {
-    prune_with(connection, TELEMETRY_MAX_BYTES)
+    prune_with(
+        connection,
+        TELEMETRY_MAX_BYTES,
+        configured_row_retention_days(),
+    )
 }
 
-/// [`prune`] with an explicit payload budget, so a test can prove the byte
-/// cap without writing 256 MiB.
-fn prune_with(connection: &Connection, max_bytes: i64) -> Result<PruneReport, String> {
+/// `telemetry_retention` from `config.toml`: `None` for `forever` (the
+/// default), else the number of days a raw protocol row is kept.
+pub fn configured_row_retention_days() -> Option<i64> {
+    let retention = crate::config::load_config().2.telemetry_retention;
+    parse_retention_days(&retention)
+}
+
+fn parse_retention_days(value: &str) -> Option<i64> {
+    let value = value.trim();
+    if value.is_empty() || value.eq_ignore_ascii_case("forever") {
+        return None;
+    }
+    value.parse::<i64>().ok().filter(|days| *days > 0)
+}
+
+/// [`prune`] with an explicit payload budget and raw-row retention, so a test
+/// can prove the byte cap without writing 256 MiB.
+fn prune_with(
+    connection: &Connection,
+    max_bytes: i64,
+    row_retention_days: Option<i64>,
+) -> Result<PruneReport, String> {
     let now = chrono::Utc::now();
     let payload_cutoff = rfc3339_days_ago(now, PAYLOAD_RETENTION_DAYS);
-    let row_cutoff = rfc3339_days_ago(now, ROW_RETENTION_DAYS);
     let mut report = PruneReport {
         bytes_before: telemetry_bytes(connection)?,
         ..PruneReport::default()
     };
+    report.payloads_cleared += clear_noise_payloads(connection)?;
     report.payloads_cleared += clear_payloads_before(connection, &payload_cutoff)?;
-    report.rows_deleted += delete_rows_before(connection, &row_cutoff)?;
+    if let Some(days) = row_retention_days {
+        let row_cutoff = rfc3339_days_ago(now, days);
+        report.rows_deleted += delete_rows_before(connection, &row_cutoff)?;
+    }
     report.rows_deleted += prune_receipts(
         connection,
         COMMAND_RECEIPT_RETENTION_DAYS,
@@ -2403,8 +2700,9 @@ fn rfc3339_days_ago(now: chrono::DateTime<chrono::Utc>, days: i64) -> String {
     (now - chrono::Duration::days(days)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-/// Payload bytes the three tables hold, as the store estimates them: the
-/// length of every payload column.
+/// Payload bytes the raw protocol tables hold, as the store estimates them:
+/// the length of every payload column. Structured rows are not counted,
+/// because this budget never deletes them.
 fn telemetry_bytes(connection: &Connection) -> Result<i64, String> {
     connection
         .query_row(
@@ -2412,13 +2710,45 @@ fn telemetry_bytes(connection: &Connection) -> Result<i64, String> {
                                        LENGTH(COALESCE(response_summary_json, '')))
                                FROM provider_requests), 0)
                   + COALESCE((SELECT SUM(LENGTH(COALESCE(payload_json, '')))
-                              FROM harness_rpc_messages), 0)
-                  + COALESCE((SELECT SUM(LENGTH(COALESCE(fields_json, '')))
-                              FROM operational_events), 0)",
+                              FROM harness_rpc_messages), 0)",
             [],
             |row| row.get(0),
         )
         .map_err(|error| error.to_string())
+}
+
+/// Drops the raw bodies of streaming deltas and repeated status pings,
+/// whatever their age. The metadata row (method, at, latency, size) stays, and
+/// so does a folded chunk's small payload.
+fn clear_noise_payloads(connection: &Connection) -> Result<usize, String> {
+    let mut cleared = connection
+        .execute(
+            "UPDATE harness_rpc_messages SET payload_json = NULL
+             WHERE payload_json IS NOT NULL
+               AND ((method GLOB '*/outputDelta' AND LENGTH(payload_json) > ?1)
+                    OR method = ?2 OR method = ?3)",
+            params![
+                STREAMED_PAYLOAD_BODY_BYTES,
+                NOISE_METHODS[0],
+                NOISE_METHODS[1]
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    // A streaming chunk's row can carry the chunk text itself: a store from
+    // before chunks were folded, or a recorder that forwarded one as a frame.
+    // A captured tool-call payload is not that, whatever its size, and stays.
+    cleared += connection
+        .execute(
+            "UPDATE harness_rpc_messages SET payload_json = NULL
+             WHERE payload_json IS NOT NULL AND method = 'session/update'
+               AND LENGTH(payload_json) > ?1
+               AND (payload_json LIKE '%\"sessionUpdate\":\"agent_message_chunk\"%'
+                    OR payload_json LIKE '%\"sessionUpdate\":\"agent_thought_chunk\"%'
+                    OR payload_json LIKE '%\"sessionUpdate\":\"user_message_chunk\"%')",
+            [STREAMED_PAYLOAD_BODY_BYTES],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(cleared)
 }
 
 fn clear_payloads_before(connection: &Connection, cutoff: &str) -> Result<usize, String> {
@@ -2437,16 +2767,12 @@ fn clear_payloads_before(connection: &Connection, cutoff: &str) -> Result<usize,
             [cutoff],
         )
         .map_err(|error| error.to_string())?;
-    cleared += connection
-        .execute(
-            "UPDATE operational_events SET fields_json = NULL, captured_bytes = NULL
-             WHERE at < ?1 AND fields_json IS NOT NULL",
-            [cutoff],
-        )
-        .map_err(|error| error.to_string())?;
     Ok(cleared)
 }
 
+/// Deletes only raw protocol rows. `turns`, `tool_calls`, `threads`,
+/// `thread_links`, `operational_events` and `compactions` are the history and
+/// are never deleted by the retention pass.
 fn delete_rows_before(connection: &Connection, cutoff: &str) -> Result<usize, String> {
     let mut deleted = connection
         .execute(
@@ -2457,15 +2783,12 @@ fn delete_rows_before(connection: &Connection, cutoff: &str) -> Result<usize, St
     deleted += connection
         .execute("DELETE FROM harness_rpc_messages WHERE at < ?1", [cutoff])
         .map_err(|error| error.to_string())?;
-    deleted += connection
-        .execute("DELETE FROM operational_events WHERE at < ?1", [cutoff])
-        .map_err(|error| error.to_string())?;
     Ok(deleted)
 }
 
-/// Drops the oldest payloads first, then the oldest rows, until the payload
-/// bytes fit the budget. Bounded: a batch per step and a finite number of
-/// steps, so a pathological store cannot hold the caller for long.
+/// Drops payloads first, then raw rows, until the payload bytes fit the
+/// budget. Bounded: a batch per step and a finite number of steps, so a
+/// pathological store cannot hold the caller for long.
 fn trim_to_budget(
     connection: &Connection,
     max_bytes: i64,
@@ -2513,14 +2836,6 @@ fn clear_oldest_payloads(connection: &Connection, batch: i64) -> Result<usize, S
             [batch],
         )
         .map_err(|error| error.to_string())?;
-    cleared += connection
-        .execute(
-            "UPDATE operational_events SET fields_json = NULL, captured_bytes = NULL
-             WHERE id IN (SELECT id FROM operational_events
-                          WHERE fields_json IS NOT NULL ORDER BY at, id LIMIT ?1)",
-            [batch],
-        )
-        .map_err(|error| error.to_string())?;
     Ok(cleared)
 }
 
@@ -2536,13 +2851,6 @@ fn delete_oldest_rows(connection: &Connection, batch: i64) -> Result<usize, Stri
         .execute(
             "DELETE FROM harness_rpc_messages WHERE id IN
                 (SELECT id FROM harness_rpc_messages ORDER BY at, id LIMIT ?1)",
-            [batch],
-        )
-        .map_err(|error| error.to_string())?;
-    deleted += connection
-        .execute(
-            "DELETE FROM operational_events WHERE id IN
-                (SELECT id FROM operational_events ORDER BY at, id LIMIT ?1)",
             [batch],
         )
         .map_err(|error| error.to_string())?;
@@ -2632,6 +2940,77 @@ pub fn open_readonly(path: &Path) -> Result<Connection, String> {
 pub fn query(sql: &str, limit: usize) -> Result<QueryResult, String> {
     let path = data_path().ok_or_else(|| "no config directory".to_owned())?;
     query_path(&path, sql, limit)
+}
+
+/// Per-table row counts and sizes, so growth itself can be tracked
+/// (`rustcode data stats`). Table and view names come from `sqlite_master`;
+/// a size is `dbstat`'s for the table together with its indexes (they grow
+/// with it), when SQLite has that virtual table, and `NULL` otherwise, never
+/// a guess.
+pub fn stats() -> Result<Value, String> {
+    let path = data_path().ok_or_else(|| "no config directory".to_owned())?;
+    stats_at(&path)
+}
+
+/// [`stats`] against one store file, so a test can read a temporary one.
+pub fn stats_at(path: &Path) -> Result<Value, String> {
+    if !path.is_file() {
+        return Err(format!(
+            "no data store yet at {}; open the app once or run a turn so it is created",
+            path.display()
+        ));
+    }
+    let connection = open(path)?;
+    let objects: Vec<(String, String)> = {
+        let mut statement = connection
+            .prepare(
+                "SELECT type, name FROM sqlite_master
+                 WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%'
+                   AND name <> 'schema_migrations'
+                 ORDER BY type, name",
+            )
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|error| error.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?
+    };
+    // `tbl_name` is the table an index belongs to, so summing by it counts a
+    // table's own pages and its indexes: an index is most of a narrow table's
+    // growth, and leaving it out would understate what the store holds.
+    let sizes: std::collections::HashMap<String, i64> = connection
+        .prepare(
+            "SELECT master.tbl_name, SUM(dbstat.pgsize)
+             FROM dbstat JOIN sqlite_master AS master ON master.name = dbstat.name
+             GROUP BY master.tbl_name",
+        )
+        .and_then(|mut statement| {
+            let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            rows.collect::<Result<Vec<(String, i64)>, _>>()
+        })
+        .map(|rows| rows.into_iter().collect())
+        .unwrap_or_default();
+    let mut out = Vec::with_capacity(objects.len());
+    for (kind, name) in objects {
+        let quoted = format!("\"{}\"", name.replace('"', "\"\""));
+        let rows: i64 = connection
+            .query_row(&format!("SELECT COUNT(*) FROM {quoted}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap_or(-1);
+        out.push(json!({
+            "type": kind,
+            "name": name,
+            "rows": (rows >= 0).then_some(rows),
+            "bytes": sizes.get(&name),
+        }));
+    }
+    Ok(json!({
+        "path": path.display().to_string(),
+        "total_bytes": std::fs::metadata(path).map(|meta| meta.len()).ok(),
+        "objects": out,
+    }))
 }
 
 /// All-time input and output tokens the local store recorded, without adding
@@ -3025,11 +3404,19 @@ mod tests {
             cache_write_tokens: None,
             cost_usd: None,
             status: status.to_owned(),
+            duration_ms: None,
+            time_to_first_token_ms: None,
+            model_time_ms: None,
+            tool_time_ms: None,
+            context_tokens: None,
+            context_window: None,
+            stop_reason: None,
             tool_calls: vec![ToolCallRow {
                 tool_name: "execute".to_owned(),
                 success: Some(false),
                 exit_code: Some(1),
                 at: Some(started.to_owned()),
+                ..Default::default()
             }],
         }
     }
@@ -3079,6 +3466,13 @@ mod tests {
                 cache_write_tokens: None,
                 cost_usd: None,
                 status: "completed".to_owned(),
+                duration_ms: None,
+                time_to_first_token_ms: None,
+                model_time_ms: None,
+                tool_time_ms: None,
+                context_tokens: None,
+                context_window: None,
+                stop_reason: None,
                 tool_calls: Vec::new(),
             },
         )
@@ -3255,6 +3649,13 @@ mod tests {
             cache_write_tokens: cache_write,
             cost_usd: None,
             status: "completed".to_owned(),
+            duration_ms: None,
+            time_to_first_token_ms: None,
+            model_time_ms: None,
+            tool_time_ms: None,
+            context_tokens: None,
+            context_window: None,
+            stop_reason: None,
             tool_calls: Vec::new(),
         };
         for turn in [
@@ -3311,18 +3712,21 @@ mod tests {
                 success: Some(false),
                 exit_code: Some(1),
                 at: None,
+                ..Default::default()
             },
             ToolCallRow {
                 tool_name: "run_command".to_owned(),
                 success: Some(true),
                 exit_code: Some(0),
                 at: None,
+                ..Default::default()
             },
             ToolCallRow {
                 tool_name: "replace_file_content".to_owned(),
                 success: Some(false),
                 exit_code: None,
                 at: None,
+                ..Default::default()
             },
         ];
         write_turn(&connection, &first).unwrap();
@@ -3557,7 +3961,14 @@ mod tests {
                 "tool_name",
                 "success",
                 "exit_code",
-                "at"
+                "at",
+                "started_at",
+                "duration_ms",
+                "output_bytes",
+                "truncated",
+                "mcp_server",
+                "command_name",
+                "error_kind"
             ]
         );
         drop(first);
@@ -4584,6 +4995,227 @@ mod tests {
         }
     }
 
+    fn compaction_row(thread: &str, at: &str, trigger: &str) -> CompactionRow {
+        CompactionRow {
+            thread_id: thread.to_owned(),
+            turn_id: None,
+            harness: Some("claude-code".to_owned()),
+            model: None,
+            at: at.to_owned(),
+            duration_ms: Some(2_400),
+            trigger: trigger.to_owned(),
+            mode: Some("harness_summary".to_owned()),
+            tokens_before: Some(120_000),
+            tokens_after: Some(18_000),
+            messages_before: None,
+            messages_after: None,
+            idle_secs_before: None,
+            count: Some(1),
+            success: true,
+            error_kind: None,
+            external_id: Some("compact-1".to_owned()),
+            source: Some("claude-code".to_owned()),
+        }
+    }
+
+    #[test]
+    fn migration_adds_turn_metrics_and_the_compactions_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let connection = open(&path).unwrap();
+        let columns = |table: &str| -> Vec<String> {
+            connection
+                .prepare(&format!("PRAGMA table_info({table})"))
+                .unwrap()
+                .query_map([], |row| row.get(1))
+                .unwrap()
+                .filter_map(Result::ok)
+                .collect()
+        };
+        let turns = columns("turns");
+        for column in [
+            "duration_ms",
+            "time_to_first_token_ms",
+            "model_time_ms",
+            "tool_time_ms",
+            "context_tokens",
+            "context_window",
+            "stop_reason",
+        ] {
+            assert!(turns.iter().any(|name| name == column), "{column}");
+        }
+        let compactions = columns("compactions");
+        for column in [
+            "thread_id",
+            "harness",
+            "trigger",
+            "mode",
+            "tokens_before",
+            "tokens_after",
+            "success",
+            "external_id",
+            "source",
+        ] {
+            assert!(compactions.iter().any(|name| name == column), "{column}");
+        }
+        let views: Vec<String> = connection
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'view'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+        for view in [
+            "daily_usage",
+            "daily_compactions",
+            "tool_failure_rates",
+            "turn_latency_daily",
+        ] {
+            assert!(views.iter().any(|name| name == view), "{view}");
+        }
+    }
+
+    #[test]
+    fn stats_count_rows_and_a_tables_indexes_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let connection = open(&path).unwrap();
+        write_turn(
+            &connection,
+            &turn("t", "2026-11-01T10:00:00Z", (10, 2), "completed"),
+        )
+        .unwrap();
+        let index_bytes: i64 = connection
+            .query_row(
+                "SELECT COALESCE(SUM(pgsize), 0) FROM dbstat WHERE name = 'turns_day'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        drop(connection);
+
+        let stats = stats_at(&path).unwrap();
+        let object = |name: &str| {
+            stats["objects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|object| object["name"] == name)
+                .cloned()
+                .unwrap_or_else(|| panic!("{name}"))
+        };
+        assert_eq!(object("turns")["rows"], 1);
+        assert_eq!(object("compactions")["rows"], 0);
+        assert_eq!(object("daily_usage")["rows"], 1, "a view reports its rows");
+        let bytes = object("turns")["bytes"].as_i64().expect("dbstat sizes");
+        assert!(
+            bytes > index_bytes,
+            "the table's pages and its indexes both count: {bytes} <= {index_bytes}"
+        );
+    }
+
+    #[test]
+    fn a_compaction_round_trips_and_a_repeated_update_keeps_one_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let connection = open(&path).unwrap();
+        upsert_thread(
+            &connection,
+            &ThreadRow {
+                id: "t".to_owned(),
+                harness: Some("claude-code".to_owned()),
+                model: Some("sonnet".to_owned()),
+                ..ThreadRow::default()
+            },
+        )
+        .unwrap();
+        let at = "2026-11-01T10:00:00Z";
+        record_compaction_at(&path, &compaction_row("t", at, "manual")).unwrap();
+        let row = one_row(&path, "SELECT * FROM compactions");
+        assert_eq!(row["thread_id"], "t");
+        assert_eq!(row["harness"], "claude-code");
+        assert_eq!(row["model"], "sonnet", "filled from the thread row");
+        assert_eq!(row["trigger"], "manual");
+        assert_eq!(row["mode"], "harness_summary");
+        assert_eq!(row["tokens_before"], 120_000);
+        assert_eq!(row["tokens_after"], 18_000);
+        assert_eq!(row["duration_ms"], 2_400);
+        assert_eq!(row["success"], 1);
+        assert_eq!(row["at"], "2026-11-01T10:00:00.000Z");
+
+        // The same harness event again (a duplicate terminal update) updates
+        // its row instead of adding a second one.
+        let mut again = compaction_row("t", "2026-11-01T10:00:01Z", "manual");
+        again.tokens_after = Some(12_000);
+        record_compaction_at(&path, &again).unwrap();
+        assert_eq!(count_rows(&path, "compactions"), 1);
+        let row = one_row(&path, "SELECT tokens_after FROM compactions");
+        assert_eq!(row["tokens_after"], 12_000);
+
+        // The one-SELECT acceptance question, through the same guards as
+        // `query_data`.
+        let daily = one_row(
+            &path,
+            "SELECT compactions, reclaimed_tokens FROM daily_compactions",
+        );
+        assert_eq!(daily["compactions"], 1);
+        assert_eq!(daily["reclaimed_tokens"], 108_000);
+    }
+
+    #[test]
+    fn turn_and_tool_metrics_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let connection = open(&path).unwrap();
+        let mut row = turn("t", "2026-11-01T10:00:00Z", (100, 20), "completed");
+        row.duration_ms = Some(9_500);
+        row.time_to_first_token_ms = Some(700);
+        row.model_time_ms = Some(7_000);
+        row.tool_time_ms = Some(1_500);
+        row.context_tokens = Some(48_000);
+        row.context_window = Some(200_000);
+        row.stop_reason = Some("end_turn".to_owned());
+        row.tool_calls[0].duration_ms = Some(250);
+        row.tool_calls[0].truncated = Some(true);
+        row.tool_calls[0].command_name = Some("cargo".to_owned());
+        row.tool_calls[0].error_kind = Some("exit_code".to_owned());
+        row.tool_calls[0].output_bytes = Some(512);
+        row.tool_calls.push(ToolCallRow {
+            tool_name: "mcp__rustcode__thread_usage".to_owned(),
+            ..Default::default()
+        });
+        write_turn(&connection, &row).unwrap();
+
+        let stored = one_row(&path, "SELECT * FROM turns");
+        assert_eq!(stored["duration_ms"], 9_500);
+        assert_eq!(stored["time_to_first_token_ms"], 700);
+        assert_eq!(stored["model_time_ms"], 7_000);
+        assert_eq!(stored["tool_time_ms"], 1_500);
+        assert_eq!(stored["context_tokens"], 48_000);
+        assert_eq!(stored["context_window"], 200_000);
+        assert_eq!(stored["stop_reason"], "end_turn");
+        let tools = query_path(
+            &path,
+            "SELECT tool_name, mcp_server, command_name, duration_ms, truncated, error_kind \
+             FROM tool_calls ORDER BY id",
+            10,
+        )
+        .unwrap()
+        .rows;
+        assert_eq!(tools[0]["command_name"], "cargo");
+        assert_eq!(tools[0]["duration_ms"], 250);
+        assert_eq!(tools[0]["truncated"], 1);
+        assert_eq!(tools[0]["error_kind"], "exit_code");
+        assert!(tools[0]["mcp_server"].is_null());
+        assert_eq!(tools[1]["mcp_server"], "rustcode");
+        let latency = one_row(
+            &path,
+            "SELECT turns, mean_duration_ms FROM turn_latency_daily",
+        );
+        assert_eq!(latency["turns"], 1);
+        assert_eq!(latency["mean_duration_ms"], 9_500.0);
+    }
+
     #[test]
     fn the_telemetry_tables_migrate_again_without_losing_rows() {
         let dir = tempfile::tempdir().unwrap();
@@ -4614,6 +5246,67 @@ mod tests {
         assert_eq!(count_rows(&path, "operational_events"), 0);
         let kept = one_row(&path, "SELECT status FROM turns");
         assert_eq!(kept["status"], "completed");
+    }
+
+    #[test]
+    fn a_store_at_migration_seven_gets_the_tool_call_turn_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let indexes = |path: &Path| -> Vec<String> {
+            let connection = Connection::open(path).unwrap();
+            connection
+                .prepare("PRAGMA index_list(tool_calls)")
+                .unwrap()
+                .query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .filter_map(Result::ok)
+                .collect()
+        };
+        // A store as migration 7 left it: every earlier step recorded, rows
+        // written, and no index on `tool_calls.turn_id`.
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL);",
+                )
+                .unwrap();
+            for (id, name, sql) in MIGRATIONS.iter().filter(|(id, _, _)| *id <= 7) {
+                connection.execute_batch(sql).unwrap();
+                connection
+                    .execute(
+                        "INSERT INTO schema_migrations (id, name) VALUES (?1, ?2)",
+                        params![id, name],
+                    )
+                    .unwrap();
+            }
+            write_turn(
+                &connection,
+                &turn("t", "2026-11-01T10:00:00Z", (10, 2), "completed"),
+            )
+            .unwrap();
+        }
+        assert!(
+            !indexes(&path).iter().any(|name| name == "tool_calls_turn"),
+            "the migration-7 store has no such index"
+        );
+
+        // Opening runs migration 8 on top of 7, and the index it adds is the
+        // one an upsert's `DELETE FROM tool_calls WHERE turn_id = ?` needs.
+        let connection = open(&path).unwrap();
+        assert!(indexes(&path).iter().any(|name| name == "tool_calls_turn"));
+        let recorded: i64 = connection
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(recorded, MIGRATIONS.len() as i64);
+        assert_eq!(count_rows(&path, "turns"), 1, "the old rows survive");
+        assert_eq!(count_rows(&path, "tool_calls"), 1, "the old rows survive");
+        // `IF NOT EXISTS` keeps the step harmless on a store that already has
+        // the index some other way.
+        let last = MIGRATIONS.iter().find(|(id, _, _)| *id == 8).unwrap().2;
+        connection.execute_batch(last).unwrap();
     }
 
     #[test]
@@ -4781,17 +5474,21 @@ mod tests {
     }
 
     #[test]
-    fn pruning_drops_old_payloads_then_old_rows() {
+    fn pruning_drops_old_raw_payloads_and_keeps_structured_rows() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(DATA_FILE);
         let connection = open(&path).unwrap();
         let payload = "{\"a\":1}";
-        // Older than the payload retention but inside the row retention.
         write_provider_request(&connection, &provider_row("t", &days_ago(8), Some(payload)))
             .unwrap();
         write_rpc_messages(&connection, &[&rpc_row("t", &days_ago(8), Some(payload))]).unwrap();
         write_operational_event(&connection, &event_row("t", &days_ago(8), Some(payload))).unwrap();
-        // Older than both.
+        write_turn(
+            &connection,
+            &turn("t", &days_ago(400), (10, 2), "completed"),
+        )
+        .unwrap();
+        // Older than the payload window.
         write_provider_request(
             &connection,
             &provider_row("t", &days_ago(40), Some(payload)),
@@ -4801,9 +5498,12 @@ mod tests {
         write_provider_request(&connection, &provider_row("t", &days_ago(0), Some(payload)))
             .unwrap();
 
-        let report = prune_with(&connection, TELEMETRY_MAX_BYTES).unwrap();
-        assert!(report.payloads_cleared >= 3, "{report:?}");
-        assert!(report.rows_deleted >= 1, "{report:?}");
+        let report = prune_with(&connection, TELEMETRY_MAX_BYTES, None).unwrap();
+        assert!(report.payloads_cleared >= 2, "{report:?}");
+        assert_eq!(
+            report.rows_deleted, 0,
+            "forever deletes no rows: {report:?}"
+        );
 
         let requests = query_path(
             &path,
@@ -4812,24 +5512,116 @@ mod tests {
         )
         .unwrap()
         .rows;
-        assert_eq!(requests.len(), 2, "the 40-day row is gone: {requests:?}");
+        assert_eq!(requests.len(), 3, "every raw row stays: {requests:?}");
         assert!(
             requests[0]["request_payload_json"].is_null(),
+            "the 40-day payload is gone: {requests:?}"
+        );
+        assert!(
+            requests[1]["request_payload_json"].is_null(),
             "the 8-day payload is gone: {requests:?}"
         );
         assert_eq!(
-            requests[1]["request_payload_json"], payload,
+            requests[2]["request_payload_json"], payload,
             "today keeps its payload"
         );
 
         let rpc = one_row(&path, "SELECT payload_json FROM harness_rpc_messages");
         assert!(rpc["payload_json"].is_null(), "{rpc}");
+        // Operational events are structured rows: their fields are history.
         let event = one_row(
             &path,
             "SELECT fields_json, captured_bytes FROM operational_events",
         );
-        assert!(event["fields_json"].is_null(), "{event}");
-        assert!(event["captured_bytes"].is_null(), "{event}");
+        assert_eq!(event["fields_json"], payload, "{event}");
+        // A 400-day-old turn is still queryable.
+        assert_eq!(count_rows(&path, "turns"), 1);
+    }
+
+    #[test]
+    fn a_folded_streaming_row_keeps_its_metadata_and_a_captured_tool_call_its_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let connection = open(&path).unwrap();
+        let coalesced = "{\"coalesced\":42,\"update\":\"command_output\",\"bytes\":900}";
+        let raw_body = format!("{{\"delta\":\"{}\"}}", "x".repeat(900));
+        let chunk_text = format!(
+            "{{\"params\":{{\"update\":{{\"sessionUpdate\":\"agent_message_chunk\",\"content\":\"{}\"}}}}}}",
+            "y".repeat(900)
+        );
+        let captured_tool_call = format!(
+            "{{\"params\":{{\"update\":{{\"sessionUpdate\":\"tool_call_update\",\"rawOutput\":{{\"text\":\"{}\"}}}}}}}}",
+            "z".repeat(900)
+        );
+        let row = |method: &str, payload: &str| {
+            let mut row = rpc_row("t", &days_ago(0), Some(payload));
+            row.method = Some(method.to_owned());
+            row
+        };
+        write_rpc_messages(
+            &connection,
+            &[
+                &row("item/commandExecution/outputDelta", coalesced),
+                &row("item/commandExecution/outputDelta", &raw_body),
+                &row("session/update", &chunk_text),
+                &row("session/update", &captured_tool_call),
+            ],
+        )
+        .unwrap();
+
+        let report = prune_with(&connection, TELEMETRY_MAX_BYTES, None).unwrap();
+        assert_eq!(
+            report.payloads_cleared, 2,
+            "the raw bodies only: {report:?}"
+        );
+        let payloads: Vec<Value> = query_path(
+            &path,
+            "SELECT payload_json FROM harness_rpc_messages ORDER BY id",
+            10,
+        )
+        .unwrap()
+        .rows
+        .into_iter()
+        .map(|row| row["payload_json"].clone())
+        .collect();
+        assert_eq!(
+            payloads[0], coalesced,
+            "a folded chunk keeps its counts: {payloads:?}"
+        );
+        assert!(payloads[1].is_null(), "the raw delta body is gone");
+        assert!(payloads[2].is_null(), "the chunk text is gone");
+        assert_eq!(
+            payloads[3], captured_tool_call,
+            "a captured tool call is not noise: {payloads:?}"
+        );
+        assert_eq!(count_rows(&path, "harness_rpc_messages"), 4);
+    }
+
+    #[test]
+    fn a_configured_retention_deletes_only_raw_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let connection = open(&path).unwrap();
+        write_provider_request(&connection, &provider_row("t", &days_ago(40), None)).unwrap();
+        write_rpc_messages(&connection, &[&rpc_row("t", &days_ago(40), None)]).unwrap();
+        write_operational_event(&connection, &event_row("t", &days_ago(40), None)).unwrap();
+        write_turn(&connection, &turn("t", &days_ago(40), (10, 2), "completed")).unwrap();
+
+        let report = prune_with(&connection, TELEMETRY_MAX_BYTES, Some(30)).unwrap();
+        assert_eq!(report.rows_deleted, 2, "only the raw rows: {report:?}");
+        assert_eq!(count_rows(&path, "provider_requests"), 0);
+        assert_eq!(count_rows(&path, "harness_rpc_messages"), 0);
+        assert_eq!(count_rows(&path, "operational_events"), 1);
+        assert_eq!(count_rows(&path, "turns"), 1);
+    }
+
+    #[test]
+    fn telemetry_retention_parses_forever_and_days() {
+        assert_eq!(super::parse_retention_days("forever"), None);
+        assert_eq!(super::parse_retention_days(""), None);
+        assert_eq!(super::parse_retention_days(" 30 "), Some(30));
+        assert_eq!(super::parse_retention_days("0"), None);
+        assert_eq!(super::parse_retention_days("later"), None);
     }
 
     #[test]
@@ -4848,7 +5640,7 @@ mod tests {
             .unwrap();
         }
         let budget = 100 * 1024;
-        let report = prune_with(&connection, budget).unwrap();
+        let report = prune_with(&connection, budget, None).unwrap();
         assert!(report.bytes_before > budget, "{report:?}");
         assert!(report.bytes_after <= budget, "{report:?}");
         assert!(report.payloads_cleared > 0, "{report:?}");
@@ -5143,7 +5935,7 @@ mod tests {
                 .unwrap();
         }
 
-        let report = prune_with(&connection, TELEMETRY_MAX_BYTES).unwrap();
+        let report = prune_with(&connection, TELEMETRY_MAX_BYTES, None).unwrap();
         assert_eq!(report.rows_deleted, 1, "{report:?}");
         assert_eq!(
             check_receipt_at(&path, "a", "old", "message_session", "h1").unwrap(),

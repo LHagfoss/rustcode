@@ -435,6 +435,15 @@
             "null"
           ]
         },
+        "supported_versions": {
+          "description": "Set with [`ErrorCode::UnsupportedVersion`]: the handshake versions\nthis gateway speaks, so the device can say which one to update to.",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
         "type": {
           "const": "error",
           "type": "string"

@@ -282,12 +282,15 @@ that does not know it ignores it.
 `request_id`. It is a **connection-level** frame: the gateway sends it once
 and then closes the connection. It is never the answer to a request on an
 authenticated connection; those are always `response` frames (below).
+`retry_after_secs` (with `rate_limited`) and `supported_versions` (with
+`unsupported_version`, an array of the handshake versions the host speaks) are
+optional and absent otherwise.
 
 | When | `code` | What the client does |
 | --- | --- | --- |
 | Handshake | `invalid_frame` | First frame was not a handshake frame, not JSON, or not text. A bug. |
 | Handshake | `frame_too_large` | Handshake frame over 8 KiB. |
-| Handshake | `unsupported_version` | `protocol_version` is not 1. Update the app. |
+| Handshake | `unsupported_version` | `protocol_version` is not 1. Update the app on the device, or the host, so both speak the same version. `supported_versions` lists the versions the host speaks, and `message` says the same in words that can be shown as they are. |
 | Handshake | `handshake_timeout` | No frame within 10 seconds. |
 | Handshake (`pair`) | `pairing_failed` | Wrong, expired, used or exhausted secret; indistinguishable on purpose. Ask for a new code. |
 | Handshake (`pair`) | `rate_limited` | Too many failed pairings on the host; `retry_after_secs` says when to try again. |

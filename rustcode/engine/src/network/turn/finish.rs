@@ -341,6 +341,8 @@ pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolic
         turn_usage.as_ref(),
         outcome,
         latest_user_index,
+        &stop_reason,
+        &ctx.performance,
     );
     s.current_token_usage = usage;
     drop(s);
@@ -358,6 +360,7 @@ pub(crate) async fn run_agent_turn_with_context_for_session<P: policy::TurnPolic
 /// Writes one finished turn to `data.sqlite` (`crate::data_store`): its
 /// tokens, its outcome and the tool calls made after its last user message.
 /// Metadata only: no message text, tool arguments or output.
+#[allow(clippy::too_many_arguments)]
 fn record_data_store_turn(
     s: &AppState,
     session_id: &str,
@@ -365,6 +368,8 @@ fn record_data_store_turn(
     usage: Option<&rustcode_core::TokenUsage>,
     outcome: Option<crate::app::TurnOutcome>,
     latest_user_index: Option<usize>,
+    stop_reason: &lifecycle::StopReason,
+    performance: &crate::benchmark::TurnPerformance,
 ) {
     // A turn that only resumes work later (a pending background task) has no
     // outcome yet; its next finish writes the row.
@@ -386,6 +391,17 @@ fn record_data_store_turn(
                 success: Some(result.success),
                 exit_code: result.exit_code.map(i64::from),
                 at: (!message.timestamp.is_empty()).then(|| message.timestamp.clone()),
+                started_at: None,
+                duration_ms: None,
+                output_bytes: Some(message.content.len() as i64),
+                truncated: Some(result.truncated || result.payload_truncated),
+                mcp_server: None,
+                command_name: result
+                    .command
+                    .as_deref()
+                    .and_then(first_word)
+                    .map(str::to_owned),
+                error_kind: result.error_kind.clone(),
             })
         })
         .collect();
@@ -406,8 +422,23 @@ fn record_data_store_turn(
             crate::app::TurnOutcome::Failed => "failed",
         }
         .to_owned(),
+        duration_ms: Some(turn_started_at.elapsed().as_millis() as i64),
+        time_to_first_token_ms: performance.ttft_us.map(|us| (us / 1000) as i64),
+        model_time_ms: Some((performance.model_us / 1000) as i64),
+        tool_time_ms: Some((performance.tool_wall_us / 1000) as i64),
+        context_tokens: s
+            .current_token_usage
+            .as_ref()
+            .map(|tokens| i64::from(tokens.total_tokens)),
+        context_window: Some(i64::from(s.active_context_window())),
+        stop_reason: Some(stop_reason.to_string()),
         tool_calls,
     });
+}
+
+/// The first word of a shell command, which is the program it ran.
+fn first_word(command: &str) -> Option<&str> {
+    command.split_whitespace().next()
 }
 
 fn finished_notification_status(

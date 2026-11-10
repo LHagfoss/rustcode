@@ -11,7 +11,7 @@
 //! `type`. Unknown fields are ignored, so fields can be added.
 
 use super::address::HostRoute;
-use super::devices::DeviceProfile;
+use super::devices::{DeviceProfile, sanitize_name};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -209,6 +209,53 @@ pub fn session_control(text: &str) -> SessionControl {
     }
 }
 
+/// What a frame that is about to be refused says about the device that sent
+/// it, read without trusting the frame to parse. A version this gateway does
+/// not speak is refused before the frame's shape is checked, and the host's
+/// owner still needs to know which app could not get in.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeviceHint {
+    /// The label the device chose, cleaned for display.
+    pub name: Option<String>,
+    /// What the frame said the device is; a phone on an unknown platform when
+    /// it said nothing usable.
+    pub profile: DeviceProfile,
+    /// The handshake version the frame named, when it named one.
+    pub protocol_version: Option<u32>,
+}
+
+/// Read the device fields of a first frame that is not trusted to parse. Only
+/// these fields are read, so a secret in a refused frame can reach neither a
+/// log nor the owner's status.
+pub fn device_hint(text: &str) -> DeviceHint {
+    if text.len() > MAX_HANDSHAKE_FRAME_BYTES {
+        return DeviceHint::default();
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return DeviceHint::default();
+    };
+    let field = |name: &str| {
+        value
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    let name = field("device_name")
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .map(|name| sanitize_name(&name));
+    let kind = field("device_kind");
+    let platform = field("platform");
+    DeviceHint {
+        name,
+        profile: DeviceProfile::from_wire(kind.as_deref(), platform.as_deref(), None),
+        protocol_version: value
+            .get("protocol_version")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|version| u32::try_from(version).ok()),
+    }
+}
+
 impl HandshakeRequest {
     /// Whether the device asked for the thread names on the wire.
     pub fn wants_thread_names(&self) -> bool {
@@ -304,11 +351,10 @@ impl HandshakeRequest {
         };
         let value: serde_json::Value = serde_json::from_str(text).map_err(|_| invalid())?;
         let version = value.get("protocol_version").and_then(|v| v.as_u64());
-        if version.is_some_and(|version| version != u64::from(HANDSHAKE_PROTOCOL_VERSION)) {
-            return Err(HandshakeResponse::error(
-                ErrorCode::UnsupportedVersion,
-                format!("this gateway speaks protocol version {HANDSHAKE_PROTOCOL_VERSION}"),
-            ));
+        if let Some(version) = version
+            && version != u64::from(HANDSHAKE_PROTOCOL_VERSION)
+        {
+            return Err(HandshakeResponse::unsupported_version(version));
         }
         // serde_json errors can quote input; never forward them to the peer or a log.
         let request: Self = serde_json::from_value(value).map_err(|_| invalid())?;
@@ -432,6 +478,10 @@ pub enum HandshakeResponse {
         message: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         retry_after_secs: Option<u64>,
+        /// Set with [`ErrorCode::UnsupportedVersion`]: the handshake versions
+        /// this gateway speaks, so the device can say which one to update to.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        supported_versions: Vec<u32>,
     },
 }
 
@@ -441,6 +491,21 @@ impl HandshakeResponse {
             code,
             message: message.into(),
             retry_after_secs: None,
+            supported_versions: Vec::new(),
+        }
+    }
+
+    /// The refusal of a device whose app speaks another handshake version.
+    /// The message says what to do about it, and the frame names the version
+    /// this host does speak, so both sides can say the same thing.
+    pub fn unsupported_version(requested: u64) -> Self {
+        Self::Error {
+            code: ErrorCode::UnsupportedVersion,
+            message: format!(
+                "this device's app speaks RustCode remote protocol version {requested}, and this host speaks version {HANDSHAKE_PROTOCOL_VERSION}; update RustCode on the device or on this host so both speak the same version"
+            ),
+            retry_after_secs: None,
+            supported_versions: vec![HANDSHAKE_PROTOCOL_VERSION],
         }
     }
 
@@ -779,6 +844,7 @@ mod tests {
             code: ErrorCode::RateLimited,
             message: "wait".into(),
             retry_after_secs: Some(30),
+            supported_versions: Vec::new(),
         };
         assert_eq!(
             limited.to_text(),
@@ -791,6 +857,61 @@ mod tests {
             Err(HandshakeResponse::Error { code, .. }) => code,
             other => panic!("expected an error frame, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn an_older_or_newer_app_is_told_to_update_with_the_versions() {
+        let refused = HandshakeRequest::parse(
+            r#"{"type":"pair","protocol_version":4,"method":"code","secret":"1234-5678","device_name":"Lars's iPhone","platform":"ios"}"#,
+        )
+        .unwrap_err();
+        let HandshakeResponse::Error {
+            code,
+            message,
+            supported_versions,
+            ..
+        } = &refused
+        else {
+            panic!("a wrong version is an error frame");
+        };
+        assert_eq!(*code, ErrorCode::UnsupportedVersion);
+        assert_eq!(*supported_versions, [HANDSHAKE_PROTOCOL_VERSION]);
+        // What to do about it, naming both sides: the device's app or the
+        // host has to be updated, and the message may be shown as it is.
+        assert!(message.contains("update RustCode"), "{message}");
+        assert!(message.contains("version 4"), "{message}");
+        assert!(
+            message.contains(&format!("version {HANDSHAKE_PROTOCOL_VERSION}")),
+            "{message}"
+        );
+        assert_eq!(
+            refused.to_text(),
+            format!(
+                r#"{{"type":"error","code":"unsupported_version","message":"{message}","supported_versions":[1]}}"#
+            )
+        );
+    }
+
+    #[test]
+    fn a_refused_frame_still_names_its_device_without_its_secret() {
+        let hint = device_hint(
+            r#"{"type":"pair","protocol_version":9,"method":"credential","secret":"s3cr3t-value-zzz","device_name":"  Lars's   iPhone ","device_kind":"phone","platform":"iOS"}"#,
+        );
+        assert_eq!(hint.name.as_deref(), Some("Lars's iPhone"));
+        assert_eq!(hint.profile.kind, DeviceKind::Phone);
+        assert_eq!(hint.profile.platform, "ios");
+        assert_eq!(hint.protocol_version, Some(9));
+        assert!(!format!("{hint:?}").contains("s3cr3t-value-zzz"));
+
+        // A frame that is not JSON at all still yields the defaults, so a
+        // refusal can always be recorded.
+        assert_eq!(device_hint("not json"), DeviceHint::default());
+        // A desktop names its kind and machine; read without validating it.
+        let desktop = device_hint(
+            r#"{"type":"authenticate","protocol_version":1,"device_id":"d","token":"t","device_kind":"desktop"}"#,
+        );
+        assert_eq!(desktop.profile.kind, DeviceKind::Desktop);
+        assert_eq!(desktop.name, None);
     }
 
     #[test]

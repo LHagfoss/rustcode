@@ -13,13 +13,14 @@
 //! with the code the owner reads off the host.
 
 use super::connect::Outcome;
+use super::control::RefusalReason;
 use super::devices::DeviceProfile;
 use super::gateway::{
     Admitted, ConnectTicket, LiveConnection, MAX_FRAME_BYTES, Shared, UnauthenticatedSlot,
 };
 use super::handshake::{
-    ErrorCode, HandshakeRequest, HandshakeResponse, MAX_HANDSHAKE_FRAME_BYTES, SessionControl,
-    session_control,
+    DeviceHint, ErrorCode, HandshakeRequest, HandshakeResponse, MAX_HANDSHAKE_FRAME_BYTES,
+    SessionControl, session_control,
 };
 use super::pairing::CODE_DIGITS;
 use super::router::{FrameQueue, FrameSink};
@@ -62,8 +63,23 @@ pub(super) async fn serve_connection(
             accept_hdr_async_with_config(socket, refuse_browsers, Some(config)),
         ) => upgraded,
     };
-    let Ok(Ok(mut socket)) = upgraded else {
-        return;
+    let mut socket = match upgraded {
+        Ok(Ok(socket)) => socket,
+        Ok(Err(WsError::Http(response))) => {
+            // The upgrade is refused before any frame, so the device is told
+            // nothing. A native app built before it sent the native app origin
+            // is refused exactly like a browser page, and its owner has no way
+            // to learn that from the connection itself.
+            if response.status() == StatusCode::FORBIDDEN {
+                shared.record_refusal(
+                    slot.ip(),
+                    RefusalReason::UnexpectedOrigin,
+                    &DeviceHint::default(),
+                );
+            }
+            return;
+        }
+        _ => return,
     };
     let first = tokio::select! {
         _ = shared.shutdown.cancelled() => return,
@@ -110,7 +126,7 @@ pub(super) async fn serve_connection(
             }
             parsed => {
                 thread_names = parsed.is_ok_and(|request| request.wants_thread_names());
-                shared.admit_device(&text)
+                shared.admit_device(slot.ip(), &text)
             }
         },
     };
@@ -285,7 +301,7 @@ async fn connect_request(
             Waited::Text(text) => {
                 let names = HandshakeRequest::parse(&text)
                     .is_ok_and(|request| request.wants_thread_names());
-                return match shared.admit_connected(&ticket.id, &text) {
+                return match shared.admit_connected(ticket.ip(), &ticket.id, &text) {
                     Ok(admitted) => Connected::Admitted(admitted, names),
                     Err(rejection) => Connected::Closing(rejection),
                 };

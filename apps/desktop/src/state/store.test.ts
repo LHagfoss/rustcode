@@ -120,6 +120,7 @@ import {
   setProjectCwd,
   setReduceTransparency,
   setSectionOrder,
+  setSnoozed,
   setThreadLimit,
   setThreadStatus,
   setTotalLimit,
@@ -128,6 +129,7 @@ import {
   setView,
   shownPlan,
   showPanel,
+  snoozeThread,
   startNewThread,
   startQueuedEdit,
   statusOf,
@@ -2765,6 +2767,61 @@ describe("engine controller with the mock engine", () => {
     expect(s.drafts[a.id]).toBe("half-written reply");
     expect(s.drafts.new).toBe("the next idea");
     expect(s.threads[a.id]?.running).toBe(true);
+  });
+
+  test("snoozing the thread on screen leaves it for a new thread in its folder", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    const [a, b] = useApp.getState().sessions;
+    selectThread(a!.id);
+    await until(() => useApp.getState().threads[a!.id]?.loaded === true);
+    setPanel("changes");
+
+    snoozeThread(a!.id, Date.now() + 3_600_000);
+    let s = useApp.getState();
+    expect(a!.id in s.snoozed).toBe(true);
+    expect(s.selectedId).toBeNull();
+    expect(s.panel).toBeNull();
+    // The new thread starts in the folder of the one that was snoozed.
+    expect(s.projectCwd).toBe(a!.cwd);
+
+    // Waking it, on the thread the user has opened since, does not send them away.
+    selectThread(b!.id);
+    snoozeThread(a!.id, null);
+    s = useApp.getState();
+    expect(a!.id in s.snoozed).toBe(false);
+    expect(s.selectedId).toBe(b!.id);
+  });
+
+  test("snoozing another thread, or one an agent snoozes, leaves the screen alone", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    const [a, b] = useApp.getState().sessions;
+    selectThread(b!.id);
+    await until(() => useApp.getState().threads[b!.id]?.loaded === true);
+    setPanel("changes");
+
+    snoozeThread(a!.id, Date.now() + 3_600_000);
+    let s = useApp.getState();
+    expect(a!.id in s.snoozed).toBe(true);
+    expect(s.selectedId).toBe(b!.id);
+    expect(s.panel).toBe("changes");
+
+    // An agent's `update_session` writes the time and stays put, as an agent's
+    // settle does.
+    setSnoozed(b!.id, Date.now() + 3_600_000);
+    s = useApp.getState();
+    expect(b!.id in s.snoozed).toBe(true);
+    expect(s.selectedId).toBe(b!.id);
+    expect(s.panel).toBe("changes");
+
+    // The board has no new-thread screen, so snoozing there stays on the board.
+    selectThread(a!.id);
+    setView({ kind: "board" });
+    snoozeThread(a!.id, Date.now() + 3_600_000);
+    s = useApp.getState();
+    expect(s.view.kind).toBe("board");
+    expect(s.selectedId).toBe(a!.id);
   });
 
   test("the new-thread screen has no panel, and neither does the thread it starts", async () => {

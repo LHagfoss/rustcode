@@ -1255,6 +1255,31 @@ async fn host_status() -> Value {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    // Why a device did not get in, newest first. This is what lets the page
+    // say "a phone tried to connect with an older app version" instead of
+    // showing nothing while the phone only says it cannot connect.
+    let refused_connections = status
+        .as_ref()
+        .map(|status| {
+            status
+                .refused_connections
+                .iter()
+                .map(|refused| {
+                    json!({
+                        "reason": refused.reason,
+                        "attempts": refused.attempts,
+                        "deviceName": refused.device_name,
+                        "deviceKind": refused.device_kind,
+                        "platform": refused.platform,
+                        "protocolVersion": refused.protocol_version,
+                        "supportedVersions": refused.supported_versions,
+                        "remoteAddr": refused.remote_addr,
+                        "refusedSecsAgo": refused.refused_secs_ago,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     json!({
         "available": true,
         "enabled": enabled,
@@ -1262,6 +1287,7 @@ async fn host_status() -> Value {
         "gateway": gateway,
         "connectRequests": connect_requests,
         "endedConnectRequests": ended_connect_requests,
+        "refusedConnections": refused_connections,
         "pairedDevices": devices.len(),
         "devices": devices
             .iter()
@@ -2256,6 +2282,7 @@ mod tests {
         assert!(value["devices"].is_array());
         assert!(value["connectRequests"].is_array());
         assert!(value["endedConnectRequests"].is_array());
+        assert!(value["refusedConnections"].is_array());
     }
 
     /// A prompt a device sends on a thread that runs on an external harness
