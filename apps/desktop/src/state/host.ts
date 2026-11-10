@@ -49,7 +49,9 @@ import {
   checkMessage,
   checkQueryData,
   checkStart,
+  contextNote,
   type DelegateLimits,
+  delegated,
   delivered,
   emptyBook,
   type Failure,
@@ -556,8 +558,22 @@ async function answer(params: JsonObject): Promise<JsonObject> {
   // its answer is kept, so the same call retried after a dropped answer is
   // answered from there instead of acting twice (`docs/orchestrator.md`).
   const key = retryKey(params, call);
-  if (!key) return perform(caller, call);
-  return receipted(caller, call, key, () => perform(caller, call));
+  const answered = await (key
+    ? receipted(caller, call, key, () => perform(caller, call))
+    : perform(caller, call));
+  return withContextNote(caller.id, answered);
+}
+
+/** The quarter of its context each caller was last told it had passed (`contextNote`). */
+const contextNoteSteps = new Map<string, number>();
+
+/** An answer with the caller's context note added, when it has just passed another quarter. */
+function withContextNote(callerId: string, answered: JsonObject): JsonObject {
+  if ("error" in answered) return answered;
+  const told = contextNote(useApp.getState().threads[callerId]?.usage, contextNoteSteps.get(callerId) ?? 0);
+  if (!told) return answered;
+  contextNoteSteps.set(callerId, told.step);
+  return { ...answered, context_note: told.note };
 }
 
 /** The tools a retry key applies to: the ones that can start or deliver twice. */
@@ -1148,7 +1164,15 @@ async function threadStatus(caller: RuleThread, target?: string): Promise<JsonOb
         ? { last_provider_error: activity.last_provider_error }
         : {}),
       project: projectOf(entry),
-      ...(entry.worktree ? { worktree: { path: entry.worktree.path, branch: entry.worktree.branch } } : {}),
+      // The worktree's and the pull request's branch are named only where they differ from `branch`.
+      ...(entry.worktree
+        ? {
+            worktree: {
+              path: entry.worktree.path,
+              ...(entry.worktree.branch !== state.branch ? { branch: entry.worktree.branch } : {}),
+            },
+          }
+        : {}),
       ...(state.branch ? { branch: state.branch } : {}),
       pull: state.pull
         ? {
@@ -1157,7 +1181,7 @@ async function threadStatus(caller: RuleThread, target?: string): Promise<JsonOb
             state: state.pull.state,
             merged: state.pull.merged,
             draft: state.pull.draft,
-            branch: state.pull.branch,
+            ...(state.pull.branch !== state.branch ? { branch: state.pull.branch } : {}),
             head_sha: state.pull.headSha,
             ci: state.pull.ci,
             failing: state.pull.failing,
@@ -2131,7 +2155,7 @@ async function startNow(caller: RuleThread, call: StartCall): Promise<JsonObject
     model,
     account: account ?? undefined,
   });
-  deliver(id, delivered(call.prompt, caller.title), link, caller.id);
+  deliver(id, delegated(call.prompt, caller.title), link, caller.id);
   return {
     session_id: id,
     link_id: link,
@@ -2232,7 +2256,7 @@ async function fanOutNow(caller: RuleThread, call: FanOutCall): Promise<JsonObje
         access: accessOf(id),
         ...ranWith(id),
       });
-      deliver(id, delivered(call.prompt, caller.title), link, caller.id);
+      deliver(id, delegated(call.prompt, caller.title), link, caller.id);
     } catch (error) {
       // The reason, not the name of the error class: the harness says why it could not start.
       out.push({ harness: h.harness.id, ...failureJson(failure("failed", errorText(error))) });

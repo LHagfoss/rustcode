@@ -208,7 +208,7 @@ the wait is released the same way.
 | `start_session` | `{ prompt, title?, harness?, model?, effort?, account? (v5), worktree?: bool, project?: path, client_request_id? }` | `{ session_id, link_id, harness, account?, access, model?, effort?, links_left, replayed? }` — `links_left` is the smaller of this thread's room and the app's total — the client asks the user once, creates the thread (in a new worktree when `worktree: true`, default true for a git project), sends `prompt` as its first message. `harness` must be installed, on and signed in, `model` one the harness lists (a missing provider prefix is filled in when only one model fits), and `account` a named login that harness's `list_harnesses` entry lists; otherwise nothing starts and the error names the usable harnesses, the closest models or the accounts it does have. Without `account` the child runs on the caller's own account when it stays on the same harness, else on the login a new thread would start on. The answer reports the access, account, model and effort the thread actually runs, and the approval card shows harness · account name (id) · model · effort |
 | `message_session` | M1 + `client_request_id?` | M1 + `replayed: true` when the call was answered from its receipt |
 | `wait_session` (a settled link whose child still works) | — | answers that link as `state: "working"` with `turns`, `last_tool` and `idle_ms`, and keeps waiting: the answer it would carry is not the child's last |
-| `wait_session` | M1 (`link_id` / `link_ids`) | M1 + `status`, `files_changed`, and per link `turns`, `last_tool` and `idle_ms` (how long the child has done nothing) so a timeout says whether it thinks or is stuck; a timeout also carries `status: "timeout"`, `waited_until` and a note that a wake will come. An answer cut at 8 KiB carries `answer_truncated: true` and the `session_id`, whose `read_session` has the rest |
+| `wait_session` | M1 (`link_id` / `link_ids`) | M1 + `status`, `files_changed`, and per link `turns`, `last_tool` and `idle_ms` (how long the child has done nothing) so a timeout says whether it thinks or is stuck; a timeout also carries `status: "timeout"`, `waited_until` and a note that a wake will come. With no `timeout_ms` a wait lasts 20 minutes: it returns as soon as a link finishes, and each wait that ends with nothing done is another request that resends the caller's whole context. An answer cut at 8 KiB carries `answer_truncated: true` and the `session_id`, whose `read_session` has the rest |
 | `fan_out` | `{ prompt, harnesses: [{ harness, model?, effort?, account? (v5) }] (2..4), title?, client_request_id? }` | `{ links: [{ session_id, link_id, harness, account?, access, model?, effort? } \| { harness, error }], fan_out_id, links_left, replayed? }` — one worktree thread per harness, same prompt, each checked like `start_session`; the user compares results in the app |
 
 Checked in the engine before anything is sent (`validate`): `prompt` and
@@ -927,3 +927,25 @@ in a git repository. `initialize` also advertises `_meta.rustcode.worktrees`,
 (`state/orchestration.ts` `CAPABILITY_VERSION`), and the newest client gets the
 v4 data-store tools, the v6 activity read, the v7 queue control and the v9
 delegate pull-request tools; v8 adds no tool, only its prompt hint.
+
+## Keeping an orchestrator's context small
+
+Every request an orchestrator makes resends its whole context, so what it
+reads costs again on each later call. In measured Opus orchestrator threads,
+most of that context came from the orchestrator reading diffs, files and logs
+itself, then from delegates' final answers. Four things keep it small:
+
+- The version 9 hint tells the orchestrator to leave reading, reviews and CI
+  triage to delegates, check pull requests with `thread_status`, wait on all
+  links in one long `wait_session` (or end the turn and be woken), and call
+  `list_harnesses` once.
+- A thread `start_session` or `fan_out` starts gets its task with one more
+  paragraph after it (`DELEGATE_REPORT`, `state/orchestration.ts`): end with a
+  report of about 12 lines, with no code, diffs or logs. `message_session`
+  messages are delivered as written.
+- Answers are compact JSON, and `thread_status` names a worktree's or pull
+  request's branch only where it differs from `branch`.
+- Once the caller's context passes 25%, 50% and 75% of its window, the next
+  successful answer carries a `context_note` saying how full it is and
+  suggesting a handoff to a new thread. It is told once per quarter
+  (`contextNote`).

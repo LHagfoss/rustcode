@@ -19,11 +19,15 @@ import {
   checkMessage,
   checkQueryData,
   checkStart,
+  contextNote,
   DEFAULT_ACTIVITY_ITEMS,
   DEFAULT_DELEGATE_LIMITS,
   DEFAULT_DELEGATES_PER_THREAD,
   DEFAULT_DELEGATES_TOTAL,
   DEFAULT_MERGE_MS,
+  DELEGATE_REPORT,
+  delegated,
+  delivered,
   depthOf,
   doneLinks,
   effectivePerThreadLimit,
@@ -1763,5 +1767,29 @@ describe("a message queued on a thread whose turn failed", () => {
     const { book: next, failed } = failQueuedLinks(start, "child", undefined, 1000);
     expect(failed).toEqual([]);
     expect(next).toBe(start);
+  });
+});
+
+describe("keeping an orchestrator's context small", () => {
+  test("asks a new delegate for a short report after the attributed task", () => {
+    const text = delegated("Fix the login", "Parent");
+    expect(text.startsWith(delivered("Fix the login", "Parent"))).toBe(true);
+    expect(text.endsWith(DELEGATE_REPORT)).toBe(true);
+  });
+
+  test("notes the context once per quarter it passes", () => {
+    expect(contextNote(undefined, 0)).toBeNull();
+    expect(contextNote({ used: 10_000, size: 0 }, 0)).toBeNull();
+    expect(contextNote({ used: 40_000, size: 200_000 }, 0)).toBeNull();
+    const first = contextNote({ used: 54_000, size: 200_000 }, 0);
+    expect(first?.step).toBe(1);
+    expect(first?.note).toContain("27% full (54k of 200k tokens)");
+    expect(contextNote({ used: 90_000, size: 200_000 }, 1)).toBeNull();
+    expect(contextNote({ used: 110_000, size: 200_000 }, 1)?.step).toBe(2);
+  });
+
+  test("waits twenty minutes when no timeout is given", () => {
+    const call = parseCall({ tool: "wait_session", args: { link_id: "a/1" } });
+    expect(call).toMatchObject({ tool: "wait_session", timeoutMs: 20 * 60 * 1000 });
   });
 });

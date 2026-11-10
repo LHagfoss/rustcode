@@ -62,7 +62,11 @@ export const effectivePerThreadLimit = (limits: DelegateLimits): number =>
  * limit in the reason, instead of being told it cannot delegate at all.
  */
 export const MAX_DEPTH = 2;
-export const DEFAULT_WAIT_MS = 60_000;
+/**
+ * A wait returns as soon as a link finishes, so a long default costs nothing; a short one makes the
+ * orchestrator ask again, and each ask resends its whole context (the engine's `DEFAULT_WAIT_MS`).
+ */
+export const DEFAULT_WAIT_MS = 20 * 60 * 1000;
 export const MAX_WAIT_MS = 25 * 60 * 1000;
 export const MAX_LAST_TURNS = 10;
 /** How long a settled child waits for its siblings before the parent hears about them. */
@@ -912,6 +916,41 @@ export function checkStart(
 
 /** The message as the other thread receives it: who it is from, then the text. */
 export const delivered = (text: string, from: string) => `From thread “${from}” (agent):\n\n${text}`;
+
+/**
+ * What a delegate is asked to end with. Its final message is what `wait_session` hands the
+ * orchestrator, and that stays in the orchestrator's context for every later request, so a short
+ * report is what keeps an orchestrator cheap; the full detail stays in the delegate's own thread.
+ */
+export const DELEGATE_REPORT =
+  "When you finish, end with a short report for the orchestrator, at most about 12 lines: the outcome, the branch and pull request, the checks you ran and their result, and anything left open. No code, diffs or logs in it; it reads your thread if it needs more.";
+
+/** A task as a new delegate receives it: attributed, with the report it ends with. */
+export const delegated = (text: string, from: string) => `${delivered(text, from)}\n\n${DELEGATE_REPORT}`;
+
+/** How full the caller's context is when it is first told, then again at each step past that. */
+export const CONTEXT_NOTE_STEP = 0.25;
+
+/**
+ * The note an orchestrator's answer carries once its context passes another quarter (25%, 50%,
+ * 75%), and the step it is now at; `null` when it is below the next step or the size is unknown.
+ * Told once per step, so the note is not paid for on every call.
+ */
+export function contextNote(
+  usage: { used: number; size: number } | undefined,
+  toldStep: number,
+): { note: string; step: number } | null {
+  if (!usage || !(usage.size > 0) || !(usage.used >= 0)) return null;
+  const share = usage.used / usage.size;
+  const step = Math.floor(share / CONTEXT_NOTE_STEP);
+  if (step < 1 || step <= toldStep) return null;
+  const percent = Math.round(share * 100);
+  const k = (n: number) => `${Math.round(n / 1000)}k`;
+  return {
+    step,
+    note: `This thread's context is ${percent}% full (${k(usage.used)} of ${k(usage.size)} tokens), and every call resends it. Leave reading and checking to delegates from here. If more work is ahead, write a short handoff (open link ids, branches, pull requests, next steps) and suggest the user continue it in a new thread.`,
+  };
+}
 
 /** One turn of a thread as `read_session` renders it. */
 export interface ReadTurn {
