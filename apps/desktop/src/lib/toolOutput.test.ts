@@ -38,4 +38,37 @@ describe("a fenced tool result", () => {
     const mixed = "```console\nhi\n```\nand then more\n";
     expect(stripOutputFence(mixed)).toBe(mixed);
   });
+
+  test("ends at the first line that closes it, not the last", () => {
+    // Two blocks drawn one after the other: neither wraps the whole text.
+    const two = "```\na\n```\n```\nb\n```";
+    expect(stripOutputFence(two)).toBe(two);
+  });
+
+  test("needs the run that closes it to be the same character", () => {
+    const mismatched = "```\nhi\n~~~\n";
+    expect(stripOutputFence(mismatched)).toBe(mismatched);
+  });
+
+  test("keeps a fence inside a longer one that wraps it", () => {
+    expect(stripOutputFence("````markdown\nIntro\n\n```sh\nbun install\n```\n````\n")).toBe(
+      "Intro\n\n```sh\nbun install\n```",
+    );
+  });
+
+  test("takes the closing run however long it is, and whatever follows it", () => {
+    expect(stripOutputFence("```\nhi\n`````\n\n  ")).toBe("hi");
+  });
+
+  test("reads a Windows line ending", () => {
+    expect(stripOutputFence("```console\r\nline one\r\nline two\r\n```\r\n")).toBe("line one\r\nline two");
+  });
+
+  test("leaves no indentation of the closing line in the output", () => {
+    expect(stripOutputFence("  ```console\nhi\n  ```  ")).toBe("hi");
+  });
+
+  test("gives back nothing for a fence around nothing", () => {
+    expect(stripOutputFence("```\n```")).toBe("");
+  });
 });
