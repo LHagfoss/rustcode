@@ -305,7 +305,7 @@ pub const LIST_SESSIONS: Tool = Tool {
 pub const MESSAGE_SESSION: Tool = Tool {
     name: crate::orchestration::MESSAGE_SESSION,
     description: "Send another thread of this project a message; it answers in a turn of its own, with its own history and approvals. The user is asked once. Returns a link_id for wait_session; the message queues while that thread is busy. Send the whole task: it does not see this conversation. Carry the repository rules (tell it to read AGENTS.md) and acceptance criteria, and bound commands that can block: a delegated shell has no TTY or default timeout.",
-    arguments: r#"{"session_id": "id from list_sessions", "message": "what to ask or do", "client_request_id": "retry key"}"#,
+    arguments: r#"{"session_id": "id from list_sessions", "message": "what to ask or do", "attachments": ["/abs/path/to/file"], "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
     schema: || {
@@ -314,6 +314,12 @@ pub const MESSAGE_SESSION: Tool = Tool {
             "properties": {
                 "session_id": {"type": "string", "minLength": 1},
                 "message": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_MESSAGE_BYTES},
+                "attachments": {
+                    "type": "array",
+                    "maxItems": crate::orchestration::MAX_ATTACHMENTS,
+                    "items": {"type": "string", "minLength": 1},
+                    "description": "Absolute paths of files to attach, each under this thread's project or worktree and at most 5 MB"
+                },
                 "client_request_id": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_CLIENT_REQUEST_ID_CHARS, "description": "Retry key: a repeat returns the first result"}
             },
             "required": ["session_id", "message"],
@@ -481,7 +487,7 @@ pub const SEARCH_SESSIONS: Tool = Tool {
 
 pub const LIST_WORKTREES: Tool = Tool {
     name: crate::orchestration::LIST_WORKTREES,
-    description: "List the threads that work in their own git worktree: session_id, title, project, branch and path. This project's by default, every project's with all_projects. For where each one stands (distance from its upstream, changed files, last commit, pull request), use worktree_status.",
+    description: "List the threads that work in their own git worktree: session_id, title, project, branch and path. This project's by default, every project's with all_projects.",
     arguments: r#"{"all_projects": false}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -501,7 +507,7 @@ pub const LIST_WORKTREES: Tool = Tool {
 
 pub const UPDATE_SESSION: Tool = Tool {
     name: crate::orchestration::UPDATE_SESSION,
-    description: "Rename, pin, mark unread, snooze or change the status of a thread. Omit session_id for this thread; changing another thread asks the user first. Status: active (back in the list), review (needs a look), settled (done). snoozed_until: how long it leaves the list: 1h, evening, tomorrow, next_week or an ISO 8601 time; null brings it back.",
+    description: "Rename, pin, mark unread or read, snooze or change the status of a thread. unread: true marks it unread, false marks it read. Omit session_id for this thread; changing another thread asks the user first. Status: active (back in the list), review (needs a look), settled (done). snoozed_until: how long it leaves the list: 1h, evening, tomorrow, next_week or an ISO 8601 time; null brings it back.",
     arguments: r#"{"title": "Fix login", "pinned": true, "status": "settled"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -589,7 +595,7 @@ pub const TRANSFER_SESSION: Tool = Tool {
 
 pub const LIST_PENDING_REQUESTS: Tool = Tool {
     name: crate::orchestration::LIST_PENDING_REQUESTS,
-    description: "List the approvals and questions this project's open threads are waiting on from the user: session_id, thread title, whether it is an approval or a question, and what it asks. Ask it when the user asks what is waiting on them. Only the user can answer them.",
+    description: "List the approvals and questions this project's open threads are waiting on from the user: session_id, request_id, thread title, whether it is an approval or a question, and what it asks. Ask it when the user asks what is waiting on them, then answer_request one of them if the user says what to answer.",
     arguments: r#"{}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -598,6 +604,58 @@ pub const LIST_PENDING_REQUESTS: Tool = Tool {
             "type": "object",
             "properties": {},
             "required": [],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const ANSWER_REQUEST: Tool = Tool {
+    name: crate::orchestration::ANSWER_REQUEST,
+    description: "Answer one approval or question a thread waits on, from list_pending_requests' session_id and request_id. An approval takes choice allow_once, allow_always or deny, exactly one of the scopes the request offers. A question takes answer, either free text or the id of one of its options, or choice deny for the Decline its card offers. Only a thread in this thread's own delegation tree can be answered, never this thread's own request, and the user approves first.",
+    arguments: r#"{"session_id": "from list_pending_requests", "request_id": "from list_pending_requests", "choice": "allow_once"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "minLength": 1},
+                "request_id": {"type": "string", "minLength": 1},
+                "choice": {"type": "string", "enum": crate::orchestration::APPROVAL_ANSWERS},
+                "answer": {"type": "string", "minLength": 1}
+            },
+            "required": ["session_id", "request_id"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const ORGANIZE_THREADS: Tool = Tool {
+    name: crate::orchestration::ORGANIZE_THREADS,
+    description: "Set the title, pin, unread or archived (settled) state of several threads at once. The batch form of update_session: the same changes reach every listed thread, the user approves once, and a thread outside this project is skipped with the reason. unread: true marks them unread, false marks them read. changed counts the threads one of the changes actually reached; a thread that already had the value is not one.",
+    arguments: r#"{"session_ids": ["id from list_sessions"], "pinned": true, "archived": false}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "session_ids": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": crate::orchestration::MAX_ORGANIZED_THREADS,
+                    "items": {"type": "string", "minLength": 1}
+                },
+                "title": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_TITLE_CHARS},
+                "pinned": {"type": "boolean"},
+                "unread": {"type": "boolean", "description": "true marks them unread, false marks them read"},
+                "archived": {"type": "boolean", "description": "true settles the threads, false brings them back"}
+            },
+            "required": ["session_ids"],
             "additionalProperties": false
         })
     },

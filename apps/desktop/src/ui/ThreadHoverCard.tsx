@@ -6,7 +6,7 @@
 // Escape or the moment its row is dragged (ui/sidebarDrag.tsx); the timing is the
 // one every tooltip shares (lib/hover.ts).
 
-import { Folder, GitBranch, MessageSquare } from "lucide-react";
+import { Folder, GitBranch, Laptop, MessageSquare } from "lucide-react";
 import { HoverCard } from "radix-ui";
 import { type ReactNode, useEffect, useMemo } from "react";
 import { displayPath, type SessionSummary } from "../acp/types";
@@ -27,6 +27,7 @@ function Line({ children, className }: { children: ReactNode; className?: string
 export function ThreadHoverCard({
   session,
   project,
+  machine,
   harness,
   model,
   status,
@@ -38,6 +39,8 @@ export function ThreadHoverCard({
   session: SessionSummary;
   /** Where the row runs, as the row names it. */
   project: string;
+  /** The computer it runs on, when that is not this one (`state/threadKeys.ts`). */
+  machine?: string;
   /** The harness's own name, when it is not RustCode's built-in one. */
   harness?: string;
   model?: string;
@@ -87,6 +90,12 @@ export function ThreadHoverCard({
               <ProjectMark name={project} />
               <span className="min-w-0 truncate">{project}</span>
             </Line>
+            {machine && (
+              <Line>
+                <Laptop size={11} className="shrink-0" />
+                <span className="min-w-0 truncate">Runs on {machine}</span>
+              </Line>
+            )}
             {said && <Line>{said}</Line>}
             <Line>
               <span className="size-1.5 shrink-0 rounded-full bg-current" aria-hidden />

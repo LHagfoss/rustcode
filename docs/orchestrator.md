@@ -298,7 +298,7 @@ the wait is released the same way.
 | `read_session` | `{ session_id, last_turns?: 1..10, offset?: bytes }` (default 3 turns, offset 0) | `{ session_id, title, status, project, offset, text, next_offset?, complete }`: the rendered answer as text, one page at a time (16 KiB); when `next_offset` is present, pass it as `offset` for the rest. Pages join with nothing lost or repeated, cut on a UTF-8 character boundary. Any project's thread |
 
 | `start_session` | `{ prompt, title?, harness?, model?, effort?, account? (v5), worktree?: bool, project?: path, client_request_id? }` | `{ session_id, link_id, harness, account?, access, model?, effort?, links_left, replayed? }` — `links_left` is the smaller of this thread's room and the app's total — the client asks the user once, creates the thread (in a new worktree when `worktree: true`, default true for a git project), sends `prompt` as its first message. `harness` must be installed, on and signed in, `model` one the harness lists (a missing provider prefix is filled in when only one model fits), and `account` a named login that harness's `list_harnesses` entry lists; otherwise nothing starts and the error names the usable harnesses, the closest models or the accounts it does have. Without `account` the child runs on the caller's own account when it stays on the same harness, else on the login a new thread would start on. The answer reports the access, account, model and effort the thread actually runs, and the approval card shows harness · account name (id) · model · effort |
-| `message_session` | M1 + `client_request_id?` | M1 + `replayed: true` when the call was answered from its receipt |
+| `message_session` | M1 + `client_request_id?`, and `attachments?: [absolute path]` (v10) | M1 + `replayed: true` when the call was answered from its receipt, and `attachments` with the paths it carried. A file is attached the way the composer attaches one (`state/compose.ts` `promptBlocks`), so the turn shows the same chips: each path absolute, inside the caller's project or worktree, at most 10 files of at most 5 MB each. A path outside them, or one the shell cannot read, refuses the whole message before the user is asked |
 | `wait_session` (a settled link whose child still works) | — | answers that link as `state: "working"` with `turns`, `last_tool` and `idle_ms`, and keeps waiting: the answer it would carry is not the child's last |
 | `wait_session` | M1 (`link_id` / `link_ids`) | M1 + `status`, `files_changed`, and per link `turns`, `last_tool` and `idle_ms` (how long the child has done nothing) so a timeout says whether it thinks or is stuck; a timeout also carries `status: "timeout"`, `waited_until` and a note that a wake will come. With no `timeout_ms` a wait lasts 20 minutes: it returns as soon as a link finishes, and each wait that ends with nothing done is another request that resends the caller's whole context. An answer cut at 8 KiB carries `answer_truncated: true` and the `session_id`, whose `read_session` has the rest |
 | `fan_out` | `{ prompt, harnesses: [{ harness, model?, effort?, account? (v5) }] (2..4), title?, client_request_id? }` | `{ links: [{ session_id, link_id, harness, account?, access, model?, effort? } \| { harness, error }], fan_out_id, links_left, replayed? }` — one worktree thread per harness, same prompt, each checked like `start_session`; the user compares results in the app |
@@ -581,8 +581,9 @@ they finish or ask, instead of having to poll with sleeps.
   A resumed turn the user stops is a stopped link, and reports nothing.
 - **Waiting on the user.** A child that goes `needs_user` (an approval or a
   question) is reported the same way, once per pending request (its rpc id):
-  the parent is told to use `list_pending_requests` and that the user answers,
-  because an agent cannot answer an approval. The user sees the same card in
+  the parent is told to use `list_pending_requests`, and that only the user
+  answers an approval unless the parent answers it itself with v10's
+  `answer_request` (below). The user sees the same card in
   the child's chat and at the foot of the parent's transcript, and answers it
   in either place.
 - **Not twice.** Each link is marked in the link book (`notifiedAt`,
@@ -665,11 +666,11 @@ validated like the others; the client carries them out (`state/host.ts`).
 | `list_harnesses` | `{ harness?, model? }` | `{ current, harnesses: [{ id, name, available, reason?, usage?, accounts? (v5), efforts?, models?, omitted_models?, filter? }] }`, at most 12 models each (50 with `model`): each harness leads with the model a new thread on it starts with, then the models this project's threads used recently, then its own order, and `omitted_models` counts the rest (`filter` says to pass `model` for them, or that nothing matched); `efforts` sits once on the harness when every listed model shares them, else on each model. `harness` (an id, else a display name; a name several harnesses share is refused, naming their ids) narrows to one harness, `model` a case-insensitive substring of a model id or name and lists every match. `accounts` is `[{ id, name, auth, signed_out?, usage? }]` for a harness with named logins, where `signed_out` is what the plan read found (and what makes naming it fail), `usage` is a login's plan windows (below), and `current` names the harness, account, model and effort this thread runs on | None |
 | `search_sessions` | `{ query, all_projects? }` | `{ sessions: [{ session_id, title, status, project?, snippet? }] }`: this project, or every project with `all_projects`, title and full text, at most 30 | None |
 | `list_worktrees` | `{ all_projects? }` | `{ worktrees: [{ session_id, title, project?, branch, path }] }`: this project, or every project with `all_projects` | None |
-| `update_session` | `{ session_id?, title?, pinned?, unread?, status?, snoozed_until? }` (`active`, `review`, `settled`; `1h`, `evening`, `tomorrow`, `next_week`, an ISO 8601 time, or `null` to wake) | `{ session_id, title, pinned, status, snoozed_until }` | Own thread none. Another: asked, allowed by Auto-edit and Full access |
+| `update_session` | `{ session_id?, title?, pinned?, unread?, status?, snoozed_until? }` (`active`, `review`, `settled`; `1h`, `evening`, `tomorrow`, `next_week`, an ISO 8601 time, or `null` to wake). `unread` is two-way: `true` marks it unread, `false` marks it read | `{ session_id, title, pinned, status, snoozed_until }` | Own thread none. Another: asked, allowed by Auto-edit and Full access |
 | `interrupt_session` | `{ session_id }` | `{ session_id, interrupted, stopped, status? }`, with `stopped` the links under it that stopped too; a thread cannot stop itself | Asked, allowed by Full access |
 | `configure_session` | `{ session_id?, model?, effort? }` | `{ session_id, harness, access, model?, effort? }`; no `model` or `effort` only reads | Reading and its own thread none. Another: asked, allowed by Full access |
 | `transfer_session` | `{ session_id, harness }` | `{ session_id, harness, moved, model?, effort? }`; the thread must be idle, and a thread cannot move itself | Asked, allowed by Full access |
-| `list_pending_requests` | none | `{ requests: [{ session_id, title, kind, asks }] }`: approvals and questions this project's open threads wait on. Agents cannot answer them | None |
+| `list_pending_requests` | none | `{ requests: [{ session_id, request_id, title, kind, asks, options }] }`: approvals and questions this project's open threads wait on, oldest first. `request_id` is what `answer_request` (v10) takes, and `options` the choices an approval and the answers a question offer, in the order its card lists them | None |
 | `list_projects` | none | `{ projects: [{ path, name, threads, working }] }`: every project the user has a thread in, most recently updated first, at most 50 | None |
 | `list_pull_requests` | `{ state?: "open" \| "closed" \| "merged" \| "all" }` (default `open`) | `{ pull_requests: [{ number, title, state, branch, url? }] }`: this project's, at most 30 | None |
 
@@ -942,7 +943,52 @@ and a v8 app keeps exactly the v8 set and `PROMPT_HINT_V8`.
 
 ## Orchestration tools v10
 
-Built. Clients advertising `_meta.rustcode.orchestration >= 10` also get the
+Built. Clients advertising `_meta.rustcode.orchestration >= 10` also get the two
+tools that close the loop v3 opened: `list_pending_requests` showed what a
+thread waits on but said only the user could answer it, and managing several
+threads meant one `update_session` call each. The version is bumped for the same
+reason as v9: the app carries the calls out, and a v9 app has neither the code
+nor the card it clicks.
+
+| Tool | Args | Answer | Approval |
+| --- | --- | --- | --- |
+| `answer_request` | `{ session_id, request_id, choice?, answer? }` — for an approval, `choice` is `allow_once`, `allow_always` or `deny`; for a question, `answer` is free text or the id of one of its `options`, and `choice: "deny"` takes the Decline its card offers. One of the two, never both | `{ session_id, request_id, thread, kind, choice?, option?, answer? }` — `kind` is `approval` or `question`; a question answered by id or text reports `answer` (and `option` when it named one), a declined question and every approval report `choice` with the option it picked. A request that is no longer waiting is `not_found` (“list_pending_requests again”), one already answered is `conflict` | Asked, allowed by Full access, grant `answer:<session id>:<kind>:<what it asks>`. Only a thread in the caller's own delegation tree can be answered — a thread below it, never itself — and a choice the request does not offer is refused, with the scopes it does offer named, rather than answered with another |
+| `organize_threads` | `{ session_ids: [id] (1..50), title?, pinned?, unread?, archived? }` — `archived: true` settles the threads and `false` brings them back, the same status `update_session`'s `settled` sets; `unread: true` marks them unread, `false` marks them read. At least one change | `{ changed, threads: [{ session_id, title, pinned, unread, status, archived }], skipped?: [{ session_id, reason }] }`. A thread this caller cannot manage is skipped with the reason and the rest still change; a list with none it can manage is `not_allowed`. `changed` counts the threads one of the changes actually reached, and `threads` lists those: a value a thread already has is not a change, and a call that would change nothing writes nothing and raises no card | Asked once for the batch, allowed by Auto-edit and Full access, grant `organize:<sorted ids>` |
+
+`answer_request` answers with the store call the user's own click makes
+(`state/store.ts` `answerPermission`, `answerQuestionOptions`,
+`answerQuestionText`): the card leaves the thread's queue, the answer is
+written into its transcript exactly as a typed one is, and a timed grant the
+engine keeps is listed again. A question takes the option whose id the answer
+names, and plain text otherwise. The delegation-tree rule is the user's: a
+delegate does not answer what the thread above it was asked, because that
+thread's approval is not its to hand out.
+
+`organize_threads` is `update_session` over a list: the same store operations
+(`renameThread`, `togglePin`, `markUnread`/`clearFinished`, one `setThreadsStatus`
+for the whole batch), the same project rule, and one card for the lot. The card
+names the changes and every thread they reach, and only the ones that will
+happen: a batch whose listed threads already look like that writes nothing,
+raises no card and answers `changed: 0`.
+
+An approval's answer picks the option whose scope the choice names — once,
+always, or decline — and nothing else. An engine that offers only a standing
+answer refuses `allow_once` instead of recording a grant that outlives the
+call, and the refusal names the scopes the request does offer.
+
+`message_session` takes `attachments` from v10 on. The app checks each path
+against the caller's project and worktree (`state/attachments.ts`), the shell
+measures the file and refuses one over 5 MB or one that resolves outside them
+(`src-tauri/src/native.rs` `attached_files`), and the message carries the
+composer's own `file` attachment — so an attachment that waits in a busy
+thread's queue still carries its files when it starts.
+
+The app advertises 10 from `CAPABILITY_VERSION` (`state/orchestration.ts`),
+and a v9 app keeps exactly the v9 set and `PROMPT_HINT_V9`.
+
+## Orchestration tools v11
+
+Built. Clients advertising `_meta.rustcode.orchestration >= 11` also get the
 pair that answers "where does this work stand, and can the user continue it
 here?" without a shell: `worktree_status` reads it, `handoff_worktree` moves it.
 Before them an orchestrator ran `git status`, `git log` and `gh pr list` in a
@@ -950,7 +996,7 @@ Before them an orchestrator ran `git status`, `git log` and `gh pr list` in a
 then remembering to `git switch` in the checkout, which is exactly the step
 that loses a user's uncommitted work when it is done carelessly. The version is
 bumped for the same reason as v4, v6, v7 and v9: the *client* reads the threads,
-asks the user and carries the calls out, and a v9 app has neither the code nor
+asks the user and carries the calls out, and a v10 app has neither the code nor
 the engine methods.
 
 | Tool | Args | Answer | Approval |
@@ -1011,11 +1057,10 @@ Like v9's three tools, the pair reaches an orchestrator through the `rustcode`
 MCP server an external harness runs. The built-in schema's byte cap is already
 exceeded at v9, so the built-in harness's own threads do not list these either;
 a v10 client loses none of the tools it had at v9
-(`version_ten_adds_tools_without_taking_any_away`).
+(`version_eleven_adds_tools_without_taking_any_away`).
 
-The app advertises 10 from `CAPABILITY_VERSION` (`state/orchestration.ts`), and
-a v9 app keeps exactly the v9 set and `PROMPT_HINT_V9`.
-
+The app advertises 11 from `CAPABILITY_VERSION` (`state/orchestration.ts`), and
+a v10 app keeps exactly the v10 set and `PROMPT_HINT_V10`.
 ## External harnesses as orchestrators
 
 Built (`rustcode/engine/src/orchestration/{hub,mcp_server}.rs`). When the
@@ -1033,8 +1078,10 @@ process list. `--token` still works for manual testing.
 The same environment carries `RUSTCODE_ORCHESTRATION_VERSION` (the client's
 version), so the server lists exactly that version's tools and prompt hint — a
 v3 app is never offered `thread_usage` or `query_data`, which it could not
-answer, a v5 app is never offered `read_activity`, a v6 app is never
-offered `manage_queue`, and a v9 app is never offered the v10 worktree pair.
+answer, a v5 app is never offered `read_activity`, a v6 app is never offered
+`manage_queue`, a v9 app is never offered `answer_request` or
+`organize_threads` nor told that `message_session` takes `attachments`, and a
+v10 app is never offered the v11 worktree pair.
 
 While the user has Smart UI on, the same environment carries
 `RUSTCODE_SMART_UI=1` and the server also lists **`smart_ui_check`**
@@ -1096,11 +1143,11 @@ can inject the server (unix), and in a thread's answer whether it did.
 engine does both); a thread's answer sets `checkpoints` to whether its cwd is
 in a git repository. `initialize` also advertises `_meta.rustcode.worktrees`,
 `checkpoints` and `threadStatus` (each `1`). The app advertises
-`_meta.rustcode.orchestration = 10` while threads may orchestrate
+`_meta.rustcode.orchestration = 11` while threads may orchestrate
 (`state/orchestration.ts` `CAPABILITY_VERSION`), and the newest client gets the
 v4 data-store tools, the v6 activity read, the v7 queue control, the v9
-delegate pull-request tools and the v10 worktree pair; v8 adds no tool, only its
-prompt hint.
+delegate pull-request tools, the v10 answers and batching and the v11 worktree
+pair; v8 adds no tool, only its prompt hint.
 
 ## Keeping an orchestrator's context small
 
@@ -1112,7 +1159,7 @@ itself, then from delegates' final answers. Four things keep it small:
 - The version 9 hint tells the orchestrator to leave reading, reviews and CI
   triage to delegates, check pull requests with `thread_status`, wait on all
   links in one long `wait_session` (or end the turn and be woken), and call
-  `list_harnesses` once. Version 10 adds where worktrees stand
+  `list_harnesses` once. Version 11 adds where worktrees stand
   (`worktree_status`) and handing one back to the user (`handoff_worktree`),
   which replace a `run_command` per worktree and the shell steps that used to
   move work by hand.

@@ -12,6 +12,7 @@ import {
   FileDiff,
   GitBranch,
   GitPullRequest,
+  Laptop,
   ListChecks,
   type LucideIcon,
   PanelRight,
@@ -20,7 +21,7 @@ import {
 } from "lucide-react";
 import { DropdownMenu, Popover } from "radix-ui";
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import { displayPath, projectName } from "../acp/types";
+import { displayPath, modelName, projectName } from "../acp/types";
 import { STATUS_LABEL } from "../acp/v2";
 import { darkenOverlay, useBanner } from "../lib/banner";
 import { observeSize } from "../lib/resize";
@@ -32,6 +33,7 @@ import { heldSetup, type PendingSetup, pendingStatus } from "../state/setup";
 import {
   autoCompactOffFor,
   dismissPendingSetup,
+  harnessesOn,
   refreshSessions,
   repairThread,
   retryPendingSetup,
@@ -43,10 +45,13 @@ import {
   setView,
   statusOf,
   useApp,
+  useMachineOfThread,
   useShortcutHint,
+  useThreadOffline,
   worktreeOf,
 } from "../state/store";
 import { formatClock, type ThreadState } from "../state/thread";
+import { splitThreadKey } from "../state/threadKeys";
 import { overviewExpanded, setOverviewExpanded } from "../state/widgets";
 import { AttentionCard, ResolvedApprovalBar } from "./AttentionCards";
 import { OriginChip } from "./Branches";
@@ -307,6 +312,17 @@ export const HEADER_BUTTONS: Record<HeaderButtonId, HeaderButtonEntry> = {
  */
 const PANEL_BUTTONS: ReadonlySet<HeaderButtonId> = new Set<HeaderButtonId>(["details", "changes"]);
 
+/**
+ * The header's controls that read this computer: git, the working tree, and a shell in the thread's
+ * folder. A thread on a paired machine keeps the buttons, disabled, with the machine's name where
+ * the action would be (docs/desktop.md › Several machines).
+ */
+const LOCAL_ONLY_BUTTONS: ReadonlySet<HeaderButtonId> = new Set<HeaderButtonId>([
+  "terminal",
+  "pulls",
+  "changes",
+]);
+
 function Header({
   thread,
   pending,
@@ -320,7 +336,20 @@ function Header({
   const projectCwd = useApp((s) => s.projectCwd);
   const shown = useApp((s) => s.headerButtons);
   const folderKey = useShortcutHint("thread-folder");
-  const listed = useApp((s) => (thread ? s.sessions.find((x) => x.id === thread.id)?.title : undefined));
+  const session = useApp((s) => (thread ? s.sessions.find((x) => x.id === thread.id) : undefined));
+  const listed = session?.title;
+  // A thread on a paired computer: the header says where it runs, with what harness and model, and
+  // whether that computer is reachable now (docs/desktop.md › Several machines).
+  const machine = useMachineOfThread(thread?.id);
+  const offline = useThreadOffline(thread?.id);
+  // The harness's name as the machine that runs it lists it, not its id: a thread on another
+  // computer runs that computer's harness (docs/desktop.md › Several machines).
+  const harnessSnapshot = useApp((s) => (thread ? harnessesOn(s, splitThreadKey(thread.id).host) : null));
+  const harnessId = thread?.harness?.id ?? session?.harness ?? "harness";
+  const harnessName = harnessSnapshot?.harnesses.find((h) => h.id === harnessId)?.name ?? harnessId;
+  const lastUpdated = session?.updatedAt
+    ? new Date(session.updatedAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+    : undefined;
   const title = pending?.title ?? (thread ? (thread.title ?? listed ?? "New thread") : "New thread");
   const cwd = pending?.cwd ?? thread?.cwd ?? projectCwd;
   // The buttons the user keeps, in their order, with the panel's toggles last:
@@ -342,7 +371,26 @@ function Header({
   ];
   for (const id of kept) {
     const entry = HEADER_BUTTONS[id];
-    const node = <entry.Button key={id} thread={thread} />;
+    const Icon = entry.icon;
+    const node =
+      machine && LOCAL_ONLY_BUTTONS.has(id) ? (
+        // A disabled button takes no pointer, so the tooltip hangs on a span that can: it says
+        // where the action lives instead of leaving a dead icon.
+        <Tooltip key={id} label={`Runs on ${machine}`}>
+          <span className="inline-flex">
+            <button
+              type="button"
+              aria-label={entry.label}
+              disabled
+              className="inline-flex h-6 w-8 items-center justify-center rounded-full text-fg-muted opacity-40"
+            >
+              <Icon size={14} />
+            </button>
+          </span>
+        </Tooltip>
+      ) : (
+        <entry.Button key={id} thread={thread} />
+      );
     if (entry.kind === "cluster") cluster.push(node);
     else {
       closeCluster();
@@ -384,6 +432,22 @@ function Header({
             <HarnessIcon id={thread.harness.id} size={14} className="text-fg-muted" />
           )}
           <h1 className="min-w-0 truncate font-semibold text-body">{title}</h1>
+          {thread && machine && (
+            <Tooltip
+              label={
+                offline
+                  ? `${machine} is not connected${lastUpdated ? `. Last updated ${lastUpdated}` : ""}. This thread is read-only until it is back.`
+                  : `This thread runs on ${machine}. Its turns, files and shell are there, not here.`
+              }
+            >
+              <span className="flex max-w-[300px] shrink-0 items-center gap-1 rounded-full bg-fill-subtle px-2 py-0.5 text-callout text-fg-muted">
+                <Laptop size={12} className="shrink-0" aria-hidden />
+                <span className="truncate">
+                  Runs on {machine} · {harnessName} · {modelName(session?.model) ?? "model"}
+                </span>
+              </span>
+            </Tooltip>
+          )}
           {/* A fork or a side chat links back to the thread it came from. */}
           {thread && <OriginChip threadId={thread.id} />}
           {/* A paired device is attached, or the thread is shared with them (RemoteAccessPage.tsx). */}
@@ -749,6 +813,12 @@ export function ChatView() {
     doc.setProperty("--rc-toast-top", `${Math.round(r.top + HEADER_HEIGHT + 8)}px`);
   }, [isNew, stackHeight, width, height]);
 
+  // A thread whose computer is away: read-only, and the lane says so before the field does.
+  const offline = useThreadOffline(thread?.id);
+  const offMachine = useMachineOfThread(thread?.id);
+  const offUpdated = useApp((s) =>
+    thread ? s.sessions.find((x) => x.id === thread.id)?.updatedAt : undefined,
+  );
   const ownRequest = thread?.permissions[0];
   // The approval just answered, which stands where its card was for a moment.
   const resolved = useApp((s) => (thread ? s.resolvedApprovals[thread.id] : undefined));
@@ -858,6 +928,22 @@ export function ChatView() {
                   showTip={height >= NEW_THREAD_WIDGETS_MIN_HEIGHT}
                 />
               )}
+              {thread && offline && (
+                <LaneItem over>
+                  <Callout floating>
+                    Not connected{offMachine ? ` to ${offMachine}` : ""}.
+                    {offUpdated
+                      ? ` Last updated ${new Date(offUpdated).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}.`
+                      : ""}{" "}
+                    This thread is read-only until the computer is back.
+                    {ownRequest
+                      ? ownRequest.question
+                        ? " It is waiting for your answer there."
+                        : " It is waiting for your approval there."
+                      : ""}
+                  </Callout>
+                </LaneItem>
+              )}
               {error && (
                 <LaneItem over>
                   <ErrorBanner
@@ -888,7 +974,7 @@ export function ChatView() {
                   <ReportPanel text={report.text} />
                 </LaneItem>
               )}
-              {ownRequest && (
+              {ownRequest && !offline && (
                 <LaneItem over>
                   <AttentionCard
                     request={ownRequest}

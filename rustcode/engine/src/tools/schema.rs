@@ -159,9 +159,10 @@ pub struct ToolSchemaPolicy {
     /// `manage_queue`, for a client that advertises orchestration version 7.
     pub(crate) include_orchestration_v7_tools: bool,
     pub(crate) include_orchestration_v9_tools: bool,
-    /// `worktree_status` and `handoff_worktree`, for a client that advertises
-    /// orchestration version 10.
+    /// `answer_request` and `organize_threads`, for orchestration version 10.
     pub(crate) include_orchestration_v10_tools: bool,
+    /// `worktree_status` and `handoff_worktree`, for orchestration version 11.
+    pub(crate) include_orchestration_v11_tools: bool,
     /// What the client advertised, capped at [`crate::orchestration::VERSION`]:
     /// the tool set follows the flags above, and the args follow this one.
     pub(crate) orchestration_version: u8,
@@ -232,6 +233,7 @@ impl ToolSchemaPolicy {
             include_orchestration_v7_tools: false,
             include_orchestration_v9_tools: false,
             include_orchestration_v10_tools: false,
+            include_orchestration_v11_tools: false,
             orchestration_version: 0,
             profile: ToolSchemaProfile::Coding,
             compact_text_prompt: false,
@@ -262,6 +264,7 @@ impl ToolSchemaPolicy {
             include_orchestration_v7_tools: false,
             include_orchestration_v9_tools: false,
             include_orchestration_v10_tools: false,
+            include_orchestration_v11_tools: false,
             orchestration_version: 0,
             profile: ToolSchemaProfile::ReadOnlyInspection,
             compact_text_prompt: false,
@@ -285,6 +288,7 @@ impl ToolSchemaPolicy {
             include_orchestration_v7_tools: false,
             include_orchestration_v9_tools: false,
             include_orchestration_v10_tools: false,
+            include_orchestration_v11_tools: false,
             orchestration_version: 0,
             profile: ToolSchemaProfile::ReadOnlySubagent,
             compact_text_prompt: false,
@@ -345,6 +349,7 @@ impl ToolSchemaPolicy {
         self.include_orchestration_v7_tools = self.include_orchestration_tools && version >= 7;
         self.include_orchestration_v9_tools = self.include_orchestration_tools && version >= 9;
         self.include_orchestration_v10_tools = self.include_orchestration_tools && version >= 10;
+        self.include_orchestration_v11_tools = self.include_orchestration_tools && version >= 11;
         self.orchestration_version = version.min(crate::orchestration::VERSION);
         self
     }
@@ -890,6 +895,8 @@ const ROOT_ONLY_TOOLS: &[&str] = &[
     crate::orchestration::LIST_PULL_REQUESTS,
     crate::orchestration::TRANSFER_SESSION,
     crate::orchestration::LIST_PENDING_REQUESTS,
+    crate::orchestration::ANSWER_REQUEST,
+    crate::orchestration::ORGANIZE_THREADS,
     crate::orchestration::THREAD_STATUS,
     crate::orchestration::MERGE_WHEN_GREEN,
     crate::orchestration::CLEANUP_WORKTREE,
@@ -942,6 +949,7 @@ fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
         || (crate::orchestration::is_v7_tool(tool.name) && !policy.include_orchestration_v7_tools)
         || (crate::orchestration::is_v9_tool(tool.name) && !policy.include_orchestration_v9_tools)
         || (crate::orchestration::is_v10_tool(tool.name) && !policy.include_orchestration_v10_tools)
+        || (crate::orchestration::is_v11_tool(tool.name) && !policy.include_orchestration_v11_tools)
         || (policy.compact_text_prompt
             && !TEXT_CODING_TOOLS.contains(&tool.name)
             && !(policy.include_agent_tools
@@ -2898,6 +2906,7 @@ pub(crate) fn tool_system_prompt_for_policy(
         include_orchestration_v7_tools: false,
         include_orchestration_v9_tools: false,
         include_orchestration_v10_tools: false,
+        include_orchestration_v11_tools: false,
         ..policy
     };
     let mut p = String::new();
@@ -3250,13 +3259,26 @@ mod schema_budget_tests {
         };
         assert!(start_schema(4)["function"]["parameters"]["properties"]["account"].is_null());
         assert!(start_schema(5)["function"]["parameters"]["properties"]["account"].is_object());
+        // Nor is v9 shown files to attach, which its app would drop.
+        let message_schema = |version: u8| {
+            let policy = ToolSchemaPolicy::root(true).with_orchestration_tools(version);
+            let (tools, _) = build_builtin_native_tools_schema(policy);
+            tools
+                .into_iter()
+                .find(|tool| tool["function"]["name"] == crate::orchestration::MESSAGE_SESSION)
+                .expect("message_session")
+        };
+        assert!(message_schema(9)["function"]["parameters"]["properties"]["attachments"].is_null());
+        assert!(
+            message_schema(10)["function"]["parameters"]["properties"]["attachments"].is_object()
+        );
     }
 
-    /// A v10 client's built-in schema lists everything a v9 client's does: the
+    /// A v11 client's built-in schema lists everything a v10 client's does: the
     /// two worktree tools are added, and the byte cap never takes another tool
     /// away to make room for them (an app upgrading must not lose a tool).
     #[test]
-    fn version_ten_adds_tools_without_taking_any_away() {
+    fn version_eleven_adds_tools_without_taking_any_away() {
         let names = |version: u8| -> Vec<String> {
             let policy = ToolSchemaPolicy::root(true).with_orchestration_tools(version);
             build_builtin_native_tools_schema(policy)
@@ -3265,11 +3287,11 @@ mod schema_budget_tests {
                 .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_owned))
                 .collect()
         };
-        let nine = names(9);
-        for name in names(10) {
+        let ten = names(10);
+        for name in names(11) {
             assert!(
-                nine.contains(&name),
-                "{name} was advertised at v9 and is gone at v10"
+                ten.contains(&name),
+                "{name} was advertised at v10 and is gone at v11"
             );
         }
     }

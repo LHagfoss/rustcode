@@ -48,6 +48,7 @@ export function delegationAllowed(
     | "message"
     | "fan_out"
     | "organize"
+    | "answer"
     | "interrupt"
     | "transfer"
     | "configure"
@@ -56,6 +57,7 @@ export function delegationAllowed(
     | "handoff",
 ): boolean {
   if (mode === "full") return true;
+  // Answering a request grants a delegate what it asked for, so it is not part of editing either.
   return mode === "edits" && (kind === "read" || kind === "organize");
 }
 

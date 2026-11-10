@@ -85,7 +85,31 @@ const MOCKS: Record<string, unknown> = {
     path: "/Users/you/code/rustcode",
   },
   list_pending_requests: {
-    requests: [{ session_id: "t1", title: "Add the login form", kind: "approval", asks: "Run: cargo test" }],
+    requests: [
+      {
+        session_id: "t1",
+        request_id: "7",
+        title: "Add the login form",
+        kind: "approval",
+        asks: "Run: cargo test",
+        options: [{ id: "allow_once", name: "Allow once" }],
+      },
+    ],
+  },
+  answer_request: {
+    session_id: "t1",
+    request_id: "7",
+    thread: "Add the login form",
+    kind: "approval",
+    choice: "allow_once",
+    option: "Allow once",
+  },
+  organize_threads: {
+    changed: 2,
+    threads: [
+      { session_id: "t1", title: "Add the login form", pinned: true, status: "idle", archived: false },
+      { session_id: "t2", title: "Fix the composer", pinned: true, status: "done", archived: true },
+    ],
   },
   transfer_session: { session_id: "t1", harness: "codex", moved: true },
   list_projects: {
@@ -129,7 +153,12 @@ const MOCKS: Record<string, unknown> = {
   interrupt_session: { session_id: "t1", interrupted: true },
   configure_session: { session_id: "self", harness: "rustcode", access: "auto", effort: "high" },
   start_session: { session_id: "thread-3", link_id: "self/1", harness: "codex" },
-  message_session: { link_id: "self/1", receipt: "started", session_id: "t1" },
+  message_session: {
+    link_id: "self/1",
+    receipt: "started",
+    session_id: "t1",
+    attachments: ["/repo/docs/login.md"],
+  },
   wait_session: { links: [{ link_id: "self/1", status: "done" }] },
   fan_out: { links: [] },
 };

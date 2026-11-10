@@ -1537,6 +1537,8 @@ pub const TOOLS: &[Tool] = &[
     misc::LIST_PULL_REQUESTS,
     misc::TRANSFER_SESSION,
     misc::LIST_PENDING_REQUESTS,
+    misc::ANSWER_REQUEST,
+    misc::ORGANIZE_THREADS,
     misc::THREAD_USAGE,
     misc::QUERY_DATA,
     misc::READ_ACTIVITY,

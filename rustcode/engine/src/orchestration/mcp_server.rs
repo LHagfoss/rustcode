@@ -385,6 +385,16 @@ async fn call(
             ),
         };
     }
+    // The same for a file an older app would drop, instead of attaching it silently
+    // nowhere.
+    if version < super::ATTACHMENT_VERSION && super::carries_attachments(tool, &args) {
+        return CallAnswer {
+            success: false,
+            content: format!(
+                "error: {tool} with attachments needs a newer RustCode app. Nothing was sent."
+            ),
+        };
+    }
     let limit = super::requested_wait(tool, &args).map(|wait| {
         wait + if tool == super::WAIT_SESSION {
             super::WAIT_SERVER_GRACE
@@ -662,28 +672,28 @@ mod tests {
     }
 
     #[test]
-    fn the_worktree_tools_are_listed_from_version_ten() {
+    fn the_worktree_tools_are_listed_from_version_eleven() {
         let names = |version: u8| {
             tools(version, false)
                 .into_iter()
                 .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
                 .collect::<Vec<_>>()
         };
-        let nine = names(9);
         let ten = names(10);
-        for name in super::super::V10_TOOL_NAMES {
+        let eleven = names(11);
+        for name in super::super::V11_TOOL_NAMES {
             assert!(
-                !nine.contains(&name.to_owned()),
-                "{name} must not reach a v9 app"
+                !ten.contains(&name.to_owned()),
+                "{name} must not reach a v10 app"
             );
             assert!(
-                ten.contains(&name.to_owned()),
-                "{name} is listed for a v10 app"
+                eleven.contains(&name.to_owned()),
+                "{name} is listed for a v11 app"
             );
         }
         // Their schemas travel with them: an argument a client cannot answer
         // is never advertised.
-        let handoff = tools(10, false)
+        let handoff = tools(11, false)
             .into_iter()
             .find(|tool| tool["name"] == super::super::HANDOFF_WORKTREE)
             .expect("handoff_worktree");
@@ -695,7 +705,7 @@ mod tests {
             handoff["inputSchema"]["required"],
             serde_json::json!(["session_id"])
         );
-        let status = tools(10, false)
+        let status = tools(11, false)
             .into_iter()
             .find(|tool| tool["name"] == super::super::WORKTREE_STATUS)
             .expect("worktree_status");
