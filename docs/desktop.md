@@ -83,7 +83,11 @@ machine (`remoteHarnesses` in `src/state/store.ts`), so the model picker, the
 `@` agents and the harness defaults are the machine's; this computer's list is
 untouched. `New thread` inside a machine's group in the sidebar starts there
 with that group's folder (`startNewThread(folder, host)`), and any other new
-thread starts here.
+thread starts here. A folder picked on this disk — "Choose Folder…", "New
+Thread in Folder…", the palette's Add project folder — always starts here: a
+path alone never names a machine, so two Macs that share a checkout path cannot
+mistake each other. "New Thread Here" in a thread's folder menu and `/new` in
+its composer keep that thread's machine and folder.
 
 The project follows the machine: `src/state/projects.ts` finds the same project
 there by path, then by git remote (`_meta.rustcode.remote`, normalized so
@@ -95,8 +99,14 @@ the folder name; the mock's Studio reports one. `session/new` is sent over the
 machine's connection with its folder and harness, and the thread is keyed with
 its host, so it appears under the machine's group at once; a thread created
 there is titled by that machine's history (`thread_rename` is this shell's).
-Reopening a thread uses its own machine's connection (`openThread`), including
-a thread listed before its machine went away.
+A machine on an older RustCode that does not answer `_rustcode/harnesses` is
+shown as the builtin harness, as this computer's engine is, so a thread can
+still start there. A harness whose models that machine has not learned yet
+keeps no model from here: the machine's own default decides. Removing a
+machine in Settings › Machines sends Run on back to this computer and drops
+the harness list kept for it. Reopening a thread uses its own machine's
+connection (`openThread`), including a thread listed before its machine went
+away.
 
 Item 4 and the rest of the orchestration work move the domain model from
 sessions to an execution graph:

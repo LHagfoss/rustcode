@@ -273,6 +273,9 @@ interface DrawerGroup {
 /** A row of the drawer as it is drawn: a heading, or a bound row the arrow keys can land on. */
 type DrawerRowItem = { kind: "heading"; label: string } | { kind: "row"; entry: DrawerEntry; index: number };
 
+/** No plans to draw: a machine's harness rows, whose plans this computer has not read. */
+const NO_PLANS: Record<string, CachedPlan> = {};
+
 /** What one login's plan has left across its windows: `62% left`, or nothing when it was not read. */
 function planLeft(plan: CachedPlan | undefined): string | undefined {
   const windows = usageOf(plan)?.windows;
@@ -570,9 +573,12 @@ export const Composer = memo(function Composer({
     }),
     [openId, sessions, newHarness, newAccount],
   );
+  // A machine's harness rows carry no plan: `planCache` is this computer's `_rustcode/plans`,
+  // and a login that runs there is not the one whose windows it read.
+  const plans = host ? NO_PLANS : planCache;
   const agents = useMemo(
-    () => agentChoices(harnesses ?? [], planCache, signedOut, parent),
-    [harnesses, planCache, signedOut, parent],
+    () => agentChoices(harnesses ?? [], plans, signedOut, parent),
+    [harnesses, plans, signedOut, parent],
   );
   const fileList = useMemo(
     () => (files?.cwd === cwdForFiles ? rankFiles(files.paths, mentionQuery) : NO_FILES),
@@ -1951,7 +1957,7 @@ function FolderMenu({ thread, cwd, host }: { thread?: ThreadState; cwd: string; 
       }
     >
       {thread ? (
-        <FolderActions cwd={cwd} remote={!!threadMachine} />
+        <FolderActions cwd={cwd} host={host} remote={!!threadMachine} />
       ) : (
         <>
           {/* The folders scroll under a search that filters them; "Choose Folder…" stays pinned
@@ -2019,7 +2025,7 @@ function FolderMenu({ thread, cwd, host }: { thread?: ThreadState; cwd: string; 
  * What the folder of an existing thread offers. A thread on another computer has its folder there:
  * this one can copy the path, but neither Finder nor a terminal on this Mac can open it.
  */
-function FolderActions({ cwd, remote }: { cwd: string; remote?: boolean }) {
+function FolderActions({ cwd, host, remote }: { cwd: string; host: string; remote?: boolean }) {
   return (
     <>
       <div className="truncate px-3 pt-1 pb-1.5 text-caption text-fg-muted">
@@ -2041,7 +2047,7 @@ function FolderActions({ cwd, remote }: { cwd: string; remote?: boolean }) {
         <Copy size={13} className="text-fg-muted" /> Copy Path
       </CardMenuItem>
       <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />
-      <CardMenuItem onSelect={() => startNewThread(cwd)}>
+      <CardMenuItem onSelect={() => startNewThread(cwd, host || undefined)}>
         <SquarePen size={13} className="text-fg-muted" /> New Thread Here
       </CardMenuItem>
     </>

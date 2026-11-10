@@ -8,7 +8,9 @@
 // see these machines.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { AcpConnection } from "../acp/jsonrpc";
 import type { Transport } from "../acp/transport";
+import { fallbackHarnessSnapshot, type HarnessSnapshot } from "../acp/types";
 import { setShellTransport } from "../lib/shell";
 import {
   type Machine,
@@ -22,13 +24,17 @@ import {
   connectionFor,
   createSession,
   harnessesOn,
+  loadMachineHarnesses,
   newThreadChoice,
   openThread,
+  renameThread,
   resetForTests,
+  runCommandAction,
   setNewThreadHost,
   startMachineRouting,
   startNewThread,
   useApp,
+  watchMachineConnection,
 } from "./store";
 import { LOCAL_HOST } from "./threadKeys";
 
@@ -131,15 +137,45 @@ describe("the default Run on", () => {
     expect(useApp.getState().projectCwd).toBe(LOCAL_CWD);
   });
 
-  test("a machine's folder starts the thread on that machine", () => {
+  test("the sidebar's New thread passes the group's folder and its machine", () => {
     localThreads();
+    // What ui/Sidebar.tsx does for a machine's project group (state/sidebarGroups.ts `project`).
     startNewThread(STUDIO_CWD, STUDIO);
     const s = useApp.getState();
     expect(s.newThreadHost).toBe(STUDIO);
     expect(s.projectCwd).toBe(STUDIO_CWD);
-    // A folder only another machine has names that machine, even without one given.
+  });
+
+  test("a folder alone is this computer's, even a path a machine also has", () => {
+    localThreads();
+    // The palette and "New Thread in Folder…" browse this disk: the folder never names a machine.
     startNewThread(STUDIO_CWD);
-    expect(useApp.getState().newThreadHost).toBe(STUDIO);
+    expect(useApp.getState().newThreadHost).toBe(LOCAL_HOST);
+    expect(useApp.getState().projectCwd).toBe(STUDIO_CWD);
+  });
+
+  test("the last screen's machine folder is not kept by a thread that starts here", () => {
+    localThreads();
+    // Composing on the Studio in a project this computer does not have, then ⌘N here.
+    useApp.setState({
+      selectedId: null,
+      newThreadHost: STUDIO,
+      projectCwd: "/Users/lars/code/notes",
+    });
+    startNewThread();
+    expect(useApp.getState().newThreadHost).toBe(LOCAL_HOST);
+    // Neither matched by remote nor trusted as this computer's: nothing, not the Studio's folder.
+    expect(useApp.getState().projectCwd).toBe("");
+  });
+
+  test("a machine that does not answer rolls Run on back without its folder", async () => {
+    localThreads();
+    useApp.setState({ selectedId: null, newThreadHost: LOCAL_HOST, projectCwd: "/Users/lars/code/notes" });
+    // No channel for this id: the harness read cannot answer, so the choice goes back.
+    await setNewThreadHost("gw-away");
+    const s = useApp.getState();
+    expect(s.newThreadHost).toBe(LOCAL_HOST);
+    expect(s.projectCwd).toBe("");
   });
 });
 
@@ -202,5 +238,109 @@ describe("a thread started on a machine", () => {
     expect(thread?.openFailed).toBeUndefined();
     expect(thread?.loaded).toBe(true);
     expect(thread?.items.length ?? 0).toBeGreaterThan(0);
+  });
+});
+
+describe("a machine's own operations", () => {
+  test("/new in a machine's thread starts there, in that thread's folder", () => {
+    localThreads();
+    const from = `${STUDIO}/mock-studio-1`;
+    // The engine lists `/new` with the action the app answers itself (state/commands.ts).
+    useApp.setState({
+      baseCommands: [
+        {
+          name: "new",
+          description: "New thread",
+          takesArguments: false,
+          report: false,
+          action: "new_session",
+        },
+      ],
+      sessionCommands: {},
+    });
+    expect(runCommandAction("new", from)).toBe(true);
+    const s = useApp.getState();
+    expect(s.newThreadHost).toBe(STUDIO);
+    // The thread's own folder, not whatever new-thread screen was named last.
+    expect(s.projectCwd).toBe(STUDIO_CWD);
+  });
+
+  test("a machine's thread is not renamed from here", async () => {
+    const key = `${STUDIO}/mock-studio-1`;
+    const before = useApp.getState().sessions.find((session) => session.id === key)?.title;
+    expect(await renameThread(key, "Renamed on this Mac")).toBe(false);
+    expect(useApp.getState().sessions.find((session) => session.id === key)?.title).toBe(before);
+  });
+
+  test("a machine's harness with no learned models keeps no model picked here", () => {
+    const listed = useApp.getState().remoteHarnesses[STUDIO];
+    expect(listed).toBeDefined();
+    // `_rustcode/harnesses` lists a harness's learned models only (a harness never started there
+    // has none), and its models call is not on the gateway: the machine's own default applies.
+    const bare: HarnessSnapshot = {
+      ...listed!,
+      harnesses: listed!.harnesses.map((harness) =>
+        harness.id === "claude-code" ? { ...harness, models: [] } : harness,
+      ),
+    };
+    const choice = newThreadChoice({
+      newThread: { harness: "claude-code", model: "opus-5.5", effort: "max" },
+      harnesses: null,
+      newThreadHost: STUDIO,
+      remoteHarnesses: { [STUDIO]: bare },
+    });
+    expect(choice).toEqual({ harness: "claude-code", model: null, effort: null });
+  });
+
+  test("a machine with no projects starts no thread until it has one", async () => {
+    localThreads();
+    // A freshly paired machine has listed no thread, so it has no project to start in.
+    useApp.setState((s) => ({ sessions: s.sessions.filter((session) => !session.host) }));
+    await setNewThreadHost(STUDIO);
+    expect(useApp.getState().newThreadHost).toBe(STUDIO);
+    expect(useApp.getState().projectCwd).toBe("");
+    // Its threads come back for the tests after this one.
+    refreshMachineThreads();
+    await until(() => useApp.getState().sessions.some((session) => session.host === STUDIO));
+  });
+
+  test("removing the machine Run on names goes back here and forgets its harnesses", async () => {
+    localThreads();
+    const gone = "gw-removed";
+    useApp.setState((s) => ({
+      newThreadHost: gone,
+      projectCwd: "/tmp/elsewhere",
+      remoteHarnesses: { ...s.remoteHarnesses, [gone]: fallbackHarnessSnapshot() },
+    }));
+    // The machines list changes: what `machines.ts` does when one is removed (state/store.ts `mirror`).
+    useMachines.setState((s) => ({ machines: [...s.machines] }));
+    await until(() => useApp.getState().newThreadHost === LOCAL_HOST);
+    expect(useApp.getState().projectCwd).toBe("");
+    expect(useApp.getState().remoteHarnesses[gone]).toBeUndefined();
+  });
+
+  test("a machine on an older engine lists the builtin harness instead of refusing", async () => {
+    const old = "gw-old-engine";
+    useApp.setState((s) => ({ machineNames: { ...s.machineNames, [old]: "Old Mac" } }));
+    let connection: AcpConnection;
+    connection = new AcpConnection((line) => {
+      const frame = JSON.parse(line) as { id?: number };
+      queueMicrotask(() =>
+        connection.receive(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: frame.id,
+            error: { code: -32601, message: "Method not found" },
+          }),
+        ),
+      );
+    });
+    watchMachineConnection(old, connection);
+    const listed = await loadMachineHarnesses(old);
+    expect(listed?.unsupported).toBe(true);
+    // Run on stays on it, and the composer starts its builtin harness rather than rolling back.
+    await setNewThreadHost(old);
+    expect(useApp.getState().newThreadHost).toBe(old);
+    watchMachineConnection(old, null);
   });
 });

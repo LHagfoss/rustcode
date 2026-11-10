@@ -55,6 +55,8 @@ describe("the sidebar's machine groups", () => {
     expect(idle.only).toBe(true);
     expect(idle.first).toBe(true);
     expect(idle.machine?.state).toBe("offline");
+    // No project yet: no folder to start in, so its heading offers no New thread (ui/Sidebar.tsx).
+    expect(idle.project).toBeUndefined();
   });
 
   test("this computer comes first, then the saved machines, each with its projects inside", () => {

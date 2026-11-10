@@ -739,6 +739,12 @@ const ThreadRow = memo(function ThreadRow({
   // What the row cannot spell out, on its hover card (ui/ThreadHoverCard.tsx).
   const harnessName = harness?.name ?? (external ? session.harness : undefined);
   const startRename = () => {
+    // A machine's thread is renamed on that machine (`thread_rename` is the shell's): the row
+    // says so instead of opening an editor whose save would only be refused (store.ts).
+    if (session.host) {
+      toast("A thread on another computer is renamed on that computer.", "info");
+      return;
+    }
     setTitle(session.title ?? "");
     // After the menu closes and gives focus back.
     setTimeout(() => setRenaming(true), 0);
@@ -2472,9 +2478,11 @@ export function Sidebar() {
                                     p.machine && p.machine.id !== LOCAL_HOST ? p.machine.id : undefined,
                                   )
                               : undefined;
-                            // A machine that is away cannot start a thread, so its heading offers none.
+                            // A machine that is away cannot start a thread, and one with no project
+                            // yet has no folder to start in: its heading offers none.
                             const canStart =
-                              !p.machine || p.machine.id === LOCAL_HOST || p.machine.state === "connected";
+                              !!p.project &&
+                              (!p.machine || p.machine.id === LOCAL_HOST || p.machine.state === "connected");
                             const head =
                               p.first && p.machine ? (
                                 <MachineHeader
