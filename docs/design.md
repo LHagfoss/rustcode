@@ -665,13 +665,16 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   one thing, by `rowStatus` — what it needs of you, the running turn's spinner
   and clock, that it waits on work it handed out, a failure, a completion you
   have not opened, a review, the time a snoozed thread wakes, else its age
-  (`5m`, `3h`) — never two, and never a second spinner. A thread with a worktree
-  branch, a pull request or a stack of delegates puts them on the quiet second
-  line (`text-sub`, 48px row): the branch in `font-mono`, `+N −N` in `success`/
-  `danger`, the pull request's mark, and the stack or the harness mark at its
-  end. Neither a diff nor the harness mark alone is worth a line: they ride in
-  the trailing slot beside the state (on the card, at the end of the title
-  line), in that order, and the slot never wraps —
+  (`5m`, `3h`) — never two, and never a second spinner. A row is two lines at
+  most, three on the card. A thread with a worktree branch or a pull request
+  puts them on the quiet last line (`text-sub`, 48px row): the branch in
+  `font-mono`, `+N −N` in `success`/`danger`, the pull request's mark, and the
+  stack or the harness mark at its end. A thread that asks something of you
+  puts the question on that line instead, and the branch waits in the hover
+  card. Neither a diff, a stack of delegates nor the harness mark alone is worth a
+  line: they ride in the trailing slot beside the state (on the card, at the
+  end of the title line), the stack in the harness mark's place, so spawning a
+  delegate never makes a row taller, and the slot never wraps —
   a 12px glyph dropped onto a second line reads as the state's own icon
   wrapping (`state/sidebarRows.ts` `rowMeta`). Counts are shown only for a
   thread the app has already read; one it has not opened shows neither, rather

@@ -449,10 +449,11 @@ export interface RowMetaRead {
  * slot (the card's title line), and `none` draws no line at all. A line is never opened for a diff
  * alone, in either layout, where it would be a line of its own for `+1` and make one card in a column
  * a line taller than the rest, nor for the harness mark alone, where one 12px glyph would sit at the right edge of an otherwise empty line and
- * read as the state's own icon wrapping onto a second line. A branch, a pull request or a stack of
- * delegates is worth one.
+ * read as the state's own icon wrapping onto a second line. A stack of delegates alone takes the
+ * harness mark's place in that slot, so spawning one never makes the row a line taller. Only a branch
+ * or a pull request is worth a line.
  */
 export function rowMeta(read: RowMetaRead): "line" | "trailing" | "none" {
-  if (read.branch || read.pull || read.stack) return "line";
-  return read.diff || read.harness ? "trailing" : "none";
+  if (read.branch || read.pull) return "line";
+  return read.diff || read.harness || read.stack ? "trailing" : "none";
 }

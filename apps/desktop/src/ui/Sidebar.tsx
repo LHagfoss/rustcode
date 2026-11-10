@@ -738,13 +738,17 @@ const ThreadRow = memo(function ThreadRow({
   // The open thread is a delegated one with no row of its own: its parent stands in as the context.
   const lit = selected || !!context;
   // One line by default (Settings › Appearance): the second is for a row that has something to put
-  // there. What it carries is the branch, its pull request, and who else works beside it; a plain
-  // chat thread has none of it, and a diff or the mark of its harness alone rides in the trailing
-  // slot rather than opening a line for one glyph (state/sidebarRows.ts `rowMeta`).
+  // there. What it carries is the branch and its pull request; a plain chat thread has neither, and
+  // a diff, its delegates or the mark of its harness ride in the trailing slot rather than opening a
+  // line (state/sidebarRows.ts `rowMeta`).
   const compact = rowLayout === "compact";
+  // What it asks of you (or the thread it belongs under) takes the row's last line in place of the
+  // branch, so a card is never more than three lines; the branch and pull request return once
+  // answered, and the hover card shows them meanwhile.
+  const asks = !!(request || hint);
   const meta = rowMeta({
-    branch: !!worktree,
-    pull: !!pull,
+    branch: !!worktree && !asks,
+    pull: !!pull && !asks,
     stack: !!stack?.length,
     harness: external,
     diff,
@@ -836,9 +840,13 @@ const ThreadRow = memo(function ThreadRow({
   );
   const stateSlot = (pill: boolean) => (
     <span title={chip?.title} className={cx(TRAILING_SLOT, SWAPPED_ON_HOVER)}>
-      {/* What the row has no line for: the harness it runs on, then the diff. */}
-      {!pill && meta === "trailing" && external && (
-        <HarnessIcon id={session.harness!} name={harness?.name} size={12} className="shrink-0" />
+      {/* What the row has no line for: its delegates (else the harness it runs on), then the diff. */}
+      {!pill && meta === "trailing" && stack?.length ? (
+        <AgentStack agents={stack} />
+      ) : (
+        !pill &&
+        meta === "trailing" &&
+        external && <HarnessIcon id={session.harness!} name={harness?.name} size={12} className="shrink-0" />
       )}
       {!pill && meta === "trailing" && diff && <DiffStat diff={diff} />}
       {pill ? cardState : compactState}
@@ -954,7 +962,7 @@ const ThreadRow = memo(function ThreadRow({
                 </>
               ) : (
                 <span className="title-first-row relative flex w-full min-w-0 flex-col gap-0.5">
-                  {/* A card of up to three lines. The first says where it runs and what it is doing:
+                  {/* A card of two lines, three with a branch or a pull request. The first says where it runs and what it is doing:
                       the project's mark and name (under a project heading, the harness instead),
                       and the state or age at its end, where the hover actions are drawn. */}
                   <span className="flex h-5 min-w-0 items-center gap-1.5 text-sub text-fg-muted">
@@ -978,13 +986,19 @@ const ThreadRow = memo(function ThreadRow({
                     {glyphs}
                     <span className={titleTint}>{session.title || "New thread"}</span>
                     {meta === "trailing" && diff && <DiffStat diff={diff} />}
-                    {!grouped && meta !== "line" && external && (
-                      <HarnessIcon
-                        id={session.harness!}
-                        name={harness?.name}
-                        size={13}
-                        className="shrink-0"
-                      />
+                    {meta !== "line" && stack?.length ? (
+                      <AgentStack agents={stack} />
+                    ) : (
+                      !grouped &&
+                      meta !== "line" &&
+                      external && (
+                        <HarnessIcon
+                          id={session.harness!}
+                          name={harness?.name}
+                          size={13}
+                          className="shrink-0"
+                        />
+                      )
                     )}
                   </span>
                   {/* The third line, only when it has something to say: the branch, what it changed,
