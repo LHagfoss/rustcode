@@ -1,14 +1,25 @@
 import { describe, expect, test } from "bun:test";
 import {
+  carriesExtras,
   commandSuggestions,
   composedText,
   emptyExtras,
+  hasExtras,
+  hashToken,
   hasTokens,
   insertCommand,
+  insertMention,
+  mentionText,
+  mentionToken,
   messageCollapses,
+  mirrorText,
   promptBlocks,
+  pruneMentions,
+  rankAgents,
+  rankThreads,
   sentAttachments,
   sentMessages,
+  serializeMentions,
   shiftPasteOffset,
   slashToken,
   splicePastes,
@@ -16,6 +27,7 @@ import {
   splitSlashCommand,
   splitTokens,
   splitUrls,
+  type ThreadChoice,
   trackPastes,
 } from "./compose";
 
@@ -235,10 +247,10 @@ describe("tokens in the draft", () => {
 
 describe("the slash token", () => {
   test("opens at the start or after whitespace, at any line", () => {
-    expect(slashToken("/", 1)).toEqual({ start: 0, query: "" });
-    expect(slashToken("/rev", 4)).toEqual({ start: 0, query: "rev" });
-    expect(slashToken("please /rev", 11)).toEqual({ start: 7, query: "rev" });
-    expect(slashToken("one\ntwo /rel", 12)).toEqual({ start: 8, query: "rel" });
+    expect(slashToken("/", 1)).toEqual({ start: 0, end: 1, query: "" });
+    expect(slashToken("/rev", 4)).toEqual({ start: 0, end: 4, query: "rev" });
+    expect(slashToken("please /rev", 11)).toEqual({ start: 7, end: 11, query: "rev" });
+    expect(slashToken("one\ntwo /rel", 12)).toEqual({ start: 8, end: 12, query: "rel" });
   });
 
   test("a path, an email-like word or a finished token is not one", () => {
@@ -290,14 +302,16 @@ describe("command suggestions", () => {
 
 describe("inserting a command token", () => {
   test("replaces the token and leaves a space to keep typing", () => {
-    expect(insertCommand("please /rel now", { start: 7, query: "rel" }, "/release-automation")).toEqual({
+    expect(
+      insertCommand("please /rel now", { start: 7, end: 11, query: "rel" }, "/release-automation"),
+    ).toEqual({
       text: "please /release-automation now",
       caret: 27,
     });
   });
 
   test("at the start it becomes the leading command", () => {
-    expect(insertCommand("/rev", { start: 0, query: "rev" }, "/review").text).toBe("/review ");
+    expect(insertCommand("/rev", { start: 0, end: 4, query: "rev" }, "/review").text).toBe("/review ");
   });
 });
 
@@ -329,5 +343,268 @@ describe("a sent message", () => {
         { kind: "user", text: "   " },
       ]),
     ).toEqual(["first", "second"]);
+  });
+});
+
+describe("the hash token", () => {
+  test("opens at the start or after whitespace, at any line", () => {
+    expect(hashToken("#", 1)).toEqual({ start: 0, end: 1, query: "" });
+    expect(hashToken("#Ship", 5)).toEqual({ start: 0, end: 5, query: "Ship" });
+    expect(hashToken("look at #Ship", 13)).toEqual({ start: 8, end: 13, query: "Ship" });
+    expect(hashToken("one\ntwo #Sh", 11)).toEqual({ start: 8, end: 11, query: "Sh" });
+  });
+
+  test("a word, a heading, a written token or code is not one", () => {
+    // `abc#x` is not a mention: the `#` does not open a word.
+    expect(hashToken("abc#x", 5)).toBeNull();
+    // A markdown heading: its `#` is followed by a space.
+    expect(hashToken("# Title", 7)).toBeNull();
+    expect(hashToken("one\n# Title", 10)).toBeNull();
+    // A mention already written, and the caret inside it.
+    expect(hashToken("#[Title]", 5)).toBeNull();
+    expect(hashToken("please #[Title] now", 12)).toBeNull();
+    // Code, fenced and inline: a `#` there is text being written.
+    expect(hashToken("```\n#Ship", 9)).toBeNull();
+    expect(hashToken("a `#Sh` code", 7)).toBeNull();
+    // The caret mid-word opens nothing.
+    expect(hashToken("#Ship", 2)).toBeNull();
+  });
+
+  test("a word after a finished token is a new one", () => {
+    expect(hashToken("#Fix the tests and #Sh", 22)).toEqual({ start: 19, end: 22, query: "Sh" });
+  });
+});
+
+describe("mention tokens", () => {
+  const thread = { kind: "thread" as const, id: "42", title: "Ship the tree" };
+  const codex = { kind: "agent" as const, harness: "codex", token: "codex", effort: "high" };
+
+  test("the draft keeps the short form, and the message spells it out", () => {
+    expect(mentionToken(thread)).toBe("#Ship the tree");
+    expect(mentionText(thread)).toBe("#[Ship the tree](rustcode://thread/42)");
+    expect(mentionToken(codex)).toBe("@codex");
+    expect(mentionText(codex)).toBe("@codex (delegate: harness=codex, effort=high)");
+    expect(
+      mentionText({
+        kind: "agent",
+        harness: "pi",
+        model: "deepseek/deepseek-flash",
+        effort: "high",
+        token: "pi/deepseek/deepseek-flash",
+      }),
+    ).toBe("@pi/deepseek/deepseek-flash (delegate: harness=pi, model=deepseek/deepseek-flash, effort=high)");
+  });
+
+  test("a title with a bracket is escaped, so the link ends where it should", () => {
+    expect(mentionText({ ...thread, title: "fix [bug] in a.ts" })).toBe(
+      "#[fix \\[bug\\] in a.ts](rustcode://thread/42)",
+    );
+  });
+
+  test("inserting replaces the token and leaves a space to keep typing", () => {
+    expect(insertMention("look at #Sh now", { start: 8, end: 11, query: "Sh" }, thread)).toEqual({
+      text: "look at #Ship the tree now",
+      caret: 23,
+    });
+    expect(insertMention("#co", { start: 0, end: 3, query: "co" }, codex).text).toBe("@codex ");
+  });
+});
+
+describe("serializing mentions", () => {
+  const thread = (id: string, title = "Ship the tree") => ({ kind: "thread" as const, id, title });
+
+  test("each mention in the draft is written out in full", () => {
+    expect(
+      serializeMentions("look at #Ship the tree, then @codex", [
+        thread("42"),
+        { kind: "agent", harness: "codex", effort: "high", token: "codex" },
+      ]),
+    ).toBe(
+      "look at #[Ship the tree](rustcode://thread/42), then @codex (delegate: harness=codex, effort=high)",
+    );
+  });
+
+  test("a mention no longer in the draft is dropped, and a bare `#123` is left alone", () => {
+    expect(serializeMentions("see #123", [thread("42")])).toBe("see #123");
+    expect(serializeMentions("nothing here", [thread("42")])).toBe("nothing here");
+  });
+
+  test("the longest title wins, and a token running into a word is another word", () => {
+    const mentions = [thread("1", "Fix"), thread("2", "Fix the tests")];
+    expect(serializeMentions("#Fix the tests pass", mentions)).toBe(
+      "#[Fix the tests](rustcode://thread/2) pass",
+    );
+    // `#Fixer` is not `#Fix`.
+    expect(serializeMentions("#Fixer", [thread("1", "Fix")])).toBe("#Fixer");
+  });
+
+  test("two threads with one title take the occurrences in turn", () => {
+    const mentions = [thread("1"), thread("2")];
+    expect(serializeMentions("#Ship the tree and #Ship the tree", mentions)).toBe(
+      "#[Ship the tree](rustcode://thread/1) and #[Ship the tree](rustcode://thread/2)",
+    );
+  });
+
+  test("the composed message carries the mention's words, not the draft's", () => {
+    const extras = { ...emptyExtras, mentions: [thread("42")] };
+    expect(composedText("look at #Ship the tree", extras)).toBe(
+      "look at #[Ship the tree](rustcode://thread/42)",
+    );
+    // The command still leads, as the composer shows it.
+    expect(composedText("#Ship the tree", { ...extras, command: command })).toBe(
+      "/review #[Ship the tree](rustcode://thread/42)",
+    );
+  });
+});
+
+describe("threads and agents in the drawer", () => {
+  const thread = (id: string, title: string, extra: Partial<ThreadChoice> = {}): ThreadChoice => ({
+    id,
+    title,
+    state: "open",
+    ...extra,
+  });
+
+  test("this project's threads come first, then the closest title", () => {
+    const threads = [
+      thread("a", "Snooze fix", { home: false }),
+      thread("b", "Unrelated", { home: true }),
+      thread("c", "Snooze again", { home: true }),
+    ];
+    expect(rankThreads(threads, "snooze").map((t) => t.id)).toEqual(["c", "a"]);
+    // Nothing typed: this project's list, then the others.
+    expect(rankThreads(threads, "").map((t) => t.id)).toEqual(["b", "c", "a"]);
+  });
+
+  test("what asks or works comes before what is settled, when two names match as well", () => {
+    const threads = [
+      thread("done", "Fix the tests", { state: "settled" }),
+      thread("working", "Fix the tests", { state: "working" }),
+      thread("asked", "Fix the tests", { state: "needs" }),
+    ];
+    expect(rankThreads(threads, "fix").map((t) => t.id)).toEqual(["asked", "working", "done"]);
+  });
+
+  test("the harnesses an `@` looks for, by name or by id", () => {
+    const agents = [
+      { harness: "claude-code", harnessName: "Claude Code", name: "Claude Code", token: "claude-code" },
+      { harness: "codex", harnessName: "Codex", name: "Codex", token: "codex" },
+      { harness: "rustcode", harnessName: "RustCode", name: "RustCode", token: "rustcode" },
+    ];
+    expect(rankAgents("co", agents).map((a) => a.harness)).toEqual(["codex", "rustcode", "claude-code"]);
+    expect(rankAgents("zzz", agents)).toEqual([]);
+    // A row names a model, and the model's name finds it.
+    const models = [
+      {
+        harness: "pi",
+        harnessName: "Pi",
+        model: "deepseek/deepseek-flash",
+        name: "DeepSeek Flash",
+        token: "pi/deepseek/deepseek-flash",
+      },
+      {
+        harness: "pi",
+        harnessName: "Pi",
+        model: "openai/gpt-6-sol",
+        name: "GPT-6 Sol",
+        token: "pi/openai/gpt-6-sol",
+      },
+    ];
+    expect(rankAgents("flash", models).map((a) => a.token)).toEqual(["pi/deepseek/deepseek-flash"]);
+    // `@codex/` asks for one harness's models: the token begins with it.
+    expect(rankAgents("pi/", models).map((a) => a.token)).toEqual([
+      "pi/deepseek/deepseek-flash",
+      "pi/openai/gpt-6-sol",
+    ]);
+    expect(rankAgents("sol", models).map((a) => a.token)).toEqual(["pi/openai/gpt-6-sol"]);
+  });
+});
+
+describe("a mention in the draft", () => {
+  const thread = { kind: "thread" as const, id: "42", title: "Ship the tree" };
+
+  test("is drawn on a pill as the draft's own characters", () => {
+    expect(splitTokens("see #Ship the tree now", [thread])).toEqual([
+      { text: "see " },
+      { mention: "#Ship the tree" },
+      { text: " now" },
+    ]);
+    expect(hasTokens("see #Ship the tree", [thread])).toBe(true);
+  });
+
+  test("is the draft's text until it is picked from the drawer", () => {
+    expect(splitTokens("see #123 now")).toEqual([{ text: "see #123 now" }]);
+  });
+
+  test("a harness mention is the same pill a file reference gets", () => {
+    const codex = { kind: "agent" as const, harness: "codex", token: "codex", effort: "high" };
+    expect(splitTokens("ask @codex", [codex])).toEqual([{ text: "ask " }, { ref: "codex" }]);
+    // A delegate's token is the harness and its model, one word: the same pill.
+    const pi = {
+      kind: "agent" as const,
+      harness: "pi",
+      model: "deepseek/deepseek-flash",
+      effort: "high",
+      token: "pi/deepseek/deepseek-flash",
+    };
+    expect(splitTokens("ask @pi/deepseek/deepseek-flash now", [pi])).toEqual([
+      { text: "ask " },
+      { ref: "pi/deepseek/deepseek-flash" },
+      { text: " now" },
+    ]);
+  });
+});
+
+describe("a mention that stays with a waiting message", () => {
+  const thread = { kind: "thread" as const, id: "42", title: "Ship the tree" };
+
+  test("a mention alone is something the message carries, though not a chip", () => {
+    const mentions = { ...emptyExtras, mentions: [thread] };
+    // Nothing to draw above the field, so it never makes an empty draft sendable…
+    expect(hasExtras(mentions)).toBe(false);
+    // …but a message waiting in a queue or a new thread's setup keeps it, or the id is lost.
+    expect(carriesExtras(mentions)).toBe(true);
+    expect(carriesExtras(emptyExtras)).toBe(false);
+    expect(carriesExtras(undefined)).toBe(false);
+    expect(carriesExtras({ ...emptyExtras, links: ["https://a.dev"] })).toBe(true);
+  });
+
+  test("the mentions a draft still writes, in the order it writes them", () => {
+    const codex = { kind: "agent" as const, harness: "codex", token: "codex", effort: "high" };
+    expect(pruneMentions("look at #Ship the tree, then @codex", [codex, thread])).toEqual([thread, codex]);
+    // A token the user deleted leaves nothing to expand.
+    expect(pruneMentions("nothing left", [thread])).toEqual([]);
+    expect(pruneMentions("#Ship the tree", [])).toEqual([]);
+    // Two threads with one title keep both registrations: the draft says the title twice.
+    expect(pruneMentions("#Ship the tree and #Ship the tree", [thread, thread])).toHaveLength(2);
+  });
+});
+
+describe("the mirror under the field", () => {
+  const thread = { kind: "thread" as const, id: "42", title: "Ship the tree" };
+  const pi = {
+    kind: "agent" as const,
+    harness: "pi",
+    model: "deepseek/deepseek-flash",
+    effort: "high",
+    token: "pi/deepseek/deepseek-flash",
+  };
+
+  test("draws exactly the draft's characters, token by token", () => {
+    const drafts = [
+      "plain words, no tokens",
+      "ask @codex and look at @src/main.ts, see https://x.dev/a?b=1",
+      "look at #Ship the tree and ask @pi/deepseek/deepseek-flash now",
+      // A quoted path keeps its quotes inside the pill.
+      'compare @"a b.ts" with @src/a.ts',
+      // One wrapped paragraph with every kind of token in it: the wrap points must not move.
+      "keep @codex, @src/a.ts and https://x.dev in one long wrapped line that runs past the width of the field more than once, with #Ship the tree in the middle of it and @pi/deepseek/deepseek-flash after it, then the rest of the sentence",
+      "tokens at the edges @src/a.ts",
+      "@codex",
+      "",
+    ];
+    for (const draft of drafts) expect(mirrorText(draft, [thread, pi])).toBe(draft);
+    // With no registrations, a `#` word is still the draft's own text.
+    expect(mirrorText("#Ship the tree")).toBe("#Ship the tree");
   });
 });

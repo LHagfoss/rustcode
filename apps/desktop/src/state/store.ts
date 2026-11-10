@@ -111,6 +111,7 @@ import {
 import {
   type Attachment,
   type ComposeExtras,
+  carriesExtras,
   composedText,
   emptyExtras,
   hasExtras,
@@ -2106,7 +2107,7 @@ async function createThread(firstMessage = "", extras: ComposeExtras = emptyExtr
   const setup = beginSetup(get().pendingSetup, {
     id: localId("setup"),
     text: firstMessage,
-    extras: hasExtras(extras) ? extras : undefined,
+    extras: carriesExtras(extras) ? extras : undefined,
     title: titleFrom(firstMessage, 80) || (hasExtras(extras) ? "Image" : "New thread"),
     cwd: s.projectCwd,
     worktree: newWorktreeFor(s, s.projectCwd, firstMessage),
@@ -2696,7 +2697,7 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
         ...t.queue,
         // The text as it was written: a paste's offset is an offset in it, and the row composes the
         // two when it draws and when the turn runs (`composedText`).
-        { id: localId("queued"), text, extras: hasExtras(extras) ? extras : undefined },
+        { id: localId("queued"), text, extras: carriesExtras(extras) ? extras : undefined },
       ],
     }));
     return true;
@@ -2710,7 +2711,10 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
   if (thread.queue.length) {
     updateThread(id, (t) => ({
       ...t,
-      queue: [...t.queue, { id: localId("queued"), text, extras: hasExtras(extras) ? extras : undefined }],
+      queue: [
+        ...t.queue,
+        { id: localId("queued"), text, extras: carriesExtras(extras) ? extras : undefined },
+      ],
     }));
     void resumeQueue(id);
     return true;
@@ -2815,7 +2819,8 @@ async function queueMessage(
   extras: ComposeExtras,
   reason: QueueReason,
 ): Promise<boolean> {
-  if (hasExtras(extras)) {
+  if (carriesExtras(extras)) {
+    // Submitted rather than parked, so the chips and the ids a mention stands for go with it.
     const sent = await submit(text, extras);
     if (sent) toast(QUEUE_REASON[reason]);
     return sent;
@@ -2841,7 +2846,7 @@ async function restartWith(id: string, text: string, extras: ComposeExtras): Pro
       {
         id: localId("queued"),
         text,
-        extras: hasExtras(extras) ? extras : undefined,
+        extras: carriesExtras(extras) ? extras : undefined,
         restart: true,
       },
       ...t.queue,
@@ -3144,7 +3149,7 @@ export async function runPrompt(
         {
           id: localId("queued"),
           text,
-          extras: hasExtras(extras) ? extras : undefined,
+          extras: carriesExtras(extras) ? extras : undefined,
           fromView: options.fromView,
           link: options.link,
           resume: options.resumeLinks,

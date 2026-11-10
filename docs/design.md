@@ -240,10 +240,15 @@ surface and the control, so its hover is a fill layer over the glass
 rather than a `hover:bg-…` utility a class rule would beat.
 
 The composer floats over the transcript as one card: the field, and under it one control row with
-every control the send needs. Its slash and `@` menus are a solid drawer attached to the box's top
+every control the send needs. Its `/` and `@` menus are a solid drawer attached to the box's top
 edge, each opened by the token at the caret, at the start of the message or after whitespace
-anywhere in it. Everything in the card starts on one left edge: the field, the chips, the
-thumbnails and the hint rows at 20px (`px-5`); the tray at 12px (`px-3`), because its round
+anywhere in it: `/` lists commands, and `@` lists agents, threads and the project's files under
+those quiet headings, in that order. `#` opens the same drawer straight on the threads. A keyword
+is the drawer's first row while what is typed is empty or still a prefix of it — `@agents`,
+`@threads`, `@files` — and completing one keeps the drawer open on that group, so `@agents pi`
+looks inside the agents for `pi`. The arrow keys walk the rows across the groups and never onto a
+heading. Everything in the card starts on one left edge: the field, the chips,
+the thumbnails and the hint rows at 20px (`px-5`); the tray at 12px (`px-3`), because its round
 controls carry 8px of their own, which puts their icons on that same edge.
 
 The composer takes the shared glass in the sidebar's own hue: `--rc-glass-alpha` of
@@ -871,8 +876,12 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   is that same line box, so it keeps the field's baseline. **Tokens in the draft**
   are drawn by a mirror under the field, not by an editor (the way T3 Code's
   composer keeps references in the text): the field's text is transparent over a
-  copy that sets each URL on an accent pill and each `@file` reference on a quiet
-  one (`state/compose.ts` `splitTokens`). The two take the same padding, scroll
+  copy that sets each URL on an accent pill, and each `@file` reference, `#thread`
+  mention and `@agent` token on a quiet one (`state/compose.ts` `splitTokens`). The mirror
+  prints exactly the draft's characters, token by token (`mirrorText`, which a test holds to
+  the draft), and a token changes only its fill, its colour and its radius: never the font's
+  weight, size or spacing, which would make the mirror wider than the field and drag the
+  caret and the wrap points off the text. The two take the same padding, scroll
   and mask, and a token's span adds **no** horizontal padding — that is what
   keeps the caret on its character. The field's height is measured on an
   off-screen twin of it (same font, leading, padding and width, no transition,
