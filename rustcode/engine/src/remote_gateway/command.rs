@@ -677,8 +677,23 @@ pub fn format_status_for(status: Option<&GatewayStatus>, this_session: Option<&s
                 .protocol_version
                 .map(|version| format!("version {version}, "))
                 .unwrap_or_default();
+            // Which versions this host speaks, so the line says which side of a
+            // version mismatch is behind, as the desktop's copy does.
+            let speaks = if refused.supported_versions.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    ", this host speaks {}",
+                    refused
+                        .supported_versions
+                        .iter()
+                        .map(u32::to_string)
+                        .collect::<Vec<_>>()
+                        .join(" and ")
+                )
+            };
             lines.push(format!(
-                "    {}  ({name}, {version}{} on {}, {}, {} ago)",
+                "    {}  ({name}, {version}{} on {}, {}, {} s ago{speaks})",
                 refused.reason.label(),
                 refused.device_kind,
                 refused.platform,
@@ -987,7 +1002,9 @@ mod tests {
 
     #[test]
     fn status_shows_addresses_devices_pairing_and_logs() {
-        use crate::remote_gateway::control::{ConnectionSummary, DeviceSummary, PairingStatus};
+        use crate::remote_gateway::control::{
+            ConnectionSummary, DeviceSummary, PairingStatus, RefusalReason, RefusedConnection,
+        };
         use crate::remote_gateway::devices::DeviceKind;
         let mut status = GatewayStatus {
             version: "1.0.0".into(),
@@ -1036,7 +1053,17 @@ mod tests {
             owner_log_directory: Some("/config/remote/owners".into()),
             connect_requests: Vec::new(),
             ended_connect_requests: Vec::new(),
-            refused_connections: Vec::new(),
+            refused_connections: vec![RefusedConnection {
+                reason: RefusalReason::UnsupportedVersion,
+                attempts: 3,
+                device_name: Some("Lars's iPhone".into()),
+                device_kind: DeviceKind::Phone,
+                platform: "ios".into(),
+                protocol_version: Some(0),
+                supported_versions: vec![1],
+                remote_addr: "192.168.1.31".into(),
+                refused_secs_ago: 40,
+            }],
             automatic_bind: Some(false),
             fixed_advertise: Some(false),
         };
@@ -1054,6 +1081,9 @@ mod tests {
             "idle owners    1",
             "gateway log    /config/remote/gateway.log",
             "session logs   /config/remote/owners",
+            "refused        1 (shown in Settings › Remote access)",
+            "app version this host does not speak  (Lars's iPhone, version 0, phone on ios, \
+             192.168.1.31, 40 s ago, this host speaks 1)",
         ] {
             assert!(text.contains(expected), "{expected}\n{text}");
         }

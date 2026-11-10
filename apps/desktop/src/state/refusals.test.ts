@@ -32,6 +32,13 @@ describe("a refused connection", () => {
     expect(copy.detail).toContain("version 2");
   });
 
+  test("a version mismatch that names no versions still says what to do", () => {
+    const copy = refusalCopy(refused({ protocolVersion: undefined, supportedVersions: [] }));
+    expect(copy.title).toBe("A phone tried to connect with a different app version");
+    expect(copy.detail).toContain("different remote protocol versions");
+    expect(copy.detail).not.toContain("another one");
+  });
+
   test("an unknown or revoked pairing says to pair again", () => {
     const copy = refusalCopy(refused({ reason: "unauthorized", deviceName: "Lars's iPhone" }));
     expect(copy.title).toBe("Lars's iPhone tried to connect with a pairing this computer does not accept");

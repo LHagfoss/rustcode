@@ -2099,7 +2099,8 @@ export class MockEngine {
           deviceName: "Lars's iPhone",
           deviceKind: "phone",
           platform: "ios",
-          protocolVersion: 2,
+          // The phone build from #3301: a protocol version this Mac does not speak.
+          protocolVersion: 0,
           supportedVersions: [1],
           remoteAddr: "192.168.1.31",
           refusedSecsAgo: 40,

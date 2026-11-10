@@ -35,20 +35,21 @@ export function refusalCopy(refused: RemoteRefusedConnection): { title: string; 
   const who = refused.deviceName ?? `A ${subject(refused.deviceKind)}`;
   switch (refused.reason) {
     case "unsupported_version": {
-      const spoken = refused.supportedVersions.join(" and ") || "another one";
       const sent = refused.protocolVersion;
-      const side =
-        sent === undefined
-          ? "a different app version"
-          : sent < Number(refused.supportedVersions[0] ?? sent)
-            ? "an older app version"
-            : "a newer app version";
+      const hostSpeaks = refused.supportedVersions[0];
+      // A host that names neither side of the mismatch still says what to do,
+      // instead of claiming a direction it does not know.
+      if (sent === undefined || hostSpeaks === undefined) {
+        return {
+          title: `${who} tried to connect with a different app version`,
+          detail:
+            "That device and this computer speak different remote protocol versions. Update RustCode on the device or on this computer so both match, then connect again.",
+        };
+      }
+      const side = sent < hostSpeaks ? "an older app version" : "a newer app version";
       return {
         title: `${who} tried to connect with ${side}`,
-        detail:
-          sent === undefined
-            ? `This computer speaks remote protocol version ${spoken}. Update RustCode on the device or on this computer so both match, then connect again.`
-            : `It speaks remote protocol version ${sent}, and this computer speaks version ${spoken}. Update RustCode on the device or on this computer so both match, then connect again.`,
+        detail: `It speaks remote protocol version ${sent}, and this computer speaks version ${refused.supportedVersions.join(" and ")}. Update RustCode on the device or on this computer so both match, then connect again.`,
       };
     }
     case "unauthorized":
