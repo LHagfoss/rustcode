@@ -769,7 +769,7 @@ pub const CLEANUP_WORKTREE: Tool = Tool {
 /// the scheduler daemon's work (`docs/daemon.md`).
 pub const READ_PROJECT: Tool = Tool {
     name: crate::orchestration::READ_PROJECT,
-    description: "Read one of the user's projects: path, name, whether it is a git repository, its remote, its current branch, the branch it calls default, its threads and its display name and default harness/model. Reads any project while \"Let agents read threads in other projects\" is on, else only this thread's.",
+    description: "Read one of the user's projects: path, name, whether it is a git repository, its remote and branch, the branch it calls default, its threads, and its display name and default harness/model. Reads any project while \"Let agents read threads in other projects\" is on, else only this thread's.",
     arguments: r#"{"path": "/abs/project"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -789,7 +789,7 @@ pub const READ_PROJECT: Tool = Tool {
 
 pub const CREATE_PROJECT: Tool = Tool {
     name: crate::orchestration::CREATE_PROJECT,
-    description: "Register a project folder: an existing one, or a new empty folder that gets `git init` (init: false leaves it plain). Nothing is cloned; use clone_project. The user approves it.",
+    description: "Register a project folder: an existing one, or a new empty folder that gets `git init` (init: false leaves it plain). Nothing is cloned; see clone_project. The user approves it.",
     arguments: r#"{"path": "/abs/new-project", "init": true}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -832,7 +832,7 @@ pub const CLONE_PROJECT: Tool = Tool {
 
 pub const UPDATE_PROJECT: Tool = Tool {
     name: crate::orchestration::UPDATE_PROJECT,
-    description: "Update one project's settings: a display name, and the harness and model new threads in that folder start on. Omitted fields are unchanged. The user approves it.",
+    description: "Update one project's settings: a display name, and the harness and model new threads in that folder start on. Omitted fields are unchanged; a name is replaced, never cleared with \"\". The user approves it.",
     arguments: r#"{"path": "/abs/project", "name": "RustCode", "harness": "claude-code", "model": "opus"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -855,7 +855,7 @@ pub const UPDATE_PROJECT: Tool = Tool {
 
 pub const REMOVE_PROJECT: Tool = Tool {
     name: crate::orchestration::REMOVE_PROJECT,
-    description: "Unregister a project: it leaves the project list and its display name and defaults go. The folder and every file in it stay on disk, and its threads stay. The user approves it.",
+    description: "Unregister a project: it leaves the project list with its display name and defaults. Its folder, files and threads stay. The user approves it.",
     arguments: r#"{"path": "/abs/project"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -875,7 +875,7 @@ pub const REMOVE_PROJECT: Tool = Tool {
 
 pub const SCHEDULE_TASK: Tool = Tool {
     name: crate::orchestration::SCHEDULE_TASK,
-    description: "Create scheduled work that runs with no thread open: a prompt the scheduler daemon runs on a cron expression or once at an ISO 8601 time. `schedule` is an object: {kind: cron, expression, timezone?} or {kind: at, at}. The timezone defaults to the user's. The daemon must be running (`rustcode daemon start`). Report the returned next run time. The user approves it.",
+    description: "Schedule work that runs with no thread open: a prompt the scheduler daemon runs on a cron expression or once at an ISO 8601 time. `schedule` is {kind: cron, expression, timezone?} or {kind: at, at}; the timezone defaults to the user's. The daemon must be running (`rustcode daemon start`); report the next run it answers. The user approves it.",
     arguments: r#"{"prompt": "Check the build", "schedule": {"kind": "cron", "expression": "0 9 * * 1-5", "timezone": "Europe/Oslo"}, "project": "/abs/project", "name": "Morning check"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -904,7 +904,7 @@ pub const SCHEDULE_TASK: Tool = Tool {
 
 pub const LIST_SCHEDULED_TASKS: Tool = Tool {
     name: crate::orchestration::LIST_SCHEDULED_TASKS,
-    description: "List the scheduler daemon's tasks: id, name, whether paused, schedule, workspace and next run time, at most 100. `daemon_running: false` means nothing is scheduled to run until `rustcode daemon start`.",
+    description: "List the scheduler daemon's tasks: id, name, paused, schedule, workspace and next run time, at most 100. `daemon_running: false` means nothing runs until `rustcode daemon start`.",
     arguments: r#"{}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,

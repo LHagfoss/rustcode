@@ -984,13 +984,16 @@ call out, and a v10 app has neither the code nor the engine methods.
 A project is still what v3 says it is — the repository a thread runs for — so
 a project tool never invents a second table. `list_projects` counts threads and
 sorts by when they last moved; the app keeps the rest in app storage
-(`state/projects.ts`): a display name, the harness and model new threads in
-that folder start on, and folders registered before any thread runs there, so
+(`state/projectBook.ts`, since `state/projects.ts` is the cross-machine lookup
+#3403 added): a display name, the harness and model new threads in that folder
+start on, and folders registered before any thread runs there, so
 `create_project` and `clone_project` land in `list_projects` with `threads: 0`.
-The display name is what the sidebar's project group says
-(`projectLabel`), and the harness and model are applied by `projectThreadChoice`
-when a thread is created in that folder — a harness that is turned off or
-signed out falls back to the usual default rather than failing the start.
+The display name is what the sidebar's project group says (`projectLabel`), and
+the harness and model are what the new-thread screen shows and ⏎ starts
+(`newThreadChoice` and `projectThreadChoice`, in that order of precedence) — a
+harness that is turned off or signed out falls back to the usual default rather
+than failing the start. A new harness with no model clears the stored model, so
+the pair always names one the harness offers.
 `remove_project` only forgets the entry: the folder, every file in it and its
 threads stay, and the description says so.
 

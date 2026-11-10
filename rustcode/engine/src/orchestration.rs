@@ -877,10 +877,13 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             let Some(schedule) = args.get("schedule").filter(|value| value.is_object()) else {
                 return Err("schedule is required".to_owned());
             };
-            match schedule.get("kind").and_then(Value::as_str) {
-                Some(kind) if SCHEDULE_KINDS.contains(&kind) => {}
-                _ => return Err(format!("schedule.kind must be one of {SCHEDULE_KINDS:?}")),
-            }
+            let Some(kind) = schedule
+                .get("kind")
+                .and_then(Value::as_str)
+                .filter(|kind| SCHEDULE_KINDS.contains(kind))
+            else {
+                return Err(format!("schedule.kind must be one of {SCHEDULE_KINDS:?}"));
+            };
             match schedule.get("expression") {
                 None | Some(Value::Null) => {}
                 Some(Value::String(expression)) if expression.split_whitespace().count() == 5 => {}
@@ -891,11 +894,22 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
                 }
             }
             match schedule.get("at") {
-                None | Some(Value::Null) => Ok(()),
-                Some(Value::String(at)) if chrono::DateTime::parse_from_rfc3339(at).is_ok() => {
-                    Ok(())
+                None | Some(Value::Null) => {}
+                Some(Value::String(at)) if chrono::DateTime::parse_from_rfc3339(at).is_ok() => {}
+                Some(_) => {
+                    return Err("schedule.at must be an ISO 8601 time with its offset".to_owned());
                 }
-                Some(_) => Err("schedule.at must be an ISO 8601 time with its offset".to_owned()),
+            }
+            // The kind's own field is the one `schedule_spec` reads; without it the call
+            // would only fail later, as a target that stopped answering.
+            match kind {
+                "cron" if schedule.get("expression").and_then(Value::as_str).is_none() => {
+                    Err("schedule.expression is required for a cron schedule".to_owned())
+                }
+                "at" if schedule.get("at").and_then(Value::as_str).is_none() => {
+                    Err("schedule.at is required for a one-off schedule".to_owned())
+                }
+                _ => Ok(()),
             }
         }
         LIST_SCHEDULED_TASKS => Ok(()),
@@ -1513,6 +1527,16 @@ mod tests {
         assert!(!ok(
             SCHEDULE_TASK,
             json!({"prompt": "Check", "schedule": {"kind": "cron", "expression": "0 9 * *"}})
+        ));
+        // The kind's own field is required here, not later in `create`: a cron with no
+        // expression and an `at` with no time are invalid arguments, not a dead daemon.
+        assert!(!ok(
+            SCHEDULE_TASK,
+            json!({"prompt": "Check", "schedule": {"kind": "cron", "timezone": "UTC"}})
+        ));
+        assert!(!ok(
+            SCHEDULE_TASK,
+            json!({"prompt": "Check", "schedule": {"kind": "at"}})
         ));
         assert!(!ok(
             SCHEDULE_TASK,

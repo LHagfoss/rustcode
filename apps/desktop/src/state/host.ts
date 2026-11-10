@@ -1246,6 +1246,8 @@ async function updateProject(
       ),
     );
   }
+  // A model without a harness still says what it is: the folder's new threads start on it.
+  const on = call.harness ?? call.model;
   const no = await permitted(caller, `project:${path}`, {
     kind: "project",
     caller: caller.id,
@@ -1253,8 +1255,7 @@ async function updateProject(
     target: path,
     detail: `It would ${[
       call.name && `call it “${call.name}”`,
-      call.harness && `start new threads there on ${call.harness}`,
-      call.model && `on ${call.model}`,
+      on && `start new threads there on ${on}${call.harness && call.model ? ` with ${call.model}` : ""}`,
     ]
       .filter(Boolean)
       .join(" and ")}. The folder itself is not touched.`,
@@ -1369,14 +1370,30 @@ async function listScheduledTasks(): Promise<JsonObject> {
   return askScheduler(Method.scheduledList, {}, 20_000);
 }
 
+/**
+ * What the list says a task is called and where it runs, so a card names it
+ * rather than a `task-1723…` id. The daemon may not answer: the changing call
+ * then reads as it did before, still naming the id it was given.
+ */
+async function scheduledTaskName(id: string): Promise<string> {
+  const listed = await askScheduler(Method.scheduledList, {}, 20_000);
+  const tasks = Array.isArray(listed.tasks) ? listed.tasks : [];
+  const task = tasks.find((entry) => obj(entry)?.id === id);
+  const name = str(obj(task)?.name);
+  const workspace = str(obj(task)?.workspace);
+  if (!name && !workspace) return "that scheduled task";
+  return `“${name ?? id}”${workspace ? `, which runs in ${workspace}` : ""}`;
+}
+
 /** `delete_scheduled_task`: the task leaves the scheduler at once. */
 async function deleteScheduledTask(caller: RuleThread, id: string): Promise<JsonObject> {
+  const task = await scheduledTaskName(id);
   const no = await permitted(caller, `schedule:delete:${id}`, {
     kind: "schedule",
     caller: caller.id,
     callerTitle: caller.title,
     target: id,
-    detail: "It would delete that scheduled task. It stops at once, and its run history goes with it.",
+    detail: `It would delete ${task}. It stops at once, and its run history goes with it.`,
   });
   if (no) return failureJson(no);
   return askScheduler(Method.scheduledDelete, { id });
@@ -1384,13 +1401,13 @@ async function deleteScheduledTask(caller: RuleThread, id: string): Promise<Json
 
 /** `run_scheduled_task_now`: one run now, with the schedule left as it is. */
 async function runScheduledTaskNow(caller: RuleThread, id: string): Promise<JsonObject> {
+  const task = await scheduledTaskName(id);
   const no = await permitted(caller, `schedule:run:${id}`, {
     kind: "schedule",
     caller: caller.id,
     callerTitle: caller.title,
     target: id,
-    detail:
-      "It would run that scheduled task now, and keep its schedule. Its prompt runs with no thread open.",
+    detail: `It would run ${task} now, and keep its schedule. Its prompt runs with no thread open.`,
   });
   if (no) return failureJson(no);
   return askScheduler(Method.scheduledRun, { id });

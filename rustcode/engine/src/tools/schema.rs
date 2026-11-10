@@ -727,15 +727,18 @@ pub(crate) fn mcp_schema_budget_bytes() -> usize {
         .unwrap_or(MAX_MCP_NATIVE_SCHEMA_BYTES)
 }
 /// The hard cap before the menu is pruned from the specialised end. The
-/// orchestration tools are the tail and the biggest: a client advertising
-/// version 7 gets the whole built-in menu at 41,897 bytes, 87 under this cap,
-/// so the next tool raises it rather than dropping one. The cap moved from
-/// 40 KiB when the delegation tool descriptions gained what a stalled
-/// delegate costs (a prompt with no TTY, and no default timeout). Raising the
-/// cap keeps every version- and setting-gated tool advertised
-/// (`schema_budget_tests` keeps it that way); the 25 KiB budget below still
+/// orchestration tools are the tail and the biggest, so the newest version
+/// decides it: v11 (projects and scheduled tasks) measures 52,171 bytes with
+/// its nine extra tools, and this is the next KiB above that. A version over
+/// it is a test failure, not a quiet prune: the next tool raises the cap
+/// rather than dropping one. It moved from 40 KiB when the delegation
+/// descriptions gained what a stalled delegate costs, then to 51 KiB when v9's
+/// pull-request tools, v10's answer/organize pair and v11's projects and
+/// schedules joined the menu: at 41 KiB a v9 menu already lost its three v9
+/// tools. Raising it keeps every version- and setting-gated tool advertised
+/// (`schema_budget_tests` loops every version); the 25 KiB budget below still
 /// keeps a plain root prompt lean.
-pub(crate) const MAX_BUILTIN_NATIVE_SCHEMA_BYTES: usize = 41 * 1024;
+pub(crate) const MAX_BUILTIN_NATIVE_SCHEMA_BYTES: usize = 51 * 1024;
 pub(super) const MCP_DISCOVERY_FALLBACK_COUNT: usize = 4;
 const MCP_RELEVANCE_THRESHOLD: usize = 6;
 const MCP_DISCOVERY_CORE: &[&str] = &[
@@ -3235,7 +3238,7 @@ mod schema_budget_tests {
         // A client at the newest version gets every orchestration tool in its
         // built-in schema; the hard cap must not start withholding any of them
         // (which would drop tools the client can answer).
-        for version in [1, 2, 3, 4, 5, 6, 7] {
+        for version in 1..=crate::orchestration::VERSION {
             let policy = ToolSchemaPolicy::root(true).with_orchestration_tools(version);
             let advertised = crate::tools::TOOLS
                 .iter()

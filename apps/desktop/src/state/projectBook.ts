@@ -73,7 +73,9 @@ export function projectLabel(path: string): string {
 
 /**
  * Register a folder, or change what is kept about it. An empty value clears
- * that field. Returns the entry as stored.
+ * that field. A new harness with no model clears the model too: the pair the
+ * book holds must be one a thread can start on, and the new harness's own
+ * default is what it starts on. Returns the entry as stored.
  */
 export function updateProjectEntry(path: string, patch: ProjectEntry): ProjectEntry {
   const key = projectKey(path);
@@ -86,6 +88,7 @@ export function updateProjectEntry(path: string, patch: ProjectEntry): ProjectEn
     if (trimmed) entry[field] = trimmed;
     else delete entry[field];
   }
+  if (patch.harness !== undefined && patch.model === undefined) delete entry.model;
   if (patch.registeredAt !== undefined) entry.registeredAt = patch.registeredAt;
   // An entry with nothing left in it is no entry: the folder is unregistered.
   if (Object.keys(entry).length) book[key] = entry;

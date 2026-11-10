@@ -5134,12 +5134,32 @@ describe("projects and scheduled work", () => {
         harness: "rustcode",
         model: "chatgpt/gpt-6-luna",
       });
+      // The new-thread screen reads the same choice, so the picker shows what ⏎ starts.
+      setProjectCwd(folder);
+      expect(newThreadChoice(useApp.getState())).toMatchObject({
+        harness: "rustcode",
+        model: "chatgpt/gpt-6-luna",
+      });
+      // A pick is the draft and wins; the project's default comes back when it is cleared.
+      setNewThreadChoice({ harness: "claude-code", model: null, effort: null });
+      expect(newThreadChoice(useApp.getState())?.harness).toBe("claude-code");
+      setNewThreadChoice(null);
+      expect(newThreadChoice(useApp.getState())?.harness).toBe("rustcode");
       // A model the harness does not list falls back to the one it would start on.
       updateProjectEntry(folder, { model: "nope" });
       expect(projectThreadChoice(useApp.getState(), folder)?.model).not.toBe("nope");
+      // A new harness with no model drops the old model: the book never holds a pair that cannot
+      // start, and the harness applies its own default.
+      updateProjectEntry(folder, { harness: "claude-code" });
+      expect(projectEntry(folder)).toMatchObject({ harness: "claude-code" });
+      expect(projectEntry(folder)?.model).toBeUndefined();
+      updateProjectEntry(folder, { harness: undefined, model: undefined });
       // A harness that cannot run a thread starts one the usual way instead.
       updateProjectEntry("/tmp/rc-project-off", { harness: "claude-code" });
       expect(projectThreadChoice(useApp.getState(), "/tmp/rc-project-off")).toBeNull();
+      // A folder with no project default is the app's own default, as before.
+      setProjectCwd("/tmp/rc-no-project");
+      expect(newThreadChoice(useApp.getState())?.harness).not.toBe("claude-code");
     } finally {
       storage.done();
     }
@@ -5165,13 +5185,16 @@ describe("projects and scheduled work", () => {
     // A cron with no zone is read in the user's own, which the app fills in.
     expect(task.schedule.timezone).toBeTruthy();
 
+    // A card names the task the list reports, not the opaque id the call carried.
     const denied = call("delete_scheduled_task", { id: "task-morning" });
     await until(() => useApp.getState().grant !== null);
+    expect(useApp.getState().grant?.detail).toContain("Morning build check");
     resolveGrant("deny");
     expect((await denied).error).toMatchObject({ code: "denied" });
 
     const running = call("run_scheduled_task_now", { id: "task-morning" });
     await until(() => useApp.getState().grant !== null);
+    expect(useApp.getState().grant?.detail).toContain("Morning build check");
     resolveGrant("once");
     expect(await running).toMatchObject({ id: "task-morning", state: "claimed" });
   });
