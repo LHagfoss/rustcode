@@ -201,6 +201,65 @@ export function automaticCompactionText(text: string): string {
   return rest ? `Compacted automatically: ${rest}` : "Compacted automatically.";
 }
 
+// Carrying on after the app compacted a thread it was still working on. RustCode
+// runs a harness's own compaction as a turn of its own (`/compact`), and that
+// turn does the thread's work no further: on a thread that still owed work (a
+// delegate in flight, a background command) the chat simply stopped there, and
+// nothing resumed it until something woke it. The continue below is the thread's
+// own turn again, marked so it reads as a divider and never as a message the
+// user typed.
+
+/**
+ * The first line of the continue prompt: what the transcript's divider says. The
+ * rest is for the model, so the divider never carries instructions to the reader.
+ */
+export const CONTINUE_AFTER_COMPACTION_LINE = "Continued after compaction";
+export const CONTINUE_AFTER_COMPACTION_TEXT = `${CONTINUE_AFTER_COMPACTION_LINE}\n\nYour context was compacted automatically. Nothing you were doing was cancelled: continue the task where you left off.`;
+
+export interface ContinueAfterCompactionInput {
+  /** How the compaction's own turn ended. */
+  outcome: "completed" | "cancelled" | "failed" | "skipped";
+  /** The thread still owes work it started: a live delegate link, or a background command. */
+  workInFlight: boolean;
+  /** A turn already runs, or a message is queued: something else carries the thread on. */
+  running: boolean;
+  queued: number;
+  /** The user has started typing in the thread: they have it back. */
+  typing: boolean;
+  /** The turn before the compaction was stopped by the user, or failed. */
+  interrupted: boolean;
+  /**
+   * Another turn already ran since the compaction started: the message that waited in the queue
+   * behind it (a wake for a delegate that settled during the compaction, or what the user typed
+   * meanwhile) is the thread's next step, and it ran when the compaction's own turn ended.
+   */
+  carriedOn: boolean;
+  /** The user put the thread away while it compacted: snoozed it, or settled it. */
+  putAway: boolean;
+}
+
+/**
+ * Whether the thread carries on by itself after the app compacted it. One answer
+ * for the store and its tests: a compaction the user stopped, a turn that failed,
+ * a thread the user is typing in or that something else already resumed, and a
+ * thread whose work is finished all end the question here. One continue per
+ * compaction is structural: `runAutoCompact` asks this once, when its own turn ends.
+ */
+export function shouldContinueAfterCompaction(input: ContinueAfterCompactionInput): boolean {
+  // Stopped by the user, or the harness failed: the chat says so, and the thread is theirs.
+  if (input.outcome !== "completed") return false;
+  if (input.interrupted) return false;
+  if (input.typing) return false;
+  // A wake, a queued message or another turn is already the thread's next step.
+  if (input.running || input.queued > 0) return false;
+  if (input.carriedOn) return false;
+  // Snoozed or settled while it compacted: the user put the thread away, and an automatic turn may
+  // not bring it back.
+  if (input.putAway) return false;
+  // A thread that finished everything it was doing is not resurrected by a compaction.
+  return input.workInFlight;
+}
+
 /** The threshold the context bar marks, when rule 1 applies to this thread's harness. */
 export function autoCompactMark(
   settings: AutoCompactSettings,

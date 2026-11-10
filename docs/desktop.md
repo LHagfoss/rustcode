@@ -578,7 +578,18 @@ composer's keys stay outside the table.
   turn writes no rows of its own (`state/thread.ts` `beginQuietTurn`): the
   answer above it stays the last answer and one row under it says
   *Compacted automatically*, and the context inspector compares the context
-  before and after it.
+  before and after it. A thread the compaction caught while a delegate was still
+  working carries on afterwards by itself, with one turn of its own drawn as a
+  *Continued after compaction* divider rather than a message the user typed
+  (`state/autoCompact.ts` `shouldContinueAfterCompaction`). It is skipped when
+  the compaction or the turn before it was stopped or failed, while the user is
+  typing or another turn or message already carries the thread, when the user
+  snoozed or settled the thread meanwhile, and when nothing is owed any more
+  (every delegate finished while it compacted: its wake carries the thread on).
+  That turn stays in the idle period the compaction spent, so it cannot compact
+  and continue again in a loop. It is not a message the user sent: the
+  composer's ↑ does not recall it, and a reloaded thread replays it as the same
+  divider (`state/thread.ts` `CONTINUE_MARK`).
 - **Model picker.** One pill names the model and its effort (*Opus 5.5
   Medium*) and opens a narrow card (a harness icon rail and a searchable model
   list). Picking a model with levels turns the card to its second step, and an

@@ -110,6 +110,10 @@ export const UserRow = memo(function UserRow({
   // A turn the app woke the thread for (a delegate finished, or asks): a
   // divider row like a compaction, never a message that reads as the user's.
   if (item.wake) return <WakeRow text={item.text} flat />;
+  // The app carrying the thread on after it compacted it: the same kind of divider.
+  if (item.continued) {
+    return <NoticeRow item={{ kind: "notice", id: item.id, text: wakeLine(item.text), tone: "info" }} />;
+  }
   return (
     <div className="group flex flex-col items-end">
       {(attachments.length > 0 || placeholders > 0) && (

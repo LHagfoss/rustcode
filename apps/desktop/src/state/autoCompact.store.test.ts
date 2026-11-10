@@ -5,9 +5,11 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { MockTransport } from "../acp/mock";
 import type { SessionSummary, SessionUsage } from "../acp/types";
-import { emptyExtras } from "./compose";
+import { emptyExtras, sentMessages } from "./compose";
 import { foldTurns } from "./fold";
+import type { Link } from "./orchestration";
 import {
+  answerPermission,
   cancel,
   clearFinished,
   connect,
@@ -66,8 +68,8 @@ const compactPrompt = (id: string) =>
     .threads[id]?.items.some((item) => item.kind === "user" && item.text.trim() === "/compact") ?? false;
 
 /** An open thread on Claude Code's two-rule policy, its size threshold at 20k. */
-async function openClaudeThread() {
-  await connect(new MockTransport({ delayMs: 0 }));
+async function openClaudeThread(delayMs = 0) {
+  await connect(new MockTransport({ delayMs }));
   await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
   const id = useApp.getState().sessions[0]!.id;
   selectThread(id);
@@ -313,5 +315,158 @@ describe("quiet automatic compaction", () => {
     await running;
     expect(compactionRows(id)).toHaveLength(0);
     expect(useApp.getState().threads[id]!.running).toBe(false);
+  });
+});
+
+describe("carrying on after an automatic compaction", () => {
+  const link = (orchestrator: string, state: string): Link => ({
+    id: `${orchestrator}/1`,
+    orchestrator,
+    target: "delegate-1",
+    orchestratorTitle: "Parent",
+    targetTitle: "A delegate",
+    message: "do the work",
+    state: state as Link["state"],
+    createdAt: Date.now(),
+  });
+
+  const continuedRow = (id: string) =>
+    useApp.getState().threads[id]?.items.find((item) => item.kind === "user" && item.continued);
+
+  test("a thread its delegate is still working for carries on, as a divider", async () => {
+    const id = await openClaudeThread();
+    endedTurn(id, Date.now(), 30_000);
+    useApp.setState((s) => ({ links: { ...s.links, links: [...s.links.links, link(id, "working")] } }));
+
+    scheduleAutoCompact(id);
+    await until(() => continuedRow(id) !== undefined);
+    // The compaction still happened, and the turn after it is the thread's own work again.
+    expect(compacted(id)).toBe(true);
+    const row = continuedRow(id);
+    expect(row).toMatchObject({ continued: true });
+    expect(row?.kind === "user" ? row.text.split("\n")[0] : "").toBe("Continued after compaction");
+    // Never a message the user sent: ↑ in the composer does not recall it.
+    const recalled = sentMessages(useApp.getState().threads[id]!.items);
+    expect(recalled.some((text) => text.includes("Continued after compaction"))).toBe(false);
+    // A normal prompt asks the mock for approval; stopping ends the test's turn.
+    await cancel(id);
+    await settle(40);
+    expect(useApp.getState().threads[id]!.running).toBe(false);
+  });
+
+  test("a thread that finished everything it was doing stays stopped", async () => {
+    const id = await openClaudeThread();
+    endedTurn(id, Date.now(), 30_000);
+    useApp.setState((s) => ({ links: { ...s.links, links: [...s.links.links, link(id, "done")] } }));
+
+    scheduleAutoCompact(id);
+    await until(() => compacted(id));
+    await settle(80);
+    expect(continuedRow(id)).toBeUndefined();
+    expect(useApp.getState().threads[id]!.running).toBe(false);
+  });
+
+  test("a turn the user stopped is not carried on", async () => {
+    const id = await openClaudeThread();
+    endedTurn(id, Date.now(), 30_000);
+    // The stop the user made: the last real turn ended cancelled.
+    updateThread(id, (t) => ({
+      ...t,
+      items: t.items.map((item) =>
+        item.kind === "turnEnd" ? { ...item, outcome: "cancelled" as const } : item,
+      ),
+    }));
+    useApp.setState((s) => ({ links: { ...s.links, links: [...s.links.links, link(id, "working")] } }));
+
+    scheduleAutoCompact(id);
+    await until(() => compacted(id));
+    await settle(80);
+    expect(continuedRow(id)).toBeUndefined();
+  });
+
+  const compactionRows = (id: string) =>
+    useApp
+      .getState()
+      .threads[id]!.items.filter(
+        (item) => item.kind === "notice" && (item.progress || item.text.startsWith("Compacted")),
+      );
+
+  const compacting = (id: string) =>
+    useApp.getState().threads[id]?.items.some((item) => item.kind === "notice" && item.progress) ?? false;
+
+  /** The mock's edit asks for approval: allow it, so the turn runs on to its end. */
+  async function allowEdit(id: string) {
+    await until(() => (useApp.getState().threads[id]?.permissions.length ?? 0) > 0);
+    const request = useApp.getState().threads[id]!.permissions[0]!;
+    answerPermission(request, request.options.find((option) => option.id === "allow") ?? null);
+  }
+
+  test("a message that waited behind the compaction already carried the thread on", async () => {
+    // A slower mock than the other cases: the compaction has to be on screen for a message to be
+    // typed behind it.
+    const id = await openClaudeThread(40);
+    // High enough that the mock's own turns do not compact again: one compaction is under test.
+    setAutoCompactThreshold(150_000);
+    endedTurn(id, Date.now(), 160_000);
+    useApp.setState((s) => ({ links: { ...s.links, links: [...s.links.links, link(id, "working")] } }));
+
+    scheduleAutoCompact(id);
+    await until(() => compacting(id), 5000);
+    // Typed while the compaction runs (a wake takes the same path): it waits behind the app's turn,
+    // and `runPrompt` starts it as soon as the compaction ends.
+    await runPrompt(id, "yolo, carry on with this instead");
+    await until(() => compacted(id), 5000);
+    // The queued message's turn runs when the compaction's own turn ends, and finishes.
+    await until(() => {
+      const items = useApp.getState().threads[id]!.items;
+      const at = items.findIndex((item) => item.kind === "user" && item.text.includes("carry on with this"));
+      return at >= 0 && items.slice(at).some((item) => item.kind === "turnEnd");
+    }, 5000);
+    await settle(300);
+
+    // One turn answered the queued message; the app did not hand the thread a second one.
+    expect(continuedRow(id)).toBeUndefined();
+    const users = useApp.getState().threads[id]!.items.filter((item) => item.kind === "user");
+    expect(users.at(-1)?.text).toContain("carry on with this instead");
+  });
+
+  test("a thread the user snoozed while it compacted is left alone", async () => {
+    const id = await openClaudeThread(40);
+    endedTurn(id, Date.now(), 30_000);
+    useApp.setState((s) => ({ links: { ...s.links, links: [...s.links.links, link(id, "working")] } }));
+
+    scheduleAutoCompact(id);
+    await until(() => compacting(id), 5000);
+    // Put away while it compacted: the app does not bring it back with a turn of its own.
+    setSnoozed(id, Date.now() + 60 * 60_000);
+    await until(() => compacted(id), 5000);
+    await settle(400);
+
+    expect(continuedRow(id)).toBeUndefined();
+    expect(id in useApp.getState().snoozed).toBe(true);
+    expect(useApp.getState().threads[id]!.running).toBe(false);
+  });
+
+  test("the continue's own turn does not start another automatic compaction", async () => {
+    const id = await openClaudeThread();
+    endedTurn(id, Date.now(), 30_000);
+    useApp.setState((s) => ({ links: { ...s.links, links: [...s.links.links, link(id, "working")] } }));
+
+    scheduleAutoCompact(id);
+    await until(() => continuedRow(id) !== undefined);
+    // The continue's turn runs to its end, and the context is over the threshold again: re-arming
+    // the size rule here would compact, continue, compact… for ever on a harness whose compaction
+    // left the context where it was.
+    await allowEdit(id);
+    await until(() => useApp.getState().threads[id]!.running === false);
+    updateThread(id, (t) => ({ ...t, usage: usage(160_000) }));
+    clearFinished(id);
+    scheduleAutoCompact(id);
+    await settle(200);
+
+    expect(compactionRows(id)).toHaveLength(1);
+    expect(
+      useApp.getState().threads[id]!.items.filter((item) => item.kind === "user" && item.continued),
+    ).toHaveLength(1);
   });
 });

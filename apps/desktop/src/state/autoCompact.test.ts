@@ -10,9 +10,13 @@ import {
   autoCompactMark,
   autoCompactPolicy,
   automaticCompactionText,
+  CONTINUE_AFTER_COMPACTION_LINE,
+  CONTINUE_AFTER_COMPACTION_TEXT,
+  type ContinueAfterCompactionInput,
   clampAutoCompactThreshold,
   DEFAULT_AUTO_COMPACT,
   parseAutoCompactSettings,
+  shouldContinueAfterCompaction,
 } from "./autoCompact";
 
 const NOW = 1_800_000_000_000;
@@ -291,5 +295,49 @@ describe("what the thread shows", () => {
     expect(
       autoCompactMark({ mode: "cache", threshold: 150_000 }, autoCompactPolicy("codex", "codex")),
     ).toBeUndefined();
+  });
+});
+
+describe("carrying on after a compaction", () => {
+  const continueInput = (over: Partial<ContinueAfterCompactionInput> = {}): ContinueAfterCompactionInput => ({
+    outcome: "completed",
+    workInFlight: true,
+    running: false,
+    queued: 0,
+    typing: false,
+    interrupted: false,
+    carriedOn: false,
+    putAway: false,
+    ...over,
+  });
+
+  test("a thread that still owes work carries on", () => {
+    expect(shouldContinueAfterCompaction(continueInput())).toBe(true);
+    // The prompt is a divider line for the chat and words for the model, never a user message.
+    const [line] = CONTINUE_AFTER_COMPACTION_TEXT.split("\n");
+    expect(line).toBe(CONTINUE_AFTER_COMPACTION_LINE);
+  });
+
+  test("a thread whose work is finished is not handed another turn", () => {
+    expect(shouldContinueAfterCompaction(continueInput({ workInFlight: false }))).toBe(false);
+  });
+
+  test("the user's stop, a failed turn and a compaction with no outcome leave the thread alone", () => {
+    expect(shouldContinueAfterCompaction(continueInput({ interrupted: true }))).toBe(false);
+    expect(shouldContinueAfterCompaction(continueInput({ outcome: "cancelled" }))).toBe(false);
+    expect(shouldContinueAfterCompaction(continueInput({ outcome: "failed" }))).toBe(false);
+    expect(shouldContinueAfterCompaction(continueInput({ outcome: "skipped" }))).toBe(false);
+    expect(shouldContinueAfterCompaction(continueInput({ typing: true }))).toBe(false);
+  });
+
+  test("a wake or a queued message already carries the thread on", () => {
+    expect(shouldContinueAfterCompaction(continueInput({ running: true }))).toBe(false);
+    expect(shouldContinueAfterCompaction(continueInput({ queued: 1 }))).toBe(false);
+    // The row ran when the compaction's turn ended, so the thread is already back at work.
+    expect(shouldContinueAfterCompaction(continueInput({ carriedOn: true }))).toBe(false);
+  });
+
+  test("a thread the user put away while it compacted is not brought back", () => {
+    expect(shouldContinueAfterCompaction(continueInput({ putAway: true }))).toBe(false);
   });
 });

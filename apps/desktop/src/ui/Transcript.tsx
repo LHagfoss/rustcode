@@ -262,7 +262,10 @@ export function rowGap(rows: readonly Row[], index: number): number {
   if (index <= 0) return 0;
   const item = rows[index]?.item;
   const prev = rows[index - 1]?.item;
-  if ((prev?.kind === "notice" && prev.tone === "info") || (prev?.kind === "user" && !!prev.wake))
+  if (
+    (prev?.kind === "notice" && prev.tone === "info") ||
+    (prev?.kind === "user" && !!(prev.wake || prev.continued))
+  )
     return ITEM_GAP;
   return item?.kind === "user" || prev?.kind === "user" ? TURN_GAP : ITEM_GAP;
 }
@@ -1211,7 +1214,8 @@ export function Transcript({
               // A divider (a wake, a notice) already draws the line a fold header would draw again.
               const afterDivider =
                 (prev?.item?.kind === "notice" && prev.item.tone === "info") ||
-                (prev?.item?.kind === "user" && !!prev.item.wake);
+                (prev?.item?.kind === "user" && !!prev.item.wake) ||
+                (prev?.item?.kind === "user" && !!prev.item.continued);
               // The air above the row, from the same answer its estimate reads (`rowGap`), so a row
               // mounts at the size the transcript already reserved for it.
               const turnGap = rowGap(rows, v.index);
