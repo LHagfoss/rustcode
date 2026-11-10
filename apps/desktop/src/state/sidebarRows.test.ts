@@ -538,12 +538,19 @@ describe("where a row puts what it has besides its title", () => {
   const meta = (over: Partial<Parameters<typeof rowMeta>[0]>) => rowMeta({ layout: "compact", ...over });
   const diff = { added: 1, removed: 0 };
 
-  test("a branch, a pull request or a stack is worth a second line, whatever the layout", () => {
+  test("a branch or a pull request is worth a second line, whatever the layout", () => {
     for (const layout of ["compact", "comfortable"] as const) {
       expect(meta({ layout, branch: true })).toBe("line");
       expect(meta({ layout, pull: true })).toBe("line");
-      expect(meta({ layout, stack: true })).toBe("line");
     }
+  });
+
+  test("a stack of delegates alone rides in the trailing slot, so spawning one adds no line", () => {
+    for (const layout of ["compact", "comfortable"] as const) {
+      expect(meta({ layout, stack: true })).toBe("trailing");
+      expect(meta({ layout, stack: true, harness: true, diff })).toBe("trailing");
+    }
+    expect(meta({ stack: true, branch: true })).toBe("line");
   });
 
   test("a diff alone is never a line of its own, whatever the layout", () => {
@@ -561,7 +568,7 @@ describe("where a row puts what it has besides its title", () => {
     expect(meta({ harness: true, diff })).toBe("trailing");
     // It earns the line when the line already holds something that does.
     expect(meta({ harness: true, branch: true })).toBe("line");
-    expect(meta({ harness: true, stack: true })).toBe("line");
+    expect(meta({ harness: true, pull: true })).toBe("line");
   });
 
   test("nothing to say is no line at all, so the mark is never alone on one", () => {
