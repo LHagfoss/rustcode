@@ -35,9 +35,13 @@ payload only when the user turns payload capture on ("Captured payloads").
 | object | holds |
 | --- | --- |
 | `threads` | one row per thread: `id`, `title`, `project`, `cwd`, `harness`, `model`, `effort`, `parent_id`, `parent_title`, `created_at`, `updated_at` |
-| `turns` | one row per turn: `thread_id`, `started_at`, `finished_at`, `harness`, `model`, `input_tokens`, `output_tokens`, `cached_tokens`, `cache_write_tokens`, `cost_usd`, `tool_calls`, `status`, unique on `(thread_id, started_at)` |
-| `tool_calls` | one row per finished tool call: `thread_id`, `turn_id`, `tool_name`, `success`, `exit_code`, `at` |
+| `turns` | one row per turn: `thread_id`, `started_at`, `finished_at`, `harness`, `model`, `input_tokens`, `output_tokens`, `cached_tokens`, `cache_write_tokens`, `cost_usd`, `tool_calls`, `status`, `duration_ms`, `time_to_first_token_ms`, `model_time_ms`, `tool_time_ms`, `context_tokens`, `context_window`, `stop_reason`, unique on `(thread_id, started_at)` |
+| `tool_calls` | one row per finished tool call: `thread_id`, `turn_id`, `tool_name`, `success`, `exit_code`, `at`, `started_at`, `duration_ms`, `output_bytes`, `truncated`, `mcp_server`, `command_name`, `error_kind` |
+| `compactions` | one row per history compaction, from any harness: `thread_id`, `turn_id`, `harness`, `model`, `at`, `duration_ms`, `trigger`, `mode`, `tokens_before`, `tokens_after`, `messages_before`, `messages_after`, `idle_secs_before`, `count`, `success`, `error_kind`, `external_id`, `source` |
 | `daily_usage` | a view over `turns`: `day`, `harness`, `model`, summed tokens, `cost_usd` and turn count |
+| `daily_compactions` | a view over `compactions`: compactions, failures, tokens before and after, reclaimed tokens and mean duration per day, harness and trigger |
+| `tool_failure_rates` | a view over `tool_calls`: calls, failures, failure rate, mean duration and truncated results per day and tool |
+| `turn_latency_daily` | a view over `turns`: turn count, mean wall, first-token, model, tool and context values per day, harness and model |
 | `thread_links` | one row per link between two threads: `id`, `orchestrator`, `target`, `state`, `started_at`, `settled_at`, `harness`, `files_changed`, and `body`, the whole link record as JSON |
 | `orchestration_state` | `key`, `body`: the rest of the link book, under `grants`, `counters` and `fanOuts` |
 | `provider_requests` | one row per built-in provider HTTP attempt or retry: `thread_id`, `turn_id`, `round`, `provider`, `model`, `endpoint_host`, `endpoint_path`, `method`, `attempt`, `started_at`, `headers_at`, `finished_at`, `latency_ms`, `status_code`, `request_bytes`, `response_bytes`, `stream_event_count`, `input_tokens`, `output_tokens`, `cached_tokens`, `error_kind`, `request_payload_json`, `response_summary_json`, `payload_truncated`, `redaction_version` |
@@ -52,6 +56,54 @@ guessed. A cost is kept only when the harness reports it in USD; another
 currency is not converted. Timestamps are RFC 3339 in UTC. Migrations are numbered and recorded with their
 names, like the thread index: a recorded name that does not match refuses to
 open instead of skipping a step.
+
+## Structured rows grow forever, noise does not
+
+The store is a record of what happened, so the small structured rows are kept:
+`threads`, `turns`, `tool_calls`, `compactions`, `operational_events`,
+`thread_links` and the usage cursors are never deleted by the retention pass.
+They are bytes to a few hundred bytes each.
+
+Only the raw protocol payloads are bulky, and only they are pruned:
+
+- streaming output (`*/outputDelta`, `agent_message_chunk`,
+  `agent_thought_chunk`, `user_message_chunk`) is coalesced per flush window
+  and, when it slips through as a raw frame, its body is dropped;
+- repeated status pings (`account/rateLimits/updated`,
+  `mcpServer/startupStatus/updated`) keep their metadata row and lose their
+  body on every pass;
+- other raw payload bodies older than 7 days are set to `NULL`, and the
+  metadata row (`method`, `at`, `latency_ms`, `byte_size`) stays;
+- the raw payloads are held under a 256 MiB budget by dropping the oldest
+  first, then the oldest raw rows;
+- `telemetry_retention` in `config.toml` is `forever` by default. A number of
+  days deletes raw `provider_requests` and `harness_rpc_messages` rows older
+  than that; it never deletes a structured row.
+
+That keeps `data.sqlite` proportional to the turns, tool calls and
+compactions a thread actually had, not to the bytes that streamed through it.
+`rustcode data stats` prints each table's row count and size.
+
+## Compactions
+
+Every compaction RustCode can see is one row, whichever harness ran it:
+
+| source | how it is seen | trigger |
+| --- | --- | --- |
+| built-in harness | `AppState::record_compaction`, where the chat card and `context.compaction` event are written | `auto_context` (the history crossed its budget) or `manual` (`/compact`) |
+| Codex | the `contextCompaction` item (`item/completed`) | `manual` for a `/compact` turn, else `harness_auto` |
+| Claude Code | the ACP adapter's synthetic `Compact conversation` tool call (`_meta.claudeCode.toolName = "compact"`), terminal update only | Claude's `trigger`: `manual`, `harness_auto` for its automatic pass, `cache_expiry` for the adapter's idle compaction |
+
+`mode` is `ai_summary` or `deterministic_record` for a RustCode compaction and
+`harness_summary` when the harness made it. Token counts, message counts and
+duration stay `NULL` when the source did not report them, never `0`. A
+harness's own event id (`external_id`) makes a repeated protocol update update
+its row instead of adding a second one.
+
+A harness that never reports a compaction has no row: RustCode does not guess
+one from timing. The Claude Code adapter of this release does forward the
+event (as the tool call above), even though it does not send the newer ACP
+`compaction_update` notification RustCode does not advertise.
 
 ## Thread links
 
@@ -193,6 +245,10 @@ Metadata is always recorded; payloads are opt-in, and off by default:
 | `capture_provider_payloads` | `false` | `provider_requests.request_payload_json` (the serialized request) and `response_summary_json` (a summary, never the raw successful stream) |
 | `capture_harness_rpc_payloads` | `false` | `harness_rpc_messages.payload_json` |
 
+`telemetry_retention` (default `"forever"`, or a number of days) is separate
+from those two: it only bounds raw protocol rows, never structured rows
+("Structured rows grow forever, noise does not"). It is global only.
+
 `debug_verbose_network_logging` is a separate flag for `debug.log` output and
 does not turn any of this on. Project configuration cannot enable either key:
 capturing payloads is a choice about the user's own data, so it is global
@@ -229,17 +285,21 @@ insert, so a mistake cannot write past the cap.
 ### Retention
 
 A pass runs at most once an hour, from the store's open path (every writer
-opens the store) and at the start:
+opens the store) and at the start. Structured rows are never deleted; see
+"Structured rows grow forever, noise does not" above for the policy, and
+`telemetry_retention` in `config.toml` for the raw-row window.
 
-- payload columns of rows older than 7 days are set to `NULL`, and the
+- streaming-delta and status-ping payloads are dropped on every pass;
+- payload columns of raw rows older than 7 days are set to `NULL`, and the
   metadata row stays;
-- rows older than 30 days are deleted;
+- when `telemetry_retention` is a number of days, raw protocol rows older
+  than that are deleted; the default `forever` keeps them;
 - command receipts older than 7 days are deleted, then the oldest until at
   most 10,000 are left: they exist to make a retry safe for a while, not to
   keep history (`COMMAND_RECEIPT_RETENTION_DAYS`, `COMMAND_RECEIPT_MAX_ROWS`);
-- if the three tables hold more than 256 MiB of payload together (estimated as
-  the summed length of the payload columns), the oldest payloads are dropped
-  first and the oldest rows only after that;
+- if the raw tables hold more than 256 MiB of payload together (estimated as
+  the summed length of the payload columns), payloads are dropped first and
+  the oldest raw rows only after that;
 - the WAL is checkpointed (`PRAGMA wal_checkpoint(TRUNCATE)`), and freed pages
   are reclaimed with `PRAGMA incremental_vacuum` only when the database already
   vacuums incrementally — turning that on for an existing file needs a full
@@ -364,7 +424,9 @@ file are refused. `rustcode data schema` prints the tables and view.
 rustcode usage                 # tokens per harness and model, all turns
 rustcode usage --since 2026-11-01 --json
 rustcode data query "SELECT * FROM daily_usage ORDER BY day DESC LIMIT 7"
+rustcode data query "SELECT * FROM daily_compactions ORDER BY day DESC LIMIT 7"
 rustcode data schema
+rustcode data stats            # rows and bytes per table
 ```
 
 `rustcode usage` reports tokens and the cost the harness reported in USD — a
@@ -424,4 +486,6 @@ and output, and per-turn history for turns recorded before this file existed.
 Opencode reports no token counts RustCode can read, so its turns keep `NULL`
 tokens and only its reported cost. Payloads are kept only when captured and
 only for 7 days; an external harness's provider HTTP is never visible here at
-all ("Request and protocol telemetry").
+all ("Request and protocol telemetry"). Per-call tool duration is `NULL`: a
+harness's transcript does not carry it, so the store does not invent one; a
+turn's `tool_time_ms` is recorded when the caller measured it.

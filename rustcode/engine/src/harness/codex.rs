@@ -58,6 +58,9 @@ enum TurnEnd {
 
 #[derive(Default)]
 struct State {
+    /// The RustCode thread this Codex thread runs for, so a compaction it
+    /// reports can be stored against it.
+    thread_id: Option<String>,
     models: Vec<CodexModel>,
     model: Option<String>,
     effort: Option<String>,
@@ -230,7 +233,10 @@ impl CodexAdapter {
         options: StartOptions,
         out: OutputSender,
     ) -> Result<Self, String> {
-        let state = Arc::new(Mutex::new(State::default()));
+        let state = Arc::new(Mutex::new(State {
+            thread_id: options.thread_id.clone(),
+            ..State::default()
+        }));
         tokio::spawn(relay(incoming, Arc::clone(&peer), Arc::clone(&state), out));
         let describe = |error: RpcError| format!("{}: {}", harness.name, error.describe());
         peer.request_within(
@@ -1269,6 +1275,9 @@ fn translate(state: &Mutex<State>, method: &str, params: &Value) -> Vec<SessionU
                     // A compaction asked for with `/compact` runs no turn of its own
                     // that ends the wait; its completed item does.
                     let mut guard = lock(state);
+                    let manual = guard.compacting;
+                    let thread_id = guard.thread_id.clone();
+                    let model = guard.model.clone();
                     if guard.compacting {
                         guard.compacting = false;
                         if let Some(waiter) = guard.waiter.take() {
@@ -1276,6 +1285,29 @@ fn translate(state: &Mutex<State>, method: &str, params: &Value) -> Vec<SessionU
                         }
                     }
                     drop(guard);
+                    if let Some(thread_id) = thread_id {
+                        crate::data_store::record_compaction(&crate::data_store::CompactionRow {
+                            thread_id,
+                            turn_id: None,
+                            harness: Some("codex".to_owned()),
+                            model,
+                            at: chrono::Utc::now()
+                                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                            duration_ms: None,
+                            trigger: if manual { "manual" } else { "harness_auto" }.to_owned(),
+                            mode: Some("harness_summary".to_owned()),
+                            tokens_before: None,
+                            tokens_after: None,
+                            messages_before: None,
+                            messages_after: None,
+                            idle_secs_before: None,
+                            count: None,
+                            success: true,
+                            error_kind: None,
+                            external_id: None,
+                            source: Some("codex".to_owned()),
+                        });
+                    }
                     vec![crate::acp::usage::compaction_card(
                         None,
                         None,

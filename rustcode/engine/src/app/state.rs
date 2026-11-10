@@ -1525,6 +1525,36 @@ impl AppState {
             previous_count,
         );
         self.current_token_usage = None;
+        crate::data_store::record_compaction(&crate::data_store::CompactionRow {
+            thread_id: self.active_session_id.clone(),
+            turn_id: None,
+            harness: Some(crate::harness::BUILTIN_ID.to_owned()),
+            model: self.active_model_profile().map(|profile| profile.model),
+            at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            duration_ms: None,
+            trigger: match trigger {
+                crate::app::CompactionTrigger::Auto => "auto_context",
+                crate::app::CompactionTrigger::Manual => "manual",
+            }
+            .to_owned(),
+            mode: Some(
+                match mode {
+                    crate::app::CompactionMode::AiSummary => "ai_summary",
+                    crate::app::CompactionMode::DeterministicRecord => "deterministic_record",
+                }
+                .to_owned(),
+            ),
+            tokens_before: Some(stats.before_tokens as i64),
+            tokens_after: Some(stats.after_tokens as i64),
+            messages_before: Some(stats.messages_considered as i64),
+            messages_after: None,
+            idle_secs_before: None,
+            count: Some(i64::from(stats.count)),
+            success: true,
+            error_kind: None,
+            external_id: None,
+            source: Some("rustcode".to_owned()),
+        });
         crate::logger::operational_event(
             "context.compaction",
             serde_json::json!({
