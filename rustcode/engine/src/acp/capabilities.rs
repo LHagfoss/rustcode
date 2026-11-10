@@ -81,6 +81,24 @@ pub(crate) fn add_skill(
     Ok(serde_json::json!({ "path": path }))
 }
 
+/// Read one discovered skill's `SKILL.md` for "Copy to ‹machine›". The
+/// capabilities snapshot lists skills without their content; this is the
+/// separate read, so polling a page does not carry every definition.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
+#[request(method = "_rustcode/skills/get", response = serde_json::Value)]
+pub(crate) struct GetSkillRequest {
+    pub name: String,
+    pub path: String,
+}
+
+pub(crate) fn get_skill(
+    request: GetSkillRequest,
+) -> Result<serde_json::Value, agent_client_protocol::Error> {
+    crate::capabilities::skill_markdown(&request.name, std::path::Path::new(&request.path))
+        .map(|content| serde_json::json!({ "content": content }))
+        .map_err(|message| agent_client_protocol::Error::invalid_params().data(message))
+}
+
 pub(crate) async fn add_mcp_server(
     request: AddMcpServerRequest,
 ) -> Result<serde_json::Value, agent_client_protocol::Error> {
@@ -178,6 +196,7 @@ mod tests {
             "_rustcode/capabilities/mcp/restart"
         ));
         assert!(AddSkillRequest::matches_method("_rustcode/skills/add"));
+        assert!(GetSkillRequest::matches_method("_rustcode/skills/get"));
         let restart: RestartMcpServerRequest =
             serde_json::from_value(serde_json::json!({"name": "fagbrev"})).unwrap();
         assert_eq!(restart.name, "fagbrev");

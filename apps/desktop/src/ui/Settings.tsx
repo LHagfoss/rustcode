@@ -393,7 +393,7 @@ function GeneralPage() {
                 min={20}
                 max={500}
                 step={10}
-                onChange={(value) => void autoCompactThreshold.set(value * 1_000)}
+                onCommit={(value) => void autoCompactThreshold.set(value * 1_000)}
                 unit="k tokens"
               />
             </ScopedValue>
@@ -757,7 +757,7 @@ function OrchestrationGroup() {
               value={totalLimit}
               min={MIN_DELEGATES_TOTAL}
               max={MAX_DELEGATES_TOTAL}
-              onChange={(value) => void totalLimitSetting.set(value)}
+              onCommit={(value) => void totalLimitSetting.set(value)}
               unit="delegates"
             />
           </ScopedValue>
@@ -784,7 +784,7 @@ function OrchestrationGroup() {
               value={threadLimit}
               min={MIN_DELEGATES_PER_THREAD}
               max={MAX_DELEGATES_PER_THREAD}
-              onChange={(value) => void threadLimitSetting.set(value)}
+              onCommit={(value) => void threadLimitSetting.set(value)}
               unit="delegates"
             />
           </ScopedValue>

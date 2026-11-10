@@ -15,6 +15,7 @@ import {
   scopeBreakdown,
   scopedMachines,
   scopeValuesMixed,
+  secretTargetReason,
   writableMachines,
 } from "./settingsRegistry";
 
@@ -171,5 +172,33 @@ describe("seeding a machine that has no values yet", () => {
       "resume-after-restart": true,
     });
     expect(missing).toEqual({ "resume-after-restart": true });
+  });
+});
+
+describe("a target that would carry a secret", () => {
+  test("a stdio flag or assignment stays on this machine", () => {
+    expect(secretTargetReason(["npx", "@acme/server", "--token", "abc"], "stdio")).toBe(
+      "its command carries a secret in --token",
+    );
+    expect(secretTargetReason(["npx", "server", "--token=abc"], "stdio")).toBe(
+      "its command carries a secret in --token",
+    );
+    expect(secretTargetReason(["npx", "server", "API_KEY=xyz"], "stdio")).toBe(
+      "its command carries a secret in API_KEY",
+    );
+    expect(secretTargetReason(["npx", "-y", "@acme/server"], "stdio")).toBeNull();
+  });
+
+  test("an http URL with credentials is not sent to another machine", () => {
+    expect(secretTargetReason(["https://mcp.example.com"], "http")).toBeNull();
+    expect(secretTargetReason(["https://mcp.example.com/mcp"], "http")).toBeNull();
+    expect(secretTargetReason(["https://mcp.example.com?token=x"], "http")).toBe(
+      "its URL carries a query string",
+    );
+    expect(secretTargetReason(["https://user:pass@mcp.example.com"], "http")).toBe(
+      "its URL carries a user name or password",
+    );
+    expect(secretTargetReason(["https://mcp.example.com#key"], "http")).toBe("its URL carries a fragment");
+    expect(secretTargetReason(["not a url"], "http")).toBe("its URL could not be read");
   });
 });

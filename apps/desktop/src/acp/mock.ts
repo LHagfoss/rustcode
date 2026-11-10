@@ -9,6 +9,46 @@ import { arr, type Json, type JsonObject, num, obj, str } from "./jsonrpc";
 import type { Transport, TransportEvent } from "./transport";
 import { BUILTIN_CAPABILITIES, type HarnessCapabilities, type HarnessSnapshot } from "./types";
 
+/** The local mock's skills; their text is served only by `_rustcode/skills/get`. */
+const MOCK_SKILLS: JsonObject[] = [
+  {
+    name: "release-automation",
+    description: "Cut a release with scripts/release.sh",
+    path: "~/.agents/skills/release-automation",
+    source: "universal",
+    readOnly: false,
+    enabled: true,
+    content:
+      "---\nname: release-automation\ndescription: Cut a release with scripts/release.sh\n---\n\nRun scripts/release.sh --patch.\n",
+  },
+  {
+    name: "frontend-design",
+    description: "Design guidance for web UIs",
+    path: ".rustcode/skills/frontend-design",
+    source: "workspace",
+    readOnly: false,
+    enabled: false,
+    content:
+      "---\nname: frontend-design\ndescription: Design guidance for web UIs\n---\n\nRead docs/design.md before shaping a page.\n",
+  },
+  {
+    name: "cloudflare-email-service",
+    description: "Send mail from a Worker",
+    path: "~/.claude/skills/cloudflare-email-service",
+    source: "claude-user",
+    readOnly: true,
+    enabled: true,
+    content:
+      "---\nname: cloudflare-email-service\ndescription: Send mail from a Worker\n---\n\nUse the Email Sending binding.\n",
+  },
+];
+
+function withoutSkillContent(skill: JsonObject): JsonObject {
+  const row = { ...skill };
+  delete row.content;
+  return row;
+}
+
 export interface MockOptions {
   /**
    * `default`: onboarded with history. `onboarding`: first run. `empty`: no threads.
@@ -3744,34 +3784,19 @@ export class MockEngine {
       case "_rustcode/capabilities":
         return {
           configPath: "~/.config/rustcode/config.toml",
-          skills: [
-            {
-              name: "release-automation",
-              description: "Cut a release with scripts/release.sh",
-              path: "~/.agents/skills/release-automation",
-              source: "universal",
-              readOnly: false,
-              enabled: true,
-            },
-            {
-              name: "frontend-design",
-              description: "Design guidance for web UIs",
-              path: ".rustcode/skills/frontend-design",
-              source: "workspace",
-              readOnly: false,
-              enabled: false,
-            },
-            {
-              name: "cloudflare-email-service",
-              description: "Send mail from a Worker",
-              path: "~/.claude/skills/cloudflare-email-service",
-              source: "claude-user",
-              readOnly: true,
-              enabled: true,
-            },
-          ],
+          skills: MOCK_SKILLS.map(withoutSkillContent),
           mcpServers: this.mcpServers(),
         };
+      case "_rustcode/skills/get": {
+        const name = str(params.name);
+        const path = str(params.path);
+        const skill = MOCK_SKILLS.find((entry) => str(entry.name) === name && str(entry.path) === path);
+        if (!skill || typeof skill.content !== "string")
+          throw Object.assign(new Error(`Could not read ${name ?? "that"}'s SKILL.md`), {
+            code: -32602,
+          });
+        return { content: skill.content };
+      }
       case "_rustcode/permissions": {
         // The same shape `_rustcode/permissions` answers with (engine/src/acp/permissions.rs).
         const now = Math.floor(Date.now() / 1000);
@@ -5142,7 +5167,7 @@ export class MockMachine {
           id,
           result: {
             configPath: `/home/lars/.config/rustcode/config.toml`,
-            skills: this.skills,
+            skills: this.skills.map(withoutSkillContent),
             mcpServers: this.mcpServers,
           },
         }),
@@ -5186,6 +5211,25 @@ export class MockMachine {
       const name = str(obj(frame.params)?.name);
       this.mcpServers = this.mcpServers.filter((server) => str(server.name) !== name);
       return this.receive(JSON.stringify({ jsonrpc: "2.0", id, method: "_rustcode/capabilities" }));
+    }
+    if (frame.method === "_rustcode/skills/get") {
+      const params = obj(frame.params);
+      const skill = this.skills.find(
+        (entry) => str(entry.name) === str(params?.name) && str(entry.path) === str(params?.path),
+      );
+      if (!skill || typeof skill.content !== "string") {
+        return [
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            error: {
+              code: -32602,
+              message: `Could not read ${str(params?.name) ?? "that"}'s SKILL.md`,
+            },
+          }),
+        ];
+      }
+      return [JSON.stringify({ jsonrpc: "2.0", id, result: { content: skill.content } })];
     }
     if (frame.method === "_rustcode/skills/add") {
       const params = obj(frame.params);

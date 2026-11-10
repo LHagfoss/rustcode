@@ -106,10 +106,14 @@ credentials are never editable over a remote connection.
 Skills and MCP servers are listed per machine under Capabilities. **Add server
 to all** adds an MCP definition to every connected machine; **Copy to ‹machine›**
 on a row copies its definition. Values of MCP environment variables and
-headers never travel: the target gets the key names blank with a note to set
-them there, and a command whose target has a masked secret is not offered for
-copying. A skill copies its `SKILL.md`; other files in its folder stay on the
-source machine. The default harness/model/effort reads through
+headers never travel: the machine you type them on keeps them, the others get
+the key names blank with a note to set them there, and a definition whose
+target carries a secret-looking part (`--token`, `KEY=value`, a URL with
+userinfo, a query or a fragment) is added to this machine only and refused on
+the others, naming the part. A command whose target has a masked secret is not
+offered for copying. A skill copies its `SKILL.md`, read with
+`_rustcode/skills/get` only when a copy is chosen; other files in its folder
+stay on the source machine. The default harness/model/effort reads through
 `_rustcode/harnesses`, and harness switches write through
 `_rustcode/harnesses/set` on each chosen machine. The other server settings
 live in each machine's `~/.config/rustcode/settings.json` through

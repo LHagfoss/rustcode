@@ -19,7 +19,7 @@ import { arr, bool, type Json, type JsonObject, num, obj, str } from "../acp/jso
 import { Method } from "../acp/types";
 import { createSkill, openPath, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
-import { failureSummary, mcpCopy, runOnMachines } from "../state/settingsRegistry";
+import { failureSummary, mcpCopy, runOnMachines, secretTargetReason } from "../state/settingsRegistry";
 import { machineRequest, useLoadScopeSettings, useScope } from "../state/settingsScope";
 import { askConfirm, errorText, toast, useApp } from "../state/store";
 import { cardInset, cx, noTextHelpers, Spinner, Switch, Tooltip } from "./primitives";
@@ -34,8 +34,6 @@ interface Skill {
   /** A harness owns the folder: listed here, never written by RustCode. */
   readOnly: boolean;
   enabled: boolean;
-  /** Its SKILL.md, so Settings can copy the definition to another machine. */
-  content?: string;
 }
 
 interface McpServer {
@@ -73,7 +71,6 @@ const parseCapabilities = (v: Json): Capabilities => {
         source: str(o.source) ?? "",
         readOnly: bool(o.readOnly) ?? false,
         enabled: bool(o.enabled) ?? false,
-        content: str(o.content),
       };
     }),
     mcpServers: arr(root.mcpServers).map((s) => {
@@ -162,14 +159,43 @@ export function CapabilitiesPage() {
   const [addingAll, setAddingAll] = useState(false);
   const q = filter.trim().toLowerCase();
   const online = targets.filter((machine) => machine.online);
-  // Add to all machines sends the definition, never the values: a secret set
-  // here stays here and is named for the user to set on each machine.
+  // Add to all machines keeps the typed values on this machine and sends the
+  // other machines the definition with blank values. A target that would carry
+  // a secret goes to this machine only; the others are refused with the reason.
   const runAll = async (method: string, params: JsonObject, timeout?: number) => {
-    const result = await runOnMachines(writes, (machine) => {
-      const forMachine = method === Method.mcpAdd ? blankMcpSecrets(params) : params;
+    const isAdd = method === Method.mcpAdd;
+    const local = writes.find((machine) => machine.local);
+    const reason = isAdd
+      ? secretTargetReason(
+          arr(params.target).map((part) => String(part)),
+          str(params.transport) ?? "",
+        )
+      : null;
+    if (reason && !local) {
+      toast(`Not added: ${reason}, and this machine is not in the chosen scope.`, "error");
+      return false;
+    }
+    const recipients = reason && local ? [local] : writes;
+    const result = await runOnMachines(recipients, (machine) => {
+      const forMachine = isAdd && !machine.local ? blankMcpSecrets(params) : params;
       return machineRequest(machine.host, method, forMachine, timeout);
     });
     for (const failure of result.failures) toast(`${failure.name}: ${failure.message}`, "error");
+    if (reason && local && result.succeeded.length) {
+      toast(
+        `Added to ${local.name} only: ${reason}. The other machines did not get it; set it up there yourself.`,
+        "info",
+      );
+    } else if (isAdd && result.succeeded.length) {
+      const keys = mcpSecretKeys(params);
+      const blanked = keys.length > 0 && result.succeeded.some((machine) => !machine.local);
+      toast(
+        blanked
+          ? `Added to ${result.succeeded.length} machines. ${keys.join(", ")} ${keys.length === 1 ? "stays" : "stay"} on this machine; set ${keys.length === 1 ? "it" : "them"} on the others.`
+          : `Added to ${result.succeeded.length} ${result.succeeded.length === 1 ? "machine" : "machines"}.`,
+        "success",
+      );
+    }
     if (result.succeeded.length) bump((n) => n + 1);
     return result.failures.length === 0;
   };
@@ -206,7 +232,7 @@ export function CapabilitiesPage() {
               <Plus size={12} /> Add server to all
             </Action>
           }
-          footer="The definition is added to every connected machine. Environment variables and headers are left blank on each one; set their values on that machine."
+          footer="The definition is added to every connected machine. Environment variables and headers stay on this machine; the others get the definition with blank values, and a target that would carry a secret is added here only."
         >
           {!addingAll && (
             <Row
@@ -214,18 +240,7 @@ export function CapabilitiesPage() {
               subtitle="Choose Add server to all and enter the definition once."
             />
           )}
-          {addingAll && (
-            <AddServer
-              run={async (method, params, timeout) => {
-                const keys = method === Method.mcpAdd ? mcpSecretKeys(params) : [];
-                const ok = await runAll(method, params, timeout);
-                if (ok && keys.length)
-                  toast(`Added to ${writes.length} machines. Set ${keys.join(", ")} on each one.`, "success");
-                return ok;
-              }}
-              onDone={() => setAddingAll(false)}
-            />
-          )}
+          {addingAll && <AddServer run={runAll} onDone={() => setAddingAll(false)} />}
         </Group>
       )}
       {targets.map((machine, index) => (
@@ -277,7 +292,14 @@ function MachineCapabilities({
     <div className={cx(!last && "mb-8")}>
       {showName && <SectionTitle title={machine.local ? "This machine" : machine.name} />}
       <McpSection data={data} filter={filter} run={run} others={others} onChanged={onChanged} />
-      <SkillsSection data={data} filter={filter} run={run} others={others} onChanged={onChanged} />
+      <SkillsSection
+        data={data}
+        filter={filter}
+        run={run}
+        host={machine.host}
+        others={others}
+        onChanged={onChanged}
+      />
     </div>
   );
 }
@@ -710,12 +732,15 @@ function SkillsSection({
   data,
   filter,
   run,
+  host,
   others,
   onChanged,
 }: {
   data: Capabilities;
   filter: string;
   run: (method: string, params: JsonObject, timeout?: number) => Promise<boolean>;
+  /** The machine that owns these skills, and reads their SKILL.md on a copy. */
+  host: string;
   others: { host: string; name: string; online: boolean; local: boolean }[];
   onChanged: () => void;
 }) {
@@ -788,9 +813,7 @@ function SkillsSection({
                   </Tooltip>
                 </div>
               )}
-              {s.content && others.length > 0 && (
-                <SkillCopy skill={s} others={others} onChanged={onChanged} />
-              )}
+              {others.length > 0 && <SkillCopy skill={s} host={host} others={others} onChanged={onChanged} />}
               <Switch
                 label={`Use ${s.name}`}
                 checked={s.enabled}
@@ -809,33 +832,50 @@ function SkillsSection({
 /** Copy one skill's definition (its SKILL.md) to another connected machine. */
 function SkillCopy({
   skill,
+  host,
   others,
   onChanged,
 }: {
   skill: Skill;
+  host: string;
   others: { host: string; name: string; online: boolean; local: boolean }[];
   onChanged: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const copyTo = async (target: string) => {
-    const content = skill.content;
-    if (!content) return;
     const nodes = target === "all" ? others : others.filter((machine) => machine.host === target);
     if (!nodes.length) return;
     setBusy(true);
-    const result = await runOnMachines(nodes, (machine) =>
-      machineRequest(machine.host, "_rustcode/skills/add", { name: skill.name, content }, 30_000),
-    );
-    if (result.succeeded.length) {
-      const where = result.succeeded.map((machine) => machine.name).join(", ");
-      toast(
-        `Copied ${skill.name}'s SKILL.md to ${where}. Other files in the skill stay on the source machine.`,
-        "success",
+    try {
+      // The page lists skills without their text; read it only for a copy.
+      const answer = await machineRequest(
+        host,
+        "_rustcode/skills/get",
+        { name: skill.name, path: skill.path },
+        15_000,
       );
-      onChanged();
+      const content = str(obj(answer)?.content);
+      if (!content) {
+        toast(`Could not read ${skill.name}'s SKILL.md.`, "error");
+        return;
+      }
+      const result = await runOnMachines(nodes, (machine) =>
+        machineRequest(machine.host, "_rustcode/skills/add", { name: skill.name, content }, 30_000),
+      );
+      if (result.succeeded.length) {
+        const where = result.succeeded.map((machine) => machine.name).join(", ");
+        toast(
+          `Copied ${skill.name}'s SKILL.md to ${where}. Other files in the skill stay on the source machine.`,
+          "success",
+        );
+        onChanged();
+      }
+      if (result.failures.length) toast(failureSummary(result), "error");
+    } catch (e) {
+      toast(errorText(e), "error");
+    } finally {
+      setBusy(false);
     }
-    if (result.failures.length) toast(failureSummary(result), "error");
-    setBusy(false);
   };
   return (
     <CopyMenu

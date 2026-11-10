@@ -308,6 +308,47 @@ export interface McpCopy {
   secretKeys: string[];
 }
 
+const SECRET_WORDS = ["token", "secret", "password", "passwd", "apikey", "api-key", "api_key", "auth"];
+
+/** The engine's `is_secret_name`, so both sides hide the same arguments. */
+function isSecretName(name: string): boolean {
+  const clean = name.replace(/^-+/, "").toLowerCase();
+  return SECRET_WORDS.some((word) => clean.includes(word));
+}
+
+/**
+ * Why a server target must stay on the machine it was typed on, or null when
+ * it can go to another machine. The client-side half of the engine's
+ * `copy_target_parts`: a stdio argument masking would hide, or a URL with
+ * userinfo, a query or a fragment, never travels in the clear.
+ */
+export function secretTargetReason(target: string[], transport: string): string | null {
+  if (transport === "http" || transport === "sse") {
+    const raw = target.join(" ");
+    let url: URL;
+    try {
+      url = new URL(raw);
+    } catch {
+      return "its URL could not be read";
+    }
+    if (url.username || url.password) return "its URL carries a user name or password";
+    if (url.search) return "its URL carries a query string";
+    if (url.hash) return "its URL carries a fragment";
+    return null;
+  }
+  let flag: string | null = null;
+  for (const part of target.slice(1)) {
+    if (flag) return `its command carries a secret in ${flag}`;
+    if (part.includes("=")) {
+      const key = part.split("=")[0] ?? "";
+      if (isSecretName(key)) return `its command carries a secret in ${key}`;
+    } else if (part.startsWith("-") && isSecretName(part)) {
+      flag = part;
+    }
+  }
+  return flag ? `its command carries a secret in ${flag}` : null;
+}
+
 /**
  * The definition to send to another machine: the target, transport and the
  * names of the environment variables and headers, with every value blank. A

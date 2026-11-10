@@ -43,13 +43,12 @@ pub struct SkillEntry {
     /// RustCode from offering the skill. Nothing is ever written there.
     pub read_only: bool,
     pub enabled: bool,
-    /// The skill's `SKILL.md`, so Settings can copy the definition to another
-    /// machine. Absent when it is unreadable or larger than
-    /// [`SKILL_CONTENT_LIMIT`].
-    pub content: Option<String>,
 }
 
-/// How large a `SKILL.md` may be before the snapshot leaves its content out.
+/// How large a `SKILL.md` may be: larger than this, Copy to… refuses it and
+/// `add_skill` does not write it. The content is no longer part of the
+/// capabilities snapshot (it made every poll carry every skill); Settings
+/// fetches it with `_rustcode/skills/get` when a copy is chosen.
 pub const SKILL_CONTENT_LIMIT: u64 = 64 * 1024;
 
 /// Whether a configured MCP server is up in this process.
@@ -164,7 +163,6 @@ pub fn skill_entries_from(
                     .unwrap_or("configured"),
                 read_only: root.is_some_and(|root| root.kind.is_harness_owned()),
                 enabled: !disabled.contains(&skill.name),
-                content: skill_content(&skill.path),
             }
         })
         .collect()
@@ -260,6 +258,25 @@ fn skill_content(path: &Path) -> Option<String> {
         return None;
     }
     std::fs::read_to_string(file).ok()
+}
+
+/// One discovered skill's `SKILL.md`, for `_rustcode/skills/get`. The path
+/// must be one discovery returned, so an ACP client cannot read another file
+/// through this request.
+pub fn skill_markdown(name: &str, path: &Path) -> Result<String, String> {
+    let known = crate::skills::discover_all_skills()
+        .into_iter()
+        .any(|skill| skill.name == name && skill.path.as_path() == path);
+    if !known {
+        return Err(format!("no skill named '{name}' at {}", path.display()));
+    }
+    skill_content(path).ok_or_else(|| {
+        format!(
+            "{}/SKILL.md is missing, unreadable or larger than {} KB",
+            path.display(),
+            SKILL_CONTENT_LIMIT / 1024
+        )
+    })
 }
 
 fn mcp_workspace() -> std::path::PathBuf {
@@ -764,7 +781,6 @@ mod tests {
             source: "universal",
             read_only: false,
             enabled: true,
-            content: None,
         };
         let mut panel = SkillsPanel {
             entries: vec![entry("deploy"), entry("review")],
@@ -812,8 +828,7 @@ mod tests {
             serde_json::to_value(snapshot).unwrap(),
             serde_json::json!({
                 "skills": [{"name": "deploy", "description": "deploy skill", "path": "/p/deploy",
-                            "source": "configured", "readOnly": false, "enabled": true,
-                            "content": null}],
+                            "source": "configured", "readOnly": false, "enabled": true}],
                 "mcpServers": [{"name": "idle", "transport": "stdio", "target": "npx",
                                 "copyTarget": ["npx"], "enabled": true, "scope": "user",
                                 "connection": "not_connected", "tools": [], "error": null,
@@ -910,5 +925,11 @@ mod tests {
             row(&stdio("secret", &["-y", "server", "--token", "abc"])).copy_target,
             None
         );
+    }
+
+    #[test]
+    fn skill_markdown_only_reads_a_discovered_skill() {
+        let error = skill_markdown("nope", Path::new("/tmp/not-a-discovered-skill")).unwrap_err();
+        assert!(error.contains("no skill"), "{error}");
     }
 }

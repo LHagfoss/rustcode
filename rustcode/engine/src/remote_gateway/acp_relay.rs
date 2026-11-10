@@ -106,6 +106,7 @@ const EXACT_METHODS: &[&str] = &[
     "_rustcode/settings/get",
     "_rustcode/settings/set",
     "_rustcode/skills/add",
+    "_rustcode/skills/get",
 ];
 const METHOD_PREFIXES: &[&str] = &["session/", "_rustcode/pulls", "_rustcode/capabilities"];
 
@@ -318,6 +319,7 @@ mod tests {
                 "_rustcode/settings/get",
                 "_rustcode/settings/set",
                 "_rustcode/skills/add",
+                "_rustcode/skills/get",
             ]
         );
         assert_eq!(
@@ -340,6 +342,7 @@ mod tests {
             "_rustcode/settings/get",
             "_rustcode/settings/set",
             "_rustcode/skills/add",
+            "_rustcode/skills/get",
             "_rustcode/capabilities",
             "_rustcode/capabilities/set",
             "_rustcode/capabilities/mcp/add",

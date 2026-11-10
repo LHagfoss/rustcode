@@ -2882,6 +2882,12 @@ async fn serve_connection(
             },
             agent_client_protocol::on_receive_request!(),
         )
+        .on_receive_request(
+            async move |request: capabilities::GetSkillRequest, responder, _connection| {
+                responder.respond(capabilities::get_skill(request)?)
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
         // Orchestrator v2 (`docs/orchestrator.md`): worktrees, thread status
         // and checkpoints. Each runs git, so none holds the dispatch loop.
         .on_receive_request(
