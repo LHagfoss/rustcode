@@ -19,7 +19,7 @@ import {
   runningSubagents,
   timeLabel,
 } from "./delegates";
-import type { Link } from "./orchestration";
+import { type Link, liveState } from "./orchestration";
 import type { TranscriptItem } from "./thread";
 
 const MINUTE = 60_000;
@@ -88,6 +88,15 @@ describe("what a node is doing", () => {
     expect(agentStateOf(link("a", "b", { state: "interrupted" }), "running")).toBe("working");
     expect(agentStateOf(link("a", "b", { state: "interrupted" }), "needs_input")).toBe("needs");
     expect(agentStateOf(link("a", "b", { state: "interrupted" }))).toBe("stopped");
+  });
+
+  test("the live state is the one rule every surface reads", () => {
+    // `state/host.ts` `stateOf`, the strip, the popover and the tree all ask this: a severed link whose
+    // thread kept working reads live again, and a stopped or failed branch keeps its word.
+    expect(liveState(link("a", "b", { state: "interrupted" }), "running")).toBe("working");
+    expect(liveState(link("a", "b", { state: "interrupted" }), "needs_input")).toBe("needs_user");
+    expect(liveState(link("a", "b", { state: "interrupted" }))).toBe("interrupted");
+    expect(liveState(link("a", "b", { state: "cancelled" }), "running")).toBe("cancelled");
   });
 
   test("a queued or waiting link reads as the app shows it", () => {

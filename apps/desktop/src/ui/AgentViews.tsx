@@ -242,6 +242,8 @@ export function AgentRow({
   onClick,
   expanded,
   showWord = true,
+  oneLine = false,
+  arrow = true,
   action,
 }: {
   harness?: string;
@@ -264,32 +266,44 @@ export function AgentRow({
    * step: a running agent's elapsed time already says it is working.
    */
   showWord?: boolean;
+  /**
+   * One line of columns, the name beside its state and how long, with no line under
+   * it: a popover's list of rows reads as a table and the name keeps the room.
+   */
+  oneLine?: boolean;
+  /** Whether the row draws the arrow that is its way in, beside the row itself. */
+  arrow?: boolean;
   /** A control beside the row, after the chevron: stop this work, show it beside this thread. */
   action?: ReactNode;
 }) {
   const word =
-    showWord && detail !== undefined && (state !== "done" || status !== undefined)
+    showWord && (oneLine || (detail !== undefined && (state !== "done" || status !== undefined)))
       ? (status ?? AGENT_LABEL[state])
       : undefined;
-  const bottom = detail ?? status ?? AGENT_LABEL[state];
+  const bottom = oneLine ? undefined : (detail ?? status ?? AGENT_LABEL[state]);
   // The row's own text starts where the composer's does: the card's 4px and the row's 12px.
   const rowClass = "flex w-full min-w-0 flex-1 items-center gap-2 rounded-lg py-1.5 pr-2 pl-3 text-left";
   // A row that opens draws its way in as its own control: the arrow answers the pointer and the
   // keyboard, and says in words where it goes. A row that folds (a subagent and its steps) says
   // what the arrow does in its own words, and still turns it as it opens.
   const opens = onClick !== undefined && expanded === undefined;
-  const chevron = onClick !== undefined || expanded !== undefined;
+  const chevron = arrow && (onClick !== undefined || expanded !== undefined);
   const chevronWord = opens ? `Open ${title}` : expanded ? "Hide the steps" : "Show the steps";
   const body = (
     <>
       <AgentAvatar harness={harness} state={state} />
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="min-w-0 truncate font-medium text-fg text-sub">{title}</span>
-        <span
-          className={cx("block truncate text-caption", state === "failed" ? "text-danger" : "text-fg-muted")}
-        >
-          {bottom}
-        </span>
+        {bottom !== undefined && (
+          <span
+            className={cx(
+              "block truncate text-caption",
+              state === "failed" ? "text-danger" : "text-fg-muted",
+            )}
+          >
+            {bottom}
+          </span>
+        )}
       </span>
       {word && (
         <span
@@ -379,6 +393,7 @@ export function ThreadAgentRow({
   model,
   action,
   peek = true,
+  popover = false,
 }: {
   link: Link;
   model?: string;
@@ -390,6 +405,11 @@ export function ThreadAgentRow({
    * between the way in and stop.
    */
   peek?: boolean;
+  /**
+   * One line of columns, for a popover's list: the state word always, how long when it is known,
+   * and the arrow left out because the row itself is the way in.
+   */
+  popover?: boolean;
 }) {
   const state = useApp((s) => stateOf(s, link));
   const session = useApp((s) => s.sessions.find((x) => x.id === link.target));
@@ -438,7 +458,9 @@ export function ThreadAgentRow({
         />
       }
       onClick={() => selectThread(link.target)}
-      showWord={LINK_AGENT_STATE[state] !== "working"}
+      showWord={popover || LINK_AGENT_STATE[state] !== "working"}
+      oneLine={popover}
+      arrow={!popover}
       action={
         <>
           {peek && (

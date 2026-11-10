@@ -27,19 +27,32 @@ export function stripCounts(linkStates: readonly AgentState[], workingAgents = 0
   };
 }
 
+export function stripCount({ delegates }: StripCounts): string {
+  return `${delegates} ${delegates === 1 ? "delegate" : "delegates"}`;
+}
+
 /**
- * The strip's one line: `3 delegates · 2 running`, and `· 1 needs you` beside it. The words after
- * the count are the ones a branch's header uses (`state/delegates.ts`), so the two surfaces never
- * name the same state two ways. A count with nothing live left keeps its first part alone.
+ * What the strip's rows do now: `2 running · 1 needs you`, empty when nothing is
+ * live. The words a branch's header uses (`state/delegates.ts`), so the two
+ * surfaces never name the same state two ways.
  */
-export function stripSummary({ delegates, running, needs }: StripCounts): string {
-  const count = `${delegates} ${delegates === 1 ? "delegate" : "delegates"}`;
-  const doing = [
+export function stripDoing({ running, needs }: StripCounts): string {
+  return [
     running ? `${running} running` : "",
     // `1 needs you`, `2 need you`: the same agreement as the branch header.
     needs ? `${needs} ${needs === 1 ? "needs" : "need"} you` : "",
-  ].filter(Boolean);
-  return doing.length ? `${count} · ${doing.join(" · ")}` : count;
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/**
+ * The strip's one line: `3 delegates · 2 running`, and `· 1 needs you` beside it. A
+ * count with nothing live left keeps its first part alone.
+ */
+export function stripSummary(counts: StripCounts): string {
+  const doing = stripDoing(counts);
+  return doing ? `${stripCount(counts)} · ${doing}` : stripCount(counts);
 }
 
 /**
