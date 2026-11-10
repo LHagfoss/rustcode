@@ -98,8 +98,17 @@ impl PendingRequests {
     }
 }
 
-const EXACT_METHODS: &[&str] = &["initialize", "_rustcode/harnesses"];
-const METHOD_PREFIXES: &[&str] = &["session/", "_rustcode/pulls"];
+const EXACT_METHODS: &[&str] = &[
+    "initialize",
+    "_rustcode/harnesses",
+    "_rustcode/harnesses/default",
+    "_rustcode/harnesses/set",
+    "_rustcode/settings/get",
+    "_rustcode/settings/set",
+    "_rustcode/skills/add",
+    "_rustcode/skills/get",
+];
+const METHOD_PREFIXES: &[&str] = &["session/", "_rustcode/pulls", "_rustcode/capabilities"];
 
 fn allowed(method: &str) -> bool {
     EXACT_METHODS.contains(&method)
@@ -300,8 +309,23 @@ mod tests {
 
     #[test]
     fn desktop_allowlist_contract() {
-        assert_eq!(EXACT_METHODS, &["initialize", "_rustcode/harnesses",]);
-        assert_eq!(METHOD_PREFIXES, &["session/", "_rustcode/pulls"]);
+        assert_eq!(
+            EXACT_METHODS,
+            &[
+                "initialize",
+                "_rustcode/harnesses",
+                "_rustcode/harnesses/default",
+                "_rustcode/harnesses/set",
+                "_rustcode/settings/get",
+                "_rustcode/settings/set",
+                "_rustcode/skills/add",
+                "_rustcode/skills/get",
+            ]
+        );
+        assert_eq!(
+            METHOD_PREFIXES,
+            &["session/", "_rustcode/pulls", "_rustcode/capabilities"]
+        );
         for method in [
             "initialize",
             "session/load",
@@ -313,13 +337,23 @@ mod tests {
             "_rustcode/pulls/list",
             "_rustcode/pullsFuture",
             "_rustcode/harnesses",
+            "_rustcode/harnesses/default",
+            "_rustcode/harnesses/set",
+            "_rustcode/settings/get",
+            "_rustcode/settings/set",
+            "_rustcode/skills/add",
+            "_rustcode/skills/get",
+            "_rustcode/capabilities",
+            "_rustcode/capabilities/set",
+            "_rustcode/capabilities/mcp/add",
+            "_rustcode/capabilities/mcp/remove",
+            "_rustcode/capabilities/mcp/restart",
         ] {
             assert!(allowed(method), "{method}");
         }
         for method in [
-            "_rustcode/settings/get",
-            "_rustcode/settings/set",
             "_rustcode/settings/changed",
+            "_rustcode/settings/reset",
             "_rustcode/threads/changes",
             "_rustcode/createOptions",
             "_rustcode/pending",
@@ -333,9 +367,10 @@ mod tests {
             "_rustcode/thread",
             "_rustcode/queue",
             "_rustcode/settings",
-            "_rustcode/settings/reset",
             "_rustcode/threads/list",
-            "_rustcode/harnesses/set",
+            "_rustcode/harnesses/accounts/add",
+            "_rustcode/harnesses/accounts/remove",
+            "_rustcode/harnesses/remove",
             "_rustcode/provider/credentials",
             "_rustcode/login",
             "_rustcode/remote/pair",

@@ -1371,6 +1371,8 @@ async function handshake(): Promise<void> {
       20_000,
     );
     const agent = parseAgentInfo(result);
+    // This machine's server settings, put back into the app (state/settingsScope.ts).
+    void import("./settingsScope").then((scope) => scope.hydrateLocalServerSettings());
     // Read before the reset below marks every thread idle.
     const interrupted = interruptedThreads();
     set({
