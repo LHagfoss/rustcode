@@ -153,7 +153,8 @@ kept.
 
 | In the app | What it does |
 | --- | --- |
-| **Remote access › Network access** | On: starts the gateway and lets paired devices reach every thread on this computer. Off: stops it. |
+| **Remote access › Network access** | On: starts the gateway and lets paired devices reach every thread on this computer, and installs the RustCode server as a background service first if it is not installed (after a confirmation: it stays up when the app closes and starts when you log in, see [server](server.md)). Off: stops the gateway. |
+| **Remote access › RustCode server** | Whether the RustCode server is installed to run in the background (*Installed · Running*), with *Install* when it is not. Installed, the shared engine stays up when the app closes and starts when you log in; the threads this app starts are still its own engine's and end with it, until the app is switched to the server. |
 | **Remote access › Gateway address** | The `host:port` a device dials, how many devices are connected, and whether it is reachable from another machine at all. |
 | **Remote access › Pair a device** | Calls the same pairing challenge as `/remote pair`: a QR code, the address, the manual code, the countdown and the wrong codes left. Remote access is switched on first if it was off. |
 | **Pairing** | The challenge on screen, its countdown, the wrong codes left, a lockout, and *Paired ‹name›* once a device pairs. |
@@ -519,8 +520,12 @@ holds until encrypted transport (#2651) lands.
 - Saved machines live in `machines.json` in the configuration directory
   (`0600` on Unix). Each is keyed by the machine's stable `host_id` — its
   gateway identifier — with an ordered list of routes (`lan`, `vpn`,
-  `tailscale`, `public`), the device record and when it was added and last
-  connected. A route keeps the product an overlay address is on (`netbird`,
+  `tailscale`, `public`), the device record, the RustCode version it last
+  reported, and when it was added and last connected. The version is an
+  optional field of the `paired` and `authenticated` frames
+  (`docs/remote-protocol`); an older gateway sends none, and the row says
+  nothing about a version rather than guessing one. A route keeps the product
+  an overlay address is on (`netbird`,
   `zerotier`; a Tailscale address is its own kind and provider). The first
   machine saved is the **main** one. A change takes
   `machines.lock` next to the file and re-reads it first, so two
@@ -555,6 +560,12 @@ holds until encrypted transport (#2651) lands.
   address after them, and an address already saved only updates its kind and
   product. Pairing once is therefore enough to reach a machine on a network it
   was not paired on.
+- The app's Add sheet lists more than Bonjour: a saved machine's overlay
+  address, learned from its handshake, is listed too, so a machine away from
+  home is one click rather than a typed IP. The two sources are merged by host
+  id, one row per machine, and an address found that way never needs typing.
+  `rustcode machines discover` itself stays Bonjour only, since it is a
+  one-shot browse with no saved machines behind it.
 - A hint is shown when one *kind* of route answers and another does not, in
   `machines list` and in the app's machine status: an overlay address that
   fails while the LAN works names the product and what to check there (and a
@@ -566,16 +577,20 @@ holds until encrypted transport (#2651) lands.
 
 Settings › **Machines** is the same pairing without a terminal: *This Mac* (or
 *This PC*) first — the app's own RustCode server — then one row per saved
-machine. `?machines=paired|connect|offline|revoked` in the mock shows the page
-without a second computer.
+machine, then the machines found for adding. `?machines=paired|connect|offline|revoked`
+in the mock shows the page without a second computer; `connect` starts with one
+saved machine on an older RustCode reached over NetBird and the background
+server not installed, so the add sheet, the version skew line and the install
+are all visible at once.
 
 | In the app | What it does |
 | --- | --- |
-| **Add machine › Machines on this network** | Bonjour, the same browse as `machines discover`: every machine whose record lists `caps=desktops`, with *Ask to connect*. |
-| **Add machine › Enter an address** | The `host:port` a machine is reached on when it is not announced (an overlay, or another subnet). |
+| **Machines found** | The machines the Add sheet lists without an address typed, filled in when the page opens (*Look again* to repeat): Bonjour, the same browse as `machines discover`, for every machine whose record lists `caps=desktops`; and the *saved* machines whose handshake reported a NetBird, Tailscale or ZeroTier address, which no browse on the LAN can hear. One machine found both ways is one row, merged by its host id. Each row names the machine, its platform, the RustCode version it runs, the network its address is on (`LAN`, `NetBird`, `Tailscale`, `VPN`, `Public`) and the address. A machine not yet paired has *Ask to connect*; one already saved is *Saved*. When the local browse itself fails (a container or a network without multicast), the rows from the saved machines are still listed and the sheet says *Could not look for machines on this network* with the reason. |
+| **Machines found › Enter an address** | The `host:port` a machine is reached on when it is not announced (an overlay, or another subnet). The fallback, never the first step. |
 | **Waiting for ‹host› to accept on that machine…** | The request is on that machine's screen; *Cancel* drops it. Once its owner accepts, the eight digits it shows are typed here, one box per digit. |
 | **Checking the code** | The code is being checked with that machine, which answers within ten seconds. After half a minute the page stops waiting and says so — *‹host› did not answer* — with **Ask again** and **Cancel**: a machine that accepted the code but could not store the token still lists this computer as a device, so it is removed there and the pairing started again. No stage of the flow is a spinner without a way out. |
-| A machine row | Its name and platform, the state chip at the row's top right — *Connected*, *Connecting*, *Offline · retrying in N s*, *Needs pairing* — the route **in use** under the name as `LAN · Unencrypted` or `Tailscale`/`VPN · Encrypted`, then whether it is the main machine, when it was last reached and how many threads it has. **Main machine** and **Remove** sit in a row of their own below. |
+| A machine row | Its name and platform, the state chip at the row's top right — *Connected*, *Connecting*, *Offline · retrying in N s*, *Needs pairing* — the route **in use** under the name as `LAN · Unencrypted` or `NetBird`/`Tailscale`/`VPN · Encrypted`, then whether it is the main machine, when it was last reached and how many threads it has. **Main machine** and **Remove** sit in a row of their own below. Under the route, the hint for one kind of route that answers while another does not (see [Machines](#machines)), and a version skew line when that machine runs another RustCode: *RustCode 0.96.0 on that machine — update it there: Settings › About › Check for updates, or `brew upgrade rustcode`* (the platform's own way, from [install](install.md#updating); a development build never shows the line), or *update RustCode here* when that machine is newer. |
+| **This computer · RustCode server** | Whether the RustCode server is installed as a background service: *Server: Installed · Running*, or *Not installed* with **Install server**. Installed, that engine stays up when the app closes and starts when you log in; the threads this app starts still run in its own engine and end with it. What `rustcode server status` reports, including a running version that differs from the app's, is on the same line. |
 | **Main machine** | The machine listed first and the default **Run on**. One at a time. |
 | **Remove** | Forgets it here: token, routes and its threads' rows go. The machine keeps listing this computer until it is revoked there. |
 | **Pair again** | On a machine whose pairing it ended (*Needs pairing*): asks it again, so a new code can be typed. |

@@ -98,6 +98,43 @@ path alone never names a machine, so two Macs that share a checkout path cannot
 mistake each other; ⌘O with no thread open starts here in the folder it picks. "New Thread Here" in a thread's folder menu and `/new` in
 its composer keep that thread's machine and folder.
 
+**Settings on one machine or all.** Settings is not synced from a main machine
+(user decision, #3202). A server-setting page — General's server rows,
+Harnesses and Capabilities — starts with **Applying to**: This machine (the
+default), one paired machine, or All machines, and the choice persists across
+pages (`src/state/settingsScope.ts`). A row whose connected machines disagree
+shows **Mixed** with a layers mark; its hover card lists each machine's value.
+Picking a value under All machines writes it to every connected machine, and
+an offline machine is listed as keeping its value rather than being changed.
+Every row's kind is in one registry (`src/state/settingsRegistry.ts`):
+appearance, shortcuts and window state are this app's own and show no
+selector; credentials, accounts, the default project folder, Remote access and
+the machines list are machine-only and shown for one machine at a time —
+credentials are never editable over a remote connection.
+
+Skills and MCP servers are listed per machine under Capabilities. **Add server
+to all** adds an MCP definition to every connected machine; **Copy to ‹machine›**
+on a row copies its definition. Values of MCP environment variables and
+headers never travel: the machine you type them on keeps them, the others get
+the key names blank with a note to set them there, and a definition whose
+target carries a secret-looking part (`--token`, `KEY=value`, a URL with
+userinfo, a query or a fragment) is added to this machine only and refused on
+the others, naming the part. A command whose target has a masked secret is not
+offered for copying. A skill copies its `SKILL.md`, read with
+`_rustcode/skills/get` only when a copy is chosen; other files in its folder
+stay on the source machine. The default harness/model/effort reads through
+`_rustcode/harnesses`, and harness switches write through
+`_rustcode/harnesses/set` on each chosen machine. The other server settings
+live in each machine's `~/.config/rustcode/settings.json` through
+`_rustcode/settings/get|set` (docs/configuration.md); the app applies this
+computer's values when it starts, so a value set from another machine is in
+force there next launch. Its first-start seed writes only the keys the server
+does not already hold (`stored`), so it cannot revert a value another machine
+wrote before this app's first start. The design's machine-only line (§6.1)
+covers binary paths, credentials and accounts; the enabled harness switches
+and MCP definitions are server settings here and fan out, with every copy
+leaving secrets behind.
+
 The project follows the machine: `src/state/projects.ts` finds the same project
 there by path, then by git remote (`_meta.rustcode.remote`, normalized so
 `git@…` and `https://…` compare equal), then by folder name, and otherwise the

@@ -35,6 +35,7 @@ function machine(id: string, name: string, state: Machine["state"] = "connected"
     state,
     detail: null,
     hint: null,
+    version: "1.28.0",
     retryInSecs: null,
     addedAt: "2026-11-02T09:00:00+00:00",
     lastConnectedAt: "2026-11-08T09:00:00+00:00",

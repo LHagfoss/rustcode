@@ -17,8 +17,8 @@ use anyhow::Error;
 use rustcode_client::machine::{machine_from_pairing, normalize_code, Connector};
 use rustcode_client::tokens::{self as token_store, STORE_TIMEOUT};
 use rustcode_client::{
-    browse_async, Approved, ClientKind, DiscoveredMachine, Machine, MachineRegistry, Route,
-    TokenStore, Unreachable,
+    browse_async, Approved, ClientKind, DiscoveredMachine, Machine, MachineRegistry,
+    OverlayProvider, Route, TokenStore, Unreachable,
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -63,6 +63,9 @@ pub struct RouteView {
     /// `lan`, `tailscale`, `vpn` or `public`.
     kind: &'static str,
     address: String,
+    /// `netbird`, `tailscale` or `zerotier` when the machine named the overlay
+    /// the address is on; the app labels the route with it.
+    provider: Option<&'static str>,
     /// The network itself encrypts the traffic (Tailscale, a VPN); a plain LAN
     /// route does not.
     encrypted: bool,
@@ -73,6 +76,7 @@ impl RouteView {
         Self {
             kind: route.kind.as_str(),
             address: route.address.clone(),
+            provider: route.provider.map(OverlayProvider::as_str),
             encrypted: route.kind.is_encrypted(),
         }
     }
@@ -89,6 +93,9 @@ pub struct MachineView {
     /// report one yet.
     platform: String,
     main: bool,
+    /// The RustCode version it reported when it last answered, or none from a
+    /// machine that has not said. The row compares it with this app's version.
+    version: Option<String>,
     /// Every route saved for it, in the order they are tried.
     routes: Vec<RouteView>,
     /// The route this connection came up over, or the one it will try first.
@@ -106,15 +113,38 @@ pub struct MachineView {
     last_connected_at: Option<String>,
 }
 
-/// A machine Bonjour found on this network.
+/// What `machines_discover` answers: the rows the Add sheet lists, and what to
+/// say when the local search failed (the overlay rows are there either way).
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Discovery {
+    pub rows: Vec<DiscoveredView>,
+    pub notice: Option<String>,
+}
+
+/// A machine the Add sheet lists without an address typed: one Bonjour found
+/// on this network, or one whose handshake reported an overlay address this
+/// app saved for it.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiscoveredView {
     name: String,
+    /// `bonjour` for a machine announcing itself here, `overlay` for a saved
+    /// machine reached at an address its own handshake reported.
+    source: &'static str,
     /// The address to dial: a LAN one when there is one.
     address: Option<String>,
     addresses: Vec<String>,
     gateway_id: Option<String>,
+    /// `macos`, `windows`, `linux`, or none for a machine that has not said.
+    platform: Option<String>,
+    /// The RustCode version it reported, when it is a saved machine that has
+    /// answered: an older one is what the row says to update.
+    version: Option<String>,
+    /// `lan`, `netbird`, `tailscale`, `zerotier`, `vpn` or `public`.
+    route_kind: String,
+    /// What to check when one route answers and another does not (#3402).
+    hint: Option<String>,
     /// Whether this app already has it.
     saved: bool,
 }
@@ -292,6 +322,7 @@ fn view(machine: &Machine, live: Option<&Live>) -> MachineView {
         name: machine.name.clone(),
         platform: machine.platform.clone(),
         main: machine.main,
+        version: machine.version.clone(),
         routes: machine.routes.iter().map(RouteView::of).collect(),
         route: live
             .and_then(|live| live.route.as_ref())
@@ -457,10 +488,14 @@ async fn relay_once(
     let failed = connected.failed.clone();
     let learned = connected.learned.clone();
     let session = connected.session;
+    let version = session.welcome().version.clone();
     if let Ok(mut registry) = MachineRegistry::load(config_dir) {
         let _ = registry.mark_connected(&machine.host_id, chrono::Utc::now());
         if !learned.is_empty() {
             let _ = registry.learn_routes(&machine.host_id, &learned);
+        }
+        if version.is_some() {
+            let _ = registry.set_version(&machine.host_id, version.as_deref());
         }
     }
     let mut acp = match session.acp().await {
@@ -648,38 +683,106 @@ pub fn machines_list(
     machines.list()
 }
 
-/// The machines on this network that take a desktop client. Bonjour, so it
-/// takes a few seconds.
+/// The machines the Add sheet can list without an address typed: those
+/// Bonjour finds on this network (a few seconds), and the saved machines whose
+/// own handshake reported an overlay address, which no browse can hear.
+///
+/// The page de-duplicates the two by host id; one machine found both ways is
+/// one row, with what either source knows of it.
 #[tauri::command]
 pub async fn machines_discover(
     machines: tauri::State<'_, Arc<Machines>>,
-) -> Result<Vec<DiscoveredView>, String> {
-    let saved: Vec<String> = machines
-        .list()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|machine| machine.id)
-        .collect();
-    let found = browse_async(DISCOVERY)
-        .await
-        .map_err(|error| format!("Could not look for machines on this network: {error}"))?;
-    Ok(found
-        .iter()
-        .map(|machine| discovered(machine, &saved))
-        .collect())
+) -> Result<Discovery, String> {
+    let saved = machines.list().unwrap_or_default();
+    let mut notice = None;
+    let mut views: Vec<DiscoveredView> = match browse_async(DISCOVERY).await {
+        Ok(found) => found
+            .iter()
+            .map(|machine| discovered(machine, &saved))
+            .collect(),
+        // A network without multicast (a container, a firewall) cannot browse,
+        // but the overlay rows come from this machine's own registry: the sheet
+        // lists them and says what failed, instead of showing nothing.
+        Err(error) => {
+            notice = Some(format!(
+                "Could not look for machines on this network: {error}"
+            ));
+            Vec::new()
+        }
+    };
+    views.extend(overlay_peers(&saved, &views));
+    Ok(Discovery {
+        rows: views,
+        notice,
+    })
 }
 
-fn discovered(machine: &DiscoveredMachine, saved: &[String]) -> DiscoveredView {
+/// What one Bonjour record says, plus what this app already knows of the
+/// machine when it is saved.
+fn discovered(machine: &DiscoveredMachine, saved: &[MachineView]) -> DiscoveredView {
+    let known = machine
+        .gateway_id
+        .as_ref()
+        .and_then(|id| saved.iter().find(|view| &view.id == id));
+    let route = machine.address().map(Route::new);
     DiscoveredView {
         name: machine.name.clone(),
-        address: machine.address(),
+        source: "bonjour",
+        address: route.as_ref().map(|route| route.address.clone()),
         addresses: machine.addresses.iter().map(ToString::to_string).collect(),
         gateway_id: machine.gateway_id.clone(),
-        saved: machine
-            .gateway_id
-            .as_ref()
-            .is_some_and(|id| saved.iter().any(|saved| saved == id)),
+        platform: known.map(|view| view.platform.clone()),
+        version: known.and_then(|view| view.version.clone()),
+        route_kind: route_kind_name(route.as_ref()),
+        hint: known.and_then(|view| view.hint.clone()),
+        saved: known.is_some(),
     }
+}
+
+/// A saved machine reached at an address its handshake reported — the overlay
+/// peers a browse on the LAN cannot hear. One row per machine, at the first
+/// route that is not a LAN address.
+fn overlay_peers(saved: &[MachineView], found: &[DiscoveredView]) -> Vec<DiscoveredView> {
+    saved
+        .iter()
+        .filter(|view| {
+            !found
+                .iter()
+                .any(|row| row.gateway_id.as_deref() == Some(&view.id))
+        })
+        .filter_map(|view| {
+            let route = view
+                .routes
+                .iter()
+                .find(|route| route.kind != "lan")
+                .or_else(|| view.route.as_ref().filter(|route| route.kind != "lan"))?;
+            Some(DiscoveredView {
+                name: view.name.clone(),
+                source: "overlay",
+                address: Some(route.address.clone()),
+                addresses: vec![route.address.clone()],
+                gateway_id: Some(view.id.clone()),
+                platform: Some(view.platform.clone()),
+                version: view.version.clone(),
+                route_kind: route_route_kind_name(route),
+                hint: view.hint.clone(),
+                saved: true,
+            })
+        })
+        .collect()
+}
+
+/// The kind a route is shown as: the overlay's own name when the machine
+/// named it (`netbird`), else `lan`, `tailscale`, `vpn` or `public`.
+fn route_kind_name(route: Option<&Route>) -> String {
+    match route {
+        Some(route) => route_route_kind_name(&RouteView::of(route)),
+        None => "lan".to_owned(),
+    }
+}
+
+fn route_route_kind_name(route: &RouteView) -> String {
+    route.provider.unwrap_or(route.kind).to_owned()
 }
 
 /// Ask `address` to let this app in (`Settings › Machines › Add machine`).
@@ -1015,6 +1118,21 @@ mod tests {
         )
     }
 
+    /// A saved machine as the page already has it: a LAN route, the NetBird
+    /// address its handshake reported, and the version it runs.
+    fn saved_view(id: &str) -> MachineView {
+        let mut saved = machine();
+        saved.host_id = id.to_owned();
+        saved.version = Some("0.96.0".to_owned());
+        let mut overlay = Route::with_kind(RouteKind::Vpn, "100.90.16.237:17879");
+        overlay.provider = Some(OverlayProvider::Netbird);
+        saved.routes.push(overlay);
+        MachineView {
+            hint: Some("Not reachable over NetBird (100.90.16.237:17879).".to_owned()),
+            ..view(&saved, None)
+        }
+    }
+
     /// The schedule the page's "Retrying in N s" comes from: 1, 2, 4, 8, 16,
     /// 32, 64, 128, 256, then five minutes, and it never goes back down.
     #[test]
@@ -1178,6 +1296,58 @@ mod tests {
         assert_eq!(json["routes"][1]["kind"], "vpn");
     }
 
+    /// The Add sheet lists a saved machine's overlay address, which no browse
+    /// on the LAN can hear: its own handshake is where the address came from.
+    #[test]
+    fn the_add_sheet_lists_the_overlay_address_a_handshake_reported() {
+        let peers = overlay_peers(&[saved_view("gw-8e1f4b7a5c2d4e6f")], &[]);
+        assert_eq!(peers.len(), 1, "one row per machine");
+        let json = serde_json::to_value(&peers[0]).unwrap();
+        assert_eq!(json["source"], "overlay");
+        assert_eq!(json["name"], "Lars's MacBook Pro");
+        assert_eq!(json["address"], "100.90.16.237:17879");
+        assert_eq!(
+            json["routeKind"], "netbird",
+            "the product the machine named, not the generic VPN"
+        );
+        assert_eq!(json["platform"], "macos");
+        assert_eq!(json["version"], "0.96.0");
+        assert_eq!(json["saved"], true);
+        assert_eq!(
+            json["hint"],
+            "Not reachable over NetBird (100.90.16.237:17879)."
+        );
+        // Bonjour found it too: the LAN row is the one, not a second opinion.
+        let record = DiscoveredMachine {
+            name: "Lars's MacBook Pro".into(),
+            port: 17879,
+            addresses: vec!["192.168.1.20".parse().unwrap()],
+            gateway_id: Some("gw-8e1f4b7a5c2d4e6f".into()),
+            protocol: Some("1".into()),
+            caps: vec!["desktops".into()],
+        };
+        let known = [saved_view("gw-8e1f4b7a5c2d4e6f")];
+        assert!(
+            overlay_peers(&known, &[discovered(&record, &known)]).is_empty(),
+            "the page merges both sources by host id"
+        );
+        let bonjour = serde_json::to_value(discovered(&record, &known)).unwrap();
+        assert_eq!(bonjour["source"], "bonjour");
+        assert_eq!(bonjour["address"], "192.168.1.20:17879");
+        assert_eq!(bonjour["routeKind"], "lan");
+        // What the saved record knows travels with the Bonjour row.
+        assert_eq!(bonjour["version"], "0.96.0");
+        assert_eq!(bonjour["platform"], "macos");
+        assert_eq!(bonjour["saved"], true);
+    }
+
+    /// A machine with nothing but a LAN route is not offered as an overlay
+    /// peer: the browse is what finds it.
+    #[test]
+    fn a_lan_only_machine_is_not_an_overlay_peer() {
+        assert!(overlay_peers(&[view(&machine(), None)], &[]).is_empty());
+    }
+
     /// What the page receives while a machine is asked: a tagged event the
     /// webview can switch on, with `camelCase` fields.
     #[test]
@@ -1266,10 +1436,12 @@ mod tests {
             protocol: Some("1".into()),
             caps: vec!["desktops".into()],
         };
-        let view = discovered(&found, &["gw-8e1f4b7a".to_string()]);
+        let view = discovered(&found, &[saved_view("gw-8e1f4b7a")]);
         let json = serde_json::to_value(&view).unwrap();
         assert_eq!(json["name"], "Studio");
         assert_eq!(json["address"], "192.168.1.20:17879");
+        assert_eq!(json["source"], "bonjour");
+        assert_eq!(json["routeKind"], "lan");
         assert_eq!(json["saved"], true);
         assert_eq!(
             serde_json::to_value(discovered(&found, &[])).unwrap()["saved"],

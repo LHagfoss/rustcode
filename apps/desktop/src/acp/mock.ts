@@ -9,6 +9,46 @@ import { arr, type Json, type JsonObject, num, obj, str } from "./jsonrpc";
 import type { Transport, TransportEvent } from "./transport";
 import { BUILTIN_CAPABILITIES, type HarnessCapabilities, type HarnessSnapshot } from "./types";
 
+/** The local mock's skills; their text is served only by `_rustcode/skills/get`. */
+const MOCK_SKILLS: JsonObject[] = [
+  {
+    name: "release-automation",
+    description: "Cut a release with scripts/release.sh",
+    path: "~/.agents/skills/release-automation",
+    source: "universal",
+    readOnly: false,
+    enabled: true,
+    content:
+      "---\nname: release-automation\ndescription: Cut a release with scripts/release.sh\n---\n\nRun scripts/release.sh --patch.\n",
+  },
+  {
+    name: "frontend-design",
+    description: "Design guidance for web UIs",
+    path: ".rustcode/skills/frontend-design",
+    source: "workspace",
+    readOnly: false,
+    enabled: false,
+    content:
+      "---\nname: frontend-design\ndescription: Design guidance for web UIs\n---\n\nRead docs/design.md before shaping a page.\n",
+  },
+  {
+    name: "cloudflare-email-service",
+    description: "Send mail from a Worker",
+    path: "~/.claude/skills/cloudflare-email-service",
+    source: "claude-user",
+    readOnly: true,
+    enabled: true,
+    content:
+      "---\nname: cloudflare-email-service\ndescription: Send mail from a Worker\n---\n\nUse the Email Sending binding.\n",
+  },
+];
+
+function withoutSkillContent(skill: JsonObject): JsonObject {
+  const row = { ...skill };
+  delete row.content;
+  return row;
+}
+
 export interface MockOptions {
   /**
    * `default`: onboarded with history. `onboarding`: first run. `empty`: no threads.
@@ -57,10 +97,12 @@ export interface MockOptions {
   remote?: "disconnected" | "expired" | "connect" | "refused";
   /**
    * The machines this app is paired with (`?machines=`): `paired` is a machine
-   * saved just now, `connect` starts with none saved so the Add machine flow
-   * can be walked, `offline` a machine the shell keeps retrying, and `revoked`
-   * one whose pairing the machine ended. The default is the paired, connected
-   * machine the happy path shows.
+   * saved just now, `connect` starts with one saved machine on an older
+   * RustCode reached over NetBird so the Add sheet has found machines to list
+   * (one of them needing an update) and the server not installed, `offline` a
+   * machine the shell keeps retrying, and `revoked` one whose pairing the
+   * machine ended. The default is the paired, connected machine the happy path
+   * shows.
    */
   machines?: "paired" | "connect" | "offline" | "revoked";
   /**
@@ -2032,6 +2074,18 @@ export class MockEngine {
   private orchestration = 0;
   /** Discord Rich Presence (docs/discord-rich-presence.md), as `discord_rpc_enabled` holds it. */
   private presence = true;
+  /** The server settings of this machine (`_rustcode/settings`, docs/configuration.md). */
+  private serverSettings: JsonObject = {
+    "default-permission-mode": "ask",
+    "resume-after-restart": true,
+    "continue-after-limit": true,
+    "auto-compact-mode": "size",
+    "auto-compact-threshold": 150_000,
+    orchestration: true,
+    "delegates-total": 8,
+    "delegates-per-thread": 4,
+    "read-across-projects": true,
+  };
   /** The payload-capture switches (docs/data-store.md › Captured payloads), off as `config.toml` defaults them. */
   private payloadCapture = { providerPayloads: false, harnessRpcPayloads: false };
   /**
@@ -3637,6 +3691,20 @@ export class MockEngine {
       case "_rustcode/presence/set":
         this.presence = params.enabled === true;
         return { enabled: this.presence, discordDetected: true };
+      case "_rustcode/settings/get": {
+        const keys = arr(params.keys).flatMap((key) => (typeof key === "string" ? [key] : []));
+        const values = keys.length
+          ? Object.fromEntries(
+              keys.filter((key) => key in this.serverSettings).map((key) => [key, this.serverSettings[key]!]),
+            )
+          : this.serverSettings;
+        return { values, stored: Object.keys(this.serverSettings) };
+      }
+      case "_rustcode/settings/set": {
+        const values = obj(params.values);
+        if (values) this.serverSettings = { ...this.serverSettings, ...values };
+        return { values: this.serverSettings, stored: Object.keys(this.serverSettings) };
+      }
       case "_rustcode/harnesses":
         return this.snapshot();
       case "_rustcode/harnesses/models": {
@@ -3797,34 +3865,19 @@ export class MockEngine {
       case "_rustcode/capabilities":
         return {
           configPath: "~/.config/rustcode/config.toml",
-          skills: [
-            {
-              name: "release-automation",
-              description: "Cut a release with scripts/release.sh",
-              path: "~/.agents/skills/release-automation",
-              source: "universal",
-              readOnly: false,
-              enabled: true,
-            },
-            {
-              name: "frontend-design",
-              description: "Design guidance for web UIs",
-              path: ".rustcode/skills/frontend-design",
-              source: "workspace",
-              readOnly: false,
-              enabled: false,
-            },
-            {
-              name: "cloudflare-email-service",
-              description: "Send mail from a Worker",
-              path: "~/.claude/skills/cloudflare-email-service",
-              source: "claude-user",
-              readOnly: true,
-              enabled: true,
-            },
-          ],
+          skills: MOCK_SKILLS.map(withoutSkillContent),
           mcpServers: this.mcpServers(),
         };
+      case "_rustcode/skills/get": {
+        const name = str(params.name);
+        const path = str(params.path);
+        const skill = MOCK_SKILLS.find((entry) => str(entry.name) === name && str(entry.path) === path);
+        if (!skill || typeof skill.content !== "string")
+          throw Object.assign(new Error(`Could not read ${name ?? "that"}'s SKILL.md`), {
+            code: -32602,
+          });
+        return { content: skill.content };
+      }
       case "_rustcode/permissions": {
         // The same shape `_rustcode/permissions` answers with (engine/src/acp/permissions.rs).
         const now = Math.floor(Date.now() / 1000);
@@ -4869,18 +4922,38 @@ const MOCK_MACHINE = {
   platform: "linux",
   host: "ubuntu-1.local",
   route: "192.168.1.31:17879",
+  overlay: "100.90.16.237:17879",
   threads: 3,
 };
 
-/** One saved machine as `machines_list` reports it (`src-tauri/src/machines.rs`). */
-function mockMachine(state: "connected" | "offline" | "needsPairing", addedAt: number): JsonObject {
+/** The NetBird address the saved machine's handshake reported (#3402). */
+const MOCK_OVERLAY_ROUTE = {
+  kind: "vpn",
+  address: MOCK_MACHINE.overlay,
+  provider: "netbird",
+  encrypted: true,
+};
+
+/**
+ * One saved machine as `machines_list` reports it (`src-tauri/src/machines.rs`).
+ * `?machines=connect` asks for the overlay route and an older version, the
+ * state the Add sheet has to explain.
+ */
+function mockMachine(
+  state: "connected" | "offline" | "needsPairing",
+  addedAt: number,
+  extra: { overlay?: boolean; version?: string; hint?: string | null } = {},
+): JsonObject {
+  const route = { kind: "lan", address: MOCK_MACHINE.route, encrypted: false };
+  const routes = extra.overlay ? [route, MOCK_OVERLAY_ROUTE] : [route];
   return {
     id: MOCK_MACHINE.id,
     name: MOCK_MACHINE.name,
     platform: MOCK_MACHINE.platform,
+    version: extra.version ?? "1.28.0",
     main: false,
-    routes: [{ kind: "lan", address: MOCK_MACHINE.route, encrypted: false }],
-    route: { kind: "lan", address: MOCK_MACHINE.route, encrypted: false },
+    routes,
+    route,
     state,
     detail:
       state === "offline"
@@ -4888,6 +4961,7 @@ function mockMachine(state: "connected" | "offline" | "needsPairing", addedAt: n
         : state === "needsPairing"
           ? "Lars's Linux box ended this computer's pairing. Pair it again to see its threads."
           : null,
+    hint: extra.hint ?? null,
     retryInSecs: state === "offline" ? 4 : null,
     addedAt: new Date(addedAt).toISOString(),
     lastConnectedAt: state === "connected" ? new Date().toISOString() : new Date(addedAt).toISOString(),
@@ -4926,7 +5000,15 @@ function mockMachineList(option: MockOptions["machines"]): JsonObject[] {
   const savedAt = Date.now() - 1000 * 60 * 60 * 24 * 6;
   switch (option) {
     case "connect":
-      return [];
+      // Saved once, on an older RustCode, and reached over NetBird: the Add
+      // sheet lists it, says to update it, and the server is not installed.
+      return [
+        mockMachine("offline", savedAt, {
+          overlay: true,
+          version: "0.96.0",
+          hint: "Not reachable over NetBird (100.90.16.237:17879). On that machine, check that NetBird allows inbound connections and that an access policy allows TCP 17879 between the two machines.",
+        }),
+      ];
     case "offline":
       return [mockMachine("offline", savedAt)];
     case "revoked":
@@ -4968,25 +5050,75 @@ function mockIsPublic(address: string): boolean {
   return host.includes(".");
 }
 
-/** The machines Bonjour finds in the mock, one of them already saved. */
+/**
+ * The machines `machines_discover` lists in the mock, as the shell answers:
+ * Bonjour on this network, plus the saved machine's own NetBird address, which
+ * the page merges by host id into one row per machine. The local search
+ * always works here, so the notice is null.
+ */
+function mockDiscovery(saved: JsonObject[]): JsonObject {
+  return { rows: mockDiscovered(saved), notice: null };
+}
+
 function mockDiscovered(saved: JsonObject[]): JsonObject[] {
-  const known = saved.some((machine) => machine.id === MOCK_MACHINE.id);
+  const machine = saved.find((row) => row.id === MOCK_MACHINE.id);
+  const version = machine ? String(machine.version ?? "") || null : null;
   return [
     {
       name: MOCK_MACHINE.name,
+      source: "bonjour",
       address: MOCK_MACHINE.route,
       addresses: ["192.168.1.31"],
       gatewayId: MOCK_MACHINE.id,
-      saved: known,
+      platform: MOCK_MACHINE.platform,
+      version,
+      routeKind: "lan",
+      hint: null,
+      saved: Boolean(machine),
     },
     {
       name: "Studio",
+      source: "bonjour",
       address: "192.168.1.20:17879",
       addresses: ["192.168.1.20"],
       gatewayId: "gw-8e1f4b7a5c2d4e6f",
-      saved: saved.some((machine) => machine.id === "gw-8e1f4b7a5c2d4e6f"),
+      platform: "macos",
+      version: "1.28.0",
+      routeKind: "lan",
+      hint: null,
+      saved: saved.some((row) => row.id === "gw-8e1f4b7a5c2d4e6f"),
     },
+    ...(machine
+      ? [
+          {
+            name: MOCK_MACHINE.name,
+            source: "overlay",
+            address: MOCK_MACHINE.overlay,
+            addresses: [MOCK_MACHINE.overlay],
+            gatewayId: MOCK_MACHINE.id,
+            platform: MOCK_MACHINE.platform,
+            version,
+            routeKind: "netbird",
+            hint: machine.hint ?? null,
+            saved: true,
+          },
+        ]
+      : []),
   ];
+}
+
+/** The RustCode server as a background service, as `src-tauri/src/service.rs` answers. */
+function mockServerService(installed: boolean): JsonObject {
+  return {
+    installed,
+    running: installed,
+    version: installed ? "1.28.0" : null,
+    cliVersion: "1.28.0",
+    problems: installed
+      ? []
+      : [{ code: "not-installed", message: "The RustCode server service is not installed." }],
+    error: null,
+  };
 }
 
 /**
@@ -5006,11 +5138,88 @@ export class MockMachine {
     updatedAt: number;
   }[] = [];
   private createdCount = 0;
+  /** The server settings of this machine, differing from this app's own. */
+  private settings: JsonObject;
+  /** A harness change made here, over the machine's seeded snapshot. */
+  private harnessOverride: HarnessSnapshot | null = null;
+  /** Its skills, with the SKILL.md so a copy can be seen. */
+  private skills: JsonObject[];
+  /** Its MCP servers, with key names but no secret values. */
+  private mcpServers: JsonObject[];
 
   constructor(
     private readonly name: string,
     private readonly threads?: number,
-  ) {}
+  ) {
+    const studio = name === MOCK_STUDIO.name;
+    this.settings = {
+      "default-permission-mode": studio ? "ask" : "edits",
+      "resume-after-restart": studio,
+      "continue-after-limit": true,
+      "auto-compact-mode": studio ? "size" : "cache",
+      "auto-compact-threshold": studio ? 150_000 : 200_000,
+      orchestration: true,
+      "delegates-total": 8,
+      "delegates-per-thread": studio ? 4 : 6,
+      "read-across-projects": true,
+    };
+    this.skills = [
+      {
+        name: studio ? "frontend-design" : "release-automation",
+        description: studio ? "Design guidance for web UIs" : "Cut a release with scripts/release.sh",
+        path: studio
+          ? "/Users/lars/.agents/skills/frontend-design"
+          : "/home/lars/.agents/skills/release-automation",
+        source: "universal",
+        readOnly: false,
+        enabled: true,
+        content: studio
+          ? "---\nname: frontend-design\ndescription: Design guidance for web UIs\n---\n\nRead docs/design.md before shaping a page.\n"
+          : "---\nname: release-automation\ndescription: Cut a release with scripts/release.sh\n---\n\nRun scripts/release.sh --patch.\n",
+      },
+      {
+        name: "shared-notes",
+        description: "Notes every machine can have",
+        path: "/home/lars/.config/rustcode/skills/shared-notes",
+        source: "rustcode",
+        readOnly: false,
+        enabled: false,
+        content:
+          "---\nname: shared-notes\ndescription: Notes every machine can have\n---\n\nKeep notes short.\n",
+      },
+    ];
+    this.mcpServers = studio
+      ? [
+          {
+            name: "notes",
+            transport: "http",
+            target: "https://mcp.example.com/notes",
+            enabled: true,
+            scope: "user",
+            connection: "connected",
+            tools: ["search", "write"],
+            error: null,
+            envKeys: [],
+            headerKeys: ["Authorization"],
+            copyTarget: ["https://mcp.example.com/notes"],
+          },
+        ]
+      : [
+          {
+            name: "github",
+            transport: "stdio",
+            target: "npx -y github-mcp",
+            enabled: true,
+            scope: "user",
+            connection: "connected",
+            tools: ["issues", "pulls"],
+            error: null,
+            envKeys: ["GITHUB_TOKEN"],
+            headerKeys: [],
+            copyTarget: ["npx", "-y", "github-mcp"],
+          },
+        ];
+  }
 
   /** The frames this machine sends back for one line the page wrote. */
   receive(line: string): string[] {
@@ -5029,7 +5238,13 @@ export class MockMachine {
     if (frame.method === "session/list")
       return [JSON.stringify({ jsonrpc: "2.0", id, result: { sessions: this.sessions() } })];
     if (frame.method === "_rustcode/harnesses")
-      return [JSON.stringify({ jsonrpc: "2.0", id, result: this.harnesses() })];
+      return [
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          result: (this.harnessOverride ?? this.harnesses()) as unknown as Json,
+        }),
+      ];
     if (frame.method === "session/new") return [this.newSession(id, frame.params)];
     if (frame.method === "session/load") return this.load(id, frame.params);
     if (frame.method === "session/prompt") {
@@ -5052,6 +5267,152 @@ export class MockMachine {
         JSON.stringify({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } }),
       ];
       return reply.filter((x): x is string => x !== null);
+    }
+    if (frame.method === "_rustcode/settings/get") {
+      const keys = arr(obj(frame.params)?.keys).flatMap((key) => (typeof key === "string" ? [key] : []));
+      const values = keys.length
+        ? Object.fromEntries(
+            keys.filter((key) => key in this.settings).map((key) => [key, this.settings[key]!]),
+          )
+        : this.settings;
+      return [
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          result: { values, stored: Object.keys(this.settings) },
+        }),
+      ];
+    }
+    if (frame.method === "_rustcode/settings/set") {
+      const values = obj(obj(frame.params)?.values);
+      if (values) this.settings = { ...this.settings, ...values };
+      return [
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          result: { values: this.settings, stored: Object.keys(this.settings) },
+        }),
+      ];
+    }
+    if (frame.method === "_rustcode/harnesses/default") {
+      const params = obj(frame.params);
+      const snapshot = this.harnessOverride ?? this.harnesses();
+      this.harnessOverride = {
+        ...snapshot,
+        default: {
+          harness: str(params?.harness) ?? snapshot.default.harness,
+          model: str(params?.model) ?? null,
+          effort: str(params?.effort) ?? null,
+        },
+      };
+      return [JSON.stringify({ jsonrpc: "2.0", id, result: this.harnessOverride as unknown as Json })];
+    }
+    if (frame.method === "_rustcode/harnesses/set") {
+      const params = obj(frame.params);
+      const id = str(params?.id);
+      const enabled = params?.enabled;
+      const snapshot = this.harnessOverride ?? this.harnesses();
+      this.harnessOverride = {
+        ...snapshot,
+        harnesses: snapshot.harnesses.map((harness) =>
+          harness.id === id && typeof enabled === "boolean" ? { ...harness, enabled } : harness,
+        ),
+      };
+      return [JSON.stringify({ jsonrpc: "2.0", id, result: this.harnessOverride as unknown as Json })];
+    }
+    if (frame.method === "_rustcode/capabilities") {
+      return [
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            configPath: `/home/lars/.config/rustcode/config.toml`,
+            skills: this.skills.map(withoutSkillContent),
+            mcpServers: this.mcpServers,
+          },
+        }),
+      ];
+    }
+    if (frame.method === "_rustcode/capabilities/set") {
+      const params = obj(frame.params);
+      const name = str(params?.name);
+      const enabled = params?.enabled === true;
+      if (params?.kind === "skill")
+        this.skills = this.skills.map((skill) => (str(skill.name) === name ? { ...skill, enabled } : skill));
+      if (params?.kind === "mcp")
+        this.mcpServers = this.mcpServers.map((server) =>
+          str(server.name) === name ? { ...server, enabled } : server,
+        );
+      return this.receive(JSON.stringify({ jsonrpc: "2.0", id, method: "_rustcode/capabilities" }));
+    }
+    if (frame.method === "_rustcode/capabilities/mcp/add") {
+      const params = obj(frame.params);
+      const target = arr(params?.target).flatMap((part) => (typeof part === "string" ? [part] : []));
+      const transport = str(params?.transport) ?? (target[0]?.startsWith("http") ? "http" : "stdio");
+      this.mcpServers = [
+        ...this.mcpServers.filter((server) => str(server.name) !== str(params?.name)),
+        {
+          name: str(params?.name) ?? "server",
+          transport,
+          target: target.join(" "),
+          enabled: true,
+          scope: "user",
+          connection: "connected",
+          tools: [],
+          error: null,
+          envKeys: arr(params?.env).map((line) => String(line).split("=")[0] ?? ""),
+          headerKeys: arr(params?.headers).map((line) => String(line).split(":")[0] ?? ""),
+          copyTarget: target,
+        },
+      ];
+      return this.receive(JSON.stringify({ jsonrpc: "2.0", id, method: "_rustcode/capabilities" }));
+    }
+    if (frame.method === "_rustcode/capabilities/mcp/remove") {
+      const name = str(obj(frame.params)?.name);
+      this.mcpServers = this.mcpServers.filter((server) => str(server.name) !== name);
+      return this.receive(JSON.stringify({ jsonrpc: "2.0", id, method: "_rustcode/capabilities" }));
+    }
+    if (frame.method === "_rustcode/skills/get") {
+      const params = obj(frame.params);
+      const skill = this.skills.find(
+        (entry) => str(entry.name) === str(params?.name) && str(entry.path) === str(params?.path),
+      );
+      if (!skill || typeof skill.content !== "string") {
+        return [
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            error: {
+              code: -32602,
+              message: `Could not read ${str(params?.name) ?? "that"}'s SKILL.md`,
+            },
+          }),
+        ];
+      }
+      return [JSON.stringify({ jsonrpc: "2.0", id, result: { content: skill.content } })];
+    }
+    if (frame.method === "_rustcode/skills/add") {
+      const params = obj(frame.params);
+      const name = str(params?.name) ?? "skill";
+      this.skills = [
+        ...this.skills.filter((skill) => str(skill.name) !== name),
+        {
+          name,
+          description: "Copied from another machine",
+          path: `/home/lars/.config/rustcode/skills/${name}`,
+          source: "rustcode",
+          readOnly: false,
+          enabled: true,
+          ...(str(params?.content) ? { content: str(params?.content) } : {}),
+        },
+      ];
+      return [
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          result: { path: `/home/lars/.config/rustcode/skills/${name}/SKILL.md` },
+        }),
+      ];
     }
     return [
       JSON.stringify({
@@ -5206,8 +5567,12 @@ export class MockTransport implements Transport {
   /** The machines this app is paired with, as `machines_list` reports them. */
   private machineList: JsonObject[];
 
+  /** Whether the RustCode server is installed as a service (`?machines=connect` starts without it). */
+  private serverInstalled: boolean;
+
   constructor(private readonly options: MockOptions = {}) {
     this.machineList = mockMachineList(options.machines);
+    this.serverInstalled = options.machines !== "connect";
   }
 
   async start(onEvent: (event: TransportEvent) => void): Promise<void> {
@@ -5268,7 +5633,7 @@ export class MockTransport implements Transport {
 
   async call(command: string, args: Record<string, unknown>): Promise<unknown> {
     if (command === "machines_list") return this.machineList;
-    if (command === "machines_discover") return mockDiscovered(this.machineList);
+    if (command === "machines_discover") return mockDiscovery(this.machineList);
     if (command === "machines_ask") {
       const address = String(args.address ?? "");
       if (!address) throw new Error("Enter a machine address first.");
@@ -5292,6 +5657,12 @@ export class MockTransport implements Transport {
     if (command === "machines_remove") {
       this.machineList = this.machineList.filter((machine) => machine.id !== String(args.id));
       return null;
+    }
+    if (command === "app_version") return "1.28.0";
+    if (command === "server_service_status") return mockServerService(this.serverInstalled);
+    if (command === "server_service_install") {
+      this.serverInstalled = true;
+      return mockServerService(true);
     }
     if (command === "machines_set_main") {
       this.machineList = this.machineList.map((machine) => ({

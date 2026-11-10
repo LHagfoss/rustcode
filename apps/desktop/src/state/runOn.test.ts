@@ -47,6 +47,7 @@ function studio(state: Machine["state"] = "connected"): Machine {
     id: STUDIO,
     name: "Studio",
     platform: "macos",
+    version: "1.28.0",
     main: false,
     routes: [{ kind: "lan", address: "192.168.1.20:17879", encrypted: false }],
     route: { kind: "lan", address: "192.168.1.20:17879", encrypted: false },

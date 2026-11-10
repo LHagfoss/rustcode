@@ -22,6 +22,7 @@ mod server_status;
 mod session;
 pub(crate) mod session_move;
 mod session_repair;
+mod settings;
 mod steer;
 mod streaming;
 mod telemetry;
@@ -2219,6 +2220,18 @@ async fn serve_connection(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async |request: settings::GetSettingsRequest, responder, _connection| {
+                responder.respond(settings::read(request)?)
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async |request: settings::SetSettingsRequest, responder, _connection| {
+                responder.respond(settings::write(request)?)
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             {
                 let server = server.clone();
                 async move |request: rewind::RewindRequest, responder, _connection| {
@@ -2953,6 +2966,18 @@ async fn serve_connection(
                     }
                     Ok(())
                 })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: capabilities::AddSkillRequest, responder, _connection| {
+                responder.respond(capabilities::add_skill(request)?)
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: capabilities::GetSkillRequest, responder, _connection| {
+                responder.respond(capabilities::get_skill(request)?)
             },
             agent_client_protocol::on_receive_request!(),
         )

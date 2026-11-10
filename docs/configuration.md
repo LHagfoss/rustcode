@@ -502,6 +502,49 @@ left out. Manage them with `rustcode theme list | show | new | set | validate |
 path`; [themes.md](themes.md) has the format, the token table and derivation,
 validation, and the ACP methods.
 
+## Server settings across machines
+
+Settings that belong to a machine — default access, resume after a restart,
+continuing after a usage limit, auto-compaction, orchestration, the delegate
+limits and reading across projects — are kept in
+`<config dir>/settings.json` on that machine, apart from `config.toml` because
+the app, not the engine's model loop, acts on them:
+
+```json
+{
+  "version": 1,
+  "values": {
+    "default-permission-mode": "ask",
+    "resume-after-restart": true,
+    "auto-compact-threshold": 150000
+  }
+}
+```
+
+A client reads and writes them with `_rustcode/settings/get` and
+`_rustcode/settings/set` (both take and answer `{ "values": { … } }`; `get`
+accepts `"keys"` and also answers `"stored"`, the keys the file actually
+holds). The engine refuses a key outside its registry, so the file
+cannot become a general store over ACP. The keys are
+`default-permission-mode`, `resume-after-restart`, `continue-after-limit`,
+`auto-compact-mode`, `auto-compact-threshold`, `orchestration`,
+`delegates-total`, `delegates-per-thread` and `read-across-projects`. A client
+that reads a key the machine never set gets the engine's default. The desktop
+app seeds its own values once on first start, but only for the keys `stored`
+does not list, so a value another machine wrote first is kept.
+
+The default harness, model and effort stay in `config.toml`
+(`[harness_defaults]`, `_rustcode/harnesses/default`) and skill/MCP toggles
+stay in `disabled_skills` and each server's `enabled` flag
+(`_rustcode/capabilities*`). A paired desktop app may reach these methods and
+`_rustcode/capabilities*` on another machine, but never credentials, accounts,
+Remote access or the server's own diagnostics (the gateway's desktop ACP
+allowlist, `rustcode/engine/src/remote_gateway/acp_relay.rs`). See
+[desktop.md](desktop.md) › Settings on one machine or all.
+
+`settings.json` is deliberately not part of `rustcode sync`: it is one
+machine's behaviour, not a shared configuration.
+
 ## Syncing config, skills, and themes
 
 Initialize a config sync repository with a remote Git URL, then choose a
