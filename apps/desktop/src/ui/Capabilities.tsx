@@ -20,7 +20,7 @@ import { Method } from "../acp/types";
 import { createSkill, openPath, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { askConfirm, request, toast, useApp } from "../state/store";
-import { cardInset, cx, Spinner, Switch, Tooltip } from "./primitives";
+import { cardInset, cx, noTextHelpers, Spinner, Switch, Tooltip } from "./primitives";
 import { Action, fieldClass, Group, Loading, Row, SectionTitle, useEngineData } from "./settingsKit";
 
 interface Skill {
@@ -140,6 +140,7 @@ export function CapabilitiesPage() {
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Filter skills and servers"
             aria-label="Filter skills and servers"
+            {...noTextHelpers}
             className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-fg-faint"
           />
         </label>
@@ -419,6 +420,7 @@ function AddServer({
         onChange={(e) => setName(e.target.value)}
         placeholder="Name"
         aria-label="Server name"
+        {...noTextHelpers}
         className={fieldClass}
       />
       <input
@@ -426,6 +428,7 @@ function AddServer({
         onChange={(e) => setTarget(e.target.value)}
         placeholder="Command (npx some-server) or https:// URL"
         aria-label="Server command or URL"
+        {...noTextHelpers}
         className={cx(fieldClass, "font-mono")}
       />
       <textarea
@@ -434,6 +437,7 @@ function AddServer({
         rows={2}
         placeholder={isHttp ? "Headers, one per line (Name: value)" : "Environment, one per line (KEY=value)"}
         aria-label={isHttp ? "Headers" : "Environment"}
+        {...noTextHelpers}
         className={cx(fieldClass, "h-auto resize-none py-1.5 font-mono")}
       />
       <div className="flex justify-end gap-2">
@@ -574,6 +578,7 @@ function NewSkill({ onDone }: { onDone: () => void }) {
         onKeyDown={(e) => e.key === "Enter" && valid && void create()}
         placeholder="skill-name"
         aria-label="Skill name"
+        {...noTextHelpers}
         className={cx(fieldClass, "font-mono")}
       />
       <div className="flex items-center gap-2 text-callout text-fg-muted">

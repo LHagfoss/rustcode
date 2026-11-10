@@ -48,7 +48,7 @@ import {
 } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { errorText, request, restartEngine, SERVER_LOG_LINES, toast, useApp } from "../state/store";
-import { cx, rowInset } from "./primitives";
+import { cx, noTextHelpers, rowInset } from "./primitives";
 import { Action, fieldClass, Group, Row, Select } from "./settingsKit";
 
 const TRANSPORT_LABEL: Record<string, string> = {
@@ -434,6 +434,7 @@ function ServerLog() {
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search the log"
           aria-label="Search the server log"
+          {...noTextHelpers}
           className={cx(fieldClass, "w-44 min-w-0 flex-1 outline-none")}
         />
         <Action

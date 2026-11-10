@@ -50,7 +50,7 @@ import {
 import { ViewHeader } from "./Board";
 import { StatusMark, splitUnifiedDiff } from "./ChangesPanel";
 import { Fragments, useMarkedFragments } from "./DiffView";
-import { cx, Pill, Segments, Select, Skeleton, Spinner, Tooltip } from "./primitives";
+import { cx, noTextHelpers, Pill, Segments, Select, Skeleton, Spinner, Tooltip } from "./primitives";
 import { DiffCount } from "./Rows";
 
 interface ReviewFile {
@@ -108,6 +108,7 @@ function CommentBox({
         }}
         placeholder={`Comment on this line (${formatBinding("mod+enter")} to save)`}
         aria-label="Comment"
+        {...noTextHelpers}
         className="w-full resize-y rounded-md bg-fill-subtle px-2 py-1.5 text-callout outline-none hover:bg-fill focus:bg-fill"
       />
       <div className="flex justify-end gap-1.5">
@@ -674,6 +675,7 @@ export function Review({ threadId }: { threadId: string }) {
                 onChange={(e) => setNote(e.target.value)}
                 placeholder="A note for the whole review (optional)"
                 aria-label="Review note"
+                {...noTextHelpers}
                 className="resize-y rounded-lg bg-fill-subtle px-2 py-1.5 text-callout outline-none hover:bg-fill focus:bg-fill"
               />
               <div className="flex flex-wrap items-center justify-end gap-2">

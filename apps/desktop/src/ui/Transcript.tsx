@@ -60,7 +60,7 @@ import { ApprovalRow, ChildRequestCard } from "./AttentionCards";
 import { BranchRow } from "./Branches";
 import { EarlierAttempts } from "./EarlierAttempts";
 import { PlanCard } from "./PlanCard";
-import { cx } from "./primitives";
+import { cx, noTextHelpers } from "./primitives";
 import { LeavingQueuedRow, QueuedMessageRow, ResumeQueueRow } from "./QueuedMessages";
 import {
   AssistantRow,
@@ -1147,6 +1147,7 @@ export function Transcript({
             }}
             placeholder="Find in thread"
             aria-label="Find in thread"
+            {...noTextHelpers}
             className="w-[180px] bg-transparent text-callout outline-none placeholder:text-fg-faint"
           />
           <span className="min-w-[52px] text-right text-caption text-fg-muted tabular" aria-live="polite">

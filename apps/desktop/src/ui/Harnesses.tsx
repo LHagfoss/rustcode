@@ -37,7 +37,7 @@ import {
 } from "../state/store";
 import { HarnessIcon } from "./HarnessIcon";
 import { CopyButton } from "./Markdown";
-import { cx, Skeleton, Spinner, Switch, Tooltip } from "./primitives";
+import { cx, noTextHelpers, Skeleton, Spinner, Switch, Tooltip } from "./primitives";
 import { Action, Chip, Choice, Select, type SelectOption } from "./settingsKit";
 
 function StatusDot({ tone }: { tone: "ok" | "warn" | "off" }) {
@@ -286,6 +286,7 @@ export function AccountsList({ harness }: { harness: Harness }) {
             }}
             placeholder="Name, e.g. Work"
             aria-label="Account name"
+            {...noTextHelpers}
             className="h-7 min-w-0 flex-1 rounded-md bg-fill px-2 text-callout outline-none focus:bg-fill-strong"
           />
           <Action size="sm" onClick={() => void add()} disabled={busy || !accountSlug(name)}>

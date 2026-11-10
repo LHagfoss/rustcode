@@ -5,6 +5,34 @@
 //   removed.
 // - Apple Intelligence Writing Tools and text suggestions in text fields:
 //   `writingsuggestions="false"` turns them off in WebKit (macOS 15+).
+// - Autocorrect, automatic capitalisation and spell checking, which every field
+//   already asks for through `noTextHelpers` (ui/primitives.tsx): set here too,
+//   so a field added without it is still quiet, and a re-render that drops the
+//   attribute is put back on the next sweep (docs/desktop.md › Native text
+//   fields).
+
+/** The attributes a text field carries, with the system's helpers off. */
+const QUIET_TEXT: [string, string][] = [
+  ["writingsuggestions", "false"],
+  ["spellcheck", "false"],
+  ["autocorrect", "off"],
+  ["autocapitalize", "off"],
+];
+
+function quietField(el: Element) {
+  if (
+    !(
+      el instanceof HTMLTextAreaElement ||
+      el instanceof HTMLInputElement ||
+      el.hasAttribute("contenteditable")
+    )
+  ) {
+    return;
+  }
+  for (const [name, value] of QUIET_TEXT) {
+    if (el.getAttribute(name) !== value) el.setAttribute(name, value);
+  }
+}
 
 function quiet(el: Element) {
   const title = el.getAttribute("title");
@@ -12,14 +40,7 @@ function quiet(el: Element) {
     if (title && !el.hasAttribute("aria-label")) el.setAttribute("aria-label", title);
     el.removeAttribute("title");
   }
-  if (
-    (el instanceof HTMLTextAreaElement ||
-      el instanceof HTMLInputElement ||
-      el.hasAttribute("contenteditable")) &&
-    el.getAttribute("writingsuggestions") !== "false"
-  ) {
-    el.setAttribute("writingsuggestions", "false");
-  }
+  quietField(el);
 }
 
 function sweep(root: Element) {
@@ -39,6 +60,7 @@ export function quietNativeChrome(): void {
     subtree: true,
     childList: true,
     attributes: true,
-    attributeFilter: ["title"],
+    // A re-render that hands a field back the attributes React had removed is put right again.
+    attributeFilter: ["title", ...QUIET_TEXT.map(([name]) => name)],
   });
 }

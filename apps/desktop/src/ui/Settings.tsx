@@ -128,7 +128,7 @@ import { DefaultsForm, HarnessList, useAutoDetect } from "./Harnesses";
 import { HeaderButtonsSetting } from "./HeaderButtonsSetting";
 import { MachinesPage } from "./MachinesPage";
 import { NewThreadBanner } from "./NewThreadBanner";
-import { ChromeButton, cx, Kbd, Spinner, Switch } from "./primitives";
+import { ChromeButton, cx, Kbd, noTextHelpers, Spinner, Switch } from "./primitives";
 import { RemoteAccessPage } from "./RemoteAccessPage";
 import { ShortcutsPage } from "./ShortcutSettings";
 import { StatisticsPage } from "./StatisticsPage";
@@ -899,6 +899,7 @@ function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
           placeholder="theme-name"
           aria-label="Theme name"
           aria-invalid={name.length > 0 && !valid}
+          {...noTextHelpers}
           className={cx(fieldClass, "flex-1 font-mono")}
         />
         <Action onClick={onDone}>Cancel</Action>
@@ -1574,6 +1575,7 @@ export function Settings() {
                   onKeyDown={onFieldKey}
                   placeholder="Search settings"
                   aria-label="Search settings"
+                  {...noTextHelpers}
                   className="min-w-0 flex-1 bg-transparent font-medium text-fg outline-none placeholder:text-fg-muted"
                 />
                 {query ? (

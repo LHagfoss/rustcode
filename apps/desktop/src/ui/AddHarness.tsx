@@ -21,7 +21,7 @@ import {
   toast,
   useApp,
 } from "../state/store";
-import { cx, Spinner } from "./primitives";
+import { cx, noTextHelpers, Spinner } from "./primitives";
 import { Action } from "./settingsKit";
 
 const FIELD =
@@ -136,6 +136,7 @@ export function AddHarnessForm({ onClose }: { onClose: () => void }) {
           onChange={(e) => patch({ name: e.target.value })}
           placeholder="My agent"
           aria-label="Name"
+          {...noTextHelpers}
           className={cx(FIELD, "font-sans")}
         />
       </Field>
@@ -145,9 +146,7 @@ export function AddHarnessForm({ onClose }: { onClose: () => void }) {
           onChange={(e) => patch({ executable: e.target.value })}
           placeholder="dsh"
           aria-label="Executable"
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
+          {...noTextHelpers}
           className={FIELD}
         />
       </Field>
@@ -161,9 +160,7 @@ export function AddHarnessForm({ onClose }: { onClose: () => void }) {
                   onChange={(e) => patch({ args: form.args.map((a, j) => (j === i ? e.target.value : a)) })}
                   placeholder={i === 0 ? "--profile" : "acp"}
                   aria-label={`Argument ${i + 1}`}
-                  spellCheck={false}
-                  autoCapitalize="off"
-                  autoCorrect="off"
+                  {...noTextHelpers}
                   className={cx(FIELD, "flex-1")}
                 />
                 <RemoveRow
@@ -196,9 +193,7 @@ export function AddHarnessForm({ onClose }: { onClose: () => void }) {
                   }
                   placeholder="NAME"
                   aria-label={`Variable ${i + 1} name`}
-                  spellCheck={false}
-                  autoCapitalize="off"
-                  autoCorrect="off"
+                  {...noTextHelpers}
                   className={cx(FIELD, "w-40")}
                 />
                 <span className="text-fg-faint">=</span>
@@ -209,9 +204,7 @@ export function AddHarnessForm({ onClose }: { onClose: () => void }) {
                   }
                   placeholder="value"
                   aria-label={`Variable ${i + 1} value`}
-                  spellCheck={false}
-                  autoCapitalize="off"
-                  autoCorrect="off"
+                  {...noTextHelpers}
                   className={cx(FIELD, "flex-1")}
                 />
                 <RemoveRow

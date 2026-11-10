@@ -19,6 +19,7 @@ import {
   menuItemDanger,
   menuLabel,
   menuSeparator,
+  noTextHelpers,
   Pill,
   Segments,
   Select,
@@ -104,7 +105,7 @@ export function Catalog() {
             <Switch label="Switch" checked={on} onChange={setOn} />
           </Section>
           <Section title="Field">
-            <input className={inputClass} placeholder="Placeholder" />
+            <input className={inputClass} placeholder="Placeholder" {...noTextHelpers} />
             <Kbd>{formatBinding("mod+k")}</Kbd>
           </Section>
           <Section title="Menu">

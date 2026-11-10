@@ -361,6 +361,7 @@ export function MenuSearchField({
         aria-label={label}
         aria-controls={controls}
         aria-activedescendant={activeDescendant}
+        {...noTextHelpers}
         className={cx(
           "min-w-0 flex-1 bg-transparent text-fg outline-none placeholder:text-fg-faint",
           size === "sm" ? "text-callout" : "text-body",
@@ -379,6 +380,19 @@ export function MenuSearchField({
     </div>
   );
 }
+
+/**
+ * What every field the user types in turns off: the system's text helpers. Autocorrect, automatic
+ * capitalisation and completions have no place in a prompt, a path, a branch name or a search
+ * term — they rewrite what the user meant — so each `<input>` and `<textarea>` the app draws
+ * spreads this (docs/desktop.md › Native text fields, for the layers below it).
+ */
+export const noTextHelpers = {
+  spellCheck: false,
+  autoCorrect: "off",
+  autoCapitalize: "off",
+  autoComplete: "off",
+} as const;
 
 /** A small text field, per the Input recipe. */
 export const inputClass =
