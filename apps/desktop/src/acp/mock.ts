@@ -5067,14 +5067,20 @@ export class MockTransport implements Transport {
       // The shell's `attached_files` (native.rs), with the same rules: inside the roots,
       // a file, at most ten of them and 5 MB each. A canned size stands in for the file.
       const paths = Array.isArray(args.paths) ? args.paths.map(String) : [];
-      const roots = Array.isArray(args.roots) ? args.roots.map(String).filter((r) => r.startsWith("/")) : [];
+      const absolute = (path: string) => /^(?:[A-Za-z]:)?[\\/]/.test(path);
+      const one = (path: string) => path.replace(/\\/g, "/");
+      const roots = Array.isArray(args.roots) ? args.roots.map(String).filter(absolute) : [];
       if (paths.length > 10) throw new Error("A message attaches at most 10 files.");
       if (!roots.length) throw new Error("This thread has no folder to attach a file from.");
       return paths.map((path) => {
-        if (!path.startsWith("/")) throw new Error(`${path} is not an absolute path.`);
-        const root = roots.find((r) => path === r || path.startsWith(`${r.replace(/\/+$/, "")}/`));
+        if (!absolute(path)) throw new Error(`${path} is not an absolute path.`);
+        const file = one(path);
+        const root = roots.find((r) => {
+          const base = one(r).replace(/\/+$/, "");
+          return file === base || file.startsWith(`${base}/`);
+        });
         if (!root) throw new Error(`${path} is outside this thread's project.`);
-        return { path, name: path.split("/").pop() ?? path, bytes: 1024 };
+        return { path, name: file.split("/").pop() ?? path, bytes: 1024 };
       });
     }
     if (command === "skill_create") return `~/.config/rustcode/skills/${String(args.name)}/SKILL.md`;

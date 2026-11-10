@@ -150,6 +150,7 @@ import {
   answerQuestionOptions,
   answerQuestionText,
   cancel,
+  clearFinished,
   createSession,
   effortMemory,
   ensureHarnessModels,
@@ -1435,6 +1436,47 @@ function manageTarget(caller: RuleThread, id: string | undefined): RuleThread | 
   return checkManage(caller, target) ?? (target as RuleThread);
 }
 
+/** The changes `update_session` and `organize_threads` share, as one list. */
+interface ManagedChange {
+  title?: string;
+  pinned?: boolean;
+  unread?: boolean;
+}
+
+/** Whether a thread is the list's unread one: it finished something the user has not seen. */
+const isUnread = (id: string) => {
+  const s = useApp.getState();
+  return id in s.finished || id in s.failed;
+};
+
+/**
+ * Applies a thread's title, pin and unread flag with the store calls the app's own
+ * controls use, and counts the ones that did something: a value the thread already
+ * has is not a change, and `unread` is a two-way flag (`true` marks it unread,
+ * `false` reads it, as opening the thread does).
+ */
+async function applyManagedChange(
+  target: RuleThread,
+  change: ManagedChange,
+): Promise<{ applied: number; renameFailed: boolean }> {
+  let applied = 0;
+  const live = () => ruleThread(useApp.getState(), target.id) ?? target;
+  if (change.title !== undefined && change.title !== live().title) {
+    if (!(await renameThread(target.id, change.title))) return { applied, renameFailed: true };
+    applied += 1;
+  }
+  if (change.pinned !== undefined && useApp.getState().pinned.includes(target.id) !== change.pinned) {
+    togglePin(target.id);
+    applied += 1;
+  }
+  if (change.unread !== undefined && isUnread(target.id) !== change.unread) {
+    if (change.unread) markUnread(target.id);
+    else clearFinished(target.id);
+    applied += 1;
+  }
+  return { applied, renameFailed: false };
+}
+
 async function updateSession(caller: RuleThread, call: UpdateCall): Promise<JsonObject> {
   const target = manageTarget(caller, call.target);
   if (isFailure(target)) return failureJson(target);
@@ -1455,13 +1497,12 @@ async function updateSession(caller: RuleThread, call: UpdateCall): Promise<Json
     });
     if (no) return failureJson(no);
   }
-  if (call.title && !(await renameThread(target.id, call.title))) {
-    return failureJson(failure("failed", "the thread could not be renamed"));
-  }
-  if (call.pinned !== undefined && useApp.getState().pinned.includes(target.id) !== call.pinned) {
-    togglePin(target.id);
-  }
-  if (call.unread) markUnread(target.id);
+  const applied = await applyManagedChange(target, {
+    title: call.title,
+    pinned: call.pinned,
+    unread: call.unread,
+  });
+  if (applied.renameFailed) return failureJson(failure("failed", "the thread could not be renamed"));
   if (call.status) await setThreadStatus(target.id, STATUS_OF_CHOICE[call.status]);
   if (call.snoozedUntil !== undefined) setSnoozed(target.id, call.snoozedUntil);
   const after = ruleThread(useApp.getState(), target.id);
@@ -1478,14 +1519,31 @@ async function updateSession(caller: RuleThread, call: UpdateCall): Promise<Json
 type AnswerCall = Extract<ReturnType<typeof parseCall>, { tool: "answer_request" }>;
 type OrganizeCall = Extract<ReturnType<typeof parseCall>, { tool: "organize_threads" }>;
 
-/** The option an approval's `choice` answers with, as the card's own three buttons would. */
+type Scope = ReturnType<typeof optionScope>;
+
+/** What each scope is called when a choice cannot be answered with it. */
+const SCOPE_WORD: Record<Scope, string> = {
+  once: "allow once",
+  hour: "allow for an hour",
+  always: "allow always",
+  decline: "decline",
+  other: "another answer",
+};
+
+/**
+ * The option a `choice` answers with: the scope it names, and no other. A request
+ * that offers only a standing answer is refused rather than answered once, because
+ * the engine records the grant the option carries, not the word the caller used.
+ */
 function optionFor(request: PermissionRequest, choice: ApprovalChoice): PermissionOption | null {
-  const of = (scope: ReturnType<typeof optionScope>) =>
-    request.options.find((o) => optionScope(o) === scope) ?? null;
-  if (choice === "deny") return of("decline");
-  if (choice === "allow_always") return of("always") ?? of("hour");
-  // An engine that only offers a standing answer still lets "once" go through once.
-  return of("once") ?? of("always");
+  const wanted = choice === "deny" ? "decline" : choice === "allow_always" ? "always" : "once";
+  return request.options.find((o) => optionScope(o) === wanted) ?? null;
+}
+
+/** Why a choice has no option here, naming the scopes the request does offer. */
+function scopeRefusal(request: PermissionRequest, choice: ApprovalChoice): Failure {
+  const offers = [...new Set(request.options.map(optionScope))].map((scope) => SCOPE_WORD[scope]);
+  return failure("invalid", `that request offers ${offers.join(", ")}, not “${ANSWER_LABEL[choice]}”`);
 }
 
 /** The options a question offers as answers: the allow and plain ones its card lists, not a reject. */
@@ -1498,6 +1556,41 @@ const ANSWER_LABEL: Record<ApprovalChoice, string> = {
   allow_always: "always allow it",
   deny: "decline it",
 };
+
+/** How one call answers one request; a question answered by words has `text` instead of a pick. */
+interface Answering {
+  option: PermissionOption | null;
+  chosen: PermissionOption | null;
+  text: string | null;
+}
+
+/**
+ * The answer one call gives one request as it is now: an approval's option, a
+ * question's option by id or its text, or a question's own Decline. Checked again
+ * after the user answered the card, since that request may be gone by then.
+ */
+function answeringFor(request: PermissionRequest, call: AnswerCall): Answering | Failure {
+  const question = request.question;
+  if (!question) {
+    if (call.answer) return failure("invalid", "that request is an approval: give choice");
+    const option = optionFor(request, call.choice ?? "allow_once");
+    return option ? { option, chosen: null, text: null } : scopeRefusal(request, call.choice ?? "allow_once");
+  }
+  // A question's card offers the same Decline an approval's does.
+  if (call.choice === "deny") {
+    const option = optionFor(request, "deny");
+    return option ? { option, chosen: null, text: null } : scopeRefusal(request, "deny");
+  }
+  if (call.answer === undefined) {
+    return failure("invalid", "that request is a question: give answer, or choice deny to decline it");
+  }
+  const answers = questionAnswers(request);
+  const chosen = answers.find((o) => o.id === call.answer) ?? null;
+  if (chosen) return { option: chosen, chosen, text: null };
+  if (!answers.length) return failure("invalid", "that question offers no answer this call can give");
+  // The store picks the carrier option, as the card's text field does.
+  return { option: null, chosen: null, text: call.answer };
+}
 
 /**
  * `answer_request`: answer one approval or question a thread waits on. The
@@ -1528,22 +1621,21 @@ async function answerRequest(caller: RuleThread, call: AnswerCall): Promise<Json
       failure("not_found", "that request is not waiting any more; list_pending_requests again"),
     );
   }
-  const question = request.question;
-  if (question && call.choice) {
-    return failureJson(failure("invalid", "that request is a question: give answer"));
-  }
-  if (!question && call.answer) {
-    return failureJson(failure("invalid", "that request is an approval: give choice"));
-  }
-  const option = question ? null : optionFor(request, call.choice!);
-  if (!question && !option) {
-    return failureJson(failure("invalid", `that request does not offer ${call.choice!.replace(/_/g, " ")}`));
-  }
-  const asked = capped(question?.text || request.title, 200).text;
-  const detail = question
-    ? `It would answer “${asked}” with: ${call.answer}`
-    : `It would ${ANSWER_LABEL[call.choice!]} “${asked}”`;
-  const no = await permitted(caller, `answer:${target.id}`, {
+  const answered = answeringFor(request, call);
+  if (isFailure(answered)) return failureJson(answered);
+  const kind = request.question ? "question" : "approval";
+  const asked = capped(request.question?.text || request.title, 200).text;
+  const choice = call.answer === undefined ? (call.choice ?? "allow_once") : undefined;
+  const detail =
+    choice === "deny"
+      ? `It would decline “${asked}”`
+      : choice
+        ? `It would ${ANSWER_LABEL[choice]} “${asked}”`
+        : `It would answer “${asked}” with: ${call.answer}`;
+  // The grant names the request, not only the thread: "always" for one question or
+  // command must not answer a later, unrelated one without a card of its own.
+  const key = `answer:${target.id}:${kind}:${asked}`;
+  const no = await permitted(caller, key, {
     kind: "answer",
     caller: caller.id,
     callerTitle: caller.title,
@@ -1556,24 +1648,23 @@ async function answerRequest(caller: RuleThread, call: AnswerCall): Promise<Json
   if (!current) {
     return failureJson(failure("conflict", "that request was answered before this call reached it"));
   }
-  // A question takes the id of one of its options when the answer names one, and plain text
-  // otherwise, as the card's own buttons and text field do.
-  const chosen = current.question ? questionAnswers(current).find((o) => o.id === call.answer) : undefined;
-  if (current.question) {
-    if (chosen) answerQuestionOptions(current, [chosen]);
-    else if (questionAnswers(current).length) answerQuestionText(current, call.answer ?? "");
-    else {
-      return failureJson(failure("invalid", "that question offers no answer this call can give"));
-    }
-  } else answerPermission(current, option);
+  const now = answeringFor(current, call);
+  if (isFailure(now)) return failureJson(now);
+  if (!current.question) answerPermission(current, now.option);
+  else if (now.text !== null) answerQuestionText(current, now.text);
+  else if (now.chosen) answerQuestionOptions(current, [now.chosen]);
+  else answerPermission(current, now.option);
+  const picked = now.option ?? now.chosen;
   return {
     session_id: target.id,
     request_id: call.requestId,
     thread: target.title,
-    kind: question ? "question" : "approval",
-    ...(question
-      ? { answer: call.answer ?? "", ...(chosen ? { option: chosen.name } : {}) }
-      : { choice: call.choice ?? "allow_once", option: option?.name ?? "" }),
+    kind,
+    // A question answered in words or by option id reports that answer; a declined
+    // question and every approval report the choice, and the option it picked.
+    ...(call.answer !== undefined
+      ? { answer: call.answer, ...(picked ? { option: picked.name } : {}) }
+      : { choice: choice ?? "allow_once", option: picked?.name ?? "" }),
   };
 }
 
@@ -1581,7 +1672,7 @@ async function answerRequest(caller: RuleThread, call: AnswerCall): Promise<Json
  * `organize_threads`: the batch form of `update_session`. Every listed thread
  * of the caller's project gets the same changes, the user is asked once, and a
  * thread this caller cannot manage is skipped with the reason instead of
- * failing the batch.
+ * failing the batch. A change a thread already has is not made and not counted.
  */
 async function organizeThreads(caller: RuleThread, call: OrganizeCall): Promise<JsonObject> {
   const decided: RuleThread[] = [];
@@ -1599,13 +1690,25 @@ async function organizeThreads(caller: RuleThread, call: OrganizeCall): Promise<
       failure("not_allowed", skipped[0]?.reason?.toString() ?? "no thread of that list can be changed"),
     );
   }
-  const others = decided.filter((target) => target.id !== caller.id);
+  const state = () => useApp.getState();
+  /** Which of the call's changes this thread does not have yet. */
+  const missing = (target: RuleThread) => ({
+    title: call.title !== undefined && call.title !== (ruleThread(state(), target.id) ?? target).title,
+    pinned: call.pinned !== undefined && state().pinned.includes(target.id) !== call.pinned,
+    unread: call.unread !== undefined && isUnread(target.id) !== call.unread,
+    archived: call.archived !== undefined && (statusOf(state(), target.id) === "done") !== call.archived,
+  });
+  const wanted = decided.filter((target) => Object.values(missing(target)).some(Boolean));
+  // Nothing to do is not a change to ask the user about: say so instead.
+  if (!wanted.length) return { changed: 0, threads: [], skipped };
+  const others = wanted.filter((target) => target.id !== caller.id);
   if (others.length) {
+    const any = (key: keyof ReturnType<typeof missing>) => wanted.some((target) => missing(target)[key]);
     const changes = [
-      call.title && `rename ${others.length === 1 ? "it" : "them"} to “${call.title}”`,
-      call.pinned !== undefined && (call.pinned ? "pin" : "unpin"),
-      call.unread && "mark unread",
-      call.archived !== undefined && (call.archived ? "settle" : "bring back"),
+      any("title") && `rename ${others.length === 1 ? "it" : "them"} to “${call.title}”`,
+      any("pinned") && (call.pinned ? "pin" : "unpin"),
+      any("unread") && (call.unread ? "mark unread" : "mark read"),
+      any("archived") && (call.archived ? "settle" : "bring back"),
     ].filter(Boolean);
     const names = others.map((target) => `“${target.title}”`).join(", ");
     const key = `organize:${decided
@@ -1621,31 +1724,30 @@ async function organizeThreads(caller: RuleThread, call: OrganizeCall): Promise<
     });
     if (no) return failureJson(no);
   }
-  const settled: string[] = [];
+  // The status of `archived` goes in one write for the batch, as the sidebar's own
+  // multi-select does it; the rest goes one thread at a time, and only where it changes.
+  const settled = wanted.filter((target) => missing(target).archived).map((target) => target.id);
+  if (settled.length) await setThreadsStatus(settled, call.archived ? "done" : "idle");
   const threads: JsonObject[] = [];
   for (const target of decided) {
-    if (call.title && !(await renameThread(target.id, call.title))) {
+    const applied = await applyManagedChange(target, {
+      title: call.title,
+      pinned: call.pinned,
+      unread: call.unread,
+    });
+    if (applied.renameFailed) {
       skipped.push({ session_id: target.id, reason: "the thread could not be renamed" });
       continue;
     }
-    if (call.pinned !== undefined && useApp.getState().pinned.includes(target.id) !== call.pinned) {
-      togglePin(target.id);
-    }
-    if (call.unread) markUnread(target.id);
-    if (call.archived !== undefined) settled.push(target.id);
+    if (!applied.applied && !settled.includes(target.id)) continue;
     threads.push({
       session_id: target.id,
-      title: ruleThread(useApp.getState(), target.id)?.title ?? target.title,
-      pinned: useApp.getState().pinned.includes(target.id),
-      ...(call.unread ? { unread: true } : {}),
+      title: ruleThread(state(), target.id)?.title ?? target.title,
+      pinned: state().pinned.includes(target.id),
+      unread: isUnread(target.id),
+      status: statusOf(state(), target.id),
+      archived: statusOf(state(), target.id) === "done",
     });
-  }
-  // One status write for the batch, as the sidebar's own multi-select does it.
-  if (settled.length) await setThreadsStatus(settled, call.archived ? "done" : "idle");
-  for (const entry of threads) {
-    const id = String(entry.session_id);
-    entry.status = statusOf(useApp.getState(), id);
-    entry.archived = statusOf(useApp.getState(), id) === "done";
   }
   return {
     changed: threads.length,
@@ -1752,20 +1854,22 @@ async function transferSession(caller: RuleThread, id: string, harness: string):
 /** What this project's open threads wait on. Only what they ask: answering stays with the user. */
 function listPendingRequests(caller: RuleThread): JsonObject {
   const s = useApp.getState();
-  const requests = Object.values(s.threads)
+  const waiting = Object.values(s.threads)
     .filter((t) => t.permissions.length)
-    .map((t) => ({ thread: t, rule: ruleThread(s, t.id) }))
+    .map((thread) => ({ thread, rule: ruleThread(s, thread.id) }))
     .filter(({ rule }) => rule && reachesThread(caller, rule))
-    .flatMap(({ thread, rule }) =>
-      thread.permissions.map((p) => ({
-        session_id: thread.id,
-        request_id: String(p.rpcId),
-        title: rule?.title ?? "",
-        kind: p.question ? "question" : "approval",
-        asks: p.question?.text ?? p.title,
-        options: p.options.map((o) => ({ id: o.id, name: o.name })),
-      })),
-    );
+    .flatMap(({ thread, rule }) => thread.permissions.map((request) => ({ thread, rule, request })))
+    // Oldest first, as docs/orchestrator.md says: the card that has waited longest comes first.
+    .sort((a, b) => (a.request.at ?? 0) - (b.request.at ?? 0));
+  const requests = waiting.map(({ thread, rule, request }) => ({
+    session_id: thread.id,
+    request_id: String(request.rpcId),
+    title: rule?.title ?? "",
+    kind: request.question ? "question" : "approval",
+    asks: request.question?.text ?? request.title,
+    // An approval's choices and a question's answers, in the order the card lists them.
+    options: request.options.map((o) => ({ id: o.id, name: o.name })),
+  }));
   return { requests };
 }
 

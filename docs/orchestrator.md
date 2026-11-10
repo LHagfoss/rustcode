@@ -645,11 +645,11 @@ validated like the others; the client carries them out (`state/host.ts`).
 | `list_harnesses` | `{ harness?, model? }` | `{ current, harnesses: [{ id, name, available, reason?, usage?, accounts? (v5), efforts?, models?, omitted_models?, filter? }] }`, at most 12 models each (50 with `model`): each harness leads with the model a new thread on it starts with, then the models this project's threads used recently, then its own order, and `omitted_models` counts the rest (`filter` says to pass `model` for them, or that nothing matched); `efforts` sits once on the harness when every listed model shares them, else on each model. `harness` (an id, else a display name; a name several harnesses share is refused, naming their ids) narrows to one harness, `model` a case-insensitive substring of a model id or name and lists every match. `accounts` is `[{ id, name, auth, signed_out?, usage? }]` for a harness with named logins, where `signed_out` is what the plan read found (and what makes naming it fail), `usage` is a login's plan windows (below), and `current` names the harness, account, model and effort this thread runs on | None |
 | `search_sessions` | `{ query, all_projects? }` | `{ sessions: [{ session_id, title, status, project?, snippet? }] }`: this project, or every project with `all_projects`, title and full text, at most 30 | None |
 | `list_worktrees` | `{ all_projects? }` | `{ worktrees: [{ session_id, title, project?, branch, path }] }`: this project, or every project with `all_projects` | None |
-| `update_session` | `{ session_id?, title?, pinned?, unread?, status?, snoozed_until? }` (`active`, `review`, `settled`; `1h`, `evening`, `tomorrow`, `next_week`, an ISO 8601 time, or `null` to wake) | `{ session_id, title, pinned, status, snoozed_until }` | Own thread none. Another: asked, allowed by Auto-edit and Full access |
+| `update_session` | `{ session_id?, title?, pinned?, unread?, status?, snoozed_until? }` (`active`, `review`, `settled`; `1h`, `evening`, `tomorrow`, `next_week`, an ISO 8601 time, or `null` to wake). `unread` is two-way: `true` marks it unread, `false` marks it read | `{ session_id, title, pinned, status, snoozed_until }` | Own thread none. Another: asked, allowed by Auto-edit and Full access |
 | `interrupt_session` | `{ session_id }` | `{ session_id, interrupted, stopped, status? }`, with `stopped` the links under it that stopped too; a thread cannot stop itself | Asked, allowed by Full access |
 | `configure_session` | `{ session_id?, model?, effort? }` | `{ session_id, harness, access, model?, effort? }`; no `model` or `effort` only reads | Reading and its own thread none. Another: asked, allowed by Full access |
 | `transfer_session` | `{ session_id, harness }` | `{ session_id, harness, moved, model?, effort? }`; the thread must be idle, and a thread cannot move itself | Asked, allowed by Full access |
-| `list_pending_requests` | none | `{ requests: [{ session_id, request_id, title, kind, asks, options }] }`: approvals and questions this project's open threads wait on, oldest first. `request_id` is what `answer_request` (v10) takes, and `options` the answers a question offers | None |
+| `list_pending_requests` | none | `{ requests: [{ session_id, request_id, title, kind, asks, options }] }`: approvals and questions this project's open threads wait on, oldest first. `request_id` is what `answer_request` (v10) takes, and `options` the choices an approval and the answers a question offer, in the order its card lists them | None |
 | `list_projects` | none | `{ projects: [{ path, name, threads, working }] }`: every project the user has a thread in, most recently updated first, at most 50 | None |
 | `list_pull_requests` | `{ state?: "open" \| "closed" \| "merged" \| "all" }` (default `open`) | `{ pull_requests: [{ number, title, state, branch, url? }] }`: this project's, at most 30 | None |
 
@@ -931,8 +931,8 @@ nor the card it clicks.
 
 | Tool | Args | Answer | Approval |
 | --- | --- | --- | --- |
-| `answer_request` | `{ session_id, request_id, choice?, answer? }` — `choice` is `allow_once`, `allow_always` or `deny` for an approval; `answer` is free text, or the id of one of the question's `options`, for a question. One of the two, never both | `{ session_id, request_id, thread, kind, choice?, option?, answer? }` — `kind` is `approval` or `question`, and `option` the name of the option the answer picked. A request that is no longer waiting is `not_found` (“list_pending_requests again”), one already answered is `conflict` | Asked, allowed by Full access, grant `answer:<session id>`. Only a thread in the caller's own delegation tree can be answered — a thread below it, never itself — and an approval the engine does not offer (no deny, no standing answer) is refused rather than answered with something else |
-| `organize_threads` | `{ session_ids: [id] (1..50), title?, pinned?, unread?, archived? }` — `archived: true` settles the threads and `false` brings them back, the same status `update_session`'s `settled` sets. At least one change | `{ changed, threads: [{ session_id, title, pinned, status, archived }], skipped?: [{ session_id, reason }] }`. A thread this caller cannot manage is skipped with the reason and the rest still change; a list with none it can manage is `not_allowed` | Asked once for the batch, allowed by Auto-edit and Full access, grant `organize:<sorted ids>` |
+| `answer_request` | `{ session_id, request_id, choice?, answer? }` — for an approval, `choice` is `allow_once`, `allow_always` or `deny`; for a question, `answer` is free text or the id of one of its `options`, and `choice: "deny"` takes the Decline its card offers. One of the two, never both | `{ session_id, request_id, thread, kind, choice?, option?, answer? }` — `kind` is `approval` or `question`; a question answered by id or text reports `answer` (and `option` when it named one), a declined question and every approval report `choice` with the option it picked. A request that is no longer waiting is `not_found` (“list_pending_requests again”), one already answered is `conflict` | Asked, allowed by Full access, grant `answer:<session id>:<kind>:<what it asks>`. Only a thread in the caller's own delegation tree can be answered — a thread below it, never itself — and a choice the request does not offer is refused, with the scopes it does offer named, rather than answered with another |
+| `organize_threads` | `{ session_ids: [id] (1..50), title?, pinned?, unread?, archived? }` — `archived: true` settles the threads and `false` brings them back, the same status `update_session`'s `settled` sets; `unread: true` marks them unread, `false` marks them read. At least one change | `{ changed, threads: [{ session_id, title, pinned, unread, status, archived }], skipped?: [{ session_id, reason }] }`. A thread this caller cannot manage is skipped with the reason and the rest still change; a list with none it can manage is `not_allowed`. `changed` counts the threads one of the changes actually reached, and `threads` lists those: a value a thread already has is not a change, and a call that would change nothing writes nothing and raises no card | Asked once for the batch, allowed by Auto-edit and Full access, grant `organize:<sorted ids>` |
 
 `answer_request` answers with the store call the user's own click makes
 (`state/store.ts` `answerPermission`, `answerQuestionOptions`,
@@ -944,9 +944,16 @@ delegate does not answer what the thread above it was asked, because that
 thread's approval is not its to hand out.
 
 `organize_threads` is `update_session` over a list: the same store operations
-(`renameThread`, `togglePin`, `markUnread`, one `setThreadsStatus` for the whole
-batch), the same project rule, and one card for the lot. The card names the
-changes and every thread they reach.
+(`renameThread`, `togglePin`, `markUnread`/`clearFinished`, one `setThreadsStatus`
+for the whole batch), the same project rule, and one card for the lot. The card
+names the changes and every thread they reach, and only the ones that will
+happen: a batch whose listed threads already look like that writes nothing,
+raises no card and answers `changed: 0`.
+
+An approval's answer picks the option whose scope the choice names — once,
+always, or decline — and nothing else. An engine that offers only a standing
+answer refuses `allow_once` instead of recording a grant that outlives the
+call, and the refusal names the scopes the request does offer.
 
 `message_session` takes `attachments` from v10 on. The app checks each path
 against the caller's project and worktree (`state/attachments.ts`), the shell

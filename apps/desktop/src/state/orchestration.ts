@@ -586,11 +586,14 @@ export function parseCall(params: JsonObject): Call | Failure {
       return { tool: "list_pending_requests" };
     case "answer_request": {
       const target = s(args.session_id) ?? "";
-      // An rpc id is a number or a string; the list hands it back as text.
-      const asked = args.request_id;
-      const requestId = (typeof asked === "number" ? String(asked) : (s(asked) ?? "")).trim();
+      // The list prints `request_id` as a string, and the engine refuses anything else
+      // (`orchestration.rs`: a name is a non-empty string), so a number is refused here too.
+      const requestId = (s(args.request_id) ?? "").trim();
       if (!target || !requestId) {
-        return failure("invalid", "session_id and request_id are required");
+        return failure(
+          "invalid",
+          "session_id and request_id (as list_pending_requests prints it) are required",
+        );
       }
       const choice = s(args.choice);
       const answer = s(args.answer);

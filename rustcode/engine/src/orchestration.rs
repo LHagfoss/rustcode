@@ -716,7 +716,12 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
         THREAD_STATUS => optional_name(args, "session_id"),
         ANSWER_REQUEST => {
             required_name(args, "session_id")?;
-            required_name(args, "request_id")?;
+            if !matches!(args.get("request_id"), Some(Value::String(id)) if !id.trim().is_empty()) {
+                return Err(
+                    "request_id is required, as list_pending_requests printed it (a string)"
+                        .to_owned(),
+                );
+            }
             let choice = match args.get("choice") {
                 None | Some(Value::Null) => None,
                 Some(Value::String(choice)) if APPROVAL_ANSWERS.contains(&choice.as_str()) => {
@@ -1354,6 +1359,11 @@ mod tests {
         assert!(!ok(
             ANSWER_REQUEST,
             json!({"session_id": "d1", "request_id": "7", "answer": "  "})
+        ));
+        // The id is the string the list printed, not the number the engine sent.
+        assert!(!ok(
+            ANSWER_REQUEST,
+            json!({"session_id": "d1", "request_id": 7, "choice": "deny"})
         ));
 
         assert!(ok(

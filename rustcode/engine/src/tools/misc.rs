@@ -507,7 +507,7 @@ pub const LIST_WORKTREES: Tool = Tool {
 
 pub const UPDATE_SESSION: Tool = Tool {
     name: crate::orchestration::UPDATE_SESSION,
-    description: "Rename, pin, mark unread, snooze or change the status of a thread. Omit session_id for this thread; changing another thread asks the user first. Status: active (back in the list), review (needs a look), settled (done). snoozed_until: how long it leaves the list: 1h, evening, tomorrow, next_week or an ISO 8601 time; null brings it back.",
+    description: "Rename, pin, mark unread or read, snooze or change the status of a thread. unread: true marks it unread, false marks it read. Omit session_id for this thread; changing another thread asks the user first. Status: active (back in the list), review (needs a look), settled (done). snoozed_until: how long it leaves the list: 1h, evening, tomorrow, next_week or an ISO 8601 time; null brings it back.",
     arguments: r#"{"title": "Fix login", "pinned": true, "status": "settled"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -613,7 +613,7 @@ pub const LIST_PENDING_REQUESTS: Tool = Tool {
 
 pub const ANSWER_REQUEST: Tool = Tool {
     name: crate::orchestration::ANSWER_REQUEST,
-    description: "Answer one approval or question a thread waits on, from list_pending_requests' session_id and request_id. Approvals take choice allow_once, allow_always or deny; a question takes answer, either free text or the id of an offered option. Only a thread in this thread's own delegation tree can be answered, never this thread's own request, and the user approves first.",
+    description: "Answer one approval or question a thread waits on, from list_pending_requests' session_id and request_id. An approval takes choice allow_once, allow_always or deny, exactly one of the scopes the request offers. A question takes answer, either free text or the id of one of its options, or choice deny for the Decline its card offers. Only a thread in this thread's own delegation tree can be answered, never this thread's own request, and the user approves first.",
     arguments: r#"{"session_id": "from list_pending_requests", "request_id": "from list_pending_requests", "choice": "allow_once"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -636,7 +636,7 @@ pub const ANSWER_REQUEST: Tool = Tool {
 
 pub const ORGANIZE_THREADS: Tool = Tool {
     name: crate::orchestration::ORGANIZE_THREADS,
-    description: "Set the title, pin, unread or archived (settled) state of several threads at once. The batch form of update_session: the same changes reach every listed thread, the user approves once, and a thread outside this project is skipped with the reason.",
+    description: "Set the title, pin, unread or archived (settled) state of several threads at once. The batch form of update_session: the same changes reach every listed thread, the user approves once, and a thread outside this project is skipped with the reason. unread: true marks them unread, false marks them read. changed counts the threads one of the changes actually reached; a thread that already had the value is not one.",
     arguments: r#"{"session_ids": ["id from list_sessions"], "pinned": true, "archived": false}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -652,8 +652,8 @@ pub const ORGANIZE_THREADS: Tool = Tool {
                 },
                 "title": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_TITLE_CHARS},
                 "pinned": {"type": "boolean"},
-                "unread": {"type": "boolean"},
-                "archived": {"type": "boolean", "description": "true settles the thread, false brings it back"}
+                "unread": {"type": "boolean", "description": "true marks them unread, false marks them read"},
+                "archived": {"type": "boolean", "description": "true settles the threads, false brings them back"}
             },
             "required": ["session_ids"],
             "additionalProperties": false

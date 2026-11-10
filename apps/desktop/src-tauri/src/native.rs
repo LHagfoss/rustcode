@@ -958,6 +958,27 @@ mod tests {
         )
         .is_err());
         assert!(attached_files(vec![file], vec!["relative".into()]).is_err());
+        // The reason the path is resolved before it is compared: a link inside the
+        // folder that points out of it would otherwise pass a prefix check.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join("secret.txt"), inside.join("link.txt")).unwrap();
+            let link = inside.join("link.txt").to_string_lossy().into_owned();
+            let refused = attached_files(vec![link], roots.clone())
+                .err()
+                .unwrap_or_default();
+            assert!(
+                refused.contains("outside this thread's project"),
+                "{refused}"
+            );
+        }
+        // And the size the web view cannot measure.
+        let big = inside.join("big.bin");
+        std::fs::write(&big, vec![0u8; MAX_ATTACHMENT_BYTES as usize + 1]).unwrap();
+        let refused = attached_files(vec![big.to_string_lossy().into_owned()], roots.clone())
+            .err()
+            .unwrap_or_default();
+        assert!(refused.contains("over 5 MB"), "{refused}");
         let many: Vec<String> = (0..=MAX_ATTACHMENTS).map(|_| "x".to_owned()).collect();
         assert!(attached_files(many, roots).is_err());
         std::fs::remove_dir_all(&root).unwrap();

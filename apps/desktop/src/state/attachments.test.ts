@@ -3,13 +3,7 @@
 // file (`src-tauri` `attached_files`); these rules decide which paths reach it.
 
 import { describe, expect, test } from "bun:test";
-import {
-  attachedExtras,
-  attachmentRefusal,
-  attachmentRoots,
-  MAX_ATTACHMENT_BYTES,
-  MAX_ATTACHMENT_FILES,
-} from "./attachments";
+import { attachedExtras, attachmentRefusal, attachmentRoots, MAX_ATTACHMENT_FILES } from "./attachments";
 import type { RuleThread } from "./orchestration";
 
 const thread = (extra: Partial<RuleThread> = {}): RuleThread => ({
@@ -62,6 +56,21 @@ describe("attachmentRefusal", () => {
     expect(attachmentRefusal("/Users/you/code/rustcode-mobile/a.ts", roots)).not.toBeNull();
   });
 
+  test("a Windows thread's drive-rooted paths compare per segment too", () => {
+    const roots = attachmentRoots(thread({ folder: "C:\\Users\\you\\code\\rustcode" }));
+    expect(roots).toEqual(["C:/Users/you/code/rustcode"]);
+    expect(attachmentRefusal("C:\\Users\\you\\code\\rustcode\\a.ts", roots)).toBeNull();
+    expect(attachmentRefusal("c:\\users\\you\\code\\rustcode\\docs\\b.md", roots)).toBeNull();
+    expect(attachmentRefusal("C:\\Users\\you\\code\\rustcode-other\\a.ts", roots)).not.toBeNull();
+    expect(attachmentRefusal("C:\\Users\\you\\.ssh\\id_rsa", roots)).not.toBeNull();
+  });
+
+  test("a POSIX path is compared in its own case", () => {
+    const roots = attachmentRoots(thread());
+    // A case-insensitive comparer would let this through, and it is another folder.
+    expect(attachmentRefusal("/users/you/code/rustcode/a.ts", roots)).not.toBeNull();
+  });
+
   test("a thread with no folder can attach nothing", () => {
     expect(attachmentRefusal("/tmp/a.ts", attachmentRoots(thread({ folder: "" })))).not.toBeNull();
   });
@@ -78,8 +87,7 @@ describe("attachedExtras", () => {
     expect(extras.links).toEqual([]);
   });
 
-  test("ten files of 5 MB are the most one message carries", () => {
+  test("ten files are the most one message carries", () => {
     expect(MAX_ATTACHMENT_FILES).toBe(10);
-    expect(MAX_ATTACHMENT_BYTES).toBe(5 * 1024 * 1024);
   });
 });

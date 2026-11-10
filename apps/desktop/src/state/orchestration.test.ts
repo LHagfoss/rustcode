@@ -160,17 +160,19 @@ describe("management tools", () => {
     expect(
       parseCall({
         tool: "answer_request",
-        args: { session_id: "c1", request_id: 7, answer: "  yes, run it " },
+        args: { session_id: "c1", request_id: " 7 ", answer: "  yes, run it " },
       }),
     ).toEqual({ tool: "answer_request", target: "c1", requestId: "7", answer: "yes, run it" });
     for (const args of [
       {},
       { session_id: "c1" },
+      // The engine's name check refuses a number, so the app does too, as it is printed.
+      { session_id: "c1", request_id: 7, choice: "allow_once" },
       { session_id: "c1", request_id: "7" },
       { session_id: "c1", request_id: "7", choice: "allow_hour" },
       { session_id: "c1", request_id: "7", choice: "deny", answer: "no" },
       { session_id: "c1", request_id: "7", answer: "  " },
-    ] as Record<string, string>[])
+    ] as Record<string, Json>[])
       expect(isFailure(parseCall({ tool: "answer_request", args }))).toBe(true);
     // Organizing several at once: one change set, at least one thread.
     expect(
