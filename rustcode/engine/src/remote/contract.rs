@@ -793,6 +793,7 @@ fn golden_session_info() -> RemoteSessionInfo {
         harness: Some("rustcode".to_owned()),
         turn_count: Some(2),
         last_active_at: Some("2026-10-09T18:42:00+02:00".to_owned()),
+        parent: None,
         activity: SessionActivity::AwaitingApproval,
         attention: RemoteAttention {
             approval: true,
@@ -1241,6 +1242,7 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
                         session_id: SAVED_SESSION.to_owned(),
                         title: "Fix the parser".to_owned(),
                         project: Some("/Users/example/projects/parser".to_owned()),
+                        parent: None,
                         workspace: Some("/Users/example/projects/parser".to_owned()),
                         updated_at: Some("2026-07-14T09:40:12Z".to_owned()),
                         message_count: 42,
@@ -1251,6 +1253,7 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
                         session_id: SESSION.0.to_owned(),
                         title: "Refactor the session store".to_owned(),
                         project: Some("/Users/example/projects/rustcode".to_owned()),
+                        parent: None,
                         workspace: Some("/Users/example/projects/rustcode".to_owned()),
                         updated_at: Some("2026-07-14T08:02:55Z".to_owned()),
                         message_count: 118,
@@ -1261,6 +1264,7 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
                         session_id: "20260713-171233-9b0e44".to_owned(),
                         title: "Untitled".to_owned(),
                         project: None,
+                        parent: None,
                         workspace: None,
                         updated_at: None,
                         message_count: 3,
@@ -1660,6 +1664,10 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
                         harness: Some("rustcode".to_owned()),
                         turn_count: Some(0),
                         last_active_at: None,
+                        parent: Some(RemoteThreadParent {
+                            session_id: SESSION.0.to_owned(),
+                            relationship: "delegate".to_owned(),
+                        }),
                         activity: SessionActivity::Idle,
                         attention: RemoteAttention {
                             approval: false,

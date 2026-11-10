@@ -29,3 +29,18 @@ pub use projection::{
 };
 pub use protocol::*;
 pub use publisher::SessionPublisher;
+
+/// The thread a session recorded as its parent, in the wire shape.
+///
+/// It reads the session store, so callers use it when they compose a
+/// registration or a listing, never inside a projection that holds a state
+/// lock. A record whose parent ID was never recovered has nothing to name, so
+/// the session reads as top-level.
+pub fn session_parent(session_id: &str) -> Option<RemoteThreadParent> {
+    let parent = crate::config::load_session_parent(session_id)?;
+    let relationship = parent.relationship();
+    Some(RemoteThreadParent {
+        session_id: parent.id?,
+        relationship: relationship.as_str().to_owned(),
+    })
+}

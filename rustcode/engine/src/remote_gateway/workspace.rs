@@ -568,9 +568,11 @@ fn list_saved_sessions(
             .workspace_cwd
             .as_ref()
             .map(|cwd| cwd.to_string_lossy().into_owned());
+        let parent = crate::remote::session_parent(&session_id);
         let session = RemoteSavedSession {
             state,
             open_in,
+            parent,
             title: meta
                 .title
                 .chars()

@@ -696,6 +696,7 @@ impl RemoteManager {
             harness: Some(crate::harness::BUILTIN_ID.to_owned()),
             turn_count: Some(0),
             last_active_at: None,
+            parent: crate::remote::session_parent(session_id),
             activity: crate::remote::SessionActivity::Idle,
             attention: crate::remote::RemoteAttention {
                 approval: false,
@@ -2414,6 +2415,7 @@ mod tests {
             harness: Some("claude-code".to_owned()),
             turn_count: Some(0),
             last_active_at: None,
+            parent: None,
             activity: crate::remote::SessionActivity::Idle,
             attention: crate::remote::RemoteAttention {
                 approval: false,
