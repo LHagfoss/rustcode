@@ -403,6 +403,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                     ErrorCode::ConnectRateLimited => Some(30),
                     _ => None,
                 },
+                supported_versions: Vec::new(),
             },
         ));
     }

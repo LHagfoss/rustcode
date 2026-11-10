@@ -145,6 +145,7 @@ kept.
 | **A phone asking to connect** | A card in the window's corner, over any page: *‹name› wants to connect*, the platform and address, *Deny* and *Accept*. Accept shows the code to enter on the phone (large, with *Copy* and its countdown) until the phone pairs or the code runs out. See [Connection requests](#connection-requests). |
 | **Remote access › Asking to connect** | The same requests with the same answers, while any are open. |
 | **Paired devices** | How many devices are paired, with their names and when each was last seen. *Revoke* forgets one and disconnects it at once, as `rustcode remote revoke` does. |
+| **Remote access › Refused connections** | Devices the gateway turned away, newest first, for a quarter of an hour after each stopped trying: an app that speaks another remote protocol version, a pairing code that did not work, an unknown or revoked pairing, or an app that was refused before it could say anything. Each says what happened and what to do, so a phone whose only message is that it cannot connect is answered here. See [Refused connections](#refused-connections). |
 | **Routes** | The addresses the phone can dial this computer at, best first: each LAN address, a NetBird or Tailscale `100.64.0.0/10` address, and the machine's `.local` name. The handshake reports the same list, so a phone learns it and keeps using the first route that answers. |
 | A thread's header chip | Shown while a thread is shared; it carries the number of devices attached to that thread. |
 
@@ -185,7 +186,10 @@ answer, `connected`), `connectRequests` (open: `id`, `deviceName`,
 `deviceKind`, `platform`,
 `remoteAddr`, `ageSecs`, `expiresInSecs`, `state` `pending` or `approved`) and
 `endedConnectRequests` (the last eight: `id`, `deviceName`, `end`, `deviceId`
-when it paired, `endedSecsAgo`). `_rustcode/remote/answer { id, accept }`
+when it paired, `endedSecsAgo`) and `refusedConnections` (the last eight
+attempts the gateway turned away, newest first: `reason`, `attempts`,
+`deviceName`, `deviceKind`, `platform`, `protocolVersion`,
+`supportedVersions`, `remoteAddr` and `refusedSecsAgo`). `_rustcode/remote/answer { id, accept }`
 answers with the machine's status plus `connectAnswer` (`code`,
 `expiresInSecs` and `instanceId` on acceptance) or `connectError`;
 `_rustcode/remote/revoke { deviceId }` with `revoked` or `revokeError`. The
@@ -256,7 +260,7 @@ remote access on is the short moment before it has registered.
 | `rustcode remote devices allow <id>` / `deny <id>` | Grant full ACP control, or deny it and immediately disconnect the device. |
 | `rustcode remote devices [--json]` | List paired devices: identifier, kind (phone, desktop or cli), platform, how long ago each was last seen, pairing time, expiry and name. JSON includes the host-controlled `acp` grant. Never a token. |
 | `rustcode remote revoke <device>` | Revoke by identifier, identifier prefix (four characters or more) or unique name. |
-| `rustcode remote status` | The running gateway: listen and advertised address (and whether each follows address changes), the machine's current addresses with a recovery command when the gateway's address is gone, paired devices and which are connected, the state of pairing (time and wrong codes left, or the lockout), shared sessions and who is attached to each, session owners that run without being shared, and the paths of the gateway log and the session logs. |
+| `rustcode remote status` | The running gateway: listen and advertised address (and whether each follows address changes), the machine's current addresses with a recovery command when the gateway's address is gone, paired devices and which are connected, the state of pairing (time and wrong codes left, or the lockout), devices the gateway turned away recently with the reason, shared sessions and who is attached to each, session owners that run without being shared, and the paths of the gateway log and the session logs. |
 | `rustcode remote stop` | Stop the running gateway. |
 
 One gateway runs per configuration directory. A second `remote serve` is
@@ -423,6 +427,34 @@ same install identifier replaces its own open request. Pressing *Pair a
 device* while a code is on screen for a request replaces that code too.
 `rustcode remote status` lists open requests. The frames and their order are
 in [the protocol](remote-protocol/README.md#connection-requests).
+
+## Refused connections
+
+A device that does not get in is refused with one `error` frame and the
+connection closes (see [the protocol](remote-protocol/README.md#the-bare-error-frame)).
+The phone shows what its app makes of that code, which leaves the host's owner
+looking at a phone that only says it cannot connect. So the gateway also keeps
+the refusals it can help with, newest first, for fifteen minutes after each
+stopped trying: eight at most, with repeats of the same attempt from the same
+address and app counted rather than listed again.
+
+| Recorded as | What happened | What the owner can do |
+| --- | --- | --- |
+| `unsupported_version` | The app speaks a remote protocol version this host does not. | Update RustCode on the device or on this computer so both match. The answer to the device says the same, with `supported_versions`. |
+| `pairing_failed` | The pairing code or QR credential was wrong, already used, or had expired. | Show a fresh code with *Pair a device*. |
+| `rate_limited` | Too many wrong codes on this host, so even the right one is refused until the lockout ends. | Wait for the lockout, then show a fresh code. |
+| `unauthorized` | A pairing this host does not accept: unknown, revoked or expired. | Pair the device again. |
+| `token_replayed` | A retired refresh token was presented, so the whole pairing was removed. | Pair the device again. |
+| `unexpected_origin` | The WebSocket upgrade carried an `Origin` no native app sends, so it was refused before a frame arrived. | That is a RustCode app from before it sent the native app origin, or a web page trying the port: update the app. Nothing was shared either way. |
+
+Settings › Remote access lists them under *Refused connections*, with the
+device's own label when its frame named one, its kind and platform, the
+address it came from, how many tries and how long ago. `rustcode remote status`
+prints the same lines, and `refusedConnections` carries them to any ACP client.
+Nothing that is only a bug on the device (a malformed frame, a binary frame, an
+oversized one) is recorded, so it cannot crowd out the reasons a person can fix.
+Secrets never reach the record: only the label, kind, platform, protocol
+version and address a refused frame named are read from it.
 
 ## Machines
 

@@ -353,6 +353,92 @@ async fn browser_origins_are_refused_at_the_upgrade() {
             ),
         }
     }
+    // A native app built before it sent the native app origin is refused the
+    // same way, and it is told nothing: the owner has to learn it here. The
+    // five refusals are one entry with five attempts.
+    let status = harness.status().await;
+    assert_eq!(status.refused_connections.len(), 1, "{status:?}");
+    let refused = &status.refused_connections[0];
+    assert_eq!(refused.reason, RefusalReason::UnexpectedOrigin);
+    assert_eq!(refused.attempts, 5);
+    assert_eq!(refused.protocol_version, None);
+    assert!(refused.device_name.is_none());
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn refusals_are_kept_for_the_owner_with_a_reason_and_no_secret() {
+    let harness = Harness::start().await;
+    let (_paired, device_id, _token) = harness.paired_device("phone").await;
+    // Nothing was refused yet: pairing is not a refusal.
+    assert!(harness.status().await.refused_connections.is_empty());
+
+    // An app that speaks another protocol version, naming itself.
+    let mut client = Client::connect(harness.addr).await;
+    client
+        .send(json!({
+            "type": "authenticate",
+            "protocol_version": 2,
+            "device_id": device_id,
+            "token": "s3cr3t-value-zzz",
+            "device_name": "Lars's iPhone",
+            "platform": "ios",
+        }))
+        .await;
+    let frame = client.expect_error("unsupported_version").await;
+    assert_eq!(frame["supported_versions"], json!([1]), "{frame}");
+    // The same attempt again counts as one entry, not two.
+    let mut again = Client::connect(harness.addr).await;
+    again
+        .send(json!({
+            "type": "authenticate",
+            "protocol_version": 2,
+            "device_id": device_id,
+            "token": "s3cr3t-value-zzz",
+            "device_name": "Lars's iPhone",
+            "platform": "ios",
+        }))
+        .await;
+    again.expect_error("unsupported_version").await;
+
+    // A device this host does not know.
+    let (mut client, frame) = Client::authenticate(harness.addr, "ffffffffffffffff", "x").await;
+    assert_eq!(frame["code"], "unauthorized", "{frame}");
+    client.expect_closed().await;
+
+    // A pairing code that does not match any challenge.
+    let refused = Client::pair(harness.addr, "code", "0000-0000").await;
+    assert_eq!(refused["code"], "pairing_failed", "{refused}");
+
+    let status = harness.status().await;
+    let reasons = status
+        .refused_connections
+        .iter()
+        .map(|refused| refused.reason)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        reasons,
+        [
+            RefusalReason::PairingFailed,
+            RefusalReason::Unauthorized,
+            RefusalReason::UnsupportedVersion,
+        ],
+        "newest first, and only the reasons the owner can act on: {status:?}"
+    );
+    let version = &status.refused_connections[2];
+    assert_eq!(version.attempts, 2);
+    assert_eq!(version.device_name.as_deref(), Some("Lars's iPhone"));
+    assert_eq!(version.device_kind, DeviceKind::Phone);
+    assert_eq!(version.platform, "ios");
+    assert_eq!(version.protocol_version, Some(2));
+    assert_eq!(version.supported_versions, [1]);
+    assert_eq!(version.remote_addr, "127.0.0.1");
+    assert!(status.refused_connections[1].device_name.is_none());
+    // A refused frame's token reaches neither the status nor its Debug form.
+    assert!(!format!("{status:?}").contains("s3cr3t-value-zzz"));
+    let json = serde_json::to_string(&status).unwrap();
+    assert!(!json.contains("s3cr3t-value-zzz"));
+    assert!(json.contains("\"refused_connections\""), "{json}");
     harness.stop().await;
 }
 

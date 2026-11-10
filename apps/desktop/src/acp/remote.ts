@@ -73,6 +73,50 @@ export interface RemoteEndedConnectRequest {
   endedSecsAgo: number;
 }
 
+/**
+ * Why the gateway refused a connection attempt. Each one names something the owner of this Mac can
+ * do about it, so a phone that only says it cannot connect is answered here.
+ */
+export type RemoteRefusalReason =
+  | "unsupported_version"
+  | "pairing_failed"
+  | "rate_limited"
+  | "unauthorized"
+  | "token_replayed"
+  | "unexpected_origin"
+  | "unknown";
+
+const REFUSAL_REASONS: readonly RemoteRefusalReason[] = [
+  "unsupported_version",
+  "pairing_failed",
+  "rate_limited",
+  "unauthorized",
+  "token_replayed",
+  "unexpected_origin",
+];
+
+/**
+ * A connection the gateway turned away (`refusedConnections`): a phone whose app speaks another
+ * version, a code that did not work, or a pairing this Mac no longer accepts. Never a secret.
+ */
+export interface RemoteRefusedConnection {
+  reason: RemoteRefusalReason;
+  /** How many times the same attempt was refused since the gateway started. */
+  attempts: number;
+  /** The label the device sent, when its frame named one. Not an identity. */
+  deviceName?: string;
+  deviceKind: DeviceKind;
+  /** `ios`, `windows`, …; `unknown` when the device said nothing usable. */
+  platform: string;
+  /** The remote protocol version the device's app sent, when it sent one. */
+  protocolVersion?: number;
+  /** The remote protocol versions this Mac speaks, with `unsupported_version`. */
+  supportedVersions: number[];
+  /** The network address the attempt came from. */
+  remoteAddr: string;
+  refusedSecsAgo: number;
+}
+
 /** The answer to `_rustcode/remote/answer`. On acceptance `code` is the only copy, for this Mac to show. */
 export interface RemoteConnectAnswer {
   id: string;
@@ -215,6 +259,11 @@ export interface RemoteStatus {
   connectRequests: RemoteConnectRequest[];
   /** Connection requests that ended recently, oldest first (the machine's answer). */
   endedConnectRequests: RemoteEndedConnectRequest[];
+  /**
+   * Connection attempts the gateway refused, newest first (the machine's answer): why a phone that
+   * only says it cannot connect was not let in. Empty from an engine that does not keep them.
+   */
+  refusedConnections: RemoteRefusedConnection[];
   /** The answer to `_rustcode/remote/answer`. */
   connectAnswer?: RemoteConnectAnswer;
   /** Why `_rustcode/remote/answer` did nothing (the request ended meanwhile). */
@@ -309,6 +358,28 @@ export function heldBackCount(status: RemoteStatus | null | undefined): number {
 /** Why this thread is not shared with paired devices (a thread's answer). */
 export function heldBackReason(status: RemoteStatus | null | undefined): string | undefined {
   return typeof status?.notShared === "string" ? status.notShared : undefined;
+}
+
+function parseRefusedConnection(value: Json | undefined): RemoteRefusedConnection[] {
+  const entry = obj(value);
+  if (!entry) return [];
+  const reason = REFUSAL_REASONS.find((known) => known === str(entry.reason)) ?? "unknown";
+  return [
+    {
+      reason,
+      attempts: num(entry.attempts) ?? 1,
+      deviceName: str(entry.deviceName),
+      deviceKind: parseDeviceKind(entry.deviceKind),
+      platform: str(entry.platform) ?? "unknown",
+      protocolVersion: num(entry.protocolVersion),
+      supportedVersions:
+        arr(entry.supportedVersions)
+          ?.map((version) => num(version))
+          .filter((version): version is number => version !== undefined) ?? [],
+      remoteAddr: str(entry.remoteAddr) ?? "",
+      refusedSecsAgo: num(entry.refusedSecsAgo) ?? 0,
+    },
+  ];
 }
 
 /** The names in a list, dropping anything that is not a string. */
@@ -406,6 +477,7 @@ export function parseRemoteStatus(value: Json | undefined): RemoteStatus {
     devices: arr(root.devices).flatMap(parseDevice),
     connectRequests: arr(root.connectRequests).flatMap(parseConnectRequest),
     endedConnectRequests: arr(root.endedConnectRequests).flatMap(parseEndedConnectRequest),
+    refusedConnections: arr(root.refusedConnections).flatMap(parseRefusedConnection),
     connectAnswer: parseConnectAnswer(root.connectAnswer),
     connectError: str(root.connectError),
     revoked: (() => {
