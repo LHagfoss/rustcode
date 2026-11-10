@@ -3103,8 +3103,11 @@ export async function runPrompt(
     }));
     return "skipped";
   }
-  // A user turn starts a new idle period, which may auto-compact once more.
-  if (!options.autoCompact) beginAutoCompactIdle(id);
+  // A user turn starts a new idle period, which may auto-compact once more. The app's own continue is
+  // not one: it is the same idle period as the compaction that asked for it, and re-arming the rule
+  // that just ran would let a harness whose compaction left the context over the threshold compact
+  // and continue for ever.
+  if (!options.autoCompact && !options.continued) beginAutoCompactIdle(id);
   const startIndex = thread?.items.length ?? 0;
   if (options.link) linkStarted(options.link);
   // The turn a restart resumes this thread with answers the links the quit severed: they work again
@@ -3265,7 +3268,7 @@ export async function runPrompt(
       automatic: next.resume !== undefined,
     });
   }
-  if (outcome === "completed") scheduleAutoCompact(id);
+  if (outcome === "completed" && !options.continued) scheduleAutoCompact(id);
   return outcome;
 }
 

@@ -9,6 +9,7 @@ import { emptyExtras, sentMessages } from "./compose";
 import { foldTurns } from "./fold";
 import type { Link } from "./orchestration";
 import {
+  answerPermission,
   cancel,
   clearFinished,
   connect,
@@ -67,8 +68,8 @@ const compactPrompt = (id: string) =>
     .threads[id]?.items.some((item) => item.kind === "user" && item.text.trim() === "/compact") ?? false;
 
 /** An open thread on Claude Code's two-rule policy, its size threshold at 20k. */
-async function openClaudeThread() {
-  await connect(new MockTransport({ delayMs: 0 }));
+async function openClaudeThread(delayMs = 0) {
+  await connect(new MockTransport({ delayMs }));
   await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
   const id = useApp.getState().sessions[0]!.id;
   selectThread(id);
@@ -381,5 +382,43 @@ describe("carrying on after an automatic compaction", () => {
     await until(() => compacted(id));
     await settle(80);
     expect(continuedRow(id)).toBeUndefined();
+  });
+
+  /** The compaction rows this test counts: the running one and the one it settles into. */
+  const compactionRows = (id: string) =>
+    useApp
+      .getState()
+      .threads[id]!.items.filter(
+        (item) => item.kind === "notice" && (item.progress || item.text.startsWith("Compacted")),
+      );
+
+  /** The mock's edit asks for approval: allow it, so the turn runs on to its end. */
+  async function allowEdit(id: string) {
+    await until(() => (useApp.getState().threads[id]?.permissions.length ?? 0) > 0);
+    const request = useApp.getState().threads[id]!.permissions[0]!;
+    answerPermission(request, request.options.find((option) => option.id === "allow") ?? null);
+  }
+
+  test("the continue's own turn does not start another automatic compaction", async () => {
+    const id = await openClaudeThread();
+    endedTurn(id, Date.now(), 30_000);
+    useApp.setState((s) => ({ links: { ...s.links, links: [...s.links.links, link(id, "working")] } }));
+
+    scheduleAutoCompact(id);
+    await until(() => continuedRow(id) !== undefined);
+    // The continue's turn runs to its end, and the context is over the threshold again: re-arming
+    // the size rule here would compact, continue, compact… for ever on a harness whose compaction
+    // left the context where it was.
+    await allowEdit(id);
+    await until(() => useApp.getState().threads[id]!.running === false);
+    updateThread(id, (t) => ({ ...t, usage: usage(160_000) }));
+    clearFinished(id);
+    scheduleAutoCompact(id);
+    await settle(200);
+
+    expect(compactionRows(id)).toHaveLength(1);
+    expect(
+      useApp.getState().threads[id]!.items.filter((item) => item.kind === "user" && item.continued),
+    ).toHaveLength(1);
   });
 });
