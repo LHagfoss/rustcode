@@ -182,6 +182,7 @@ import {
 import { clearPageCache } from "./pageCache";
 import { autoAnswer, effectiveMode, type PermissionMode, parsePermissionMode } from "./permissions";
 import { NO_PAUSES, type PlanPauses, type PlansAsk, pausesAfter, plansAskFor, queueAsks } from "./plans";
+import { projectChoice } from "./projectBook";
 import { matchProject, projectAt, projectsOn } from "./projects";
 import {
   nextQueued,
@@ -2511,6 +2512,8 @@ export function newThreadChoice(
   s: { newThread: NewThreadChoice | null; harnesses: HarnessSnapshot | null } & {
     newThreadHost?: string;
     remoteHarnesses?: Record<string, HarnessSnapshot>;
+    /** The folder a new thread would start in: its project default comes first. */
+    projectCwd?: string;
   },
 ): NewThreadChoice | null {
   // The computer the thread will run on chooses the harnesses: a machine's default harness,
@@ -2518,7 +2521,12 @@ export function newThreadChoice(
   const snapshot = harnessesOn(s, s.newThreadHost);
   if (!snapshot) return null;
   if (!s.newThread) {
-    return restoreChoice(snapshot, snapshot.default.harness, appChoices(snapshot), effortMemory());
+    // A folder whose project names a harness and model starts on them, so the picker shows
+    // exactly what ⏎ starts (`startSetup` reads the same two functions).
+    return (
+      projectDefaultChoice(s, s.projectCwd) ??
+      restoreChoice(snapshot, snapshot.default.harness, appChoices(snapshot), effortMemory())
+    );
   }
   // A kept draft can name a harness that is gone, or one that cannot run now (turned off, signed
   // out in Settings): then the screen falls back to the harness a new thread would start on, never
@@ -2531,6 +2539,39 @@ export function newThreadChoice(
   // the machine's own harness default applies rather than a model picked on this computer.
   if (s.newThreadHost && !harness.models.length) return { ...choice, model: null, effort: null };
   return choice;
+}
+
+/**
+ * The new-thread choice a project set for `cwd`: a harness that can run now,
+ * on the project's model when that harness offers it. A folder with no
+ * project default, or one whose harness is turned off or signed out, starts a
+ * thread the way every other folder does; a harness the user picked wins.
+ */
+export function projectThreadChoice(
+  s: Pick<AppState, "newThread" | "harnesses">,
+  cwd: string,
+): NewThreadChoice | null {
+  if (s.newThread) return null;
+  return projectDefaultChoice(s, cwd);
+}
+
+/**
+ * The project's own default, when it can run here: this computer's folders
+ * only, since a machine's folders and harnesses are its own. The project book
+ * holds one harness/model pair per folder (`state/projectBook.ts`).
+ */
+function projectDefaultChoice(
+  s: { harnesses: HarnessSnapshot | null; newThreadHost?: string },
+  cwd: string | null | undefined,
+): NewThreadChoice | null {
+  if (s.newThreadHost || !s.harnesses || !cwd) return null;
+  const { harness, model } = projectChoice(cwd);
+  if (!harness) return null;
+  const found = s.harnesses.harnesses.find((h) => h.id === harness);
+  if (!found || unavailableReason(found)) return null;
+  const restored = restoreChoice(s.harnesses, harness);
+  const offered = !!model && (!found.models.length || found.models.some((m) => m.id === model));
+  return { ...restored, model: offered ? model : restored.model, effort: restored.effort };
 }
 
 /**
@@ -2591,13 +2632,17 @@ async function startSetup(setup: PendingSetup): Promise<string | null> {
   const s = get();
   const host = setup.host ?? LOCAL_HOST;
   // The harness choice belongs to the machine the setup runs on, which may not be the one the
-  // composer shows now (the user moved **Run on** after sending).
-  const choice = newThreadChoice({
-    newThread: s.newThread,
-    harnesses: s.harnesses,
-    remoteHarnesses: s.remoteHarnesses,
-    newThreadHost: host,
-  });
+  // composer shows now (the user moved **Run on** after sending). A project's own default harness
+  // and model are this machine's folders, so they only shape a local setup.
+  const choice =
+    (host === LOCAL_HOST ? projectThreadChoice(s, setup.cwd) : null) ??
+    newThreadChoice({
+      newThread: s.newThread,
+      harnesses: s.harnesses,
+      remoteHarnesses: s.remoteHarnesses,
+      newThreadHost: host,
+      projectCwd: setup.cwd,
+    });
   // The login follows the choice `session/new` is given, not a draft it fell back from.
   const harness = harnessesOn(s, host)?.harnesses.find((h) => h.id === choice?.harness);
   let id: string;

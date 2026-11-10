@@ -849,7 +849,10 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   }, [ask]);
 
   const isNew = !thread;
-  const effective: NewThreadChoice = newThreadChoice({ newThread: choice, harnesses }) ?? {
+  // The project's own default belongs to this computer's folders, so a machine's picker never
+  // reads it; a pick is still the draft, and wins over it (`state/store.ts` `newThreadChoice`).
+  const projectCwd = useApp((s) => (host ? "" : s.projectCwd));
+  const effective: NewThreadChoice = newThreadChoice({ newThread: choice, harnesses, projectCwd }) ?? {
     harness: "rustcode",
     model: null,
     effort: null,

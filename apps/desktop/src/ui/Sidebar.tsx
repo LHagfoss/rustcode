@@ -74,6 +74,7 @@ import { type BranchRow, branchKindOf, branchRows } from "../state/branches";
 import { type ChildInfo, childInfo } from "../state/children";
 import { stateOf } from "../state/host";
 import { stateLabel, useMachines } from "../state/machines";
+import { projectLabel } from "../state/projectBook";
 import {
   cachedPulls,
   loadPulls,
@@ -1870,11 +1871,15 @@ export function Sidebar() {
     // state of its connection, and the threads by project inside (docs/desktop.md › Several machines).
     // Working and Pinned are grouped too, so a running thread on another computer is never drawn
     // beside a local one as if it were here; a machine with no rows keeps a heading only in Threads
-    // (state/sidebarGroups.ts `machineGroups`).
+    // (state/sidebarGroups.ts `machineGroups`). A project's label is the display name the project
+    // tools set for it, in both shapes.
     const groupsFor = (id: SectionId, rows: SessionSummary[]): ProjectGroup[] | undefined => {
       if (!machines.length) return undefined;
       const groups = machineGroups(id, rows, machines);
-      for (const group of groups) group.items = arranged(id, group.items, group.key);
+      for (const group of groups) {
+        if (group.project) group.label = projectLabel(group.project);
+        group.items = arranged(id, group.items, group.key);
+      }
       return groups;
     };
     // The Threads list's project groups: by machine when one is paired, else by the preference.
@@ -1883,7 +1888,7 @@ export function Sidebar() {
     else if (byProject && byKey.size > 1) {
       projects = [...byKey.entries()].map(([key, items]) => ({
         key,
-        label: key ? projectName(key) : "No folder",
+        label: key ? projectLabel(key) : "No folder",
         project: key || undefined,
         items,
       }));

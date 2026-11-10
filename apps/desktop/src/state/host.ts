@@ -27,7 +27,6 @@ import {
   Method,
   type PermissionOption,
   type PermissionRequest,
-  projectName,
 } from "../acp/types";
 import { type ThreadStatus, V2Method } from "../acp/v2";
 import { optionScope } from "../lib/approval";
@@ -62,6 +61,7 @@ import {
   checkMessage,
   checkQueryData,
   checkStart,
+  cleanProjectPath,
   contextNote,
   type DelegateLimits,
   delegated,
@@ -133,6 +133,14 @@ import {
   wakesDue,
 } from "./orchestration";
 import { delegationAllowed, effectiveMode, modeLabel, type PermissionMode } from "./permissions";
+import {
+  forgetProject,
+  projectEntry,
+  projectLabel,
+  registeredProjects,
+  registerProject,
+  updateProjectEntry,
+} from "./projectBook";
 import { rememberPullSummaries } from "./pullQueries";
 import { QUEUE_REASON, wakeDelivery } from "./queue";
 import {
@@ -477,6 +485,10 @@ export function verb(q: GrantAsk): string {
       return `merge “${q.target}”'s pull request`;
     case "cleanup":
       return `clean up “${q.target}”`;
+    case "project":
+      return `change the project “${q.target}”`;
+    case "schedule":
+      return `schedule “${q.target}”`;
   }
 }
 
@@ -501,6 +513,8 @@ const TOOL_OF_KIND: Record<GrantAsk["kind"], string> = {
   transfer: "transfer_session",
   merge: "merge_when_green",
   cleanup: "cleanup_worktree",
+  project: "update_project",
+  schedule: "schedule_task",
 };
 
 /** What the app did on the thread's behalf, when its call's row is not in flight to say it. */
@@ -516,6 +530,8 @@ const ALLOWED_NOTICE: Record<GrantAsk["kind"], string> = {
   transfer: "Moved a thread to another harness",
   merge: "Merged a delegate's pull request",
   cleanup: "Cleaned up a delegate's worktree",
+  project: "Changed a project",
+  schedule: "Changed scheduled work",
 };
 
 async function permitted(
@@ -751,6 +767,24 @@ async function perform(
       return listWorktrees(threads(), caller, call.allProjects);
     case "list_projects":
       return listProjects(useApp.getState());
+    case "read_project":
+      return readProject(caller, call.path);
+    case "create_project":
+      return createProject(caller, call);
+    case "clone_project":
+      return cloneProject(caller, call);
+    case "update_project":
+      return updateProject(caller, call);
+    case "remove_project":
+      return removeProject(caller, call);
+    case "schedule_task":
+      return scheduleTask(caller, call);
+    case "list_scheduled_tasks":
+      return listScheduledTasks();
+    case "delete_scheduled_task":
+      return deleteScheduledTask(caller, call.id);
+    case "run_scheduled_task_now":
+      return runScheduledTaskNow(caller, call.id);
     case "list_pull_requests":
       return listPullRequests(caller, call.state);
     case "update_session":
@@ -1040,7 +1074,11 @@ function listWorktrees(all: RuleThread[], caller: RuleThread, allProjects = fals
   };
 }
 
-/** `list_projects`: every project the user has a thread in, most recently updated first. */
+/**
+ * `list_projects`: every project the user has a thread in or registered,
+ * most recently updated first. A registered folder with no thread yet shows
+ * with 0, so a project created or cloned before its first thread is there.
+ */
 function listProjects(s: AppState): JsonObject {
   const byPath = new Map<string, { path: string; threads: number; working: boolean; updatedAt: number }>();
   for (const x of s.sessions) {
@@ -1052,11 +1090,327 @@ function listProjects(s: AppState): JsonObject {
     entry.updatedAt = Math.max(entry.updatedAt, x.updatedAt ?? 0);
     byPath.set(path, entry);
   }
+  for (const { path, entry } of registeredProjects()) {
+    if (byPath.has(path)) continue;
+    byPath.set(path, {
+      path,
+      threads: 0,
+      working: false,
+      updatedAt: entry.registeredAt ?? 0,
+    });
+  }
   const projects = [...byPath.values()]
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, MAX_PROJECTS)
-    .map((p) => ({ path: p.path, name: projectName(p.path), threads: p.threads, working: p.working }));
+    .map((p) => ({ path: p.path, name: projectLabel(p.path), threads: p.threads, working: p.working }));
   return { projects };
+}
+
+// ---------------------------------------------------------------- projects
+
+/** A folder as the project book files it, the same rule `projectOf` reads. */
+const projectPath = (path: string) => cleanProjectPath(path);
+
+/** The threads that run in `path`, for a project's row: never a worktree's other repository. */
+function projectThreads(path: string): { threads: number; working: boolean } {
+  const s = useApp.getState();
+  let threads = 0;
+  let working = false;
+  for (const x of s.sessions) {
+    if (projectOf({ folder: x.cwd, worktree: x.worktree }) !== path) continue;
+    threads += 1;
+    working ||= !!s.threads[x.id]?.running || x.status === "running";
+  }
+  return { threads, working };
+}
+
+/** A path as the engine resolved it: what `_rustcode/project/*` answered. */
+function projectAnswer(facts: JsonObject, path: string, extra: JsonObject = {}): JsonObject {
+  const entry = projectEntry(path);
+  return {
+    project: {
+      ...facts,
+      path,
+      name: projectLabel(path),
+      ...projectThreads(path),
+      ...(entry?.harness ? { harness: entry.harness } : {}),
+      ...(entry?.model ? { model: entry.model } : {}),
+      registered: !!entry?.registeredAt,
+      ...extra,
+    },
+  };
+}
+
+/** The engine's project call, answered as a failure the agent can read. */
+async function askProject(
+  method: string,
+  params: JsonObject,
+  timeoutMs: number,
+): Promise<JsonObject | Failure> {
+  try {
+    return await request<JsonObject>(method, params, timeoutMs);
+  } catch (error) {
+    if (error instanceof RpcError) {
+      // -32602 is JSON-RPC's `invalid_params`: the folder is not there.
+      return failure(error.code === -32602 ? "not_found" : "target_unavailable", error.message);
+    }
+    return failure("target_unavailable", `the project could not be read: ${errorText(error)}`);
+  }
+}
+
+/** Why a path may not be read: this thread's project, or another while the setting allows it. */
+function projectRefusal(caller: RuleThread, path: string): Failure | null {
+  if (sameProject(path, reachOf(caller))) return null;
+  if (useApp.getState().readAcrossProjects) return null;
+  return failure(
+    "not_allowed",
+    "that project is outside this thread's; turn on “Let agents read threads in other projects” in Settings › Harnesses",
+  );
+}
+
+/**
+ * `read_project`: one folder's git facts and the app's own entry for it —
+ * display name, default harness and model, thread count. A read: no approval.
+ */
+async function readProject(caller: RuleThread, path: string): Promise<JsonObject> {
+  const asked = projectPath(path);
+  const refused = projectRefusal(caller, asked);
+  if (refused) return failureJson(refused);
+  const facts = await askProject(Method.projectRead, { path: asked }, 15_000);
+  if (isFailure(facts)) return failureJson(facts);
+  return projectAnswer(facts, projectPath(String(facts.path ?? asked)));
+}
+
+/** `create_project`: register an existing folder, or make a new one a repository. */
+async function createProject(
+  caller: RuleThread,
+  call: { path: string; init?: boolean },
+): Promise<JsonObject> {
+  const path = projectPath(call.path);
+  const no = await permitted(caller, `project:${path}`, {
+    kind: "project",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: path,
+    detail: `It would register ${path} as a project${call.init === false ? "" : ", making it a git repository if it is not one"}.`,
+  });
+  if (no) return failureJson(no);
+  const facts = await askProject(Method.projectCreate, { path, init: call.init ?? true }, 60_000);
+  if (isFailure(facts)) return failureJson(facts);
+  const resolved = projectPath(String(facts.path ?? path));
+  registerProject(resolved);
+  return projectAnswer(facts, resolved, { created: true });
+}
+
+/** `clone_project`: `git clone` into a parent folder, through the engine, then register it. */
+async function cloneProject(
+  caller: RuleThread,
+  call: { url: string; parent?: string; name?: string },
+): Promise<JsonObject> {
+  const s = useApp.getState();
+  const parent = projectPath(call.parent || projectOf(caller) || s.projectCwd || s.defaultCwd);
+  if (!parent) {
+    return failureJson(failure("failed", "there is no folder to clone into; pass parent"));
+  }
+  const no = await permitted(caller, `project:clone:${call.url}`, {
+    kind: "project",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: call.name ? `${parent}/${call.name}` : parent,
+    detail: `It would run git clone on ${call.url} in ${parent} and register the result as a project. A large repository over a slow link can take minutes.`,
+  });
+  if (no) return failureJson(no);
+  const facts = await askProject(
+    Method.projectClone,
+    { url: call.url, parent, ...(call.name ? { name: call.name } : {}) },
+    620_000,
+  );
+  if (isFailure(facts)) return failureJson(facts);
+  const resolved = projectPath(String(facts.path ?? parent));
+  registerProject(resolved);
+  return projectAnswer(facts, resolved, { created: true });
+}
+
+/** `update_project`: a display name, and the harness and model new threads there start on. */
+async function updateProject(
+  caller: RuleThread,
+  call: { path: string; name?: string; harness?: string; model?: string },
+): Promise<JsonObject> {
+  const path = projectPath(call.path);
+  const harnesses = useApp.getState().harnesses?.harnesses ?? [];
+  if (call.harness && !harnesses.some((h) => h.id === call.harness)) {
+    return failureJson(
+      failure(
+        "not_found",
+        `no harness ${call.harness}; list_harnesses shows the ids${harnesses.length ? ` (${harnesses.map((h) => h.id).join(", ")})` : ""}`,
+      ),
+    );
+  }
+  // A model without a harness still says what it is: the folder's new threads start on it.
+  const on = call.harness ?? call.model;
+  const no = await permitted(caller, `project:${path}`, {
+    kind: "project",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: path,
+    detail: `It would ${[
+      call.name && `call it “${call.name}”`,
+      on && `start new threads there on ${on}${call.harness && call.model ? ` with ${call.model}` : ""}`,
+    ]
+      .filter(Boolean)
+      .join(" and ")}. The folder itself is not touched.`,
+  });
+  if (no) return failureJson(no);
+  const entry = updateProjectEntry(path, {
+    name: call.name,
+    harness: call.harness,
+    model: call.model,
+  });
+  return projectAnswer({}, path, {
+    ...(entry.name ? { name: entry.name } : {}),
+  });
+}
+
+/** `remove_project`: forget the folder; its files and its threads stay. */
+async function removeProject(caller: RuleThread, call: { path: string }): Promise<JsonObject> {
+  const path = projectPath(call.path);
+  const no = await permitted(caller, `remove-project:${path}`, {
+    kind: "project",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: path,
+    detail: `It would unregister ${path} as a project. The folder and every file in it stay on disk, and its threads stay; only its display name and defaults go.`,
+  });
+  if (no) return failureJson(no);
+  const known = forgetProject(path);
+  return { path, removed: true, known, files_deleted: false };
+}
+
+// ---------------------------------------------------------------- scheduled work
+
+/** The user's IANA time zone, which a cron with none is read in. */
+function userTimeZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** How a schedule reads in the approval card. */
+function scheduleText(schedule: {
+  kind: "cron" | "at";
+  expression?: string;
+  timezone?: string;
+  at?: string;
+}): string {
+  if (schedule.kind === "cron") {
+    return `every cron ${schedule.expression}${schedule.timezone ? ` (${schedule.timezone})` : ""}`;
+  }
+  return `once at ${schedule.at}`;
+}
+
+/** The engine's scheduler call, answered as a failure the agent can read. */
+async function askScheduler(method: string, params: JsonObject, timeoutMs = 30_000): Promise<JsonObject> {
+  try {
+    return await request<JsonObject>(method, params, timeoutMs);
+  } catch (error) {
+    if (error instanceof RpcError) {
+      return failureJson(failure("target_unavailable", error.message));
+    }
+    return failureJson(failure("target_unavailable", `the scheduler did not answer: ${errorText(error)}`));
+  }
+}
+
+/** `schedule_task`: a prompt the daemon runs on its schedule, with no thread open. */
+async function scheduleTask(
+  caller: RuleThread,
+  call: {
+    prompt: string;
+    schedule: { kind: "cron"; expression: string; timezone?: string } | { kind: "at"; at: string };
+    project?: string;
+    name?: string;
+    modelProfile?: string;
+  },
+): Promise<JsonObject> {
+  const workspace = projectPath(call.project || projectOf(caller) || useApp.getState().projectCwd);
+  if (!workspace) {
+    return failureJson(failure("failed", "this thread has no project folder; pass project"));
+  }
+  // A cron is read in the user's own zone unless the call named one: the app knows it, the engine only guesses.
+  const timezone = call.schedule.kind === "cron" ? call.schedule.timezone || userTimeZone() : undefined;
+  const schedule =
+    call.schedule.kind === "cron"
+      ? {
+          kind: "cron" as const,
+          expression: call.schedule.expression,
+          ...(timezone ? { timezone } : {}),
+        }
+      : call.schedule;
+  const title = call.name || call.prompt.trim().split("\n")[0]?.slice(0, 60) || "this task";
+  const no = await permitted(caller, "schedule:new", {
+    kind: "schedule",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: title,
+    detail: `It would add “${title}” to the scheduler: ${scheduleText(schedule)}, running in ${workspace} with no thread open. The daemon must be running for it to fire.`,
+  });
+  if (no) return failureJson(no);
+  return askScheduler(Method.scheduledCreate, {
+    prompt: call.prompt,
+    workspace,
+    schedule,
+    ...(call.name ? { name: call.name } : {}),
+    ...(call.modelProfile ? { modelProfile: call.modelProfile } : {}),
+  });
+}
+
+/** `list_scheduled_tasks`: what the daemon holds, and whether it is running. */
+async function listScheduledTasks(): Promise<JsonObject> {
+  return askScheduler(Method.scheduledList, {}, 20_000);
+}
+
+/**
+ * What the list says a task is called and where it runs, so a card names it
+ * rather than a `task-1723…` id. The daemon may not answer: the changing call
+ * then reads as it did before, still naming the id it was given.
+ */
+async function scheduledTaskName(id: string): Promise<string> {
+  const listed = await askScheduler(Method.scheduledList, {}, 20_000);
+  const tasks = Array.isArray(listed.tasks) ? listed.tasks : [];
+  const task = tasks.find((entry) => obj(entry)?.id === id);
+  const name = str(obj(task)?.name);
+  const workspace = str(obj(task)?.workspace);
+  if (!name && !workspace) return "that scheduled task";
+  return `“${name ?? id}”${workspace ? `, which runs in ${workspace}` : ""}`;
+}
+
+/** `delete_scheduled_task`: the task leaves the scheduler at once. */
+async function deleteScheduledTask(caller: RuleThread, id: string): Promise<JsonObject> {
+  const task = await scheduledTaskName(id);
+  const no = await permitted(caller, `schedule:delete:${id}`, {
+    kind: "schedule",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: id,
+    detail: `It would delete ${task}. It stops at once, and its run history goes with it.`,
+  });
+  if (no) return failureJson(no);
+  return askScheduler(Method.scheduledDelete, { id });
+}
+
+/** `run_scheduled_task_now`: one run now, with the schedule left as it is. */
+async function runScheduledTaskNow(caller: RuleThread, id: string): Promise<JsonObject> {
+  const task = await scheduledTaskName(id);
+  const no = await permitted(caller, `schedule:run:${id}`, {
+    kind: "schedule",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: id,
+    detail: `It would run ${task} now, and keep its schedule. Its prompt runs with no thread open.`,
+  });
+  if (no) return failureJson(no);
+  return askScheduler(Method.scheduledRun, { id });
 }
 
 /** Why a pull request read failed, in the shape the agent reads: `{ error: { code, message } }`. */
@@ -3572,5 +3926,3 @@ export function linksOf(b: LinkBook, id: string) {
     drivenBy: [...b.links].reverse().find((l) => l.target === id && isActive(l.state)),
   };
 }
-
-export const projectLabel = (path: string) => projectName(path);

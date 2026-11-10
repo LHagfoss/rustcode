@@ -140,6 +140,88 @@ describe("management tools", () => {
       state: "merged",
     });
     expect(isFailure(parseCall({ tool: "list_pull_requests", args: { state: "draft" } }))).toBe(true);
+    // v11: the project tools and the scheduler's four.
+    expect(parseCall({ tool: "read_project", args: { path: " /abs/project " } })).toEqual({
+      tool: "read_project",
+      path: "/abs/project",
+    });
+    expect(isFailure(parseCall({ tool: "read_project", args: { path: " " } }))).toBe(true);
+    expect(parseCall({ tool: "create_project", args: { path: "/abs/new" } })).toEqual({
+      tool: "create_project",
+      path: "/abs/new",
+      init: undefined,
+    });
+    expect(parseCall({ tool: "create_project", args: { path: "/abs/new", init: false } })).toMatchObject({
+      init: false,
+    });
+    expect(parseCall({ tool: "clone_project", args: { url: "git@github.com:o/r.git", name: "r" } })).toEqual({
+      tool: "clone_project",
+      url: "git@github.com:o/r.git",
+      parent: undefined,
+      name: "r",
+    });
+    expect(isFailure(parseCall({ tool: "clone_project", args: {} }))).toBe(true);
+    expect(parseCall({ tool: "update_project", args: { path: "/abs/p", harness: " codex " } })).toEqual({
+      tool: "update_project",
+      path: "/abs/p",
+      name: undefined,
+      harness: "codex",
+      model: undefined,
+    });
+    expect(isFailure(parseCall({ tool: "update_project", args: { path: "/abs/p" } }))).toBe(true);
+    expect(parseCall({ tool: "remove_project", args: { path: "/abs/p" } })).toEqual({
+      tool: "remove_project",
+      path: "/abs/p",
+    });
+    expect(
+      parseCall({
+        tool: "schedule_task",
+        args: {
+          prompt: "Check the build",
+          schedule: { kind: "cron", expression: "0 9 * * 1-5", timezone: "Europe/Oslo" },
+          project: "/abs/project",
+        },
+      }),
+    ).toEqual({
+      tool: "schedule_task",
+      prompt: "Check the build",
+      schedule: { kind: "cron", expression: "0 9 * * 1-5", timezone: "Europe/Oslo" },
+      project: "/abs/project",
+      name: undefined,
+      modelProfile: undefined,
+    });
+    expect(
+      parseCall({
+        tool: "schedule_task",
+        args: { prompt: "Once", schedule: { kind: "at", at: "2026-03-04T09:30:00+01:00" } },
+      }),
+    ).toMatchObject({ schedule: { kind: "at", at: "2026-03-04T09:30:00+01:00" } });
+    expect(
+      isFailure(parseCall({ tool: "schedule_task", args: { prompt: "x", schedule: { kind: "daily" } } })),
+    ).toBe(true);
+    expect(
+      isFailure(
+        parseCall({
+          tool: "schedule_task",
+          args: { prompt: "x", schedule: { kind: "cron", expression: "0 9 * *" } },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isFailure(
+        parseCall({ tool: "schedule_task", args: { prompt: "x", schedule: { kind: "at", at: "later" } } }),
+      ),
+    ).toBe(true);
+    expect(parseCall({ tool: "list_scheduled_tasks", args: {} })).toEqual({ tool: "list_scheduled_tasks" });
+    expect(parseCall({ tool: "delete_scheduled_task", args: { id: " task-1 " } })).toEqual({
+      tool: "delete_scheduled_task",
+      id: "task-1",
+    });
+    expect(parseCall({ tool: "run_scheduled_task_now", args: { id: "task-1" } })).toEqual({
+      tool: "run_scheduled_task_now",
+      id: "task-1",
+    });
+    expect(isFailure(parseCall({ tool: "run_scheduled_task_now", args: {} }))).toBe(true);
     expect(parseCall({ tool: "update_session", args: { pinned: false, status: "settled" } })).toMatchObject({
       pinned: false,
       status: "settled",
@@ -246,7 +328,7 @@ describe("orchestration rules", () => {
   test("the app advertises the version whose arguments it answers", () => {
     // The engine strips `account` below 5 and `attachments` below 10, and refuses a call that
     // carries one: the app speaks the newest, so it is offered both.
-    expect(CAPABILITY_VERSION).toBe(10);
+    expect(CAPABILITY_VERSION).toBe(11);
   });
 
   test("parses the v2 calls and refuses bad arguments", () => {
