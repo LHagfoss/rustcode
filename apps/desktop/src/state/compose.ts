@@ -155,9 +155,19 @@ function fenced(text: string): string {
  * files" list in the text on the built-in one (it ignores links, as the
  * SwiftUI app found); a file without a path, and a long paste held as a chip,
  * are inlined as text.
+ *
+ * A skill is RustCode's own (the harness did not advertise it): the built-in
+ * harness reads `/name` as a prompt and routes it to `use_skill`, but another
+ * harness may reject a leading slash command it does not know, so it is sent as
+ * words naming the skill instead. What the transcript shows is unchanged.
  */
 export function promptBlocks(text: string, extras: ComposeExtras, options: BlockOptions): Json[] {
   let body = composedText(text, extras);
+  if (!options.builtin && extras.command?.action === "skill") {
+    const name = extras.command.name.replace(/^\/+/, "");
+    const rest = composedText(text, { ...extras, command: undefined });
+    body = rest ? `Use the ${name} skill. ${rest}` : `Use the ${name} skill.`;
+  }
   const files = extras.attachments.filter((a) => a.kind === "file");
   const withPath = files.filter((f) => f.path);
   const inline = files.filter((f) => !f.path && f.text !== undefined);

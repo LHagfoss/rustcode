@@ -25,6 +25,29 @@ describe("compose", () => {
     expect(composedText("", extras)).toBe("/review https://a.dev");
   });
 
+  test("a skill is words on a harness that did not advertise it, and a command there", () => {
+    const skill = { ...command, name: "/release-automation", action: "skill" };
+    const options = { images: false, cwd: "/p" };
+    const sent = (harness: boolean, text: string, extras = { ...emptyExtras, command: skill }) =>
+      promptBlocks(text, extras, { ...options, builtin: harness });
+
+    // The built-in harness reads `/name` and routes it to `use_skill`.
+    expect(sent(true, "cut a beta")).toEqual([{ type: "text", text: "/release-automation cut a beta" }]);
+    expect(sent(true, "")).toEqual([{ type: "text", text: "/release-automation" }]);
+    // Another harness may reject a leading slash command it does not know: it is told in words.
+    expect(sent(false, "cut a beta")).toEqual([
+      { type: "text", text: "Use the release-automation skill. cut a beta" },
+    ]);
+    expect(sent(false, "")).toEqual([{ type: "text", text: "Use the release-automation skill." }]);
+    expect(sent(false, "", { ...emptyExtras, command: skill, links: ["https://a.dev"] })).toEqual([
+      { type: "text", text: "Use the release-automation skill. https://a.dev" },
+    ]);
+    // A command the harness itself advertised goes out as typed, on either harness.
+    expect(sent(false, "the diff", { ...emptyExtras, command })).toEqual([
+      { type: "text", text: "/review the diff" },
+    ]);
+  });
+
   test("images become image blocks only when the harness takes them", () => {
     const extras = {
       ...emptyExtras,
