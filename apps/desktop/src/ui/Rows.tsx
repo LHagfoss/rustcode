@@ -115,8 +115,8 @@ export const UserRow = memo(function UserRow({
       {(attachments.length > 0 || placeholders > 0) && (
         <div className="mb-1.5 flex max-w-full flex-wrap justify-end gap-1.5">
           {attachments.map((a, i) =>
-            // A message sent with a long paste keeps it as the chip it was written as, not as the
-            // wall of text it came from: the panel opens the text itself.
+            // A message sent before a paste went into the text keeps the chip it was written as: the
+            // panel opens the text itself. New messages carry the paste as their own text.
             a.kind === "text" ? (
               <PasteChip key={i} text={a.text ?? ""} />
             ) : a.kind === "image" && a.preview ? (

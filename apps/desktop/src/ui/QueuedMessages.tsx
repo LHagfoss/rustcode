@@ -8,7 +8,7 @@
 import { ArrowUp, ChevronDown, ChevronUp, Clock, FileText, Pencil, RotateCw, X } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import type { Attachment } from "../state/compose";
+import { type Attachment, splicePastes } from "../state/compose";
 import {
   isOwnQueued,
   QUEUE_REASON,
@@ -30,7 +30,6 @@ import {
 import { type QueuedPrompt, wakeLine } from "../state/thread";
 import { openLightbox } from "./Lightbox";
 import { Markdown } from "./Markdown";
-import { PasteChip } from "./PasteChip";
 import { cx, Pill, Tooltip } from "./primitives";
 
 const EMPTY_QUEUE: QueuedPrompt[] = [];
@@ -64,7 +63,7 @@ function RowAction({
   );
 }
 
-/** The pictures and files that go with a queued message, above its text. */
+/** The pictures and files that go with a queued message, above its text. A long paste is in the text. */
 const QueuedAttachments = memo(function QueuedAttachments({ list }: { list: Attachment[] }) {
   const pictures = list.flatMap((a) =>
     a.kind === "image" ? [{ src: `data:${a.mimeType};base64,${a.data}`, alt: a.name }] : [],
@@ -72,9 +71,7 @@ const QueuedAttachments = memo(function QueuedAttachments({ list }: { list: Atta
   return (
     <div className="mb-1.5 flex max-w-[80%] flex-wrap justify-end gap-1.5">
       {list.map((a) =>
-        a.kind === "text" ? (
-          <PasteChip key={a.id} text={a.text} />
-        ) : a.kind === "image" ? (
+        a.kind === "image" ? (
           <button
             key={a.id}
             type="button"
@@ -94,14 +91,14 @@ const QueuedAttachments = memo(function QueuedAttachments({ list }: { list: Atta
               className="max-h-[120px] max-w-[180px] rounded-lg object-cover opacity-80 shadow-1"
             />
           </button>
-        ) : (
+        ) : a.kind === "file" ? (
           <Tooltip key={a.id} label={a.path ?? `${a.name} (sent inline)`}>
             <span className="flex h-[26px] items-center gap-1.5 rounded-full bg-fill-subtle px-2 text-callout text-fg-muted">
               <FileText size={12} />
               <span className="max-w-[200px] truncate">{a.name}</span>
             </span>
           </Tooltip>
-        ),
+        ) : null,
       )}
     </div>
   );
@@ -122,6 +119,9 @@ const QueuedBubble = memo(function QueuedBubble({
   const attachments = item.extras?.attachments ?? [];
   const command = item.extras?.command;
   const links = item.extras?.links ?? [];
+  // A paste is in the text where it was pasted, as in the message once it is sent; the command and
+  // links keep their chips at the top.
+  const body = splicePastes(item.text, attachments);
   return (
     <>
       {attachments.length > 0 && <QueuedAttachments list={attachments} />}
@@ -148,11 +148,8 @@ const QueuedBubble = memo(function QueuedBubble({
             ))}
           </div>
         )}
-        {item.text.trim() ? (
-          <Markdown
-            text={item.text}
-            className="text-fg [&_li]:whitespace-pre-wrap [&_p]:whitespace-pre-wrap"
-          />
+        {body ? (
+          <Markdown text={body} className="text-fg [&_li]:whitespace-pre-wrap [&_p]:whitespace-pre-wrap" />
         ) : (
           <p className="text-callout text-fg-muted">Attachments only</p>
         )}

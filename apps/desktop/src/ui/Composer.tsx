@@ -74,6 +74,7 @@ import {
   sentMessages,
   slashToken,
   splitTokens,
+  trackPastes,
 } from "../state/compose";
 import { atToken, insertRef, rankFiles } from "../state/fileRefs";
 import { controlDisabledReason } from "../state/harness";
@@ -400,7 +401,16 @@ export const Composer = memo(function Composer({
     });
   }, []);
 
-  const update = (text: string) => setDraft(key, text);
+  const update = (text: string) => {
+    // A paste is a chip above the field, not text in it: its offset moves with every edit before it,
+    // so the message can put it back where it was pasted (`state/compose.ts` `trackPastes`).
+    const state = useApp.getState();
+    const before = state.drafts[key] ?? "";
+    const attachments = state.extras[key]?.attachments ?? [];
+    const tracked = trackPastes(attachments, before, text);
+    if (tracked !== attachments) change((e) => ({ ...e, attachments: [...tracked] }));
+    setDraft(key, text);
+  };
   // A message walked back into the field puts the caret at its end, so ↓ comes forward again at once.
   const recall = (text: string) => {
     update(text);
@@ -485,7 +495,9 @@ export const Composer = memo(function Composer({
     void sending.then((sent) => {
       // A thread that could not start keeps the message for another try.
       if (!sent && !useApp.getState().drafts[key]) {
-        update(text);
+        // Set the draft directly: the pastes were never moved, and putting the text back must not
+        // move them now (the extras are restored with it).
+        setDraft(key, text);
         change(() => sentExtras);
       }
     });
@@ -546,11 +558,15 @@ export const Composer = memo(function Composer({
       return;
     }
     // A long block (a log, a file, a stack trace) would turn the draft into a wall of text and the
-    // card into a tower: it becomes a chip above the field, sent with the message all the same.
+    // card into a tower: it becomes a chip above the field, and goes back into the message where the
+    // caret was when it is sent. A selection is taken by the paste, as it would be in the field.
     const text = e.clipboardData.getData("text/plain");
     if (isLongPaste(text)) {
       e.preventDefault();
-      attach([{ id: localId("paste"), kind: "text", text }]);
+      const at = e.currentTarget.selectionStart ?? draft.length;
+      const end = e.currentTarget.selectionEnd ?? at;
+      if (end > at) update(`${draft.slice(0, at)}${draft.slice(end)}`);
+      attach([{ id: localId("paste"), kind: "text", text, at }]);
       return;
     }
     // A pasted link stays where it was pasted, as text; the sent message shows it as a chip.

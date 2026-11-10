@@ -1,6 +1,7 @@
-// A long paste kept out of the field: the chip above the composer, and the one a sent message keeps
-// in the transcript. The chip says how much it holds; opening it shows the text itself, so the
-// message reads as the question and not as the log that came with it.
+// A long paste kept out of the field: the chip above the composer while the message is written.
+// The chip says how much it holds; opening it shows the text itself, so the draft reads as the
+// question and not as the log that came with it. The message puts the paste back into its text where
+// it was pasted; only a message sent before that keeps a chip in the transcript.
 
 import { ClipboardPaste, X } from "lucide-react";
 import { pasteLabel } from "../lib/paste";
