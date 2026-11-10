@@ -471,8 +471,9 @@ export const Composer = memo(function Composer({
   const sessions = useApp((s) => s.sessions);
   const links = useApp((s) => s.links);
   const planCache = useApp((s) => s.planCache);
-  // The harness a new thread would start on: the one a delegate it names would be started from.
+  // The harness and login a new thread would start on: what a delegate it names would inherit.
   const newHarness = useApp((s) => newThreadChoice(s)?.harness);
+  const newAccount = useApp((s) => s.newThreadAccount);
   const signedOut = useApp((s) => s.signedOutLogins);
   const openId = thread?.id;
   // The open thread's project: its own, or the folder a new thread will start in.
@@ -549,9 +550,9 @@ export const Composer = memo(function Composer({
   const parent = useMemo(
     () => ({
       harness: openId ? sessions.find((x) => x.id === openId)?.harness : newHarness,
-      account: openId ? (sessions.find((x) => x.id === openId)?.account ?? null) : null,
+      account: openId ? (sessions.find((x) => x.id === openId)?.account ?? null) : newAccount,
     }),
-    [openId, sessions, newHarness],
+    [openId, sessions, newHarness, newAccount],
   );
   const agents = useMemo(
     () => agentChoices(harnesses ?? [], planCache, signedOut, parent),
