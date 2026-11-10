@@ -212,6 +212,10 @@ describe("the effort pill", () => {
 });
 
 describe("the card's height", () => {
+  test("reserves space for the effort and account header", () => {
+    const groups = [{ models: [1, 2] }];
+    expect(panelHeight(groups, true)).toBe(panelHeight(groups) + 40);
+  });
   test("follows the longest harness's list, so moving along the rail does not resize it", () => {
     const groups = [{ models: [1, 2] }, { models: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] }];
     expect(panelHeight(groups)).toBe(panelHeight([{ models: groups[1]!.models }, { models: [] }]));

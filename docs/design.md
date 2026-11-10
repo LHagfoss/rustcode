@@ -258,6 +258,9 @@ Reduce transparency.
 
 ## Spacing
 
+The model picker puts its effort and account control above the search and model list,
+inset 12px from the card edges. The card stays fixed while its model list scrolls.
+
 One scale, on Tailwind's 4px grid: every screen takes its gaps and insets from
 it, and `design.test.ts` fails on a half step that sits between two of them
 (the retired 10px `2.5` and 14px `3.5`).
