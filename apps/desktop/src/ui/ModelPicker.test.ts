@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { BUILTIN_CAPABILITIES, type ConfigOption, type Harness } from "../acp/types";
 import {
   clampEffort,
+  dedupeModels,
   filterModelRows,
+  modelDisplayName,
   modelThreadWrites,
   movePickerIndex,
   orderEfforts,
@@ -214,7 +216,8 @@ describe("the effort pill", () => {
 describe("the card's height", () => {
   test("reserves space for the effort and account header", () => {
     const groups = [{ models: [1, 2] }];
-    expect(panelHeight(groups, true)).toBe(panelHeight(groups) + 40);
+    // The row is 28px tall on the card's 4px gutter.
+    expect(panelHeight(groups, true)).toBe(panelHeight(groups) + 32);
   });
   test("follows the longest harness's list, so moving along the rail does not resize it", () => {
     const groups = [{ models: [1, 2] }, { models: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] }];
@@ -226,6 +229,59 @@ describe("the card's height", () => {
     expect(panelHeight([{ models: [] }])).toBeGreaterThan(0);
     const rail = Array.from({ length: 12 }, () => ({ models: [] }));
     expect(panelHeight(rail)).toBeGreaterThan(panelHeight([{ models: [] }]));
+  });
+});
+
+describe("one row per model", () => {
+  const model = (value: string, name: string) => ({ value, name });
+
+  test("an id the harness lists twice is one row, where it first listed it", () => {
+    const rows = dedupeModels([
+      model("fable-5-1", "Fable 5.1"),
+      model("sonnet-5-5", "Sonnet 5.5"),
+      model("fable-5-1", "Fable 5.1"),
+    ]);
+    expect(rows.map((row) => row.value)).toEqual(["fable-5-1", "sonnet-5-5"]);
+  });
+
+  test("two ids under one name keep the one the harness runs", () => {
+    // An alias beside the dated id it names: Claude Code lists both as "Fable 5.1".
+    const rows = dedupeModels(
+      [
+        model("claude-fable-5-1-20260115", "Fable 5.1"),
+        model("claude-sonnet-5-5", "Sonnet 5.5"),
+        model("claude-fable-5-1", "Fable 5.1"),
+      ],
+      "claude-fable-5-1",
+    );
+    expect(rows.map((row) => row.value)).toEqual(["claude-fable-5-1", "claude-sonnet-5-5"]);
+  });
+
+  test("with nothing recommended the first listing of a name stays", () => {
+    const rows = dedupeModels([
+      model("claude-fable-5-1-20260115", "Fable 5.1"),
+      model("claude-fable-5-1", "Fable 5.1"),
+    ]);
+    expect(rows.map((row) => row.value)).toEqual(["claude-fable-5-1-20260115"]);
+  });
+
+  test("names that differ in case or spacing are one name", () => {
+    const rows = dedupeModels([model("a", "Fable  5.1"), model("b", "fable 5.1 ")]);
+    expect(rows.map((row) => row.value)).toEqual(["a"]);
+  });
+
+  test("the harness's own order is kept, its first model first", () => {
+    const rows = dedupeModels([
+      model("fable-5-1", "Fable 5.1"),
+      model("haiku-5-5", "Haiku 5.5"),
+      model("sonnet-5", "Sonnet 5"),
+    ]);
+    expect(rows.map((row) => row.value)).toEqual(["fable-5-1", "haiku-5-5", "sonnet-5"]);
+  });
+
+  test("a row with no name reads by its id", () => {
+    expect(modelDisplayName({ value: "chatgpt/gpt-6-luna", name: "  " })).toBe("chatgpt/gpt-6-luna");
+    expect(modelDisplayName({ value: "luna", name: " GPT  6 Luna " })).toBe("GPT 6 Luna");
   });
 });
 
