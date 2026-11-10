@@ -92,7 +92,8 @@ the turn ends). The stored status is `status.json` in the thread's
 directory. Auto-`done` needs a watch on the pull request
 (`_rustcode/pulls/watch/start` from that thread): when a check of it sees the
 pull request merged and the thread runs in a worktree, the thread becomes
-`done`. Without a watch nothing polls GitHub.
+`done`. Without a watch nothing polls GitHub; `manage_pull_links` (below) is
+how a thread starts one without the app.
 
 ### From the CLI
 
@@ -117,6 +118,54 @@ stored status is written (`status.json` in the thread's directory), so a thread
 with a turn running stays `running`; the app shows the change on its next
 `session/list` refresh (connect, window focus, or after a turn), and the
 terminal picker shows it on its next list.
+
+## Linked pull requests
+
+Built (`rustcode/engine/src/pull_watch.rs`). A thread links itself to a pull
+request and keeps working; the engine checks the pull request on the same
+schedule as the manual watches (`_rustcode/pulls/watch*`, #2648) and the
+thread reads what changed instead of polling `gh` itself (#3369).
+
+`manage_pull_links` is listed by `rustcode mcp-orchestrator` for every
+external harness thread, and the server answers it itself — no
+`_rustcode/orchestration` request, no user approval — because a link only
+writes the watch store and reads GitHub through `gh`. It is deliberately not
+in the built-in tool block: that block is at its byte budget (see
+`schema_budget_tests`), and the tool needs no client, so paying for it on
+every built-in request would cut a tool a client can answer instead.
+
+| Args | Answer |
+| --- | --- |
+| `{ action: "link", number, repo? }` — `repo` is `owner/name`; omit it to read the pull request through the thread's folder | `{ link, detail }`. `link` is `{ repo, number, title, url, status, stopReason, state, checks: { failing, pending, passed }, conflicts, lastActivity, checkedAt, failures, lastError, expiresAt, events }`. `link` reads the pull request once, so the answer holds its state now, and that first read is the baseline: nothing already true is reported |
+| `{ action: "status", number? }` — omitting `number` answers every link of this thread | `{ links: [link] }` with the state last read and, in `events`, what the thread has not been told yet. Each event is handed over once and never replayed |
+| `{ action: "unlink", number }` | `{ number, unlinked, detail }` — stops checking and forgets the link |
+
+Lifecycle and limits:
+
+- A link is a `Watch` (`link: true`) in `storage/pull_watches.json`, so it
+  survives a restart: a new engine resumes the same schedule and reports what
+  changed while RustCode was closed on the first check, once. The checking
+  loop starts with the engine, so a link is picked up even when no client asks
+  for watches.
+- It stops by itself when the pull request merges or closes (`merged`,
+  `closed`), after six failed GitHub reads in a row (with the reason in
+  `stopReason`, and the failure count and message in `failures` and
+  `lastError`, which a recovery then clears and reports once as
+  `sync_recovered`), or after two weeks (`linked for 14 days`).
+- A thread keeps at most 5 links and 20 are linked across the engine; a link
+  counts against the same schedule as a manual watch, which keeps working as
+  before with its own 7-day limit and `_rustcode/pulls/watch*` methods.
+- GitHub is read at most three pull requests per round, one round every 30 s
+  (`PER_ROUND`), so polling is bounded whatever the list holds: a fully linked
+  engine (20) is swept every few minutes, and one pull request several threads
+  link is read once per round with each of them getting its own events, so no
+  thread sees the same event twice and no pull request is read twice.
+- A link records `owner/name` and is read with `gh --repo`, so it keeps working
+  after the worktree it was made in was removed; when several threads of one
+  pull request are in different folders, the first that answers is used.
+- The events are also published to a client subscribed to
+  `_rustcode/pulls/watch`, unchanged; a worktree thread whose linked pull
+  request merges becomes `done` (`thread_status::on_pull_watch`).
 
 ## Checkpoints
 
@@ -877,6 +926,11 @@ each with its line. The server answers it itself, without the socket, so it
 works on a thread whose client never advertised Smart UI at all; the engine and
 the harness pay one tool description for it. It does not run the page, so it
 returns no script errors, height or screenshot (`docs/smart-ui.md`).
+
+Every thread that has the server also gets **`manage_pull_links`**
+([Linked pull requests](#linked-pull-requests)), answered by the server
+itself out of the watch store, for the same reason: it needs no client and no
+orchestration version.
 
 a stdio MCP server (`tools/list`, `tools/call`, `ping`; server name
 `rustcode`), started by the harness with the engine's own executable:

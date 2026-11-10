@@ -707,6 +707,47 @@ pub const CLEANUP_WORKTREE: Tool = Tool {
     safety: ToolSafety::Interactive,
 };
 
+/// Link a thread to a pull request (#3369) and read it back: the engine keeps
+/// checking through the watch machinery (`pull_watch.rs`), so the thread hears
+/// about a change once instead of polling `gh` itself.
+pub const MANAGE_PULL_LINKS: Tool = Tool {
+    name: crate::pull_watch::LINK_TOOL_NAME,
+    description: "Link this thread to a pull request and keep it checked without polling: `link` with `repo` (owner/name) and `number` answers its state now, then this thread hears about each change once (failed or recovered checks, reviews, comments, conflicts, merged or closed) through `status`. `unlink` stops. A link stops itself when the PR merges or closes, after six failed GitHub reads, or after two weeks; 5 per thread, 20 at once, and a PR several threads link is read once.",
+    arguments: r#"{"action": "link|status|unlink", "repo": "owner/name", "number": 7}"#,
+    handler: manage_pull_links,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": crate::pull_watch::LINK_ACTIONS},
+                "repo": {"type": "string", "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$", "description": "owner/name; omit to use this thread's folder"},
+                "number": {"type": "integer", "minimum": 1, "description": "Pull request number"}
+            },
+            "required": ["action"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::Network, ToolCapability::SessionState],
+    safety: ToolSafety::ControlPlane,
+};
+
+fn manage_pull_links(args: &Value) -> Result<String, String> {
+    let session_id =
+        super::get_active_session_id().ok_or("no session is active to link a pull request for")?;
+    // A link reads GitHub through `gh --repo`, so any folder will do; this
+    // thread's own is the one whose sign-in and remotes are already set up.
+    let cwd = crate::checkpoints::thread_cwd(&session_id)
+        .filter(|cwd| cwd.is_dir())
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or("there is no folder to read the pull request in")?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("failed to create async runtime: {error}"))?;
+    runtime.block_on(crate::pull_watch::answer(args, &session_id, &cwd))
+}
+
 /// Tokens and the cost a harness reported, from the local data store
 /// (`docs/data-store.md`). The app answers it, so the project scope follows
 /// "Let agents read threads in other projects".

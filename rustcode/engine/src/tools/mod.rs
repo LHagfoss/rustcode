@@ -1544,6 +1544,7 @@ pub const TOOLS: &[Tool] = &[
     misc::THREAD_STATUS,
     misc::MERGE_WHEN_GREEN,
     misc::CLEANUP_WORKTREE,
+    misc::MANAGE_PULL_LINKS,
 ];
 
 pub fn is_agent_tool(name: &str) -> bool {
