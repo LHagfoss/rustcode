@@ -539,8 +539,6 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
   const reason =
     failed && item.exitCode === undefined ? clip(item.output?.trim().split("\n")[0] ?? "", 120) : "";
   const counts = useMemo(() => diffCounts(item.diffs), [item.diffs]);
-  const tailLines =
-    running && kind === "execute" && item.output ? item.output.replace(/\n$/, "").split("\n").slice(-6) : [];
   return (
     <div>
       <div className="group flex items-center gap-0.5">
@@ -573,6 +571,9 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
             >
               {shownDetail}
             </span>
+          )}
+          {item.background === "command" && (
+            <span className="shrink-0 text-caption text-fg-faint">Started in background</span>
           )}
           {failed && item.exitCode === undefined && (
             <span
@@ -621,11 +622,6 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
           </Tooltip>
         )}
       </div>
-      {tailLines.length > 0 && !open && (
-        <pre className="m-0 mt-0.5 ml-[26px] overflow-hidden font-mono text-caption text-fg-muted leading-[15px] whitespace-pre-wrap">
-          {tailLines.join("\n")}
-        </pre>
-      )}
       {open && (
         <div className="rc-expand mt-1.5 mb-1 ml-[26px]">
           <ToolDetail item={item} />

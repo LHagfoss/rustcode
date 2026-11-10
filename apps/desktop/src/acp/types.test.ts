@@ -154,6 +154,133 @@ describe("ACP types", () => {
       expect(update.diffs[0]).toMatchObject({ path: "a.ts", oldStart: 4, newStart: 5 });
   });
 
+  test("a result the harness fenced is the output, without the fence", () => {
+    const update = parseSessionUpdate({
+      sessionId: "s",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "c",
+        status: "completed",
+        content: [
+          {
+            type: "content",
+            content: {
+              type: "text",
+              text: "```console\nCommand running in background with ID: bc82qcgu4.\nYou will be notified when it completes.\n```",
+            },
+          },
+        ],
+      },
+    });
+    expect(update).toMatchObject({
+      kind: "toolCallUpdate",
+      status: "completed",
+      output: "Command running in background with ID: bc82qcgu4.\nYou will be notified when it completes.",
+    });
+  });
+
+  test("an update that repeats the call's input has no output", () => {
+    // What Claude Code's adapter sends once it has the arguments: the call again, with the
+    // description as content. Read as output, the description looked like what the command printed.
+    const update = parseSessionUpdate({
+      sessionId: "s",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "c",
+        rawInput: { command: "bun test src", description: "Run the unit tests" },
+        content: [{ type: "content", content: { type: "text", text: "Run the unit tests" } }],
+      },
+    });
+    expect(update).toMatchObject({ kind: "toolCallUpdate", output: undefined });
+  });
+
+  test("a call restated alongside its input is no output, whatever status it carries", () => {
+    const update = parseSessionUpdate({
+      sessionId: "s",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "c",
+        status: "in_progress",
+        rawInput: { command: "bun test src", description: "Run the unit tests" },
+        content: [{ type: "content", content: { type: "text", text: "Run the unit tests" } }],
+      },
+    });
+    expect(update).toMatchObject({ kind: "toolCallUpdate", output: undefined });
+  });
+
+  test("a replayed call keeps what it printed next to the arguments it was given", () => {
+    // The engine's replay of a resumed transcript sends a finished call, its arguments and its
+    // recorded result as one update (`harness/transcript.rs`): the input is no proof of an echo.
+    const update = parseSessionUpdate({
+      sessionId: "s",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "c",
+        title: "ls",
+        status: "completed",
+        rawInput: { command: "ls" },
+        content: [{ type: "content", content: { type: "text", text: "a.ts\nb.ts\n" } }],
+      },
+    });
+    expect(update).toMatchObject({ kind: "toolCall", output: "a.ts\nb.ts\n" });
+  });
+
+  test("a result that arrives with the call's input is still the output", () => {
+    const update = parseSessionUpdate({
+      sessionId: "s",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "c",
+        status: "completed",
+        rawInput: { command: "bun test src", description: "Run the unit tests" },
+        content: [{ type: "content", content: { type: "text", text: "24 pass\n" } }],
+      },
+    });
+    expect(update).toMatchObject({ kind: "toolCallUpdate", output: "24 pass\n" });
+  });
+
+  test("an update that carries the call's input can still answer with a result", () => {
+    const update = parseSessionUpdate({
+      sessionId: "s",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "c",
+        status: "completed",
+        rawInput: { path: "a.ts" },
+        rawOutput: { content: "```\nhello\n```" },
+      },
+    });
+    expect(update).toMatchObject({ kind: "toolCallUpdate", output: "hello" });
+  });
+
+  test("a call whose arguments are empty still shows what it printed", () => {
+    const update = parseSessionUpdate({
+      sessionId: "s",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "c",
+        title: "read",
+        status: "completed",
+        rawInput: null,
+        content: [{ type: "content", content: { type: "text", text: "use std::net;" } }],
+      },
+    });
+    expect(update).toMatchObject({ kind: "toolCall", output: "use std::net;" });
+  });
+
+  test("a backgrounded call's marker reaches the app", () => {
+    const update = parseSessionUpdate({
+      sessionId: "s",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "c",
+        status: "completed",
+        _meta: { jetbrains: { air: { asyncTasks: { backgrounded: true } } } },
+      },
+    });
+    expect(update).toMatchObject({ kind: "toolCallUpdate", backgrounded: true });
+  });
+
   test("a resumable notice is not reply text", () => {
     const update = parseSessionUpdate({
       sessionId: "s",

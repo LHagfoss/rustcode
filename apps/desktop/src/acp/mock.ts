@@ -64,11 +64,18 @@ export interface MockOptions {
    */
   machines?: "paired" | "connect" | "offline" | "revoked";
   /**
+  /**
    * `?notices=repeat`: the default thread ends on six identical quiet notices, the shape an
    * access mode that lets calls through without asking leaves (one notice per call), so the
    * transcript's count (`state/fold.ts` `collapseNotices`) is visible without a real run.
    */
   notices?: "repeat";
+  /**
+   * A tool row's hard cases on their own thread (`?tools=background`): a command the harness sent to
+   * the background, its answer fenced in Markdown, and the call repeated with its description in
+   * `content`. It is a thread of the default scenario, so the rest of the mock is still there.
+   */
+  tools?: "background";
 }
 
 interface MockConnectRequest {
@@ -853,6 +860,97 @@ function seedRepeatedNotices(threads: MockThread[]): void {
         _meta: { rustcode: { kind: "compaction", phase: "completed" } },
       }),
     );
+}
+
+/**
+ * `?tools=background`: a Claude Code turn whose commands went to the background, as its adapter
+ * sends them — the call again with the description in `content`, then the task's id inside a
+ * ```console fence — so the row can be looked at, and beside it a command fenced the same way.
+ */
+function seedToolRowsThread(): MockThread {
+  const id = "mock-tool-rows";
+  const call = (toolCallId: string, title: string, rawInput: JsonObject) => [
+    update(id, {
+      sessionUpdate: "tool_call",
+      toolCallId,
+      title: "Terminal",
+      kind: "execute",
+      status: "in_progress",
+      content: [],
+      _meta: { claudeCode: { toolName: "Bash" } },
+    }),
+    update(id, { sessionUpdate: "tool_call_update", toolCallId, title }),
+    // The call again, with the description it was given: never the output.
+    update(id, {
+      sessionUpdate: "tool_call_update",
+      toolCallId,
+      rawInput,
+      content: [{ type: "content", content: { type: "text", text: String(rawInput.description ?? "") } }],
+    }),
+  ];
+  return {
+    id,
+    cwd: "/Users/you/code/rustcode-mobile",
+    title: "Install the phone build",
+    updatedAt: minutes(1),
+    harness: "claude-code",
+    model: "sonnet",
+    effort: "medium",
+    checkpoints: [],
+    history: [
+      update(id, {
+        sessionUpdate: "user_message_chunk",
+        content: text("Build the Release app on my iPhone, and run the checks while it builds."),
+      }),
+      ...call("toolu_bg", "cd ~/code/rustcode-mobile && CI=1 bunx expo run:ios --configuration Release", {
+        command: "cd ~/code/rustcode-mobile && CI=1 bunx expo run:ios --configuration Release",
+        description: "Build the Release app and install it on the iPhone",
+        run_in_background: true,
+      }),
+      update(id, {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "toolu_bg",
+        status: "completed",
+        content: [
+          {
+            type: "content",
+            content: {
+              type: "text",
+              text: "```console\nCommand running in background with ID: bc82qcgu4. Output is being written to: /private/tmp/claude-501/-Users-you-code-rustcode-mobile/tasks/bc82qcgu4.output. You will be notified when it completes. To check interim output, use Read on that file path.\n```",
+            },
+          },
+        ],
+        _meta: { jetbrains: { air: { asyncTasks: { backgrounded: true } } } },
+      }),
+      ...call("toolu_test", "bun run check", { command: "bun run check", description: "Run the checks" }),
+      update(id, {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "toolu_test",
+        status: "completed",
+        rawOutput: {
+          content:
+            "```console\n$ bun run check\n$ tsc --noEmit && biome check src\nChecked 214 files in 380ms. No fixes applied.\n```",
+          exitCode: 0,
+        },
+      }),
+      update(id, {
+        sessionUpdate: "agent_message_chunk",
+        content: text(
+          "The build runs in the background and the checks pass. I'll report when the app is on the phone.",
+        ),
+        _meta: {
+          rustcode: {
+            turn: {
+              id: "t1",
+              elapsedMs: 12_000,
+              outcome: "completed",
+              endedAt: new Date(minutes(1)).toISOString(),
+            },
+          },
+        },
+      }),
+    ],
+  };
 }
 
 function seedThreads(): MockThread[] {
@@ -2108,6 +2206,8 @@ export class MockEngine {
         fanOuts: [],
       };
     }
+    // A thread of its own for a tool row's hard cases, in front of the scenario's own.
+    if (options.tools === "background") this.threads = [seedToolRowsThread(), ...this.threads];
     this.harnesses = withLast(initialHarnesses(scenario !== "onboarding"));
     if (options.remote === "connect") {
       this.remote.enabled = true;

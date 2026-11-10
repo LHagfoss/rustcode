@@ -1001,7 +1001,13 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   a message starts a turn and a footer ends it. A tool row itself is quiet:
   24px high (`min-h-6`), a 16px icon in the 18px column, its title in
   `text-body text-fg-muted`, the summary in `text-body text-fg-faint`, the
-  chevron only on hover.
+  chevron only on hover. It stays that one line while it runs, a spinner in
+  the icon's place: what a call printed is never drawn under it by itself, only
+  in the card its chevron opens (Input, then Output), so a running command does
+  not push the turn around as it prints. A command the harness sent to the
+  background returned when it started, and says so quietly after its summary
+  (`Started in background` in `text-caption text-fg-faint`): its task is the
+  thread's own waiting line, not a spinner on a call that already answered.
 - **Subagent row:** a subagent (Claude Code's `Agent`/`Task` call,
   RustCode's `spawn_agent`) is one row in the tool rows' grammar: the `Orb`
   (a 3×3 dot ring whose light travels clockwise) while it works, else a
