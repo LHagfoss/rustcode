@@ -1091,15 +1091,20 @@ export function watchMachineConnection(id: string, next: AcpConnection | null): 
   if (!next) {
     machineConnections.delete(id);
     // Its threads stay listed and keep the copy this window drew, read-only: the last replay is
-    // still the thread. A turn that was running there ended with the connection.
+    // still the thread. A turn that was running there ended with the connection, and the request
+    // it waited on died with it (the engine keeps no pending-permission replay): its card goes
+    // with the turn's own failure rather than holding an answer no connection can carry. A request
+    // on a thread that was not running goes too, for the same reason (`reply` refuses an answer
+    // made in the moment before this runs).
     set((s) => ({
       connectedHosts: [...machineConnections.keys()],
       threads: Object.fromEntries(
-        Object.entries(s.threads).map(([key, t]) =>
-          splitThreadKey(key).host === id && t.running
-            ? [key, finishTurn(t, "failed", Date.now(), "The machine disconnected during this turn.")]
-            : [key, t],
-        ),
+        Object.entries(s.threads).map(([key, t]) => {
+          if (splitThreadKey(key).host !== id) return [key, t];
+          if (t.running)
+            return [key, finishTurn(t, "failed", Date.now(), "The machine disconnected during this turn.")];
+          return [key, t.permissions.length ? { ...t, permissions: [] } : t];
+        }),
       ),
     }));
     return;
@@ -1110,8 +1115,8 @@ export function watchMachineConnection(id: string, next: AcpConnection | null): 
     next.onInbound((message) => void handleInbound(scopeInbound(message, id), next, id)),
   );
   // Back: the copy on screen is from before it went away, so the thread it shows is read again.
-  // A request it was waiting on stays: the machine re-asks it with the replay, and until then the
-  // card is still what the thread wants from the user (`reply` refuses to answer without a channel).
+  // Requests of the old connection did not survive the drop (they died with it), so there is
+  // nothing to keep here: the reload is the machine's whole answer about the thread.
   set((s) => ({
     connectedHosts: [...machineConnections.keys()],
     threads: Object.fromEntries(
@@ -3674,19 +3679,27 @@ export interface ResolvedApproval {
 }
 
 /**
+ * Says the thread's computer is away, once, for a caller that would otherwise answer every
+ * pending card with its own refusal. True when there is nothing to answer on.
+ */
+function refuseAway(key: string): boolean {
+  if (connectionForThread(key)) return false;
+  toast(threadIsRemote(key) ? "That computer is not connected." : "The server is not connected.", "error");
+  return true;
+}
+
+/**
  * Answer exactly this request; it leaves the queue before the reply, so a double click cannot
  * answer the next. A question also leaves its answer in the transcript, where the reader can see
  * what was asked and what they said (state/thread.ts `questionItem`).
  */
 function reply(request: PermissionRequest, result: JsonObject, answer?: string): boolean {
   // The answer goes back on the connection the request arrived on (`handleInbound`). With the
-  // machine away there is nothing to answer on: the card stays, and the turn keeps waiting there.
+  // machine away there is nothing to answer on: the card stays, and an answer made now is refused
+  // rather than dropped.
   const conn = connectionForThread(request.sessionId);
   if (!conn) {
-    toast(
-      threadIsRemote(request.sessionId) ? "That computer is not connected." : "The server is not connected.",
-      "error",
-    );
+    refuseAway(request.sessionId);
     return false;
   }
   updateThread(request.sessionId, (t) => {
@@ -3779,6 +3792,9 @@ export async function revokeGrant(id: string): Promise<void> {
 
 /** Approve every approval the thread waits on (not questions), each with its "allow once" option. */
 export function approveAll(threadId: string) {
+  // The answers go over the thread's own connection; with the machine away, one refusal is said
+  // once, not once per card.
+  if (refuseAway(threadId)) return;
   const pending = get().threads[threadId]?.permissions.filter((p) => !p.question) ?? [];
   for (const request of pending) {
     const option =
@@ -3821,6 +3837,8 @@ export function setPermissionMode(threadId: string | undefined, mode: Permission
   const modes = { ...get().permissionModes, [threadId]: mode };
   set({ permissionModes: modes });
   store(STORAGE.permissionModes, JSON.stringify(modes));
+  // With the machine away nothing can be answered: one refusal, not one per pending card.
+  if (refuseAway(threadId)) return;
   for (const request of get().threads[threadId]?.permissions ?? []) {
     const option = autoAnswer(request, mode);
     if (option) reply(request, permissionSelected(option.id));
