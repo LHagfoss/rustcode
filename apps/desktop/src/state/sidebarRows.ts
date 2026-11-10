@@ -335,6 +335,33 @@ export interface Placement {
   layout: SidebarLayout;
 }
 
+/** What a folded group's dot says about the rows it hides, strongest first. */
+export type HiddenKind = "needs" | "working" | "finished";
+
+/** What one hidden row says, as the sidebar already reads it. */
+export interface HiddenRow {
+  /** A permission or a question waits on the user. */
+  needs: boolean;
+  /** Its turn runs, or it waits on work it handed out. */
+  working: boolean;
+  /** A turn finished or failed and the row was not opened (`finished`, `failed`). */
+  unseen: boolean;
+}
+
+/**
+ * The dot a folded group shows for what it hides: what needs the user first, then what works, then
+ * what came back unseen. A Snoozed shelf shows none of it: the user put those threads away, so a
+ * request, a turn at work or one that ended while they slept is not news until the snooze ends
+ * (`placeThread`, state/notify.ts `wakeEvent`). Its count alone says the shelf has rows.
+ */
+export function hiddenKind(section: SectionId, rows: readonly HiddenRow[]): HiddenKind | undefined {
+  if (section === "snoozed") return undefined;
+  if (rows.some((row) => row.needs)) return "needs";
+  if (rows.some((row) => row.working)) return "working";
+  if (rows.some((row) => row.unseen)) return "finished";
+  return undefined;
+}
+
 /**
  * The section a thread is drawn under. A settled thread never sits under Pinned, whatever it was
  * pinned as (the pin returns when it is unsettled); a thread asleep after a snooze stays in Snoozed

@@ -3,6 +3,7 @@ import type { FileDiff } from "../acp/types";
 import {
   cleanFolds,
   contextRow,
+  hiddenKind,
   isShelf,
   keepListed,
   listedPicks,
@@ -412,6 +413,26 @@ describe("which section a thread is drawn under", () => {
   test("neither layout draws a separate Needs you section: the chip is the whole of it", () => {
     expect(sectionsOf("top") as readonly string[]).not.toContain("needs");
     expect(sectionsOf("shelf") as readonly string[]).not.toContain("needs");
+  });
+});
+
+describe("the dot a folded group shows", () => {
+  const row = (needs: boolean, working: boolean, unseen: boolean) => ({ needs, working, unseen });
+
+  test("a Snoozed shelf says nothing, whatever its rows did while asleep", () => {
+    // The user put them away: a request, work or a turn that ended is not news until the snooze
+    // ends, and the shelf's count alone says it has rows.
+    expect(hiddenKind("snoozed", [row(true, true, true)])).toBeUndefined();
+    expect(hiddenKind("snoozed", [row(false, true, false), row(false, false, true)])).toBeUndefined();
+    expect(hiddenKind("snoozed", [])).toBeUndefined();
+  });
+
+  test("the other shelves still say it, strongest first", () => {
+    expect(hiddenKind("settled", [row(false, false, true), row(true, false, false)])).toBe("needs");
+    expect(hiddenKind("working", [row(false, true, false), row(false, false, true)])).toBe("working");
+    expect(hiddenKind("settled", [row(false, false, true)])).toBe("finished");
+    expect(hiddenKind("threads", [row(false, false, false)])).toBeUndefined();
+    expect(hiddenKind("threads", [])).toBeUndefined();
   });
 });
 

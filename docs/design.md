@@ -657,9 +657,11 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   row's menu. A snoozed thread keeps its place in the shelf until its time is
   up: it works, waits on an approval or a question, and finishes there without
   coming back to the list, counting in Needs you, badging the Dock or notifying
-  the system, and nothing it does marks it unread. It comes back when its snooze
-  ends — or when the user writes in it — with the state it reached then, and one
-  notification at most, for a request that waits or a turn that ended unseen.
+  the system, and nothing it does marks it unread. Its folded shelf shows its
+  count and no dot either, so what it hides is not news until the snooze ends.
+  It comes back when its snooze ends — or when the user writes in it — with the
+  state it reached then, and one notification at most, for a request that waits
+  or a turn that ended unseen.
   Section and project headers are one 32px line of `text-body` (`14px`) in
   `fg-muted`, with 14px folder icons: the label,
   a dot for what a folded group hides, a count only while it is folded, then
