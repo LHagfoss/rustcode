@@ -271,8 +271,8 @@ export function RemoteAccessPage() {
           gateway.routes.map((route) => (
             <Row
               key={route.address}
-              title={routeLabel(route.kind)}
-              subtitle={routeHint(route.kind)}
+              title={routeLabel(route)}
+              subtitle={routeHint(route)}
               status={<span className="font-mono">{route.address}</span>}
             >
               {route.address === gateway.advertisedAddress && <Chip tone="ok">Advertised</Chip>}
@@ -340,13 +340,21 @@ export function RefusedConnectionsGroup({ refused }: { refused: RemoteRefusedCon
   );
 }
 
-/** A route's kind, in the words the page shows. */
-function routeLabel(kind: RemoteRoute["kind"]): string {
-  switch (kind) {
+/** The mesh product an overlay route runs on, in the spelling the product uses. */
+const PROVIDER_NAMES: Record<NonNullable<RemoteRoute["provider"]>, string> = {
+  netbird: "NetBird",
+  tailscale: "Tailscale",
+  zerotier: "ZeroTier",
+};
+
+/** A route, in the words the page shows. An overlay names its product when the engine says. */
+function routeLabel(route: RemoteRoute): string {
+  switch (route.kind) {
     case "lan":
       return "Local network";
+    case "overlay":
     case "vpn":
-      return "VPN";
+      return (route.provider && PROVIDER_NAMES[route.provider]) ?? "Overlay network";
     case "hostname":
       return "Host name";
     case "public":
@@ -356,13 +364,16 @@ function routeLabel(kind: RemoteRoute["kind"]): string {
   }
 }
 
-/** What a kind of route means for the phone. */
-function routeHint(kind: RemoteRoute["kind"]): string {
-  switch (kind) {
+/** What a route means for the phone. */
+function routeHint(route: RemoteRoute): string {
+  switch (route.kind) {
     case "lan":
       return "The phone's own Wi-Fi or Ethernet network. Not encrypted.";
+    case "overlay":
     case "vpn":
-      return "A NetBird or Tailscale address, reachable away from home and encrypted by the tunnel.";
+      return route.provider
+        ? `A ${PROVIDER_NAMES[route.provider]} address, reachable away from home and encrypted by the overlay network.`
+        : "A NetBird, Tailscale or ZeroTier address, reachable away from home and encrypted by the tunnel.";
     case "hostname":
       return "A name that follows this computer when its address changes.";
     case "public":

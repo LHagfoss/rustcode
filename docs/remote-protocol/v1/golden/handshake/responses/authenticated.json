@@ -14,7 +14,8 @@
     },
     {
       "address": "100.92.13.44:17879",
-      "kind": "vpn"
+      "kind": "overlay",
+      "provider": "netbird"
     },
     {
       "address": "rustcode-8e1f4b7a.local:17879",

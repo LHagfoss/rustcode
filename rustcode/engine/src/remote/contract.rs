@@ -13,7 +13,7 @@
 
 use crate::controller::ApprovalChoice;
 
-use crate::remote_gateway::address::{HostRoute, HostRouteKind};
+use crate::remote_gateway::address::{HostRoute, HostRouteKind, OverlayProvider};
 use crate::remote_gateway::handshake::{
     CAPABILITY_TOKEN_ROTATION, ErrorCode, HANDSHAKE_PROTOCOL_VERSION, HandshakeRequest,
     HandshakeResponse, PairingMethod, Secret, TokenAck, WIRE_NAMES_THREAD,
@@ -300,14 +300,17 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                     HostRoute {
                         address: "192.168.1.20:17879".to_owned(),
                         kind: HostRouteKind::Lan,
+                        provider: None,
                     },
                     HostRoute {
                         address: "100.92.13.44:17879".to_owned(),
-                        kind: HostRouteKind::Vpn,
+                        kind: HostRouteKind::Overlay,
+                        provider: Some(OverlayProvider::Netbird),
                     },
                     HostRoute {
                         address: "rustcode-8e1f4b7a.local:17879".to_owned(),
                         kind: HostRouteKind::Hostname,
+                        provider: None,
                     },
                 ],
             },

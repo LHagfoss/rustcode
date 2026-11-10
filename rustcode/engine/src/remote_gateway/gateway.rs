@@ -7,7 +7,7 @@
 //! connections. Nothing awaits while the lock is held.
 
 use super::address::{
-    AdvertisedAddress, Candidate, HostRoute, ListenPlan, alternate_addresses, candidate_addresses,
+    AdvertisedAddress, Candidate, HostRoute, ListenPlan, alternates_for, candidate_addresses,
     host_routes,
 };
 use super::connect::{ConnectRequests, OpenError, Outcome, RequestEnd, RequestState};
@@ -290,6 +290,10 @@ pub(super) struct Shared {
     advertised: tokio::sync::watch::Sender<AdvertisedAddress>,
     /// The local address the listener is bound to, for interface-scoped Bonjour.
     bind: tokio::sync::watch::Sender<IpAddr>,
+    /// Every address the WebSocket listeners are bound to, primary first. A
+    /// handshake reports only these: an address the gateway does not listen on
+    /// is not a route a device can use.
+    bound: tokio::sync::watch::Sender<Vec<IpAddr>>,
     registration: Arc<Mutex<GatewayRegistration>>,
     pub(super) lifecycle: RemoteLifecycle,
     pub(super) limits: Limits,
@@ -1182,8 +1186,8 @@ impl Shared {
     fn issue_pairing(&self) -> OfferDetails {
         // Read the interfaces before taking the state lock.
         let advertised = self.advertised.borrow().clone();
-        let alternates =
-            alternate_addresses(*self.bind.borrow(), &advertised, &candidate_addresses());
+        let bound = self.bound.borrow().clone();
+        let alternates = alternates_for(&bound, &advertised, &candidate_addresses());
         let now = Instant::now();
         let mut state = self.state();
         replace_approved(&mut state, now);
@@ -1203,44 +1207,42 @@ impl Shared {
 }
 
 impl Shared {
-    /// Follow a changed listen plan. A new bind address gets a new listener
-    /// on the same port, returned to replace the old one; connections on the
-    /// old address stay until it stops carrying them. Either way pairing
-    /// details, status, the registration and the session owners learn the
-    /// address a device should dial now.
-    async fn move_listener(
+    /// Follow the listeners after a change: pairing details, status, the
+    /// registration and the session owners learn the addresses a device should
+    /// dial now. Connections on a closed address stay until they end.
+    fn announce_listeners(
         &self,
-        listener: &TcpListener,
-        current: &ListenPlan,
-        next: &ListenPlan,
-    ) -> Result<Option<TcpListener>> {
-        let port = listener.local_addr()?.port();
-        let moved = if next.bind == current.bind {
-            None
-        } else {
-            Some(TcpListener::bind(SocketAddr::new(next.bind, port)).await?)
-        };
-        let local = match &moved {
-            Some(moved) => moved.local_addr()?,
-            None => listener.local_addr()?,
-        };
-        let advertised = next.advertise.clone().with_port(port);
+        plan: &ListenPlan,
+        primary: SocketAddr,
+        also: &[IpAddr],
+    ) -> Result<()> {
+        let port = primary.port();
+        let advertised = plan.advertise.clone().with_port(port);
         {
             let mut registration = self
                 .registration
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            registration.listen_address = local.to_string();
+            registration.listen_address = primary.to_string();
             registration.advertised_address = advertised.to_string();
             registration.publish(&self.lifecycle.registration_path())?;
         }
+        let loopback_only = primary.ip().is_loopback() && also.iter().all(IpAddr::is_loopback);
         if let Some(sessions) = &self.sessions {
-            sessions.set_advertised_address(advertised.to_string(), next.bind.is_loopback());
+            sessions.set_advertised_address(advertised.to_string(), loopback_only);
         }
-        println!("address changed: listening on {local}, advertised as {advertised}");
+        let mut bound = vec![primary.ip()];
+        bound.extend_from_slice(also);
+        self.bound.send_replace(bound);
         self.advertised.send_replace(advertised);
-        self.bind.send_replace(next.bind);
-        Ok(moved)
+        self.bind.send_replace(plan.bind);
+        Ok(())
+    }
+
+    /// Whether every address the gateway answers on is loopback: no other
+    /// machine can reach it then.
+    fn loopback_only(&self) -> bool {
+        self.bound.borrow().iter().all(IpAddr::is_loopback)
     }
 }
 
@@ -1313,21 +1315,33 @@ fn rfc3339(at: chrono::DateTime<chrono::Utc>) -> String {
 }
 
 /// The addresses this host answers on right now, for a handshake and for
-/// `remote status`: the advertised one, the machine's LAN and mesh addresses,
-/// and its `.local` name. A device keeps them as routes, so it can reconnect
-/// over another network after pairing once.
+/// `remote status`: the advertised one, every LAN and overlay address a
+/// listener is bound to, and the machine's `.local` name. A device keeps them
+/// as routes, so it can reconnect over another network after pairing once.
 ///
-/// A listener bound to one address answers on nothing else, so it reports
-/// only the advertised address, as the QR code's `alternates` do.
+/// Only what is bound is reported: a specific bind answers on that address
+/// alone, a wildcard on every candidate of its family, and an `auto` gateway
+/// on the LAN plus overlay listeners it opened.
 fn routes_now(shared: &Shared) -> Vec<HostRoute> {
     let advertised = shared.advertised.borrow().clone();
-    let bind = *shared.bind.borrow();
-    if !bind.is_unspecified() {
+    let bound = shared.bound.borrow().clone();
+    let wildcard_v4 = bound.iter().any(|ip| ip.is_ipv4() && ip.is_unspecified());
+    let wildcard_v6 = bound.iter().any(|ip| ip.is_ipv6() && ip.is_unspecified());
+    let wildcard = wildcard_v4 || wildcard_v6;
+    if !wildcard && bound.iter().all(IpAddr::is_loopback) {
+        // Only this computer can dial it: no route for another machine.
         return host_routes(&advertised, &[], None);
     }
     let candidates: Vec<Candidate> = candidate_addresses()
         .into_iter()
-        .filter(|candidate| bind.is_ipv6() || candidate.address.is_ipv4())
+        .filter(|candidate| {
+            if wildcard {
+                // `::` is usually dual-stack; `0.0.0.0` takes IPv4 peers only.
+                wildcard_v6 || candidate.address.is_ipv4()
+            } else {
+                bound.contains(&candidate.address.to_canonical())
+            }
+        })
         .collect();
     let label = super::discovery::host_label(&shared.gateway_id);
     host_routes(&advertised, &candidates, Some(label.trim_end_matches('.')))
@@ -1368,6 +1382,9 @@ impl Drop for Ownership {
 
 pub struct Gateway {
     listener: TcpListener,
+    /// Overlay and extra LAN listeners the plan asked for; `listener` is the
+    /// primary one a device dials.
+    extra: Vec<TcpListener>,
     control: LocalListener,
     owners: LocalListener,
     shared: Arc<Shared>,
@@ -1391,6 +1408,8 @@ impl Gateway {
         let devices = apply_revocation_notes(&store, &notes, store.load()?)?;
         let listener = TcpListener::bind(SocketAddr::new(config.plan.bind, config.port)).await?;
         let local = listener.local_addr()?;
+        let extra = bind_extras(&config.plan, local.port()).await;
+        let bound = bound_addresses(local, &extra);
         let advertised = config.plan.advertise.clone().with_port(local.port());
         let registration = GatewayRegistration::current(
             lifecycle.socket_path(),
@@ -1428,7 +1447,7 @@ impl Gateway {
                 gateway_id: gateway_id.clone(),
                 instance_id: instance_id.clone(),
                 advertised_address: advertised.to_string(),
-                loopback_only: config.plan.bind.is_loopback(),
+                loopback_only: bound.iter().all(IpAddr::is_loopback),
             });
         }
         registration
@@ -1440,6 +1459,7 @@ impl Gateway {
             instance_id,
             advertised: tokio::sync::watch::Sender::new(advertised),
             bind: tokio::sync::watch::Sender::new(config.plan.bind),
+            bound: tokio::sync::watch::Sender::new(bound),
             registration,
             lifecycle: lifecycle.clone(),
             limits: config.limits,
@@ -1463,6 +1483,7 @@ impl Gateway {
         });
         Ok(Self {
             listener,
+            extra,
             control,
             owners,
             shared,
@@ -1508,7 +1529,8 @@ impl Gateway {
     /// connection and removes the socket and registration.
     pub async fn run(self) -> Result<()> {
         let Gateway {
-            mut listener,
+            listener,
+            extra,
             control,
             owners,
             shared,
@@ -1517,27 +1539,77 @@ impl Gateway {
             started,
             _ownership,
         } = self;
+        let mut listener = listener;
         let mut tasks = JoinSet::new();
+        // The overlay and extra LAN listeners run in their own accept loops
+        // and hand sockets here, so every connection is admitted, served and
+        // closed by the same code as the primary listener's.
+        let (accepted, mut incoming) =
+            tokio::sync::mpsc::channel::<(tokio::net::TcpStream, SocketAddr)>(32);
+        let mut extra_tasks: HashMap<IpAddr, tokio::task::JoinHandle<()>> = HashMap::new();
+        for extra_listener in extra {
+            spawn_extra_accept(extra_listener, &accepted, &shared, &mut extra_tasks);
+        }
         let mut replan_due = tokio::time::interval(shared.limits.replan_interval);
         replan_due.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
                 _ = shared.shutdown.cancelled() => break,
                 _ = replan_due.tick(), if replan.is_some() => {
-                    let next = replan.as_ref().and_then(|replan| replan());
-                    if let Some(next) = next.filter(|next| *next != plan) {
-                        match shared.move_listener(&listener, &plan, &next).await {
-                            Ok(Some(moved)) => {
-                                listener = moved;
+                    let Some(next) = replan.as_ref().and_then(|replan| replan()) else {
+                        continue;
+                    };
+                    let plan_changed = next != plan;
+                    match apply_plan(
+                        &shared,
+                        &mut listener,
+                        &next,
+                        &accepted,
+                        &mut extra_tasks,
+                    )
+                    .await {
+                        Ok(changed) => {
+                            if changed || plan_changed {
+                                let also: Vec<IpAddr> = extra_tasks.keys().copied().collect();
+                                let local = listener.local_addr()?;
+                                match shared.announce_listeners(&next, local, &also) {
+                                    Ok(()) => {
+                                        let advertised = next.advertise.clone().with_port(local.port());
+                                        let more = if also.is_empty() {
+                                            String::new()
+                                        } else {
+                                            format!(" (+{} more)", also.len())
+                                        };
+                                        println!(
+                                            "address changed: listening on {local}{more}, advertised as {advertised}"
+                                        );
+                                        plan = next;
+                                    }
+                                    // The registration could not be written; the
+                                    // old plan stays, and the next round retries.
+                                    Err(error) => crate::dbg_log!(
+                                        "remote gateway: could not publish {}: {error:#}",
+                                        next.bind
+                                    ),
+                                }
+                            } else {
                                 plan = next;
                             }
-                            Ok(None) => plan = next,
-                            // Usually the new address is not assignable yet;
-                            // the next round tries again.
-                            Err(error) => {
-                                crate::dbg_log!("remote gateway: could not move to {}: {error:#}", next.bind);
-                            }
                         }
+                        // Usually the new address is not assignable yet; the
+                        // next round tries again.
+                        Err(error) => {
+                            crate::dbg_log!("remote gateway: could not move to {}: {error:#}", next.bind);
+                        }
+                    }
+                }
+                Some((socket, peer)) = incoming.recv() => {
+                    if let Some(slot) = shared.admit_socket(peer.ip()) {
+                        tasks.spawn(transport::serve_connection(
+                            Arc::clone(&shared),
+                            socket,
+                            slot,
+                        ));
                     }
                 }
                 accepted = listener.accept() => match accepted {
@@ -1592,6 +1664,125 @@ impl Gateway {
         tasks.shutdown().await;
         Ok(())
     }
+}
+
+/// Bind every extra address the plan asks for on the primary's port. One
+/// that cannot be bound (the interface went away, the address is not
+/// assignable yet) is logged and skipped; the next replan tries it again.
+async fn bind_extras(plan: &ListenPlan, port: u16) -> Vec<TcpListener> {
+    let mut listeners = Vec::new();
+    for address in &plan.also {
+        match TcpListener::bind(SocketAddr::new(*address, port)).await {
+            Ok(listener) => listeners.push(listener),
+            Err(error) => {
+                crate::dbg_log!("remote gateway: could not listen on {address}:{port}: {error}");
+            }
+        }
+    }
+    listeners
+}
+
+fn bound_addresses(primary: SocketAddr, extra: &[TcpListener]) -> Vec<IpAddr> {
+    let mut bound = vec![primary.ip()];
+    bound.extend(
+        extra
+            .iter()
+            .filter_map(|listener| listener.local_addr().ok().map(|address| address.ip())),
+    );
+    bound
+}
+
+/// Accept on one extra listener and hand every socket to the gateway's main
+/// loop, which admits it against the unauthenticated limit.
+fn spawn_extra_accept(
+    listener: TcpListener,
+    incoming: &tokio::sync::mpsc::Sender<(tokio::net::TcpStream, SocketAddr)>,
+    shared: &Shared,
+    tasks: &mut HashMap<IpAddr, tokio::task::JoinHandle<()>>,
+) {
+    let Ok(address) = listener.local_addr() else {
+        return;
+    };
+    let incoming = incoming.clone();
+    let shutdown = shared.shutdown.clone();
+    tasks.insert(
+        address.ip(),
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    accepted = listener.accept() => match accepted {
+                        Ok((socket, peer)) => {
+                            if incoming.send((socket, peer)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(error) => {
+                            crate::dbg_log!(
+                                "remote gateway: accept on {address} failed: {error}"
+                            );
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                        }
+                    }
+                }
+            }
+        }),
+    );
+}
+
+/// Make the listeners match `plan`: move the primary when its address changed
+/// and open or close the extra LAN and overlay listeners on the same port.
+/// Returns whether anything changed.
+async fn apply_plan(
+    shared: &Shared,
+    listener: &mut TcpListener,
+    plan: &ListenPlan,
+    incoming: &tokio::sync::mpsc::Sender<(tokio::net::TcpStream, SocketAddr)>,
+    extra: &mut HashMap<IpAddr, tokio::task::JoinHandle<()>>,
+) -> Result<bool> {
+    let port = listener.local_addr()?.port();
+    let mut changed = false;
+    // Release the extras the plan dropped before moving the primary: the new
+    // primary may be an address an extra still holds (NetBird went down, so
+    // the LAN address that was an extra becomes the primary), and binding it
+    // while the extra is open fails with EADDRINUSE on every round. Awaiting
+    // the aborted task is what actually closes its socket, and it returns as
+    // soon as the task is dropped.
+    let removed: Vec<IpAddr> = extra
+        .keys()
+        .filter(|address| !plan.also.contains(address))
+        .copied()
+        .collect();
+    let mut closing = Vec::new();
+    for address in removed {
+        if let Some(task) = extra.remove(&address) {
+            task.abort();
+            closing.push(task);
+            changed = true;
+        }
+    }
+    for task in closing {
+        let _ = task.await;
+    }
+    if listener.local_addr()?.ip() != plan.bind {
+        *listener = TcpListener::bind(SocketAddr::new(plan.bind, port)).await?;
+        changed = true;
+    }
+    for address in &plan.also {
+        if extra.contains_key(address) {
+            continue;
+        }
+        match TcpListener::bind(SocketAddr::new(*address, port)).await {
+            Ok(listener) => {
+                spawn_extra_accept(listener, incoming, shared, extra);
+                changed = true;
+            }
+            Err(error) => {
+                crate::dbg_log!("remote gateway: could not listen on {address}:{port}: {error}");
+            }
+        }
+    }
+    Ok(changed)
 }
 
 async fn serve_control(shared: Arc<Shared>, started: Instant, stream: LocalStream) {
@@ -1723,7 +1914,7 @@ fn status(shared: &Shared, started: Instant) -> GatewayStatus {
         paired_devices: state.devices.list().len(),
         connections: connections.into_iter().map(|(_, c)| c).collect(),
         pairing_open: state.pairing.is_open(now),
-        loopback_only: shared.advertised.borrow().host().is_loopback(),
+        loopback_only: shared.loopback_only(),
         sessions,
         candidates: candidate_addresses()
             .into_iter()
