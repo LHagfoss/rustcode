@@ -121,7 +121,7 @@ All kit, no CSS: the same intent reads the same way in every turn.
 ## Design
 
 - No outer card, border, background or title banner. One view per question.
-- Fits a 320 px column, aim under 300 px tall: relative widths, no `vh`.
+- Fits a 320 px column, and grows to the height its content needs: relative widths, no `vh`.
 - Useful before any interaction; a control's effect shows next to it.
 - Real controls with `aria-label` where a label is missing; pre-aggregate.
 - Hover is an extra, never the only way to read a value.

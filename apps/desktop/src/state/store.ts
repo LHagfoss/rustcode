@@ -93,9 +93,11 @@ import {
   autoCompactMark,
   autoCompactPolicy,
   automaticCompactionText,
+  CONTINUE_AFTER_COMPACTION_TEXT,
   clampAutoCompactThreshold,
   DEFAULT_AUTO_COMPACT,
   parseAutoCompactSettings,
+  shouldContinueAfterCompaction,
 } from "./autoCompact";
 import { createBatcher, frameQueue } from "./batch";
 import {
@@ -167,6 +169,7 @@ import {
   DEFAULT_DELEGATES_TOTAL,
   forget,
   type GrantAsk,
+  isActive,
   type LinkBook,
   MAX_DELEGATES_PER_THREAD,
   MAX_DELEGATES_TOTAL,
@@ -216,6 +219,7 @@ import {
   userIndexOf,
   waitingOn,
   wakeTurn,
+  withContinueMark,
 } from "./thread";
 import {
   clear as clearQueue,
@@ -3097,19 +3101,28 @@ export async function runPrompt(
     /** The turn that continues after a limit: its wait is settled when it ends. */
     limitResume?: boolean;
     /**
-     * The next message of a thread's queue, started because the turn before it ended: work the user
-     * already sent, so it does not bring a snoozed thread back (`state/store.ts` `runPrompt`).
+     * The turn that carries the thread on after the app compacted it: its prompt reads as a divider
+     * in the transcript, never as a message the user typed (`state/thread.ts` `CONTINUE_MARK`).
      */
     continued?: boolean;
+    /**
+     * The next message of a thread's queue, started because the turn before it ended: work the user
+     * already sent, so starting it is not a new send and does not bring a snoozed thread back
+     * (`state/store.ts` `wakeOnWrite`). Unlike `continued`, it is the user's turn in every other way.
+     */
+    queued?: boolean;
     /**
      * The thread was made for this message, and the new-thread screen already shows its row
      * (`state/setup.ts`): it does not fly in when the thread takes the screen over.
      */
     alreadyShown?: boolean;
   } = {},
-): Promise<void> {
+): Promise<TurnOutcome> {
   const conn = engine();
   const thread = get().threads[id];
+  // The prompt reads as a divider both ways: live, and after a reload from the history the engine
+  // kept, which carries the text and not this flag (state/thread.ts `CONTINUE_MARK`).
+  if (options.continued) text = withContinueMark(text);
   // A prompt no agent asked for is the user's: the thread is theirs now, even
   // when it was started by an agent (state/topLevel.ts). A resume after a
   // restart, a wake or a message from another thread is not a message the user
@@ -3123,7 +3136,7 @@ export async function runPrompt(
   if (thread?.running) {
     // An automatic compaction never waits in the queue: the next turn may run
     // before it, and the guards will offer another one in a later idle period.
-    if (options.autoCompact) return;
+    if (options.autoCompact) return "skipped";
     updateThread(id, (t) => ({
       ...t,
       queue: [
@@ -3141,16 +3154,19 @@ export async function runPrompt(
         },
       ],
     }));
-    return;
+    return "skipped";
   }
-  // A user turn starts a new idle period, which may auto-compact once more.
-  if (!options.autoCompact) beginAutoCompactIdle(id);
+  // A user turn starts a new idle period, which may auto-compact once more. The app's own continue is
+  // not one: it is the same idle period as the compaction that asked for it, and re-arming the rule
+  // that just ran would let a harness whose compaction left the context over the threshold compact
+  // and continue for ever.
+  if (!options.autoCompact && !options.continued) beginAutoCompactIdle(id);
   // Writing in a thread brings it back from a snooze, as it always has: that is the user asking for
   // it (`submit` and `steerOrSubmit` have already done it for a message they took). A turn the app
-  // starts — a delegate's wake, a resume after a restart, the next row of the queue, the turn after
-  // a usage limit — is the app's own work and leaves the snooze alone, so a sleeping thread keeps
-  // working in the background without coming back to the list.
-  if (userTypedPrompt(options) && !options.continued) wakeOnWrite(id);
+  // starts — a delegate's wake, a resume after a restart, the next row of the queue (`queued`), the
+  // turn after a usage limit — is not a new send and leaves the snooze alone, so a sleeping thread
+  // keeps working in the background without coming back to the list.
+  if (userTypedPrompt(options) && !options.queued) wakeOnWrite(id);
   const startIndex = thread?.items.length ?? 0;
   if (options.link) linkStarted(options.link);
   // The turn a restart resumes this thread with answers the links the quit severed: they work again
@@ -3173,7 +3189,16 @@ export async function runPrompt(
     options.autoCompact
       ? // The turn writes no rows, so "Compacting context…" is the one sign the thread is busy.
         startCompaction(beginQuietTurn(t))
-      : beginTurn(t, shown, Date.now(), sentAttachments(extras), options.fromView, options.wake, sent),
+      : beginTurn(
+          t,
+          shown,
+          Date.now(),
+          sentAttachments(extras),
+          options.fromView,
+          options.wake,
+          sent,
+          options.continued,
+        ),
   );
   await afterPaint();
   const harness = threadHarness(thread);
@@ -3263,6 +3288,7 @@ export async function runPrompt(
   void refreshCheckpoints(id);
   if (
     !options.autoCompact &&
+    !options.continued &&
     (outcome === "completed" || outcome === "failed") &&
     id !== get().selectedId &&
     // A thread the user snoozed says nothing: its finish waits for the snooze to end, which then
@@ -3302,11 +3328,15 @@ export async function runPrompt(
       wakeAsking: next.wakeAsking,
       automatic: next.resume !== undefined,
       // The row was typed before this turn: starting it is not a new send (`runPrompt` above).
-      continued: true,
+      queued: true,
     });
   }
-  if (outcome === "completed") scheduleAutoCompact(id);
+  if (outcome === "completed" && !options.continued) scheduleAutoCompact(id);
+  return outcome;
 }
+
+/** How a turn ended, and `skipped` for a prompt that never became one (a queued one, a compaction that found a turn running). */
+export type TurnOutcome = "completed" | "cancelled" | "failed" | "skipped";
 
 export async function cancel(id = get().selectedId): Promise<void> {
   if (!id || !connection) return;
@@ -4297,6 +4327,28 @@ function lastTurnEndedAt(thread: ThreadState | undefined): number | undefined {
   return undefined;
 }
 
+/**
+ * Whether the user stopped the thread's last turn, or it failed. The app's own quiet turns leave no
+ * footer, so the last `turnEnd` is the last turn the thread ran for its work.
+ */
+function lastTurnInterrupted(thread: ThreadState | undefined): boolean {
+  for (let i = (thread?.items.length ?? 0) - 1; i >= 0; i -= 1) {
+    const item = thread!.items[i]!;
+    if (item.kind === "turnEnd") return item.outcome !== "completed";
+  }
+  return false;
+}
+
+/**
+ * Whether the thread still owes work it started: a delegate that is still working, or a command it
+ * left running in the background. A thread that finished what it was doing has none, and a
+ * compaction is not a reason to hand it another turn.
+ */
+function workInFlightOn(s: AppState, id: string): boolean {
+  if (linksOf(s.links, id).driving.some((link) => isActive(link.state))) return true;
+  return (s.threads[id]?.waiting ?? 0) > 0;
+}
+
 function autoCompactInput(s: AppState, id: string, now: number) {
   const thread = s.threads[id];
   const links = linksOf(s.links, id);
@@ -4380,28 +4432,80 @@ function runAutoCompact(id: string): void {
   autoCompactInFlight.add(id);
   autoCompactCardSeen.delete(id);
   autoCompactPendingNotice.delete(id);
+  // What the compaction is about to hold up, read before the app's own turn starts: that turn clears
+  // the thread's waiting state (thread.ts `beginQuietTurn`), and a compaction must not lose work.
+  const wasWorking = workInFlightOn(s, id);
+  const userStopped = lastTurnInterrupted(s.threads[id]);
+  // Where the transcript is now: whatever a turn writes after it ran while the compaction did.
+  const itemsBefore = s.threads[id]?.items.length ?? 0;
   void runPrompt(id, "/compact", emptyExtras, { automatic: true, autoCompact: true })
-    .catch(() => undefined)
-    .finally(() => {
-      autoCompactInFlight.delete(id);
-      if (autoCompactCardSeen.has(id)) {
-        autoCompactPendingNotice.delete(id);
-        autoCompactCardSeen.delete(id);
+    // The compaction's own row is settled whether or not the prompt became a turn.
+    .then(
+      (outcome) => {
+        settleAutoCompactTurn(id, before);
+        return outcome;
+      },
+      () => {
+        settleAutoCompactTurn(id, before);
+        return "skipped" as TurnOutcome;
+      },
+    )
+    .then((outcome) => {
+      const after = get();
+      const thread = after.threads[id];
+      // A turn that ran since the compaction started: the queue's, which `runPrompt` starts when the
+      // compaction's own turn ends. It is the thread's next step already.
+      const carriedOn = (thread?.items.slice(itemsBefore) ?? []).some((item) => item.kind === "turnEnd");
+      if (
+        !shouldContinueAfterCompaction({
+          outcome,
+          // Read before the compaction, and again now: the work it held up must still be owed. A
+          // delegate that settled while it ran is carried by its wake, not by a second turn.
+          workInFlight: wasWorking && workInFlightOn(after, id),
+          running: thread?.running ?? false,
+          queued: thread?.queue.length ?? 0,
+          // What the user is composing counts as having the thread back, text or attachments.
+          typing: !!(after.drafts[id] ?? "").trim() || hasExtras(after.extras[id]),
+          interrupted: userStopped,
+          carriedOn,
+          putAway: id in after.snoozed || statusOf(after, id) === "done",
+        })
+      ) {
         return;
       }
-      if (contextMoved(before, get().threads[id]?.usage)) {
-        updateThread(id, (thread) => settleCompaction(thread, compactedNotice()));
-        return;
-      }
-      // The harness may send its usage just after the prompt returns: wait for
-      // that event, bounded, instead of reading a stale gauge.
-      autoCompactPendingNotice.add(id);
-      const timer = setTimeout(() => {
-        autoCompactNoticeTimers.delete(timer);
-        settleAutoCompactNotice(id);
-      }, AUTO_COMPACT_USAGE_WAIT_MS);
-      autoCompactNoticeTimers.add(timer);
-    });
+      // The compaction itself is the only turn that ran: the thread carries on with the work it
+      // still owed, as its own divider row rather than a message the user typed.
+      void runPrompt(id, CONTINUE_AFTER_COMPACTION_TEXT, emptyExtras, {
+        automatic: true,
+        continued: true,
+      }).catch(() => undefined);
+    })
+    .catch(() => undefined);
+}
+
+/**
+ * The app's compaction turn ended: its "Compacting context…" row becomes the card (a harness that
+ * sends one), the "Compacted automatically" row, or the reason nothing came of it.
+ */
+function settleAutoCompactTurn(id: string, before: SessionUsage | undefined): void {
+  autoCompactInFlight.delete(id);
+  if (autoCompactCardSeen.has(id)) {
+    autoCompactPendingNotice.delete(id);
+    autoCompactCardSeen.delete(id);
+    return;
+  }
+  if (contextMoved(before, get().threads[id]?.usage)) {
+    updateThread(id, (thread) => settleCompaction(thread, compactedNotice()));
+    return;
+  }
+  // The harness may send its usage just after the prompt returns: wait for
+  // that event, bounded, instead of reading a stale gauge.
+  autoCompactPendingNotice.add(id);
+  const timer = setTimeout(() => {
+    autoCompactNoticeTimers.delete(timer);
+    settleAutoCompactNotice(id);
+  }, AUTO_COMPACT_USAGE_WAIT_MS);
+  autoCompactNoticeTimers.add(timer);
 }
 
 /**

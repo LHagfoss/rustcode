@@ -825,9 +825,27 @@ pub struct RemoteSessionInfo {
     /// without one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_active_at: Option<String>,
+    /// The thread this one was started from, so a client can fold delegates,
+    /// forks and side chats under their parent. Absent for a top-level thread
+    /// and from a host that predates the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<RemoteThreadParent>,
     pub activity: SessionActivity,
     pub attention: RemoteAttention,
     pub health: OwnerHealth,
+}
+
+/// The thread above a related one, as the host recorded it in the thread's own
+/// metadata (`_meta.rustcode.parent` for the app). A record written before the
+/// relationship existed was always a delegate, and a record that never
+/// recovered the parent's ID has none to report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoteThreadParent {
+    pub session_id: String,
+    /// Why the parent exists: `delegate`, `fork`, `side_chat`, or `other` for
+    /// one a later release wrote. A client that does not know a value keeps the
+    /// thread as a child and never counts it as a delegate.
+    pub relationship: String,
 }
 
 /// The host's default harness, model and effort. This is the whole allowlist
@@ -956,6 +974,12 @@ pub struct RemoteSavedSession {
     /// resumed from a device.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    /// The thread this one was started from, so a client folds delegates,
+    /// forks and side chats under their parent here as it does in the live
+    /// list. Absent for a top-level thread and from a host that predates the
+    /// field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<RemoteThreadParent>,
     /// The recorded working directory, when a device can reopen the session
     /// in it. Absent for a session that predates workspace recording.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1424,6 +1448,59 @@ mod tests {
             panic!("rejections are error results");
         };
         (response.request_id, error)
+    }
+
+    fn session_info(parent: Option<RemoteThreadParent>) -> RemoteSessionInfo {
+        RemoteSessionInfo {
+            session_id: "child-session".to_owned(),
+            registration_epoch: 2,
+            title: "Fold the delegates".to_owned(),
+            workspace: None,
+            model: "gpt-5.5".to_owned(),
+            harness: Some("rustcode".to_owned()),
+            turn_count: Some(1),
+            last_active_at: None,
+            parent,
+            activity: SessionActivity::Idle,
+            attention: RemoteAttention {
+                approval: false,
+                question: false,
+            },
+            health: OwnerHealth::Live,
+        }
+    }
+
+    #[test]
+    fn a_delegate_names_its_parent_and_a_top_level_thread_omits_it() {
+        let parent = RemoteThreadParent {
+            session_id: "parent-session".to_owned(),
+            relationship: "delegate".to_owned(),
+        };
+        let child = serde_json::to_value(session_info(Some(parent.clone()))).expect("serializes");
+        assert_eq!(
+            child["parent"],
+            serde_json::json!({"session_id": "parent-session", "relationship": "delegate"})
+        );
+        let top = session_info(None);
+        let json = serde_json::to_value(&top).expect("serializes");
+        assert!(
+            json.get("parent").is_none(),
+            "a top-level thread names no parent"
+        );
+        // A host that predates the field sends a row without it; it reads as
+        // top-level, and one that carries it reads back unchanged.
+        let older: RemoteSessionInfo = serde_json::from_value(json).expect("decodes");
+        assert_eq!(older, top);
+        let decoded: RemoteSessionInfo =
+            serde_json::from_value(serde_json::to_value(session_info(Some(parent))).unwrap())
+                .expect("decodes");
+        assert_eq!(
+            decoded.parent,
+            Some(RemoteThreadParent {
+                session_id: "parent-session".to_owned(),
+                relationship: "delegate".to_owned(),
+            })
+        );
     }
 
     #[test]

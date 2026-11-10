@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  collapseNotices,
   foldEnds,
   foldLabel,
   foldTurns,
@@ -440,5 +441,62 @@ describe("changes once a newer turn exists", () => {
     // Opened, the group lists its calls: the fold ends on the last of them, not on its header.
     const grouped = groupTools(rows, new Set(["tools-a"]));
     expect(grouped[foldEnds(grouped)[turnFoldKey("e")]!]).toMatchObject({ item: { id: "b" } });
+  });
+});
+
+describe("repeated notices", () => {
+  const ALLOWED = "Cleaned up a delegate's worktree · allowed by Full access";
+  type NoticeRow = { key: string; item?: TranscriptItem; inFold?: string };
+  const notice = (
+    id: string,
+    text = ALLOWED,
+    tone: "info" | "warning" | "error" = "info",
+    progress = false,
+  ): NoticeRow => ({
+    key: id,
+    item: progress
+      ? { kind: "notice", id, text, tone, progress: true }
+      : { kind: "notice", id, text, tone, ...(id.endsWith("-x") ? { count: 2 } : {}) },
+  });
+  const ids = (rows: readonly NoticeRow[]) =>
+    rows.map((row) => (row.item && row.item.kind === "notice" ? row.item.id : row.key));
+
+  test("copies of one notice back to back read as one row that says how many", () => {
+    const rows = collapseNotices([
+      { key: "m", item: user("m") },
+      ...Array.from({ length: 6 }, (_, i) => notice(`n${i}`)),
+    ]);
+    expect(rows).toHaveLength(2);
+    // The first notice keeps the row, and so the key it is drawn under.
+    expect(rows[1]).toMatchObject({ key: "n0", item: { id: "n0", text: ALLOWED, count: 6 } });
+  });
+
+  test("a different notice keeps its row, and the order they came in", () => {
+    const rows = collapseNotices([
+      notice("a"),
+      notice("b", "Started 2 threads · allowed by Full access"),
+      notice("a2"),
+      notice("w1", "The turn failed: no output", "warning"),
+      notice("w2", "The turn failed: no output", "warning"),
+    ]);
+    expect(ids(rows)).toEqual(["a", "b", "a2", "w1"]);
+    expect(rows.at(-1)?.item).toMatchObject({ id: "w1", count: 2 });
+  });
+
+  test("a row between them keeps them apart", () => {
+    const rows = collapseNotices<NoticeRow>([notice("a"), { key: "t", item: tool("t") }, notice("b")]);
+    expect(ids(rows)).toEqual(["a", "t", "b"]);
+    expect(rows.some((row) => row.item?.kind === "notice" && row.item.count)).toBe(false);
+  });
+
+  test("a compaction still running is never folded into a finished one", () => {
+    const rows = collapseNotices([notice("done"), notice("live", ALLOWED, "info", true), notice("again")]);
+    expect(ids(rows)).toEqual(["done", "live", "again"]);
+  });
+
+  test("a row that already carries a count adds to it", () => {
+    const rows = collapseNotices([notice("n-x"), notice("n2")]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.item).toMatchObject({ id: "n-x", count: 3 });
   });
 });

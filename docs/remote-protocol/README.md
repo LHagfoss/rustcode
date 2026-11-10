@@ -517,6 +517,23 @@ and `model` is the model that harness runs the thread on (empty when the host
 does not know it). Both are additive: a client that predates them decodes the
 same frames unchanged.
 
+A session that an agent started, a fork or a side chat also carries `parent`,
+the thread it was started from:
+
+```json
+"parent": { "session_id": "20260714-091502-3fa2c1", "relationship": "delegate" }
+```
+
+`relationship` is `delegate` (an agent handed the parent's task to it, which
+includes every record written before the field existed), `fork` (the user
+copied the parent's conversation), `side_chat` (a question asked beside the
+parent from one of its messages), or `other` for a value a later release
+wrote; a client that does not know a value keeps the thread as a child and
+never counts it as a delegate. A top-level thread omits `parent`, and so does
+a record whose parent's ID was never recovered, which the client treats as
+top-level. The field rides on every session entry and is additive: a client
+that predates it decodes the same frames unchanged.
+
 The `sessions` result also carries `capabilities`, the optional host-wide
 operations the gateway implements. It is absent from gateways that implement
 none; the flags are `saved_sessions`, `session_changes`,
@@ -960,7 +977,9 @@ session was started; pass `next_cursor` back as `cursor` for the next page.
 `limit` is 1 to 100 (30 when absent). `query` keeps sessions whose title,
 workspace or ID contains it, ignoring case. Each entry has `session_id`,
 `title`, `project` (the recorded workspace directory, so a client groups
-threads by project; absent when unknown), `workspace` (absent for sessions
+threads by project; absent when unknown), `parent` (the thread this one was
+started from, the same `{ session_id, relationship }` the live list carries;
+absent for a top-level thread), `workspace` (absent for sessions
 that predate workspace recording), `updated_at` (when the transcript was last
 written), `message_count` and `state`:
 

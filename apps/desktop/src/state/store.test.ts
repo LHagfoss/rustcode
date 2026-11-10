@@ -2948,7 +2948,7 @@ describe("a thread that sleeps through its work", () => {
     const seen = toastIds();
     setSnoozed(a.id, Date.now() + 3_600_000);
     // Exactly what starting the row behind a finished turn passes: typed earlier, not now.
-    await runPrompt(a.id, "fail this turn", undefined, { continued: true });
+    await runPrompt(a.id, "fail this turn", undefined, { queued: true });
     expect(a.id in useApp.getState().snoozed).toBe(true);
     expect(toastsSince(seen)).toEqual([]);
   });

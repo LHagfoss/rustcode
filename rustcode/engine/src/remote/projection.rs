@@ -61,6 +61,9 @@ pub struct ProjectionContext {
     /// Stored session title, when the owner has one; the projection never
     /// reads the session store itself.
     pub title: Option<String>,
+    /// The thread this one was started from, read from the store by whoever
+    /// builds the context for the same reason as `title`.
+    pub parent: Option<RemoteThreadParent>,
 }
 
 /// Cut `text` to at most `max_bytes` from its start, on a character boundary.
@@ -316,6 +319,7 @@ pub fn project_session_info(state: &AppState, context: &ProjectionContext) -> Re
             .map(|message| message.timestamp.as_str())
             .find(|timestamp| !timestamp.is_empty())
             .map(str::to_owned),
+        parent: context.parent.clone(),
         activity: activity(state),
         attention: RemoteAttention {
             approval: state.pending_tool_confirmation.is_some(),
@@ -1058,6 +1062,23 @@ mod tests {
     use crate::app::{AppStatus, ChatMessage, ToolConfirmation};
 
     #[test]
+    fn a_projected_session_carries_the_parent_from_its_context() {
+        let state = state_with_history(2, 16);
+        let mut context = context();
+        assert!(project_session_info(&state, &context).parent.is_none());
+        context.parent = Some(RemoteThreadParent {
+            session_id: "parent-session".to_owned(),
+            relationship: "fork".to_owned(),
+        });
+        assert_eq!(
+            project_session_info(&state, &context).parent,
+            context.parent
+        );
+        let snapshot = project_snapshot(&state, &context, &ProjectionLimits::default());
+        assert_eq!(snapshot.session.parent, context.parent);
+    }
+
+    #[test]
     fn tool_snapshot_uses_only_authoritative_unrecorded_call_identities() {
         let mut state = state_with_history(0, 0);
         state.begin_live_tool_call(None, "run_command", &serde_json::json!({"command":"pwd"}));
@@ -1249,6 +1270,7 @@ mod tests {
             generation: 2,
             health: OwnerHealth::Live,
             title: Some("Fix the build".to_owned()),
+            parent: None,
         }
     }
 

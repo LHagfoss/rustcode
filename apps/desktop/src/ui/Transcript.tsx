@@ -23,6 +23,7 @@ import { checkpointsByMessage } from "../state/attempts";
 import { type Branch, branchesOf } from "../state/branches";
 import { COLLAPSED_MESSAGE_HEIGHT, messageCollapses } from "../state/compose";
 import {
+  collapseNotices,
   foldEnds,
   foldTurns,
   footerChangeTurns,
@@ -261,7 +262,10 @@ export function rowGap(rows: readonly Row[], index: number): number {
   if (index <= 0) return 0;
   const item = rows[index]?.item;
   const prev = rows[index - 1]?.item;
-  if ((prev?.kind === "notice" && prev.tone === "info") || (prev?.kind === "user" && !!prev.wake))
+  if (
+    (prev?.kind === "notice" && prev.tone === "info") ||
+    (prev?.kind === "user" && !!(prev.wake || prev.continued))
+  )
     return ITEM_GAP;
   return item?.kind === "user" || prev?.kind === "user" ? TURN_GAP : ITEM_GAP;
 }
@@ -466,9 +470,12 @@ export function Transcript({
   // skips a streamed chunk (state/fold.ts keepUnchangedRows).
   const drawnRows = useRef<Row[]>([]);
   const rows = useMemo<Row[]>(() => {
-    // Finished turns fold, then runs of finished tool calls inside what shows fold into one row each.
+    // Finished turns fold, then runs of finished tool calls inside what shows fold into one row each,
+    // and the same quiet notice said back to back reads as one row with its count.
     const shown = searching ? ALL_OPEN : open;
-    const grouped: Row[] = groupTools(foldTurns(visible, thread.running, shown), shown).filter(
+    const grouped: Row[] = collapseNotices(
+      groupTools(foldTurns(visible, thread.running, shown), shown),
+    ).filter(
       // The turn that just finished keeps its live header for a moment instead of its fold
       // divider: the header settles on a check and then becomes this divider.
       (row) => !(settleEnd && "fold" in row && row.fold?.key === turnFoldKey(settleEnd.id)),
@@ -1207,7 +1214,8 @@ export function Transcript({
               // A divider (a wake, a notice) already draws the line a fold header would draw again.
               const afterDivider =
                 (prev?.item?.kind === "notice" && prev.item.tone === "info") ||
-                (prev?.item?.kind === "user" && !!prev.item.wake);
+                (prev?.item?.kind === "user" && !!prev.item.wake) ||
+                (prev?.item?.kind === "user" && !!prev.item.continued);
               // The air above the row, from the same answer its estimate reads (`rowGap`), so a row
               // mounts at the size the transcript already reserved for it.
               const turnGap = rowGap(rows, v.index);
