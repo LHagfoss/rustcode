@@ -920,6 +920,11 @@ fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
         // (`orchestration/mcp_server.rs`); a RustCode turn has no renderer for
         // it, so it never reaches a built-in schema.
         || tool.name == crate::smart_ui::CHECK_TOOL_NAME
+        // Listed and answered by that same MCP server (#3369). The built-in
+        // block is at its byte cap (a v9 client's is already cut), so a tool
+        // an external harness can run without the client is offered there and
+        // not on every built-in request.
+        || tool.name == crate::pull_watch::LINK_TOOL_NAME
         || (crate::orchestration::is_tool(tool.name) && !policy.include_orchestration_tools)
         || (crate::orchestration::is_v2_tool(tool.name) && !policy.include_orchestration_v2_tools)
         || (crate::orchestration::is_v3_tool(tool.name) && !policy.include_orchestration_v3_tools)
@@ -3255,6 +3260,31 @@ mod schema_budget_tests {
                     .iter()
                     .any(|tool| tool["function"]["name"] == crate::smart_ui::CHECK_TOOL_NAME),
                 "the block check is never a built-in tool"
+            );
+        }
+    }
+
+    #[test]
+    fn the_link_tool_is_listed_only_by_the_mcp_server() {
+        // The `rustcode` MCP server an external harness runs lists it and
+        // answers it itself (`orchestration/mcp_server.rs`, #3369); the
+        // built-in block is at its byte cap, and the tool needs no client.
+        assert!(
+            crate::tools::TOOLS
+                .iter()
+                .any(|tool| tool.name == crate::pull_watch::LINK_TOOL_NAME)
+        );
+        for policy in [
+            ToolSchemaPolicy::root(true),
+            ToolSchemaPolicy::root(true).with_orchestration_tools(crate::orchestration::VERSION),
+            ToolSchemaPolicy::read_only_inspection(),
+        ] {
+            let (tools, _) = build_builtin_native_tools_schema(policy);
+            assert!(
+                !tools
+                    .iter()
+                    .any(|tool| tool["function"]["name"] == crate::pull_watch::LINK_TOOL_NAME),
+                "the link tool is never a built-in tool"
             );
         }
     }

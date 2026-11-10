@@ -70,12 +70,15 @@ pub struct Identity {
 }
 
 /// The tools the server lists, as MCP tool entries, for a client of
-/// `version`. `smart_ui` adds the block check, when the user has it on.
+/// `version`. `smart_ui` adds the block check, when the user has it on. The
+/// pull request link tool is listed for every client: this server answers it
+/// itself (#3369).
 pub fn tools(version: u8, smart_ui: bool) -> Vec<Value> {
     let names = super::tool_names(version).into_iter().chain(
-        smart_ui
-            .then_some(crate::smart_ui::CHECK_TOOL_NAME)
-            .into_iter(),
+        // Answered by this server itself rather than by the client, so no
+        // orchestration version gates it (#3369).
+        std::iter::once(crate::pull_watch::LINK_TOOL_NAME)
+            .chain(smart_ui.then_some(crate::smart_ui::CHECK_TOOL_NAME)),
     );
     names
         .filter_map(|name| crate::tools::TOOLS.iter().find(|tool| tool.name == name))
@@ -327,6 +330,30 @@ async fn call(
         return CallAnswer {
             success: output.success,
             content: output.content,
+        };
+    }
+    // A thread's pull request link (#3369) is the same store the engine's own
+    // checks read, so the server answers it here instead of asking the client:
+    // no approval is needed to watch a pull request, and an engine that is not
+    // running the app's window still links one.
+    if tool == crate::pull_watch::LINK_TOOL_NAME {
+        let args = params
+            .get("arguments")
+            .cloned()
+            .filter(Value::is_object)
+            .unwrap_or_else(|| json!({}));
+        let cwd = crate::checkpoints::thread_cwd(&identity.session_id)
+            .filter(|cwd| cwd.is_dir())
+            .or_else(|| std::env::current_dir().ok());
+        let Some(cwd) = cwd else {
+            return CallAnswer::failure("error: there is no folder to read the pull request in");
+        };
+        return match crate::pull_watch::answer(&args, &identity.session_id, &cwd).await {
+            Ok(content) => CallAnswer {
+                success: true,
+                content,
+            },
+            Err(message) => CallAnswer::failure(format!("error: {message}")),
         };
     }
     if !super::tool_names(version).contains(&tool) {
@@ -665,6 +692,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_pull_request_link_is_answered_by_the_server_without_the_app() {
+        // A socket nothing listens on: a link does not need the app either.
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.sock");
+        let identity = || Identity {
+            session_id: "thread-1".into(),
+            token: "t".into(),
+        };
+        let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                          "params": {"name": crate::pull_watch::LINK_TOOL_NAME,
+                                     "arguments": {"action": "status", "number": 9_999_999}}});
+        let answers = exchange_with(identity(), missing, &[call], false).await;
+        let result = &answers[0]["result"];
+        // Either this test config has no such link (a clear refusal) or it has
+        // one (its state): both are answered here, never forwarded.
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("has no link to pull request #9999999"),
+            "{text}"
+        );
+
+        // A bad action is refused with the ones it takes.
+        let call = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                          "params": {"name": crate::pull_watch::LINK_TOOL_NAME,
+                                     "arguments": {"action": "watch"}}});
+        let answers =
+            exchange_with(identity(), dir.path().join("missing.sock"), &[call], false).await;
+        assert_eq!(answers[0]["result"]["isError"], true);
+        assert!(
+            answers[0]["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("link, status, unlink")
+        );
+    }
+
+    #[tokio::test]
     async fn tools_list_and_call_round_trip_to_the_app() {
         let (_dir, hub) = hub().await;
         let token = hub.register("thread-1", Arc::new(EchoApp), super::super::VERSION);
@@ -700,13 +764,14 @@ mod tests {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap().to_owned())
             .collect::<Vec<_>>();
-        assert_eq!(
-            listed,
-            super::super::tool_names(super::super::VERSION)
-                .into_iter()
-                .map(str::to_owned)
-                .collect::<Vec<_>>()
-        );
+        let mut expected = super::super::tool_names(super::super::VERSION)
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        // The link tool needs no orchestration version, so it is listed last
+        // for every client and answered by this server (#3369).
+        expected.push(crate::pull_watch::LINK_TOOL_NAME.to_owned());
+        assert_eq!(listed, expected);
         assert!(answers[1]["result"]["tools"][0]["inputSchema"]["type"] == "object");
 
         let called = &answers[2]["result"];
