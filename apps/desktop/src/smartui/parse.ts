@@ -6,7 +6,6 @@
 export const MAX_SOURCE_BYTES = 64 * 1024;
 export const MAX_ELEMENTS = 5000;
 export const MIN_HEIGHT = 48;
-export const MAX_HEIGHT = 720;
 export const MAX_LIVE = 6;
 
 export type Segment =
@@ -174,7 +173,8 @@ export function blockTitle(source: string): string {
   return m?.[1]?.trim() || "Interactive view";
 }
 
-export const clampHeight = (h: number) => Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, Math.ceil(h)));
+/** A view takes its content's full height; only a title row's minimum keeps it readable. */
+export const clampHeight = (h: number) => Math.max(MIN_HEIGHT, Math.ceil(h));
 
 /** What a page may ask through `window.rustcode.send`: text, at most 2,000 characters, not blank. */
 export function viewMessage(text: unknown): string | null {

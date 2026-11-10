@@ -1094,7 +1094,8 @@ when it comes into sight, also in a chat opened later, and shows its title
 at its reserved height until then; Run stays only for one you stopped or one
 that failed. At most six run; starting a seventh stops one out of sight, else
 the oldest, which waits until it has left the viewport and come back. 64 KB of source, 5,000 elements,
-48–720 px tall and fitting the content; a page that does not load in 5 s,
+at least 48 px tall and growing to its content's full height (only `.rc-scroll`
+or the view's own CSS scrolls); a page that does not load in 5 s,
 goes 3 s without its heartbeat (a busy loop) or builds too many elements is
 stopped with its source shown; one out of sight for 30 s is torn down.
 
