@@ -568,14 +568,32 @@ function contentText(content: Json | undefined): string {
 function toolOutput(update: JsonObject): string | undefined {
   const raw = str(obj(update.rawOutput)?.content);
   if (raw !== undefined) return stripOutputFence(raw);
-  // An update that carries the call's input repeats the call, it does not answer with a result:
-  // the harness sends the call's description as content there, and shown as output it reads as
-  // what the command printed.
-  if (obj(update.rawInput) !== undefined) return undefined;
   const blocks = arr(update.content)
     .map((b) => contentText(obj(b)?.content))
     .filter((t) => t.length > 0);
-  return blocks.length ? stripOutputFence(blocks.join("\n")) : undefined;
+  if (!blocks.length) return undefined;
+  const text = blocks.join("\n");
+  if (repeatsCall(update, text)) return undefined;
+  return stripOutputFence(text);
+}
+
+/**
+ * Whether content is the call said again rather than what it printed. Some harnesses repeat a call
+ * once they have its arguments (Claude Code's adapter does), with the call's input, its description
+ * in `content` and no status: nothing has happened yet, so the row would show the description as
+ * what the command printed. The input alone is no proof of that: the engine's replay of a resumed
+ * transcript sends a call, its arguments and its recorded result in one update
+ * (`harness/transcript.rs`), and a harness can report a result next to the input it was given.
+ */
+function repeatsCall(update: JsonObject, text: string): boolean {
+  const input = obj(update.rawInput);
+  if (input === undefined) return false;
+  // A call that reports no status moved nothing forward: it restates the call where it stands.
+  if (parseToolStatus(update.status) === undefined) return true;
+  const said = text.trim();
+  return [str(input.description), str(input.summary)].some(
+    (word) => word !== undefined && word.trim() === said,
+  );
 }
 
 function parseTurn(value: Json | undefined): TurnTiming | undefined {

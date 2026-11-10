@@ -194,6 +194,51 @@ describe("ACP types", () => {
     expect(update).toMatchObject({ kind: "toolCallUpdate", output: undefined });
   });
 
+  test("a call restated alongside its input is no output, whatever status it carries", () => {
+    const update = parseSessionUpdate({
+      sessionId: "s",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "c",
+        status: "in_progress",
+        rawInput: { command: "bun test src", description: "Run the unit tests" },
+        content: [{ type: "content", content: { type: "text", text: "Run the unit tests" } }],
+      },
+    });
+    expect(update).toMatchObject({ kind: "toolCallUpdate", output: undefined });
+  });
+
+  test("a replayed call keeps what it printed next to the arguments it was given", () => {
+    // The engine's replay of a resumed transcript sends a finished call, its arguments and its
+    // recorded result as one update (`harness/transcript.rs`): the input is no proof of an echo.
+    const update = parseSessionUpdate({
+      sessionId: "s",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "c",
+        title: "ls",
+        status: "completed",
+        rawInput: { command: "ls" },
+        content: [{ type: "content", content: { type: "text", text: "a.ts\nb.ts\n" } }],
+      },
+    });
+    expect(update).toMatchObject({ kind: "toolCall", output: "a.ts\nb.ts\n" });
+  });
+
+  test("a result that arrives with the call's input is still the output", () => {
+    const update = parseSessionUpdate({
+      sessionId: "s",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "c",
+        status: "completed",
+        rawInput: { command: "bun test src", description: "Run the unit tests" },
+        content: [{ type: "content", content: { type: "text", text: "24 pass\n" } }],
+      },
+    });
+    expect(update).toMatchObject({ kind: "toolCallUpdate", output: "24 pass\n" });
+  });
+
   test("an update that carries the call's input can still answer with a result", () => {
     const update = parseSessionUpdate({
       sessionId: "s",
