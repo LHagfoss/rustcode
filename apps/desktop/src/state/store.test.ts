@@ -2925,6 +2925,24 @@ describe("a thread that sleeps through its work", () => {
     expect(toastsSince(seen)).toEqual([]);
   });
 
+  test("a message the user writes into a working sleeper brings it back at once", async () => {
+    const { a } = await background();
+    selectThread(a.id);
+    // Long enough that the turn is still running when the message arrives: it waits in the queue.
+    const running = runPrompt(a.id, "keep working");
+    await until(() => useApp.getState().threads[a.id]?.running === true);
+    setSnoozed(a.id, Date.now() + 3_600_000);
+    expect(await submit("one more thing")).toBe(true);
+    const s = useApp.getState();
+    // The write is the user asking for it, so it does not wait for the queued row's turn.
+    expect(a.id in s.snoozed).toBe(false);
+    expect(s.threads[a.id]?.queue.length).toBe(1);
+    await cancel(a.id);
+    await running;
+    // The row this test left behind is not the next one's to start from storage.
+    updateThread(a.id, (t) => ({ ...t, queue: [] }));
+  });
+
   test("the next message of the queue is not a new send, and lets it sleep", async () => {
     const { a } = await background();
     const seen = toastIds();

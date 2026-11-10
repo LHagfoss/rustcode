@@ -1633,6 +1633,16 @@ export function setSnoozed(id: string, at: number | null) {
 }
 
 /**
+ * The user wrote in this thread, so a snoozed one comes back now (`submit`, `steerOrSubmit`):
+ * writing in a thread is what asks for it, whichever way the message goes out — its own turn, the
+ * queue behind a running one, or a steer into it. A message the app sends instead is not a write
+ * and leaves the snooze alone (`runPrompt`).
+ */
+function wakeOnWrite(id: string) {
+  if (id in get().snoozed) setSnoozed(id, null);
+}
+
+/**
  * Snoozes a thread because the user asked — the sidebar's menu, the command
  * palette, the custom dialog — or wakes one with `null`.
  *
@@ -2667,7 +2677,11 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
     } else void go();
     return true;
   }
-  if (trimmed !== "/fork" || hasExtras(extras)) unsettleThreads([id], { quiet: true });
+  if (trimmed !== "/fork" || hasExtras(extras)) {
+    unsettleThreads([id], { quiet: true });
+    // Its message may wait behind the running turn: the thread comes back all the same.
+    wakeOnWrite(id);
+  }
   if (thread.running) {
     updateThread(id, (t) => ({
       ...t,
@@ -2777,6 +2791,9 @@ export async function steerOrSubmit(text: string, extras: ComposeExtras = emptyE
     return submit(text, extras);
   }
   unsettleThreads([id], { quiet: true });
+  // A steer or a queued row leaves no turn of its own behind to read the snooze: it is the user
+  // writing in the thread, so the thread comes back here (`submit` does the same).
+  wakeOnWrite(id);
   const verdict = sendDecisionFor(thread, extras);
   if (verdict.action === "steer" && (await steer(id, text, extras))) return true;
   if (verdict.action === "interruptRestart") return restartWith(id, text, extras);
@@ -3126,10 +3143,11 @@ export async function runPrompt(
   // A user turn starts a new idle period, which may auto-compact once more.
   if (!options.autoCompact) beginAutoCompactIdle(id);
   // Writing in a thread brings it back from a snooze, as it always has: that is the user asking for
-  // it. A turn the app starts — a delegate's wake, a resume after a restart, the next row of the
-  // queue, the turn after a usage limit — is the app's own work and leaves the snooze alone, so a
-  // sleeping thread keeps working in the background without coming back to the list.
-  if (userTypedPrompt(options) && !options.continued && id in get().snoozed) setSnoozed(id, null);
+  // it (`submit` and `steerOrSubmit` have already done it for a message they took). A turn the app
+  // starts — a delegate's wake, a resume after a restart, the next row of the queue, the turn after
+  // a usage limit — is the app's own work and leaves the snooze alone, so a sleeping thread keeps
+  // working in the background without coming back to the list.
+  if (userTypedPrompt(options) && !options.continued) wakeOnWrite(id);
   const startIndex = thread?.items.length ?? 0;
   if (options.link) linkStarted(options.link);
   // The turn a restart resumes this thread with answers the links the quit severed: they work again
