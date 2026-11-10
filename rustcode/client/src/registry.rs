@@ -284,6 +284,10 @@ pub struct Machine {
     pub platform: String,
     /// Routes in the order they are tried.
     pub routes: Vec<Route>,
+    /// The RustCode version that machine reported when it last answered.
+    /// `None` until it does, and from a gateway that does not report one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     /// The device record on that machine, needed for `authenticate`.
     pub device_id: String,
     pub added_at: DateTime<Utc>,
@@ -313,6 +317,7 @@ impl Machine {
             name: name.into(),
             platform: platform.into(),
             routes: vec![route],
+            version: None,
             device_id: device_id.into(),
             added_at: now,
             last_connected_at: None,
@@ -476,6 +481,9 @@ impl MachineRegistry {
                 Some(existing) => {
                     existing.name = machine.name;
                     existing.platform = machine.platform;
+                    if machine.version.is_some() {
+                        existing.version = machine.version;
+                    }
                     existing.device_id = machine.device_id;
                     for route in machine.routes {
                         existing.learn_route(route);
@@ -523,6 +531,25 @@ impl MachineRegistry {
                 machine.last_connected_at = Some(now);
             }
             Ok(())
+        })
+    }
+
+    /// Record the version a machine reported, so its row can say it needs
+    /// updating even while the machine is away. Returns whether it changed.
+    pub fn set_version(&mut self, host_id: &str, version: Option<&str>) -> Result<bool> {
+        self.mutate(|machines| {
+            let Some(machine) = machines
+                .iter_mut()
+                .find(|machine| machine.host_id == host_id)
+            else {
+                bail!("no saved machine has host id {host_id}");
+            };
+            let version = version.map(str::to_owned);
+            if machine.version == version {
+                return Ok(false);
+            }
+            machine.version = version;
+            Ok(true)
         })
     }
 

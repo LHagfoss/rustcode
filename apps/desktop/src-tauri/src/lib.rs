@@ -12,6 +12,7 @@ mod native;
 mod notify;
 mod process;
 mod pty;
+mod service;
 mod smartui;
 mod threads;
 mod updater;
@@ -100,6 +101,8 @@ pub fn run() {
             threads::thread_log_open,
             diagnostics::server_status,
             diagnostics::system_info,
+            service::server_service_status,
+            service::server_service_install,
             diagnostics::resolve_binaries,
             diagnostics::logs_folder_open,
             diagnostics::diagnostics_save,
@@ -118,6 +121,9 @@ pub fn run() {
         .setup(|app| {
             // The engine starts with the app, in parallel with the webview loading the UI.
             app.state::<EngineState>().prestart();
+            // An AppImage's bundled binary lives in a mount that goes away with the app: the
+            // copy a service runs is refreshed here, so an updated AppImage reaches it.
+            std::thread::spawn(service::refresh_program);
             // Built here, not from the config, so it renders at 120 Hz where the display does.
             webview::build_main_window(app)?;
             // A click on a notification is only reported while something listens for it.

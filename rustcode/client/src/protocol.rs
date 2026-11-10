@@ -207,6 +207,11 @@ pub enum HandshakeResponse {
         access_expires_at: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         wire_names: Option<String>,
+        /// The RustCode version running on that machine, for the row that
+        /// says it needs updating. A label, never a gate; absent from an
+        /// older gateway.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
         /// The addresses this machine answers on now, best first. A newer
         /// gateway sends them; an older one leaves the field out.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -238,6 +243,9 @@ pub enum HandshakeResponse {
         rotation_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         wire_names: Option<String>,
+        /// That machine's RustCode version, as in `paired`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
         /// The addresses this machine answers on now, best first, as in
         /// `paired`.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
