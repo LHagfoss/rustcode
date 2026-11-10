@@ -25,6 +25,9 @@ struct Row {
     machine: Machine,
     route: String,
     state: State,
+    /// What to check when one kind of route answers and another does not,
+    /// e.g. a NetBird address that is blocked while the LAN works.
+    hint: Option<String>,
     threads: Option<Vec<String>>,
 }
 
@@ -109,19 +112,20 @@ async fn list(config_dir: &std::path::Path, threads: bool, json: bool) -> Result
         return Ok(());
     }
     let tokens = TokenStore::open(config_dir)?;
-    let connector = Connector {
-        // `list` is a glance: a route that does not answer in seconds is
-        // skipped instead of waited on.
-        route_timeout: Duration::from_secs(3),
-        timeout: Duration::from_secs(5),
-        ..Connector::new(config_dir, ClientKind::Desktop)?
-    };
+    // `list` is a glance: a route that does not answer in seconds is skipped
+    // instead of waited on.
+    let connector = Connector::new(config_dir, ClientKind::Desktop)?
+        .with_timeouts(Duration::from_secs(3), Duration::from_secs(5));
     let mut rows = Vec::new();
+    // Routes learned from a handshake are saved after the run, so the loop
+    // keeps borrowing the loaded registry.
+    let mut learned: Vec<(String, Vec<Route>)> = Vec::new();
     for machine in registry.ordered() {
         let mut row = Row {
             machine: machine.clone(),
             route: route_list(machine),
             state: State::NoToken,
+            hint: None,
             threads: None,
         };
         if tokens.get(&machine.host_id)?.is_none() {
@@ -129,12 +133,21 @@ async fn list(config_dir: &std::path::Path, threads: bool, json: bool) -> Result
             rows.push(row);
             continue;
         }
-        match connector.connect(machine, &tokens).await {
-            Ok((session, route)) => {
-                row.route = route.address;
+        match connector.connect_raced(machine, &tokens).await {
+            Ok(connected) => {
+                row.route = connected.route.address.clone();
                 row.state = State::Connected;
+                if !connected.learned.is_empty() {
+                    learned.push((machine.host_id.clone(), connected.learned.clone()));
+                }
+                // A LAN win stops the race before the overlay attempts start,
+                // so ask about them to say why they are not used (#3202).
+                let failures = connector
+                    .probe_overlay_routes(machine, &connected.route)
+                    .await;
+                row.hint = rustcode_client::route_hint(&connected.route, &failures);
                 if threads {
-                    row.threads = Some(match read_threads(session).await {
+                    row.threads = Some(match read_threads(connected.session).await {
                         Ok(titles) => titles,
                         Err(error) => vec![format!("could not read threads: {error:#}")],
                     });
@@ -156,6 +169,13 @@ async fn list(config_dir: &std::path::Path, threads: bool, json: bool) -> Result
             }
         }
         rows.push(row);
+    }
+    if !learned.is_empty()
+        && let Ok(mut registry) = MachineRegistry::load(config_dir)
+    {
+        for (host_id, routes) in learned {
+            let _ = registry.learn_routes(&host_id, &routes);
+        }
     }
     if json {
         print_json(&rows);
@@ -198,6 +218,9 @@ fn print_rows(rows: &[Row]) {
         if let Some(reason) = row.state.detail() {
             println!("  {reason}");
         }
+        if let Some(hint) = &row.hint {
+            println!("  {hint}");
+        }
         for title in row.threads.iter().flatten() {
             println!("  {title}");
         }
@@ -221,6 +244,7 @@ fn print_json(rows: &[Row]) {
                 })).collect::<Vec<_>>(),
                 "state": row.state.label(),
                 "detail": row.state.detail(),
+                "hint": row.hint,
                 "added_at": row.machine.added_at,
                 "last_connected_at": row.machine.last_connected_at,
                 "threads": row.threads,

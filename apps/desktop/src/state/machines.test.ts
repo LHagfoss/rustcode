@@ -36,6 +36,7 @@ const MACHINE: Machine = {
   route: { kind: "lan", address: "192.168.1.31:17879", encrypted: false },
   state: "connected",
   detail: null,
+  hint: null,
   retryInSecs: null,
   addedAt: "2026-11-02T09:00:00+00:00",
   lastConnectedAt: "2026-11-08T09:00:00+00:00",

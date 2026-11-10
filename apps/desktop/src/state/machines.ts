@@ -41,6 +41,12 @@ export interface Machine {
   route: MachineRoute | null;
   state: MachineState;
   detail: string | null;
+  /**
+   * What to check when the machine is reachable one way and not another, e.g.
+   * the LAN works while the NetBird address does not. Set by the shell; the
+   * page may show it next to `detail`.
+   */
+  hint: string | null;
   /** Seconds until the next attempt, while it waits. */
   retryInSecs: number | null;
   addedAt: string;

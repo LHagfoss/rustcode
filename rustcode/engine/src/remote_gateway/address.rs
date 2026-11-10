@@ -169,6 +169,11 @@ impl fmt::Display for AdvertisedAddress {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListenPlan {
     pub bind: IpAddr,
+    /// Other local addresses the listener answers on when the bind is `auto`:
+    /// every other LAN address and every overlay address on a tunnel
+    /// interface. Empty for an explicit bind, including a wildcard, which
+    /// already answers on all of them.
+    pub also: Vec<IpAddr>,
     pub advertise: AdvertisedHost,
     /// The bind was `auto`: it follows the machine's addresses.
     pub automatic_bind: bool,
@@ -211,9 +216,18 @@ pub fn plan_listen_with_preference(
             .parse()
             .map_err(|_| AddressError::InvalidBind(bind.to_string()))?
     };
+    // An `auto` bind follows every address the machine answers on, not only
+    // the advertised one: at home the LAN works, away a mesh VPN does, and a
+    // device learns both from the handshake or the pairing details.
+    let also = if automatic_bind && !bind.is_unspecified() {
+        other_listen_addresses(bind, candidates)
+    } else {
+        Vec::new()
+    };
     if let Some(advertise) = advertise {
         return Ok(ListenPlan {
             bind,
+            also,
             advertise: AdvertisedHost::parse(advertise)?,
             automatic_bind,
             fixed_advertise: true,
@@ -222,6 +236,7 @@ pub fn plan_listen_with_preference(
     if !bind.is_unspecified() {
         return Ok(ListenPlan {
             bind,
+            also,
             advertise: AdvertisedHost::from_ip(bind)?,
             automatic_bind,
             fixed_advertise: false,
@@ -236,6 +251,7 @@ pub fn plan_listen_with_preference(
     match reachable.as_slice() {
         [only] => Ok(ListenPlan {
             bind,
+            also,
             advertise: AdvertisedHost::from_ip(only.address)?,
             automatic_bind,
             fixed_advertise: false,
@@ -246,13 +262,114 @@ pub fn plan_listen_with_preference(
     }
 }
 
+/// Every address an `auto` listener opens besides its primary one: the LAN
+/// addresses and the overlay addresses on tunnel interfaces. Deterministic
+/// and deduplicated, so a replanned set compares equal when nothing changed.
+fn other_listen_addresses(bind: IpAddr, candidates: &[Candidate]) -> Vec<IpAddr> {
+    let mut also: Vec<IpAddr> = eligible_candidates(candidates)
+        .into_iter()
+        .map(|candidate| candidate.address.to_canonical())
+        .filter(|address| *address != bind.to_canonical())
+        .collect();
+    also.sort();
+    also.dedup();
+    also
+}
+
 /// True for interface names belonging to a NetBird mesh: `wt0`-style
 /// WireGuard devices on Linux/Windows, or anything with netbird in the name.
-/// (On macOS NetBird uses a generic `utun` device shared with other VPNs, so
-/// there `--advertise <host>.netbird.cloud` is the reliable route.)
+/// (On macOS NetBird uses a generic `utun` device, so there only the address
+/// range tells that a mesh is up.)
 pub fn is_netbird_interface(interface: &str) -> bool {
     let name = interface.to_ascii_lowercase();
     name.starts_with("wt") || name.contains("netbird")
+}
+
+/// True for interfaces that are tunnels rather than the local network:
+/// macOS's `utun`, Linux's `tailscale0`/`wt0`/`zt0`, WireGuard's `wg0`, and
+/// the adapter names Windows gives such products ("NetBird", "Tailscale",
+/// "WireGuard Tunnel", "ZeroTier One"). A private address on one of these is
+/// an overlay address, which is reachable from another machine running the
+/// same overlay and is never the local network.
+pub fn is_tunnel_interface(interface: &str) -> bool {
+    let name = interface.to_ascii_lowercase();
+    [
+        "utun",
+        "tun",
+        "tap",
+        "wg",
+        "wireguard",
+        "wt",
+        "netbird",
+        "tailscale",
+        "zt",
+        "zerotier",
+        "wintun",
+        "vpn",
+        "ppp",
+        "ipsec",
+        "nordlynx",
+        "nebula",
+    ]
+    .iter()
+    .any(|prefix| name.starts_with(prefix))
+}
+
+/// The mesh product an interface belongs to, when its name says which one.
+/// macOS names every VPN `utunN`, so there the provider stays unknown and the
+/// address is reported as a plain overlay address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OverlayProvider {
+    Netbird,
+    Tailscale,
+    Zerotier,
+}
+
+impl OverlayProvider {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Netbird => "netbird",
+            Self::Tailscale => "tailscale",
+            Self::Zerotier => "zerotier",
+        }
+    }
+
+    /// The product's name as a person writes it. Used in the hint a device
+    /// shows when this overlay does not answer.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Netbird => "NetBird",
+            Self::Tailscale => "Tailscale",
+            Self::Zerotier => "ZeroTier",
+        }
+    }
+
+    pub fn from_interface(interface: &str) -> Option<Self> {
+        let name = interface.to_ascii_lowercase();
+        if is_netbird_interface(&name) {
+            Some(Self::Netbird)
+        } else if name.contains("tailscale") {
+            Some(Self::Tailscale)
+        } else if name.contains("zerotier") || name.starts_with("zt") {
+            Some(Self::Zerotier)
+        } else {
+            None
+        }
+    }
+}
+
+impl fmt::Display for OverlayProvider {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+/// Tailscale's IPv6 prefix, `fd7a:115c:a1e0::/48`, the part of its address
+/// space that is not shared with other unique-local networks.
+fn is_tailscale_ipv6(ip: std::net::Ipv6Addr) -> bool {
+    let segments = ip.segments();
+    segments[0] == 0xfd7a && segments[1] == 0x115c && segments[2] == 0xa1e0
 }
 
 /// True when `interface` is selected by a `prefer_interface` value: a
@@ -321,6 +438,10 @@ fn eligible_candidates(candidates: &[Candidate]) -> Vec<&Candidate> {
                 && !address.is_unspecified()
                 && !address.is_multicast()
                 && !matches!(address, IpAddr::V4(ip) if ip.is_link_local() || ip.is_broadcast())
+                // A `100.64.0.0/10` address is a mesh address only on a
+                // tunnel. Anywhere else it is a carrier's CGNAT range, which
+                // no other machine shares: never bound, never reported.
+                && !matches!(address, IpAddr::V4(ip) if is_shared_address_space(ip) && !is_tunnel_interface(interface))
                 && !matches!(address, IpAddr::V6(ip) if ip.is_unicast_link_local())
                 && is_auto_candidate_interface(interface)
         })
@@ -436,13 +557,31 @@ pub fn alternate_addresses(
     advertised: &AdvertisedAddress,
     candidates: &[Candidate],
 ) -> Vec<String> {
-    if !bind.is_unspecified() {
-        return Vec::new();
-    }
+    alternates_for(&[bind], advertised, candidates)
+}
+
+/// The same list for a gateway listening on several addresses: every address
+/// it is bound to, plus, for a wildcard bind, every candidate of that family.
+/// An `auto` gateway now answers on its LAN and overlay addresses, so pairing
+/// details can carry both.
+pub fn alternates_for(
+    bound: &[IpAddr],
+    advertised: &AdvertisedAddress,
+    candidates: &[Candidate],
+) -> Vec<String> {
+    let wildcard_v4 = bound.iter().any(|ip| ip.is_ipv4() && ip.is_unspecified());
+    let wildcard_v6 = bound.iter().any(|ip| ip.is_ipv6() && ip.is_unspecified());
+    let reachable: Vec<Candidate> = candidates
+        .iter()
+        .filter(|candidate| match candidate.address {
+            IpAddr::V4(_) => wildcard_v4 || wildcard_v6 || bound.contains(&candidate.address),
+            IpAddr::V6(_) => wildcard_v6 || bound.contains(&candidate.address),
+        })
+        .cloned()
+        .collect();
     let advertised_ip = advertised.host().ip();
-    let mut ranked: Vec<(u8, IpAddr)> = eligible_candidates(candidates)
+    let mut ranked: Vec<(u8, IpAddr)> = eligible_candidates(&reachable)
         .into_iter()
-        .filter(|candidate| bind.is_ipv6() || candidate.address.is_ipv4())
         .map(|candidate| {
             (
                 candidate.interface.as_str(),
@@ -454,7 +593,9 @@ pub fn alternate_addresses(
             let rank = match address {
                 IpAddr::V4(ip) if ip.is_private() && is_lan_interface(interface) => 0,
                 IpAddr::V4(ip) if is_shared_address_space(ip) => 1,
+                IpAddr::V4(ip) if ip.is_private() => 1,
                 IpAddr::V6(ip) if is_global_ipv6(ip) => 2,
+                IpAddr::V6(ip) if is_tailscale_ipv6(ip) => 1,
                 _ => return None,
             };
             Some((rank, address))
@@ -477,13 +618,28 @@ pub fn alternate_addresses(
 pub enum HostRouteKind {
     /// A private IPv4 address on a local network interface (Wi-Fi, Ethernet).
     Lan,
-    /// A `100.64.0.0/10` mesh address, as NetBird and Tailscale hand out.
-    Vpn,
+    /// A private overlay or VPN address: a `100.64.0.0/10` mesh address, or a
+    /// tunnel-facing unique-local address on a tunnel interface. `vpn` is
+    /// what a gateway before this kind reported and is still read.
+    #[serde(alias = "vpn")]
+    Overlay,
     /// A host name: the machine's `.local` name, or another advertised name.
     Hostname,
     /// A public address or name. Plain LAN traffic is unencrypted, so a
     /// client should prefer the other kinds.
     Public,
+}
+
+impl HostRouteKind {
+    /// Try order: the LAN first, then an overlay, then a name, then public.
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::Lan => 0,
+            Self::Overlay => 1,
+            Self::Hostname => 2,
+            Self::Public => 3,
+        }
+    }
 }
 
 /// One address a device can dial this host at, as the handshake reports it.
@@ -492,21 +648,56 @@ pub struct HostRoute {
     /// `host:port` a device dials.
     pub address: String,
     pub kind: HostRouteKind,
+    /// Which mesh product the address is on, when the interface name says:
+    /// `netbird`, `tailscale` or `zerotier`. Absent for a LAN address and for
+    /// a tunnel whose name names no product (macOS's `utunN`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<OverlayProvider>,
 }
 
 /// Most routes one handshake reports, so the frame stays small.
 pub const MAX_ROUTES: usize = 8;
 
-/// Which kind a local address is, when a device could plausibly dial it.
-/// Global IPv4 is left out: a NAT usually stops it, and the host reports the
-/// names it is reachable by instead. Unique-local IPv6 counts as a VPN.
-fn route_kind(address: IpAddr) -> Option<HostRouteKind> {
+/// Which kind a local address is, when a device could plausibly dial it. A
+/// `100.64.0.0/10` address counts only on a tunnel interface: on Wi-Fi or
+/// Ethernet it is a carrier's CGNAT range, which no other machine can dial.
+/// A private IPv4 on a tunnel is an overlay, on Wi-Fi it is the LAN. Global
+/// IPv4 is left out (a NAT usually stops it) and so is global IPv6 (the
+/// advertised name is what a machine reports for a public path).
+fn route_kind_for(
+    interface: &str,
+    address: IpAddr,
+) -> Option<(HostRouteKind, Option<OverlayProvider>)> {
+    let tunnel = is_tunnel_interface(interface);
+    let provider = OverlayProvider::from_interface(interface);
     match address {
-        IpAddr::V4(ip) if is_shared_address_space(ip) => Some(HostRouteKind::Vpn),
-        IpAddr::V4(ip) if ip.is_private() => Some(HostRouteKind::Lan),
+        IpAddr::V4(ip) if is_shared_address_space(ip) => {
+            tunnel.then_some((HostRouteKind::Overlay, provider))
+        }
+        IpAddr::V4(ip) if ip.is_private() => Some(if tunnel {
+            (HostRouteKind::Overlay, provider)
+        } else {
+            (HostRouteKind::Lan, None)
+        }),
         IpAddr::V4(_) => None,
-        IpAddr::V6(ip) if (ip.segments()[0] & 0xfe00) == 0xfc00 => Some(HostRouteKind::Vpn),
+        IpAddr::V6(ip) if is_tailscale_ipv6(ip) || (ip.segments()[0] & 0xfe00) == 0xfc00 => {
+            Some((HostRouteKind::Overlay, provider))
+        }
         IpAddr::V6(_) => None,
+    }
+}
+
+/// Which kind an address is without knowing its interface: what the
+/// advertised address is reported as.
+fn standalone_route_kind(address: IpAddr) -> HostRouteKind {
+    match address {
+        IpAddr::V4(ip) if is_shared_address_space(ip) => HostRouteKind::Overlay,
+        IpAddr::V4(ip) if ip.is_private() => HostRouteKind::Lan,
+        IpAddr::V4(_) => HostRouteKind::Public,
+        IpAddr::V6(ip) if is_tailscale_ipv6(ip) || (ip.segments()[0] & 0xfe00) == 0xfc00 => {
+            HostRouteKind::Overlay
+        }
+        IpAddr::V6(_) => HostRouteKind::Public,
     }
 }
 
@@ -525,29 +716,31 @@ pub fn host_routes(
     }
     let port = advertised.port();
     let mut routes = Vec::new();
-    let advertised_kind = match advertised.host() {
-        host if host.ip().is_none() => HostRouteKind::Hostname,
-        host => host
-            .ip()
-            .and_then(route_kind)
-            .unwrap_or(HostRouteKind::Public),
+    let (advertised_kind, advertised_provider) = match &advertised.host() {
+        host if host.ip().is_none() => (HostRouteKind::Hostname, None),
+        host => {
+            let ip = host.ip().expect("a host with an ip");
+            (
+                standalone_route_kind(ip),
+                candidates
+                    .iter()
+                    .find(|candidate| candidate.address == ip)
+                    .and_then(|candidate| OverlayProvider::from_interface(&candidate.interface)),
+            )
+        }
     };
     routes.push(HostRoute {
         address: advertised.to_string(),
         kind: advertised_kind,
+        provider: advertised_provider,
     });
     let mut ranked: Vec<(u8, HostRoute)> = eligible_candidates(candidates)
         .into_iter()
         .filter_map(|candidate| {
-            let kind = route_kind(candidate.address.to_canonical())?;
-            let rank = match kind {
-                HostRouteKind::Lan => 0,
-                HostRouteKind::Vpn => 1,
-                HostRouteKind::Hostname => 2,
-                HostRouteKind::Public => 3,
-            };
+            let (kind, provider) =
+                route_kind_for(&candidate.interface, candidate.address.to_canonical())?;
             Some((
-                rank,
+                kind.rank(),
                 HostRoute {
                     address: format!(
                         "{}",
@@ -556,6 +749,7 @@ pub fn host_routes(
                             .with_port(port)
                     ),
                     kind,
+                    provider,
                 },
             ))
         })
@@ -583,6 +777,7 @@ pub fn host_routes(
             routes.push(HostRoute {
                 address,
                 kind: HostRouteKind::Hostname,
+                provider: None,
             });
         }
     }
@@ -721,6 +916,175 @@ mod tests {
         Candidate {
             interface: interface.into(),
             address: address.parse().unwrap(),
+        }
+    }
+
+    #[test]
+    fn shared_address_on_wifi_is_not_an_automatic_candidate() {
+        let candidates = [candidate("en0", "100.90.16.237")];
+        assert!(automatic_address_with_route(&candidates, None).is_loopback());
+        let advertised = AdvertisedAddress::new("192.168.1.2", 17879).unwrap();
+        assert_eq!(host_routes(&advertised, &candidates, None).len(), 1);
+        // Nor is it an address the listener opens or reports: a CGNAT address
+        // on Wi-Fi is the carrier's, not a mesh address another machine shares.
+        let plan = plan_listen("auto", None, &[candidate("en0", "10.0.0.5")]);
+        let plan = plan.unwrap();
+        assert_eq!(plan.bind, "10.0.0.5".parse::<IpAddr>().unwrap());
+        assert!(plan.also.is_empty());
+        let mixed = [
+            candidate("en0", "10.0.0.5"),
+            candidate("en0", "100.90.16.237"),
+        ];
+        assert!(plan_listen("auto", None, &mixed).unwrap().also.is_empty());
+    }
+
+    #[test]
+    fn automatic_bind_also_listens_on_the_overlay_addresses() {
+        let candidates = [
+            candidate("en0", "192.168.1.20"),
+            candidate("en1", "10.0.0.9"),
+            candidate("utun4", "100.90.16.237"),
+            candidate("tailscale0", "100.101.1.2"),
+            candidate("zt0", "10.147.20.5"),
+            candidate("bridge100", "192.168.64.1"),
+        ];
+        let plan = plan_listen("auto", None, &candidates).unwrap();
+        // One LAN address is what pairing details advertise; every other LAN
+        // address and every overlay address is another listener, so the
+        // gateway answers at home and away.
+        assert!(["192.168.1.20", "10.0.0.9"].contains(&plan.bind.to_string().as_str()));
+        let also: Vec<String> = plan.also.iter().map(|ip| ip.to_string()).collect();
+        for address in ["10.147.20.5", "100.101.1.2", "100.90.16.237"] {
+            assert!(
+                also.contains(&address.to_owned()),
+                "{address} not in {also:?}"
+            );
+        }
+        assert_eq!(
+            also.iter()
+                .filter(|address| ["192.168.1.20", "10.0.0.9"].contains(&address.as_str()))
+                .count(),
+            1,
+            "the other LAN address is listened on too: {also:?}"
+        );
+        assert!(
+            !also.contains(&"192.168.64.1".to_owned()),
+            "a VM bridge is not"
+        );
+        // A specific bind answers on that address only, and a wildcard
+        // already answers on all of them.
+        let fixed = plan_listen("192.168.1.20", None, &candidates).unwrap();
+        assert!(fixed.also.is_empty());
+        let wildcard = plan_listen("0.0.0.0", Some("192.168.1.20"), &candidates).unwrap();
+        assert!(wildcard.also.is_empty());
+        // With only a mesh up, auto advertises the mesh and opens nothing else.
+        let mesh = plan_listen("auto", None, &[candidate("utun4", "100.90.16.237")]).unwrap();
+        assert_eq!(mesh.bind, "100.90.16.237".parse::<IpAddr>().unwrap());
+        assert!(mesh.also.is_empty());
+    }
+
+    #[test]
+    fn overlay_interfaces_are_recognized_on_every_platform() {
+        for name in [
+            "utun4",
+            "tun0",
+            "wg0",
+            "wt0",
+            "tailscale0",
+            "zt0",
+            "wintun",
+            "WireGuard Tunnel",
+            "NetBird",
+            "Tailscale",
+            "ZeroTier One [zt0]",
+            "VPN Connection",
+        ] {
+            assert!(is_tunnel_interface(name), "{name}");
+        }
+        for name in ["en0", "eth0", "wlan0", "Wi-Fi", "Ethernet", "lo0"] {
+            assert!(!is_tunnel_interface(name), "{name}");
+        }
+        assert_eq!(
+            OverlayProvider::from_interface("wt0"),
+            Some(OverlayProvider::Netbird)
+        );
+        assert_eq!(
+            OverlayProvider::from_interface("NetBird"),
+            Some(OverlayProvider::Netbird)
+        );
+        assert_eq!(
+            OverlayProvider::from_interface("tailscale0"),
+            Some(OverlayProvider::Tailscale)
+        );
+        assert_eq!(
+            OverlayProvider::from_interface("ZeroTier One"),
+            Some(OverlayProvider::Zerotier)
+        );
+        assert_eq!(
+            OverlayProvider::from_interface("zt0"),
+            Some(OverlayProvider::Zerotier)
+        );
+        // macOS shares one `utun` device between VPN products.
+        assert_eq!(OverlayProvider::from_interface("utun4"), None);
+        assert_eq!(OverlayProvider::from_interface("en0"), None);
+    }
+
+    #[test]
+    fn routes_report_an_overlay_with_its_provider() {
+        let candidates = [
+            candidate("en0", "192.168.1.20"),
+            candidate("NetBird", "100.90.16.237"),
+            candidate("tailscale0", "100.101.1.2"),
+            candidate("zt0", "10.147.20.5"),
+            candidate("utun4", "100.90.16.238"),
+        ];
+        let advertised = AdvertisedAddress::new("192.168.1.20", 17879).unwrap();
+        let routes = host_routes(&advertised, &candidates, None);
+        let kind = |address: &str| {
+            routes
+                .iter()
+                .find(|route| route.address == address)
+                .map(|route| (route.kind, route.provider))
+                .unwrap_or_else(|| panic!("no route {address} in {routes:?}"))
+        };
+        assert_eq!(kind("192.168.1.20:17879"), (HostRouteKind::Lan, None));
+        assert_eq!(
+            kind("100.90.16.237:17879"),
+            (HostRouteKind::Overlay, Some(OverlayProvider::Netbird))
+        );
+        assert_eq!(
+            kind("100.101.1.2:17879"),
+            (HostRouteKind::Overlay, Some(OverlayProvider::Tailscale))
+        );
+        assert_eq!(
+            kind("10.147.20.5:17879"),
+            (HostRouteKind::Overlay, Some(OverlayProvider::Zerotier))
+        );
+        assert_eq!(kind("100.90.16.238:17879"), (HostRouteKind::Overlay, None));
+        // The advertised address carries its provider too, so a client whose
+        // route in use is the mesh can name it.
+        let mesh = AdvertisedAddress::new("100.90.16.237", 17879).unwrap();
+        let routes = host_routes(&mesh, &candidates, None);
+        assert_eq!(routes[0].kind, HostRouteKind::Overlay);
+        assert_eq!(routes[0].provider, Some(OverlayProvider::Netbird));
+    }
+
+    #[test]
+    fn an_older_gateway_route_kind_is_still_read() {
+        for (kind, expected) in [
+            ("lan", HostRouteKind::Lan),
+            ("vpn", HostRouteKind::Overlay),
+            ("overlay", HostRouteKind::Overlay),
+            ("hostname", HostRouteKind::Hostname),
+            ("public", HostRouteKind::Public),
+        ] {
+            let route: HostRoute = serde_json::from_value(serde_json::json!({
+                "address": "10.0.0.2:17879",
+                "kind": kind,
+            }))
+            .unwrap();
+            assert_eq!(route.kind, expected, "{kind}");
+            assert_eq!(route.provider, None, "{kind}");
         }
     }
 
@@ -1025,18 +1389,26 @@ mod tests {
         let unspecified = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
         assert_eq!(
             alternate_addresses(unspecified, &advertised, &machine()),
-            ["192.168.31.185:17879"],
+            ["192.168.31.185:17879", "10.8.0.2:17879"],
         );
         let dual_stack: IpAddr = "::".parse().unwrap();
         assert_eq!(
             alternate_addresses(dual_stack, &advertised, &machine()),
-            ["192.168.31.185:17879", "[2a01:79c:cebf:d688::1]:17879"],
+            [
+                "192.168.31.185:17879",
+                "10.8.0.2:17879",
+                "[2a01:79c:cebf:d688::1]:17879"
+            ],
         );
 
         let lan = AdvertisedAddress::new("192.168.31.185", 17879).unwrap();
         assert_eq!(
             alternate_addresses(dual_stack, &lan, &machine()),
-            ["100.90.16.237:17879", "[2a01:79c:cebf:d688::1]:17879"],
+            [
+                "10.8.0.2:17879",
+                "100.90.16.237:17879",
+                "[2a01:79c:cebf:d688::1]:17879"
+            ],
         );
     }
 
@@ -1045,7 +1417,11 @@ mod tests {
         let named = AdvertisedAddress::new("mac.netbird.cloud", 17879).unwrap();
         assert_eq!(
             alternate_addresses(IpAddr::V4(Ipv4Addr::UNSPECIFIED), &named, &machine()),
-            ["192.168.31.185:17879", "100.90.16.237:17879"],
+            [
+                "192.168.31.185:17879",
+                "10.8.0.2:17879",
+                "100.90.16.237:17879"
+            ],
         );
     }
 
@@ -1091,9 +1467,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             [
                 ("192.168.31.185:17879", HostRouteKind::Lan),
-                ("10.8.0.2:17879", HostRouteKind::Lan),
-                ("100.90.16.237:17879", HostRouteKind::Vpn),
-                ("[fd00::1]:17879", HostRouteKind::Vpn),
+                ("10.8.0.2:17879", HostRouteKind::Overlay),
+                ("100.90.16.237:17879", HostRouteKind::Overlay),
+                ("[fd00::1]:17879", HostRouteKind::Overlay),
                 ("rustcode-8e1f4b7a.local:17879", HostRouteKind::Hostname),
             ],
         );

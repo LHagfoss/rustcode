@@ -1608,3 +1608,57 @@ async fn a_device_pairing_with_the_code_says_what_it_is() {
     assert_eq!(device.host_id.as_deref(), Some("host-fedcba9876543210"));
     harness.stop().await;
 }
+
+/// An `auto` gateway listens on every address it answers on, and an extra
+/// listener serves the same gateway: a device that can only reach the overlay
+/// address pairs and authenticates exactly like one on the LAN (#3202).
+#[tokio::test]
+async fn an_extra_listener_serves_the_same_gateway() {
+    let dir = tempfile::tempdir_in("/tmp").unwrap();
+    let lifecycle = RemoteLifecycle::new(dir.path());
+    // The machine's own network address, where there is one: macOS binds only
+    // 127.0.0.1 on loopback, Linux and Windows would take another alias, and
+    // production extras are exactly these interface addresses.
+    let Some(extra) = crate::remote_gateway::address::candidate_addresses()
+        .into_iter()
+        .find(|candidate| candidate.address.is_ipv4() && !candidate.address.is_loopback())
+        .map(|candidate| candidate.address)
+    else {
+        return;
+    };
+    let mut plan = plan_listen("127.0.0.1", None, &[]).unwrap();
+    plan.also.push(extra);
+    let gateway = Gateway::bind(
+        &lifecycle,
+        GatewayConfig {
+            replan: None,
+            plan,
+            port: 0,
+            router: Arc::new(RecordingRouter::default()),
+            sessions: None,
+            limits: Limits::default(),
+        },
+    )
+    .await
+    .unwrap();
+    let port = gateway.local_addr().port();
+    let shutdown = gateway.shutdown_token();
+    let task = tokio::spawn(gateway.run());
+
+    let offer = bounded(lifecycle.pair()).await.unwrap();
+    let mut client = Client::connect(SocketAddr::new(extra, port)).await;
+    client
+        .send(json!({
+            "type": "pair",
+            "protocol_version": 1,
+            "method": "credential",
+            "secret": offer.credential.expose(),
+            "device_name": "overlay device",
+        }))
+        .await;
+    let paired = client.next_json().await;
+    assert_eq!(paired["type"], "paired", "{paired}");
+
+    shutdown.cancel();
+    bounded(task).await.unwrap().unwrap();
+}
