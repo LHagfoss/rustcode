@@ -436,8 +436,9 @@ client holds.
 
 `session_id` and `registration_epoch` are required on every operation except
 the host-wide ones: `list_sessions`, `subscribe_sessions`, `get_request_status`,
-`list_directories`, `create_session`, `request_share`, `list_saved_sessions`
-and `resume_session`. Device identity
+`list_directories`, `create_session`, `request_share`, `list_saved_sessions`,
+`resume_session`, `get_usage`, `get_settings`, `set_settings`, `pin_thread`,
+`unpin_thread`, `settle_thread` and `unsettle_thread`. Device identity
 comes from authentication and is never part of a frame.
 
 ## Operations
@@ -459,6 +460,11 @@ comes from authentication and is never part of a frame.
 | `list_saved_sessions` | gateway (`saved_sessions`) | `saved_sessions` | `invalid_request` |
 | `resume_session` | gateway (`saved_sessions`) | `session_resumed` | `not_found`, `busy`, `open_elsewhere`, `invalid_request`, `internal` |
 | `get_changes` | terminal (`session_changes`) | `changes` | `not_found` (no workspace), `stale_session` |
+| `get_usage` | gateway (`usage_summary`) | `usage` | `internal` |
+| `get_settings` | gateway (`settings_get`) | `settings` | `invalid_request`, `internal` |
+| `set_settings` | gateway (`settings_set`) | `settings` | `invalid_request`, `internal` |
+| `pin_thread`, `unpin_thread` | gateway (`thread_pin`, `thread_unpin`) | `thread_pinned` | `invalid_request` |
+| `settle_thread`, `unsettle_thread` | gateway (`thread_settle`, `thread_unsettle`) | `thread_settled` | `invalid_request` |
 
 Any request can also be rejected with:
 
@@ -510,9 +516,11 @@ same frames unchanged.
 
 The `sessions` result also carries `capabilities`, the optional host-wide
 operations the gateway implements. It is absent from gateways that implement
-none; the flags are `saved_sessions`, `session_changes` and
-`thread_create_options`. A client offers a feature only when its flag is
-listed; an older owner answers `get_changes` with `unsupported_operation`.
+none; the flags are `saved_sessions`, `session_changes`,
+`thread_create_options`, `usage_summary`, `settings_get`, `settings_set`,
+`thread_pin`, `thread_unpin`, `thread_settle` and `thread_unsettle`. A client
+offers a feature only when its flag is listed; an older owner answers
+`get_changes` with `unsupported_operation`.
 `thread_create_options` is not a fixed feature of the gateway: it is listed
 while a share that can start threads (the desktop app's) is live, so a client
 reads it from every `list_sessions`/`subscribe_sessions` answer rather than
@@ -983,6 +991,87 @@ when the process ends, so a lock left by a dead process does not count. A
 session without a recorded workspace, or whose
 workspace no longer exists, with `invalid_request`, an unknown ID with
 `not_found`; nothing is started for any of them.
+
+### Usage, host settings and thread status
+
+These five features are host-wide: they name no shared session, so they need
+no `session_id` or `registration_epoch` on the envelope. Each is offered only
+when its capability flag is listed in a `sessions` result, so a phone can tell
+an older Mac from one that supports the operation.
+
+`get_usage` (capability `usage_summary`) returns the last 30 days from the
+store `rustcode usage` reads, today included. Every token field is what a
+harness reported; `cost_usd` is only ever the USD a harness reported, never a
+price RustCode computed. A field no turn reported is absent, not zero. Days
+and groups are bounded to 1000 rows; `by_day` is newest first, the other two
+are largest token total first.
+
+```json
+{"protocol_version": 1, "request_id": "req-usage", "operation": {"type": "get_usage"}}
+```
+
+```json
+{
+  "kind": "response", "protocol_version": 1, "request_id": "req-usage",
+  "result": {
+    "type": "usage", "since": "2026-06-15", "until": "2026-07-14",
+    "totals": {"input_tokens": 120000, "output_tokens": 9000, "cached_tokens": 40000, "cache_write_tokens": 8000, "cost_usd": 1.42, "turns": 12},
+    "by_day": [{"day": "2026-07-14", "usage": {"input_tokens": 20000, "output_tokens": 1500, "cached_tokens": 6000, "cache_write_tokens": 1000, "cost_usd": 0.24, "turns": 2}}],
+    "by_harness": [{"harness": "codex", "usage": {"input_tokens": 90000, "output_tokens": 7000, "cached_tokens": 30000, "cache_write_tokens": 6000, "cost_usd": 1.1, "turns": 8}}],
+    "by_model": [{"harness": "codex", "model": "gpt-5.5", "usage": {"input_tokens": 90000, "output_tokens": 7000, "cached_tokens": 30000, "cache_write_tokens": 6000, "cost_usd": 1.1, "turns": 8}}]
+  }
+}
+```
+
+`get_settings` (capability `settings_get`) returns only the host's default
+harness, model and effort. No other host setting is visible over the remote
+protocol.
+
+```json
+{"protocol_version": 1, "request_id": "req-settings", "operation": {"type": "get_settings"}}
+```
+
+```json
+{"kind": "response", "protocol_version": 1, "request_id": "req-settings", "result": {"type": "settings", "harness": "codex", "model": "gpt-5.5", "effort": "high"}}
+```
+
+`set_settings` (capability `settings_set`) writes the same three fields.
+`harness`, `model` and `effort` are the whole allowlist; a key outside it is
+rejected with `invalid_request` and nothing is written. A field that is absent
+(rather than `null`) keeps its current value. The answer is the complete
+`settings` result after the write, with a `receipt`.
+
+```json
+{"protocol_version": 1, "request_id": "req-set-settings", "operation": {"type": "set_settings", "settings": {"harness": "codex", "model": "gpt-5.5", "effort": "high"}}}
+```
+
+```json
+{"kind": "response", "protocol_version": 1, "request_id": "req-set-settings", "receipt": "applied", "result": {"type": "settings", "harness": "codex", "model": "gpt-5.5", "effort": "high"}}
+```
+
+`pin_thread`, `unpin_thread`, `settle_thread` and `unsettle_thread` use the
+engine's own thread paths, so a pin or a settled state is the same one the
+desktop app shows. They work for a saved thread as well as a shared one, and
+name the thread in the operation because the shared-session envelope is not
+required. Settling stores `done`; unsettling returns the thread to `idle`.
+Answers are `thread_pinned { session_id, pinned }` and
+`thread_settled { session_id, settled }`, each with a `receipt`.
+
+```json
+{"protocol_version": 1, "request_id": "req-pin", "operation": {"type": "pin_thread", "session_id": "20260714-091502-3fa2c1"}}
+{"protocol_version": 1, "request_id": "req-unpin", "operation": {"type": "unpin_thread", "session_id": "20260714-091502-3fa2c1"}}
+{"protocol_version": 1, "request_id": "req-settle", "operation": {"type": "settle_thread", "session_id": "20260714-091502-3fa2c1"}}
+{"protocol_version": 1, "request_id": "req-unsettle", "operation": {"type": "unsettle_thread", "session_id": "20260714-091502-3fa2c1"}}
+```
+
+```json
+{"kind": "response", "protocol_version": 1, "request_id": "req-pin", "receipt": "applied", "result": {"type": "thread_pinned", "session_id": "20260714-091502-3fa2c1", "pinned": true}}
+{"kind": "response", "protocol_version": 1, "request_id": "req-settle", "receipt": "applied", "result": {"type": "thread_settled", "session_id": "20260714-091502-3fa2c1", "settled": true}}
+```
+
+Snooze is not in this list: it lives in the desktop app's own local storage,
+not in the engine or the host's session store, so a paired device cannot set
+it and no capability advertises it.
 
 ### Image attachments
 
