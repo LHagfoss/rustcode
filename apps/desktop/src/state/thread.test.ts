@@ -837,7 +837,7 @@ describe("Claude Code subagents", () => {
     expect(t.items.find((i) => i.id === "a1")).toMatchObject({ status: "completed" });
   });
 
-  test("a backgrounded command outlives the turn until the engine ends its call", () => {
+  test("a backgrounded command is done when it returns, and says where its work went", () => {
     let t = beginTurn(emptyThread("s", "/p"), "go");
     t = applyUpdate(t, call({ toolCallId: "b1", title: "npm test", kind: "execute", status: "in_progress" }));
     t = applyUpdate(
@@ -845,13 +845,42 @@ describe("Claude Code subagents", () => {
       result({
         toolCallId: "b1",
         status: "completed",
+        content: [
+          {
+            type: "content",
+            content: {
+              type: "text",
+              text: "```console\nCommand running in background with ID: bc82qcgu4.\n```",
+            },
+          },
+        ],
         _meta: { jetbrains: { air: { asyncTasks: { backgrounded: true } } } },
       }),
     );
+    // The call answered: no spinner waits on a task update that may never come.
+    expect(t.items.find((i) => i.id === "b1")).toMatchObject({
+      status: "completed",
+      background: "command",
+      output: "Command running in background with ID: bc82qcgu4.",
+    });
+    // The turn ending, and a task ending later, leave the row as it answered.
     t = finishTurn(t, "completed");
-    expect(t.items.find((i) => i.id === "b1")).toMatchObject({ status: "in_progress", background: "task" });
     t = applyUpdate(t, result({ toolCallId: "b1", status: "completed" }));
-    expect(t.items.find((i) => i.id === "b1")).toMatchObject({ status: "completed" });
+    expect(t.items.find((i) => i.id === "b1")).toMatchObject({ status: "completed", background: "command" });
+  });
+
+  test("a backgrounded command that failed is a failed row, not a spinner", () => {
+    let t = beginTurn(emptyThread("s", "/p"), "go");
+    t = applyUpdate(t, call({ toolCallId: "b1", title: "npm test", kind: "execute", status: "in_progress" }));
+    t = applyUpdate(
+      t,
+      result({
+        toolCallId: "b1",
+        status: "failed",
+        _meta: { jetbrains: { air: { asyncTasks: { backgrounded: true } } } },
+      }),
+    );
+    expect(t.items.find((i) => i.id === "b1")).toMatchObject({ status: "failed", background: "command" });
   });
 
   test("a replayed background launch is over", () => {

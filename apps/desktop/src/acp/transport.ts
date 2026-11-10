@@ -256,6 +256,8 @@ export async function defaultTransport(): Promise<Transport> {
       remote: (["disconnected", "expired", "connect", "refused"] as const).find((f) => f === q.get("remote")),
       // This app paired with other computers (`?machines=paired|connect|offline|revoked`).
       machines: (["paired", "connect", "offline", "revoked"] as const).find((f) => f === q.get("machines")),
+      // Tool row cases on a thread of their own (`?tools=background`).
+      tools: (["background"] as const).find((f) => f === q.get("tools")),
     });
   }
   const port = import.meta.env.VITE_BRIDGE_PORT ?? "1421";

@@ -1,6 +1,7 @@
 // ACP v1 shapes the app uses, and parsers from raw JSON. Ported from the
 // SwiftUI app's RustCodeKit (ACPTypes.swift, FileDiff.swift, SessionUsage.swift).
 
+import { stripOutputFence } from "../lib/toolOutput";
 import { arr, bool, type Json, type JsonObject, num, obj, rustcodeMeta, str } from "./jsonrpc";
 import { parseStatus, parseWorktree, type ThreadStatus, type Worktree } from "./v2";
 
@@ -566,11 +567,15 @@ function contentText(content: Json | undefined): string {
 
 function toolOutput(update: JsonObject): string | undefined {
   const raw = str(obj(update.rawOutput)?.content);
-  if (raw !== undefined) return raw;
+  if (raw !== undefined) return stripOutputFence(raw);
+  // An update that carries the call's input repeats the call, it does not answer with a result:
+  // the harness sends the call's description as content there, and shown as output it reads as
+  // what the command printed.
+  if (obj(update.rawInput) !== undefined) return undefined;
   const blocks = arr(update.content)
     .map((b) => contentText(obj(b)?.content))
     .filter((t) => t.length > 0);
-  return blocks.length ? blocks.join("\n") : undefined;
+  return blocks.length ? stripOutputFence(blocks.join("\n")) : undefined;
 }
 
 function parseTurn(value: Json | undefined): TurnTiming | undefined {
