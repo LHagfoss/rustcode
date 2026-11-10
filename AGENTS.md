@@ -61,11 +61,20 @@ instructions for work in this repository.
   (it can create a merge commit) and never forced. If the working tree is dirty,
   leave it alone and say so instead.
 - Inspect first; make the smallest scoped change and preserve unrelated work.
-- Run the checks for what the change touches; CI runs the same split.
-  - Rust (`rustcode/`, `Cargo.*`): `cargo check --workspace --tests` and
-    `cargo test --workspace`. Without `--workspace` only the engine package is
-    built, and a TUI change passes unchecked. CI also runs
-    `cargo fmt --all -- --check`.
+- Run the checks for what the change touches, and let CI run the full
+  suites. Locally, run what catches your own mistakes quickly: the type check,
+  the formatter and the tests of the modules you changed. Push and read
+  `gh pr checks` instead of running a full `cargo test --workspace` before
+  every push. Compiling is slow and drains a laptop's battery, and CI runs
+  the same split on every push.
+  - Rust (`rustcode/`, `Cargo.*`): `cargo check --workspace --tests`,
+    `cargo fmt --all -- --check`, and `cargo test -p <package> <module>` for
+    what you changed. Without `--workspace` the check builds only the engine
+    package, and a TUI change passes unchecked. CI runs
+    `cargo test --workspace`; run it locally only to reproduce a CI failure.
+  - On a laptop, or when several threads build at once, run cargo as
+    `taskpolicy -b env CARGO_BUILD_JOBS=2 cargo …` (macOS background
+    priority, two jobs).
   - Desktop app (`apps/desktop`, Tauri + React, bun): `bun run check` in
     `apps/desktop`, and `cargo fmt --check`, `cargo clippy --all-targets --
     -D warnings`, `cargo test` in `apps/desktop/src-tauri` (its own Cargo
@@ -260,8 +269,12 @@ When an orchestrator thread hands work to other threads (`start_session`,
   script alive after its work is done: make scripts exit and bound them. If a
   command times out, report it and inspect the worktree before resuming; do
   not blindly rerun it.
-- Gate on `bun run check` and unit tests. Ask for screenshots only when the
-  change needs them; home-made CDP drivers were the main time sink.
+- Gate on `bun run check` and unit tests, run once at the end, and on CI
+  after the push. Do not run `cargo test --workspace` locally: delegates
+  build in parallel, and seven of them at once drained the user's battery.
+  Reviewers read the code and the PR's CI instead of building it. Ask for
+  screenshots only when the change needs them; home-made CDP drivers were the
+  main time sink.
 - Name a skill's `SKILL.md` path in the prompt if it matters. Listed skills
   went unread.
 - Local notes, if present (git-excluded):

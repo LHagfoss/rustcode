@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail, ensure};
 use rustcode_client::machine::{APPROVAL_TIMEOUT, normalize_code, platform};
 use rustcode_client::{
     ClientKind, Connector, DiscoveredMachine, Machine, MachineRegistry, PAIRING_CODE_DIGITS, Route,
-    Session, TokenStore, browse_async,
+    RouteFailure, Session, TokenStore, browse_async,
 };
 use std::io::{BufRead, Read, Write};
 use std::time::Duration;
@@ -25,6 +25,9 @@ struct Row {
     machine: Machine,
     route: String,
     state: State,
+    /// What to check when one kind of route answers and another does not,
+    /// e.g. a NetBird address that is blocked while the LAN works.
+    hint: Option<String>,
     threads: Option<Vec<String>>,
 }
 
@@ -109,19 +112,20 @@ async fn list(config_dir: &std::path::Path, threads: bool, json: bool) -> Result
         return Ok(());
     }
     let tokens = TokenStore::open(config_dir)?;
-    let connector = Connector {
-        // `list` is a glance: a route that does not answer in seconds is
-        // skipped instead of waited on.
-        route_timeout: Duration::from_secs(3),
-        timeout: Duration::from_secs(5),
-        ..Connector::new(config_dir, ClientKind::Desktop)?
-    };
+    // `list` is a glance: a route that does not answer in seconds is skipped
+    // instead of waited on.
+    let connector = Connector::new(config_dir, ClientKind::Desktop)?
+        .with_timeouts(Duration::from_secs(3), Duration::from_secs(5));
     let mut rows = Vec::new();
+    // Routes learned from a handshake are saved after the run, so the loop
+    // keeps borrowing the loaded registry.
+    let mut learned: Vec<(String, Vec<Route>)> = Vec::new();
     for machine in registry.ordered() {
         let mut row = Row {
             machine: machine.clone(),
             route: route_list(machine),
             state: State::NoToken,
+            hint: None,
             threads: None,
         };
         if tokens.get(&machine.host_id)?.is_none() {
@@ -129,12 +133,22 @@ async fn list(config_dir: &std::path::Path, threads: bool, json: bool) -> Result
             rows.push(row);
             continue;
         }
-        match connector.connect(machine, &tokens).await {
-            Ok((session, route)) => {
-                row.route = route.address;
+        match connector.connect_raced(machine, &tokens).await {
+            Ok(connected) => {
+                row.route = connected.route.address.clone();
                 row.state = State::Connected;
+                if !connected.learned.is_empty() {
+                    learned.push((machine.host_id.clone(), connected.learned.clone()));
+                }
+                // A LAN win stops the race before the overlay attempts start,
+                // so ask about them to say why they are not used (#3202); an
+                // overlay win may instead leave a LAN failure in the race.
+                let probe = connector
+                    .probe_overlay_routes(machine, &connected.route)
+                    .await;
+                row.hint = hint(&connected.route, connected.failed, probe);
                 if threads {
-                    row.threads = Some(match read_threads(session).await {
+                    row.threads = Some(match read_threads(connected.session).await {
                         Ok(titles) => titles,
                         Err(error) => vec![format!("could not read threads: {error:#}")],
                     });
@@ -157,6 +171,13 @@ async fn list(config_dir: &std::path::Path, threads: bool, json: bool) -> Result
         }
         rows.push(row);
     }
+    if !learned.is_empty()
+        && let Ok(mut registry) = MachineRegistry::load(config_dir)
+    {
+        for (host_id, routes) in learned {
+            let _ = registry.learn_routes(&host_id, &routes);
+        }
+    }
     if json {
         print_json(&rows);
     } else {
@@ -168,6 +189,15 @@ async fn list(config_dir: &std::path::Path, threads: bool, json: bool) -> Result
 async fn read_threads(session: Session) -> Result<Vec<String>> {
     let mut channel = session.acp().await?;
     rustcode_client::machine::thread_titles(&mut channel).await
+}
+
+/// The hint for a connected machine, from both the race's own failures and
+/// the overlay probe's: a LAN win has no overlay failure yet, and an overlay
+/// win keeps the LAN failure that explains why it is not on the local network.
+fn hint(route: &Route, in_race: Vec<RouteFailure>, probe: Vec<RouteFailure>) -> Option<String> {
+    let mut failures = in_race;
+    failures.extend(probe);
+    rustcode_client::route_hint(route, &failures)
 }
 
 fn print_rows(rows: &[Row]) {
@@ -198,6 +228,9 @@ fn print_rows(rows: &[Row]) {
         if let Some(reason) = row.state.detail() {
             println!("  {reason}");
         }
+        if let Some(hint) = &row.hint {
+            println!("  {hint}");
+        }
         for title in row.threads.iter().flatten() {
             println!("  {title}");
         }
@@ -221,6 +254,7 @@ fn print_json(rows: &[Row]) {
                 })).collect::<Vec<_>>(),
                 "state": row.state.label(),
                 "detail": row.state.detail(),
+                "hint": row.hint,
                 "added_at": row.machine.added_at,
                 "last_connected_at": row.machine.last_connected_at,
                 "threads": row.threads,
@@ -532,5 +566,32 @@ mod tests {
             State::NeedsPairing("unknown device".into()).detail(),
             Some("unknown device")
         );
+    }
+
+    /// `machines list` must say why the other kind of route is not used in
+    /// both directions: a LAN connection with a blocked NetBird address, and
+    /// an away-from-home overlay connection whose LAN route failed.
+    #[test]
+    fn a_hint_merges_the_races_failures_with_the_overlays_probe() {
+        let lan = Route::with_kind(rustcode_client::RouteKind::Lan, "192.168.1.20:17879");
+        let mut netbird = Route::with_kind(rustcode_client::RouteKind::Vpn, "100.90.16.237:17879");
+        netbird.provider = Some(rustcode_client::OverlayProvider::Netbird);
+        let failure = |route: Route, reason: &str| RouteFailure {
+            route,
+            reason: reason.into(),
+            refusal: None,
+        };
+        let home = hint(
+            &lan,
+            Vec::new(),
+            vec![failure(netbird.clone(), "connection timed out")],
+        )
+        .expect("the LAN works and NetBird does not");
+        assert!(home.contains("NetBird"), "{home}");
+        assert!(home.contains("100.90.16.237:17879"), "{home}");
+        let away = hint(&netbird, vec![failure(lan, "no route to host")], Vec::new())
+            .expect("the overlay works and the LAN does not");
+        assert!(away.contains("not on the LAN"), "{away}");
+        assert!(away.contains("192.168.1.20:17879"), "{away}");
     }
 }

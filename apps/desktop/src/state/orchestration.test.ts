@@ -48,6 +48,7 @@ import {
   linkGroupStatus,
   linkResult,
   linksLeft,
+  linkThreads,
   listSessions,
   MAX_ACTIVITY_ITEMS,
   MAX_DATA_ROWS,
@@ -1749,6 +1750,56 @@ describe("a group of threads", () => {
     expect(capped.shown.map((l) => l.target)).toEqual(["newer", "refused"]);
     expect(capped.more).toBe(1);
     expect(doneLinks(links, "a", 0)).toEqual({ shown: [], more: 3 });
+  });
+});
+
+describe("one row per delegate thread", () => {
+  const messages = (target: string, state: Link["state"], createdAt: number, id: string): Link => ({
+    ...link("a", target, state),
+    id,
+    createdAt,
+  });
+
+  test("several links to one session are one row, and the other threads keep theirs", () => {
+    const rows = linkThreads([
+      messages("b", "done", 100, "a/1"),
+      messages("c", "working", 200, "a/2"),
+      messages("b", "working", 300, "a/3"),
+    ]);
+    expect(rows.map((row) => [row.target, row.state, row.link.id, row.links.length])).toEqual([
+      ["b", "working", "a/3", 2],
+      ["c", "working", "a/2", 1],
+    ]);
+  });
+
+  test("a live message speaks for its thread, so a settled one never reads as working", () => {
+    const settled = messages("b", "done", 100, "a/1");
+    const running = messages("b", "working", 200, "a/2");
+    const rows = linkThreads([settled, running]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.state).toBe("working");
+    expect(rows[0]!.link.id).toBe("a/2");
+
+    // The shown state can differ from the record: a restart's `interrupted` link whose thread runs.
+    const [shown] = linkThreads([{ ...settled, state: "interrupted" }], ["working"]);
+    expect(shown!.state).toBe("working");
+  });
+
+  test("a session idle after answering takes its newest answer and that link's time", () => {
+    const older = messages("b", "done", 100, "a/1");
+    const newer = messages("b", "done", 300, "a/2");
+    const [row] = linkThreads([newer, older]);
+    expect(row!.state).toBe("done");
+    expect(row!.link.id).toBe("a/2");
+    expect(row!.link.createdAt).toBe(300);
+    expect(row!.links).toHaveLength(2);
+  });
+
+  test("a session waiting on the user is one row with its latest state", () => {
+    const rows = linkThreads([messages("b", "done", 100, "a/1"), messages("b", "needs_user", 200, "a/2")]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.state).toBe("needs_user");
+    expect(rows[0]!.link.id).toBe("a/2");
   });
 });
 

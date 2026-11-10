@@ -37,6 +37,7 @@ const MACHINE: Machine = {
   route: { kind: "lan", address: "192.168.1.31:17879", encrypted: false },
   state: "connected",
   detail: null,
+  hint: null,
   retryInSecs: null,
   addedAt: "2026-11-02T09:00:00+00:00",
   lastConnectedAt: "2026-11-08T09:00:00+00:00",
@@ -303,6 +304,14 @@ describe("machines rows", () => {
   test("a row under the name says what the connection is doing", () => {
     // The state is the row's chip; the line under the name is the route.
     expect(machineLine(MACHINE)).toBe("LAN · Unencrypted");
+    // The shell's hint is shown too: a machine reachable over the LAN whose
+    // NetBird address is blocked says what to check.
+    const hinted = machineLine({
+      ...MACHINE,
+      hint: "Not reachable over NetBird (100.90.16.237:17879). On that machine, check that NetBird allows inbound connections.",
+    });
+    expect(hinted).toStartWith("LAN · Unencrypted. ");
+    expect(hinted).toContain("NetBird allows inbound connections");
     expect(machineLine({ ...MACHINE, state: "connecting" })).toContain("Connecting");
     expect(
       machineLine({

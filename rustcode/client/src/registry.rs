@@ -58,11 +58,68 @@ impl RouteKind {
     pub fn is_encrypted(self) -> bool {
         matches!(self, Self::Vpn | Self::Tailscale)
     }
+
+    /// The race order: LAN first, then an overlay, then a public route.
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::Lan => 0,
+            Self::Vpn | Self::Tailscale => 1,
+            Self::Public => 2,
+        }
+    }
 }
 
 impl fmt::Display for RouteKind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.pad(self.as_str())
+    }
+}
+
+/// The mesh product a route belongs to, when the machine's handshake said
+/// which interface the address is on. The address range `100.64.0.0/10` is
+/// shared by NetBird, Tailscale and other overlays, so only the machine can
+/// say which one it is running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OverlayProvider {
+    Netbird,
+    Tailscale,
+    Zerotier,
+}
+
+impl OverlayProvider {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Netbird => "netbird",
+            Self::Tailscale => "tailscale",
+            Self::Zerotier => "zerotier",
+        }
+    }
+
+    /// The product's name as a person writes it, for a hint.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Netbird => "NetBird",
+            Self::Tailscale => "Tailscale",
+            Self::Zerotier => "ZeroTier",
+        }
+    }
+
+    /// The `provider` a gateway reports, or `None` for a spelling this client
+    /// does not know.
+    pub fn from_wire(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "netbird" => Some(Self::Netbird),
+            "tailscale" => Some(Self::Tailscale),
+            "zerotier" => Some(Self::Zerotier),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for OverlayProvider {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
     }
 }
 
@@ -72,15 +129,20 @@ impl fmt::Display for RouteKind {
 pub struct Route {
     pub kind: RouteKind,
     pub address: String,
+    /// Which mesh product the address is on, when the machine named one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<OverlayProvider>,
 }
 
 impl Route {
     /// A route to `address`, with the kind its address implies.
     pub fn new(address: impl Into<String>) -> Self {
         let address = address.into();
+        let kind = classify_address(&address);
         Self {
-            kind: classify_address(&address),
+            kind,
             address,
+            provider: provider_for_kind(kind),
         }
     }
 
@@ -88,8 +150,55 @@ impl Route {
         Self {
             kind,
             address: address.into(),
+            provider: provider_for_kind(kind),
         }
     }
+
+    /// A route learned from a handshake `routes` entry: the kind and product
+    /// the machine reported, so the same address is dialled and named the
+    /// same way everywhere.
+    pub fn reported(address: impl Into<String>, kind: &str, provider: Option<&str>) -> Self {
+        let address = address.into();
+        let provider = provider.and_then(OverlayProvider::from_wire);
+        match kind {
+            "lan" => Self::with_kind(RouteKind::Lan, address),
+            // `vpn` is what a gateway before the overlay kind reported.
+            "overlay" | "vpn" => {
+                let provider = provider.or_else(|| match classify_address(&address) {
+                    RouteKind::Tailscale => Some(OverlayProvider::Tailscale),
+                    _ => None,
+                });
+                let kind = match provider {
+                    Some(OverlayProvider::Tailscale) => RouteKind::Tailscale,
+                    _ => RouteKind::Vpn,
+                };
+                Self {
+                    kind,
+                    address,
+                    provider,
+                }
+            }
+            _ => Self {
+                provider,
+                ..Self::new(address)
+            },
+        }
+    }
+
+    /// The name of the network this route is on, for a person: the product
+    /// when known, otherwise the kind.
+    pub fn network_name(&self) -> String {
+        match self.provider {
+            Some(provider) => provider.display_name().to_owned(),
+            None if self.kind == RouteKind::Tailscale => "Tailscale".to_owned(),
+            None if self.kind == RouteKind::Vpn => "the VPN".to_owned(),
+            None => "the LAN".to_owned(),
+        }
+    }
+}
+
+fn provider_for_kind(kind: RouteKind) -> Option<OverlayProvider> {
+    (kind == RouteKind::Tailscale).then_some(OverlayProvider::Tailscale)
 }
 
 /// Which kind an address implies without asking the network or the machine.
@@ -220,23 +329,36 @@ impl Machine {
     }
 
     /// Add a route unless the same address is already there, which only
-    /// learns its kind. Learned routes keep their place at the end.
-    fn learn_route(&mut self, route: Route) -> bool {
+    /// learns its kind and product. A learned route keeps the order the races
+    /// rely on: it goes after the routes of its own class, so a LAN address
+    /// learned later is still tried before an overlay one.
+    pub(crate) fn learn_route(&mut self, route: Route) -> bool {
         if let Some(existing) = self
             .routes
             .iter_mut()
             .find(|existing| same_address(&existing.address, &route.address))
         {
-            if existing.kind == route.kind {
-                return false;
+            let mut changed = false;
+            if existing.kind != route.kind {
+                existing.kind = route.kind;
+                changed = true;
             }
-            existing.kind = route.kind;
-            return true;
+            if route.provider.is_some() && existing.provider != route.provider {
+                existing.provider = route.provider;
+                changed = true;
+            }
+            return changed;
         }
         if self.routes.len() >= MAX_ROUTES_PER_MACHINE {
             return false;
         }
-        self.routes.push(route);
+        let rank = route.kind.rank();
+        let index = self
+            .routes
+            .iter()
+            .rposition(|existing| existing.kind.rank() <= rank)
+            .map_or(0, |last| last + 1);
+        self.routes.insert(index, route);
         true
     }
 }
@@ -404,8 +526,25 @@ impl MachineRegistry {
         })
     }
 
-    /// Add a route learned from a machine or a discovery record (the seam the
-    /// route racing in step 1.8 fills with more).
+    /// Learn the addresses a machine reports after authentication, saving
+    /// them for the next connection. Returns how many routes changed or were
+    /// added; an unknown `host_id` is an error rather than a silent no-op.
+    pub fn learn_routes(&mut self, host_id: &str, routes: &[Route]) -> Result<usize> {
+        self.mutate(|machines| {
+            let Some(machine) = machines
+                .iter_mut()
+                .find(|machine| machine.host_id == host_id)
+            else {
+                bail!("no saved machine has host id {host_id}");
+            };
+            Ok(routes
+                .iter()
+                .filter(|route| machine.learn_route((*route).clone()))
+                .count())
+        })
+    }
+
+    /// Add a route learned from a machine or a discovery record.
     pub fn add_route(&mut self, host_id: &str, route: Route) -> Result<bool> {
         self.mutate(|machines| {
             let Some(machine) = machines
@@ -748,6 +887,67 @@ mod tests {
         assert_eq!(reloaded.machines().len(), 1);
         assert_eq!(studio.routes.len(), 3);
         assert_eq!(studio.preferred_route().unwrap().kind, RouteKind::Lan);
+    }
+
+    /// Routes a handshake reports are saved in the order the race uses, with
+    /// the product when the machine named one, so a learned LAN address is
+    /// still tried before the overlay the pairing came over.
+    #[test]
+    fn learned_routes_keep_the_race_order_and_the_provider() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let mut store = load(dir.path());
+        store
+            .insert(machine("gw-a", "Studio", "100.90.16.237:17879"))
+            .unwrap();
+        let learned = [
+            Route::reported("100.90.16.237:17879", "overlay", Some("netbird")),
+            Route::reported("192.168.1.20:17879", "lan", None),
+            // The same address twice is learned once.
+            Route::reported("192.168.1.20:17879", "lan", None),
+        ];
+        assert_eq!(store.learn_routes("gw-a", &learned).unwrap(), 2);
+        let reloaded = load(dir.path());
+        let studio = &reloaded.machines()[0];
+        assert_eq!(
+            studio
+                .routes
+                .iter()
+                .map(|route| (route.kind, route.address.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                (RouteKind::Lan, "192.168.1.20:17879"),
+                (RouteKind::Vpn, "100.90.16.237:17879"),
+            ]
+        );
+        assert_eq!(
+            studio.routes[1].provider,
+            Some(OverlayProvider::Netbird),
+            "the product is kept, so a hint can name it"
+        );
+        assert!(store.learn_routes("gw-missing", &learned).is_err());
+    }
+
+    /// The kinds a machine reports become this client's kinds, including the
+    /// `vpn` an older gateway still sends and the product a newer one names.
+    #[test]
+    fn a_reported_route_keeps_the_machine_kind_and_product() {
+        let netbird = Route::reported("100.90.16.237:17879", "overlay", Some("netbird"));
+        assert_eq!(netbird.kind, RouteKind::Vpn);
+        assert_eq!(netbird.provider, Some(OverlayProvider::Netbird));
+        let tailscale = Route::reported("100.101.1.2:17879", "overlay", Some("tailscale"));
+        assert_eq!(tailscale.kind, RouteKind::Tailscale);
+        assert_eq!(tailscale.network_name(), "Tailscale");
+        // An older gateway's `vpn` with a Tailscale address is still Tailscale.
+        let legacy = Route::reported("mac.tail1234.ts.net:17879", "vpn", None);
+        assert_eq!(legacy.kind, RouteKind::Tailscale);
+        let lan = Route::reported("192.168.1.20:17879", "lan", None);
+        assert_eq!(lan.kind, RouteKind::Lan);
+        assert_eq!(lan.network_name(), "the LAN");
+        // An unknown provider is dropped, not invented.
+        let unknown = Route::reported("10.8.0.2:17879", "overlay", Some("hamachi"));
+        assert_eq!(unknown.kind, RouteKind::Vpn);
+        assert_eq!(unknown.provider, None);
+        assert_eq!(unknown.network_name(), "the VPN");
     }
 
     #[test]

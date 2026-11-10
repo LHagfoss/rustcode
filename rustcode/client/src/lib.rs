@@ -11,6 +11,8 @@
 //!   short-lived access token in memory only.
 //! - [`transport`]: the WebSocket to a machine's gateway, its handshake and
 //!   the ACP channel it becomes.
+//! - [`routes`]: the order routes are tried in, the race between them and the
+//!   hint a route that does not answer earns.
 //! - [`machine`]: the ask-to-connect pairing flow, route selection and the one
 //!   ACP read (`session/list`).
 //! - [`discovery`]: Bonjour, for machines that take a desktop client.
@@ -25,6 +27,7 @@ pub mod discovery;
 pub mod machine;
 pub mod protocol;
 pub mod registry;
+pub mod routes;
 pub mod tokens;
 pub mod transport;
 
@@ -37,6 +40,9 @@ pub use protocol::{
     AcpClientFrame, AcpServerFrame, CAPABILITY_TOKEN_ROTATION, ErrorCode, HandshakeRequest,
     HandshakeResponse, PAIRING_CODE_DIGITS, Secret,
 };
-pub use registry::{Machine, MachineRegistry, Route, RouteKind};
+pub use registry::{Machine, MachineRegistry, OverlayProvider, Route, RouteKind};
+pub use routes::{
+    DialFailure, LAN_GRACE, RACE_DEADLINE, Race, RaceSettings, RouteFailure, route_hint,
+};
 pub use tokens::{Access, TokenStore};
 pub use transport::{AcpChannel, DEFAULT_PORT, MAX_FRAME_BYTES};

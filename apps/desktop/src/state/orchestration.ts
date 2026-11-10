@@ -303,6 +303,56 @@ export function doneLinks(
   return { shown: all.slice(0, most), more: Math.max(0, all.length - most) };
 }
 
+/** One thread in a thread's links: the link that speaks for it now, and every message. */
+export interface LinkThread {
+  /** The thread the row opens. */
+  target: string;
+  /** The link that speaks for it now: live first, else the newest. */
+  link: Link;
+  /** What that link shows now, from the caller's reading or its own record. */
+  state: LinkState;
+  /** Every link to it, in the order given: a follow-up is the same delegate. */
+  links: Link[];
+}
+
+/**
+ * The threads `links` name, one row each, however many times one was messaged. A
+ * follow-up is the same delegate: its row takes a live link when it has one, so
+ * a settled message cannot make a busy thread read answered, and otherwise the
+ * newest, so the row shows the latest state and time.
+ */
+export function linkThreads(links: readonly Link[], states?: readonly LinkState[]): LinkThread[] {
+  const groups = new Map<string, { links: Link[]; states: LinkState[] }>();
+  links.forEach((link, i) => {
+    const state = states?.[i] ?? link.state;
+    const group = groups.get(link.target);
+    if (group) {
+      group.links.push(link);
+      group.states.push(state);
+    } else {
+      groups.set(link.target, { links: [link], states: [state] });
+    }
+  });
+  return [...groups].map(([target, group]) => {
+    let best = 0;
+    for (let i = 1; i < group.links.length; i++) {
+      const live = isActive(group.states[i]!);
+      const bestLive = isActive(group.states[best]!);
+      if (live !== bestLive) {
+        if (live) best = i;
+        continue;
+      }
+      if (group.links[i]!.createdAt >= group.links[best]!.createdAt) best = i;
+    }
+    return {
+      target,
+      link: group.links[best]!,
+      state: group.states[best]!,
+      links: group.links,
+    };
+  });
+}
+
 /** One thread working for another: from the message (or the start) to the answer. */
 export interface Link {
   /** `<orchestrator>/<n>`. */

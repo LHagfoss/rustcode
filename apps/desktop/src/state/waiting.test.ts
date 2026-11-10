@@ -85,6 +85,20 @@ describe("waiting on background work", () => {
       "Thread a, Thread b",
     );
   });
+
+  test("a delegate messaged twice is one thread on the line, at its latest message", () => {
+    const links = [
+      { ...link("p/1", "p", "a", "done"), createdAt: 1, settledAt: 2 },
+      { ...link("p/2", "p", "a", "working"), createdAt: 3 },
+    ];
+    const wait = read({}, { links, quiet: ["a"] })!;
+    // The live message speaks for the thread, and the footer counts the thread once.
+    expect(wait.links.map((l) => l.id)).toEqual(["p/2"]);
+    expect(waitingLabel(wait)).toBe("Waiting on 1 thread");
+    expect(waitingTitle(wait)).toBe("Thread a");
+    // The line counts threads even when handed the links themselves.
+    expect(waitingLabel({ links, commands: 0 })).toBe("Waiting on 1 thread");
+  });
 });
 
 describe("the threads the list draws with the ones that work", () => {
