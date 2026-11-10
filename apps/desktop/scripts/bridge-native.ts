@@ -229,6 +229,28 @@ export const nativeCommands: Record<string, (args: Record<string, unknown>) => P
     writeFileSync(join(threadDir(id), "title.txt"), clean);
     return clean;
   },
+  // The shell's `attached_files` (native.rs), with the same rules: inside the roots, a file,
+  // at most ten of them and 5 MB each.
+  attached_files: async ({ paths, roots }) => {
+    const files = (Array.isArray(paths) ? paths : []).map(String);
+    const dirs = (Array.isArray(roots) ? roots : [])
+      .map(String)
+      .filter((r) => isAbsolute(r) && existsSync(r))
+      .map((r) => realpathSync(r));
+    if (files.length > 10) throw new Error("A message attaches at most 10 files.");
+    if (!dirs.length) throw new Error("This thread has no folder to attach a file from.");
+    return files.map((path) => {
+      if (!isAbsolute(path)) throw new Error(`${path} is not an absolute path.`);
+      if (!existsSync(path)) throw new Error(`No such file: ${path}.`);
+      const real = realpathSync(path);
+      if (!dirs.some((dir) => real === dir || real.startsWith(`${dir}/`)))
+        throw new Error(`${path} is outside this thread's project.`);
+      const stat = statSync(real);
+      if (!stat.isFile()) throw new Error(`${path} is not a file.`);
+      if (stat.size > 5 * 1024 * 1024) throw new Error(`${path} is over 5 MB.`);
+      return { path: real, name: real.split("/").pop() ?? real, bytes: stat.size };
+    });
+  },
   // The shell's `thread_image` (native.rs), with the same rules: inside the roots, pictures only, 20 MB.
   thread_image: async ({ path, roots }) => {
     const real = (p: string) => realpathSync(p);

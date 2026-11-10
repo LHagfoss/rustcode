@@ -46,6 +46,8 @@ pub const LIST_PROJECTS: &str = "list_projects";
 pub const LIST_PULL_REQUESTS: &str = "list_pull_requests";
 pub const TRANSFER_SESSION: &str = "transfer_session";
 pub const LIST_PENDING_REQUESTS: &str = "list_pending_requests";
+pub const ANSWER_REQUEST: &str = "answer_request";
+pub const ORGANIZE_THREADS: &str = "organize_threads";
 pub const THREAD_USAGE: &str = "thread_usage";
 pub const QUERY_DATA: &str = "query_data";
 pub const READ_ACTIVITY: &str = "read_activity";
@@ -79,19 +81,31 @@ pub const V6_TOOL_NAMES: [&str; 1] = [READ_ACTIVITY];
 pub const V7_TOOL_NAMES: [&str; 1] = [MANAGE_QUEUE];
 /// Added by version 9: a delegate's pull request, merging and cleanup.
 pub const V9_TOOL_NAMES: [&str; 3] = [THREAD_STATUS, MERGE_WHEN_GREEN, CLEANUP_WORKTREE];
+/// Added by version 10: answering what a thread waits on, and organizing several at once.
+pub const V10_TOOL_NAMES: [&str; 2] = [ANSWER_REQUEST, ORGANIZE_THREADS];
 /// The newest version this engine speaks.
-pub const VERSION: u8 = 9;
+pub const VERSION: u8 = 10;
 /// Version 5 adds named account targeting to the existing `start_session` and
 /// `fan_out` args. No tool is added, but a client that advertised less never
 /// sees the `account` field and has it refused, so an older app cannot quietly
 /// ignore it and start the child on another login.
 pub const ACCOUNT_VERSION: u8 = 5;
+/// Version 10 adds `attachments` to `message_session`. Like `account`, a client
+/// below it never sees the argument and has one refused.
+pub const ATTACHMENT_VERSION: u8 = 10;
 /// What `update_session` may set a thread's status to.
 pub const SESSION_STATUSES: [&str; 3] = ["active", "review", "settled"];
 /// What `list_pull_requests` may ask for.
 pub const PR_STATES: [&str; 4] = ["open", "closed", "merged", "all"];
 /// What `manage_queue` may do to a message this thread queued on another one.
 pub const QUEUE_ACTIONS: [&str; 4] = ["list", "edit", "cancel", "steer"];
+/// What `answer_request` may answer an approval with.
+pub const APPROVAL_ANSWERS: [&str; 3] = ["allow_once", "allow_always", "deny"];
+/// How many files one `message_session` may attach. The app also refuses one
+/// over 5 MB; only it can measure a file.
+pub const MAX_ATTACHMENTS: usize = 10;
+/// How many threads one `organize_threads` call changes.
+pub const MAX_ORGANIZED_THREADS: usize = 50;
 /// The longest `queue_id` `manage_queue` accepts: one a list returned.
 pub const MAX_QUEUE_ID_CHARS: usize = 128;
 
@@ -171,6 +185,10 @@ pub const PROMPT_HINT_V8: &str = "\n\nRustCode's threads: `list_sessions`, `sear
 /// [`PROMPT_HINT_V8`] for version 9 clients, which can finish a delegate's work.
 pub const PROMPT_HINT_V9: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. `thread_status` reports a delegate's worktree, branch, pull request and checks; `merge_when_green` merges it once green; `cleanup_worktree` removes its worktree and branch and settles it. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those, merge and cleanup change other threads, so do them only when the user asks; the user approves. Stay lean: every call resends this thread's context, so leave reading code, diffs, logs and CI to delegates, and check their pull requests with `thread_status`. Wait on all links in one `wait_session` with `link_ids`, or end the turn: the app wakes this thread when a child finishes. Call `list_harnesses` once.";
 
+/// [`PROMPT_HINT_V9`] for version 10 clients, which can answer what a thread
+/// waits on and organize several at once.
+pub const PROMPT_HINT_V10: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user, and `answer_request` answers one of those on a thread in your own tree. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, and `message_session` attaches files by path; `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. `thread_status` reports a delegate's worktree, branch, pull request and checks; `merge_when_green` merges it once green; `cleanup_worktree` removes its worktree and branch and settles it. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`. `update_session`, `organize_threads`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those, answering, merge and cleanup change other threads, so do them only when the user asks; the user approves. Stay lean: every call resends this thread's context, so leave reading code, diffs, logs and CI to delegates, and check their pull requests with `thread_status`. Wait on all links in one `wait_session` with `link_ids`, or end the turn: the app wakes this thread when a child finishes. Call `list_harnesses` once.";
+
 /// The prompt hint a client of `version` gets.
 pub fn prompt_hint(version: u8) -> &'static str {
     match version {
@@ -183,7 +201,8 @@ pub fn prompt_hint(version: u8) -> &'static str {
         6 => PROMPT_HINT_V6,
         7 => PROMPT_HINT_V7,
         8 => PROMPT_HINT_V8,
-        _ => PROMPT_HINT_V9,
+        9 => PROMPT_HINT_V9,
+        _ => PROMPT_HINT_V10,
     }
 }
 
@@ -196,6 +215,7 @@ pub fn is_tool(name: &str) -> bool {
         || V6_TOOL_NAMES.contains(&name)
         || V7_TOOL_NAMES.contains(&name)
         || V9_TOOL_NAMES.contains(&name)
+        || V10_TOOL_NAMES.contains(&name)
 }
 
 /// Whether `name` needs a version 2 client.
@@ -226,6 +246,11 @@ pub fn is_v7_tool(name: &str) -> bool {
 /// Whether `name` needs a version 9 client (delegate pull requests and cleanup).
 pub fn is_v9_tool(name: &str) -> bool {
     V9_TOOL_NAMES.contains(&name)
+}
+
+/// Whether `name` needs a version 10 client (answering requests, batching a manage).
+pub fn is_v10_tool(name: &str) -> bool {
+    V10_TOOL_NAMES.contains(&name)
 }
 
 /// The tools a client of `version` gets, in order.
@@ -266,9 +291,14 @@ pub fn tool_names(version: u8) -> Vec<&'static str> {
         }
         // Version 8 adds native-subagent guidance to the hint, not another tool.
         8 => tool_names(7),
-        _ => {
+        9 => {
             let mut names = tool_names(8);
             names.extend(V9_TOOL_NAMES);
+            names
+        }
+        _ => {
+            let mut names = tool_names(9);
+            names.extend(V10_TOOL_NAMES);
             names
         }
     }
@@ -287,6 +317,12 @@ pub fn client_meta_version(meta: Option<&serde_json::Map<String, Value>>) -> u8 
 /// version 5, so a client that advertised less is never told about `account`;
 /// [`execute_versioned`] refuses one it sends anyway.
 pub fn schema_for(name: &str, version: u8, mut schema: Value) -> Value {
+    // An older client never sees an argument it would ignore.
+    if version < ATTACHMENT_VERSION && name == MESSAGE_SESSION {
+        if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+            properties.remove("attachments");
+        }
+    }
     if version >= ACCOUNT_VERSION {
         return schema;
     }
@@ -310,6 +346,14 @@ pub fn schema_for(name: &str, version: u8, mut schema: Value) -> Value {
         _ => {}
     }
     schema
+}
+
+/// Whether a call tries to attach files, which only a version 10 client can do.
+pub(crate) fn carries_attachments(name: &str, args: &Value) -> bool {
+    name == MESSAGE_SESSION
+        && args
+            .get("attachments")
+            .is_some_and(|attachments| !attachments.is_null())
 }
 
 /// Whether a call tries to name a login, which only a version 5 client can do.
@@ -448,6 +492,31 @@ fn optional_name(args: &Value, key: &str) -> Result<(), String> {
     }
 }
 
+/// An optional `attachments` list: absolute file paths, at most
+/// [`MAX_ATTACHMENTS`] of them. Each must be a file of at most
+/// [`MAX_ATTACHMENT_BYTES`], which only the app can measure; the engine checks
+/// the shape so a harness cannot send a path it made up as an attachment.
+fn optional_attachments(args: &Value) -> Result<(), String> {
+    match args.get("attachments") {
+        None | Some(Value::Null) => Ok(()),
+        Some(Value::Array(paths)) => {
+            if paths.len() > MAX_ATTACHMENTS {
+                return Err(format!("attachments takes at most {MAX_ATTACHMENTS} files"));
+            }
+            for path in paths {
+                let Some(path) = path.as_str().filter(|path| !path.trim().is_empty()) else {
+                    return Err("each attachments entry must be a path".to_owned());
+                };
+                if !std::path::Path::new(path).is_absolute() {
+                    return Err(format!("attachments entry {path} is not an absolute path"));
+                }
+            }
+            Ok(())
+        }
+        Some(_) => Err("attachments must be a list of absolute paths".to_owned()),
+    }
+}
+
 /// An optional flag: when present it must be a boolean, never a string.
 fn optional_flag(args: &Value, key: &str) -> Result<(), String> {
     match args.get(key) {
@@ -578,6 +647,7 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             if message.len() > MAX_MESSAGE_BYTES {
                 return Err(format!("message is over {MAX_MESSAGE_BYTES} bytes"));
             }
+            optional_attachments(args)?;
             optional_request_id(args)
         }
         READ_SESSION => {
@@ -644,6 +714,68 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             Ok(())
         }
         THREAD_STATUS => optional_name(args, "session_id"),
+        ANSWER_REQUEST => {
+            required_name(args, "session_id")?;
+            if !matches!(args.get("request_id"), Some(Value::String(id)) if !id.trim().is_empty()) {
+                return Err(
+                    "request_id is required, as list_pending_requests printed it (a string)"
+                        .to_owned(),
+                );
+            }
+            let choice = match args.get("choice") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(choice)) if APPROVAL_ANSWERS.contains(&choice.as_str()) => {
+                    Some(choice)
+                }
+                Some(_) => return Err(format!("choice must be one of {APPROVAL_ANSWERS:?}")),
+            };
+            let answer = match args.get("answer") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(answer)) if !answer.trim().is_empty() => Some(answer),
+                Some(_) => return Err("answer must be a sentence or an option id".to_owned()),
+            };
+            match (choice, answer) {
+                (Some(_), Some(_)) => {
+                    Err("give choice for an approval or answer for a question, not both".to_owned())
+                }
+                (None, None) => {
+                    Err("choice (an approval) or answer (a question) is required".to_owned())
+                }
+                (Some(_), None) | (None, Some(_)) => Ok(()),
+            }
+        }
+        ORGANIZE_THREADS => {
+            let Some(ids) = args.get("session_ids").and_then(Value::as_array) else {
+                return Err("session_ids is required".to_owned());
+            };
+            if ids.is_empty() {
+                return Err("session_ids needs at least one thread".to_owned());
+            }
+            if ids.len() > MAX_ORGANIZED_THREADS {
+                return Err(format!(
+                    "session_ids takes at most {MAX_ORGANIZED_THREADS} threads"
+                ));
+            }
+            if ids
+                .iter()
+                .any(|id| id.as_str().is_none_or(|id| id.trim().is_empty()))
+            {
+                return Err("each session_ids entry must be a thread id".to_owned());
+            }
+            optional_title(args)?;
+            for key in ["pinned", "unread", "archived"] {
+                if !matches!(args.get(key), None | Some(Value::Null | Value::Bool(_))) {
+                    return Err(format!("{key} must be true or false"));
+                }
+            }
+            if !["title", "pinned", "unread", "archived"]
+                .iter()
+                .any(|key| !matches!(args.get(*key), None | Some(Value::Null)))
+            {
+                return Err("give at least one of title, pinned, unread or archived".to_owned());
+            }
+            Ok(())
+        }
         MERGE_WHEN_GREEN => {
             required_name(args, "session_id")?;
             match args.get("timeout_ms") {
@@ -822,6 +954,14 @@ pub async fn execute_versioned(
             false,
         );
     }
+    // The same for files an older client would drop on the floor.
+    if client.is_some() && version < ATTACHMENT_VERSION && carries_attachments(name, args) {
+        return ToolExecutionOutput::failure_with_kind(
+            format!("error: {name} with attachments needs a newer RustCode app. Nothing was sent."),
+            ToolErrorKind::UnavailableDependency,
+            false,
+        );
+    }
     execute_with(client, cancel, name, args).await
 }
 
@@ -972,7 +1112,8 @@ mod tests {
         assert_eq!(version(json!({"rustcode": {"orchestration": 1}})), 1);
         assert_eq!(version(json!({"rustcode": {"orchestration": 2}})), 2);
         // A newer client gets what this engine speaks.
-        assert_eq!(version(json!({"rustcode": {"orchestration": 9}})), VERSION);
+        assert_eq!(version(json!({"rustcode": {"orchestration": 9}})), 9);
+        assert_eq!(version(json!({"rustcode": {"orchestration": 10}})), VERSION);
         assert_eq!(version(json!({"rustcode": {"preview": 1}})), 0);
         assert_eq!(client_meta_version(None), 0);
     }
@@ -1009,7 +1150,7 @@ mod tests {
 
     #[test]
     fn version_four_adds_the_data_store_tools_only_for_its_clients() {
-        assert_eq!(VERSION, 9);
+        assert_eq!(VERSION, 10);
         let v3 = tool_names(3);
         assert!(v3.iter().all(|name| !is_v4_tool(name)), "{v3:?}");
         let v4 = tool_names(4);
@@ -1031,9 +1172,19 @@ mod tests {
         );
         assert_eq!(
             tool_names(10),
-            tool_names(9),
+            [tool_names(9), V10_TOOL_NAMES.to_vec()].concat()
+        );
+        assert_eq!(
+            tool_names(11),
+            tool_names(10),
             "a newer client gets what this engine speaks"
         );
+        for name in V10_TOOL_NAMES {
+            assert!(is_tool(name) && is_v10_tool(name));
+            assert!(!is_v9_tool(name) && !tool_names(9).contains(&name));
+            assert!(PROMPT_HINT_V10.contains(name), "{name}");
+            assert!(!PROMPT_HINT_V9.contains(name), "{name} is v10 only");
+        }
         for name in [THREAD_USAGE, QUERY_DATA] {
             assert!(is_tool(name) && is_v4_tool(name));
             assert!(PROMPT_HINT_V4.contains(name), "{name}");
@@ -1081,7 +1232,8 @@ mod tests {
         assert_eq!(prompt_hint(7), PROMPT_HINT_V7);
         assert_eq!(prompt_hint(8), PROMPT_HINT_V8);
         assert_eq!(prompt_hint(9), PROMPT_HINT_V9);
-        assert_eq!(prompt_hint(10), PROMPT_HINT_V9);
+        assert_eq!(prompt_hint(10), PROMPT_HINT_V10);
+        assert_eq!(prompt_hint(11), PROMPT_HINT_V10);
         assert_eq!(prompt_hint(0), "");
         // Accounts arrived in 5: a v4 hint promises nothing it cannot do.
         assert!(!PROMPT_HINT_V4.contains("account"));
@@ -1172,6 +1324,93 @@ mod tests {
             ),
             deadline
         );
+    }
+
+    #[test]
+    fn answering_and_batching_arguments_are_checked() {
+        let ok = |name: &str, args: Value| validate(name, &args).is_ok();
+        let ask = json!({"session_id": "d1", "request_id": "7"});
+        assert!(ok(
+            ANSWER_REQUEST,
+            json!({"session_id": "d1", "request_id": "7", "choice": "allow_once"})
+        ));
+        assert!(ok(
+            ANSWER_REQUEST,
+            json!({"session_id": "d1", "request_id": "7", "answer": "yes, run it"})
+        ));
+        assert!(!ok(ANSWER_REQUEST, ask));
+        assert!(!ok(
+            ANSWER_REQUEST,
+            json!({"session_id": "d1", "request_id": "7", "choice": "allow_hour"})
+        ));
+        // One of the two, never both.
+        assert!(!ok(
+            ANSWER_REQUEST,
+            json!({"session_id": "d1", "request_id": "7", "choice": "deny", "answer": "no"})
+        ));
+        assert!(!ok(
+            ANSWER_REQUEST,
+            json!({"request_id": "7", "choice": "deny"})
+        ));
+        assert!(!ok(
+            ANSWER_REQUEST,
+            json!({"session_id": "d1", "choice": "deny"})
+        ));
+        assert!(!ok(
+            ANSWER_REQUEST,
+            json!({"session_id": "d1", "request_id": "7", "answer": "  "})
+        ));
+        // The id is the string the list printed, not the number the engine sent.
+        assert!(!ok(
+            ANSWER_REQUEST,
+            json!({"session_id": "d1", "request_id": 7, "choice": "deny"})
+        ));
+
+        assert!(ok(
+            ORGANIZE_THREADS,
+            json!({"session_ids": ["a"], "pinned": true})
+        ));
+        assert!(ok(
+            ORGANIZE_THREADS,
+            json!({"session_ids": ["a", "b"], "title": "Done", "archived": true})
+        ));
+        assert!(!ok(ORGANIZE_THREADS, json!({"session_ids": []})));
+        assert!(!ok(ORGANIZE_THREADS, json!({"session_ids": ["a"]})));
+        assert!(!ok(ORGANIZE_THREADS, json!({"pinned": true})));
+        assert!(!ok(
+            ORGANIZE_THREADS,
+            json!({"session_ids": ["a"], "pinned": "yes"})
+        ));
+        assert!(!ok(
+            ORGANIZE_THREADS,
+            json!({"session_ids": [1], "pinned": true})
+        ));
+
+        // Attachments are absolute paths, at most ten of them.
+        let message = |extra: Value| {
+            let mut args = json!({"session_id": "d1", "message": "look"});
+            args.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().cloned().unwrap());
+            args
+        };
+        assert!(ok(MESSAGE_SESSION, message(json!({}))));
+        assert!(ok(
+            MESSAGE_SESSION,
+            message(json!({"attachments": ["/repo/a.png", "/repo/b.log"]}))
+        ));
+        assert!(!ok(
+            MESSAGE_SESSION,
+            message(json!({"attachments": ["docs/notes.md"]}))
+        ));
+        assert!(!ok(
+            MESSAGE_SESSION,
+            message(json!({"attachments": "a.png"}))
+        ));
+        let many: Vec<String> = (0..=MAX_ATTACHMENTS)
+            .map(|i| format!("/repo/{i}.txt"))
+            .collect();
+        assert!(!ok(MESSAGE_SESSION, message(json!({"attachments": many}))));
     }
 
     #[test]
