@@ -129,8 +129,11 @@ pub const MAX_MESSAGE_BYTES: usize = 32 * 1024;
 /// `read_session` page with worst-case JSON escaping stays under it.
 pub const MAX_OUTPUT_BYTES: usize = 128 * 1024;
 /// How long `wait_session` waits by default, and at most: 25 minutes. A longer
-/// `timeout_ms` is cut to this on the server, not refused.
-pub const DEFAULT_WAIT_MS: u64 = 60_000;
+/// `timeout_ms` is cut to this on the server, not refused. The default is long
+/// because a wait returns as soon as a link finishes, and every wait that ends
+/// with nothing done is another request that resends the caller's whole
+/// context: a one-minute default turned an hour of waiting into sixty of them.
+pub const DEFAULT_WAIT_MS: u64 = 20 * 60 * 1000;
 pub const MAX_WAIT_MS: u64 = 25 * 60 * 1000;
 /// How long the client may take on a list or a message: a message can wait
 /// for the user to answer the grant.
@@ -166,7 +169,7 @@ pub const PROMPT_HINT_V7: &str = "\n\nRustCode's threads: `list_sessions`, `sear
 pub const PROMPT_HINT_V8: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`, while a harness with its own subagent tool may use it for quick lookups. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those change other threads, so do them only when the user asks; the user approves.";
 
 /// [`PROMPT_HINT_V8`] for version 9 clients, which can finish a delegate's work.
-pub const PROMPT_HINT_V9: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. `thread_status` reports a delegate's worktree, branch, pull request and checks; `merge_when_green` merges it once green; `cleanup_worktree` removes its worktree and branch and settles it. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those, merge and cleanup change other threads, so do them only when the user asks; the user approves.";
+pub const PROMPT_HINT_V9: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. `thread_status` reports a delegate's worktree, branch, pull request and checks; `merge_when_green` merges it once green; `cleanup_worktree` removes its worktree and branch and settles it. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`. `update_session`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those, merge and cleanup change other threads, so do them only when the user asks; the user approves. Stay lean: every call resends this thread's context, so leave reading code, diffs, logs and CI to delegates, and check their pull requests with `thread_status`. Wait on all links in one `wait_session` with `link_ids`, or end the turn: the app wakes this thread when a child finishes. Call `list_harnesses` once.";
 
 /// The prompt hint a client of `version` gets.
 pub fn prompt_hint(version: u8) -> &'static str {
@@ -926,7 +929,10 @@ fn output(name: &str, value: Value) -> ToolExecutionOutput {
             false,
         );
     }
-    let mut content = serde_json::to_string_pretty(&value).unwrap_or_default();
+    // Compact, not pretty: the model reads either as well, and every later
+    // request of the caller resends this text, so indentation is paid for again
+    // on each one.
+    let mut content = serde_json::to_string(&value).unwrap_or_default();
     // The client caps answers; this holds if one does not.
     if content.len() > MAX_OUTPUT_BYTES {
         let mut end = MAX_OUTPUT_BYTES;
@@ -1061,6 +1067,10 @@ mod tests {
             assert!(!PROMPT_HINT_V8.contains(name), "{name} is v9 only");
             assert!(!PROMPT_HINT_V7.contains(name), "{name} is v9 only");
         }
+        // An orchestrator is told how to keep its own context small .
+        for said in ["Stay lean", "link_ids", "end the turn", "thread_status"] {
+            assert!(PROMPT_HINT_V9.contains(said), "{said}");
+        }
         // The hint a client is told follows the version it advertised.
         assert_eq!(prompt_hint(1), PROMPT_HINT);
         assert_eq!(prompt_hint(2), PROMPT_HINT_V2);
@@ -1108,8 +1118,10 @@ mod tests {
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V5),
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V6)
         );
-        // v9 adds the three delegate pull-request tools, all named with their use.
-        assert!(tokens < 460, "{tokens}");
+        // v9 adds the three delegate pull-request tools, all named with their use,
+        // and how an orchestrator keeps its own context small: those few lines
+        // save far more than they cost on each request.
+        assert!(tokens < 540, "{tokens}");
     }
 
     #[test]
@@ -1995,5 +2007,23 @@ mod tests {
         );
         // Every call of this engine gets an id of its own.
         assert_ne!(next_call_id(), next_call_id());
+    }
+
+    #[test]
+    fn answers_are_compact_json() {
+        let out = output(
+            LIST_SESSIONS,
+            json!({"sessions": [{"id": "a", "title": "x"}]}),
+        );
+        assert!(out.success);
+        assert_eq!(out.content, r#"{"sessions":[{"id":"a","title":"x"}]}"#);
+    }
+
+    #[test]
+    fn a_wait_defaults_to_a_long_one() {
+        assert_eq!(
+            requested_wait(WAIT_SESSION, &json!({"link_id": "a/1"})),
+            Some(Duration::from_millis(20 * 60 * 1000))
+        );
     }
 }
