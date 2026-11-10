@@ -93,6 +93,11 @@ export type TranscriptItem =
       resumable?: boolean;
       /** A compaction that is running: the row shows a spinner until its card replaces it. */
       progress?: boolean;
+      /**
+       * The same notice said this many times in a row, drawn as one row (`×6`). Set when the
+       * transcript draws the row (`state/fold.ts` `collapseNotices`), not by what appended it.
+       */
+      count?: number;
     }
   /**
    * A question the harness asked and the answer given, kept as a row once it resolves. The

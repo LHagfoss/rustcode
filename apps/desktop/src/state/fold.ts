@@ -405,6 +405,52 @@ export function groupTools(rows: FoldRow[], open: ReadonlySet<string>): FoldRow[
   return out;
 }
 
+// ---------------------------------------------------------------- notices
+
+type NoticeItem = Extract<TranscriptItem, { kind: "notice" }>;
+
+/** The quiet notice a row draws, when it draws one that has finished (a running compaction is not). */
+function settledNotice(row: { item?: TranscriptItem }): NoticeItem | undefined {
+  const item = row.item;
+  return item?.kind === "notice" && !item.progress ? item : undefined;
+}
+
+/**
+ * A row per notice, except that copies of the same one back to back become one row that says how
+ * many (`×6`): an access mode that lets calls through without asking appends a notice per call
+ * (`state/host.ts` `permitted`), and six identical lines say what one does. Only the same text in
+ * the same tone, with nothing else between them, collapses; every other notice keeps its row and
+ * the order it came in.
+ */
+export function collapseNotices<T extends { key: string; item?: TranscriptItem; inFold?: string }>(
+  rows: readonly T[],
+): T[] {
+  const out: T[] = [];
+  for (const row of rows) {
+    const notice = settledNotice(row);
+    const prev = out.at(-1);
+    const before = prev ? settledNotice(prev) : undefined;
+    if (
+      prev &&
+      notice &&
+      before &&
+      before.text === notice.text &&
+      before.tone === notice.tone &&
+      prev.inFold === row.inFold
+    ) {
+      // The first notice keeps the row, and so its key: the row stays where it was and holds still
+      // while the count climbs. A count the item already carries adds to it.
+      out[out.length - 1] = {
+        ...prev,
+        item: { ...before, count: (before.count ?? 1) + (notice.count ?? 1) },
+      } as T;
+      continue;
+    }
+    out.push(row);
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------- stable rows
 
 /**
