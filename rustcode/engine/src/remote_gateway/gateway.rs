@@ -14,14 +14,15 @@ use super::connect::{ConnectRequests, OpenError, Outcome, RequestEnd, RequestSta
 use super::control::{
     CONTROL_TIMEOUT, ConnectAnswer, ConnectRequestSummary, ConnectionSummary, ControlRequest,
     ControlResponse, DeviceSummary, EndedChallenge, EndedConnectRequest, GatewayStatus,
-    OfferDetails, PairingStatus,
+    OfferDetails, PairingStatus, RefusalReason, RefusedConnection,
 };
 use super::devices::{
-    Acknowledgement, AuthenticateError, Credential, DeviceError, DeviceProfile, DeviceRecord,
-    DeviceStore, Devices, RevocationNotes, apply_revocation_notes,
+    Acknowledgement, AuthenticateError, Credential, DeviceError, DeviceKind, DeviceProfile,
+    DeviceRecord, DeviceStore, Devices, RevocationNotes, apply_revocation_notes,
 };
 use super::handshake::{
-    ErrorCode, HANDSHAKE_PROTOCOL_VERSION, HandshakeRequest, HandshakeResponse, PairingMethod,
+    DeviceHint, ErrorCode, HANDSHAKE_PROTOCOL_VERSION, HandshakeRequest, HandshakeResponse,
+    PairingMethod, device_hint,
 };
 use super::hub::{HubIdentity, SessionHub};
 use super::lifecycle::{GatewayRegistration, RemoteLifecycle};
@@ -176,6 +177,112 @@ struct Unauthenticated {
     per_ip: HashMap<IpAddr, usize>,
 }
 
+/// How many refused attempts are kept for the owner. Newest win, so a device
+/// that retries in a loop cannot push everything else out.
+const REFUSALS_KEPT: usize = 8;
+
+/// How long a refused attempt stays worth showing.
+const REFUSAL_RETENTION: Duration = Duration::from_secs(15 * 60);
+
+/// Refused connection attempts, oldest first, for Settings › Remote access.
+/// Only the reasons a person can act on are in here
+/// ([`RefusalReason::from_error_code`]).
+#[derive(Default)]
+struct Refusals {
+    entries: Vec<Refusal>,
+}
+
+struct Refusal {
+    reason: RefusalReason,
+    attempts: u32,
+    device_name: Option<String>,
+    device_kind: DeviceKind,
+    platform: String,
+    protocol_version: Option<u32>,
+    supported_versions: Vec<u32>,
+    remote_addr: IpAddr,
+    at: Instant,
+}
+
+impl Refusals {
+    /// Note one refusal. The same attempt from the same address, by the same
+    /// app, is counted instead of listed again. True when this started a new
+    /// entry rather than adding to one.
+    fn record(
+        &mut self,
+        now: Instant,
+        reason: RefusalReason,
+        remote_addr: IpAddr,
+        hint: &DeviceHint,
+    ) -> bool {
+        self.entries
+            .retain(|entry| now.saturating_duration_since(entry.at) < REFUSAL_RETENTION);
+        let same = |entry: &Refusal| {
+            entry.reason == reason
+                && entry.remote_addr == remote_addr
+                && entry.device_name.as_deref() == hint.name.as_deref()
+                && entry.protocol_version == hint.protocol_version
+        };
+        let started = match self.entries.iter().position(same) {
+            Some(index) => {
+                let mut entry = self.entries.remove(index);
+                entry.attempts = entry.attempts.saturating_add(1);
+                entry.at = now;
+                entry.device_kind = hint.profile.kind;
+                entry.platform.clone_from(&hint.profile.platform);
+                self.entries.push(entry);
+                false
+            }
+            None => {
+                self.entries.push(Refusal {
+                    reason,
+                    attempts: 1,
+                    device_name: hint.name.clone(),
+                    device_kind: hint.profile.kind,
+                    platform: hint.profile.platform.clone(),
+                    protocol_version: hint.protocol_version,
+                    supported_versions: supported_versions(reason),
+                    remote_addr,
+                    at: now,
+                });
+                true
+            }
+        };
+        let excess = self.entries.len().saturating_sub(REFUSALS_KEPT);
+        self.entries.drain(..excess);
+        started
+    }
+
+    /// The attempts still worth showing, newest first.
+    fn view(&mut self, now: Instant) -> Vec<RefusedConnection> {
+        self.entries
+            .retain(|entry| now.saturating_duration_since(entry.at) < REFUSAL_RETENTION);
+        self.entries
+            .iter()
+            .rev()
+            .map(|entry| RefusedConnection {
+                reason: entry.reason,
+                attempts: entry.attempts,
+                device_name: entry.device_name.clone(),
+                device_kind: entry.device_kind,
+                platform: entry.platform.clone(),
+                protocol_version: entry.protocol_version,
+                supported_versions: entry.supported_versions.clone(),
+                remote_addr: entry.remote_addr.to_string(),
+                refused_secs_ago: now.saturating_duration_since(entry.at).as_secs(),
+            })
+            .collect()
+    }
+}
+
+/// The versions this host speaks, for a refusal that is about versions.
+fn supported_versions(reason: RefusalReason) -> Vec<u32> {
+    match reason {
+        RefusalReason::UnsupportedVersion => vec![HANDSHAKE_PROTOCOL_VERSION],
+        _ => Vec::new(),
+    }
+}
+
 pub(super) struct Shared {
     pub(super) gateway_id: String,
     pub(super) instance_id: String,
@@ -199,6 +306,9 @@ pub(super) struct Shared {
     notes: RevocationNotes,
     state: Mutex<State>,
     unauthenticated: Mutex<Unauthenticated>,
+    /// Refusals for the owner's UI; never part of a security decision, so it
+    /// is a lock of its own rather than part of `state`.
+    refusals: Mutex<Refusals>,
 }
 
 /// One of the bounded slots for sockets that have not authenticated.
@@ -259,8 +369,18 @@ impl Drop for LiveConnection {
 pub(super) struct ConnectTicket {
     shared: Arc<Shared>,
     pub(super) id: String,
+    /// The address the requesting socket came from, for the refusal record
+    /// when its code does not work.
+    ip: IpAddr,
     pub(super) expires_at: Instant,
     pub(super) outcome: tokio::sync::watch::Receiver<Outcome>,
+}
+
+impl ConnectTicket {
+    /// The peer's address, canonical.
+    pub(super) fn ip(&self) -> IpAddr {
+        self.ip
+    }
 }
 
 impl Drop for ConnectTicket {
@@ -312,12 +432,78 @@ impl Shared {
         })
     }
 
-    /// Decide a first frame. On success the connection is already in the
-    /// live registry, so a revocation that follows cannot miss it.
+    /// Keep a refused attempt for the owner's UI: why it was refused, where it
+    /// came from and what the device's frame said about it. Never a secret.
+    pub(super) fn record_refusal(
+        &self,
+        remote_addr: IpAddr,
+        reason: RefusalReason,
+        hint: &DeviceHint,
+    ) {
+        let remote_addr = remote_addr.to_canonical();
+        let mut refusals = self
+            .refusals
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // One line per new attempt, not per retry: a device in a reconnect loop
+        // must not fill the gateway log either.
+        if refusals.record(Instant::now(), reason, remote_addr, hint) {
+            let name = hint.name.as_deref().unwrap_or("an unnamed device");
+            let version = hint
+                .protocol_version
+                .map(|version| format!(", protocol version {version}"))
+                .unwrap_or_default();
+            crate::dbg_log!(
+                "remote gateway: refused a connection from {remote_addr}: {name} ({} on {}{version}): {}",
+                hint.profile.kind,
+                hint.profile.platform,
+                reason.label()
+            );
+        }
+    }
+
+    /// The refused attempts still worth showing, newest first.
+    fn refused_connections(&self, now: Instant) -> Vec<RefusedConnection> {
+        let mut refusals = self
+            .refusals
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        refusals.view(now)
+    }
+
+    /// Record a refused handshake frame, when it is one its owner can act on.
+    /// The frame is read a second time, and only for what it says about the
+    /// device, because a frame refused for its version never parses.
+    fn record_handshake_refusal(
+        &self,
+        remote_addr: IpAddr,
+        rejection: &HandshakeResponse,
+        text: &str,
+    ) {
+        let HandshakeResponse::Error { code, .. } = rejection else {
+            return;
+        };
+        let Some(reason) = RefusalReason::from_error_code(*code) else {
+            return;
+        };
+        self.record_refusal(remote_addr, reason, &device_hint(text));
+    }
+
+    /// Decide a first frame and, when it is refused for a reason its owner can
+    /// act on, keep that refusal for the desktop and `remote status`.
     pub(super) fn admit_device(
         self: &Arc<Self>,
+        remote_addr: IpAddr,
         text: &str,
     ) -> Result<Admitted, HandshakeResponse> {
+        let outcome = self.decide_device(text);
+        if let Err(rejection) = &outcome {
+            self.record_handshake_refusal(remote_addr, rejection, text);
+        }
+        outcome
+    }
+
+    fn decide_device(self: &Arc<Self>, text: &str) -> Result<Admitted, HandshakeResponse> {
         let request = HandshakeRequest::parse(text)?;
         let profile = request.device_profile();
         let rotate = request.wants_token_rotation();
@@ -377,8 +563,22 @@ impl Shared {
     }
 
     /// The second frame of a socket whose connection request was accepted:
-    /// a `pair` frame presenting the code bound to that request.
+    /// a `pair` frame presenting the code bound to that request. A refusal
+    /// here is kept for the owner like any other.
     pub(super) fn admit_connected(
+        self: &Arc<Self>,
+        remote_addr: IpAddr,
+        request: &str,
+        text: &str,
+    ) -> Result<Admitted, HandshakeResponse> {
+        let admitted = self.decide_connected(request, text);
+        if let Err(rejection) = &admitted {
+            self.record_handshake_refusal(remote_addr, rejection, text);
+        }
+        admitted
+    }
+
+    fn decide_connected(
         self: &Arc<Self>,
         request: &str,
         text: &str,
@@ -463,11 +663,13 @@ impl Shared {
                     code: ErrorCode::ConnectRateLimited,
                     message: "the host denied this device a moment ago".into(),
                     retry_after_secs: Some(retry_after.as_secs().max(1)),
+                    supported_versions: Vec::new(),
                 },
             })?;
         Ok(ConnectTicket {
             shared: Arc::clone(self),
             id: opened.id,
+            ip,
             expires_at: opened.expires_at,
             outcome: opened.outcome,
         })
@@ -576,6 +778,7 @@ impl Shared {
                     code: ErrorCode::RateLimited,
                     message: "too many failed pairing attempts on this host".into(),
                     retry_after_secs: Some(retry_after.as_secs().max(1)),
+                    supported_versions: Vec::new(),
                 },
             })?;
         // The challenge is spent from here on, whatever happens next.
@@ -1256,6 +1459,7 @@ impl Gateway {
                 next_connection: 1,
             }),
             unauthenticated: Mutex::new(Unauthenticated::default()),
+            refusals: Mutex::new(Refusals::default()),
         });
         Ok(Self {
             listener,
@@ -1548,6 +1752,7 @@ fn status(shared: &Shared, started: Instant) -> GatewayStatus {
         owner_log_directory: Some(shared.lifecycle.owners_directory()),
         connect_requests,
         ended_connect_requests,
+        refused_connections: shared.refused_connections(now),
         automatic_bind: Some(shared.automatic_bind),
         fixed_advertise: Some(shared.fixed_advertise),
     }

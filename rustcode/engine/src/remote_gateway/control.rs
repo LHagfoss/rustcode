@@ -128,6 +128,11 @@ pub struct GatewayStatus {
     /// Connection requests that ended recently, oldest first.
     #[serde(default)]
     pub ended_connect_requests: Vec<EndedConnectRequest>,
+    /// Connection attempts the gateway turned away, newest first, so the owner
+    /// can say why a device does not get in. Empty from a gateway that does
+    /// not keep them. Never a secret.
+    #[serde(default)]
+    pub refused_connections: Vec<RefusedConnection>,
     /// The bind is `auto` and follows the machine's addresses. `None` from a
     /// gateway that does not report it.
     #[serde(default)]
@@ -226,6 +231,96 @@ pub struct EndedConnectRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_id: Option<String>,
     pub ended_secs_ago: u64,
+}
+
+/// A connection attempt the gateway turned away, for its owner to see why a
+/// device did not get in: a phone whose app speaks another protocol version, a
+/// code that did not work, or a pairing this host no longer accepts. Never a
+/// secret: only what the device's frame said about itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefusedConnection {
+    pub reason: RefusalReason,
+    /// How many times the same attempt was refused since the gateway started.
+    #[serde(default = "one_attempt")]
+    pub attempts: u32,
+    /// The label the device sent, when its frame named one. Not an identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_name: Option<String>,
+    /// What the device said it is. A phone from an older gateway.
+    #[serde(default)]
+    pub device_kind: DeviceKind,
+    /// `ios`, `android`, `windows`, …; `unknown` when it said nothing usable.
+    #[serde(default = "unknown_platform")]
+    pub platform: String,
+    /// The remote protocol version the device sent, when its frame carried one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol_version: Option<u32>,
+    /// Set with [`RefusalReason::UnsupportedVersion`]: the versions this host
+    /// speaks, so the owner is told which side is behind.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_versions: Vec<u32>,
+    /// The network address the attempt came from.
+    pub remote_addr: String,
+    pub refused_secs_ago: u64,
+}
+
+fn one_attempt() -> u32 {
+    1
+}
+
+/// Why the gateway refused a connection. Each one names something its owner can
+/// act on, so the answer is never only "the phone could not connect".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RefusalReason {
+    /// The app on the device speaks a remote protocol version this host does
+    /// not: one of the two must be updated.
+    UnsupportedVersion,
+    /// The pairing code or credential was wrong, already used or expired.
+    PairingFailed,
+    /// Too many failed pairing attempts on this host, so even the right code is
+    /// refused until the lockout ends.
+    RateLimited,
+    /// Unknown, revoked or expired device, or a token that does not match it.
+    Unauthorized,
+    /// A retired refresh token was presented; the gateway therefore removed the
+    /// whole pairing. The device has to pair again.
+    TokenReplayed,
+    /// The WebSocket upgrade carried an `Origin` no native app sends, so it was
+    /// refused before a single frame arrived: a browser, or an app build older
+    /// than the one that sends the native app origin.
+    UnexpectedOrigin,
+}
+
+impl RefusalReason {
+    /// A short name for a terminal line, in the words the owner acts on.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::UnsupportedVersion => "app version this host does not speak",
+            Self::PairingFailed => "pairing code refused (wrong, used or expired)",
+            Self::RateLimited => "pairing locked after too many wrong codes",
+            Self::Unauthorized => "unknown or revoked device",
+            Self::TokenReplayed => "pairing revoked (a retired token was used)",
+            Self::UnexpectedOrigin => "unexpected app origin, refused before any frame",
+        }
+    }
+
+    /// The handshake error code this reason was decided from, for a gateway
+    /// that records a refusal where the frame was refused.
+    pub fn from_error_code(code: super::handshake::ErrorCode) -> Option<Self> {
+        use super::handshake::ErrorCode;
+        Some(match code {
+            ErrorCode::UnsupportedVersion => Self::UnsupportedVersion,
+            ErrorCode::PairingFailed => Self::PairingFailed,
+            ErrorCode::RateLimited => Self::RateLimited,
+            ErrorCode::Unauthorized => Self::Unauthorized,
+            ErrorCode::TokenReplayed => Self::TokenReplayed,
+            // A malformed frame is a bug on the device that its owner cannot
+            // act on; a full gateway or a slow one is not about the device
+            // either. Recording those would crowd out the ones that help.
+            _ => return None,
+        })
+    }
 }
 
 /// The owner's answer to a connection request. On acceptance `code` is the

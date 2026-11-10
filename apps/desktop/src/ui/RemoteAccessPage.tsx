@@ -12,9 +12,16 @@
 
 import { Copy, RefreshCw, Smartphone, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { heldBackReason, type RemoteOffer, type RemotePairing, type RemoteRoute } from "../acp/remote";
+import {
+  heldBackReason,
+  type RemoteOffer,
+  type RemotePairing,
+  type RemoteRefusedConnection,
+  type RemoteRoute,
+} from "../acp/remote";
 import { encodeQr } from "../lib/qr";
 import { deviceLabel, lastSeenLabel } from "../state/connectRequests";
+import { refusalAgo, refusalCopy } from "../state/refusals";
 import { activeChallenge, remainingPairingSeconds } from "../state/remotePairing";
 import {
   dismissRemoteChallenge,
@@ -68,6 +75,7 @@ export function RemoteAccessPage() {
   }, []);
 
   const devices = remote?.devices ?? [];
+  const refused = remote?.refusedConnections ?? [];
   const gateway = remote?.gateway;
   const active = activeChallenge(challenge, now);
   const offer = active?.offer;
@@ -229,6 +237,8 @@ export function RemoteAccessPage() {
 
       <ConnectRequestsGroup />
 
+      {refused.length > 0 && <RefusedConnectionsGroup refused={refused} />}
+
       <Group
         title={`Paired devices · ${devices.length}`}
         footer="A pairing stays until you revoke it here, so a device does not have to pair again. Revoke disconnects it at once."
@@ -286,6 +296,47 @@ export function RemoteAccessPage() {
         )}
       </Group>
     </>
+  );
+}
+
+/**
+ * Connections the gateway turned away, newest first: the desktop half of "the
+ * phone cannot connect". A phone that speaks another protocol version, sends a
+ * code that does not work, or reconnects with a pairing this Mac no longer
+ * accepts says so here, with what to do about it, instead of the phone only
+ * saying it cannot connect.
+ */
+export function RefusedConnectionsGroup({ refused }: { refused: RemoteRefusedConnection[] }) {
+  return (
+    <Group
+      title="Refused connections"
+      footer="A device that could not get in is listed here for a quarter of an hour after it stopped trying. Nothing was shared with it: no thread, no prompt and no code was accepted."
+    >
+      {refused.map((entry) => {
+        const copy = refusalCopy(entry);
+        const when = refusalAgo(entry.refusedSecsAgo);
+        return (
+          <Row
+            key={`${entry.reason}-${entry.deviceName ?? ""}-${entry.protocolVersion ?? ""}-${entry.remoteAddr}`}
+            title={copy.title}
+            subtitle={copy.detail}
+            status={
+              <span>
+                {[
+                  entry.attempts > 1 ? `${entry.attempts} tries` : undefined,
+                  when,
+                  entry.remoteAddr || undefined,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
+            }
+          >
+            <Chip tone="warn">{deviceLabel(entry.deviceKind, entry.platform)}</Chip>
+          </Row>
+        );
+      })}
+    </Group>
   );
 }
 

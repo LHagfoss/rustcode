@@ -663,6 +663,30 @@ pub fn format_status_for(status: Option<&GatewayStatus>, this_session: Option<&s
             ));
         }
     }
+    if !status.refused_connections.is_empty() {
+        lines.push(format!(
+            "  refused        {} (shown in Settings › Remote access)",
+            status.refused_connections.len()
+        ));
+        for refused in &status.refused_connections {
+            let name = refused
+                .device_name
+                .as_deref()
+                .unwrap_or("an unnamed device");
+            let version = refused
+                .protocol_version
+                .map(|version| format!("version {version}, "))
+                .unwrap_or_default();
+            lines.push(format!(
+                "    {}  ({name}, {version}{} on {}, {}, {} ago)",
+                refused.reason.label(),
+                refused.device_kind,
+                refused.platform,
+                refused.remote_addr,
+                refused.refused_secs_ago
+            ));
+        }
+    }
     lines.push(format!("  connections    {}", status.connections.len()));
     if status.devices.is_empty() {
         for connection in &status.connections {
@@ -1012,6 +1036,7 @@ mod tests {
             owner_log_directory: Some("/config/remote/owners".into()),
             connect_requests: Vec::new(),
             ended_connect_requests: Vec::new(),
+            refused_connections: Vec::new(),
             automatic_bind: Some(false),
             fixed_advertise: Some(false),
         };

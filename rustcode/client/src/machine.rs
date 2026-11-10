@@ -911,6 +911,10 @@ impl Refusal {
                 "; this computer is not allowed to use that machine's threads — on that machine, \
                  run `rustcode remote devices allow <device>`"
             }
+            ErrorCode::UnsupportedVersion => {
+                "; that machine speaks another RustCode remote protocol version — update RustCode \
+                 on both machines so they match"
+            }
             ErrorCode::Internal => {
                 "; no RustCode engine is running there to relay to — open RustCode on that \
                  machine, or run `rustcode server run` on it"

@@ -50,10 +50,11 @@ export interface MockOptions {
   /**
    * Remote access the mock starts in (`?remote=`): `disconnected` shares with
    * the gateway unreachable, `expired` issues a pairing code that has already
-   * run out, `connect` starts on with a phone asking to connect. The default
-   * starts idle.
+   * run out, `connect` starts on with a phone asking to connect, `refused`
+   * starts on with recent refusals (an app version this Mac does not speak, an
+   * unknown pairing, an unexpected app origin). The default starts idle.
    */
-  remote?: "disconnected" | "expired" | "connect";
+  remote?: "disconnected" | "expired" | "connect" | "refused";
   /**
    * The machines this app is paired with (`?machines=`): `paired` is a machine
    * saved just now, `connect` starts with none saved so the Add machine flow
@@ -1932,6 +1933,8 @@ export class MockEngine {
     pairingDue: false,
     pairingError: null as string | null,
     refused: new Map<string, string>(),
+    /** Connections the gateway turned away, newest first (`refusedConnections`). */
+    refusedConnections: [] as JsonObject[],
     /** Phones asking to connect, as the gateway holds them (`remote_gateway/connect.rs`). */
     connect: [] as MockConnectRequest[],
     /** Requests that ended, oldest first, as the gateway keeps its last eight. */
@@ -2082,6 +2085,54 @@ export class MockEngine {
       this.remote.gateway = this.remoteGateway();
       for (const open of this.threads) this.remote.shared.add(open.id);
       this.askToConnect("Lars's Pixel", "android", "192.168.1.31");
+    }
+    if (options.remote === "refused") {
+      this.remote.enabled = true;
+      this.remote.gateway = this.remoteGateway();
+      for (const open of this.threads) this.remote.shared.add(open.id);
+      // One of each refusal the owner can act on, newest first, as the gateway
+      // keeps them (`remote_gateway/gateway.rs`).
+      this.remote.refusedConnections = [
+        {
+          reason: "unsupported_version",
+          attempts: 3,
+          deviceName: "Lars's iPhone",
+          deviceKind: "phone",
+          platform: "ios",
+          protocolVersion: 2,
+          supportedVersions: [1],
+          remoteAddr: "192.168.1.31",
+          refusedSecsAgo: 40,
+        },
+        {
+          reason: "pairing_failed",
+          attempts: 1,
+          deviceName: "Pixel 8",
+          deviceKind: "phone",
+          platform: "android",
+          supportedVersions: [],
+          remoteAddr: "192.168.1.72",
+          refusedSecsAgo: 190,
+        },
+        {
+          reason: "unauthorized",
+          attempts: 1,
+          deviceKind: "phone",
+          platform: "android",
+          supportedVersions: [],
+          remoteAddr: "192.168.1.44",
+          refusedSecsAgo: 320,
+        },
+        {
+          reason: "unexpected_origin",
+          attempts: 2,
+          deviceKind: "phone",
+          platform: "unknown",
+          supportedVersions: [],
+          remoteAddr: "192.168.1.72",
+          refusedSecsAgo: 500,
+        },
+      ];
     }
   }
 
@@ -2408,6 +2459,7 @@ export class MockEngine {
       pairingError: this.remote.pairingError,
       notShared: this.remote.refused.size,
       pairedDevices: this.remote.devices.length,
+      refusedConnections: this.remote.refusedConnections,
       // The machine's answer says which paired devices are connected; the mock's gateway has them all.
       devices: this.remote.devices.map((device) => ({
         ...device,
