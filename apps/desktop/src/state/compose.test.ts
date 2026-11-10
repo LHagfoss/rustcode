@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
+  commandSuggestions,
   composedText,
   emptyExtras,
   hasTokens,
+  insertCommand,
   messageCollapses,
   promptBlocks,
   sentAttachments,
   sentMessages,
+  slashToken,
   splitImageMarkers,
   splitSlashCommand,
   splitTokens,
@@ -20,6 +23,29 @@ describe("compose", () => {
     const extras = { ...emptyExtras, command, links: ["https://a.dev"] };
     expect(composedText("look at this", extras)).toBe("/review https://a.dev look at this");
     expect(composedText("", extras)).toBe("/review https://a.dev");
+  });
+
+  test("a skill is words on a harness that did not advertise it, and a command there", () => {
+    const skill = { ...command, name: "/release-automation", action: "skill" };
+    const options = { images: false, cwd: "/p" };
+    const sent = (harness: boolean, text: string, extras = { ...emptyExtras, command: skill }) =>
+      promptBlocks(text, extras, { ...options, builtin: harness });
+
+    // The built-in harness reads `/name` and routes it to `use_skill`.
+    expect(sent(true, "cut a beta")).toEqual([{ type: "text", text: "/release-automation cut a beta" }]);
+    expect(sent(true, "")).toEqual([{ type: "text", text: "/release-automation" }]);
+    // Another harness may reject a leading slash command it does not know: it is told in words.
+    expect(sent(false, "cut a beta")).toEqual([
+      { type: "text", text: "Use the release-automation skill. cut a beta" },
+    ]);
+    expect(sent(false, "")).toEqual([{ type: "text", text: "Use the release-automation skill." }]);
+    expect(sent(false, "", { ...emptyExtras, command: skill, links: ["https://a.dev"] })).toEqual([
+      { type: "text", text: "Use the release-automation skill. https://a.dev" },
+    ]);
+    // A command the harness itself advertised goes out as typed, on either harness.
+    expect(sent(false, "the diff", { ...emptyExtras, command })).toEqual([
+      { type: "text", text: "/review the diff" },
+    ]);
   });
 
   test("images become image blocks only when the harness takes them", () => {
@@ -131,6 +157,74 @@ describe("tokens in the draft", () => {
     expect(hasTokens("https://x.dev")).toBe(true);
     // Two calls in a row on the same draft: the mirrors' patterns carry no `lastIndex` state.
     expect(hasTokens("@src/a.ts")).toBe(true);
+  });
+});
+
+describe("the slash token", () => {
+  test("opens at the start or after whitespace, at any line", () => {
+    expect(slashToken("/", 1)).toEqual({ start: 0, query: "" });
+    expect(slashToken("/rev", 4)).toEqual({ start: 0, query: "rev" });
+    expect(slashToken("please /rev", 11)).toEqual({ start: 7, query: "rev" });
+    expect(slashToken("one\ntwo /rel", 12)).toEqual({ start: 8, query: "rel" });
+  });
+
+  test("a path, an email-like word or a finished token is not one", () => {
+    expect(slashToken("/usr/bin", 8)).toBeNull();
+    expect(slashToken("and/or", 7)).toBeNull();
+    expect(slashToken("/rev fix it", 11)).toBeNull();
+    expect(slashToken("no slash here", 13)).toBeNull();
+  });
+
+  test("the caret inside a word opens nothing", () => {
+    expect(slashToken("/review", 3)).toBeNull();
+  });
+});
+
+describe("command suggestions", () => {
+  const commands = [
+    {
+      name: "/review",
+      description: "Review the diff",
+      takesArguments: false,
+      report: false,
+      action: "execute",
+    },
+    {
+      name: "/release-automation",
+      description: "Cut a release",
+      takesArguments: true,
+      report: false,
+      action: "skill",
+    },
+    { name: "/status", description: "Show status", takesArguments: false, report: true, action: "execute" },
+  ];
+
+  test("names that start with what is typed come first, then the ones that contain it", () => {
+    expect(commandSuggestions("re", commands).map((c) => c.name)).toEqual(["/review", "/release-automation"]);
+    expect(commandSuggestions("status", commands).map((c) => c.name)).toEqual(["/status"]);
+    expect(commandSuggestions("", commands).map((c) => c.name)).toEqual([
+      "/review",
+      "/release-automation",
+      "/status",
+    ]);
+  });
+
+  test("it keeps to a bound and drops what does not match", () => {
+    expect(commandSuggestions("zzz", commands)).toEqual([]);
+    expect(commandSuggestions("", commands, 2)).toHaveLength(2);
+  });
+});
+
+describe("inserting a command token", () => {
+  test("replaces the token and leaves a space to keep typing", () => {
+    expect(insertCommand("please /rel now", { start: 7, query: "rel" }, "/release-automation")).toEqual({
+      text: "please /release-automation now",
+      caret: 27,
+    });
+  });
+
+  test("at the start it becomes the leading command", () => {
+    expect(insertCommand("/rev", { start: 0, query: "rev" }, "/review").text).toBe("/review ");
   });
 });
 

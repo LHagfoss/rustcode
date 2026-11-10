@@ -293,7 +293,12 @@ composer's keys stay outside the table.
   label, the branch chip, the agents pill); controls stay. A slash command
   from `available_commands_update` that
   takes arguments becomes a token in front of the field (picked from the
-  popup or typed as `/name `). Commands the engine marks for the client
+  popup or typed as `/name `). The popup opens for the `/token` at the caret,
+  at the start of the message or after whitespace anywhere in it, and a pick
+  mid-message writes `/name ` into the message instead. The engine's skills
+  (`_meta.rustcode.action: "skill"`, one per enabled skill it discovers) are
+  offered beside the harness's own commands, which on Claude Code only cover
+  `.claude/skills`. Commands the engine marks for the client
   (`_meta.rustcode.action`) never go out as a prompt: `new_session`
   (`/clear`) opens a new thread on the same project, harness, model and
   effort; `model_picker` (`/model`) opens the model picker;
