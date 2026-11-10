@@ -173,13 +173,30 @@ export function DailyChart({
   const peak = Math.max(0, ...values.map((one) => one ?? 0));
   const shown = active ? points[active.index] : undefined;
 
+  const tip = useRef<HTMLDivElement>(null);
+  const [tipWidth, setTipWidth] = useState(96);
+  const [plotWidth, setPlotWidth] = useState(0);
+
   const pick = (index: number, x?: number) => {
-    const box = plot.current?.getBoundingClientRect();
-    const width = box?.width ?? 0;
+    const width = plot.current?.getBoundingClientRect().width ?? 0;
     const centre = width ? ((index + 0.5) / points.length) * width : 0;
-    // Keep the tip inside the card, so a day at either end still reads.
-    setActive({ index, x: Math.min(Math.max(x ?? centre, 48), Math.max(width - 48, 48)) });
+    // The line stays on the pointer (or the day's centre) all the way to the edges.
+    setPlotWidth(width);
+    setActive({ index, x: Math.min(Math.max(x ?? centre, 0), width) });
   };
+
+  // Measure the tip after it renders, so the clamp below uses its real width.
+  useLayoutEffect(() => {
+    const width = tip.current?.offsetWidth;
+    if (width && width !== tipWidth) setTipWidth(width);
+  });
+  // The tip sits inside the plot beside the line, on whichever side has room,
+  // so it never covers the hovered bar, the measure switch above, or the edges.
+  const tipLeft = active
+    ? active.x + 8 + tipWidth <= plotWidth
+      ? active.x + 8
+      : Math.max(active.x - 8 - tipWidth, 0)
+    : 0;
 
   const onKey = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!points.length) return;
@@ -272,8 +289,9 @@ export function DailyChart({
         })}
         {active && shown && (
           <div
+            ref={tip}
             className="pointer-events-none absolute top-0 z-20 rounded-lg bg-surface-3 px-2 py-1 whitespace-nowrap text-caption shadow-2"
-            style={{ left: active.x, transform: "translate(-50%, -100%)" }}
+            style={{ left: tipLeft }}
           >
             <span className="font-medium text-fg tabular">{shortDay(shown.day)}</span>
             <span className="text-fg-muted tabular">
