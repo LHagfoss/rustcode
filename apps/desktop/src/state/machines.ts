@@ -86,6 +86,16 @@ export interface DiscoveredMachine {
   saved: boolean;
 }
 
+/**
+ * What `machines_discover` answers: the rows, and what to say when the local
+ * search failed — the overlay rows come from this app's registry and are in
+ * `rows` either way.
+ */
+export interface Discovery {
+  rows: DiscoveredMachine[];
+  notice: string | null;
+}
+
 /** The RustCode server as this computer runs it in the background (`server status`). */
 export interface ServerService {
   /** A service is in place, so the server starts when you log in. */
@@ -283,6 +293,14 @@ export function forgetLocalAppVersion(): void {
 }
 
 /**
+ * The version `tauri.conf.json` gives a development build; a released app is
+ * stamped with its own version by `scripts/bundle-version.ts`. Every machine
+ * would read as newer against it, so the skew line is not shown in a `tauri
+ * dev` build (the mock reports a released version and does show it).
+ */
+export const DEV_APP_VERSION = "0.1.0";
+
+/**
  * A machine running another RustCode version, in words: an older one is
  * updated there, a newer one means this app is the one to update. Version
  * skew is how the Mac Studio kept talking RustCode 0.96 to a 1.28 app without
@@ -293,7 +311,7 @@ export function versionSkew(
   local: string | null | undefined,
   platform?: string | null,
 ): string | null {
-  if (!remote || !local) return null;
+  if (!remote || !local || local === DEV_APP_VERSION) return null;
   const order = compareVersions(remote, local);
   if (order === 0) return null;
   return order < 0
@@ -302,20 +320,20 @@ export function versionSkew(
 }
 
 /**
- * The command that updates RustCode on a machine of that platform, as
- * docs/install.md gives it: Homebrew on a Mac, the app's own updater or a new
- * AppImage on Linux, the installer on Windows.
+ * How RustCode is updated on a machine of that platform, as docs/install.md
+ * gives it: the app's own updater or Homebrew on a Mac, the app's updater or a
+ * new AppImage on Linux, the installer on Windows.
  */
 export function updateAdvice(platform: string): string {
   switch (platformName(platform)?.toLowerCase()) {
     case "mac":
-      return "brew upgrade rustcode";
+      return "Settings › About › Check for updates, or `brew upgrade rustcode`";
     case "windows":
-      return "Run the RustCode installer there";
+      return "run the RustCode installer";
     case "linux":
-      return "Install the new AppImage there, or run rustcode --update";
+      return "install the new AppImage, or run `rustcode --update`";
     default:
-      return "Install the newer RustCode there";
+      return "install the newer RustCode";
   }
 }
 
@@ -653,8 +671,10 @@ export function refreshMachineThreads(): void {
 export async function discoverMachines(): Promise<void> {
   useMachines.setState({ discovering: true, discoverError: null });
   try {
-    const discovered = await shellCall<DiscoveredMachine[]>("machines_discover");
-    useMachines.setState({ discovered: mergeDiscovered(discovered), discovering: false });
+    const { rows, notice } = await shellCall<Discovery>("machines_discover");
+    // A failed browse still lists the overlay rows: the notice says why the
+    // local search found nothing, and the saved machines are below it.
+    useMachines.setState({ discovered: mergeDiscovered(rows), discoverError: notice, discovering: false });
   } catch (error) {
     useMachines.setState({ discovering: false, discoverError: errorText(error) });
   }
@@ -684,10 +704,11 @@ export async function refreshServerService(): Promise<void> {
 }
 
 /**
- * Install the server as a background service: threads then keep running when
- * the app closes, and the server starts when you log in. It is the CLI's own
- * `rustcode server install`, so a development build is refused there with the
- * reason shown here. Answers whether it ended up installed.
+ * Install the server as a background service: the shared engine threads run in
+ * stays up when the app closes, and starts when you log in. The app's own
+ * threads stay in its engine until the app is switched to the server. It is the
+ * CLI's own `rustcode server install`, so a development build is refused there
+ * with the reason shown here. Answers whether it ended up installed.
  */
 export async function installServer(): Promise<boolean> {
   useMachines.setState({ serverInstalling: true });
@@ -695,7 +716,10 @@ export async function installServer(): Promise<boolean> {
     const server = await shellCall<ServerService>("server_service_install");
     useMachines.setState({ server, serverInstalling: false });
     if (server.installed) {
-      toast("The RustCode server is installed and keeps threads running when the app closes.", "success");
+      toast(
+        "The RustCode server is installed as a background service and starts when you log in.",
+        "success",
+      );
     } else {
       toast(server.error ?? "The RustCode server is installed but is not running yet.", "error");
     }
@@ -708,14 +732,15 @@ export async function installServer(): Promise<boolean> {
 }
 
 /**
- * Ask before installing the server, in the words that say why: it is what
- * keeps threads running when the app closes, and it starts when you log in.
+ * Ask before installing the server, in the words that say what it does: it is
+ * the shared engine threads run in, it stays up when the app closes, and it
+ * starts when you log in. The app's own threads are still its engine's.
  */
 export function askInstallServer(): void {
   askConfirm({
     title: "Install the RustCode server?",
     message:
-      "RustCode keeps threads running when the app closes by running them in the RustCode server in the background. It starts when you log in, and the app uses it instead of one that ends with the app. Threads, settings and pairings stay as they are.",
+      "The RustCode server is the engine threads run in: as a background service it stays up when the app closes, and it starts when you log in. The threads this app starts itself still run in the app's engine and end with it, until RustCode uses the server. Threads, settings and pairings stay as they are.",
     action: "Install",
     run: () => void installServer(),
   });

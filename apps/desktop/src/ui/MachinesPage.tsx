@@ -11,8 +11,9 @@
 // explains; `state/machines.ts` keeps what it is told.
 //
 // This computer's row also says whether the RustCode server is installed as a
-// background service: that is what keeps threads running when the app closes,
-// and Settings › Remote access installs it when network access is turned on.
+// background service — the server that keeps this computer reachable with the
+// app closed, and that Settings › Remote access installs when network access is
+// turned on. Threads this app runs stay in the app and end with it.
 // A row of another machine says which RustCode version it runs, so an old one
 // is a sentence with a command, not a silent connection failure.
 
@@ -143,8 +144,9 @@ export function MachinesPage() {
 
 /**
  * This app's own computer: the local RustCode server, over the local socket,
- * and whether that server is installed to run in the background — which is
- * what keeps threads running when the app closes (docs/server.md).
+ * and whether the server is installed to run in the background — which keeps
+ * this computer reachable with the app closed (docs/server.md). The threads
+ * this app runs are its own engine's, and end when the app does.
  */
 function ThisComputer() {
   const status = useApp((s) => s.status);
@@ -319,9 +321,7 @@ function AddMachine({ error, local }: { error: string | null; local: string | nu
     >
       {error && <p className="m-0 px-4 py-4 text-callout text-warning">{error}</p>}
       {discoverError && (
-        <p className="m-0 px-4 py-3 text-callout text-warning leading-normal">
-          Could not look for machines: {discoverError}
-        </p>
+        <p className="m-0 px-4 py-3 text-callout text-warning leading-normal">{discoverError}</p>
       )}
       {(discovered ?? []).map((found) => (
         <DiscoveredRow key={found.gatewayId ?? found.name} found={found} local={local} />

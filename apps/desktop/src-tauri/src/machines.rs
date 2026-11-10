@@ -113,6 +113,15 @@ pub struct MachineView {
     last_connected_at: Option<String>,
 }
 
+/// What `machines_discover` answers: the rows the Add sheet lists, and what to
+/// say when the local search failed (the overlay rows are there either way).
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Discovery {
+    pub rows: Vec<DiscoveredView>,
+    pub notice: Option<String>,
+}
+
 /// A machine the Add sheet lists without an address typed: one Bonjour found
 /// on this network, or one whose handshake reported an overlay address this
 /// app saved for it.
@@ -683,17 +692,29 @@ pub fn machines_list(
 #[tauri::command]
 pub async fn machines_discover(
     machines: tauri::State<'_, Arc<Machines>>,
-) -> Result<Vec<DiscoveredView>, String> {
+) -> Result<Discovery, String> {
     let saved = machines.list().unwrap_or_default();
-    let found = browse_async(DISCOVERY)
-        .await
-        .map_err(|error| format!("Could not look for machines on this network: {error}"))?;
-    let mut views: Vec<DiscoveredView> = found
-        .iter()
-        .map(|machine| discovered(machine, &saved))
-        .collect();
+    let mut notice = None;
+    let mut views: Vec<DiscoveredView> = match browse_async(DISCOVERY).await {
+        Ok(found) => found
+            .iter()
+            .map(|machine| discovered(machine, &saved))
+            .collect(),
+        // A network without multicast (a container, a firewall) cannot browse,
+        // but the overlay rows come from this machine's own registry: the sheet
+        // lists them and says what failed, instead of showing nothing.
+        Err(error) => {
+            notice = Some(format!(
+                "Could not look for machines on this network: {error}"
+            ));
+            Vec::new()
+        }
+    };
     views.extend(overlay_peers(&saved, &views));
-    Ok(views)
+    Ok(Discovery {
+        rows: views,
+        notice,
+    })
 }
 
 /// What one Bonjour record says, plus what this app already knows of the

@@ -4922,8 +4922,13 @@ function mockIsPublic(address: string): boolean {
 /**
  * The machines `machines_discover` lists in the mock, as the shell answers:
  * Bonjour on this network, plus the saved machine's own NetBird address, which
- * the page merges by host id into one row per machine.
+ * the page merges by host id into one row per machine. The local search
+ * always works here, so the notice is null.
  */
+function mockDiscovery(saved: JsonObject[]): JsonObject {
+  return { rows: mockDiscovered(saved), notice: null };
+}
+
 function mockDiscovered(saved: JsonObject[]): JsonObject[] {
   const machine = saved.find((row) => row.id === MOCK_MACHINE.id);
   const version = machine ? String(machine.version ?? "") || null : null;
@@ -5268,7 +5273,7 @@ export class MockTransport implements Transport {
 
   async call(command: string, args: Record<string, unknown>): Promise<unknown> {
     if (command === "machines_list") return this.machineList;
-    if (command === "machines_discover") return mockDiscovered(this.machineList);
+    if (command === "machines_discover") return mockDiscovery(this.machineList);
     if (command === "machines_ask") {
       const address = String(args.address ?? "");
       if (!address) throw new Error("Enter a machine address first.");

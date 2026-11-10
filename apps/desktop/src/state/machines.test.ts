@@ -12,6 +12,7 @@ import {
   codeCheckOverdue,
   codeComplete,
   codeDigits,
+  DEV_APP_VERSION,
   discoverMachines,
   forgetLocalAppVersion,
   installServer,
@@ -81,8 +82,14 @@ class FakeShell implements Transport {
     hint?: string | null;
     saved: boolean;
   }[] = [];
+  /** What the local search says when it failed; the overlay rows are still listed. */
+  discoverNotice: string | null = null;
   /** Whether the background server reads as installed. */
   serverInstalled = true;
+  /** What `server_service_install` refuses with, when it does. */
+  installError: Error | null = null;
+  /** Whether the install reports back as not installed (the CLI's partial answer). */
+  installAnswersInstalled = true;
   /** What the shell answers for `app_version` (a dev build in a browser). */
   appVersion: string | null = "1.28.0";
   private pendingAsk: ((value: unknown) => void) | null = null;
@@ -115,11 +122,12 @@ class FakeShell implements Transport {
         return paired;
       }
       case "machines_discover":
-        return this.discovered;
+        return { rows: this.discovered, notice: this.discoverNotice };
       case "server_service_status":
         return this.serverService();
       case "server_service_install":
-        this.serverInstalled = true;
+        if (this.installError) throw this.installError;
+        this.serverInstalled = this.installAnswersInstalled;
         return this.serverService();
       case "app_version":
         return this.appVersion;
@@ -136,13 +144,19 @@ class FakeShell implements Transport {
 
   /** `server_service_status`, as `src-tauri/src/service.rs` answers it. */
   private serverService() {
+    const installed = this.serverInstalled;
     return {
-      installed: this.serverInstalled,
-      running: this.serverInstalled,
-      version: this.serverInstalled ? "1.28.0" : null,
+      installed,
+      running: installed,
+      version: installed ? "1.28.0" : null,
       cliVersion: "1.28.0",
       problems: [],
-      error: null,
+      // The shell that installs and still reads "not installed" keeps the
+      // command's own words here.
+      error:
+        installed || this.installAnswersInstalled
+          ? null
+          : "The RustCode server was installed but does not read as installed yet.",
     };
   }
 
@@ -444,6 +458,22 @@ describe("the machines a browse and a handshake find", () => {
     expect(useMachines.getState().discovering).toBe(false);
   });
 
+  test("a browse that fails still lists the overlay rows, and says why", async () => {
+    // The shell answers with the saved machine's overlay row and the reason its
+    // local search found nothing (mDNS cannot bind in a container, say).
+    shell.discovered = [studioOverlay];
+    shell.discoverNotice = "Could not look for machines on this network: no multicast interface";
+    await discoverMachines();
+    expect(useMachines.getState().discovered?.map((row) => row.name)).toEqual(["Studio"]);
+    expect(useMachines.getState().discoverError).toContain("no multicast interface");
+    expect(useMachines.getState().discovering).toBe(false);
+    // Looking again clears the notice once the browse answers.
+    shell.discoverNotice = null;
+    await discoverMachines();
+    expect(useMachines.getState().discovered).toHaveLength(1);
+    expect(useMachines.getState().discoverError).toBeNull();
+  });
+
   test("an overlay address says which product made it", () => {
     expect(routeName(null, "netbird")).toBe("NetBird");
     expect(routeName(null, "tailscale")).toBe("Tailscale");
@@ -460,10 +490,11 @@ describe("the machines a browse and a handshake find", () => {
 describe("a machine on another RustCode version", () => {
   test("an older machine says what to update, and how on its platform", () => {
     expect(versionSkew("0.96.0", "1.28.0", "macos")).toBe(
-      "RustCode 0.96.0 on that machine — update it there: brew upgrade rustcode",
+      "RustCode 0.96.0 on that machine — update it there: Settings › About › Check for updates, or `brew upgrade rustcode`",
     );
-    expect(versionSkew("0.96.0", "1.28.0", "linux")).toContain("Install the new AppImage");
-    expect(versionSkew("0.96.0", "1.28.0", "windows")).toContain("Run the RustCode installer");
+    expect(versionSkew("0.96.0", "1.28.0", "linux")).toContain("install the new AppImage");
+    expect(versionSkew("0.96.0", "1.28.0", "windows")).toContain("run the RustCode installer");
+    expect(updateAdvice("")).toBe("install the newer RustCode");
     // The app is the one to update when the machine is ahead.
     expect(versionSkew("1.30.0", "1.28.0", "macos")).toBe(
       "RustCode 1.30.0 on that machine — update RustCode here",
@@ -476,6 +507,12 @@ describe("a machine on another RustCode version", () => {
     expect(versionSkew(null, "1.28.0")).toBeNull();
     // A beta of the same release is older, and says so.
     expect(versionSkew("1.28.0-beta.2", "1.28.0")).toContain("update it there");
+  });
+
+  test("a development build does not call every released machine newer", () => {
+    // `tauri dev` reports tauri.conf.json's placeholder; the mock reports 1.28.0.
+    expect(versionSkew("1.28.0", DEV_APP_VERSION)).toBeNull();
+    expect(versionSkew(DEV_APP_VERSION, "1.28.0")).toContain("update it there");
   });
 
   test("this app's version is read once, from the shell when it is not the app", async () => {
@@ -532,7 +569,24 @@ describe("the RustCode server in the background", () => {
     expect(await installServer()).toBe(true);
     expect(useMachines.getState().server?.running).toBe(true);
     expect(useMachines.getState().serverInstalling).toBe(false);
-    expect(updateAdvice("macos")).toBe("brew upgrade rustcode");
+    expect(updateAdvice("macos")).toContain("brew upgrade rustcode");
+  });
+
+  test("an install that fails says why, and leaves the page without a server", async () => {
+    shell.serverInstalled = false;
+    shell.installError = new Error("a development build; run `rustcode server install` from a release");
+    expect(await installServer()).toBe(false);
+    expect(useMachines.getState().serverInstalling).toBe(false);
+    // Nothing is claimed installed that the shell never confirmed.
+    expect(useMachines.getState().server?.installed ?? false).toBe(false);
+  });
+
+  test("an install that answers not-installed keeps the CLI's reason on the page", async () => {
+    shell.serverInstalled = false;
+    shell.installAnswersInstalled = false;
+    expect(await installServer()).toBe(false);
+    expect(useMachines.getState().server?.error).toContain("installed but");
+    expect(useMachines.getState().serverInstalling).toBe(false);
   });
 });
 

@@ -120,7 +120,7 @@ describe("mock machines", () => {
 
   test("discovery offers a machine already saved, one that is not, and the saved one's overlay address", async () => {
     const transport = new MockTransport();
-    const found = (await call(transport, "machines_discover")) as JsonObject[];
+    const found = ((await call(transport, "machines_discover")) as JsonObject).rows as JsonObject[];
     // The page merges the two rows for one machine by host id (`mergeDiscovered`).
     expect(found.map((machine) => [machine.name, machine.saved, machine.source])).toEqual([
       ["Lars's Linux box", true, "bonjour"],

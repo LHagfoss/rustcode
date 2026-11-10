@@ -117,14 +117,23 @@ rustcode server uninstall   # remove the service
   running (`--yes` skips the question).
 - **The app installs it** when Settings › Remote access › *Network access* is
   turned on and the server is not installed, after one confirmation that says
-  what it is for: threads then keep running when the app closes, and the
-  server starts when you log in. It runs the same `rustcode server install`
-  with the `rustcode` the app itself runs, so a development build is refused
-  there with the reason shown, and a server another process runs is never
-  stopped while a turn is running — `--yes` stays a decision for a terminal.
-  Settings › Machines shows the result on *This computer* as
-  *Server: Installed · Running*, with **Install server** while it is not
-  installed; Settings › Remote access shows the same and its version.
+  what it is for: the engine threads run in stays up when the app closes, and
+  it starts when you log in. Threads the app starts itself are still its own
+  engine's and end with it, until the app is switched to the server (a later
+  step: the app runs its own `rustcode --acp`, not a client of this one). The
+  app runs the same `rustcode server install` with the `rustcode` the app
+  itself runs, so a development build is refused there with the reason shown,
+  and a server another process runs is never stopped while a turn is running —
+  `--yes` stays a decision for a terminal. Settings › Machines shows the
+  result on *This computer* as *Server: Installed · Running*, with **Install
+  server** while it is not installed; Settings › Remote access shows the same
+  and its version.
+- **From an AppImage**, the bundled `rustcode` lives in a mount that goes away
+  with the app, so the app copies it to `$XDG_DATA_HOME/rustcode/bin/rustcode`
+  (`~/.local/share/rustcode/bin/rustcode`) and installs the service from that
+  copy, refreshing it when the AppImage is updated. A copy that cannot be made
+  is refused with the reason; a `.deb` install needs no copy and is installed
+  where it is.
 
 ### Linux: keep it running after logout
 

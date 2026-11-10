@@ -200,7 +200,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     section: "remote",
     title: "RustCode server",
     keywords:
-      "server background service launchd systemd login install threads keep running app closed closing quits installed running",
+      "server background service launchd systemd login install reachable app closed closing quits installed running",
   },
   {
     section: "remote",
