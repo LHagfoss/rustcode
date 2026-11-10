@@ -52,17 +52,26 @@ Next, in rough order:
 5. The rest of [Not yet ported](#not-yet-ported).
 
 Several machines (#3202): Settings › **Machines** pairs the app with another
-computer's RustCode server and keeps the connection, so one app can reach its
-own threads here and other machines' threads there. This step ships the page,
-the pairing flow and the connection itself — the state of each machine, the
-route it is reached over, and its thread count from `session/list`; listing
-and driving those threads in the sidebar is the next step. The Rust shell
-owns one connection supervisor per machine (`src-tauri/src/machines.rs`,
-`rustcode/client`) and the webview gives each a channel (`MachineTransport` in
-`src/acp/transport.ts`, `src/state/machines.ts`), because a web view cannot
-dial a gateway and the pairing token belongs in the credential store.
-`?machines=paired|connect|offline|revoked` in the mock walks the page without a
-second computer.
+computer's RustCode server and keeps the connection, so one app reaches its
+own threads here and other machines' threads there. The sidebar lists every
+machine in a group of its own — this computer first, then each paired machine
+with ● connected, ○ offline or ⚠ revoked — and its threads by project inside.
+A thread key carries its machine (`local` keeps its bare id, another one reads
+`‹host›/‹id›`, `src/state/threadKeys.ts`), and every operation on it goes over
+that machine's own connection: `connectionFor` in `src/state/store.ts` returns
+the local engine or the machine's `AcpConnection`, open the thread and its
+permission answers travel there, and its `session/update` stream keeps it live.
+A machine that is away keeps its threads listed and read-only: the chat says
+"Not connected. Last updated HH:MM", the composer is disabled, and the
+header shows `Runs on ‹machine› · ‹harness› · ‹model›`; the controls that read
+this computer (terminal, working tree, pull requests, Finder, worktrees,
+checkpoints and undo) stay disabled with "Runs on ‹machine›" where the action
+would be. The Rust shell owns one connection supervisor per machine
+(`src-tauri/src/machines.rs`, `rustcode/client`) and the webview gives each a
+channel (`MachineTransport` in `src/acp/transport.ts`, `src/state/machines.ts`),
+because a web view cannot dial a gateway and the pairing token belongs in the
+credential store. `?machines=paired|connect|offline|revoked` in the mock walks
+the page without a second computer; `paired` is two computers with threads.
 
 Item 4 and the rest of the orchestration work move the domain model from
 sessions to an execution graph:

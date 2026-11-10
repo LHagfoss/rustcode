@@ -72,6 +72,7 @@ import { liveSubagents, type StackAgent } from "../state/agentStack";
 import { type BranchRow, branchKindOf, branchRows } from "../state/branches";
 import { type ChildInfo, childInfo } from "../state/children";
 import { stateOf } from "../state/host";
+import { type Machine, type MachineState, stateLabel, useMachines } from "../state/machines";
 import {
   cachedPulls,
   loadPulls,
@@ -149,6 +150,7 @@ import {
   worktreeOf,
 } from "../state/store";
 import { formatClock, idleSettled, shortAge } from "../state/thread";
+import { LOCAL_HOST } from "../state/threadKeys";
 import { openChain, parentOf as parentOfThread, type SubRow, topLevel } from "../state/topLevel";
 import { useWaiting, useWaitingIds, waitingLabel, waitingTitle } from "../state/waiting";
 import { AgentStack } from "./AgentStack";
@@ -1226,8 +1228,75 @@ interface Section {
   /** What a folded section hides: a thread that needs you, else one that works, else one just
    * finished — and nothing for Snoozed (`state/sidebarRows.ts` `hiddenKind`). */
   hidden?: HiddenKind;
-  /** Threads, split by project when there are several. */
-  projects?: { key: string; label: string; items: SessionSummary[] }[];
+  /** Threads, split by project when there are several, and by machine when one is paired. */
+  projects?: ProjectGroup[];
+}
+
+/** One project's rows in the list, and the machine they run on (docs/desktop.md › Several machines). */
+interface ProjectGroup {
+  key: string;
+  label: string;
+  items: SessionSummary[];
+  /** The machine it belongs to, whose heading is drawn above its first project. */
+  machine?: MachineHead;
+  /** The first project of its machine: the machine's name goes here. */
+  first?: boolean;
+  /** The machine's only project: its rows are drawn under the machine's name, with no folder. */
+  only?: boolean;
+}
+
+/** What the list says a machine is: this computer, or another one and how it stands. */
+interface MachineHead {
+  id: string;
+  name: string;
+  state: MachineState;
+  /** Seconds until the next attempt, while it waits (`state/machines.ts` `stateLabel`). */
+  retryInSecs: Machine["retryInSecs"];
+}
+
+/**
+ * A machine's name above its threads: `● Connected`, `○ Offline`, `⚠ Revoked`, or
+ * nothing for this computer. The dot and the words say the same thing twice, so
+ * a row read out loud still says where it runs (docs/desktop.md › Several machines).
+ */
+function MachineHeader({ machine }: { machine: MachineHead }) {
+  const local = machine.id === LOCAL_HOST;
+  const glyph = machine.state === "connected" ? "●" : machine.state === "needsPairing" ? "⚠" : "○";
+  return (
+    <Tooltip
+      label={
+        local
+          ? "Threads on this computer"
+          : `${stateLabel({ state: machine.state, retryInSecs: machine.retryInSecs })}. Its threads open read-only while it is away.`
+      }
+    >
+      <div className="mt-3 mb-1 flex h-6 items-center gap-1.5 px-2 first:mt-0">
+        <span
+          aria-hidden
+          className={cx(
+            "shrink-0 text-[9px] leading-none",
+            machine.state === "connected"
+              ? "text-success"
+              : machine.state === "needsPairing"
+                ? "text-warn"
+                : "text-fg-faint",
+          )}
+        >
+          {glyph}
+        </span>
+        <span className="min-w-0 flex-1 truncate font-medium text-callout text-fg/90">{machine.name}</span>
+        {!local && (
+          <span className="shrink-0 text-fg-faint text-sub">
+            {machine.state === "connected"
+              ? "Connected"
+              : machine.state === "needsPairing"
+                ? "Revoked"
+                : "Offline"}
+          </span>
+        )}
+      </div>
+    </Tooltip>
+  );
 }
 
 /**
@@ -1468,6 +1537,8 @@ const NO_AGENTS: SubagentInfo[] = [];
 
 export function Sidebar() {
   const sessions = useApp((s) => s.sessions);
+  // This app's paired computers: their threads are listed in one group each (state/machines.ts).
+  const machines = useMachines((s) => s.machines);
   const pending = useApp((s) => s.pendingSetup);
   const sessionsLoaded = useApp((s) => s.sessionsLoaded);
   const selectedId = useApp((s) => s.selectedId);
@@ -1752,17 +1823,60 @@ export function Sidebar() {
       const key = s.worktree?.repo || s.cwd || "";
       byKey.set(key, [...(byKey.get(key) ?? []), s]);
     }
-    const projects =
-      byProject && byKey.size > 1
-        ? [...byKey.entries()].map(([key, items]) => ({
+    // One group per machine once a computer is paired: this one first, then each machine with the
+    // state of its connection, and the threads by project inside (docs/desktop.md › Several machines).
+    let projects: ProjectGroup[] | undefined;
+    if (machines.length) {
+      projects = [];
+      for (const host of [LOCAL_HOST, ...machines.map((m) => m.id)]) {
+        const mine = active.filter((s) => (s.host ?? LOCAL_HOST) === host);
+        if (!mine.length && host === LOCAL_HOST) continue;
+        const saved = machines.find((m) => m.id === host);
+        const head: MachineHead = saved
+          ? { id: saved.id, name: saved.name, state: saved.state, retryInSecs: saved.retryInSecs }
+          : { id: LOCAL_HOST, name: "This computer", state: "connected", retryInSecs: null };
+        // A machine that has not listed a thread yet (away, or just paired) keeps its heading, so
+        // the list still says it is there.
+        if (!mine.length) {
+          projects.push({
+            key: `${host}\u0000`,
+            label: "",
+            items: [],
+            machine: head,
+            first: true,
+            only: true,
+          });
+          continue;
+        }
+        const perProject = new Map<string, SessionSummary[]>();
+        for (const s of mine) {
+          const key = s.worktree?.repo || s.cwd || "";
+          perProject.set(key, [...(perProject.get(key) ?? []), s]);
+        }
+        let first = true;
+        for (const [project, items] of perProject) {
+          const key = `${host}\u0000${project}`;
+          projects.push({
             key,
-            label: key ? projectName(key) : "No folder",
-            items,
-          }))
-        : undefined;
-    // Each project's own rows are arranged on their own: two projects never share one order.
-    for (const project of projects ?? []) {
-      project.items = arranged("threads", project.items, project.key);
+            label: project ? projectName(project) : "No folder",
+            items: arranged("threads", items, key),
+            machine: head,
+            first,
+            only: perProject.size === 1,
+          });
+          first = false;
+        }
+      }
+    } else if (byProject && byKey.size > 1) {
+      projects = [...byKey.entries()].map(([key, items]) => ({
+        key,
+        label: key ? projectName(key) : "No folder",
+        items,
+      }));
+      // Each project's own rows are arranged on their own: two projects never share one order.
+      for (const project of projects) {
+        project.items = arranged("threads", project.items, project.key);
+      }
     }
     // The sections this layout draws, in its order: Pinned and the one Threads list, and the
     // shelves close it (state/sidebarRows.ts `sectionsOf`).
@@ -1804,6 +1918,7 @@ export function Sidebar() {
     projectCwd,
     orphanOpen,
     layout,
+    machines,
   ]);
 
   const settledSection = sections.find((g) => g.id === "settled");
@@ -2333,8 +2448,20 @@ export function Sidebar() {
                       {section.projects
                         ? section.projects.map((p) => {
                             const projectOpen = isOpen(`project:${p.key}`);
+                            const head =
+                              p.first && p.machine ? (
+                                <MachineHeader key={`machine:${p.machine.id}`} machine={p.machine} />
+                              ) : null;
+                            if (p.only)
+                              return (
+                                <Fragment key={p.key}>
+                                  {head}
+                                  <div className="mb-1">{rows(p.items, true)}</div>
+                                </Fragment>
+                              );
                             return (
                               <div key={p.key} className="mb-1">
+                                {head}
                                 <ProjectHeader
                                   label={p.label}
                                   count={p.items.length}

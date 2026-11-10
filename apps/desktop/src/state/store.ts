@@ -222,6 +222,7 @@ import {
   wakeTurn,
   withContinueMark,
 } from "./thread";
+import { isRemoteThread, LOCAL_HOST, splitThreadKey, threadKey } from "./threadKeys";
 import {
   clear as clearQueue,
   dismiss as dismissInQueue,
@@ -326,6 +327,10 @@ export interface AppState {
   engineLog: string[];
   agent?: AgentInfo;
   sessions: SessionSummary[];
+  /** Each paired machine's name, by host id: the sidebar, the header and a notice say where. */
+  machineNames: Record<string, string>;
+  /** The paired machines whose connection is open now: their threads can be driven, not only read. */
+  connectedHosts: string[];
   sessionsLoaded: boolean;
   /** The session list stopped at the page cap, so some threads may be absent. */
   sessionsCapped: boolean;
@@ -816,6 +821,8 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   status: "connecting",
   engineLog: [],
   sessions: [],
+  machineNames: {},
+  connectedHosts: [],
   sessionsLoaded: false,
   sessionsCapped: false,
   threads: {},
@@ -964,6 +971,151 @@ function rpcReason(data: Json | undefined): string | null {
 
 let connection: AcpConnection | null = null;
 let transport: Transport | null = null;
+
+// ---------------------------------------------------------------- machines
+//
+// A thread on a paired computer is driven over that computer's own connection
+// (state/machines.ts holds one per machine, the shell's supervisor keeps it).
+// Local threads keep their bare id and this module's `connection`; a remote
+// thread's key carries its machine (`state/threadKeys.ts`), and every call
+// that names it on the machine goes through `connectionForThread` with the
+// key split back into the machine's own session id. Responses to a machine's
+// own requests go back on the same connection they arrived on.
+
+const machineConnections = new Map<string, AcpConnection>();
+const machineOff = new Map<string, () => void>();
+let machineRouting: Promise<void> | null = null;
+
+/** The connection a thread's operations go over: this computer's engine, or that machine's own. */
+export function connectionFor(host: string): AcpConnection | null {
+  return host ? (machineConnections.get(host) ?? null) : connection;
+}
+
+/** The same, from a thread key (`state/threadKeys.ts`). */
+export function connectionForThread(key: string): AcpConnection | null {
+  return connectionFor(splitThreadKey(key).host);
+}
+
+/** Whether the thread runs on another computer. */
+export function threadIsRemote(key: string): boolean {
+  return isRemoteThread(key);
+}
+
+/** The name of the machine a remote thread runs on; undefined for this computer. */
+export function machineOfThread(key: string): string | undefined {
+  return get().machineNames[splitThreadKey(key).host];
+}
+
+/** Whether a machine's threads are listed but its connection is not open (read-only). */
+export function threadOffline(key: string | null | undefined): boolean {
+  if (!key) return false;
+  const host = splitThreadKey(key).host;
+  return !!host && !machineConnections.has(host);
+}
+
+/** The machine a thread runs on, as the chat's header reads it, and whether it is away now. */
+export function useMachineOfThread(key: string | null | undefined): string | undefined {
+  const names = useApp((s) => s.machineNames);
+  return key ? names[splitThreadKey(key).host] : undefined;
+}
+
+/** A remote thread's machine is away: the row stays, the thread opens read-only (ChatView, Composer). */
+export function useThreadOffline(key: string | null | undefined): boolean {
+  const hosts = useApp((s) => s.connectedHosts);
+  if (!key) return false;
+  const host = splitThreadKey(key).host;
+  return !!host && !hosts.includes(host);
+}
+
+/**
+ * Follow the shell's machines: one inbound subscription per connection (so a
+ * machine's notifications reach the transcript tagged with its key), and its
+ * thread list mirrored into `sessions` whenever it is re-read.
+ */
+export async function startMachineRouting(): Promise<void> {
+  if (machineRouting) return machineRouting;
+  machineRouting = (async () => {
+    // Loaded here, not at the top: state/machines.ts reads this module's `toast` and `askConfirm`.
+    const machines = await import("./machines");
+    machines.onMachineLinks((id, conn) => watchMachineConnection(id, conn));
+    const mirror = () => {
+      const state = machines.useMachines.getState();
+      set({
+        machineNames: Object.fromEntries(state.machines.map((machine) => [machine.id, machine.name])),
+      });
+      mergeMachineLists(state.sessions);
+    };
+    machines.useMachines.subscribe((state, prev) => {
+      if (state.sessions !== prev.sessions || state.machines !== prev.machines) mirror();
+    });
+    for (const link of machines.machineLinks()) watchMachineConnection(link.machine.id, link.connection);
+    mirror();
+  })();
+  return machineRouting;
+}
+
+/**
+ * Point the store at a machine's live connection (or at none, when it drops).
+ * `startMachineRouting` calls it for every change `state/machines.ts` announces;
+ * exported so the routing is testable without the app's shell (machinesThreads.test.ts).
+ */
+export function watchMachineConnection(id: string, next: AcpConnection | null): void {
+  const current = machineConnections.get(id) ?? null;
+  if (current === next) return;
+  machineOff.get(id)?.();
+  machineOff.delete(id);
+  if (!next) {
+    machineConnections.delete(id);
+    // Its threads stay listed and keep the copy this window drew, read-only: the last replay is
+    // still the thread. A turn that was running there ended with the connection.
+    set((s) => ({
+      connectedHosts: [...machineConnections.keys()],
+      threads: Object.fromEntries(
+        Object.entries(s.threads).map(([key, t]) =>
+          splitThreadKey(key).host === id && t.running
+            ? [key, finishTurn(t, "failed", Date.now(), "The machine disconnected during this turn.")]
+            : [key, t],
+        ),
+      ),
+    }));
+    return;
+  }
+  machineConnections.set(id, next);
+  machineOff.set(
+    id,
+    next.onInbound((message) => void handleInbound(scopeInbound(message, id), next, id)),
+  );
+  // Back: the copy on screen is from before it went away, so the thread it shows is read again.
+  set((s) => ({
+    connectedHosts: [...machineConnections.keys()],
+    threads: Object.fromEntries(
+      Object.entries(s.threads).map(([key, t]) =>
+        splitThreadKey(key).host === id
+          ? [key, { ...t, loaded: false, running: false, permissions: [] }]
+          : [key, t],
+      ),
+    ),
+  }));
+  const selected = get().selectedId;
+  if (selected && splitThreadKey(selected).host === id) void openThread(selected);
+}
+
+/** A machine's ids reach the store as keys: `‹host›/‹sessionId›`. */
+function scopeInbound(message: Inbound, host: string): Inbound {
+  if (message.type === "closed") return message;
+  const sessionId = str(message.params.sessionId);
+  if (!sessionId) return message;
+  return { ...message, params: { ...message.params, sessionId: threadKey(host, sessionId) } };
+}
+
+/** Replaces the sessions of every machine with the list it last gave (this computer's are kept). */
+function mergeMachineLists(lists: Record<string, readonly SessionSummary[]>): void {
+  const remote = Object.entries(lists).flatMap(([host, items]) =>
+    items.map((s) => ({ ...s, id: threadKey(host, s.id), host })),
+  );
+  set((s) => ({ sessions: byActivity([...s.sessions.filter((x) => !x.host), ...remote]) }));
+}
+
 /** Ignore machine-status reads that started before a newer answer changed remote state. */
 let remoteStatusRevision = 0;
 let remoteStatusReadId = 0;
@@ -1105,6 +1257,8 @@ export async function connect(next: Transport): Promise<void> {
       // The shell (re)started the engine, after a crash too: initialize a fresh connection.
       else if (event.type === "open") void handshake();
     });
+    // The paired computers' supervisors are the shell's too: follow the connections they open.
+    void startMachineRouting();
   } catch (error) {
     set({ status: "closed", statusDetail: errorText(error) });
   }
@@ -1381,9 +1535,14 @@ function onSessionActivity(params: unknown) {
   if (state !== "running") scheduleAutoCompact(id);
 }
 
-async function handleInbound(message: Inbound) {
+async function handleInbound(message: Inbound, conn: AcpConnection | null = connection, host = LOCAL_HOST) {
   switch (message.type) {
     case "closed":
+      if (host) {
+        // One machine's channel closed: this computer's engine is untouched. Its threads stay
+        // listed and read-only (`watchMachineConnection`), and a turn it ran ended with it.
+        return;
+      }
       set((s) => ({
         status: "closed",
         statusDetail: message.reason,
@@ -1406,7 +1565,7 @@ async function handleInbound(message: Inbound) {
       if (message.method === Method.requestPermission) {
         const parsed = parsePermissionRequest(message.id, message.params);
         if (!parsed) {
-          connection?.respond(message.id, permissionCancelled);
+          conn?.respond(message.id, permissionCancelled);
           return;
         }
         // A thread this window has not opened (a child started elsewhere, or a thread after a
@@ -1415,12 +1574,12 @@ async function handleInbound(message: Inbound) {
         if (!get().threads[parsed.sessionId]?.loaded) await openThread(parsed.sessionId);
         const request = { ...parsed, at: Date.now() };
         if (!get().threads[request.sessionId]) {
-          connection?.respond(message.id, permissionCancelled);
+          conn?.respond(message.id, permissionCancelled);
           return;
         }
         const auto = autoAnswer(request, permissionModeOf(get(), request.sessionId));
         if (auto) {
-          connection?.respond(message.id, permissionSelected(auto.id));
+          conn?.respond(message.id, permissionSelected(auto.id));
           return;
         }
         updateThread(request.sessionId, (t) => {
@@ -1437,7 +1596,12 @@ async function handleInbound(message: Inbound) {
         // inbox and the badge leave it out until then (state/inbox.ts, state/notify.ts).
         const asleep = request.sessionId in get().snoozed;
         if (!asleep && request.sessionId !== get().selectedId && get().view.kind !== "inbox") {
-          toast(request.question ? "A thread has a question" : "A thread needs approval", "info");
+          // On another computer, the notice says which one: two machines may run a thread each.
+          const machine = machineOfThread(request.sessionId);
+          toast(
+            `${request.question ? "A thread has a question" : "A thread needs approval"}${machine ? ` on ${machine}` : ""}`,
+            "info",
+          );
         }
         // The system says the same, so a thread waiting behind another window is not forgotten.
         notifyThread(
@@ -1445,7 +1609,7 @@ async function handleInbound(message: Inbound) {
             threadId: request.sessionId,
             kind: request.question ? "question" : "approval",
             key: String(request.rpcId),
-            title: threadName(request.sessionId),
+            title: notifyTitle(request.sessionId),
             detail: request.question?.text,
           },
           get(),
@@ -1455,13 +1619,12 @@ async function handleInbound(message: Inbound) {
         return;
       }
       if (message.method === V2Method.orchestration) {
-        const conn = connection;
         const result = await answerOrchestration(message.params);
         conn?.respond(message.id, result);
         return;
       }
       // Nothing else is advertised; answer so the engine never waits.
-      connection?.respondError(message.id, -32601, `Method not found: ${message.method}`);
+      conn?.respondError(message.id, -32601, `Method not found: ${message.method}`);
       return;
   }
 }
@@ -1561,11 +1724,15 @@ export async function refreshSessions(): Promise<void> {
     }
     // The engine's list is the newer truth about a status.
     reconcileStatusMarks(all);
+    // Another computer's list is its own read: ask each connected machine again, too.
+    void import("./machines").then((m) => m.refreshMachineThreads());
     set((s) => {
       // Threads started here that the engine does not list yet (it lists a session once it saved history).
       const listed = new Set(all.map((x) => x.id));
-      const started = s.sessions.filter((x) => !listed.has(x.id) && s.threads[x.id]);
-      const sessions = byActivity([...started, ...all]);
+      const started = s.sessions.filter((x) => !x.host && !listed.has(x.id) && s.threads[x.id]);
+      // Another machine's threads are listed by that machine (state/machines.ts), kept as they are.
+      const remote = s.sessions.filter((x) => x.host);
+      const sessions = byActivity([...started, ...all, ...remote]);
       return {
         sessions,
         sessionsLoaded: true,
@@ -1604,7 +1771,7 @@ export function markFinished(id: string, now = Date.now(), failed = false) {
     const delegated = linksOf(get().links, id).drivenBy !== undefined && get().messaged[id] === undefined;
     if (!delegated) {
       notifyThread(
-        { threadId: id, kind: failed ? "failed" : "finished", key: String(now), title: threadName(id) },
+        { threadId: id, kind: failed ? "failed" : "finished", key: String(now), title: notifyTitle(id) },
         get(),
       );
     }
@@ -1615,6 +1782,15 @@ export function markFinished(id: string, now = Date.now(), failed = false) {
 function threadName(id: string): string {
   const s = get();
   return sessionById(s, id)?.title || s.threads[id]?.title || "A thread";
+}
+
+/**
+ * A notification's title: the thread's, and the computer it runs on when that
+ * is not this one, so two machines' "Run the tests" are told apart.
+ */
+function notifyTitle(id: string): string {
+  const machine = machineOfThread(id);
+  return machine ? `${threadName(id)} · ${machine}` : threadName(id);
 }
 
 /**
@@ -1818,7 +1994,11 @@ export async function moveThread(id: string, cwd: string): Promise<boolean> {
   }
   if (thread && get().agent?.closeSession) await closeThread(id);
   try {
-    await connection.request(Method.sessionMove, { sessionId: id, cwd }, 10_000);
+    await connectionForThread(id)?.request(
+      Method.sessionMove,
+      { sessionId: splitThreadKey(id).id, cwd },
+      10_000,
+    );
   } catch (error) {
     toast(`Could not move the thread: ${errorText(error)}`, "error");
     if (thread) void openThread(id);
@@ -1844,7 +2024,10 @@ export async function moveThread(id: string, cwd: string): Promise<boolean> {
 export function openThread(id: string): Promise<string | null> {
   const inFlight = opening.get(id);
   if (inFlight) return inFlight;
-  const conn = connection;
+  // Another computer's thread loads over that machine's connection (`state/threadKeys.ts`); an
+  // offline one is not opened at all, and the chat says so instead of a conversation.
+  const conn = connectionForThread(id);
+  const { id: sessionId } = splitThreadKey(id);
   const existing = get().threads[id];
   // A copy whose open failed is no copy: opening it again tries again, so a thread that could not
   // be opened once (the engine was restarting, its harness was down) is not refused for good.
@@ -1855,7 +2038,7 @@ export function openThread(id: string): Promise<string | null> {
   let pending: Promise<string | null>;
   pending = Promise.resolve().then(async () => {
     try {
-      const result = await conn.request(Method.sessionLoad, { sessionId: id, cwd, mcpServers: [] }, 60_000);
+      const result = await conn.request(Method.sessionLoad, { sessionId, cwd, mcpServers: [] }, 60_000);
       updateThread(id, (t) => ({
         ...finishLoad(t),
         configOptions: parseConfigOptions((result as JsonObject | null)?.configOptions),
@@ -1895,7 +2078,7 @@ export function openThread(id: string): Promise<string | null> {
  * The thread is then opened again; what is left (a folder that is gone) is said.
  */
 export async function repairThread(id: string): Promise<void> {
-  const conn = connection;
+  const conn = connectionForThread(id);
   if (!conn || !get().agent?.sessionRepair) {
     toast("This server cannot repair threads. Update RustCode.", "error");
     return;
@@ -1907,7 +2090,8 @@ export async function repairThread(id: string): Promise<void> {
   await closeThread(id);
   let answer: JsonObject;
   try {
-    answer = ((await conn.request(Method.sessionRepair, { sessionId: id }, 10_000)) ?? {}) as JsonObject;
+    answer = ((await conn.request(Method.sessionRepair, { sessionId: splitThreadKey(id).id }, 10_000)) ??
+      {}) as JsonObject;
   } catch (error) {
     toast(`Could not repair the thread: ${errorText(error)}`, "error");
     return;
@@ -1938,7 +2122,7 @@ export async function repairThread(id: string): Promise<void> {
 
 export async function closeThread(id: string) {
   try {
-    await connection?.request(Method.sessionClose, { sessionId: id }, 10_000);
+    await connectionForThread(id)?.request(Method.sessionClose, { sessionId: splitThreadKey(id).id }, 10_000);
   } catch {
     // Closing is best effort.
   }
@@ -2238,7 +2422,9 @@ async function rewindTo(id: string, itemId: string, text: string): Promise<boole
   const userIndex = userIndexOf(thread, itemId);
   if (userIndex < 0) return false;
   try {
-    await engine().request(Method.rewind, { sessionId: id, userIndex, text }, 10_000);
+    const conn = connectionForThread(id);
+    if (!conn) throw new Error("That computer is not connected.");
+    await conn.request(Method.rewind, { sessionId: splitThreadKey(id).id, userIndex, text }, 10_000);
   } catch (error) {
     toast(`Could not rewind: ${errorText(error)}`, "error");
     return false;
@@ -2916,9 +3102,12 @@ export async function steer(id: string, text: string, extras?: ComposeExtras): P
       })
     : undefined;
   try {
-    const result = (await engine().request(
+    const conn = connectionForThread(id);
+    if (!conn) return false;
+    const sessionId = splitThreadKey(id).id;
+    const result = (await conn.request(
       Method.steer,
-      prompt ? { sessionId: id, text: full, prompt } : { sessionId: id, text: full },
+      prompt ? { sessionId, text: full, prompt } : { sessionId, text: full },
       10_000,
     )) as JsonObject | null;
     if (result?.accepted !== true) return false;
@@ -3123,7 +3312,12 @@ export async function runPrompt(
     alreadyShown?: boolean;
   } = {},
 ): Promise<TurnOutcome> {
-  const conn = engine();
+  // The turn runs on the thread's own computer, which may have gone away since it was opened.
+  const conn = connectionForThread(id);
+  if (!conn) {
+    toast(threadIsRemote(id) ? "That computer is not connected." : "The server is not connected.", "error");
+    return "skipped";
+  }
   const thread = get().threads[id];
   // The prompt reads as a divider both ways: live, and after a reload from the history the engine
   // kept, which carries the text and not this flag (state/thread.ts `CONTINUE_MARK`).
@@ -3229,7 +3423,7 @@ export async function runPrompt(
   let failure: string | undefined;
   let unused: string[] = [];
   try {
-    const request: JsonObject = { sessionId: id, prompt };
+    const request: JsonObject = { sessionId: splitThreadKey(id).id, prompt };
     if (options.autoCompact) request._meta = { rustcode: { autoCompact: true } };
     const result = (await conn.request(Method.sessionPrompt, request)) as JsonObject | null;
     if (str(result?.stopReason) === "cancelled") outcome = "cancelled";
@@ -3344,15 +3538,16 @@ export async function runPrompt(
 export type TurnOutcome = "completed" | "cancelled" | "failed" | "skipped";
 
 export async function cancel(id = get().selectedId): Promise<void> {
-  if (!id || !connection) return;
+  const conn = id ? connectionForThread(id) : null;
+  if (!id || !conn) return;
   const thread = get().threads[id];
   // Stopping a thread stops the work it gave other threads (M1); turns the user started there go on.
   void stopLinksFrom(id);
   if (!thread?.running) return;
   try {
-    connection.notify(Method.sessionCancel, { sessionId: id });
+    conn.notify(Method.sessionCancel, { sessionId: splitThreadKey(id).id });
     // ACP: after `session/cancel` the client answers outstanding permission requests as cancelled.
-    for (const request of thread.permissions) connection.respond(request.rpcId, permissionCancelled);
+    for (const request of thread.permissions) conn.respond(request.rpcId, permissionCancelled);
     updateThread(id, (t) => settleEveryWait({ ...t, permissions: [] }, Date.now()));
     if (thread.permissions.length) linkWaitEnded(id);
   } catch (error) {
@@ -3373,16 +3568,18 @@ export async function setConfigOption(
   value: string | boolean,
   options: { remember?: boolean } = {},
 ): Promise<void> {
+  // A remote thread's options are its machine's to list and set.
+  const conn = connectionForThread(id);
+  if (!conn) {
+    toast("That computer is not connected.", "error");
+    return;
+  }
   const params: JsonObject =
     typeof value === "boolean"
-      ? { sessionId: id, configId, type: "boolean", value }
-      : { sessionId: id, configId, value };
+      ? { sessionId: splitThreadKey(id).id, configId, type: "boolean", value }
+      : { sessionId: splitThreadKey(id).id, configId, value };
   try {
-    const result = (await engine().request(
-      Method.sessionSetConfigOption,
-      params,
-      15_000,
-    )) as JsonObject | null;
+    const result = (await conn.request(Method.sessionSetConfigOption, params, 15_000)) as JsonObject | null;
     if (result?.configOptions) {
       updateThread(id, (t) => ({ ...t, configOptions: parseConfigOptions(result.configOptions) }));
     }
@@ -3427,7 +3624,8 @@ function reply(request: PermissionRequest, result: JsonObject, answer?: string) 
   });
   // Another request of the same thread keeps it waiting; the last one ends the wait.
   if (!get().threads[request.sessionId]?.permissions.length) linkWaitEnded(request.sessionId);
-  connection?.respond(request.rpcId, result);
+  // The answer goes back on the connection the request arrived on (`handleInbound`).
+  connectionForThread(request.sessionId)?.respond(request.rpcId, result);
 }
 
 export function answerPermission(request: PermissionRequest, option: PermissionOption | null) {
@@ -3946,9 +4144,11 @@ export async function switchThreadAccount(id: string, account: string | null): P
   if (!harness) return false;
   const named = accountsOf(get(), harness).find((a) => a.id === account);
   try {
-    const result = (await engine().request(
+    const conn = connectionForThread(id);
+    if (!conn) throw new Error("That computer is not connected.");
+    const result = (await conn.request(
       Method.sessionHarness,
-      { sessionId: id, harness, account },
+      { sessionId: splitThreadKey(id).id, harness, account },
       30_000,
     )) as JsonObject | null;
     const next = parseSessionHarness(result) ?? thread.harness;
@@ -3993,10 +4193,12 @@ export async function switchThreadHarness(
   if (!thread || thread.running) return false;
   const last = get().harnesses?.harnesses.find((h) => h.id === harness)?.last;
   try {
-    const result = (await engine().request(
+    const conn = connectionForThread(id);
+    if (!conn) throw new Error("That computer is not connected.");
+    const result = (await conn.request(
       Method.sessionHarness,
       {
-        sessionId: id,
+        sessionId: splitThreadKey(id).id,
         harness,
         account: account ?? null,
         model: last?.model ?? null,
@@ -4786,7 +4988,8 @@ export async function removeWorktree(id: string): Promise<void> {
 // ---------------------------------------------------------------- checkpoints
 
 export async function refreshCheckpoints(id: string): Promise<void> {
-  if (!connection || !get().features.checkpoints) return;
+  // Checkpoints are files on the machine that ran the turn: this computer cannot read another's.
+  if (threadIsRemote(id) || !connection || !get().features.checkpoints) return;
   try {
     const list = parseCheckpoints(
       await connection.request(V2Method.checkpointList, { session_id: id }, 15_000),
@@ -5070,10 +5273,11 @@ export function hasAgents(thread?: ThreadState): boolean {
 
 export async function refreshAgents(id: string): Promise<SubagentInfo[]> {
   const thread = get().threads[id];
-  if (!connection || !hasAgents(thread)) return [];
+  const conn = connectionForThread(id);
+  if (!conn || !hasAgents(thread)) return [];
   try {
     const agents = parseAgentList(
-      await connection.request(Method.agents, { sessionId: id, action: "list" }, 10_000),
+      await conn.request(Method.agents, { sessionId: splitThreadKey(id).id, action: "list" }, 10_000),
     );
     set((s) => ({ agents: { ...s.agents, [id]: agents } }));
     return agents;
@@ -5084,9 +5288,11 @@ export async function refreshAgents(id: string): Promise<SubagentInfo[]> {
 
 /** A child's conversation, folded like a replayed thread. */
 export async function agentHistory(id: string, agentId: number): Promise<ThreadState> {
-  const result = (await engine().request(
+  const conn = connectionForThread(id);
+  if (!conn) throw new Error("That computer is not connected.");
+  const result = (await conn.request(
     Method.agents,
-    { sessionId: id, action: "history", id: agentId },
+    { sessionId: splitThreadKey(id).id, action: "history", id: agentId },
     15_000,
   )) as JsonObject | null;
   let state = emptyThread(`${id}#${agentId}`, get().threads[id]?.cwd ?? "");
@@ -5337,10 +5543,13 @@ function commitPlans(incoming: Record<string, CachedPlan>) {
  * answer without windows (the harness has no plan usage) clears them.
  */
 export async function refreshPlanUsage(id: string): Promise<void> {
-  if (!connection || planUsageInFlight.has(id)) return;
+  const conn = connectionForThread(id);
+  if (!conn || planUsageInFlight.has(id)) return;
   planUsageInFlight.add(id);
   try {
-    const usage = parsePlanUsage(await connection.request(Method.usageLimits, { sessionId: id }, 10_000));
+    const usage = parsePlanUsage(
+      await conn.request(Method.usageLimits, { sessionId: splitThreadKey(id).id }, 10_000),
+    );
     const fetchedAt = Date.now();
     set((s) => ({ planUsage: { ...s.planUsage, [id]: usage && { ...usage, fetchedAt } } }));
     // The same numbers serve every thread on that harness; a thread that has
