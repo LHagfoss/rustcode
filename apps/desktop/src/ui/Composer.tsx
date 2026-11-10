@@ -91,7 +91,7 @@ import { agentStateOf, type DelegateNode, delegateTree } from "../state/delegate
 import { atToken, insertKeyword, insertRef, type MentionScope, rankFiles, SCOPES } from "../state/fileRefs";
 import { controlDisabledReason, defaultEffort, orderHarnesses, unavailableReason } from "../state/harness";
 import { usageOf } from "../state/harnessUsage";
-import { newThreadAccountOn, type SignedOutLogins } from "../state/logins";
+import { childAccountOn, type SignedOutLogins } from "../state/logins";
 import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
 import type { CachedPlan } from "../state/store";
 import {
@@ -266,9 +266,6 @@ interface DrawerGroup {
 /** A row of the drawer as it is drawn: a heading, or a bound row the arrow keys can land on. */
 type DrawerRowItem = { kind: "heading"; label: string } | { kind: "row"; entry: DrawerEntry; index: number };
 
-/** How many models one harness offers with nothing typed: the rest are found by typing one's name. */
-const AGENTS_PER_HARNESS = 4;
-
 /** What one login's plan has left across its windows: `62% left`, or nothing when it was not read. */
 function planLeft(plan: CachedPlan | undefined): string | undefined {
   const windows = usageOf(plan)?.windows;
@@ -277,21 +274,24 @@ function planLeft(plan: CachedPlan | undefined): string | undefined {
 }
 
 /**
- * Who a delegate could run on: each available harness's models, with the model a new thread there
+ * Who a delegate could run on: every available harness's models, with the model a new thread there
  * starts on first, and the effort, login and plan that go with each. The rows are interleaved one
- * model per harness, so an empty drawer shows what every harness offers rather than one harness's
- * whole list; typing a model's name finds the rest (`rankAgents`).
+ * model per harness, so the drawer's first rows show what every harness offers rather than one
+ * harness's whole list, and the whole catalog is searched by name (`rankAgents`), not just what is
+ * on screen.
  */
 function agentChoices(
   harnesses: readonly Harness[],
   plans: Record<string, CachedPlan>,
   signedOut: SignedOutLogins,
+  /** The thread the delegate would be started from: a child on its harness inherits its login. */
+  parent: { harness?: string; account?: string | null },
 ): AgentChoice[] {
   const perHarness = orderHarnesses([...harnesses])
     .filter((h) => !unavailableReason(h))
     .map((h) => {
       const accounts = h.accounts ?? [];
-      const accountId = accounts.length ? newThreadAccountOn(h, null, signedOut) : null;
+      const accountId = accounts.length ? childAccountOn(h, parent, signedOut) : null;
       // Only a harness with logins to choose between names one on its rows.
       const account = accounts.length > 1 ? accounts.find((a) => a.id === accountId)?.name : undefined;
       const plan = planLeft(plans[harnessPlanKey(h.id, accountId)]);
@@ -326,7 +326,8 @@ function agentChoices(
       }));
     });
   const rows: AgentChoice[] = [];
-  for (let i = 0; i < AGENTS_PER_HARNESS; i++) {
+  const deepest = Math.max(0, ...perHarness.map((choices) => choices.length));
+  for (let i = 0; i < deepest; i++) {
     for (const choices of perHarness) {
       const row = choices[i];
       if (row) rows.push(row);
@@ -470,6 +471,8 @@ export const Composer = memo(function Composer({
   const sessions = useApp((s) => s.sessions);
   const links = useApp((s) => s.links);
   const planCache = useApp((s) => s.planCache);
+  // The harness a new thread would start on: the one a delegate it names would be started from.
+  const newHarness = useApp((s) => newThreadChoice(s)?.harness);
   const signedOut = useApp((s) => s.signedOutLogins);
   const openId = thread?.id;
   // The open thread's project: its own, or the folder a new thread will start in.
@@ -542,9 +545,17 @@ export const Composer = memo(function Composer({
     return found;
   }, [openId, sessions, links, working, asking]);
   // `@`'s agents: who a delegate could run on, on which model, at which effort.
+  // The thread a delegate would be started from: a child on this harness inherits its login.
+  const parent = useMemo(
+    () => ({
+      harness: openId ? sessions.find((x) => x.id === openId)?.harness : newHarness,
+      account: openId ? (sessions.find((x) => x.id === openId)?.account ?? null) : null,
+    }),
+    [openId, sessions, newHarness],
+  );
   const agents = useMemo(
-    () => agentChoices(harnesses ?? [], planCache, signedOut),
-    [harnesses, planCache, signedOut],
+    () => agentChoices(harnesses ?? [], planCache, signedOut, parent),
+    [harnesses, planCache, signedOut, parent],
   );
   const fileList = useMemo(
     () => (files?.cwd === cwdForFiles ? rankFiles(files.paths, mentionQuery) : NO_FILES),
