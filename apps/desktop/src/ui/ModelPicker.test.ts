@@ -1,14 +1,20 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { BUILTIN_CAPABILITIES, type ConfigOption, type Harness } from "../acp/types";
 import {
+  type CardSize,
   clampEffort,
+  dedupeModels,
   filterModelRows,
+  measureCard,
+  modelDisplayName,
+  modelProviderOf,
   modelThreadWrites,
   movePickerIndex,
   orderEfforts,
   panelHeight,
   pickerModels,
   pillLabel,
+  repeatedModelNames,
   shownAccounts,
   traitsLabel,
   writeModelPick,
@@ -214,7 +220,8 @@ describe("the effort pill", () => {
 describe("the card's height", () => {
   test("reserves space for the effort and account header", () => {
     const groups = [{ models: [1, 2] }];
-    expect(panelHeight(groups, true)).toBe(panelHeight(groups) + 40);
+    // The row is 28px tall on the card's 4px gutter.
+    expect(panelHeight(groups, true)).toBe(panelHeight(groups) + 32);
   });
   test("follows the longest harness's list, so moving along the rail does not resize it", () => {
     const groups = [{ models: [1, 2] }, { models: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] }];
@@ -226,6 +233,99 @@ describe("the card's height", () => {
     expect(panelHeight([{ models: [] }])).toBeGreaterThan(0);
     const rail = Array.from({ length: 12 }, () => ({ models: [] }));
     expect(panelHeight(rail)).toBeGreaterThan(panelHeight([{ models: [] }]));
+  });
+});
+
+describe("one row per model", () => {
+  const model = (value: string, name: string) => ({ value, name });
+
+  test("an id the harness lists twice is one row, where it first listed it", () => {
+    const rows = dedupeModels([
+      model("fable-5-1", "Fable 5.1"),
+      model("sonnet-5-5", "Sonnet 5.5"),
+      model("fable-5-1", "Fable 5.1"),
+    ]);
+    expect(rows.map((row) => row.value)).toEqual(["fable-5-1", "sonnet-5-5"]);
+  });
+
+  test("two ids under one name keep the one the harness runs", () => {
+    // An alias beside the dated id it names: Claude Code lists both as "Fable 5.1".
+    const rows = dedupeModels(
+      [
+        model("claude-fable-5-1-20260115", "Fable 5.1"),
+        model("claude-sonnet-5-5", "Sonnet 5.5"),
+        model("claude-fable-5-1", "Fable 5.1"),
+      ],
+      "claude-fable-5-1",
+    );
+    expect(rows.map((row) => row.value)).toEqual(["claude-fable-5-1", "claude-sonnet-5-5"]);
+  });
+
+  test("with nothing recommended the first listing of a name stays", () => {
+    const rows = dedupeModels([
+      model("claude-fable-5-1-20260115", "Fable 5.1"),
+      model("claude-fable-5-1", "Fable 5.1"),
+    ]);
+    expect(rows.map((row) => row.value)).toEqual(["claude-fable-5-1-20260115"]);
+  });
+
+  test("names that differ in case or spacing are one name", () => {
+    const rows = dedupeModels([model("a", "Fable  5.1"), model("b", "fable 5.1 ")]);
+    expect(rows.map((row) => row.value)).toEqual(["a"]);
+  });
+
+  test("the harness's own order is kept, its first model first", () => {
+    const rows = dedupeModels([
+      model("fable-5-1", "Fable 5.1"),
+      model("haiku-5-5", "Haiku 5.5"),
+      model("sonnet-5", "Sonnet 5"),
+    ]);
+    expect(rows.map((row) => row.value)).toEqual(["fable-5-1", "haiku-5-5", "sonnet-5"]);
+  });
+
+  test("a row with no name reads by its id", () => {
+    expect(modelDisplayName({ value: "chatgpt/gpt-6-luna", name: "  " })).toBe("chatgpt/gpt-6-luna");
+    expect(modelDisplayName({ value: "luna", name: " GPT  6 Luna " })).toBe("GPT 6 Luna");
+  });
+
+  test("one name under two providers is two models, both listed", () => {
+    // Pi and OpenCode list `provider/model`: the same model through two providers is two picks.
+    const rows = dedupeModels([
+      model("anthropic/claude-sonnet-4", "Claude Sonnet 4"),
+      model("openrouter/anthropic/claude-sonnet-4", "Claude Sonnet 4"),
+    ]);
+    expect(rows.map((row) => row.value)).toEqual([
+      "anthropic/claude-sonnet-4",
+      "openrouter/anthropic/claude-sonnet-4",
+    ]);
+  });
+
+  test("one provider's pair of ids for one model is still one row", () => {
+    const rows = dedupeModels(
+      [
+        model("anthropic/claude-sonnet-4-20260115", "Claude Sonnet 4"),
+        model("anthropic/claude-sonnet-4", "Claude Sonnet 4"),
+        model("anthropic/claude-haiku-4", "Claude Haiku 4"),
+      ],
+      "anthropic/claude-sonnet-4",
+    );
+    expect(rows.map((row) => row.value)).toEqual(["anthropic/claude-sonnet-4", "anthropic/claude-haiku-4"]);
+  });
+
+  test("an id carries its provider, and a bare id names none", () => {
+    expect(modelProviderOf("anthropic/claude-sonnet-4")).toBe("anthropic");
+    expect(modelProviderOf("openrouter/anthropic/claude-sonnet-4")).toBe("openrouter/anthropic");
+    expect(modelProviderOf("claude-sonnet-4")).toBeNull();
+    expect(modelProviderOf("/leading")).toBeNull();
+  });
+
+  test("only the names a list holds twice read by their provider", () => {
+    const shared = repeatedModelNames([
+      model("anthropic/claude-sonnet-4", "Claude Sonnet 4"),
+      model("openrouter/anthropic/claude-sonnet-4", "claude  sonnet 4"),
+      model("anthropic/claude-haiku-4", "Claude Haiku 4"),
+    ]);
+    expect([...shared]).toEqual(["claude sonnet 4"]);
   });
 });
 
@@ -309,11 +409,126 @@ describe("model picker navigation", () => {
     expect(filterModelRows(groups, "codex", "opus").map((r) => r.group.harness.id)).toEqual(["other"]);
     expect(filterModelRows(groups, "codex", "missing")).toEqual([]);
   });
+  test("finds a model by its id, so a provider narrows the list", () => {
+    const group = {
+      harness: harness([]),
+      models: [
+        { value: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4" },
+        { value: "openai/gpt-6", name: "GPT 6" },
+      ],
+    };
+    expect(filterModelRows([group], "codex", "openai/").map((r) => r.model.value)).toEqual(["openai/gpt-6"]);
+  });
   test("clamps keyboard movement and displays the catalog label", () => {
     expect(movePickerIndex(0, -1, 3)).toBe(0);
     expect(movePickerIndex(2, 1, 3)).toBe(2);
     expect(pillLabel("Sonnet 5.5")).toBe("Sonnet 5.5");
     expect(pillLabel(null)).toBe("Default model");
     expect(pillLabel("claude-sonnet-5-5-long", true)).toBe("claude-sonnet…");
+  });
+});
+
+describe("measuring the card", () => {
+  const g = globalThis as Record<string, unknown>;
+  const saved = {
+    observer: g.ResizeObserver,
+    frame: g.requestAnimationFrame,
+    cancel: g.cancelAnimationFrame,
+  };
+
+  afterEach(() => {
+    g.ResizeObserver = saved.observer;
+    g.requestAnimationFrame = saved.frame;
+    g.cancelAnimationFrame = saved.cancel;
+  });
+
+  /** A stand-in for the browser's observer: it holds its callback until the test delivers a frame. */
+  function stubObservers() {
+    const frames = new Map<number, () => void>();
+    let nextFrame = 1;
+    const watched: { element: Element | null; notify: () => void; stopped: boolean }[] = [];
+    g.requestAnimationFrame = (callback: () => void) => {
+      const id = nextFrame++;
+      frames.set(id, callback);
+      return id;
+    };
+    g.cancelAnimationFrame = (id: number) => {
+      frames.delete(id);
+    };
+    g.ResizeObserver = class {
+      private readonly entry: { element: Element | null; notify: () => void; stopped: boolean };
+      constructor(callback: () => void) {
+        this.entry = { element: null, notify: callback, stopped: false };
+        watched.push(this.entry);
+      }
+      observe(element: Element) {
+        this.entry.element = element;
+      }
+      disconnect() {
+        this.entry.stopped = true;
+      }
+    };
+    /** The frames the observer asked for, run once each, as the browser would. */
+    const frame = () => {
+      for (const [id, callback] of [...frames]) {
+        frames.delete(id);
+        callback();
+      }
+    };
+    return { watched, frame };
+  }
+
+  /** A node whose box the test can change, as the card's own element reads to the browser. */
+  function node(size: { width: number; height: number }) {
+    const own = { ...size };
+    const element = {
+      getBoundingClientRect: () => ({ ...own, top: 0, left: 0, right: 0, bottom: 0, x: 0, y: 0 }),
+    };
+    return {
+      element: element as unknown as HTMLElement,
+      resize: (w: number, h: number) => Object.assign(own, { width: w, height: h }),
+    };
+  }
+
+  test("reports the node's size the moment it mounts, without a frame", () => {
+    stubObservers();
+    const sizes: CardSize[] = [];
+    const { element } = node({ width: 360, height: 320 });
+    measureCard(element, (size) => sizes.push(size));
+    // The card's first open is painted from this measurement, so it cannot wait for the observer.
+    expect(sizes).toEqual([{ width: 360, height: 320 }]);
+  });
+
+  test("reports a changed size on a frame of its own, not inside the observer's delivery", () => {
+    const { watched, frame } = stubObservers();
+    const sizes: CardSize[] = [];
+    const box = node({ width: 360, height: 320 });
+    measureCard(box.element, (size) => sizes.push(size));
+    box.resize(240, 209);
+    watched[0]!.notify();
+    // Writing the measured size inside the delivery is what the browser reports as a loop.
+    expect(sizes).toHaveLength(1);
+    frame();
+    expect(sizes[1]).toEqual({ width: 240, height: 209 });
+  });
+
+  test("stops when the node goes, so a closed card is not measured", () => {
+    const { watched } = stubObservers();
+    const sizes: CardSize[] = [];
+    const box = node({ width: 240, height: 209 });
+    const stop = measureCard(box.element, (size) => sizes.push(size));
+    stop();
+    expect(watched[0]!.stopped).toBe(true);
+    watched[0]!.notify();
+    expect(sizes).toHaveLength(1);
+  });
+
+  test("no node, no observer, and nothing to call back", () => {
+    const { watched } = stubObservers();
+    const stop = measureCard(null, () => {
+      throw new Error("a card that mounted nothing has nothing to report");
+    });
+    expect(watched).toHaveLength(0);
+    expect(() => stop()).not.toThrow();
   });
 });

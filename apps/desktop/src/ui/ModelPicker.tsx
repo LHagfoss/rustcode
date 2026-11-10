@@ -4,10 +4,12 @@
 // is as tall as the longest list it can show, up to the room the window has, and only the list
 // scrolls. Picking a model turns the card to its second step: the model's levels, Fast mode and
 // the harness's logins (a row at the foot of the list goes there too). What the thread's harness
-// cannot do is greyed out with the reason, from capability flags.
+// cannot do is greyed out with the reason, from capability flags. The two steps are different
+// sizes (the list is wider than the effort menu), so the card measures the step it shows and
+// glides between the two, anchored to the pill.
 
 import { Check, ChevronLeft, ChevronRight, ChevronUp, Lock, RotateCcw, UserRound, Zap } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   type ConfigOption,
   effortLabel,
@@ -18,6 +20,7 @@ import {
 } from "../acp/types";
 import { clip } from "../lib/clip";
 import { matchModels } from "../lib/modelSearch";
+import { observeSize } from "../lib/resize";
 import {
   controlDisabledReason,
   defaultEffort,
@@ -63,6 +66,9 @@ const EFFORT_ORDER = ["off", "none", "default", "minimal", "low", "medium", "hig
  * the window's room already counts.
  */
 const CARD_MAX = "min(360px, calc(var(--radix-popper-available-height, 360px) - 16px))";
+
+/** The reason note under a list that cannot be changed: its 14px line, 16px of padding, a 1px rule. */
+const NOTE_PX = 31;
 
 export function orderEfforts(efforts: string[]): string[] {
   const rank = (value: string) => {
@@ -154,6 +160,95 @@ export function shownAccounts(chips: AccountChip[]): AccountChip[] {
   return chips.length > 1 ? chips : [];
 }
 
+/**
+ * A model row's own name: the catalog's when it has one, else its id. Whitespace is collapsed, so
+ * two listings of one name compare as one.
+ */
+export function modelDisplayName(model: Choice): string {
+  const name = (model.name || model.value).trim().replace(/\s+/g, " ");
+  return name || model.value;
+}
+
+/**
+ * The provider an id names, when it carries one: `anthropic/claude-sonnet` is Anthropic's, and
+ * `openrouter/anthropic/claude-sonnet` is the same model through OpenRouter, a different one to
+ * pick. Null for an id without a `provider/` prefix, which is one harness's own list.
+ */
+export function modelProviderOf(value: string): string | null {
+  const at = value.lastIndexOf("/");
+  return at > 0 ? value.slice(0, at) : null;
+}
+
+/**
+ * One row per model. A harness can list the same model twice: one id twice (a cached listing merged
+ * with a fresh one), or two ids under one name (an alias beside the dated id it names). The harness's
+ * own order is kept, so the model it puts first stays first; of two rows sharing a name the one it
+ * recommends (`recommended`, the model the harness runs or was last left on) wins, else the first it
+ * listed. Ids are matched exactly, names case- and space-insensitively.
+ *
+ * A name only holds within one provider: two providers can each list a `Claude Sonnet`
+ * (`anthropic/…` and `openrouter/anthropic/…`), and hiding either would lose a model the user came
+ * to pick. Such a pair stays two rows, which `repeatedModelNames` marks so the row can say which
+ * provider it comes from.
+ */
+export function dedupeModels(models: Choice[], recommended?: string | null): Choice[] {
+  const seen = new Set<string>();
+  const byName = new Map<string, number>();
+  const rows: Choice[] = [];
+  for (const model of models) {
+    if (seen.has(model.value)) continue;
+    seen.add(model.value);
+    const key = `${modelProviderOf(model.value) ?? ""}\u0000${modelDisplayName(model).toLowerCase()}`;
+    const at = byName.get(key);
+    if (at === undefined) {
+      byName.set(key, rows.length);
+      rows.push(model);
+    } else if (recommended && model.value === recommended && rows[at]!.value !== recommended) {
+      // The name keeps the harness's place for it; the recommended id takes that place.
+      rows[at] = model;
+    }
+  }
+  return rows;
+}
+
+/**
+ * The names one harness's list holds more than once, so a row among them can name its provider
+ * instead of reading as its neighbour.
+ */
+export function repeatedModelNames(models: Choice[]): Set<string> {
+  const counts = new Map<string, number>();
+  for (const model of models) {
+    const key = modelDisplayName(model).toLowerCase();
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
+}
+
+/** The card's own size in px: the step it shows, measured rather than guessed. */
+export interface CardSize {
+  width: number;
+  height: number;
+}
+
+/**
+ * Reports the size `node` has as soon as it is given one, and again whenever it changes, until the
+ * returned call. The card's step is in a portal Radix mounts after this component's own effects, so
+ * an effect on `open` runs before there is anything to measure: the card measures itself from its
+ * ref, which React calls exactly when the node mounts and with `null` when it goes.
+ */
+export function measureCard(node: HTMLElement | null, onSize: (size: CardSize) => void): () => void {
+  if (!node) return () => {};
+  const measure = () => {
+    const rect = node.getBoundingClientRect();
+    onSize({ width: rect.width, height: rect.height });
+  };
+  // The opening size is measured mid-commit, so it paints without the transition; later changes
+  // come from `observeSize`, which reports on a frame of its own rather than inside the observer's
+  // delivery (writing layout there is what raises a ResizeObserver loop warning).
+  measure();
+  return observeSize(node, measure);
+}
+
 /** One harness's models in the list, with what the list needs to offer them. */
 interface ModelGroup {
   harness: Harness;
@@ -188,6 +283,8 @@ export function traitsLabel({
 /** A model row's height, the search row's and the list's padding, as the card draws them. */
 const ROW_PX = 28;
 const LIST_CHROME_PX = 48;
+/** The effort and account row above the search: its 28px and the card's 4px gutter. */
+const TRAITS_ROW_PX = 32;
 /** A rail button (`size-9`) and the gap under it, and the rail's own padding. */
 const RAIL_ITEM_PX = 40;
 const RAIL_CHROME_PX = 8;
@@ -200,7 +297,7 @@ export function panelHeight(groups: { models: unknown[] }[], hasTraits = false):
   const rows = Math.max(1, ...groups.map((group) => group.models.length));
   return (
     Math.max(LIST_CHROME_PX + rows * ROW_PX, RAIL_CHROME_PX + groups.length * RAIL_ITEM_PX) +
-    (hasTraits ? 40 : 0)
+    (hasTraits ? TRAITS_ROW_PX : 0)
   );
 }
 
@@ -260,12 +357,13 @@ function EffortPanel({
           onBack();
         } else menuKeys(event);
       }}
-      className="flex flex-col p-1"
+      style={{ maxHeight: CARD_MAX }}
+      className="flex w-[240px] flex-col overflow-y-auto p-1"
     >
       <button
         type="button"
         onClick={onBack}
-        className="flex h-7 min-w-0 items-center gap-1 rounded-sm px-1.5 text-callout text-fg-muted hover:bg-fill hover:text-fg"
+        className="flex h-7 w-full min-w-0 items-center gap-1 rounded-xl px-2 text-body text-fg-muted hover:bg-fill hover:text-fg focus-visible:bg-fill"
       >
         <ChevronLeft size={13} strokeWidth={2.5} className="shrink-0" />
         <span className="min-w-0 truncate">{model}</span>
@@ -366,6 +464,7 @@ function ModelPanel({
   onPick,
   traits,
   onTraits,
+  maxHeight = CARD_MAX,
 }: {
   groups: ModelGroup[];
   current?: string | null;
@@ -373,6 +472,8 @@ function ModelPanel({
   /** What the second step holds for the current model (its effort), and the row that opens it. */
   traits?: string | null;
   onTraits?: () => void;
+  /** The card's ceiling for this step: less the note under it when the list has one. */
+  maxHeight?: string;
 }) {
   const [filter, setFilter] = useState("");
   // The harness the user is browsing, until a switch makes another one current.
@@ -388,6 +489,11 @@ function ModelPanel({
     ? (browsed as string)
     : (groups[0]?.harness.id ?? "");
   const rows = useMemo(() => filterModelRows(groups, provider, filter), [groups, provider, filter]);
+  // A name two providers share: its rows say which provider they come from.
+  const shared = useMemo(
+    () => new Map(groups.map((group) => [group.harness.id, repeatedModelNames(group.models)])),
+    [groups],
+  );
   // Until the user moves, the list highlights the model the picker's owner runs; a highlight the
   // current rows no longer hold (another harness browsed) falls back to the first row.
   const marker = picked ?? (current ? { harness: groups[0]?.harness.id ?? "", model: current } : null);
@@ -420,15 +526,15 @@ function ModelPanel({
   const railButtons = () => [...(rail.current?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
   return (
     <div
-      className="flex min-h-0 flex-1 flex-col"
-      style={{ minHeight: `min(${panelHeight(groups, !!traits)}px, ${CARD_MAX})` }}
+      className="flex min-h-0 w-[min(360px,calc(100vw-32px))] flex-1 flex-col"
+      style={{ minHeight: `min(${panelHeight(groups, !!traits)}px, ${maxHeight})` }}
     >
       {traits && onTraits && (
-        <div className="shrink-0 px-3 pt-3">
+        <div className="shrink-0 p-1 pb-0">
           <button
             type="button"
             onClick={onTraits}
-            className="flex h-7 w-full min-w-0 items-center gap-2 rounded-md px-2 text-body hover:bg-fill focus-visible:bg-fill"
+            className="flex h-7 w-full min-w-0 items-center gap-2 rounded-xl px-2 text-body hover:bg-fill focus-visible:bg-fill"
           >
             <span className="min-w-0 flex-1 truncate text-start text-fg-muted">Effort and account</span>
             <span className="shrink-0 text-fg">{traits}</span>
@@ -520,42 +626,67 @@ function ModelPanel({
             aria-label="Models"
             className="scroll-stable min-h-0 min-w-0 flex-1 p-1"
           >
-            {rows.map((item, i) => (
-              <div
-                key={`${item.group.harness.id}:${item.model.value}`}
-                id={`model-row-${i}`}
-                role="option"
-                tabIndex={-1}
-                aria-selected={
-                  item.group.harness.id === groups[0]?.harness.id && item.model.value === current
-                }
-                aria-disabled={!!item.group.blocked}
-                onMouseEnter={() => highlight(i)}
-                onClick={() => !item.group.blocked && onPick(item.group, item.model.value)}
-                className={cx(
-                  "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1",
-                  i === active && "bg-fill",
-                  item.group.blocked && "opacity-45",
-                )}
-              >
-                {searching && (
-                  <HarnessIcon id={item.group.harness.id} name={item.group.harness.name} size={14} />
-                )}
-                <span className="min-w-0 flex-1 truncate text-body">
-                  {item.model.name || item.model.value}
-                </span>
-                {item.group.harness.id === groups[0]?.harness.id && item.model.value === current && (
-                  <Check size={13} className="shrink-0 text-accent" />
-                )}
-              </div>
-            ))}
-            {!rows.length && (
-              <div className="px-2 py-3 text-center text-callout text-fg-muted">
-                {searching
-                  ? "No matching models"
-                  : (groups.find((g) => g.harness.id === provider)?.blocked ?? "No models listed")}
-              </div>
-            )}
+            {rows.map((item, i) => {
+              const name = modelDisplayName(item.model);
+              // A name the list holds twice is only told apart by the provider behind it.
+              const providerName = shared.get(item.group.harness.id)?.has(name.toLowerCase())
+                ? modelProviderOf(item.model.value)
+                : null;
+              return (
+                <div
+                  key={`${item.group.harness.id}:${item.model.value}`}
+                  id={`model-row-${i}`}
+                  role="option"
+                  tabIndex={-1}
+                  aria-selected={
+                    item.group.harness.id === groups[0]?.harness.id && item.model.value === current
+                  }
+                  aria-disabled={!!item.group.blocked}
+                  onMouseEnter={() => highlight(i)}
+                  onClick={() => !item.group.blocked && onPick(item.group, item.model.value)}
+                  className={cx(
+                    "flex min-h-7 cursor-pointer items-center gap-2 rounded-xl px-2 py-1",
+                    i === active && "bg-fill",
+                    item.group.blocked && "opacity-45",
+                  )}
+                >
+                  {searching && (
+                    <HarnessIcon id={item.group.harness.id} name={item.group.harness.name} size={14} />
+                  )}
+                  <span className="min-w-0 flex-1 truncate text-body">{name}</span>
+                  {providerName && (
+                    <span className="shrink-0 text-caption text-fg-faint">{providerName}</span>
+                  )}
+                  {item.group.harness.id === groups[0]?.harness.id && item.model.value === current && (
+                    <Check size={13} className="shrink-0 text-accent" />
+                  )}
+                </div>
+              );
+            })}
+            {!rows.length &&
+              (searching ? (
+                <div role="presentation" className="px-3 py-6 text-center">
+                  <p className="text-callout text-fg">No models match “{filter.trim()}”</p>
+                  <p className="mt-1 text-caption text-fg-faint">
+                    Search every harness, by name or provider.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFilter("");
+                      // The button goes with the empty list: the field it cleared takes the caret.
+                      field.current?.focus();
+                    }}
+                    className="mt-2 rounded-md px-2 py-1 text-callout text-accent hover:bg-fill focus-visible:bg-fill"
+                  >
+                    Clear search
+                  </button>
+                </div>
+              ) : (
+                <div role="presentation" className="px-2 py-3 text-center text-callout text-fg-muted">
+                  {groups.find((g) => g.harness.id === provider)?.blocked ?? "No models listed"}
+                </div>
+              ))}
           </div>
         </div>
       </div>
@@ -571,10 +702,15 @@ export function filterModelRows(groups: ModelGroup[], provider: string, filter: 
   const searching = !!filter.trim();
   return groups.flatMap((group) =>
     searching || group.harness.id === provider
-      ? (searching ? matchModels(filter, group.models).shown : group.models).map((model) => ({
-          group,
-          model,
-        }))
+      ? // The id is searched beside the name: on a harness whose models are `provider/model`, the
+        // provider is only in the id, and that is what the user types to narrow the list.
+        (searching
+          ? matchModels(
+              filter,
+              group.models.map((model) => ({ ...model, id: model.value })),
+            ).shown
+          : group.models
+        ).map((model) => ({ group, model }))
       : [],
   );
 }
@@ -679,9 +815,13 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   const [open, setOpenState] = useState(false);
   // The card's step: the model list, or the picked model's effort, Fast mode and logins.
   const [step, setStep] = useState<"models" | "traits">("models");
-  // Every opening starts on the models.
+  // Every opening starts on the models, drawn at the size it needs rather than the last one's.
   const setOpen = (next: boolean) => {
-    if (next) setStep("models");
+    if (next) {
+      setStep("models");
+      setBox(null);
+      setGliding(false);
+    }
     setOpenState(next);
   };
   // `/model` asks the picker to open (store.runCommandAction).
@@ -691,6 +831,8 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     if (ask === seenAsk.current) return;
     seenAsk.current = ask;
     setStep("models");
+    setBox(null);
+    setGliding(false);
     setOpenState(true);
   }, [ask]);
 
@@ -785,10 +927,13 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   ];
   const groups: ModelGroup[] = ordered.map((h) => {
     const isCurrent = h.id === providerId;
+    const listed = isCurrent ? models : h.models.map((m) => ({ value: m.id, name: m.name }));
     return {
       harness: h,
       blocked: unavailableReason(h) ?? (isCurrent || canSwitch ? undefined : "Stop the turn to switch"),
-      models: isCurrent ? models : h.models.map((m) => ({ value: m.id, name: m.name })),
+      // One row per model: the model this thread runs, else the one its last pick was, is the row a
+      // name shared by two ids keeps.
+      models: dedupeModels(listed, isCurrent ? model : (h.last?.model ?? null)),
     };
   });
   // The current harness's logins, and only when there is more than one to choose between.
@@ -863,6 +1008,30 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
     fast: !!fast,
   });
 
+  // The card's own size: whatever step it shows, measured rather than guessed, so the two steps
+  // (the wide list, the narrow effort menu) glide into each other instead of jumping. The size an
+  // opening lands on is painted without the transition; only a step changing after it animates.
+  const [box, setBox] = useState<CardSize | null>(null);
+  const [gliding, setGliding] = useState(false);
+  const stopMeasuring = useRef<(() => void) | null>(null);
+  const glideFrame = useRef(0);
+  // The card's step mounts with the portal, after this component's own effects, so the measurement
+  // hangs off the node's ref instead of an effect on `open`: it starts when the node is there.
+  const measureBody = useCallback((node: HTMLDivElement | null) => {
+    stopMeasuring.current?.();
+    stopMeasuring.current = null;
+    cancelAnimationFrame(glideFrame.current);
+    if (!node) return;
+    stopMeasuring.current = measureCard(node, (size) =>
+      setBox((current) =>
+        current && current.width === size.width && current.height === size.height ? current : size,
+      ),
+    );
+    // Radix publishes the room it has a frame after the card mounts, and that first size is not a
+    // step change: it is committed with the transition still off.
+    glideFrame.current = requestAnimationFrame(() => setGliding(true));
+  }, []);
+
   // Nothing to show until the engine lists harnesses (or the thread its options): a placeholder pill.
   if (!harnesses && !thread?.configOptions.length) {
     return (
@@ -873,6 +1042,8 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
   }
 
   const traitsStep = step === "traits" && !!traits;
+  // The note under a list takes its room from the card's ceiling, never from the list's last row.
+  const cardMax = !traitsStep && modelReason ? `calc(${CARD_MAX} - ${NOTE_PX}px)` : CARD_MAX;
   return (
     <CardPopover
       open={open}
@@ -882,14 +1053,17 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
       // The card focuses its own control (the search field, which the panel does on mount; the
       // effort step its checked row) so the arrow keys act on what the card is for the moment it opens.
       onOpenAutoFocus={(event) => event.preventDefault()}
-      // As tall as the longest list up to the room the window has: the model list is the one part
-      // that scrolls. The effort step is a narrower menu.
-      className={cx(
-        // The card itself never scrolls (the popover's own `overflow-y-auto` would win over a plain
-        // `overflow-hidden`): only the model list does, so the header, search and rail stay put.
-        "flex flex-col overflow-hidden!",
-        traitsStep ? "w-[240px] p-0" : "w-[min(360px,calc(100vw-32px))] p-0",
-      )}
+      // Escape steps back out of the effort menu before it closes the card; the models step has no
+      // step behind it, so there Escape closes as it always did.
+      onEscapeKeyDown={(event) => {
+        if (!traitsStep) return;
+        event.preventDefault();
+        setStep("models");
+      }}
+      // The card takes the size its step measured; the step itself is never wider than the window
+      // allows, and only the model list scrolls. Its own ceiling is the full card, note included:
+      // the list gives the note its room (`cardMax`), so the two together never pass it.
+      className="flex flex-col overflow-hidden! p-0"
       style={{ maxHeight: CARD_MAX }}
       trigger={
         <button
@@ -909,40 +1083,61 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
         </button>
       }
     >
-      {traitsStep ? (
-        <EffortPanel
-          model={displayName ?? label}
-          onBack={() => setStep("models")}
-          levels={efforts}
-          effort={effort}
-          defaultLevel={defaultLevel}
-          effortReason={effortReason}
-          fast={!!fast}
-          fastOn={!!fast?.currentBool}
-          accounts={accountRows}
-          accountsDisabled={accountBlocked || (!!harness && !!unavailableReason(harness))}
-          onEffort={pickEffort}
-          onFast={(on) => thread && void setConfigOption(thread.id, "fast", on)}
-          onPickAccount={pickAccount}
-        />
-      ) : (
-        <>
-          <ModelPanel
-            key={providerId}
-            groups={groups}
-            current={model}
-            onPick={pickModel}
-            traits={traits}
-            onTraits={() => setStep("traits")}
-          />
-          {modelReason && (
-            <p className="flex shrink-0 items-start gap-1.5 border-border border-t px-3 py-2 text-caption text-fg-faint">
-              <Lock size={10} className="mt-[2px] shrink-0" />
-              <span>{modelReason}</span>
-            </p>
+      <div
+        // The card itself never scrolls (the popover's own `overflow-y-auto` would win over a plain
+        // `overflow-hidden`): only the model list does, so the header, search and rail stay put. While
+        // the two steps swap places the card clips what it is growing out of or into.
+        className={cx(
+          "min-h-0 overflow-hidden",
+          gliding && "transition-[width,height] duration-200 ease-snappy motion-reduce:transition-none",
+        )}
+        style={box ? { width: box.width, height: box.height } : undefined}
+      >
+        {/* The ceiling matters as much as the measurement: a long list that grew the body past it
+            would make the clipped card taller than the room it has, and nothing would scroll. Capped,
+            the body hands the list the room left under the note, and the list scrolls in it. */}
+        <div
+          ref={measureBody}
+          style={{ maxHeight: CARD_MAX }}
+          className="flex w-max max-w-[min(360px,calc(100vw-32px))] flex-col"
+        >
+          {traitsStep ? (
+            <EffortPanel
+              model={displayName ?? label}
+              onBack={() => setStep("models")}
+              levels={efforts}
+              effort={effort}
+              defaultLevel={defaultLevel}
+              effortReason={effortReason}
+              fast={!!fast}
+              fastOn={!!fast?.currentBool}
+              accounts={accountRows}
+              accountsDisabled={accountBlocked || (!!harness && !!unavailableReason(harness))}
+              onEffort={pickEffort}
+              onFast={(on) => thread && void setConfigOption(thread.id, "fast", on)}
+              onPickAccount={pickAccount}
+            />
+          ) : (
+            <>
+              <ModelPanel
+                key={providerId}
+                groups={groups}
+                current={model}
+                onPick={pickModel}
+                traits={traits}
+                onTraits={() => setStep("traits")}
+                maxHeight={cardMax}
+              />
+              {modelReason && (
+                <p className="flex shrink-0 items-start gap-1.5 border-border border-t px-3 py-2 text-caption text-fg-faint">
+                  <Lock size={10} className="mt-[2px] shrink-0" />
+                  <span>{modelReason}</span>
+                </p>
+              )}
+            </>
           )}
-        </>
-      )}
+        </div>
+      </div>
     </CardPopover>
   );
 }
