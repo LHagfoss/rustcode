@@ -14,7 +14,7 @@
 //! on `capture_provider_payloads` or `capture_harness_rpc_payloads`, and even
 //! then it is redacted and clipped ([`redact`]) before it is written, kept for
 //! [`PAYLOAD_RETENTION_DAYS`] days, and pruned to a byte budget
-//! ([`prune_telemetry`]).
+//! ([`prune`]).
 //!
 //! Writes never fail a turn: [`record_turn`] logs and returns. Reads go
 //! through [`query`], a read-only connection with a two-second cap, a single
@@ -299,6 +299,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         FROM turns
         WHERE duration_ms IS NOT NULL
         GROUP BY day, harness, model;",
+    ),
+    (
+        8,
+        "tool_calls_turn_index",
+        "CREATE INDEX IF NOT EXISTS tool_calls_turn ON tool_calls(turn_id);",
     ),
 ];
 
@@ -2619,16 +2624,7 @@ pub struct PruneReport {
     pub bytes_after: i64,
 }
 
-/// Applies the retention policy to the store, logging and swallowing a
-/// failure like every other write.
-pub fn prune_telemetry() {
-    let Some(path) = data_path() else { return };
-    if let Err(error) = prune_telemetry_at(&path) {
-        crate::dbg_log!("data store: telemetry not pruned: {error}");
-    }
-}
-
-/// [`prune_telemetry`] against one store file, answering what it did.
+/// [`prune`] against one store file, answering what it did.
 pub fn prune_telemetry_at(path: &Path) -> Result<PruneReport, String> {
     let connection = open(path)?;
     prune(&connection)
@@ -5250,6 +5246,67 @@ mod tests {
         assert_eq!(count_rows(&path, "operational_events"), 0);
         let kept = one_row(&path, "SELECT status FROM turns");
         assert_eq!(kept["status"], "completed");
+    }
+
+    #[test]
+    fn a_store_at_migration_seven_gets_the_tool_call_turn_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let indexes = |path: &Path| -> Vec<String> {
+            let connection = Connection::open(path).unwrap();
+            connection
+                .prepare("PRAGMA index_list(tool_calls)")
+                .unwrap()
+                .query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .filter_map(Result::ok)
+                .collect()
+        };
+        // A store as migration 7 left it: every earlier step recorded, rows
+        // written, and no index on `tool_calls.turn_id`.
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL);",
+                )
+                .unwrap();
+            for (id, name, sql) in MIGRATIONS.iter().filter(|(id, _, _)| *id <= 7) {
+                connection.execute_batch(sql).unwrap();
+                connection
+                    .execute(
+                        "INSERT INTO schema_migrations (id, name) VALUES (?1, ?2)",
+                        params![id, name],
+                    )
+                    .unwrap();
+            }
+            write_turn(
+                &connection,
+                &turn("t", "2026-11-01T10:00:00Z", (10, 2), "completed"),
+            )
+            .unwrap();
+        }
+        assert!(
+            !indexes(&path).iter().any(|name| name == "tool_calls_turn"),
+            "the migration-7 store has no such index"
+        );
+
+        // Opening runs migration 8 on top of 7, and the index it adds is the
+        // one an upsert's `DELETE FROM tool_calls WHERE turn_id = ?` needs.
+        let connection = open(&path).unwrap();
+        assert!(indexes(&path).iter().any(|name| name == "tool_calls_turn"));
+        let recorded: i64 = connection
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(recorded, MIGRATIONS.len() as i64);
+        assert_eq!(count_rows(&path, "turns"), 1, "the old rows survive");
+        assert_eq!(count_rows(&path, "tool_calls"), 1, "the old rows survive");
+        // `IF NOT EXISTS` keeps the step harmless on a store that already has
+        // the index some other way.
+        let last = MIGRATIONS.iter().find(|(id, _, _)| *id == 8).unwrap().2;
+        connection.execute_batch(last).unwrap();
     }
 
     #[test]

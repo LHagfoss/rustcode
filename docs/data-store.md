@@ -292,8 +292,8 @@ insert, so a mistake cannot write past the cap.
 
 ### Retention
 
-A pass runs at most once an hour, from the store's open path (every writer
-opens the store) and at the start. Structured rows are never deleted; see
+A pass runs at most once an hour, from the store's open path: every writer
+opens the store. Structured rows are never deleted; see
 "Structured rows grow forever, payloads do not" above for the policy, and
 `telemetry_retention` in `config.toml` for the raw-row window.
 
