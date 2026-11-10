@@ -4373,18 +4373,39 @@ function runAutoCompact(id: string): void {
   // the thread's waiting state (thread.ts `beginQuietTurn`), and a compaction must not lose work.
   const wasWorking = workInFlightOn(s, id);
   const userStopped = lastTurnInterrupted(s.threads[id]);
+  // Where the transcript is now: whatever a turn writes after it ran while the compaction did.
+  const itemsBefore = s.threads[id]?.items.length ?? 0;
   void runPrompt(id, "/compact", emptyExtras, { automatic: true, autoCompact: true })
+    // The compaction's own row is settled whether or not the prompt became a turn.
+    .then(
+      (outcome) => {
+        settleAutoCompactTurn(id, before);
+        return outcome;
+      },
+      () => {
+        settleAutoCompactTurn(id, before);
+        return "skipped" as TurnOutcome;
+      },
+    )
     .then((outcome) => {
-      settleAutoCompactTurn(id, before);
+      const after = get();
+      const thread = after.threads[id];
+      // A turn that ran since the compaction started: the queue's, which `runPrompt` starts when the
+      // compaction's own turn ends. It is the thread's next step already.
+      const carriedOn = (thread?.items.slice(itemsBefore) ?? []).some((item) => item.kind === "turnEnd");
       if (
         !shouldContinueAfterCompaction({
           outcome,
-          workInFlight: wasWorking,
-          running: get().threads[id]?.running ?? false,
-          queued: get().threads[id]?.queue.length ?? 0,
-          typing: !!(get().drafts[id] ?? "").trim(),
+          // Read before the compaction, and again now: the work it held up must still be owed. A
+          // delegate that settled while it ran is carried by its wake, not by a second turn.
+          workInFlight: wasWorking && workInFlightOn(after, id),
+          running: thread?.running ?? false,
+          queued: thread?.queue.length ?? 0,
+          // What the user is composing counts as having the thread back, text or attachments.
+          typing: !!(after.drafts[id] ?? "").trim() || hasExtras(after.extras[id]),
           interrupted: userStopped,
-          continued: false,
+          carriedOn,
+          putAway: id in after.snoozed || statusOf(after, id) === "done",
         })
       ) {
         return;

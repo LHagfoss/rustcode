@@ -228,24 +228,34 @@ export interface ContinueAfterCompactionInput {
   typing: boolean;
   /** The turn before the compaction was stopped by the user, or failed. */
   interrupted: boolean;
-  /** An automatic continue already ran for this compaction: one per compaction, never a loop. */
-  continued: boolean;
+  /**
+   * Another turn already ran since the compaction started: the message that waited in the queue
+   * behind it (a wake for a delegate that settled during the compaction, or what the user typed
+   * meanwhile) is the thread's next step, and it ran when the compaction's own turn ended.
+   */
+  carriedOn: boolean;
+  /** The user put the thread away while it compacted: snoozed it, or settled it. */
+  putAway: boolean;
 }
 
 /**
  * Whether the thread carries on by itself after the app compacted it. One answer
  * for the store and its tests: a compaction the user stopped, a turn that failed,
  * a thread the user is typing in or that something else already resumed, and a
- * thread whose work is finished all end the question here.
+ * thread whose work is finished all end the question here. One continue per
+ * compaction is structural: `runAutoCompact` asks this once, when its own turn ends.
  */
 export function shouldContinueAfterCompaction(input: ContinueAfterCompactionInput): boolean {
-  if (input.continued) return false;
   // Stopped by the user, or the harness failed: the chat says so, and the thread is theirs.
   if (input.outcome !== "completed") return false;
   if (input.interrupted) return false;
   if (input.typing) return false;
   // A wake, a queued message or another turn is already the thread's next step.
   if (input.running || input.queued > 0) return false;
+  if (input.carriedOn) return false;
+  // Snoozed or settled while it compacted: the user put the thread away, and an automatic turn may
+  // not bring it back.
+  if (input.putAway) return false;
   // A thread that finished everything it was doing is not resurrected by a compaction.
   return input.workInFlight;
 }

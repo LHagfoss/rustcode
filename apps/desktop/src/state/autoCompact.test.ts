@@ -306,7 +306,8 @@ describe("carrying on after a compaction", () => {
     queued: 0,
     typing: false,
     interrupted: false,
-    continued: false,
+    carriedOn: false,
+    putAway: false,
     ...over,
   });
 
@@ -329,9 +330,14 @@ describe("carrying on after a compaction", () => {
     expect(shouldContinueAfterCompaction(continueInput({ typing: true }))).toBe(false);
   });
 
-  test("a wake or a queued message already carries the thread on, and one continue is enough", () => {
+  test("a wake or a queued message already carries the thread on", () => {
     expect(shouldContinueAfterCompaction(continueInput({ running: true }))).toBe(false);
     expect(shouldContinueAfterCompaction(continueInput({ queued: 1 }))).toBe(false);
-    expect(shouldContinueAfterCompaction(continueInput({ continued: true }))).toBe(false);
+    // The row ran when the compaction's turn ended, so the thread is already back at work.
+    expect(shouldContinueAfterCompaction(continueInput({ carriedOn: true }))).toBe(false);
+  });
+
+  test("a thread the user put away while it compacted is not brought back", () => {
+    expect(shouldContinueAfterCompaction(continueInput({ putAway: true }))).toBe(false);
   });
 });

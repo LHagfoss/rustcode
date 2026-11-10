@@ -384,7 +384,6 @@ describe("carrying on after an automatic compaction", () => {
     expect(continuedRow(id)).toBeUndefined();
   });
 
-  /** The compaction rows this test counts: the running one and the one it settles into. */
   const compactionRows = (id: string) =>
     useApp
       .getState()
@@ -392,12 +391,61 @@ describe("carrying on after an automatic compaction", () => {
         (item) => item.kind === "notice" && (item.progress || item.text.startsWith("Compacted")),
       );
 
+  const compacting = (id: string) =>
+    useApp.getState().threads[id]?.items.some((item) => item.kind === "notice" && item.progress) ?? false;
+
   /** The mock's edit asks for approval: allow it, so the turn runs on to its end. */
   async function allowEdit(id: string) {
     await until(() => (useApp.getState().threads[id]?.permissions.length ?? 0) > 0);
     const request = useApp.getState().threads[id]!.permissions[0]!;
     answerPermission(request, request.options.find((option) => option.id === "allow") ?? null);
   }
+
+  test("a message that waited behind the compaction already carried the thread on", async () => {
+    // A slower mock than the other cases: the compaction has to be on screen for a message to be
+    // typed behind it.
+    const id = await openClaudeThread(40);
+    // High enough that the mock's own turns do not compact again: one compaction is under test.
+    setAutoCompactThreshold(150_000);
+    endedTurn(id, Date.now(), 160_000);
+    useApp.setState((s) => ({ links: { ...s.links, links: [...s.links.links, link(id, "working")] } }));
+
+    scheduleAutoCompact(id);
+    await until(() => compacting(id), 5000);
+    // Typed while the compaction runs (a wake takes the same path): it waits behind the app's turn,
+    // and `runPrompt` starts it as soon as the compaction ends.
+    await runPrompt(id, "yolo, carry on with this instead");
+    await until(() => compacted(id), 5000);
+    // The queued message's turn runs when the compaction's own turn ends, and finishes.
+    await until(() => {
+      const items = useApp.getState().threads[id]!.items;
+      const at = items.findIndex((item) => item.kind === "user" && item.text.includes("carry on with this"));
+      return at >= 0 && items.slice(at).some((item) => item.kind === "turnEnd");
+    }, 5000);
+    await settle(300);
+
+    // One turn answered the queued message; the app did not hand the thread a second one.
+    expect(continuedRow(id)).toBeUndefined();
+    const users = useApp.getState().threads[id]!.items.filter((item) => item.kind === "user");
+    expect(users.at(-1)?.text).toContain("carry on with this instead");
+  });
+
+  test("a thread the user snoozed while it compacted is left alone", async () => {
+    const id = await openClaudeThread(40);
+    endedTurn(id, Date.now(), 30_000);
+    useApp.setState((s) => ({ links: { ...s.links, links: [...s.links.links, link(id, "working")] } }));
+
+    scheduleAutoCompact(id);
+    await until(() => compacting(id), 5000);
+    // Put away while it compacted: the app does not bring it back with a turn of its own.
+    setSnoozed(id, Date.now() + 60 * 60_000);
+    await until(() => compacted(id), 5000);
+    await settle(400);
+
+    expect(continuedRow(id)).toBeUndefined();
+    expect(id in useApp.getState().snoozed).toBe(true);
+    expect(useApp.getState().threads[id]!.running).toBe(false);
+  });
 
   test("the continue's own turn does not start another automatic compaction", async () => {
     const id = await openClaudeThread();
