@@ -145,12 +145,16 @@ pub enum HandshakeRequest {
 }
 
 /// An address the host answers on, as a handshake reports it. The kind is the
-/// host's own word (`lan`, `vpn`, `hostname`, `public`); a kind this client
-/// does not know is still a route it may try.
+/// host's own word (`lan`, `overlay`, `hostname`, `public`; a gateway before
+/// the overlay kind says `vpn`), and `provider` names the mesh product
+/// (`netbird`, `tailscale`, `zerotier`) when the host can tell. A kind this
+/// client does not know is still a route it may try.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostRoute {
     pub address: String,
     pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
 }
 
 /// Frames the gateway sends during the handshake, and the error frame that

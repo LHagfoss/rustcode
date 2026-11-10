@@ -97,6 +97,17 @@
         },
         "kind": {
           "$ref": "#/$defs/HostRouteKind"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OverlayProvider"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Which mesh product the address is on, when the interface name says:\n`netbird`, `tailscale` or `zerotier`. Absent for a LAN address and for\na tunnel whose name names no product (macOS's `utunN`)."
         }
       },
       "required": [
@@ -114,8 +125,8 @@
           "type": "string"
         },
         {
-          "const": "vpn",
-          "description": "A `100.64.0.0/10` mesh address, as NetBird and Tailscale hand out.",
+          "const": "overlay",
+          "description": "A private overlay or VPN address: a `100.64.0.0/10` mesh address, or a\ntunnel-facing unique-local address on a tunnel interface. `vpn` is\nwhat a gateway before this kind reported and is still read.",
           "type": "string"
         },
         {
@@ -129,6 +140,15 @@
           "type": "string"
         }
       ]
+    },
+    "OverlayProvider": {
+      "description": "The mesh product an interface belongs to, when its name says which one.\nmacOS names every VPN `utunN`, so there the provider stays unknown and the\naddress is reported as a plain overlay address.",
+      "enum": [
+        "netbird",
+        "tailscale",
+        "zerotier"
+      ],
+      "type": "string"
     },
     "Secret": {
       "description": "A pairing credential, manual code or device token. Serializes as a plain\nstring; `Debug` never prints the value, so it cannot reach logs or error\nstrings through a derived impl.",
