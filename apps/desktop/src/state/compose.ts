@@ -19,11 +19,22 @@ export function splitSlashCommand(text: string): { command: string; rest: string
 }
 
 /**
+ * A word being typed after its trigger: where it starts, where it ends, and what
+ * has been typed of it. `end` is the caret's own word end, which a narrowed `@`
+ * token (`@agents pi`) reaches past the trigger's word.
+ */
+export interface TokenRange {
+  start: number;
+  end: number;
+  query: string;
+}
+
+/**
  * The `/word` the caret is in, when the `/` opens a word: at the start of the
  * message or just after whitespace. A path is not a command, so a second slash
  * inside the word (`/usr/bin`) closes the token, and so does a space.
  */
-export function slashToken(text: string, caret: number): { start: number; query: string } | null {
+export function slashToken(text: string, caret: number): TokenRange | null {
   const before = text.slice(0, caret);
   const start = before.lastIndexOf("/");
   if (start < 0) return null;
@@ -32,7 +43,7 @@ export function slashToken(text: string, caret: number): { start: number; query:
   if (/\s/.test(query)) return null;
   // The caret mid-word: the rest of the word is part of what gets replaced.
   if (/^\S/.test(text.slice(caret))) return null;
-  return { start, query };
+  return { start, end: caret, query };
 }
 
 /**
@@ -52,12 +63,11 @@ export function commandSuggestions(query: string, commands: SlashCommand[], limi
 /** The text with the token replaced by `/name `, and where the caret goes. */
 export function insertCommand(
   text: string,
-  token: { start: number; query: string },
+  token: TokenRange,
   command: string,
 ): { text: string; caret: number } {
   const ref = `${command} `;
-  const end = token.start + 1 + token.query.length;
-  const rest = text.slice(end).replace(/^ /, "");
+  const rest = text.slice(token.end).replace(/^ /, "");
   return { text: text.slice(0, token.start) + ref + rest, caret: token.start + ref.length };
 }
 
@@ -99,19 +109,29 @@ export type Attachment =
 // ---------------------------------------------------------------- mentions
 
 /**
- * Something a message points at besides its words: another thread (`#Title`), or a harness the
- * agent should hand work to (`@codex`). The draft keeps the short form the reader types, and is
- * sent in full (`composedText`), so the agent can act on it: a thread id for `read_session`, a
- * harness id for `start_session`. The id is what makes it unambiguous: two threads may share a
- * title, and the list of mentions carries which one was picked.
+ * Something a message points at besides its words: another thread (`#Title`), or the harness, model
+ * and effort an agent should delegate to (`@pi/deepseek/deepseek-flash`). The draft keeps the
+ * short form the reader picks, and the message spells it out (`composedText`), so the agent can act
+ * on it: a thread id for `read_session`, or what `start_session` takes. The id is what makes it
+ * unambiguous: two threads may share a title, and the list of mentions carries which one was picked.
  */
 export type Mention =
   | { kind: "thread"; id: string; title: string }
-  | { kind: "agent"; harness: string; name: string };
+  | {
+      kind: "agent";
+      /** The harness that would run the delegate. */
+      harness: string;
+      /** The model it would start on, when the row named one. */
+      model?: string;
+      /** The effort it would start on. */
+      effort?: string;
+      /** What the draft says after the `@`: `pi/deepseek/deepseek-flash`. */
+      token: string;
+    };
 
 /** What a mention reads as in the draft, and what the mirror draws on its pill: `#Title`, `@codex`. */
 export function mentionToken(mention: Mention): string {
-  return mention.kind === "thread" ? `#${mention.title}` : `@${mention.name}`;
+  return mention.kind === "thread" ? `#${mention.title}` : `@${mention.token}`;
 }
 
 /** A link's label cannot hold an unescaped bracket: `#[a]b](…)` would end at the first `]`. */
@@ -119,12 +139,17 @@ const escapeLabel = (title: string) => title.replace(/[\\[\]]/g, (c) => `\\${c}`
 
 /**
  * What a mention says in the sent message: a link around the title, so the agent reads the thread's
- * id and can open it; or the harness's id spelled out beside the name the drawer offered.
+ * id and can open it; or the harness, model and effort of the delegate, as `start_session` takes
+ * them, spelled out after the token the drawer wrote.
  */
 export function mentionText(mention: Mention): string {
-  return mention.kind === "thread"
-    ? `#[${escapeLabel(mention.title)}](rustcode://thread/${mention.id})`
-    : `@${mention.name} (harness: ${mention.harness})`;
+  if (mention.kind === "thread") return `#[${escapeLabel(mention.title)}](rustcode://thread/${mention.id})`;
+  const delegation = [
+    `harness=${mention.harness}`,
+    ...(mention.model ? [`model=${mention.model}`] : []),
+    ...(mention.effort ? [`effort=${mention.effort}`] : []),
+  ].join(", ");
+  return `@${mention.token} (delegate: ${delegation})`;
 }
 
 /** One mention written out in the draft, as the text and what it stands for. */
@@ -152,7 +177,7 @@ export function inCode(text: string, at: number): boolean {
  * heading is not one either: its `#` is followed by a space. Nor is a `#` in code (see `inCode`),
  * or one inside a token already written (`#[Title]`).
  */
-export function hashToken(text: string, caret: number): { start: number; query: string } | null {
+export function hashToken(text: string, caret: number): TokenRange | null {
   const before = text.slice(0, caret);
   const start = before.lastIndexOf("#");
   if (start < 0) return null;
@@ -164,7 +189,7 @@ export function hashToken(text: string, caret: number): { start: number; query: 
   // The caret mid-word: the rest of the word is part of what gets replaced.
   if (/^\S/.test(text.slice(caret))) return null;
   if (inCode(text, start)) return null;
-  return { start, query };
+  return { start, end: caret, query };
 }
 
 /** The mention whose own token starts at `start`, the longest first, or undefined. */
@@ -246,12 +271,11 @@ export function serializeMentions(text: string, mentions: readonly Mention[] | u
 /** The text with the `#` token replaced by the mention's own words, and where the caret goes. */
 export function insertMention(
   text: string,
-  token: { start: number; query: string },
+  token: TokenRange,
   mention: Mention,
 ): { text: string; caret: number } {
   const ref = `${mentionToken(mention)} `;
-  const end = token.start + 1 + token.query.length;
-  const rest = text.slice(end).replace(/^ /, "");
+  const rest = text.slice(token.end).replace(/^ /, "");
   return { text: text.slice(0, token.start) + ref + rest, caret: token.start + ref.length };
 }
 
@@ -302,18 +326,42 @@ export function rankThreads(threads: readonly ThreadChoice[], query: string, lim
 export interface AgentChoice {
   /** The harness's id: what the message names. */
   harness: string;
-  /** What the row calls it. */
-  name: string;
-  /** The model a new thread on it would start with. */
+  /** What the harness is called: the row's own left-hand name when it has no model. */
+  harnessName: string;
+  /** The model the delegate would start on, when the row names one. */
   model?: string;
+  /** That model's name, as the harness lists it: the row's name. */
+  name: string;
+  /** The effort the delegate would start on. */
+  effort?: string;
+  /** The named login it would run as, when the harness has more than one. */
+  account?: string;
+  /** What that login's plan has left, when the app read it: `62% left`. */
+  plan?: string;
+  /** What the draft writes after the `@`. */
+  token: string;
 }
 
-/** The harnesses an `@` token is looking for, the closest name first. */
-export function rankAgents(query: string, agents: readonly AgentChoice[], limit = 6): AgentChoice[] {
+/**
+ * What an agent row answers: the harness, the model, the effort, and what the drawer calls it. The
+ * model's name and id lead, then the harness's, then the token the message will carry.
+ */
+function agentScore(query: string, agent: AgentChoice): number | null {
+  const scores = [
+    fuzzyScore(query, agent.name),
+    agent.model ? fuzzyScore(query, agent.model) : null,
+    fuzzyScore(query, agent.harnessName),
+    fuzzyScore(query, agent.harness),
+    // `@codex/` is how a harness's models are asked for: the token starts with it.
+    fuzzyScore(query, agent.token),
+  ].flatMap((score) => (score === null ? [] : [score]));
+  return scores.length ? Math.max(...scores) : null;
+}
+
+/** The agents an `@` token is looking for, the closest one first. */
+export function rankAgents(query: string, agents: readonly AgentChoice[], limit = 8): AgentChoice[] {
   const scored = agents.flatMap((agent, at) => {
-    const name = fuzzyScore(query, agent.name);
-    const id = fuzzyScore(query, agent.harness);
-    const score = name === null && id === null ? null : Math.max(name ?? 0, id ?? 0);
+    const score = agentScore(query, agent);
     return score === null ? [] : [{ agent, at, score }];
   });
   scored.sort((a, b) => b.score - a.score || a.at - b.at);
@@ -592,6 +640,17 @@ export function splitTokens(text: string, mentions: readonly Mention[] = []): Dr
   return splitUrls(text).flatMap((part) =>
     part.url ? [part] : part.text === undefined ? [] : mentionTokens(part.text, mentions),
   );
+}
+
+/**
+ * What the mirror draws, as one string: exactly the draft's characters, token by token. The field's
+ * text is transparent over it, so anything the mirror prints differently — a shorter label, a
+ * bolder glyph — moves the caret and the wrap points off the text. A test holds the two together.
+ */
+export function mirrorText(text: string, mentions: readonly Mention[] = []): string {
+  return splitTokens(text, mentions)
+    .map((part) => part.text ?? part.url ?? (part.ref !== undefined ? `@${part.ref}` : (part.mention ?? "")))
+    .join("");
 }
 
 /** Whether the draft has anything the mirror draws as a token. */
