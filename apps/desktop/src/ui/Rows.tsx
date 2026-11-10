@@ -772,6 +772,10 @@ export function NoticeRow({
   flat?: boolean;
 }) {
   // Something that happened to the thread (it compacted), not a problem: a divider, like a switch.
+  // Said many times in a row it is still one line, with the count on its end.
+  const times = (item.count ?? 1) > 1 && (
+    <span className="shrink-0 tabular text-fg-faint">×{item.count}</span>
+  );
   if (item.tone === "info")
     return (
       <div
@@ -782,13 +786,14 @@ export function NoticeRow({
         <span className="flex min-w-0 items-center gap-1.5">
           {item.progress ? <Spinner size={11} /> : <Layers size={11} className="shrink-0 text-fg-faint" />}
           <span className="truncate">{item.text}</span>
+          {times}
         </span>
         <span className="h-px flex-1 bg-border" />
       </div>
     );
   return (
     <Callout tone="warning" action={action}>
-      {item.text}
+      {item.text} {times}
     </Callout>
   );
 }

@@ -1044,7 +1044,12 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   clipped to the bubble, the actions before the time so a steer's kept badge and
   time end flush with the bubble rather than before their empty room), the final answer (the replies after the last
   step), warnings and errors, and the footer, which says only the time: no
-  duration, so a folded turn never states it twice.
+  duration, so a folded turn never states it twice. A quiet notice the app
+  appends for what it did on the thread's behalf (a call an access mode let
+  through, a compaction) is one divider line; the same notice back to back is
+  one line that says how many (`Cleaned up a delegate's worktree · allowed by
+  Full access ×6`), and any other notice keeps its own line and the order it
+  came in (`state/fold.ts` `collapseNotices`).
   Nothing else in a turn draws actions: an intermediate reply, a thought and a
   tool row only narrate what the turn does, and none of them holds room for a
   hover it would answer. A finished turn's footer is its one action row, always

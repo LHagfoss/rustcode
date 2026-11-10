@@ -64,6 +64,13 @@ export interface MockOptions {
    */
   machines?: "paired" | "connect" | "offline" | "revoked";
   /**
+  /**
+   * `?notices=repeat`: the default thread ends on six identical quiet notices, the shape an
+   * access mode that lets calls through without asking leaves (one notice per call), so the
+   * transcript's count (`state/fold.ts` `collapseNotices`) is visible without a real run.
+   */
+  notices?: "repeat";
+  /**
    * A tool row's hard cases on their own thread (`?tools=background`): a command the harness sent to
    * the background, its answer fenced in Markdown, and the call repeated with its description in
    * `content`. It is a thread of the default scenario, so the rest of the mock is still there.
@@ -831,6 +838,28 @@ function seedDelegateLinks(): JsonObject[] {
       ],
     }),
   ];
+}
+
+/** The quiet notice the app appends for a call its thread's access mode let through (`state/host.ts`). */
+const ALLOWED_NOTICE_LINE = "Cleaned up a delegate's worktree · allowed by Full access";
+
+/**
+ * `?notices=repeat`: a turn that ended on the same quiet notice six times, as a run of calls its
+ * thread's access mode let through leaves it (one notice per call, each an app-side row the engine
+ * never sent). The only engine line that draws that quiet row is a finished compaction, so each
+ * notice replays as one; the transcript then draws a single row, with its count.
+ */
+function seedRepeatedNotices(threads: MockThread[]): void {
+  const thread = threads.find((t) => t.id === "mock-thread-1");
+  if (!thread) return;
+  for (let i = 0; i < 6; i++)
+    thread.history.push(
+      update(thread.id, {
+        sessionUpdate: "agent_message_chunk",
+        content: text(ALLOWED_NOTICE_LINE),
+        _meta: { rustcode: { kind: "compaction", phase: "completed" } },
+      }),
+    );
 }
 
 /**
@@ -2168,6 +2197,7 @@ export class MockEngine {
               ? seedBranchThreads()
               : [];
     // The stored book is the only one the app reads at connect; a scenario brings its own.
+    if (options.notices === "repeat") seedRepeatedNotices(this.threads);
     if (scenario === "delegates") {
       this.options.links ??= {
         links: seedDelegateLinks() as unknown as Json,
