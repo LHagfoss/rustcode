@@ -13,7 +13,7 @@ import { snoozeAt } from "./snooze";
 import { formatDuration, type QueuedPrompt, withWakeMark } from "./thread";
 
 /** What the client advertises in `initialize` while the setting is on. */
-export const CAPABILITY_VERSION = 11;
+export const CAPABILITY_VERSION = 12;
 /** The most of a child's answer `wait_session` carries; beyond it, `read_session` pages the rest. */
 export const MAX_BYTES = 8 * 1024;
 /** The longest prompt or message a thread may hand another one (32 KiB). */
@@ -303,6 +303,56 @@ export function doneLinks(
   return { shown: all.slice(0, most), more: Math.max(0, all.length - most) };
 }
 
+/** One thread in a thread's links: the link that speaks for it now, and every message. */
+export interface LinkThread {
+  /** The thread the row opens. */
+  target: string;
+  /** The link that speaks for it now: live first, else the newest. */
+  link: Link;
+  /** What that link shows now, from the caller's reading or its own record. */
+  state: LinkState;
+  /** Every link to it, in the order given: a follow-up is the same delegate. */
+  links: Link[];
+}
+
+/**
+ * The threads `links` name, one row each, however many times one was messaged. A
+ * follow-up is the same delegate: its row takes a live link when it has one, so
+ * a settled message cannot make a busy thread read answered, and otherwise the
+ * newest, so the row shows the latest state and time.
+ */
+export function linkThreads(links: readonly Link[], states?: readonly LinkState[]): LinkThread[] {
+  const groups = new Map<string, { links: Link[]; states: LinkState[] }>();
+  links.forEach((link, i) => {
+    const state = states?.[i] ?? link.state;
+    const group = groups.get(link.target);
+    if (group) {
+      group.links.push(link);
+      group.states.push(state);
+    } else {
+      groups.set(link.target, { links: [link], states: [state] });
+    }
+  });
+  return [...groups].map(([target, group]) => {
+    let best = 0;
+    for (let i = 1; i < group.links.length; i++) {
+      const live = isActive(group.states[i]!);
+      const bestLive = isActive(group.states[best]!);
+      if (live !== bestLive) {
+        if (live) best = i;
+        continue;
+      }
+      if (group.links[i]!.createdAt >= group.links[best]!.createdAt) best = i;
+    }
+    return {
+      target,
+      link: group.links[best]!,
+      state: group.states[best]!,
+      links: group.links,
+    };
+  });
+}
+
 /** One thread working for another: from the message (or the start) to the answer. */
 export interface Link {
   /** `<orchestrator>/<n>`. */
@@ -499,8 +549,30 @@ export type Call =
   | { tool: "thread_status"; target?: string; machine?: string }
   | { tool: "merge_when_green"; target: string; timeoutMs: number; callId?: string }
   | { tool: "cleanup_worktree"; target: string; settle: boolean }
-  /** The computers this RustCode is paired with (orchestration version 11). */
-  | { tool: "list_machines" };
+  /** The computers this RustCode is paired with (orchestration version 12). */
+  | { tool: "list_machines" }
+  | { tool: "read_project"; path: string }
+  | { tool: "create_project"; path: string; init?: boolean }
+  | { tool: "clone_project"; url: string; parent?: string; name?: string }
+  | {
+      tool: "update_project";
+      path: string;
+      name?: string;
+      harness?: string;
+      model?: string;
+    }
+  | { tool: "remove_project"; path: string }
+  | {
+      tool: "schedule_task";
+      prompt: string;
+      schedule: TaskSchedule;
+      project?: string;
+      name?: string;
+      modelProfile?: string;
+    }
+  | { tool: "list_scheduled_tasks" }
+  | { tool: "delete_scheduled_task"; id: string }
+  | { tool: "run_scheduled_task_now"; id: string };
 
 /** What `update_session` may set a thread's status to. */
 export type SessionStatusChoice = "active" | "review" | "settled";
@@ -531,6 +603,11 @@ const QUEUE_ACTIONS: readonly string[] = ["list", "edit", "cancel", "steer"];
 export const MAX_QUEUE_ITEMS = 50;
 /** How much of a queued message a list shows: enough to know which one it is. */
 export const QUEUE_PREVIEW_CHARS = 200;
+
+/** What `schedule_task` may ask the scheduler for: a cron, or one time. */
+export type TaskSchedule =
+  | { kind: "cron"; expression: string; timezone?: string }
+  | { kind: "at"; at: string };
 
 /** How long `merge_when_green` waits for checks by default, and at most: 25 minutes a call, like `wait_session`. */
 export const DEFAULT_MERGE_MS = MAX_WAIT_MS;
@@ -568,7 +645,8 @@ function pathsOf(value: Json | undefined, max = MAX_ATTACHMENT_FILES): string[] 
 export function parseCall(params: JsonObject): Call | Failure {
   const raw = params.args;
   const args = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
-  switch (s(params.tool)) {
+  const tool = s(params.tool) ?? "";
+  switch (tool) {
     case "list_sessions":
       return {
         tool: "list_sessions",
@@ -872,9 +950,101 @@ export function parseCall(params: JsonObject): Call | Failure {
         ...machineField(args),
       };
     }
+    case "read_project":
+    case "remove_project": {
+      const path = (s(args.path) ?? "").trim();
+      if (!path) return failure("invalid", "path is required");
+      return tool === "read_project" ? { tool: "read_project", path } : { tool: "remove_project", path };
+    }
+    case "create_project": {
+      const path = (s(args.path) ?? "").trim();
+      if (!path) return failure("invalid", "path is required");
+      return {
+        tool: "create_project",
+        path,
+        init: typeof args.init === "boolean" ? args.init : undefined,
+      };
+    }
+    case "clone_project": {
+      const url = (s(args.url) ?? "").trim();
+      if (!url) return failure("invalid", "url is required");
+      return {
+        tool: "clone_project",
+        url,
+        parent: s(args.parent)?.trim() || undefined,
+        name: s(args.name)?.trim() || undefined,
+      };
+    }
+    case "update_project": {
+      const path = (s(args.path) ?? "").trim();
+      if (!path) return failure("invalid", "path is required");
+      const change = {
+        name: s(args.name)?.trim() || undefined,
+        harness: s(args.harness)?.trim() || undefined,
+        model: s(args.model)?.trim() || undefined,
+      };
+      if (!change.name && !change.harness && !change.model) {
+        return failure("invalid", "give at least one of name, harness or model");
+      }
+      return { tool: "update_project", path, ...change };
+    }
+    case "schedule_task": {
+      const prompt = s(args.prompt) ?? "";
+      if (!prompt.trim()) return failure("invalid", "prompt is required");
+      if (bytes(prompt) > MAX_MESSAGE_BYTES) return failure("invalid", "the prompt is over 32 KiB");
+      const raw =
+        args.schedule && typeof args.schedule === "object" && !Array.isArray(args.schedule)
+          ? (args.schedule as Record<string, unknown>)
+          : {};
+      const schedule = parseSchedule(raw);
+      if (typeof schedule === "string") return failure("invalid", schedule);
+      return {
+        tool: "schedule_task",
+        prompt,
+        schedule,
+        project: s(args.project)?.trim() || undefined,
+        name: s(args.name)?.trim() || undefined,
+        modelProfile: s(args.model_profile)?.trim() || undefined,
+      };
+    }
+    case "list_scheduled_tasks":
+      return { tool: "list_scheduled_tasks" };
+    case "delete_scheduled_task":
+    case "run_scheduled_task_now": {
+      const id = (s(args.id) ?? "").trim();
+      if (!id) return failure("invalid", "id is required");
+      return tool === "delete_scheduled_task"
+        ? { tool: "delete_scheduled_task", id }
+        : { tool: "run_scheduled_task_now", id };
+    }
     default:
       return failure("invalid", "unknown tool");
   }
+}
+
+/**
+ * `schedule_task`'s schedule, checked here the way the engine checks it: a
+ * five-field cron for a repeating task, an ISO 8601 time with its offset for
+ * one that runs once.
+ */
+export function parseSchedule(raw: Record<string, unknown>): TaskSchedule | string {
+  const kind = typeof raw.kind === "string" ? raw.kind : "";
+  if (kind === "cron") {
+    const expression = typeof raw.expression === "string" ? raw.expression.trim() : "";
+    if (expression.split(/\s+/).filter(Boolean).length !== 5) {
+      return "schedule.expression must be a five-field cron expression";
+    }
+    const timezone = typeof raw.timezone === "string" ? raw.timezone.trim() : "";
+    return { kind: "cron", expression, ...(timezone ? { timezone } : {}) };
+  }
+  if (kind === "at") {
+    const at = typeof raw.at === "string" ? raw.at.trim() : "";
+    if (!at || Number.isNaN(Date.parse(at))) {
+      return "schedule.at must be an ISO 8601 time with its offset";
+    }
+    return { kind: "at", at };
+  }
+  return "schedule.kind must be cron or at";
 }
 
 export function isFailure(value: unknown): value is Failure {
@@ -898,11 +1068,13 @@ export interface RuleThread {
 }
 
 // macOS links /tmp, /var and /etc into /private, and the engine reports the resolved path: one place.
-const clean = (path: string) =>
+export const cleanProjectPath = (path: string) =>
   path
     .replace(/\/+$/, "")
     .replace(/\/\.\//g, "/")
     .replace(/^\/private(?=\/(?:tmp|var|etc)(?:\/|$))/, "");
+
+const clean = cleanProjectPath;
 
 /** A thread's project: its worktree's repository, else its folder. */
 export const projectOf = (t: Pick<RuleThread, "folder" | "worktree">) => clean(t.worktree?.repo || t.folder);
@@ -2461,7 +2633,9 @@ export interface GrantAsk {
     | "transfer"
     | "configure"
     | "merge"
-    | "cleanup";
+    | "cleanup"
+    | "project"
+    | "schedule";
   caller: string;
   callerTitle: string;
   /** The thread messaged or read, or the new thread's title. */

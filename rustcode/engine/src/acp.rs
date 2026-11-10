@@ -12,10 +12,12 @@ mod hosted;
 mod permissions;
 mod presence;
 mod preview;
+mod projects;
 mod prompt;
 pub(crate) mod questions;
 mod remote;
 mod rewind;
+mod scheduled;
 mod server_status;
 mod session;
 pub(crate) mod session_move;
@@ -2411,6 +2413,97 @@ async fn serve_connection(
             async move |request: data::DataReceiptsGetRequest, responder, connection| {
                 connection.spawn(async move {
                     match data::receipts_get(request) {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: projects::ProjectReadRequest, responder, connection| {
+                connection.spawn(async move {
+                    match projects::read(request) {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::invalid_params().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: projects::ProjectCreateRequest, responder, connection| {
+                connection.spawn(async move {
+                    match projects::create(request) {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::invalid_params().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: projects::ProjectCloneRequest, responder, connection| {
+                connection.spawn(async move {
+                    match projects::clone(request) {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::invalid_params().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |_request: scheduled::ScheduledListRequest, responder, connection| {
+                connection.spawn(async move {
+                    match scheduled::list().await {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: scheduled::ScheduledCreateRequest, responder, connection| {
+                connection.spawn(async move {
+                    match scheduled::create(request).await {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::invalid_params().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: scheduled::ScheduledDeleteRequest, responder, connection| {
+                connection.spawn(async move {
+                    match scheduled::delete(request.id).await {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: scheduled::ScheduledRunRequest, responder, connection| {
+                connection.spawn(async move {
+                    match scheduled::run(request.id).await {
                         Ok(answer) => responder.respond(answer),
                         Err(error) => responder
                             .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),

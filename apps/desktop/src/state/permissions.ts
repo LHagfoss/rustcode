@@ -53,7 +53,9 @@ export function delegationAllowed(
     | "transfer"
     | "configure"
     | "merge"
-    | "cleanup",
+    | "cleanup"
+    | "project"
+    | "schedule",
 ): boolean {
   if (mode === "full") return true;
   // Answering a request grants a delegate what it asked for, so it is not part of editing either.

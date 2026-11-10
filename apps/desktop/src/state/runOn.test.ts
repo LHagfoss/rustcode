@@ -52,6 +52,7 @@ function studio(state: Machine["state"] = "connected"): Machine {
     route: { kind: "lan", address: "192.168.1.20:17879", encrypted: false },
     state,
     detail: null,
+    hint: null,
     retryInSecs: null,
     addedAt: "2026-11-02T09:00:00+00:00",
     lastConnectedAt: "2026-11-08T09:00:00+00:00",

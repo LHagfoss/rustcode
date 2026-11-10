@@ -161,8 +161,11 @@ pub struct ToolSchemaPolicy {
     pub(crate) include_orchestration_v9_tools: bool,
     /// `answer_request` and `organize_threads`, for orchestration version 10.
     pub(crate) include_orchestration_v10_tools: bool,
-    /// `list_machines`, for a client that advertises orchestration version 11.
+    /// `read_project` and the other project tools, plus the scheduler's four,
+    /// for a client that advertises orchestration version 11.
     pub(crate) include_orchestration_v11_tools: bool,
+    /// `list_machines`, for a client that advertises orchestration version 12.
+    pub(crate) include_orchestration_v12_tools: bool,
     /// What the client advertised, capped at [`crate::orchestration::VERSION`]:
     /// the tool set follows the flags above, and the args follow this one.
     pub(crate) orchestration_version: u8,
@@ -234,6 +237,7 @@ impl ToolSchemaPolicy {
             include_orchestration_v9_tools: false,
             include_orchestration_v10_tools: false,
             include_orchestration_v11_tools: false,
+            include_orchestration_v12_tools: false,
             orchestration_version: 0,
             profile: ToolSchemaProfile::Coding,
             compact_text_prompt: false,
@@ -265,6 +269,7 @@ impl ToolSchemaPolicy {
             include_orchestration_v9_tools: false,
             include_orchestration_v10_tools: false,
             include_orchestration_v11_tools: false,
+            include_orchestration_v12_tools: false,
             orchestration_version: 0,
             profile: ToolSchemaProfile::ReadOnlyInspection,
             compact_text_prompt: false,
@@ -289,6 +294,7 @@ impl ToolSchemaPolicy {
             include_orchestration_v9_tools: false,
             include_orchestration_v10_tools: false,
             include_orchestration_v11_tools: false,
+            include_orchestration_v12_tools: false,
             orchestration_version: 0,
             profile: ToolSchemaProfile::ReadOnlySubagent,
             compact_text_prompt: false,
@@ -350,6 +356,7 @@ impl ToolSchemaPolicy {
         self.include_orchestration_v9_tools = self.include_orchestration_tools && version >= 9;
         self.include_orchestration_v10_tools = self.include_orchestration_tools && version >= 10;
         self.include_orchestration_v11_tools = self.include_orchestration_tools && version >= 11;
+        self.include_orchestration_v12_tools = self.include_orchestration_tools && version >= 12;
         self.orchestration_version = version.min(crate::orchestration::VERSION);
         self
     }
@@ -726,15 +733,19 @@ pub(crate) fn mcp_schema_budget_bytes() -> usize {
         .unwrap_or(MAX_MCP_NATIVE_SCHEMA_BYTES)
 }
 /// The hard cap before the menu is pruned from the specialised end. The
-/// orchestration tools are the tail and the biggest: a client advertising
-/// version 7 gets the whole built-in menu at 41,897 bytes, 87 under this cap,
-/// so the next tool raises it rather than dropping one. The cap moved from
-/// 40 KiB when the delegation tool descriptions gained what a stalled
-/// delegate costs (a prompt with no TTY, and no default timeout). Raising the
-/// cap keeps every version- and setting-gated tool advertised
-/// (`schema_budget_tests` keeps it that way); the 25 KiB budget below still
-/// keeps a plain root prompt lean.
-pub(crate) const MAX_BUILTIN_NATIVE_SCHEMA_BYTES: usize = 44 * 1024;
+/// orchestration tools are the tail and the biggest, so the newest version
+/// decides it: v12 (the machines) measures 54,671 bytes with `list_machines`
+/// and the `machine` argument on eleven tools, and this is the next KiB above
+/// that. A version over it is a test failure, not a quiet prune: the next tool
+/// raises the cap rather than dropping one. It moved from 40 KiB when the
+/// delegation descriptions gained what a stalled delegate costs, then to 51 KiB
+/// when v9's pull-request tools, v10's answer/organize pair and v11's projects
+/// and schedules joined the menu, and to 54 KiB for v12: at 51 KiB the v11 menu
+/// had already lost `delete_scheduled_task` and `run_scheduled_task_now`, as at
+/// 41 KiB a v9 menu lost its three v9 tools. Raising it keeps every version- and
+/// setting-gated tool advertised (`schema_budget_tests` loops every version);
+/// the 25 KiB budget below still keeps a plain root prompt lean.
+pub(crate) const MAX_BUILTIN_NATIVE_SCHEMA_BYTES: usize = 54 * 1024;
 pub(super) const MCP_DISCOVERY_FALLBACK_COUNT: usize = 4;
 const MCP_RELEVANCE_THRESHOLD: usize = 6;
 const MCP_DISCOVERY_CORE: &[&str] = &[
@@ -900,6 +911,15 @@ const ROOT_ONLY_TOOLS: &[&str] = &[
     crate::orchestration::THREAD_STATUS,
     crate::orchestration::MERGE_WHEN_GREEN,
     crate::orchestration::CLEANUP_WORKTREE,
+    crate::orchestration::READ_PROJECT,
+    crate::orchestration::CREATE_PROJECT,
+    crate::orchestration::CLONE_PROJECT,
+    crate::orchestration::UPDATE_PROJECT,
+    crate::orchestration::REMOVE_PROJECT,
+    crate::orchestration::SCHEDULE_TASK,
+    crate::orchestration::LIST_SCHEDULED_TASKS,
+    crate::orchestration::DELETE_SCHEDULED_TASK,
+    crate::orchestration::RUN_SCHEDULED_TASK_NOW,
 ];
 
 /// Whether a read-only child agent's gate runs `tool`, so it is worth
@@ -948,6 +968,7 @@ fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
         || (crate::orchestration::is_v9_tool(tool.name) && !policy.include_orchestration_v9_tools)
         || (crate::orchestration::is_v10_tool(tool.name) && !policy.include_orchestration_v10_tools)
         || (crate::orchestration::is_v11_tool(tool.name) && !policy.include_orchestration_v11_tools)
+        || (crate::orchestration::is_v12_tool(tool.name) && !policy.include_orchestration_v12_tools)
         || (policy.compact_text_prompt
             && !TEXT_CODING_TOOLS.contains(&tool.name)
             && !(policy.include_agent_tools
@@ -3225,7 +3246,7 @@ mod schema_budget_tests {
         // A client at the newest version gets every orchestration tool in its
         // built-in schema; the hard cap must not start withholding any of them
         // (which would drop tools the client can answer).
-        for version in [1, 2, 3, 4, 5, 6, 7] {
+        for version in 1..=crate::orchestration::VERSION {
             let policy = ToolSchemaPolicy::root(true).with_orchestration_tools(version);
             let advertised = crate::tools::TOOLS
                 .iter()

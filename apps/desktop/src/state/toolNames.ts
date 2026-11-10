@@ -33,6 +33,15 @@ export const ORCHESTRATION_TOOLS = [
   "thread_status",
   "merge_when_green",
   "cleanup_worktree",
+  "read_project",
+  "create_project",
+  "clone_project",
+  "update_project",
+  "remove_project",
+  "schedule_task",
+  "list_scheduled_tasks",
+  "delete_scheduled_task",
+  "run_scheduled_task_now",
 ] as const;
 
 /** `mcp__server__tool`, `server__tool`, `server.tool`, `server/tool`, `server:tool`. */
@@ -228,6 +237,24 @@ function orchestrationLabel(
       return { title: running(status) ? "Merging pull request" : "Merged pull request" };
     case "cleanup_worktree":
       return { title: "Cleaned up a worktree" };
+    case "read_project":
+      return { title: "Read project", summary: text(args.path) || undefined };
+    case "create_project":
+      return { title: "Registered project", summary: text(args.path) || undefined };
+    case "clone_project":
+      return { title: "Cloned project", summary: text(args.url) || undefined };
+    case "update_project":
+      return { title: "Updated project", summary: text(args.name) || text(args.path) || undefined };
+    case "remove_project":
+      return { title: "Removed project", summary: text(args.path) || undefined };
+    case "schedule_task":
+      return { title: "Scheduled a task", summary: text(args.name) || text(args.prompt) || undefined };
+    case "list_scheduled_tasks":
+      return { title: "Listed scheduled tasks" };
+    case "delete_scheduled_task":
+      return { title: "Deleted a scheduled task", summary: text(args.id) || undefined };
+    case "run_scheduled_task_now":
+      return { title: "Ran a scheduled task", summary: text(args.id) || undefined };
     case "update_session":
       return { title: "Updated thread", summary: text(args.title) || text(args.status) || undefined };
     case "interrupt_session":

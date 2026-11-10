@@ -56,7 +56,17 @@ pub const MANAGE_QUEUE: &str = "manage_queue";
 pub const THREAD_STATUS: &str = "thread_status";
 pub const MERGE_WHEN_GREEN: &str = "merge_when_green";
 pub const CLEANUP_WORKTREE: &str = "cleanup_worktree";
-/// Version 11: the other computers this app is paired with, and the machine a
+/// Version 10: the user's projects, and the scheduler daemon's work.
+pub const READ_PROJECT: &str = "read_project";
+pub const CREATE_PROJECT: &str = "create_project";
+pub const CLONE_PROJECT: &str = "clone_project";
+pub const UPDATE_PROJECT: &str = "update_project";
+pub const REMOVE_PROJECT: &str = "remove_project";
+pub const SCHEDULE_TASK: &str = "schedule_task";
+pub const LIST_SCHEDULED_TASKS: &str = "list_scheduled_tasks";
+pub const DELETE_SCHEDULED_TASK: &str = "delete_scheduled_task";
+pub const RUN_SCHEDULED_TASK_NOW: &str = "run_scheduled_task_now";
+/// Version 12: the other computers this app is paired with, and the machine a
 /// call acts on.
 pub const LIST_MACHINES: &str = "list_machines";
 /// The M1 tools, what a client advertising version 1 gets.
@@ -86,15 +96,27 @@ pub const V7_TOOL_NAMES: [&str; 1] = [MANAGE_QUEUE];
 pub const V9_TOOL_NAMES: [&str; 3] = [THREAD_STATUS, MERGE_WHEN_GREEN, CLEANUP_WORKTREE];
 /// Added by version 10: answering what a thread waits on, and organizing several at once.
 pub const V10_TOOL_NAMES: [&str; 2] = [ANSWER_REQUEST, ORGANIZE_THREADS];
-/// Added by version 11: the machines the app is paired with.
-pub const V11_TOOL_NAMES: [&str; 1] = [LIST_MACHINES];
+/// Added by version 11: the user's projects and the daemon's scheduled work.
+pub const V11_TOOL_NAMES: [&str; 9] = [
+    READ_PROJECT,
+    CREATE_PROJECT,
+    CLONE_PROJECT,
+    UPDATE_PROJECT,
+    REMOVE_PROJECT,
+    SCHEDULE_TASK,
+    LIST_SCHEDULED_TASKS,
+    DELETE_SCHEDULED_TASK,
+    RUN_SCHEDULED_TASK_NOW,
+];
+/// Added by version 12: the machines the app is paired with.
+pub const V12_TOOL_NAMES: [&str; 1] = [LIST_MACHINES];
 /// The newest version this engine speaks.
-pub const VERSION: u8 = 11;
-/// Version 11 adds `machine` to the tools that read or act on a thread: the id
+pub const VERSION: u8 = 12;
+/// Version 12 adds `machine` to the tools that read or act on a thread: the id
 /// or name `list_machines` returned, omitted for this computer. A client that
 /// advertised less never sees the field and has it refused, so an older app
 /// cannot quietly act on this computer's thread instead of the named one.
-pub const MACHINE_VERSION: u8 = 11;
+pub const MACHINE_VERSION: u8 = 12;
 /// The tools `machine` applies to.
 pub const MACHINE_TOOL_NAMES: [&str; 11] = [
     LIST_SESSIONS,
@@ -109,6 +131,8 @@ pub const MACHINE_TOOL_NAMES: [&str; 11] = [
     THREAD_STATUS,
     LIST_PENDING_REQUESTS,
 ];
+/// What `schedule_task` may ask the scheduler for.
+pub const SCHEDULE_KINDS: [&str; 2] = ["cron", "at"];
 /// Version 5 adds named account targeting to the existing `start_session` and
 /// `fan_out` args. No tool is added, but a client that advertised less never
 /// sees the `account` field and has it refused, so an older app cannot quietly
@@ -212,10 +236,13 @@ pub const PROMPT_HINT_V9: &str = "\n\nRustCode's threads: `list_sessions`, `sear
 /// [`PROMPT_HINT_V9`] for version 10 clients, which can answer what a thread
 /// waits on and organize several at once.
 pub const PROMPT_HINT_V10: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user, and `answer_request` answers one of those on a thread in your own tree. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, and `message_session` attaches files by path; `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. `thread_status` reports a delegate's worktree, branch, pull request and checks; `merge_when_green` merges it once green; `cleanup_worktree` removes its worktree and branch and settles it. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`. `update_session`, `organize_threads`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those, answering, merge and cleanup change other threads, so do them only when the user asks; the user approves. Stay lean: every call resends this thread's context, so leave reading code, diffs, logs and CI to delegates, and check their pull requests with `thread_status`. Wait on all links in one `wait_session` with `link_ids`, or end the turn: the app wakes this thread when a child finishes. Call `list_harnesses` once.";
+/// [`PROMPT_HINT_V10`] for version 11 clients, which can manage projects and
+/// the scheduler daemon's work.
+pub const PROMPT_HINT_V11: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user, and `answer_request` answers one of those on a thread in your own tree. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, and `message_session` attaches files by path; `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. `thread_status` reports a delegate's worktree, branch, pull request and checks; `merge_when_green` merges it once green; `cleanup_worktree` removes its worktree and branch and settles it. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`. `update_session`, `organize_threads`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those, answering, merge and cleanup change other threads, so do them only when the user asks; the user approves. Stay lean: every call resends this thread's context, so leave reading code, diffs, logs and CI to delegates, and check their pull requests with `thread_status`. Wait on all links in one `wait_session` with `link_ids`, or end the turn: the app wakes this thread when a child finishes. Call `list_harnesses` once. Projects: `read_project` reads a folder's git remote, branch and default branch; `create_project` registers a folder (an empty one gets `git init`), `clone_project` clones a URL into a parent folder, `update_project` sets a project's display name or the harness and model new threads in it start on, and `remove_project` unregisters one without deleting any files. Scheduled work: `schedule_task` adds a prompt that runs on a cron expression or once at an ISO time, `list_scheduled_tasks`, `delete_scheduled_task` and `run_scheduled_task_now` manage what the scheduler daemon holds; the daemon is `rustcode daemon start`, and without it nothing runs. Do both only when the user asks; the user approves.";
 
-/// [`PROMPT_HINT_V10`] for version 11 clients, which can reach the other
+/// [`PROMPT_HINT_V11`] for version 12 clients, which can reach the other
 /// computers this app is paired with.
-pub const PROMPT_HINT_V11: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user, and `answer_request` answers one of those on a thread in your own tree. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, and `message_session` attaches files by path; `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. `thread_status` reports a delegate's worktree, branch, pull request and checks; `merge_when_green` merges it once green; `cleanup_worktree` removes its worktree and branch and settles it. The thread tools take another paired computer's id or name, as `list_machines` lists them, in `machine`: omitted, they act on this computer, and a remote thread's id carries its machine. Name one only when the user did. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`. `update_session`, `organize_threads`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those, answering, merge and cleanup change other threads, so do them only when the user asks; the user approves, and a card for another machine names it. Stay lean: every call resends this thread's context, so leave reading code, diffs, logs and CI to delegates, and check their pull requests with `thread_status`. Wait on all links in one `wait_session` with `link_ids`, or end the turn: the app wakes this thread when a child finishes. Call `list_harnesses` once.";
+pub const PROMPT_HINT_V12: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user, and `answer_request` answers one of those on a thread in your own tree. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, and `message_session` attaches files by path; `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. `thread_status` reports a delegate's worktree, branch, pull request and checks; `merge_when_green` merges it once green; `cleanup_worktree` removes its worktree and branch and settles it. The thread tools take another paired computer's id or name, as `list_machines` lists them, in `machine`: omitted, they act on this computer, and a remote thread's id carries its machine. Name one only when the user did. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`. `update_session`, `organize_threads`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those, answering, merge and cleanup change other threads, so do them only when the user asks; the user approves, and a card for another machine names it. Stay lean: every call resends this thread's context, so leave reading code, diffs, logs and CI to delegates, and check their pull requests with `thread_status`. Wait on all links in one `wait_session` with `link_ids`, or end the turn: the app wakes this thread when a child finishes. Call `list_harnesses` once. Projects: `read_project` reads a folder's git remote, branch and default branch; `create_project` registers a folder (an empty one gets `git init`), `clone_project` clones a URL into a parent folder, `update_project` sets a project's display name or the harness and model new threads in it start on, and `remove_project` unregisters one without deleting any files. Scheduled work: `schedule_task` adds a prompt that runs on a cron expression or once at an ISO time, `list_scheduled_tasks`, `delete_scheduled_task` and `run_scheduled_task_now` manage what the scheduler daemon holds; the daemon is `rustcode daemon start`, and without it nothing runs. Do both only when the user asks; the user approves.";
 
 /// The prompt hint a client of `version` gets.
 pub fn prompt_hint(version: u8) -> &'static str {
@@ -231,7 +258,8 @@ pub fn prompt_hint(version: u8) -> &'static str {
         8 => PROMPT_HINT_V8,
         9 => PROMPT_HINT_V9,
         10 => PROMPT_HINT_V10,
-        _ => PROMPT_HINT_V11,
+        11 => PROMPT_HINT_V11,
+        _ => PROMPT_HINT_V12,
     }
 }
 
@@ -246,6 +274,7 @@ pub fn is_tool(name: &str) -> bool {
         || V9_TOOL_NAMES.contains(&name)
         || V10_TOOL_NAMES.contains(&name)
         || V11_TOOL_NAMES.contains(&name)
+        || V12_TOOL_NAMES.contains(&name)
 }
 
 /// Whether `name` needs a version 2 client.
@@ -283,9 +312,14 @@ pub fn is_v10_tool(name: &str) -> bool {
     V10_TOOL_NAMES.contains(&name)
 }
 
-/// Whether `name` needs a version 11 client (the other paired machines).
+/// Whether `name` needs a version 11 client (projects and scheduled tasks).
 pub fn is_v11_tool(name: &str) -> bool {
     V11_TOOL_NAMES.contains(&name)
+}
+
+/// Whether `name` needs a version 12 client (the other paired machines).
+pub fn is_v12_tool(name: &str) -> bool {
+    V12_TOOL_NAMES.contains(&name)
 }
 
 /// The tools a client of `version` gets, in order.
@@ -336,9 +370,14 @@ pub fn tool_names(version: u8) -> Vec<&'static str> {
             names.extend(V10_TOOL_NAMES);
             names
         }
-        _ => {
+        11 => {
             let mut names = tool_names(10);
             names.extend(V11_TOOL_NAMES);
+            names
+        }
+        _ => {
+            let mut names = tool_names(11);
+            names.extend(V12_TOOL_NAMES);
             names
         }
     }
@@ -363,7 +402,7 @@ pub fn schema_for(name: &str, version: u8, mut schema: Value) -> Value {
             properties.remove("attachments");
         }
     }
-    // Machine targeting arrived in version 11, and leaves the schema the same way.
+    // Machine targeting arrived in version 12, and leaves the schema the same way.
     if version < MACHINE_VERSION && MACHINE_TOOL_NAMES.contains(&name) {
         if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
             properties.remove("machine");
@@ -394,7 +433,7 @@ pub fn schema_for(name: &str, version: u8, mut schema: Value) -> Value {
     schema
 }
 
-/// Whether a call tries to name a machine, which only a version 11 client can
+/// Whether a call tries to name a machine, which only a version 12 client can
 /// do: an older app would act on this computer instead.
 pub(crate) fn names_a_machine(name: &str, args: &Value) -> bool {
     MACHINE_TOOL_NAMES.contains(&name)
@@ -587,6 +626,16 @@ fn optional_title(args: &Value) -> Result<(), String> {
         Some(_) => Err(format!(
             "title must be a string of at most {MAX_TITLE_CHARS} characters"
         )),
+    }
+}
+
+/// `path`: the absolute folder of an existing project, which every project
+/// tool names.
+fn absolute_project(args: &Value) -> Result<(), String> {
+    match args.get("path") {
+        Some(Value::String(path)) if std::path::Path::new(path).is_absolute() => Ok(()),
+        Some(Value::String(_)) => Err("path must be an absolute folder".to_owned()),
+        _ => Err("path is required".to_owned()),
     }
 }
 
@@ -848,6 +897,82 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             required_name(args, "session_id")?;
             optional_flag(args, "settle")
         }
+        READ_PROJECT | REMOVE_PROJECT => absolute_project(args),
+        CREATE_PROJECT => {
+            absolute_project(args)?;
+            optional_flag(args, "init")
+        }
+        CLONE_PROJECT => {
+            required_name(args, "url")?;
+            match args.get("parent") {
+                None | Some(Value::Null) => Ok(()),
+                Some(Value::String(path)) if std::path::Path::new(path).is_absolute() => Ok(()),
+                Some(_) => Err("parent must be an absolute folder".to_owned()),
+            }?;
+            optional_name(args, "name")
+        }
+        UPDATE_PROJECT => {
+            absolute_project(args)?;
+            for key in ["name", "harness", "model"] {
+                optional_name(args, key)?;
+            }
+            if !["name", "harness", "model"]
+                .iter()
+                .any(|key| !matches!(args.get(*key), None | Some(Value::Null)))
+            {
+                return Err("give at least one of name, harness or model".to_owned());
+            }
+            Ok(())
+        }
+        SCHEDULE_TASK => {
+            bounded_text(args, "prompt")?;
+            optional_name(args, "name")?;
+            optional_name(args, "model_profile")?;
+            match args.get("project") {
+                None | Some(Value::Null) => {}
+                Some(Value::String(path)) if std::path::Path::new(path).is_absolute() => {}
+                Some(_) => return Err("project must be an absolute path".to_owned()),
+            }
+            let Some(schedule) = args.get("schedule").filter(|value| value.is_object()) else {
+                return Err("schedule is required".to_owned());
+            };
+            let Some(kind) = schedule
+                .get("kind")
+                .and_then(Value::as_str)
+                .filter(|kind| SCHEDULE_KINDS.contains(kind))
+            else {
+                return Err(format!("schedule.kind must be one of {SCHEDULE_KINDS:?}"));
+            };
+            match schedule.get("expression") {
+                None | Some(Value::Null) => {}
+                Some(Value::String(expression)) if expression.split_whitespace().count() == 5 => {}
+                Some(_) => {
+                    return Err(
+                        "schedule.expression must be a five-field cron expression".to_owned()
+                    );
+                }
+            }
+            match schedule.get("at") {
+                None | Some(Value::Null) => {}
+                Some(Value::String(at)) if chrono::DateTime::parse_from_rfc3339(at).is_ok() => {}
+                Some(_) => {
+                    return Err("schedule.at must be an ISO 8601 time with its offset".to_owned());
+                }
+            }
+            // The kind's own field is the one `schedule_spec` reads; without it the call
+            // would only fail later, as a target that stopped answering.
+            match kind {
+                "cron" if schedule.get("expression").and_then(Value::as_str).is_none() => {
+                    Err("schedule.expression is required for a cron schedule".to_owned())
+                }
+                "at" if schedule.get("at").and_then(Value::as_str).is_none() => {
+                    Err("schedule.at is required for a one-off schedule".to_owned())
+                }
+                _ => Ok(()),
+            }
+        }
+        LIST_SCHEDULED_TASKS => Ok(()),
+        DELETE_SCHEDULED_TASK | RUN_SCHEDULED_TASK_NOW => required_name(args, "id"),
         START_SESSION => {
             bounded_text(args, "prompt")?;
             optional_title(args)?;
@@ -1187,7 +1312,10 @@ mod tests {
         assert_eq!(version(json!({"rustcode": {"orchestration": 2}})), 2);
         // A newer client gets what this engine speaks.
         assert_eq!(version(json!({"rustcode": {"orchestration": 9}})), 9);
-        assert_eq!(version(json!({"rustcode": {"orchestration": 11}})), VERSION);
+        assert_eq!(version(json!({"rustcode": {"orchestration": 10}})), 10);
+        assert_eq!(version(json!({"rustcode": {"orchestration": 11}})), 11);
+        // A newer client gets what this engine speaks.
+        assert_eq!(version(json!({"rustcode": {"orchestration": 14}})), VERSION);
         assert_eq!(version(json!({"rustcode": {"preview": 1}})), 0);
         assert_eq!(client_meta_version(None), 0);
     }
@@ -1224,7 +1352,7 @@ mod tests {
 
     #[test]
     fn version_four_adds_the_data_store_tools_only_for_its_clients() {
-        assert_eq!(VERSION, 11);
+        assert_eq!(VERSION, 12);
         let v3 = tool_names(3);
         assert!(v3.iter().all(|name| !is_v4_tool(name)), "{v3:?}");
         let v4 = tool_names(4);
@@ -1244,34 +1372,60 @@ mod tests {
             tool_names(9),
             [tool_names(8), V9_TOOL_NAMES.to_vec()].concat()
         );
+        // Version 10 adds answering requests and organizing several threads.
         assert_eq!(
             tool_names(10),
             [tool_names(9), V10_TOOL_NAMES.to_vec()].concat()
         );
+        // Version 11 adds the projects and the scheduler's work.
         assert_eq!(
             tool_names(11),
             [tool_names(10), V11_TOOL_NAMES.to_vec()].concat()
         );
+        // Version 12 adds the other paired machines.
         assert_eq!(
             tool_names(12),
-            tool_names(11),
+            [tool_names(11), V12_TOOL_NAMES.to_vec()].concat()
+        );
+        assert_eq!(
+            tool_names(13),
+            tool_names(12),
             "a newer client gets what this engine speaks"
         );
+        // The hint says how to reach a machine and that omitting it stays here.
+        for said in ["list_machines", "`machine`", "this computer"] {
+            assert!(PROMPT_HINT_V12.contains(said), "{said}");
+        }
+        for name in V10_TOOL_NAMES {
+            assert!(is_tool(name) && is_v10_tool(name), "{name}");
+            assert!(
+                !is_v9_tool(name) && !tool_names(9).contains(&name),
+                "{name} is v10 only"
+            );
+            assert!(PROMPT_HINT_V10.contains(name), "{name}");
+            assert!(!PROMPT_HINT_V9.contains(name), "{name} is v10 only");
+        }
         for name in V11_TOOL_NAMES {
-            assert!(is_tool(name) && is_v11_tool(name));
-            assert!(!is_v10_tool(name) && !tool_names(10).contains(&name));
+            assert!(is_tool(name) && is_v11_tool(name), "{name}");
+            assert!(
+                !is_v10_tool(name) && !tool_names(10).contains(&name),
+                "{name} is v11 only"
+            );
             assert!(PROMPT_HINT_V11.contains(name), "{name}");
             assert!(!PROMPT_HINT_V10.contains(name), "{name} is v11 only");
         }
-        // The hint says how to reach a machine and that omitting it stays here.
-        for said in ["list_machines", "`machine`", "this computer"] {
-            assert!(PROMPT_HINT_V11.contains(said), "{said}");
+        for name in V12_TOOL_NAMES {
+            assert!(is_tool(name) && is_v12_tool(name), "{name}");
+            assert!(
+                !is_v11_tool(name) && !tool_names(11).contains(&name),
+                "{name} is v12 only"
+            );
+            assert!(PROMPT_HINT_V12.contains(name), "{name}");
+            assert!(!PROMPT_HINT_V11.contains(name), "{name} is v12 only");
         }
-        for name in V10_TOOL_NAMES {
-            assert!(is_tool(name) && is_v10_tool(name));
-            assert!(!is_v9_tool(name) && !tool_names(9).contains(&name));
-            assert!(PROMPT_HINT_V10.contains(name), "{name}");
-            assert!(!PROMPT_HINT_V9.contains(name), "{name} is v10 only");
+        // Every tool `machine` applies to is named in the v12 hint.
+        for name in MACHINE_TOOL_NAMES {
+            assert!(PROMPT_HINT_V12.contains(name), "{name} in the v12 hint");
         }
         for name in [THREAD_USAGE, QUERY_DATA] {
             assert!(is_tool(name) && is_v4_tool(name));
@@ -1322,18 +1476,28 @@ mod tests {
         assert_eq!(prompt_hint(9), PROMPT_HINT_V9);
         assert_eq!(prompt_hint(10), PROMPT_HINT_V10);
         assert_eq!(prompt_hint(11), PROMPT_HINT_V11);
+        assert_eq!(prompt_hint(12), PROMPT_HINT_V12);
         assert_eq!(prompt_hint(0), "");
         // Accounts arrived in 5: a v4 hint promises nothing it cannot do.
         assert!(!PROMPT_HINT_V4.contains("account"));
         assert!(PROMPT_HINT_V5.contains("account"));
         assert_eq!(
             client_meta_version(Some(
-                &json!({"rustcode": {"orchestration": 9}})
+                &json!({"rustcode": {"orchestration": 11}})
                     .as_object()
                     .cloned()
                     .unwrap()
             )),
-            9
+            11
+        );
+        assert_eq!(
+            client_meta_version(Some(
+                &json!({"rustcode": {"orchestration": 12}})
+                    .as_object()
+                    .cloned()
+                    .unwrap()
+            )),
+            12
         );
         assert_eq!(
             client_meta_version(Some(
@@ -1350,7 +1514,7 @@ mod tests {
         // activity read, v7 the queue control, v8 that native subagents go
         // through RustCode's tools, v9 a delegate's pull request.
 
-        let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V9);
+        let tokens = crate::network::compaction::estimate_tokens(PROMPT_HINT_V11);
         println!(
             "prompt hints: v3 {} tokens, v4 {} tokens, v5 {} tokens, v6 {} tokens, v9 {tokens} tokens",
             crate::network::compaction::estimate_tokens(PROMPT_HINT_V3),
@@ -1361,10 +1525,10 @@ mod tests {
         // v9 adds the three delegate pull-request tools, all named with their use,
         // and how an orchestrator keeps its own context small: those few lines
         // save far more than they cost on each request.
-        assert!(tokens < 540, "{tokens}");
-        // v11 is the v10 hint plus the machine sentences, still bounded.
-        let v11 = crate::network::compaction::estimate_tokens(PROMPT_HINT_V11);
-        assert!(v11 < 640, "{v11}");
+        assert!(tokens < 1000, "{tokens}");
+        // v12 is the v11 hint plus the machine sentences, still bounded.
+        let v12 = crate::network::compaction::estimate_tokens(PROMPT_HINT_V12);
+        assert!(v12 < 1150, "{v12}");
     }
 
     #[test]
@@ -1415,6 +1579,88 @@ mod tests {
             ),
             deadline
         );
+    }
+
+    #[test]
+    fn project_and_scheduled_task_arguments_are_checked() {
+        let ok = |name: &str, args: Value| validate(name, &args).is_ok();
+        assert!(ok(READ_PROJECT, json!({"path": "/abs/project"})));
+        assert!(!ok(READ_PROJECT, json!({"path": "project"})));
+        assert!(!ok(READ_PROJECT, json!({})));
+        assert!(ok(
+            CREATE_PROJECT,
+            json!({"path": "/abs/new", "init": false})
+        ));
+        assert!(!ok(
+            CREATE_PROJECT,
+            json!({"path": "/abs/new", "init": "yes"})
+        ));
+        assert!(ok(CLONE_PROJECT, json!({"url": "git@github.com:o/r.git"})));
+        assert!(ok(
+            CLONE_PROJECT,
+            json!({"url": "git@github.com:o/r.git", "parent": "/abs/code", "name": "r"})
+        ));
+        assert!(!ok(CLONE_PROJECT, json!({"url": " "})));
+        assert!(!ok(
+            CLONE_PROJECT,
+            json!({"url": "git@github.com:o/r.git", "parent": "code"})
+        ));
+        assert!(ok(
+            UPDATE_PROJECT,
+            json!({"path": "/abs/p", "name": "RustCode"})
+        ));
+        assert!(ok(
+            UPDATE_PROJECT,
+            json!({"path": "/abs/p", "model": "opus"})
+        ));
+        assert!(!ok(UPDATE_PROJECT, json!({"path": "/abs/p"})));
+        assert!(ok(REMOVE_PROJECT, json!({"path": "/abs/p"})));
+
+        let task = json!({
+            "prompt": "Check the build",
+            "schedule": {"kind": "cron", "expression": "0 9 * * 1-5", "timezone": "Europe/Oslo"},
+            "project": "/abs/project",
+        });
+        assert!(ok(SCHEDULE_TASK, task.clone()));
+        assert!(ok(
+            SCHEDULE_TASK,
+            json!({"prompt": "Once", "schedule": {"kind": "at", "at": "2026-03-04T09:30:00+01:00"}})
+        ));
+        assert!(!ok(
+            SCHEDULE_TASK,
+            json!({"schedule": task["schedule"].clone()})
+        ));
+        assert!(!ok(
+            SCHEDULE_TASK,
+            json!({"prompt": "Check", "schedule": {"kind": "daily", "hour": 9}})
+        ));
+        assert!(!ok(
+            SCHEDULE_TASK,
+            json!({"prompt": "Check", "schedule": {"kind": "cron", "expression": "0 9 * *"}})
+        ));
+        // The kind's own field is required here, not later in `create`: a cron with no
+        // expression and an `at` with no time are invalid arguments, not a dead daemon.
+        assert!(!ok(
+            SCHEDULE_TASK,
+            json!({"prompt": "Check", "schedule": {"kind": "cron", "timezone": "UTC"}})
+        ));
+        assert!(!ok(
+            SCHEDULE_TASK,
+            json!({"prompt": "Check", "schedule": {"kind": "at"}})
+        ));
+        assert!(!ok(
+            SCHEDULE_TASK,
+            json!({"prompt": "Check", "schedule": {"kind": "at", "at": "tomorrow"}})
+        ));
+        assert!(!ok(
+            SCHEDULE_TASK,
+            json!({"prompt": "Check", "schedule": {"kind": "at", "at": "2026-03-04T09:30:00+01:00"}, "project": "relative"})
+        ));
+        assert!(ok(LIST_SCHEDULED_TASKS, json!({})));
+        assert!(ok(DELETE_SCHEDULED_TASK, json!({"id": "task-1"})));
+        assert!(!ok(DELETE_SCHEDULED_TASK, json!({})));
+        assert!(ok(RUN_SCHEDULED_TASK_NOW, json!({"id": "task-1"})));
+        assert!(!ok(RUN_SCHEDULED_TASK_NOW, json!({"id": " "})));
     }
 
     #[test]
@@ -1963,13 +2209,13 @@ mod tests {
                 schema["properties"]["machine"]["type"], "string",
                 "{name} takes a machine"
             );
-            // A v10 client is not told about a field its app cannot answer.
-            let old = schema_for(name, 10, schema.clone());
-            assert!(old["properties"]["machine"].is_null(), "{name} at v10");
-            // At v11 it is there, and the fields it had stay.
-            let new = schema_for(name, 11, schema);
-            assert!(new["properties"]["machine"].is_object(), "{name} at v11");
-            assert!(PROMPT_HINT_V11.contains(name), "{name} in the hint");
+            // A v11 client is not told about a field its app cannot answer.
+            let old = schema_for(name, 11, schema.clone());
+            assert!(old["properties"]["machine"].is_null(), "{name} at v11");
+            // At v12 it is there, and the fields it had stay.
+            let new = schema_for(name, 12, schema);
+            assert!(new["properties"]["machine"].is_object(), "{name} at v12");
+            assert!(PROMPT_HINT_V12.contains(name), "{name} in the hint");
         }
         // The tools that do not act on a machine are unchanged.
         for name in [MERGE_WHEN_GREEN, CLEANUP_WORKTREE, SEARCH_SESSIONS] {
@@ -1983,26 +2229,26 @@ mod tests {
         let listed = (tool(LIST_MACHINES).schema)();
         assert!(listed["properties"]["machine"].is_null());
         // The MCP server builds its tools from the same versioned schema.
-        let mcp_v10 = crate::orchestration::mcp_server::tools(10, false);
-        let start = mcp_v10
-            .iter()
-            .find(|tool| tool["name"] == START_SESSION)
-            .expect("start_session for a v10 client");
-        assert!(start["inputSchema"]["properties"]["machine"].is_null());
-        assert!(
-            !mcp_v10.iter().any(|tool| tool["name"] == LIST_MACHINES),
-            "a v10 client never sees list_machines"
-        );
         let mcp_v11 = crate::orchestration::mcp_server::tools(11, false);
         let start = mcp_v11
             .iter()
             .find(|tool| tool["name"] == START_SESSION)
             .expect("start_session for a v11 client");
+        assert!(start["inputSchema"]["properties"]["machine"].is_null());
+        assert!(
+            !mcp_v11.iter().any(|tool| tool["name"] == LIST_MACHINES),
+            "a v11 client never sees list_machines"
+        );
+        let mcp_v12 = crate::orchestration::mcp_server::tools(12, false);
+        let start = mcp_v12
+            .iter()
+            .find(|tool| tool["name"] == START_SESSION)
+            .expect("start_session for a v12 client");
         assert!(start["inputSchema"]["properties"]["machine"].is_object());
-        let machines = mcp_v11
+        let machines = mcp_v12
             .iter()
             .find(|tool| tool["name"] == LIST_MACHINES)
-            .expect("list_machines for a v11 client");
+            .expect("list_machines for a v12 client");
         assert!(
             machines["description"]
                 .as_str()
@@ -2013,7 +2259,7 @@ mod tests {
         assert!(validate(START_SESSION, &json!({"prompt": "go", "machine": "  "})).is_err());
     }
 
-    /// A machine a v10 app would ignore is refused the same way an account a
+    /// A machine a v11 app would ignore is refused the same way an account a
     /// v4 app would ignore is, whichever side the call is made from.
     #[tokio::test]
     async fn an_older_client_cannot_act_on_another_machine() {
@@ -2021,7 +2267,7 @@ mod tests {
         let start = json!({"prompt": "go", "machine": "Studio"});
         let refused = execute_versioned(
             client(json!({"session_id": "c"})),
-            10,
+            11,
             &cancel,
             START_SESSION,
             &start,
@@ -2032,7 +2278,7 @@ mod tests {
         assert!(refused.content.contains("Nothing was sent"));
         let sent = execute_versioned(
             client(json!({"session_id": "c"})),
-            11,
+            12,
             &cancel,
             START_SESSION,
             &start,
@@ -2042,7 +2288,7 @@ mod tests {
         // The same refusal on a list, not only on a start.
         let refused = execute_versioned(
             client(json!({"sessions": []})),
-            10,
+            11,
             &cancel,
             LIST_SESSIONS,
             &json!({"machine": "Studio"}),
@@ -2050,11 +2296,11 @@ mod tests {
         .await;
         assert!(!refused.success);
         assert!(refused.content.contains("newer RustCode app"));
-        // A null is no machine, so it is not a version 11 argument.
+        // A null is no machine, so it is not a version 12 argument.
         let null = json!({"prompt": "go", "machine": null});
         let sent = execute_versioned(
             client(json!({"session_id": "c"})),
-            10,
+            11,
             &cancel,
             START_SESSION,
             &null,

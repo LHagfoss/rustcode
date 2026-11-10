@@ -44,6 +44,12 @@ export interface Machine {
   route: MachineRoute | null;
   state: MachineState;
   detail: string | null;
+  /**
+   * What to check when the machine is reachable one way and not another, e.g.
+   * the LAN works while the NetBird address does not. Set by the shell; the
+   * page may show it next to `detail`.
+   */
+  hint: string | null;
   /** Seconds until the next attempt, while it waits. */
   retryInSecs: number | null;
   addedAt: string;
@@ -213,8 +219,12 @@ export function routeLabel(route: MachineRoute | null | undefined): string {
  */
 export function machineLine(machine: Machine): string {
   switch (machine.state) {
-    case "connected":
-      return routeLabel(machine.route);
+    case "connected": {
+      const line = routeLabel(machine.route);
+      // Why another route to the same machine is not used, when the shell
+      // knows: the LAN works and NetBird does not, or the other way round.
+      return machine.hint ? `${line}. ${machine.hint}` : line;
+    }
     case "connecting":
       return `Connecting over ${routeLabel(machine.route)}`;
     case "needsPairing":
