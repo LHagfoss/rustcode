@@ -20,6 +20,8 @@ import {
   threadTurnEnded,
   wakeTick,
 } from "./host";
+import { deriveInbox } from "./inbox";
+import { badgeCount } from "./notify";
 import {
   DEFAULT_DELEGATES_PER_THREAD,
   DEFAULT_DELEGATES_TOTAL,
@@ -30,6 +32,7 @@ import {
 import { pendingRequestsOn } from "./pending";
 import { QUEUE_REASON } from "./queue";
 import {
+  type AppState,
   addHarnessAccount,
   agentHistory,
   answerConnectRequest,
@@ -130,6 +133,7 @@ import {
   shownPlan,
   showPanel,
   snoozeThread,
+  snoozeWakeEvent,
   startNewThread,
   startQueuedEdit,
   statusOf,
@@ -146,6 +150,7 @@ import {
   updateQueued,
   updateThread,
   useApp,
+  wakeSnoozed,
   windowNow,
 } from "./store";
 import { turnCompletion } from "./thread";
@@ -2835,6 +2840,158 @@ describe("engine controller with the mock engine", () => {
     await until(() => !!selected());
     // A thread never seen opens closed: nothing opens the panel on its own.
     expect(useApp.getState().panel).toBeNull();
+  });
+});
+
+describe("a thread that sleeps through its work", () => {
+  /** A thread loaded in the background (not on screen), and how a test sees the toasts it causes. */
+  const background = async () => {
+    // `resetForTests` keeps the unread marks, as other suites rely on: this one starts without them.
+    useApp.setState({ finished: {}, failed: {} });
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    const [a, b] = useApp.getState().sessions;
+    await openThread(a!.id);
+    await until(() => useApp.getState().threads[a!.id]?.loaded === true);
+    return { a: a!, b: b! };
+  };
+  const toastIds = () => new Set(useApp.getState().toasts.map((t) => t.id));
+  const toastsSince = (seen: ReadonlySet<string>) => useApp.getState().toasts.filter((t) => !seen.has(t.id));
+  /** The inbox's rows, as the sidebar and the view read them from this state. */
+  const inboxOf = (s: AppState) =>
+    deriveInbox({
+      sessions: s.sessions,
+      threads: s.threads,
+      failed: s.failed,
+      links: s.links.links,
+      archived: s.archived,
+      dismissed: s.inboxDismissed,
+      snoozed: s.snoozed,
+    });
+
+  test("a turn that fails while the thread sleeps neither wakes it nor says so", async () => {
+    const { a } = await background();
+    const seen = toastIds();
+    // The turn starts first, so the snooze is the user's wish about a thread already at work.
+    const running = runPrompt(a.id, "fail this turn");
+    snoozeThread(a.id, Date.now() + 3_600_000);
+    await running;
+    const s = useApp.getState();
+    expect(a.id in s.snoozed).toBe(true);
+    expect(toastsSince(seen)).toEqual([]);
+    // The failure is kept: the row reads Failed when the snooze is over.
+    expect(a.id in s.failed).toBe(true);
+    // Nothing counts it while it sleeps: no Dock badge, no row in Needs you.
+    expect(badgeCount(s)).toBe(0);
+    expect(inboxOf(s).some((item) => item.threadId === a.id)).toBe(false);
+    // Its time up: the row is back in the inbox, the badge counts it, and one thing is said.
+    wakeSnoozed(Date.now() + 3_600_001);
+    const woken = useApp.getState();
+    expect(woken.snoozed).toEqual({});
+    expect(badgeCount(woken)).toBe(1);
+    expect(inboxOf(woken).some((item) => item.kind === "failed" && item.threadId === a.id)).toBe(true);
+    expect(snoozeWakeEvent(a.id)).toMatchObject({ threadId: a.id, kind: "failed" });
+  });
+
+  test("a request that waits on a sleeping thread waits there", async () => {
+    const { a } = await background();
+    const seen = toastIds();
+    const running = runPrompt(a.id, "ask me a question");
+    snoozeThread(a.id, Date.now() + 3_600_000);
+    await until(() => (useApp.getState().threads[a.id]?.permissions.length ?? 0) > 0);
+    const s = useApp.getState();
+    expect(a.id in s.snoozed).toBe(true);
+    expect(toastsSince(seen)).toEqual([]);
+    // Nothing answers it for the user, and the turn stays held by the question.
+    const question = s.threads[a.id]!.permissions[0]!;
+    expect(question.question?.text).toBe("Which test runner should I use?");
+    expect(s.threads[a.id]?.running).toBe(true);
+    // The request is not a row in Needs you, nor a thread the Dock counts, until the snooze ends.
+    expect(inboxOf(s).some((item) => item.threadId === a.id)).toBe(false);
+    expect(badgeCount(s)).toBe(0);
+    // Stopping it answers the question as cancelled, which ends the turn this test left running.
+    await cancel(a.id);
+    await running;
+  });
+
+  test("a turn the app starts on a sleeping thread does not bring it back", async () => {
+    const { a } = await background();
+    const seen = toastIds();
+    setSnoozed(a.id, Date.now() + 3_600_000);
+    // A turn the app starts after a restart is not the user writing in the thread.
+    await runPrompt(a.id, "fail this turn", undefined, { automatic: true });
+    const s = useApp.getState();
+    expect(a.id in s.snoozed).toBe(true);
+    expect(toastsSince(seen)).toEqual([]);
+  });
+
+  test("a message the user writes into a working sleeper brings it back at once", async () => {
+    const { a } = await background();
+    selectThread(a.id);
+    // Long enough that the turn is still running when the message arrives: it waits in the queue.
+    const running = runPrompt(a.id, "keep working");
+    await until(() => useApp.getState().threads[a.id]?.running === true);
+    setSnoozed(a.id, Date.now() + 3_600_000);
+    expect(await submit("one more thing")).toBe(true);
+    const s = useApp.getState();
+    // The write is the user asking for it, so it does not wait for the queued row's turn.
+    expect(a.id in s.snoozed).toBe(false);
+    expect(s.threads[a.id]?.queue.length).toBe(1);
+    await cancel(a.id);
+    await running;
+    // The row this test left behind is not the next one's to start from storage.
+    updateThread(a.id, (t) => ({ ...t, queue: [] }));
+  });
+
+  test("the next message of the queue is not a new send, and lets it sleep", async () => {
+    const { a } = await background();
+    const seen = toastIds();
+    setSnoozed(a.id, Date.now() + 3_600_000);
+    // Exactly what starting the row behind a finished turn passes: typed earlier, not now.
+    await runPrompt(a.id, "fail this turn", undefined, { queued: true });
+    expect(a.id in useApp.getState().snoozed).toBe(true);
+    expect(toastsSince(seen)).toEqual([]);
+  });
+
+  test("a sleeping thread with nothing to say comes back quietly", async () => {
+    const { a } = await background();
+    const seen = toastIds();
+    setSnoozed(a.id, Date.now() - 1);
+    wakeSnoozed();
+    const s = useApp.getState();
+    expect(a.id in s.snoozed).toBe(false);
+    // Nothing happened while it slept: no unread mark is invented for it.
+    expect(a.id in s.finished).toBe(false);
+    expect(a.id in s.failed).toBe(false);
+    expect(toastsSince(seen)).toEqual([]);
+  });
+
+  test("a sleeping thread that finished comes back done, and waking twice says it once", async () => {
+    const { a } = await background();
+    const seen = toastIds();
+    setSnoozed(a.id, Date.now() - 1);
+    markFinished(a.id);
+    wakeSnoozed();
+    let s = useApp.getState();
+    expect(a.id in s.snoozed).toBe(false);
+    expect(a.id in s.finished).toBe(true);
+    expect(toastsSince(seen)).toEqual([]);
+    // One thing to say now it is back: the finish it slept through.
+    expect(snoozeWakeEvent(a.id)).toMatchObject({ threadId: a.id, kind: "finished" });
+    // Its time has come and gone: a second pass says nothing again.
+    wakeSnoozed();
+    s = useApp.getState();
+    expect(a.id in s.snoozed).toBe(false);
+  });
+
+  test("opening a sleeping thread is the user's call, and only opening it", async () => {
+    const { a } = await background();
+    setSnoozed(a.id, Date.now() + 3_600_000);
+    selectThread(a.id);
+    const s = useApp.getState();
+    expect(s.selectedId).toBe(a.id);
+    expect(s.threads[a.id]?.loaded).toBe(true);
+    expect(a.id in s.snoozed).toBe(true);
   });
 });
 

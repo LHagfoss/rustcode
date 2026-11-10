@@ -335,14 +335,44 @@ export interface Placement {
   layout: SidebarLayout;
 }
 
+/** What a folded group's dot says about the rows it hides, strongest first. */
+export type HiddenKind = "needs" | "working" | "finished";
+
+/** What one hidden row says, as the sidebar already reads it. */
+export interface HiddenRow {
+  /** A permission or a question waits on the user. */
+  needs: boolean;
+  /** Its turn runs, or it waits on work it handed out. */
+  working: boolean;
+  /** A turn finished or failed and the row was not opened (`finished`, `failed`). */
+  unseen: boolean;
+}
+
+/**
+ * The dot a folded group shows for what it hides: what needs the user first, then what works, then
+ * what came back unseen. A Snoozed shelf shows none of it: the user put those threads away, so a
+ * request, a turn at work or one that ended while they slept is not news until the snooze ends
+ * (`placeThread`, state/notify.ts `wakeEvent`). Its count alone says the shelf has rows.
+ */
+export function hiddenKind(section: SectionId, rows: readonly HiddenRow[]): HiddenKind | undefined {
+  if (section === "snoozed") return undefined;
+  if (rows.some((row) => row.needs)) return "needs";
+  if (rows.some((row) => row.working)) return "working";
+  if (rows.some((row) => row.unseen)) return "finished";
+  return undefined;
+}
+
 /**
  * The section a thread is drawn under. A settled thread never sits under Pinned, whatever it was
- * pinned as (the pin returns when it is unsettled); a thread that needs you or works stays out of
- * the shelves that would hide it.
+ * pinned as (the pin returns when it is unsettled); a thread asleep after a snooze stays in Snoozed
+ * whatever it does.
  *
  * Pinned wins over what asks you and over Working, so a pinned thread stays where the user put it
- * and says what it is doing in its chip, rather than being drawn twice. Everything that asks you
- * or works leaves Snoozed and Settled at once, and comes back when it is answered or done.
+ * and says what it is doing in its chip, rather than being drawn twice. A snoozed thread is the
+ * same bargain with the user, and a stronger one: it works in the background, waits on an approval
+ * or a question, and finishes there without coming back to the list, because its snooze is what
+ * says where it is. It comes back when its snooze ends, with the state it reached then, and
+ * everything that asks you then is drawn as it always was.
  *
  * The default layout draws one Threads list, so what works and what asks you stay in it and the
  * row's chip is the whole of either state. The shelf layout still gives Working its own shelf at
@@ -352,8 +382,9 @@ export function placeThread(p: Placement): SectionId {
   const busy = p.needs || p.working;
   if (p.settled && !busy && !p.fresh) return "settled";
   if (p.pinned) return "pinned";
+  // Asleep: nothing it does moves it out of the shelf the user put it in.
+  if (p.snoozed) return "snoozed";
   if (p.needs) return "threads";
-  if (p.snoozed && !busy) return "snoozed";
   if (p.working) return p.layout === "shelf" ? "working" : "threads";
   if ((p.settled || p.aged) && !busy && !p.fresh) return "settled";
   return "threads";

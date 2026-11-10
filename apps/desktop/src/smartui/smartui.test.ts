@@ -32,7 +32,6 @@ import {
   blockTitle,
   clampHeight,
   closeOpenTags,
-  MAX_HEIGHT,
   MAX_LIVE,
   splitReply,
   stripEmptyTags,
@@ -216,7 +215,7 @@ describe("smart ui", () => {
     expect(clampHeight(100.01)).toBe(101);
     expect(clampHeight(100)).toBe(100);
     expect(clampHeight(10)).toBe(48);
-    expect(clampHeight(5000)).toBe(720);
+    expect(clampHeight(5000)).toBe(5000);
     expect(blockTitle("<title>Runs</title><p>")).toBe("Runs");
     expect(viewMessage("  hi ")).toBe("hi");
     expect(viewMessage("x".repeat(2001))).toBeNull();
@@ -341,8 +340,11 @@ describe("smart ui", () => {
   });
 
   test("one type scale and one chart height", () => {
-    // A view past the app's clamp still scrolls, inside the body, where the app stops growing it.
-    expect(BASE_CSS).toContain(`max-height: ${MAX_HEIGHT}px; overflow-y: auto;`);
+    // A view grows to its content: the page has no body cap, so only `.rc-scroll` or the
+    // view's own CSS bounds anything.
+    expect(BASE_CSS).not.toContain("max-height: 720px");
+    expect(BASE_CSS).toContain("html { overflow: hidden; }");
+    expect(BASE_CSS).toContain(".rc-scroll { max-height: 320px; overflow: auto; }");
     expect(BASE_CSS).toContain("var(--rc-text-size-value)");
     expect(BASE_CSS).toContain("var(--rc-text-size-xs)");
     expect(BASE_CSS).toContain(".rc-chart { position: relative; height: 200px; }");

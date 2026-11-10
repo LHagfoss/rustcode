@@ -530,15 +530,7 @@ pub(crate) fn interpret_response(
     }
     out.push('.');
     if let Some(height) = number("contentHeight") {
-        out.push_str(&format!(" Content is {height} px tall"));
-        if let Some(max) = number("maxHeight")
-            && height > max
-        {
-            out.push_str(&format!(
-                ", taller than the card's {max} px, so the rest scrolls inside the card"
-            ));
-        }
-        out.push('.');
+        out.push_str(&format!(" Content is {height} px tall."));
     }
     if let Some(elements) = number("elements") {
         out.push_str(&format!(" {elements} elements."));
@@ -750,7 +742,6 @@ mod tests {
             "title": "Slowest tests",
             "width": 360,
             "contentHeight": 900,
-            "maxHeight": 720,
             "elements": 42,
             "errors": ["TypeError: rows is undefined"],
             "image": {"data": png_base64(), "mimeType": "image/png"},
@@ -760,7 +751,7 @@ mod tests {
         assert_eq!(image, Some(PathBuf::from("/tmp/shot.png")));
         assert!(output.content.contains("\"Slowest tests\""));
         assert!(output.content.contains("360 px"));
-        assert!(output.content.contains("taller than the card's 720 px"));
+        assert!(output.content.contains("Content is 900 px tall."));
         assert!(output.content.contains("42 elements"));
         assert!(output.content.contains("TypeError: rows is undefined"));
         assert_eq!(

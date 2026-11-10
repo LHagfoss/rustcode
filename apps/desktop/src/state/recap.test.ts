@@ -74,4 +74,16 @@ describe("the recap", () => {
     });
     expect(recap.failed[0]!.title).toBe("Pricing page, renamed");
   });
+
+  test("a thread that slept through its finish is not in the card yet", () => {
+    const recap = recapOf({
+      since,
+      items: [],
+      finished: { one: NOW - 30 * 60_000, two: NOW - HOUR },
+      sessions,
+      threads: {},
+      snoozed: { one: NOW + HOUR },
+    });
+    expect(recap.done.map((row) => row.threadId)).toEqual(["two"]);
+  });
 });

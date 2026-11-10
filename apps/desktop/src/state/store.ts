@@ -162,7 +162,7 @@ import type { InboxItem } from "./inbox";
 import { dismissRows, type InboxDismissals, restoreRows } from "./inboxDismissed";
 import { LIMIT_RESUME_TEXT, type LimitWait, limitReset, nextWait, waitDue, waitHolds } from "./limitResume";
 import { newThreadAccountOn, type SignedOutLogins, signedOutFrom } from "./logins";
-import { notifyThread, startNotifications } from "./notify";
+import { type NotifyEvent, notifyThread, startNotifications, wakeEvent } from "./notify";
 import {
   CAPABILITY_VERSION,
   DEFAULT_DELEGATES_PER_THREAD,
@@ -1431,8 +1431,11 @@ async function handleInbound(message: Inbound) {
         // Its links stop their work clock while the user decides (state/delegates.ts).
         linkWaitStarted(request.sessionId);
         // The inbox is the screen that lists this request already: a toast there would
-        // stack over its own first rows. Other toasts (copied, finished) still show.
-        if (request.sessionId !== get().selectedId && get().view.kind !== "inbox") {
+        // stack over its own first rows. Other toasts (copied, finished) still show. A thread the
+        // user snoozed says nothing either: the request waits there until the snooze ends, and the
+        // inbox and the badge leave it out until then (state/inbox.ts, state/notify.ts).
+        const asleep = request.sessionId in get().snoozed;
+        if (!asleep && request.sessionId !== get().selectedId && get().view.kind !== "inbox") {
           toast(request.question ? "A thread has a question" : "A thread needs approval", "info");
         }
         // The system says the same, so a thread waiting behind another window is not forgotten.
@@ -1580,6 +1583,10 @@ export async function refreshSessions(): Promise<void> {
 
 /**
  * A turn ended: flag the thread unless you are looking at it. The row says Done (or Failed) until you open the thread.
+ *
+ * A thread that sleeps after a snooze is marked all the same — the row reads Done or Failed when its
+ * snooze ends — but nothing is said about it now: the notification gate keeps quiet for a sleeping
+ * thread, and `wakeSnoozed` says its one thing then.
  */
 export function markFinished(id: string, now = Date.now(), failed = false) {
   const looking = get().selectedId === id && typeof document !== "undefined" && document.hasFocus();
@@ -1630,6 +1637,16 @@ export function setSnoozed(id: string, at: number | null) {
 }
 
 /**
+ * The user wrote in this thread, so a snoozed one comes back now (`submit`, `steerOrSubmit`):
+ * writing in a thread is what asks for it, whichever way the message goes out — its own turn, the
+ * queue behind a running one, or a steer into it. A message the app sends instead is not a write
+ * and leaves the snooze alone (`runPrompt`).
+ */
+function wakeOnWrite(id: string) {
+  if (id in get().snoozed) setSnoozed(id, null);
+}
+
+/**
  * Snoozes a thread because the user asked — the sidebar's menu, the command
  * palette, the custom dialog — or wakes one with `null`.
  *
@@ -1651,13 +1668,36 @@ export function askCustomSnooze(id: string | null) {
   set({ snoozeAsk: id });
 }
 
-/** Bring back the threads whose time has come, each marked unread so it is noticed. */
+/**
+ * What a thread that slept has to say now its snooze is over: one thing at most, when it waits on
+ * the user (an approval or a question) or its last turn ended unseen. Null for a thread with
+ * nothing new, which simply takes its place in the list again.
+ */
+export function snoozeWakeEvent(id: string): NotifyEvent | null {
+  const s = get();
+  return wakeEvent({
+    threadId: id,
+    title: threadName(id),
+    request: s.threads[id]?.permissions[0],
+    finishedAt: s.finished[id],
+    failedAt: s.failed[id],
+    // The same read `markFinished` makes: a delegate's own ending is its parent's news, not a
+    // notification of its own with a row the user cannot find.
+    delegated: linksOf(s.links, id).drivenBy !== undefined && s.messaged[id] === undefined,
+  });
+}
+
+/**
+ * Brings back the threads whose time has come, quietly. Nothing a sleeping thread did reached the
+ * list, the badge, the inbox or a notification (state/notify.ts, state/inbox.ts, state/sidebarRows.ts),
+ * so this is where it is heard once: a request that waits or a turn that ended unseen says itself, at
+ * most one thing, and a thread with nothing to say just returns with the state it reached.
+ */
 export function wakeSnoozed(now = Date.now()) {
   for (const id of dueSnoozes(get().snoozed, now)) {
     setSnoozed(id, null);
-    markUnread(id);
-    const title = get().sessions.find((s) => s.id === id)?.title || "A thread";
-    toast(`“${title}” is back`, "info");
+    const event = snoozeWakeEvent(id);
+    if (event) notifyThread(event, get());
   }
 }
 
@@ -2644,7 +2684,11 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
     } else void go();
     return true;
   }
-  if (trimmed !== "/fork" || hasExtras(extras)) unsettleThreads([id], { quiet: true });
+  if (trimmed !== "/fork" || hasExtras(extras)) {
+    unsettleThreads([id], { quiet: true });
+    // Its message may wait behind the running turn: the thread comes back all the same.
+    wakeOnWrite(id);
+  }
   if (thread.running) {
     updateThread(id, (t) => ({
       ...t,
@@ -2754,6 +2798,9 @@ export async function steerOrSubmit(text: string, extras: ComposeExtras = emptyE
     return submit(text, extras);
   }
   unsettleThreads([id], { quiet: true });
+  // A steer or a queued row leaves no turn of its own behind to read the snooze: it is the user
+  // writing in the thread, so the thread comes back here (`submit` does the same).
+  wakeOnWrite(id);
   const verdict = sendDecisionFor(thread, extras);
   if (verdict.action === "steer" && (await steer(id, text, extras))) return true;
   if (verdict.action === "interruptRestart") return restartWith(id, text, extras);
@@ -3059,6 +3106,12 @@ export async function runPrompt(
      */
     continued?: boolean;
     /**
+     * The next message of a thread's queue, started because the turn before it ended: work the user
+     * already sent, so starting it is not a new send and does not bring a snoozed thread back
+     * (`state/store.ts` `wakeOnWrite`). Unlike `continued`, it is the user's turn in every other way.
+     */
+    queued?: boolean;
+    /**
      * The thread was made for this message, and the new-thread screen already shows its row
      * (`state/setup.ts`): it does not fly in when the thread takes the screen over.
      */
@@ -3108,6 +3161,12 @@ export async function runPrompt(
   // that just ran would let a harness whose compaction left the context over the threshold compact
   // and continue for ever.
   if (!options.autoCompact && !options.continued) beginAutoCompactIdle(id);
+  // Writing in a thread brings it back from a snooze, as it always has: that is the user asking for
+  // it (`submit` and `steerOrSubmit` have already done it for a message they took). A turn the app
+  // starts — a delegate's wake, a resume after a restart, the next row of the queue (`queued`), the
+  // turn after a usage limit — is not a new send and leaves the snooze alone, so a sleeping thread
+  // keeps working in the background without coming back to the list.
+  if (userTypedPrompt(options) && !options.queued) wakeOnWrite(id);
   const startIndex = thread?.items.length ?? 0;
   if (options.link) linkStarted(options.link);
   // The turn a restart resumes this thread with answers the links the quit severed: they work again
@@ -3116,7 +3175,6 @@ export async function runPrompt(
   // A queued wake reports its links now, as its turn starts: late enough that a restart before this
   // point brings the wake back, early enough that nothing in the turn reports it again.
   if (options.wake && options.wakeLinks?.length) wakeDelivered(options.wakeLinks, options.wakeAsking ?? []);
-  if (!options.autoCompact && id in get().snoozed) setSnoozed(id, null);
   // The message the transcript shows: the command, links and typed text, with each long paste back
   // where it was pasted. The prompt's blocks say the same thing (below).
   const shown = composedText(text, extras);
@@ -3232,7 +3290,10 @@ export async function runPrompt(
     !options.autoCompact &&
     !options.continued &&
     (outcome === "completed" || outcome === "failed") &&
-    id !== get().selectedId
+    id !== get().selectedId &&
+    // A thread the user snoozed says nothing: its finish waits for the snooze to end, which then
+    // says it once (state/store.ts `wakeSnoozed`).
+    !(id in get().snoozed)
   ) {
     const name = get().sessions.find((s) => s.id === id)?.title || "A thread";
     // A delegate finishing is already said twice: the wake message into its parent's transcript and
@@ -3266,6 +3327,8 @@ export async function runPrompt(
       wakeLinks: next.wakeLinks,
       wakeAsking: next.wakeAsking,
       automatic: next.resume !== undefined,
+      // The row was typed before this turn: starting it is not a new send (`runPrompt` above).
+      queued: true,
     });
   }
   if (outcome === "completed" && !options.continued) scheduleAutoCompact(id);
