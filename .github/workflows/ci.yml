@@ -191,11 +191,14 @@ jobs:
 
             - name: Install bubblewrap
               if: env.AFFECTED_PACKAGES != ''
-              # The sandbox-gated tests skip themselves without bubblewrap, so
-              # an unreachable Ubuntu mirror warns instead of failing the job.
+              # The sandbox tests need bubblewrap. When the runner's Azure Ubuntu
+              # mirror cannot be reached, retry once against archive.ubuntu.com.
               run: |
-                  if ! { sudo apt-get update && sudo apt-get install --no-install-recommends -y bubblewrap; }; then
-                      echo "::warning::bubblewrap could not be installed; sandbox-gated tests will skip"
+                  install_bwrap() { sudo apt-get update && sudo apt-get install --no-install-recommends -y bubblewrap; }
+                  if ! install_bwrap; then
+                      echo "::warning::the runner's Ubuntu mirror failed; retrying with archive.ubuntu.com"
+                      echo "http://archive.ubuntu.com/ubuntu/" | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+                      install_bwrap
                   fi
 
             - name: Run tests
