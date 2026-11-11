@@ -8,6 +8,7 @@
 // say more than their middle.
 
 import { clip } from "./clip";
+import { basename, dirname, isInside, normalize } from "./paths";
 
 /** Where a folder was seen: a thread's folder, its worktree, and when that thread last ran. */
 export interface FolderSource {
@@ -31,7 +32,7 @@ export interface FolderRow {
  * Worktrees the app cuts itself live under this root, one folder per repo and one per branch, so
  * their repo is readable from the path even when the thread says nothing about it.
  */
-const WORKTREE_ROOT = /\/\.config\/rustcode\/worktrees\/([^/]+)\/([^/]+)$/;
+const WORKTREE_ROOT = /(?:\/\.config|\/AppData\/Roaming)\/rustcode\/worktrees\/([^/]+)\/([^/]+)$/i;
 
 /** A home folder: a place projects live, never a project, whatever is inside it. */
 const HOME_FOLDER = /^(?:\/(?:Users|home)\/[^/]+|[A-Za-z]:[\\/]Users[\\/][^\\/]+)$/;
@@ -65,21 +66,17 @@ const WORKTREE_ROWS = 3;
 
 /** The last segment, which is what a folder is called. */
 function nameOf(path: string): string {
-  const parts = path.split("/").filter(Boolean);
-  return parts[parts.length - 1] ?? path;
+  return basename(path) || path;
 }
 
 /** Whether `parent` holds `child` at some depth (a folder is not its own container). */
 function holds(parent: string, child: string): boolean {
-  if (parent === child) return false;
-  if (parent === "/") return child.startsWith("/");
-  return child.startsWith(`${parent}/`);
+  return isInside(child, parent) && !isInside(parent, child);
 }
 
-/** The folder a path sits in: `/Users/ada/code` is in `/Users/ada`, which is in `/`. */
+/** The folder a path sits in. */
 function parentOf(path: string): string {
-  const at = path.lastIndexOf("/");
-  return at > 0 ? path.slice(0, at) : "/";
+  return dirname(path);
 }
 
 /**
@@ -90,8 +87,8 @@ function parentOf(path: string): string {
  * (`rustcode` and `rustcode/apps/desktop/src-tauri`).
  */
 function isPlace(path: string, projects: readonly string[]): boolean {
-  if (path === "/") return true;
-  if (HOME_FOLDER.test(path)) return true;
+  if (dirname(path) === normalize(path)) return true;
+  if (HOME_FOLDER.test(normalize(path))) return true;
   if (!CONTAINER_NAMES.has(nameOf(path).toLowerCase())) return false;
   // A container only groups the projects under it when it is itself in a place: a folder called
   // `desktop` or `src` deep inside a project is that project's own business.
@@ -100,7 +97,7 @@ function isPlace(path: string, projects: readonly string[]): boolean {
 
 /** The repo a worktree path names, when the app cut it (`<root>/<repo>/<branch>`). */
 function cutFrom(path: string): { repo: string; branch: string } | undefined {
-  const at = WORKTREE_ROOT.exec(path);
+  const at = WORKTREE_ROOT.exec(normalize(path).replace(/\\/g, "/"));
   return at ? { repo: at[1]!, branch: at[2]! } : undefined;
 }
 
@@ -257,8 +254,9 @@ export function middleEllipsis(path: string, max: number): string {
   const tail = Math.ceil(room * 0.55);
   const head = clip(path, Math.max(1, room - tail));
   const start = path.length - tail;
-  // Start the tail on a `/` when one lands in it, so it reads as folders, not letters.
-  const at = path.indexOf("/", start);
+  // Start the tail on a separator when one lands in it, so it reads as folders, not letters.
+  const offset = path.slice(start).search(/[\\/]/);
+  const at = offset < 0 ? -1 : start + offset;
   const from = at > 0 && at < path.length - 1 ? at : start;
   return `${head}…${path.slice(from)}`;
 }

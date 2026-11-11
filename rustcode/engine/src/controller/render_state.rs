@@ -383,7 +383,7 @@ pub fn render_state(state: &AppState) -> RenderState {
         api_base_url: state.api_base_url.clone(),
         active_session_id: state.active_session_id.clone(),
         cwd_and_branch: state.cwd_and_branch.clone(),
-        home_path: std::env::var("HOME").ok(),
+        home_path: crate::home::home_dir().map(|home| home.to_string_lossy().into_owned()),
         active_context_window: state.active_context_window(),
         active_model_profile: state.active_model_profile(),
         active_tool_protocol: state.active_tool_protocol(),

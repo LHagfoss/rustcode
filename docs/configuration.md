@@ -133,6 +133,14 @@ api_protocol = "responses"
 tool_protocol = "apinative"
 ```
 
+`env_key` is the *name* of the environment variable that holds the key, never
+the key itself. A value that is not a variable name (a pasted `omlx-…` key, or
+one containing `-`, `:`, `=`, `.` or spaces) is rejected with a warning that
+names the profile, so the profile keeps working through `api_key` or
+`credential`. Setting `env_key` to the same value as `api_key` stores the
+secret twice: `rustcode doctor` reports it and loading the configuration warns
+about it. Neither message ever includes the value.
+
 OpenCode's temporary free models are restricted by OpenCode's service to the
 OpenCode client session. RustCode does not bypass that restriction; use a paid
 Zen model and valid billing/API credentials for this provider profile.

@@ -577,6 +577,18 @@ they finish or ask, instead of having to poll with sleeps.
   `link_id`, and that the message is the notification. A child that was
   stopped, or interrupted and left interrupted, is no result to wait for:
   nothing ever reports it, so it does not hold its parent back.
+- **A delegate on another machine whose channel goes.** The prompt request that
+  ran a remote turn dies with its machine's connection; the turn there does
+  not. Nothing is settled from the rows that had arrived — a half-written
+  answer is not an answer — so the links keep working and the machine is asked
+  how the thread ended once its channel is back (`state/store.ts`
+  `lostTurn`): a turn still running there is followed, and its rows and answer
+  are read through a reload of the thread (`openThread`'s replay) when the
+  machine reports it stopped; a thread that is idle settles `done` with its
+  last turn's answer, or `failed` with the error it ended in. A machine that
+  stays unreachable for two minutes (`LOST_MACHINE_MS`) fails the links with
+  `MACHINE_LOST_TURN`, the sentence the thread's own row carries. A `Failed`
+  row is the turn's own failure, never a channel that blinked.
 - **After a restart.** A restart resumes the threads it cut off
   (`state/store.ts` `resumeInterrupted`), and the resume is what answers the
   links the quit severed: it is tied to that one turn, never to a turn that
@@ -1081,8 +1093,8 @@ is the follow-up (§10, phases 3.1 and 3.2).
 
 | Tool | With `machine` |
 | --- | --- |
-| `list_machines` | This computer (`current: true`) and each paired machine: `{ id, name, platform, state, route?, last_connected?, harnesses, projects }`. `harnesses` is that machine's list (`[{ id, name, available }]`), `projects` its project names |
-| `start_session`, `fan_out` | Start on that machine, in its project. `harness`, `model`, `effort` and `account` are that machine's own (never this app's logins or remembered choices). `project` is an absolute path there; without it, the caller's path when the machine has it, else a folder with the same project name, else its only project; otherwise the error lists what it has |
+| `list_machines` | This computer (`current: true`) and each paired machine: `{ id, name, platform, state, route?, last_connected?, harnesses, projects }`. `harnesses` is that machine's list (`[{ id, name, available }]`). `projects` is its project names: the folders its threads really run in, never the home folder or root its engine lists for a thread that recorded none, and never two spellings of one folder (Windows' `\\?\` prefix is dropped, issue 3425) |
+| `start_session`, `fan_out` | Start on that machine, in its project. `harness`, `model`, `effort` and `account` are that machine's own (never this app's logins or remembered choices). `project` is an absolute path there; without it, the caller's path when the machine has it, else a folder with the same project name, else its only project; otherwise the error lists what it has, and a machine with none is refused with a hint to pass the path. A thread never starts in `/` or the app's install folder (issue 3425) |
 | `list_harnesses` | That machine's harnesses, models and named accounts, without this app's plan numbers |
 | `list_projects`, `list_sessions` | That machine's projects or threads. Its folders are not this one's, so its threads are listed whether or not they share this project |
 | `read_session`, `message_session`, `interrupt_session` | On that machine's thread. A machine's threads are not narrowed to the caller's project: the user named the machine, and the approval card is the gate. A thread the caller started on a machine is reachable even when `machine` is omitted |
@@ -1134,6 +1146,19 @@ Limits of v1, and what is left:
 The app advertises 12 from `CAPABILITY_VERSION` (`state/orchestration.ts`);
 a v11 app keeps exactly the v11 set and `PROMPT_HINT_V11`, and this engine
 refuses `machine` from it rather than acting on the wrong computer.
+
+## Orchestration tools v14
+
+`message_session` reaches a thread in any project through the existing user
+approval policy. The approval card names the target project when it differs.
+With `steer: true`, a running target receives input mid-turn when its harness
+supports it; otherwise the message queues. An idle target starts a turn.
+The result's `delivered` is `steered`, `queued` or `started`.
+`manage_queue` can list and change only the caller's own queued messages,
+also across projects; changes use the same approval grant as messaging.
+Older clients are not offered `steer` and calls carrying it are refused with
+an instruction to upgrade. Existing chain, delegate, mailbox and machine
+routing rules still apply. No new tools are added in v14.
 
 ## Orchestration tools v13
 
@@ -1212,13 +1237,13 @@ enough for the newest version again (57 KiB, room to spare after #3376), and
 `the_orchestration_tools_fit_the_hard_cap` loops every version and fails if
 one loses a tool or the newest has no room for the next.
 
-The app advertises 14 from `CAPABILITY_VERSION` (`state/orchestration.ts`); a
-v12 app keeps exactly the v12 set and `PROMPT_HINT_V12`, and a v13 app keeps
-its exact set and `PROMPT_HINT_V13`.
+The app advertises 15 from `CAPABILITY_VERSION` (`state/orchestration.ts`); a
+v12 app keeps exactly the v12 set and `PROMPT_HINT_V12`, a v13 app its exact
+set and `PROMPT_HINT_V13`, and a v14 app `PROMPT_HINT_V14`.
 
-## Orchestration v14: a thread of the user's own
+## Orchestration v15: a thread of the user's own
 
-Built. Version 14 adds no tool: it adds `standalone` to `start_session` and
+Built. Version 15 adds no tool: it adds `standalone` to `start_session` and
 `fan_out`, because those two could only ever start a delegate — a child nested
 under the calling thread, whose answer is delivered back and who is settled
 with its parent. When the user asks an orchestrator for "a brand new thread",
@@ -1235,10 +1260,10 @@ the `From thread …` header or the delegate report a child gets. The approval
 card says **New thread** rather than **Delegate**, and the grant key is the
 same `start`/`start:‹project›`.
 
-A client below 14 is never shown the argument and has a call that carries one
+A client below 15 is never shown the argument and has a call that carries one
 refused (`start_session with standalone needs a newer RustCode app`), so an
 older app cannot file the thread under the caller and then wait for an answer
-that never comes. `PROMPT_HINT_V14` teaches it to a v14 orchestrator.
+that never comes. `PROMPT_HINT_V15` teaches it to a v15 orchestrator.
 
 
 
@@ -1262,8 +1287,9 @@ v3 app is never offered `thread_usage` or `query_data`, which it could not
 answer, a v5 app is never offered `read_activity`, a v6 app is never offered
 `manage_queue`, a v9 app is never offered `answer_request` or
 `organize_threads` nor told that `message_session` takes `attachments`, and a
-v12 app is never offered the v13 worktree pair, and a v13 app is never told
-`start_session` or `fan_out` takes `standalone`.
+v12 app is never offered the v13 worktree pair, a v13 app is never told
+`message_session` takes `steer`, and a v14 app is never told `start_session` or
+`fan_out` takes `standalone`.
 
 While the user has Smart UI on, the same environment carries
 `RUSTCODE_SMART_UI=1` and the server also lists **`smart_ui_check`**
@@ -1325,12 +1351,13 @@ can inject the server (unix), and in a thread's answer whether it did.
 engine does both); a thread's answer sets `checkpoints` to whether its cwd is
 in a git repository. `initialize` also advertises `_meta.rustcode.worktrees`,
 `checkpoints` and `threadStatus` (each `1`). The app advertises
-`_meta.rustcode.orchestration = 14` while threads may orchestrate
+`_meta.rustcode.orchestration = 15` while threads may orchestrate
 (`state/orchestration.ts` `CAPABILITY_VERSION`), and the newest client gets the
 v4 data-store tools, the v6 activity read, the v7 queue control, the v9
 delegate pull-request tools, v10's `answer_request` and `organize_threads`, the
 v11 project and scheduled-task tools, the v12 machine tools and the v13 worktree
-pair, plus the v14 standalone argument; v8 adds no tool, only its prompt hint.
+pair, plus the v14 mid-turn `steer` and the v15 standalone argument; v8 adds
+no tool, only its prompt hint.
 
 ## Keeping an orchestrator's context small
 
@@ -1339,7 +1366,7 @@ reads costs again on each later call. In measured Opus orchestrator threads,
 most of that context came from the orchestrator reading diffs, files and logs
 itself, then from delegates' final answers. Four things keep it small:
 
-- The version 10, 11, 12, 13 and 14 hints tell the orchestrator to leave reading,
+- The version 10 through 15 hints tell the orchestrator to leave reading,
   reviews and CI triage to delegates, check pull requests with `thread_status`,
   wait on all links in one long `wait_session` (or end the turn and be woken),
   and call `list_harnesses` once. Version 13 adds where worktrees stand

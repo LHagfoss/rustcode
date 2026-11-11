@@ -1,5 +1,6 @@
 import { setTabMovesFocus, tabMovesFocus } from "../lib/focusModality";
-import { currentPlatform } from "../lib/platform";
+import { dirname } from "../lib/paths";
+import { appPlatform, currentPlatform } from "../lib/platform";
 // Settings, a full panel inside the window: the shell stays mounted behind it,
 // hidden and inert, so closing Settings shows the thread exactly where it was.
 // A grouped nav on the left searches every row's title and keywords
@@ -341,17 +342,17 @@ function GeneralPage() {
           </ScopedValue>
         </Row>
         <Row
-          title="Continue threads when a usage limit resets"
+          title="Continue threads on their own"
           reset={
             afterLimit.mixed || !afterLimitValue
               ? () => void afterLimit.set(SETTINGS_DEFAULTS.continueAfterLimit)
               : undefined
           }
-          subtitle="A thread stopped by its plan's limit is sent “Continue where you left off” when the limit resets, unless you have moved it to another harness or account, or sent it something else."
+          subtitle="A thread stopped by its plan's limit, by a provider that was overloaded, or by the network dropping is told to carry on once it can go on again, unless you have moved it to another harness or account, or sent it something else."
         >
           <ScopedValue mixed={afterLimit.mixed} breakdown={afterLimit.breakdown}>
             <Switch
-              label="Continue threads when a usage limit resets"
+              label="Continue threads on their own"
               checked={afterLimitValue}
               onChange={(value) => void afterLimit.set(value)}
             />
@@ -800,6 +801,7 @@ function OrchestrationGroup() {
 interface Connections {
   github?: {
     cliInstalled: boolean;
+    installHint?: string;
     accounts: { host: string; login: string; active: boolean; valid: boolean }[];
     error?: string;
   };
@@ -813,6 +815,7 @@ const parseConnections = (v: Json): Connections => {
     github: gh
       ? {
           cliInstalled: bool(gh.cliInstalled) ?? false,
+          installHint: str(gh.installHint),
           accounts: arr(gh.accounts).map((a) => {
             const o = obj(a) ?? {};
             return {
@@ -869,7 +872,14 @@ function ConnectionsPage() {
       <SettingsScopeBar machineOnly />
       <Group title="GitHub" footer="RustCode uses the GitHub CLI's sign-in for pull requests.">
         {!data.github?.cliInstalled ? (
-          <Row title="GitHub CLI not installed" subtitle="Install it with: brew install gh" />
+          <Row
+            title="GitHub CLI not installed"
+            subtitle={
+              data.github?.installHint
+                ? `Install it with: ${data.github.installHint}`
+                : "Install GitHub CLI: https://cli.github.com"
+            }
+          />
         ) : data.github.accounts.length ? (
           data.github.accounts.map((a) => (
             <Row key={`${a.host}/${a.login}`} title={a.login} subtitle={a.host}>
@@ -1040,9 +1050,12 @@ function AppearancePage() {
   const supported = useApp((s) => s.features.themes);
   const [creating, setCreating] = useState(false);
   const themes = snapshot?.themes.length ? snapshot.themes : BUILTIN_THEMES;
-  const userDir =
-    themes.find((t) => t.source === "user" && t.path)?.path?.replace(/\/[^/]+$/, "") ??
-    "~/.config/rustcode/themes";
+  const userPath = themes.find((t) => t.source === "user" && t.path)?.path;
+  const userDir = userPath
+    ? dirname(userPath)
+    : appPlatform() === "windows"
+      ? "%APPDATA%\\rustcode\\themes"
+      : "~/.config/rustcode/themes";
   return (
     <>
       <Group title="Sidebar">

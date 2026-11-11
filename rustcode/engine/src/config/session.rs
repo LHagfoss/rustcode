@@ -7,7 +7,7 @@ pub use rustcode_session::{
 };
 use sha2::Digest;
 use std::collections::HashMap;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -54,14 +54,7 @@ fn archive_history_prefix_at(root: &Path, history: &[ChatMessage]) -> Result<Str
     let (temporary, mut file) = loop {
         let sequence = NEXT_HISTORY_ARCHIVE_TEMP.fetch_add(1, Ordering::Relaxed);
         let path = root.join(format!(".{digest}-{}-{sequence}.tmp", std::process::id()));
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        match options.open(&path) {
+        match crate::daemon::private_files::create_private_new(&path) {
             Ok(file) => break (path, file),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
@@ -107,12 +100,10 @@ fn validate_history_archive(
             path.display()
         ));
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-            .map_err(|error| format!("cannot secure existing history archive: {error}"))?;
-    }
+    let file = fs::File::open(path)
+        .map_err(|error| format!("cannot open existing history archive: {error}"))?;
+    crate::daemon::private_files::protect_private_file(path, &file)
+        .map_err(|error| format!("cannot secure existing history archive: {error}"))?;
     Ok(path.to_string_lossy().into_owned())
 }
 

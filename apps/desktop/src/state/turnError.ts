@@ -76,19 +76,86 @@ function messageOf(body: Body): string | undefined {
   );
 }
 
-/** The HTTP status in the body (`status`, `status_code`, `error.code`) or the text before it. */
-function statusIn(body: Body | undefined, before: string): number | undefined {
+/** The HTTP status a provider body carries (`status`, `status_code`, `error.code`), if any. */
+function statusInBody(body: Body | undefined): number | undefined {
   const inner = isBody(body?.error) ? (body.error as Body) : undefined;
   for (const value of [body?.status, body?.status_code, body?.statusCode, inner?.status, inner?.code]) {
     if (isStatus(value)) return value;
     if (typeof value === "string" && /^[45]\d\d$/.test(value)) return Number(value);
   }
+  return undefined;
+}
+
+/** The HTTP status in the body, or written before it (`HTTP 400`, `400 Bad Request`, `API Error: 429 {…}`). */
+function statusIn(body: Body | undefined, before: string): number | undefined {
+  const inBody = statusInBody(body);
+  if (inBody !== undefined) return inBody;
   // `HTTP 400`, `status: 400`, `400 Bad Request`, or a bare code just before the body (`API Error: 429 {…}`).
   const match =
     /\b(?:HTTP|status)(?:\s+code)?\s*:?\s*([45]\d\d)\b/i.exec(before) ??
     /\b([45]\d\d)\s+[A-Z][a-z]/.exec(before) ??
     /(?:^|[\s:])([45]\d\d)\s*$/.exec(before);
   return match ? Number(match[1]) : undefined;
+}
+
+/** A status written as a status (`API Error: 529`, `503 Service Unavailable`), never a port or a count. */
+const NAMES_ITS_STATUS = /\b(?:http|status|code|error)\b\s*:?\s*([45]\d\d)\b/i;
+const WITH_REASON_PHRASE = /\b([45]\d\d)\s+[A-Z][a-z]/;
+
+/**
+ * The HTTP status a failure names (`HTTP 400`, `API Error: 529 {…}`, `503 Service
+ * Unavailable`), or one its provider body carries, or undefined when it names none.
+ * A bare number at the end of a message is not read: that is a port or a count.
+ */
+export function failureStatus(raw: string): number | undefined {
+  const text = raw.trim();
+  const json = jsonIn(text);
+  const body = json?.body;
+  const before = json?.before ?? text;
+  const message = body ? messageOf(body) : undefined;
+  const named = NAMES_ITS_STATUS.exec(before) ?? WITH_REASON_PHRASE.exec(before);
+  return (
+    statusInBody(body) ??
+    (named ? Number(named[1]) : undefined) ??
+    (message ? statusOfReason(message) : undefined)
+  );
+}
+
+// The machine could not reach its provider at all: no status came back, because no
+// answer came back. Claude Code says `Can't reach the API server`, Codex `stream
+// disconnected before completion: error sending request`, Pi `fetch failed`.
+const SAYS_NO_NETWORK = [
+  /\bcan'?t reach the (?:api|model) server\b/i,
+  /\bcannot reach the (?:api|model) server\b/i,
+  /\bunable to (?:reach|connect to) the (?:api|model) server\b/i,
+  /\bfetch failed\b/i,
+  /\bfailed to fetch\b/i,
+  /\bnetwork (?:error|unreachable|connection (?:lost|failed|was lost))\b/i,
+  /\bno internet\b/i,
+  /\boffline\b/i,
+  /\bconnection (?:error|refused|reset|closed|aborted|lost|failed|timed out|timeout)\b/i,
+  // A connection the turn needed that never opened: a provider or host, not the thread's own tools.
+  /\b(?:failed|could not|couldn'?t|unable|cannot) (?:to )?connect (?:to )?(?:the )?(?:api|model|provider|server|upstream|host|anthropic|openai|google|gemini)\b/i,
+  /\berror sending request\b/i,
+  /\bstream disconnected before completion\b/i,
+  /\bupstream connect error\b/i,
+  /\bsocket hang up\b/i,
+  /\bdns (?:error|lookup failed|resolution failed|name resolution)\b/i,
+  /\b(?:enotfound|econnrefused|econnreset|etimedout|eai_again|enetunreach|ehostunreach|ehostdown|epipe)\b/i,
+];
+
+/**
+ * Whether a failed turn failed because the machine had no network: the wording a
+ * harness uses when no answer came back at all. A provider that answered, a
+ * rejected key, a rate limit, an overload or a spend limit all came over the wire,
+ * so none of them is this.
+ */
+export function networkFailure(raw: string | undefined): boolean {
+  const text = raw?.trim();
+  if (!text || text.length > 4_000) return false;
+  // A status means the provider (or its proxy) answered: the wire was up.
+  if (failureStatus(text) !== undefined) return false;
+  return SAYS_NO_NETWORK.some((pattern) => pattern.test(text));
 }
 
 /**

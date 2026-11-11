@@ -43,6 +43,26 @@ impl Ptys {
 
 const MAX_SESSIONS: usize = 8;
 
+/// Inject lookups so every platform's policy can be tested on any host.
+fn shell_command(
+    os: &str,
+    env: impl Fn(&str) -> Option<String>,
+    on_path: impl Fn(&str) -> Option<String>,
+) -> (String, &'static [&'static str]) {
+    let shell = env("SHELL");
+    if os == "windows" {
+        let program = shell
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| on_path("pwsh.exe"))
+            .or_else(|| on_path("powershell.exe"))
+            .or_else(|| env("COMSPEC").filter(|value| !value.trim().is_empty()))
+            .unwrap_or_else(|| "cmd.exe".into());
+        (program, &[])
+    } else {
+        (shell.unwrap_or_else(|| "/bin/zsh".into()), &["-l"])
+    }
+}
+
 fn size(cols: u16, rows: u16) -> PtySize {
     PtySize {
         rows: rows.clamp(2, 500),
@@ -94,10 +114,19 @@ pub fn pty_open(
     let pair = native_pty_system()
         .openpty(size(cols, rows))
         .map_err(|e| e.to_string())?;
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    let (shell, args) = shell_command(
+        std::env::consts::OS,
+        |name| std::env::var(name).ok(),
+        |name| {
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .map(|dir| dir.join(name))
+                .find(|path| path.is_file())
+                .map(|path| path.to_string_lossy().into_owned())
+        },
+    );
     // The shell owns a PTY (ConPTY on Windows); do not use CREATE_NO_WINDOW.
     let mut command = CommandBuilder::new(&shell);
-    command.arg("-l");
+    command.args(args);
     command.cwd(&cwd);
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
@@ -175,6 +204,64 @@ pub fn pty_close(ptys: tauri::State<'_, Ptys>, id: u32) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shell_selection_by_platform() {
+        for os in ["macos", "linux"] {
+            for shell in [None, Some("/bin/fish")] {
+                let (program, args) = shell_command(
+                    os,
+                    |key| {
+                        assert_eq!(key, "SHELL");
+                        shell.map(str::to_owned)
+                    },
+                    |_| panic!("Unix must not probe Windows shells"),
+                );
+                assert_eq!(program, shell.unwrap_or("/bin/zsh"));
+                assert_eq!(args, &["-l"]);
+            }
+        }
+    }
+
+    #[test]
+    fn windows_shell_precedence_and_arguments() {
+        for (shell, available, comspec, expected) in [
+            (
+                Some("C:/Git/bin/bash.exe"),
+                vec!["pwsh.exe"],
+                None,
+                "C:/Git/bin/bash.exe",
+            ),
+            (
+                None,
+                vec!["pwsh.exe", "powershell.exe"],
+                Some("custom-cmd.exe"),
+                "pwsh.exe",
+            ),
+            (
+                None,
+                vec!["powershell.exe"],
+                Some("custom-cmd.exe"),
+                "powershell.exe",
+            ),
+            (None, vec![], Some("custom-cmd.exe"), "custom-cmd.exe"),
+            (None, vec![], None, "cmd.exe"),
+            (Some(" "), vec!["pwsh.exe"], None, "pwsh.exe"),
+            (None, vec![], Some(""), "cmd.exe"),
+        ] {
+            let (program, args) = shell_command(
+                "windows",
+                |key| match key {
+                    "SHELL" => shell.map(str::to_owned),
+                    "COMSPEC" => comspec.map(str::to_owned),
+                    _ => panic!("unexpected environment lookup"),
+                },
+                |name| available.contains(&name).then(|| name.to_owned()),
+            );
+            assert_eq!(program, expected);
+            assert!(args.is_empty(), "Windows shells must not receive -l");
+        }
+    }
 
     #[test]
     fn keeps_split_utf8_for_the_next_read() {

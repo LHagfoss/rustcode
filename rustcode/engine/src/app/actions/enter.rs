@@ -1103,18 +1103,9 @@ async fn handle_enter_inner(
                 // message shown on screen.
                 let session_id = s.active_session_id.clone();
                 crate::config::save_session_history(&session_id, &s.history);
-                let destination = tokens.get(1).map(|path| {
-                    let path = path.strip_prefix("~/").map_or_else(
-                        || std::path::PathBuf::from(path),
-                        |rest| {
-                            std::env::var_os("HOME")
-                                .map(std::path::PathBuf::from)
-                                .unwrap_or_default()
-                                .join(rest)
-                        },
-                    );
-                    path
-                });
+                let destination = tokens
+                    .get(1)
+                    .map(|path| crate::home::expand_home(path, crate::home::home_dir().as_deref()));
                 match crate::config::export_session(&session_id, destination.as_deref()) {
                     Ok(path) => {
                         s.set_transient_notice(format!("Exported thread to {}", path.display()))

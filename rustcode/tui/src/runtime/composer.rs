@@ -53,6 +53,13 @@ fn frame_pasted_text(text: &str) -> String {
 /// screenshot. Clipboard managers and Finder drops deliver an image this way,
 /// shell-escaped (`Application\ Support`), quoted, or as a `file://` URL.
 fn pasted_image_path_marker(text: &str) -> Option<String> {
+    let path = parse_pasted_image_path(text, cfg!(windows))?;
+    let file = std::path::Path::new(&path);
+    (file.is_absolute() && file.is_file()).then(|| format!("![image](file://{path})"))
+}
+
+// Parse separately from filesystem validation so Windows syntax is tested on every host.
+fn parse_pasted_image_path(text: &str, windows: bool) -> Option<String> {
     let trimmed = text.trim();
     if trimmed.is_empty() || trimmed.contains('\n') {
         return None;
@@ -67,6 +74,7 @@ fn pasted_image_path_marker(text: &str) -> Option<String> {
         });
     let path = match unquoted {
         Some(inner) => inner.to_owned(),
+        None if windows => trimmed.to_owned(),
         None => {
             let mut unescaped = String::with_capacity(trimmed.len());
             let mut chars = trimmed.chars();
@@ -82,7 +90,18 @@ fn pasted_image_path_marker(text: &str) -> Option<String> {
         }
     };
     let path = match path.strip_prefix("file://") {
-        Some(rest) => rest.replace("%20", " "),
+        Some(rest) => {
+            let rest = rest.replace("%20", " ");
+            if windows {
+                let rest = rest
+                    .strip_prefix('/')
+                    .filter(|path| path.as_bytes().get(1) == Some(&b':'))
+                    .unwrap_or(&rest);
+                rest.replace('/', "\\")
+            } else {
+                rest
+            }
+        }
         None => path,
     };
     let extension = std::path::Path::new(&path).extension()?.to_str()?;
@@ -90,12 +109,10 @@ fn pasted_image_path_marker(text: &str) -> Option<String> {
         .iter()
         .any(|known| extension.eq_ignore_ascii_case(known));
     // The marker ends at the first `)`, so such a path cannot be framed.
-    if !is_image || !path.starts_with('/') || path.contains(')') {
+    if !is_image || path.contains(')') {
         return None;
     }
-    std::path::Path::new(&path)
-        .is_file()
-        .then(|| format!("![image](file://{path})"))
+    Some(path)
 }
 
 impl Composer {
@@ -370,6 +387,25 @@ mod tests {
     use rustcode::app::AppState;
 
     #[test]
+    fn parses_windows_image_paths_without_shell_unescaping() {
+        for (input, expected) in [
+            (r"C:\Users\ada\shot.png", r"C:\Users\ada\shot.png"),
+            (r#""C:\Users\ada\my shot.png""#, r"C:\Users\ada\my shot.png"),
+            (r"\\server\share\shot.png", r"\\server\share\shot.png"),
+            (
+                "file:///C:/Users/ada/my%20shot.png",
+                r"C:\Users\ada\my shot.png",
+            ),
+        ] {
+            assert_eq!(
+                super::parse_pasted_image_path(input, true).as_deref(),
+                Some(expected)
+            );
+        }
+        assert!(super::parse_pasted_image_path(r"C:\notes.txt", true).is_none());
+    }
+
+    #[test]
     fn pasted_image_path_becomes_an_image_marker() {
         let directory =
             std::env::temp_dir().join(format!("rustcode paste test {}", std::process::id()));
@@ -380,7 +416,9 @@ mod tests {
         let marker = format!("![image](file://{plain})");
 
         let escaped = plain.replace(' ', "\\ ");
-        assert_eq!(pasted_image_path_marker(&escaped), Some(marker.clone()));
+        if !cfg!(windows) {
+            assert_eq!(pasted_image_path_marker(&escaped), Some(marker.clone()));
+        }
         assert_eq!(
             pasted_image_path_marker(&format!("'{plain}'\n")),
             Some(marker.clone())
@@ -389,8 +427,11 @@ mod tests {
             pasted_image_path_marker(&format!("file://{}", plain.replace(' ', "%20"))),
             Some(marker)
         );
-        // Unescaped spaces, prose, non-images and missing files stay text.
-        assert_eq!(pasted_image_path_marker(&plain), None);
+        // POSIX unescaped spaces, prose, non-images and missing files stay text.
+        assert_eq!(
+            pasted_image_path_marker(&plain),
+            cfg!(windows).then(|| format!("![image](file://{plain})"))
+        );
         assert_eq!(pasted_image_path_marker("look at /tmp/a.png"), None);
         assert_eq!(pasted_image_path_marker("/tmp/missing-rustcode.png"), None);
         let text = directory.join("notes.txt");

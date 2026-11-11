@@ -6,6 +6,7 @@
 // (state/host.ts). Pure: no store, no engine.
 
 import type { Json, JsonObject } from "../acp/jsonrpc";
+import { plainPath } from "../acp/types";
 import type { ThreadStatus, Worktree } from "../acp/v2";
 import { MAX_ATTACHMENT_FILES } from "./attachments";
 import type { PermissionMode } from "./permissions";
@@ -15,12 +16,12 @@ import { formatDuration, type QueuedPrompt, withWakeMark } from "./thread";
 /**
  * What the client advertises in `initialize` while the setting is on.
  *
- * Version 14 adds `standalone` to `start_session` and `fan_out` (issue 3443): a
- * thread of the user's own at the top level, rather than a delegate the caller
- * waits on. A v13 app is never offered the argument, and the engine refuses a
- * call that carries one.
+ * Version 14 adds `steer` to `message_session`, and version 15 `standalone` to
+ * `start_session` and `fan_out` (issue 3443): a thread of the user's own at the
+ * top level, rather than a delegate the caller waits on. A v14 app is never
+ * offered `standalone`, and the engine refuses a call that carries one.
  */
-export const CAPABILITY_VERSION = 14;
+export const CAPABILITY_VERSION = 15;
 /** The most of a child's answer `wait_session` carries; beyond it, `read_session` pages the rest. */
 export const MAX_BYTES = 8 * 1024;
 /** The longest prompt or message a thread may hand another one (32 KiB). */
@@ -481,7 +482,14 @@ export type Call =
   | { tool: "list_sessions"; query: string; allProjects: boolean; machine?: string }
   | { tool: "read_session"; target: string; lastTurns: number; offset: number; machine?: string }
   /** `attachments` are absolute paths, under the caller's project or worktree. */
-  | { tool: "message_session"; target: string; text: string; attachments: string[]; machine?: string }
+  | {
+      tool: "message_session";
+      target: string;
+      text: string;
+      attachments: string[];
+      steer?: boolean;
+      machine?: string;
+    }
   /** `callId` is the engine's name for this call, so a dropped call can end its wait. */
   | { tool: "wait_session"; links: string[]; timeoutMs: number; callId?: string; machine?: string }
   | {
@@ -935,7 +943,17 @@ export function parseCall(params: JsonObject): Call | Failure {
       if (attachments === null) {
         return failure("invalid", `attachments must be at most ${MAX_ATTACHMENT_FILES} absolute paths`);
       }
-      return { tool: "message_session", target, text, attachments, ...machineField(args) };
+      if (args.steer !== undefined && typeof args.steer !== "boolean") {
+        return failure("invalid", "steer must be a boolean");
+      }
+      return {
+        tool: "message_session",
+        target,
+        text,
+        attachments,
+        ...(args.steer !== undefined ? { steer: args.steer } : {}),
+        ...machineField(args),
+      };
     }
     case "wait_session": {
       // One answer per link: a repeated id is asked about once.
@@ -1120,8 +1138,10 @@ export interface RuleThread {
 }
 
 // macOS links /tmp, /var and /etc into /private, and the engine reports the resolved path: one place.
+// Windows' verbatim prefix goes too (`plainPath`): it is a Win32 detail, not part of the folder, and
+// keeping it made one project two (issue 3425).
 export const cleanProjectPath = (path: string) =>
-  path
+  plainPath(path)
     .replace(/\/+$/, "")
     .replace(/\/\.\//g, "/")
     .replace(/^\/private(?=\/(?:tmp|var|etc)(?:\/|$))/, "");
@@ -1211,10 +1231,8 @@ export function listSessions(
 
 /**
  * Whether `caller` may message (or read) `target`, before the user is asked.
- * Reading reaches any project while the app allows it; everything that writes,
- * or that opens a thread to another, stays in the caller's own project — except
- * a thread on a machine the call named (`remote`), whose folders are not this
- * project's and whose card is the gate.
+ * Reading across projects needs the setting. Messaging reaches any project:
+ * the existing user approval policy gates delivery in the host.
  */
 export function checkMessage(
   caller: RuleThread,
@@ -1228,7 +1246,7 @@ export function checkMessage(
   if (!target) return failure("not_found", "no thread has that id; use list_sessions");
   if (target.id === caller.id)
     return failure("not_allowed", `a thread cannot ${read ? "read" : "message"} itself`);
-  if (!remote && !(read && acrossProjects) && !reachesThread(caller, target)) {
+  if (read && !remote && !acrossProjects && !reachesThread(caller, target)) {
     return failure(
       "not_allowed",
       "that thread is in another project; only this project's threads can be reached",
@@ -2041,6 +2059,13 @@ export interface TurnAnswer {
   truncated: boolean;
   filesChanged: number;
 }
+
+/**
+ * What the app says about a turn whose machine went away while it ran (`state/store.ts`
+ * `watchMachineConnection` and the prompt that died with it). One sentence, so the thread's row and
+ * the link's preview tell the same story.
+ */
+export const MACHINE_LOST_TURN = "The machine disconnected during this turn.";
 
 /** The last reply in a transcript, whatever turn it belongs to. */
 export function latestReply(items: readonly { kind: string; text?: string }[]): string {

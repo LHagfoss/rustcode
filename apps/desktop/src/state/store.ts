@@ -2,7 +2,16 @@
 // Components read slices with `useApp(selector)` and call the actions below.
 
 import { create } from "zustand";
-import { AcpConnection, type Inbound, type Json, type JsonObject, obj, RpcError, str } from "../acp/jsonrpc";
+import {
+  AcpConnection,
+  ConnectionClosedError,
+  type Inbound,
+  type Json,
+  type JsonObject,
+  obj,
+  RpcError,
+  str,
+} from "../acp/jsonrpc";
 import { parseRemoteStatus, RemoteMethod, type RemoteStatus } from "../acp/remote";
 import {
   agentActive,
@@ -82,6 +91,7 @@ import {
   SHORTCUTS_KEY,
 } from "../lib/keys";
 import { dismissOverlays } from "../lib/overlays";
+import { trashName } from "../lib/platform";
 import { setShellTransport, shellCall } from "../lib/shell";
 import { BUILTIN_THEMES, parseThemes, ThemeMethod, type ThemesSnapshot } from "../lib/themes";
 import { titleFrom } from "../lib/title";
@@ -162,7 +172,25 @@ import {
 } from "./host";
 import type { InboxItem } from "./inbox";
 import { dismissRows, type InboxDismissals, restoreRows } from "./inboxDismissed";
-import { LIMIT_RESUME_TEXT, type LimitWait, limitReset, nextWait, waitDue, waitHolds } from "./limitResume";
+import {
+  INTERNET_POLL_MS,
+  INTERNET_RESUME_TEXT,
+  type InternetWait,
+  internetDue,
+  internetGaveUp,
+  internetHolds,
+  nextInternetWait,
+} from "./internetWait";
+import {
+  type LimitWait,
+  limitReset,
+  nextWait,
+  overloadDelay,
+  overloadStop,
+  resumeText,
+  waitDue,
+  waitHolds,
+} from "./limitResume";
 import { newThreadAccountOn, type SignedOutLogins, signedOutFrom } from "./logins";
 import { type NotifyEvent, notifyThread, startNotifications, wakeEvent } from "./notify";
 import {
@@ -175,6 +203,8 @@ import {
   type GrantAsk,
   isActive,
   type LinkBook,
+  latestReply,
+  MACHINE_LOST_TURN,
   MAX_DELEGATES_PER_THREAD,
   MAX_DELEGATES_TOTAL,
   MIN_DELEGATES_PER_THREAD,
@@ -185,6 +215,7 @@ import { autoAnswer, effectiveMode, type PermissionMode, parsePermissionMode } f
 import { NO_PAUSES, type PlanPauses, type PlansAsk, pausesAfter, plansAskFor, queueAsks } from "./plans";
 import { projectChoice } from "./projectBook";
 import { matchProject, projectAt, projectsOn } from "./projects";
+import { deliverPullWatch, PULL_WATCH, subscribePullWatches } from "./pullWatch";
 import {
   nextQueued,
   QUEUE_REASON,
@@ -196,6 +227,17 @@ import {
 } from "./queue";
 import { parseRecapHours, RECAP_HOURS_DEFAULT } from "./recap";
 import { challengeIsValid, makeChallenge, newPairedDevice, type PairingChallenge } from "./remotePairing";
+import {
+  addScheduled,
+  dueScheduled,
+  parseScheduleBook,
+  persistableSchedule,
+  SCHEDULED_KEY,
+  type ScheduleBook,
+  type ScheduledMessage,
+  scheduledCount,
+  withoutScheduled,
+} from "./schedule";
 import { beginSetup, dismissSetup, type PendingSetup, setupFailed, setupSucceeded } from "./setup";
 import { keepThreads, type SidebarOrder, withoutThreads } from "./sidebarOrder";
 import { dueSnoozes } from "./snooze";
@@ -241,7 +283,7 @@ import {
   type ToastTone,
 } from "./toasts";
 import { userTypedPrompt } from "./topLevel";
-import { readableTurnError } from "./turnError";
+import { networkFailure, readableTurnError } from "./turnError";
 
 export type { Toast, ToastTone } from "./toasts";
 
@@ -375,6 +417,8 @@ export interface AppState {
   drafts: Record<string, string>;
   /** Command token, link chips and attachments of each composer, by thread id (or "new"). */
   extras: Record<string, ComposeExtras>;
+  /** Messages written now and sent at a time the user picked, by thread id (state/schedule.ts). */
+  scheduled: ScheduleBook;
   settings: SettingsSection | null;
   switcherOpen: boolean;
   /** A report command's answer (`/status`, `/context`…), shown over the composer of its thread. */
@@ -487,6 +531,8 @@ export interface AppState {
   continueAfterLimit: boolean;
   /** The threads waiting on that, by thread id (state/limitResume.ts). */
   limitWaits: Record<string, LimitWait>;
+  /** The threads waiting for the internet, by thread id (state/internetWait.ts). */
+  internetWaits: Record<string, InternetWait>;
   /** The interface in SF Pro Rounded (the default) or the standard system font. */
   roundedFont: boolean;
   /** A streaming reply's new words fade in as the model writes them. */
@@ -627,6 +673,8 @@ const STORAGE = {
   lastActive: "rustcode.lastActiveAt",
   continueAfterLimit: "rustcode.continueAfterLimit",
   limitWaits: "rustcode.limitWaits",
+  /** The threads waiting for the internet to come back, by thread id. */
+  internetWaits: "rustcode.internetWaits",
   /** The ids of the threads running a turn, kept while the engine is up. */
   runningThreads: "rustcode.runningThreads",
   roundedFont: "rustcode.roundedFont",
@@ -795,6 +843,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   recapDismissed: false,
   continueAfterLimit: storedFlag(STORAGE.continueAfterLimit, SETTINGS_DEFAULTS.continueAfterLimit),
   limitWaits: storedJson<Record<string, LimitWait>>(STORAGE.limitWaits, {}),
+  internetWaits: storedJson<Record<string, InternetWait>>(STORAGE.internetWaits, {}),
   roundedFont: storedFlag(STORAGE.roundedFont, SETTINGS_DEFAULTS.roundedFont),
   animateStreaming: storedFlag(STORAGE.animateStreaming, SETTINGS_DEFAULTS.animateStreaming),
   reduceTransparency: storedFlag(STORAGE.reduceTransparency, SETTINGS_DEFAULTS.reduceTransparency),
@@ -860,6 +909,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   sessionCommands: {},
   drafts: parseDrafts(stored(DRAFTS_KEY)),
   extras: {},
+  scheduled: parseScheduleBook(stored(SCHEDULED_KEY)),
   settings: null,
   switcherOpen: false,
   modelPickerAsk: 0,
@@ -1148,8 +1198,7 @@ export function watchMachineConnection(id: string, next: AcpConnection | null): 
       threads: Object.fromEntries(
         Object.entries(s.threads).map(([key, t]) => {
           if (splitThreadKey(key).host !== id) return [key, t];
-          if (t.running)
-            return [key, finishTurn(t, "failed", Date.now(), "The machine disconnected during this turn.")];
+          if (t.running) return [key, finishTurn(t, "failed", Date.now(), MACHINE_LOST_TURN)];
           return [key, t.permissions.length ? { ...t, permissions: [] } : t];
         }),
       ),
@@ -1157,12 +1206,15 @@ export function watchMachineConnection(id: string, next: AcpConnection | null): 
     return;
   }
   machineConnections.set(id, next);
+  void subscribePullWatches(next, id).catch(() => {});
   machineOff.set(
     id,
     next.onInbound((message) => void handleInbound(scopeInbound(message, id), next, id)),
   );
   // Back: a harness or login added there while it was away is in the list a second read gives.
   if (get().remoteHarnesses[id]) void loadMachineHarnesses(id, { refresh: true });
+  // Back: a turn whose request died with this machine's channel is asked about again now.
+  resumeLostTurns(id);
   // Back: the copy on screen is from before it went away, so the thread it shows is read again.
   // Requests of the old connection did not survive the drop (they died with it), so there is
   // nothing to keep here: the reload is the machine's whole answer about the thread.
@@ -1428,6 +1480,10 @@ async function handshake(): Promise<void> {
     // Queued messages and wakes come back from app storage, and the threads that kept one open, so a
     // row's own turn marks what it reports before any wake is worked out below.
     restoreQueuedThreads();
+    void subscribePullWatches(conn).catch(() => {});
+    // Messages written now and sent later come back the same way; one whose time passed while the
+    // app was closed goes out once its thread is open.
+    restoreScheduled();
     // The link book now lives in the data store; local storage is the first paint only. Once the
     // store's copy is in, a child result nobody was told about (a window closed with its wake still
     // queued) is due: the queue is memory, the book is not, so the wake is read back from it here.
@@ -1437,8 +1493,9 @@ async function handshake(): Promise<void> {
     if (connection === conn) void resumeInterrupted(interrupted);
     // Waits survive a restart, and one may have come due while the app was closed.
     if (connection === conn) {
-      syncLimitTimer();
+      syncWaitTimers();
       void continueDueThreads();
+      void continueInternetThreads();
     }
   } catch (error) {
     set({ status: "closed", statusDetail: errorText(error) });
@@ -1664,6 +1721,8 @@ async function handleInbound(message: Inbound, conn: AcpConnection | null = conn
       else if (message.method === Method.sessionActivity) onSessionActivity(message.params);
       else if (message.method === Method.threadCreated) threadCreated(message.params);
       else if (message.method === V2Method.orchestrationCancelled) orchestrationCallDropped(message.params);
+      else if (message.method === PULL_WATCH && conn)
+        void deliverPullWatch(conn, message.params, host).catch(() => {});
       else if (message.method === ThemeMethod.changed) onThemesChanged(message.params);
       return;
     case "request":
@@ -1788,6 +1847,8 @@ function onSessionUpdate(params: JsonObject) {
   if (status) {
     set((s) => ({ sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, status } : x)) }));
     clearStatusMark(sessionId);
+    // A lost turn on this thread is settled now if the machine says it stopped running there.
+    lostTurnStatus(sessionId, status);
   }
   if (update.kind === "title") {
     set((s) => ({
@@ -1888,8 +1949,8 @@ export function markFinished(id: string, now = Date.now(), failed = false) {
       ? { failed: { ...s.failed, [id]: now } }
       : { finished: { ...s.finished, [id]: now }, failed: without(s.failed, id) },
   );
-  // A limit already said what stopped it, in the words the composer's notice uses.
-  if (!failed || !get().limitWaits[id]) {
+  // A limit or a lost network already said what stopped it, in the composer's own row.
+  if (!failed || (!get().limitWaits[id] && !get().internetWaits[id])) {
     // A delegate finishing is not news for the system either: the wake message reaches its parent
     // and the strip above that parent's composer already says it. A failure still is.
     const delegated = linksOf(get().links, id).drivenBy !== undefined && get().messaged[id] === undefined;
@@ -3062,7 +3123,7 @@ export async function renameThread(id: string, title: string): Promise<boolean> 
 /** Move a thread's folder to the Trash, closing it in the engine first, as the SwiftUI app does. */
 export async function trashThread(id: string): Promise<boolean> {
   if (get().threads[id]?.running) {
-    toast("Stop the running turn before moving this thread to the Trash.", "info");
+    toast(`Stop the running turn before moving this thread to the ${trashName()}.`, "info");
     return false;
   }
   // Its delegates stop with it: forgetting their links would free slots they still hold.
@@ -3149,6 +3210,163 @@ export function flushDrafts() {
 export function setExtras(key: string, fn: (extras: ComposeExtras) => ComposeExtras) {
   set((s) => ({ extras: { ...s.extras, [key]: fn(s.extras[key] ?? emptyExtras) } }));
   if (hasExtras(get().extras[key])) noteTyping(key);
+}
+
+// ---------------------------------------------------------------- sending later
+
+/**
+ * A message written now and sent at a time the user picked (state/schedule.ts): the card over the
+ * composer counts down, Send now sends it at once, Delete drops it, and a restart keeps it because
+ * every change is written to app storage. When its time comes it goes out on the thread's normal send
+ * path, so its command, links, pictures, model, effort and permissions are the ones the composer
+ * had; a thread that is busy then queues it like any follow-up.
+ */
+function writeScheduled(next: ScheduleBook) {
+  set({ scheduled: next });
+  store(SCHEDULED_KEY, JSON.stringify(persistableSchedule(next)));
+  syncScheduleTimer();
+}
+
+/** The book as storage has it: read at start-up, and between tests as a window that just started. */
+export function restoreScheduled(): void {
+  set({ scheduled: parseScheduleBook(stored(SCHEDULED_KEY)) });
+  syncScheduleTimer();
+}
+
+/**
+ * Schedule the composer's message for `due`. Null when there is nothing to send, the app is not
+ * connected, or the message is too big to keep; the composer keeps its text then.
+ */
+export function scheduleMessage(
+  threadId: string,
+  text: string,
+  extras: ComposeExtras,
+  due: number,
+): ScheduledMessage | null {
+  if (get().status !== "ready") return null;
+  if (!text.trim() && !hasExtras(extras)) return null;
+  if (!(due > Date.now())) return null;
+  const item: ScheduledMessage = {
+    id: localId("scheduled"),
+    text,
+    due,
+    ...(carriesExtras(extras) ? { extras } : {}),
+  };
+  const next = addScheduled(get().scheduled, threadId, item);
+  if (!next) return null;
+  writeScheduled(next);
+  return item;
+}
+
+/** Delete: the message never goes out. */
+export function removeScheduled(threadId: string, id: string): void {
+  const next = withoutScheduled(get().scheduled, threadId, id);
+  if (next !== get().scheduled) writeScheduled(next);
+}
+
+/** Send now: take it out of the book and send it on the thread's normal path. */
+export async function sendScheduledNow(threadId: string, id: string): Promise<boolean> {
+  const item = get().scheduled[threadId]?.find((row) => row.id === id);
+  if (!item) return false;
+  if (get().status !== "ready") {
+    toast("Not connected: the message stays scheduled.", "error");
+    return false;
+  }
+  const outcome = await deliverScheduled(threadId, item);
+  if (outcome === "wait") {
+    toast("Not connected: the message stays scheduled.", "error");
+    return false;
+  }
+  removeScheduled(threadId, id);
+  return outcome === "sent";
+}
+
+/**
+ * Open the thread if it is not, then send: a busy turn takes it as its next message (runPrompt).
+ * `wait` keeps the message for another try — its computer is away, or the engine is not connected
+ * yet — while a thread that no longer exists is `gone` and one the user deleted meanwhile is too.
+ */
+async function deliverScheduled(threadId: string, item: ScheduledMessage): Promise<"sent" | "gone" | "wait"> {
+  const s = get();
+  if (s.sessionsLoaded && !s.sessions.some((session) => session.id === threadId)) {
+    toast("That thread is gone, so its scheduled message was dropped.", "error");
+    return "gone";
+  }
+  // A thread on a paired computer that is away, or an engine that is not up: the message waits for
+  // it rather than being lost, and the timer tries again.
+  if (!connectionForThread(threadId)) return "wait";
+  if (!get().threads[threadId]?.loaded) {
+    await openThread(threadId);
+    for (let i = 0; i < 100 && !get().threads[threadId]?.loaded; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  if (!get().threads[threadId]?.loaded) return "wait";
+  // Deleted while the thread was opening: nothing goes out.
+  if (!get().scheduled[threadId]?.some((row) => row.id === item.id)) return "gone";
+  const extras = item.extras;
+  const thread = get().threads[threadId]!;
+  // A turn runs, or the queue is held by a stopped turn, or messages wait in it: this goes behind
+  // them and Resume starts the head, exactly as a message typed meanwhile does (`submit`).
+  if (thread.running || thread.queue.length || thread.queueHeld) {
+    unsettleThreads([threadId], { quiet: true });
+    wakeOnWrite(threadId);
+    updateThread(threadId, (t) => ({
+      ...t,
+      queue: [
+        ...t.queue,
+        {
+          id: localId("queued"),
+          text: item.text,
+          ...(extras && carriesExtras(extras) ? { extras } : {}),
+        },
+      ],
+    }));
+    // Held for Resume: nothing starts until the user presses it. A queue with no turn starts its head.
+    if (!thread.running && !thread.queueHeld) void resumeQueue(threadId);
+    return "sent";
+  }
+  void runPrompt(threadId, item.text, extras ?? emptyExtras);
+  return "sent";
+}
+
+let scheduleTimer: ReturnType<typeof setInterval> | null = null;
+let sendingScheduled = false;
+
+/**
+ * One slow timer while something is scheduled: a card's countdown ticks in the UI, and this only has
+ * to notice that a time has come, even after the Mac slept past it.
+ */
+function syncScheduleTimer() {
+  const waiting = scheduledCount(get().scheduled) > 0;
+  if (waiting && !scheduleTimer) {
+    const timer = setInterval(() => void continueDueScheduled(), 1000) as unknown as ReturnType<
+      typeof setInterval
+    > & { unref?: () => void };
+    // A timer does not keep the process alive (a test, or a window with nothing left to do).
+    timer.unref?.();
+    scheduleTimer = timer;
+  } else if (!waiting && scheduleTimer) {
+    clearInterval(scheduleTimer);
+    scheduleTimer = null;
+  }
+}
+
+/** Every message whose time has come goes out, the soonest first. */
+export async function continueDueScheduled(now = Date.now()): Promise<void> {
+  if (sendingScheduled || get().status !== "ready") return;
+  const due = dueScheduled(get().scheduled, now);
+  if (!due.length) return;
+  sendingScheduled = true;
+  try {
+    for (const { threadId, item } of due) {
+      const outcome = await deliverScheduled(threadId, item);
+      // One that waits for its computer stays; anything else has had its one turn out of the book.
+      if (outcome !== "wait") removeScheduled(threadId, item.id);
+    }
+  } finally {
+    sendingScheduled = false;
+  }
 }
 
 /** The harness a thread runs on, or a new thread would start on. */
@@ -3676,6 +3894,209 @@ export function moveQueued(id: string, queuedId: string, by: -1 | 1) {
   });
 }
 
+/**
+ * How long the app waits for a machine's channel to come back before it gives a lost turn up:
+ * past it the machine is unreachable, and the links it was answering are told so. Every read the
+ * machine answers pushes it out, so a turn that is still running there is followed for as long as
+ * it runs.
+ */
+export const LOST_MACHINE_MS = 2 * 60_000;
+
+/** How often a lost turn the machine has not spoken about is looked at again (`LOST_MACHINE_MS`). */
+export const LOST_RECHECK_MS = 30_000;
+
+/** A turn on another machine whose prompt request died with that machine's connection. */
+interface LostTurn {
+  /** This window's key for the thread, `‹host›/‹session›`. */
+  thread: string;
+  host: string;
+  /** The links the turn was answering: nothing else settles them once it is handed here. */
+  links: string[];
+  /** When the machine has been silent long enough to give up (`LOST_MACHINE_MS`). */
+  deadline: number;
+  /** The next look at the machine, or the give-up, whichever comes first. */
+  timer?: ReturnType<typeof setTimeout>;
+  /** A read of the machine is in flight: a second one would settle the same links twice. */
+  busy?: boolean;
+  /** The thread has been read again since the machine said the turn still runs there. */
+  following?: boolean;
+}
+
+/** The lost turns this window is following, by thread key. */
+const lostTurns = new Map<string, LostTurn>();
+
+/** Tests only: `LOST_MACHINE_MS`, shortened so a test need not wait two minutes. */
+let lostMachineMs = LOST_MACHINE_MS;
+export function setLostMachineMsForTests(ms: number): void {
+  lostMachineMs = ms;
+}
+
+/**
+ * A turn on another machine whose prompt request died with the machine's connection: the turn goes
+ * on there. Nothing is settled from the rows that had arrived — a half-written answer is not an
+ * answer — so the links keep working until the machine can be asked how the thread ended
+ * (`settleLostTurn`), or for `LOST_MACHINE_MS` if its channel never comes back (issue 3440).
+ */
+export function lostTurn(thread: string, links: readonly (string | undefined)[]): void {
+  const host = splitThreadKey(thread).host;
+  const ids = links.filter((link): link is string => typeof link === "string");
+  if (!host || !ids.length) return;
+  // A second prompt can be lost on the same thread: it is followed by the record already there, so
+  // the links of both are answered by the turn the machine ends with, never one of them orphaned.
+  const before = lostTurns.get(thread);
+  if (before) {
+    before.links = [...new Set([...before.links, ...ids])];
+    before.deadline = Date.now() + lostMachineMs;
+    void lookAtLostTurn(before);
+    return;
+  }
+  const record: LostTurn = { thread, host, links: ids, deadline: Date.now() + lostMachineMs };
+  lostTurns.set(thread, record);
+  void lookAtLostTurn(record);
+}
+
+/**
+ * One look at a lost turn's machine, then the next look before the deadline. A machine that
+ * answers resets the deadline (`askMachine`), so this repeats only while the turn runs there or
+ * while the machine is away; `LOST_RECHECK_MS` bounds how fast, `LOST_MACHINE_MS` how long.
+ */
+async function lookAtLostTurn(record: LostTurn): Promise<void> {
+  if (lostTurns.get(record.thread) !== record) return;
+  clearTimeout(record.timer);
+  if (Date.now() >= record.deadline) return giveUpLostTurn(record);
+  await askMachine(record);
+  if (lostTurns.get(record.thread) !== record) return;
+  const next = Math.min(record.deadline, Date.now() + LOST_RECHECK_MS);
+  record.timer = setTimeout(() => void lookAtLostTurn(record), Math.max(0, next - Date.now()));
+}
+
+/** A machine's channel was opened again: ask it about the turns this window lost with it. */
+function resumeLostTurns(host: string): void {
+  for (const record of lostTurns.values()) if (record.host === host) void askMachine(record);
+}
+
+/**
+ * A machine reported what one of its threads does (`session/update` `session_info_update`, read by
+ * `onSessionUpdate`): a lost turn whose thread stopped running there is read and settled now.
+ */
+function lostTurnStatus(thread: string, status: ThreadStatus): void {
+  const record = lostTurns.get(thread);
+  if (record && status !== "running" && status !== "needs_input") void askMachine(record);
+}
+
+/**
+ * Ask the machine how the lost turn's thread ended, if it can be asked now. A turn still running
+ * there keeps the links working and waits for the machine's next word about that thread; one that
+ * ended is settled from what the thread holds (`settleLostTurn`).
+ */
+async function askMachine(record: LostTurn): Promise<void> {
+  if (record.busy || lostTurns.get(record.thread) !== record) return;
+  const conn = connectionFor(record.host);
+  // No channel yet: `resumeLostTurns` asks again when the machine is back, and the deadline gives up.
+  if (!conn) return;
+  record.busy = true;
+  try {
+    const status = await machineStatusOf(conn, record.thread);
+    // A thread the machine no longer lists is not one it can be asked about: the deadline says so.
+    if (!status || lostTurns.get(record.thread) !== record) return;
+    // It answered about this thread, so it is reachable, and it has longer to report.
+    record.deadline = Date.now() + lostMachineMs;
+    if (status === "running") {
+      // Still working there. The delegate's own chat is read again once (the machine's rows, not
+      // the failure the drop wrote), and the answer arrives when the machine says it stopped.
+      if (!record.following) {
+        record.following = true;
+        void reloadThread(record.thread);
+      }
+      return;
+    }
+    await settleLostTurn(record);
+  } catch {
+    // The channel went again: its return asks once more, and the deadline bounds the wait.
+  } finally {
+    record.busy = false;
+  }
+}
+
+/** What a machine says one of its threads does, from its own `session/list` pages. */
+async function machineStatusOf(conn: AcpConnection, thread: string): Promise<ThreadStatus | undefined> {
+  const { id } = splitThreadKey(thread);
+  let cursor: string | undefined;
+  for (let page = 0; page < 10; page++) {
+    const params: JsonObject = cursor ? { cursor } : {};
+    const result = parseSessionList(await conn.request(Method.sessionList, params, 10_000));
+    const found = result.sessions.find((x) => x.id === id);
+    if (found) return found.status;
+    cursor = result.nextCursor;
+    if (!cursor) break;
+  }
+  return undefined;
+}
+
+/**
+ * The lost turn's thread no longer runs: read it again from the machine (the replay a reopened
+ * thread gets) and settle its links by what the turn left — its answer, or the failure it ended in.
+ */
+async function settleLostTurn(record: LostTurn): Promise<void> {
+  if (lostTurns.get(record.thread) !== record) return;
+  // The thread as the machine has it now, not as this window last saw it. A replay it stops
+  // answering is no end of the turn: the recheck and the deadline still hold the links.
+  if (!(await reloadThread(record.thread))) return;
+  lostTurns.delete(record.thread);
+  clearTimeout(record.timer);
+  const rows = lastTurnRows(get().threads[record.thread]);
+  const answer = latestReply(rows);
+  // The turn's own answer, never the one before it: a turn that wrote none settled on nothing.
+  if (answer.trim()) linksFinished(record.links, record.thread, "completed", undefined, rows);
+  else linksFinished(record.links, record.thread, "failed", turnErrorIn(rows) ?? MACHINE_LOST_TURN, rows);
+}
+
+/**
+ * A thread's rows for the turn that ended last, as its replay holds them: after its last prompt,
+ * so a turn that answered nothing does not take the answer of the turn before it.
+ */
+function lastTurnRows(thread: ThreadState | undefined): TranscriptItem[] {
+  const items = thread?.items ?? [];
+  const from = items.findLastIndex((item) => item.kind === "user");
+  return from < 0 ? items : items.slice(from);
+}
+
+/**
+ * What a thread's rows say about how its last turn ended: its last notice (the engine's stop,
+ * limit or failure marker, which a replay carries), an error-toned one first. A turn the machine
+ * ended in one is that failure, not the connection's.
+ */
+function turnErrorIn(items: readonly TranscriptItem[]): string | undefined {
+  let notice: string | undefined;
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i]!;
+    if (item.kind !== "notice") continue;
+    if (item.tone === "error") return item.text;
+    notice ??= item.text;
+  }
+  return notice;
+}
+
+/** The machine never came back inside the bound: its links are told so, with the sentence for it. */
+function giveUpLostTurn(record: LostTurn): void {
+  if (!lostTurns.delete(record.thread)) return;
+  clearTimeout(record.timer);
+  const rows = lastTurnRows(get().threads[record.thread]);
+  linksFinished(record.links, record.thread, "failed", MACHINE_LOST_TURN, rows);
+}
+
+/**
+ * A thread read again from its machine, as opening it after a restart does: its replay, not ours.
+ * Answers whether that replay arrived; one the machine did not give leaves the thread as it was.
+ */
+async function reloadThread(thread: string): Promise<boolean> {
+  if (!connectionForThread(thread)) return false;
+  updateThread(thread, (t) => ({ ...t, loaded: false, openFailed: false }));
+  await openThread(thread);
+  const after = get().threads[thread];
+  return !!after?.loaded && !after.openFailed;
+}
+
 export async function runPrompt(
   id: string,
   text: string,
@@ -3699,8 +4120,11 @@ export async function runPrompt(
     autoCompact?: boolean;
     /** What the "Compacting context…" divider says for that `/compact` (`autoCompactingText`). */
     autoCompactText?: string;
-    /** The turn that continues after a limit: its wait is settled when it ends. */
-    limitResume?: boolean;
+    /**
+     * The turn that continues a thread the app was waiting for (a usage limit, an overload, the
+     * internet): its wait is kept while it runs and settled when it ends.
+     */
+    autoResume?: boolean;
     /**
      * The turn that carries the thread on after the app compacted it: its prompt reads as a divider
      * in the transcript, never as a message the user typed (`state/thread.ts` `CONTINUE_MARK`).
@@ -3732,10 +4156,10 @@ export async function runPrompt(
   // A prompt no agent asked for is the user's: the thread is theirs now, even
   // when it was started by an agent (state/topLevel.ts). A resume after a
   // restart, a wake or a message from another thread is not a message the user
-  // sent, and neither is the turn that continues after a usage limit.
+  // sent, and neither is the turn that continues after a wait.
   if (userTypedPrompt(options)) markMessaged(id);
-  // Whoever starts a turn now moots the wait, and if this one hits the limit too it waits again.
-  if (!options.limitResume && !options.autoCompact && !thread?.running) dropLimitWait(id);
+  // Whoever starts a turn now moots the wait, and if this one stops the same way it waits again.
+  if (!options.autoResume && !options.autoCompact && !thread?.running) dropWaits(id);
   // Never a second prompt into a running turn: an external harness takes it as the next turn and can
   // interrupt the tools it is still running (a parent's wait_session). It waits in the queue, like a
   // message typed meanwhile, and starts when this turn ends.
@@ -3846,6 +4270,20 @@ export async function runPrompt(
       ? meta.unusedSteers.filter((x): x is string => typeof x === "string")
       : [];
   } catch (error) {
+    // A turn on another machine outlives the request that asked for it: the request dies with the
+    // machine's connection, and the turn there goes on. Nothing is settled from the rows that had
+    // arrived — a half-written answer is not an answer — so the links are handed to `lostTurn`: it
+    // asks the machine how the thread ended once its channel is back, and gives them that answer
+    // then, or their failure after `LOST_MACHINE_MS` (issue 3440). Anything else is the engine's own
+    // refusal, and a failure as it always was.
+    if (error instanceof ConnectionClosedError && threadIsRemote(id)) {
+      // The channel's close usually ended the turn already (`watchMachineConnection`); when a
+      // closed channel is what refused the request, this is what ends it.
+      if (get().threads[id]?.running)
+        updateThread(id, (t) => finishTurn(t, "failed", Date.now(), MACHINE_LOST_TURN));
+      lostTurn(id, [options.link, ...(options.resumeLinks ?? [])]);
+      return "skipped";
+    }
     outcome = "failed";
     failure = errorText(error);
   }
@@ -3857,12 +4295,14 @@ export async function runPrompt(
     ...requeueSteers(finishTurn(t, outcome, Date.now(), failure, options.autoCompact), unused),
     ...(rawFailure !== failure ? { errorDetail: rawFailure } : {}),
   }));
-  // The limit is settled first: a turn it stopped is reported as the limit, not twice.
+  // The stop is settled first: a turn it stopped is reported as the stop, not twice.
   // An automatic compaction must leave a pending wait alone, not settle it.
   const waiting = options.autoCompact
     ? (get().limitWaits[id] ?? null)
-    : // The limit is read from what the harness said, not the words the thread shows.
-      settleLimitWait(id, outcome, rawFailure, startIndex);
+    : // The stop is read from what the harness said, not the words the thread shows.
+      settleStopWait(id, outcome, rawFailure, startIndex);
+  // A thread waiting for the internet is held, not dead: it says so in the composer's row.
+  const offline = options.autoCompact ? undefined : get().internetWaits[id];
   // An automatic compaction is not a turn the user waits for: it is not "Done"
   // news, and it must not wake the thread's parent as if its work finished.
   if (!options.autoCompact) {
@@ -3910,16 +4350,20 @@ export async function runPrompt(
   ) {
     const name = get().sessions.find((s) => s.id === id)?.title || "A thread";
     // A delegate finishing is already said twice: the wake message into its parent's transcript and
-    // the strip above that composer. Only a failure, or the limit that stopped it, is news here.
-    const delegated = options.link !== undefined && outcome === "completed" && !waiting;
+    // the strip above that composer. Only a failure, or the wait that stopped it, is news here.
+    const delegated = options.link !== undefined && outcome === "completed" && !waiting && !offline;
     if (!delegated) {
       toast(
         waiting
-          ? `“${name}” hit its limit and continues at ${limitTime(waiting.until)}`
-          : outcome === "failed"
-            ? `“${name}” failed`
-            : `“${name}” finished`,
-        waiting ? "info" : outcome === "failed" ? "error" : "success",
+          ? waiting.reason === "overload"
+            ? `“${name}” was overloaded and tries again at ${limitTime(waiting.until)}`
+            : `“${name}” hit its limit and continues at ${limitTime(waiting.until)}`
+          : offline
+            ? `“${name}” is waiting for the internet`
+            : outcome === "failed"
+              ? `“${name}” failed`
+              : `“${name}” finished`,
+        waiting || offline ? "info" : outcome === "failed" ? "error" : "success",
         { action: { label: "Open", run: () => selectThread(id) } },
       );
     }
@@ -3927,9 +4371,9 @@ export async function runPrompt(
   // A queued message starts at once, so "working" stays up across the hand-off. A turn that was
   // stopped or failed leaves the queue held instead (thread.ts `holdsQueue`): the rows read Held and
   // Resume starts them.
-  // Nor does one go out into a limit: it waits for the turn that continues.
+  // Nor does one go out into a wait: it waits for the turn that continues.
   const after = get().threads[id];
-  const next = after && !waiting ? nextQueued(after.queue, after) : undefined;
+  const next = after && !waiting && !offline ? nextQueued(after.queue, after) : undefined;
   if (next) {
     removeQueued(id, next.id);
     await runPrompt(id, next.text, next.extras, {
@@ -5046,7 +5490,7 @@ function autoCompactInput(s: AppState, id: string, now: number) {
     queued: thread?.queue.length ?? 0,
     approvals: thread?.permissions.length ?? 0,
     waiting: (thread?.waiting ?? 0) > 0,
-    limitWaiting: s.limitWaits[id] !== undefined,
+    limitWaiting: s.limitWaits[id] !== undefined || s.internetWaits[id] !== undefined,
     snoozed: id in s.snoozed,
     // Done or Failed until the row is opened (`markFinished`, `clearFinished`). A delegate is
     // read by its orchestrator, not by the user, so its own flag says nothing about what they read.
@@ -6552,12 +6996,21 @@ export function resetForTests() {
   remoteStatusReadId = 0;
   latestRemoteStatusReadId = 0;
   clearTimeout(slowTimer);
-  if (limitTimer) clearInterval(limitTimer);
-  limitTimer = null;
+  if (waitTimer) clearInterval(waitTimer);
+  waitTimer = null;
+  upSince.clear();
+  sending.clear();
+  if (scheduleTimer) clearInterval(scheduleTimer);
+  scheduleTimer = null;
+  sendingScheduled = false;
   clearPageCache();
   stopPlanPolling();
   resetWaits();
   forgetAutoCompact();
+  // A lost turn's timers outlive a test file, and its links belong to that file's book.
+  for (const record of lostTurns.values()) clearTimeout(record.timer);
+  lostTurns.clear();
+  lostMachineMs = LOST_MACHINE_MS;
   engineWatch?.();
   engineWatch = undefined;
   crashed = false;
@@ -6592,6 +7045,7 @@ export function resetForTests() {
     sessionCommands: {},
     drafts: {},
     extras: {},
+    scheduled: {},
     settings: null,
     switcherOpen: false,
     onboardingOpen: false,
@@ -6599,6 +7053,7 @@ export function resetForTests() {
     toastsPaused: false,
     connectCode: null,
     limitWaits: {},
+    internetWaits: {},
     continueAfterLimit: true,
     agent: undefined,
     pinned: [],
@@ -6652,16 +7107,43 @@ export function closeReport() {
 
 // ---------------------------------------------------------------- continuing after a limit
 
+// ---------------------------------------------------------------- waiting to continue
+
+// When the connection was first seen up again, by thread: a wait's stable period counts from it.
+// Memory only, so a wait saved across a restart simply needs the period again.
+const upSince = new Map<string, number>();
+// The threads whose resume turn this tick already sent, so one wait sends one turn.
+const sending = new Set<string>();
+
 function storeLimitWaits(next: Record<string, LimitWait>) {
   set({ limitWaits: next });
   store(STORAGE.limitWaits, JSON.stringify(next));
-  syncLimitTimer();
+  syncWaitTimers();
+}
+
+function storeInternetWaits(next: Record<string, InternetWait>) {
+  set({ internetWaits: next });
+  store(STORAGE.internetWaits, JSON.stringify(next));
+  syncWaitTimers();
 }
 
 /** The user's call, or something they did that makes the wait moot: no turn goes out for it. */
 export function dropLimitWait(id: string) {
   const { [id]: gone, ...rest } = get().limitWaits;
   if (gone) storeLimitWaits(rest);
+}
+
+/** The same for a thread waiting for the internet, and the moment its connection came back. */
+export function dropInternetWait(id: string) {
+  upSince.delete(id);
+  const { [id]: gone, ...rest } = get().internetWaits;
+  if (gone) storeInternetWaits(rest);
+}
+
+/** Both waits of a thread: its cancel, or a new turn of the user's that makes them moot. */
+function dropWaits(id: string) {
+  dropLimitWait(id);
+  dropInternetWait(id);
 }
 
 /** The time a wait ends, as the row and the toast say it. */
@@ -6672,21 +7154,32 @@ export function limitTime(until: number, now = Date.now()): string {
   return `${at.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}, ${time}`;
 }
 
+/** A turn that failed because the machine had no network waits for it to come back. */
+function waitForInternet(id: string, now: number) {
+  const s = get();
+  const wait = nextInternetWait(s.internetWaits[id], now, {
+    harness: harnessOf(s, id),
+    account: accountOn(s, id),
+  });
+  storeInternetWaits({ ...s.internetWaits, [id]: wait });
+}
+
 /**
- * A turn ended: on a limit it waits for the reset, on anything else the wait is
- * over. The limit is read from the failure or, as Claude Code says it, from the
- * reply. A stop by the user always ends it. Returns the wait a limit started.
+ * A turn ended. On a plan limit it waits for the reset; on a provider overload it
+ * waits out a doubling backoff; on a network failure it waits for the internet; on
+ * anything else every wait is over. The reason is read from the failure or, as
+ * Claude Code says a limit, from the reply. A stop by the user always ends them.
+ * Returns the limit-or-overload wait the turn started.
  */
-function settleLimitWait(
+function settleStopWait(
   id: string,
   outcome: "completed" | "cancelled" | "failed",
   failure: string | undefined,
   startIndex: number,
 ): LimitWait | null {
   const s = get();
-  const previous = s.limitWaits[id];
   if (!s.continueAfterLimit || outcome === "cancelled") {
-    dropLimitWait(id);
+    dropWaits(id);
     return null;
   }
   const reply = s.threads[id]?.items.slice(startIndex).findLast((i) => i.kind === "assistant");
@@ -6694,36 +7187,85 @@ function settleLimitWait(
   const key = planKeyFor(s, id);
   const windows = (key ? s.planCache[key]?.windows : undefined) ?? [];
   const now = Date.now();
-  const until = limitReset(said, now, windows);
-  if (until === null) {
+  const resetAt = limitReset(said, now, windows);
+  const overload = resetAt === null && overloadStop(said);
+  if (resetAt === null && !overload) {
+    // Not a stop that waits for a time: the network may be what the turn lost.
     dropLimitWait(id);
+    if (networkFailure(said)) waitForInternet(id, now);
+    else dropInternetWait(id);
     return null;
   }
-  const wait = nextWait(previous, { until, harness: harnessOf(s, id), account: accountOn(s, id) });
+  // A turn stopped on a limit or an overload is not also waiting for the internet.
+  dropInternetWait(id);
+  const reason = overload ? ("overload" as const) : ("limit" as const);
+  const prior = s.limitWaits[id];
+  // The attempt this one is: a wait that changed kind starts its own count (as `nextWait` does).
+  const attempt = prior && (prior.reason ?? "limit") === reason ? prior.attempts + 1 : 1;
+  const until = overload ? now + overloadDelay(attempt) : resetAt!;
+  const wait = nextWait(prior, {
+    until,
+    harness: harnessOf(s, id),
+    account: accountOn(s, id),
+    reason,
+  });
   if (!wait) {
     dropLimitWait(id);
     return null;
   }
   storeLimitWaits({ ...get().limitWaits, [id]: wait });
-  notifyThread({ threadId: id, kind: "limit", key: String(wait.until), title: threadName(id) }, get());
+  if (!overload)
+    notifyThread({ threadId: id, kind: "limit", key: String(wait.until), title: threadName(id) }, get());
   return wait;
 }
 
-let limitTimer: ReturnType<typeof setInterval> | null = null;
+let waitTimer: ReturnType<typeof setInterval> | null = null;
 
-/** One slow timer while anything waits: a Mac that slept wakes past the reset and still continues. */
-function syncLimitTimer() {
-  const waiting = Object.keys(get().limitWaits).length > 0;
-  if (waiting && !limitTimer) limitTimer = setInterval(() => void continueDueThreads(), 15_000);
-  else if (!waiting && limitTimer) {
-    clearInterval(limitTimer);
-    limitTimer = null;
+/**
+ * One timer while anything waits, on the internet's own beat: a Mac that slept
+ * wakes past a reset or past the connection's return and still goes on.
+ */
+function syncWaitTimers() {
+  const waiting = Object.keys(get().limitWaits).length > 0 || Object.keys(get().internetWaits).length > 0;
+  if (waiting && !waitTimer) waitTimer = setInterval(tickWaits, INTERNET_POLL_MS);
+  else if (!waiting && waitTimer) {
+    clearInterval(waitTimer);
+    waitTimer = null;
+  }
+}
+
+/** One tick for both kinds of wait: a reset or backoff falling due, and the internet coming back. */
+function tickWaits() {
+  void continueDueThreads();
+  void continueInternetThreads();
+}
+
+// The machine's own word on whether it is online is asked at once when it changes, rather than
+// waiting for the next tick: a network that comes back just after one is not waited out.
+if (typeof window !== "undefined") {
+  const nowOnline = () => {
+    if (Object.keys(get().internetWaits).length > 0) tickWaits();
+  };
+  window.addEventListener("online", nowOnline);
+  window.addEventListener("focus", nowOnline);
+  if (typeof document !== "undefined")
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") nowOnline();
+    });
+}
+
+/** Whether the machine has a network at all: the webview's own word, with no probe of ours. */
+function networkUp(): boolean {
+  try {
+    return typeof navigator === "undefined" || navigator.onLine !== false;
+  } catch {
+    return true;
   }
 }
 
 let continuing = false;
 
-/** Each thread whose limit has reset carries on, unless it now runs on something else. */
+/** Each thread whose limit or overload has passed carries on, unless it now runs on something else. */
 export async function continueDueThreads(now = Date.now()): Promise<void> {
   if (continuing || get().status !== "ready") return;
   continuing = true;
@@ -6737,7 +7279,7 @@ export async function continueDueThreads(now = Date.now()): Promise<void> {
         const s = get();
         return waitHolds(wait, { harness: harnessOf(s, id), account: accountOn(s, id) });
       };
-      // Switched already: another harness or login is not this limit, so nothing starts on its own.
+      // Switched already: another harness or login is not this stop, so nothing starts on its own.
       if (!holds()) {
         dropLimitWait(id);
         continue;
@@ -6753,17 +7295,100 @@ export async function continueDueThreads(now = Date.now()): Promise<void> {
         dropLimitWait(id);
         continue;
       }
-      void runPrompt(id, LIMIT_RESUME_TEXT, undefined, { automatic: true, limitResume: true });
+      void runPrompt(id, resumeText(wait), undefined, { automatic: true, autoResume: true });
     }
   } finally {
     continuing = false;
   }
 }
 
+let continuingNet = false;
+
+/**
+ * Each thread waiting for the internet goes on once the connection has stayed up
+ * for the period its attempt count asks for (state/internetWait.ts); a wait that
+ * outlives its patience says so and stops. Nothing runs while no thread waits.
+ */
+export async function continueInternetThreads(now = Date.now()): Promise<void> {
+  if (continuingNet) return;
+  const ids = Object.keys(get().internetWaits);
+  if (!ids.length) return;
+  if (!networkUp()) {
+    for (const id of ids) upSince.delete(id);
+    return;
+  }
+  continuingNet = true;
+  try {
+    for (const [id, wait] of Object.entries(get().internetWaits)) {
+      if (!get().sessions.some((x) => x.id === id) || get().archived[id]) {
+        if (get().sessionsLoaded) dropInternetWait(id);
+        continue;
+      }
+      const holds = () => {
+        const s = get();
+        return internetHolds(wait, { harness: harnessOf(s, id), account: accountOn(s, id) });
+      };
+      if (!holds()) {
+        dropInternetWait(id);
+        continue;
+      }
+      if (internetGaveUp(wait, now)) {
+        dropInternetWait(id);
+        toast(`“${threadName(id)}” stopped waiting for the internet. Send it a message when you are back.`);
+        continue;
+      }
+      const since = upSince.get(id) ?? now;
+      upSince.set(id, since);
+      if (sending.has(id) || !internetDue(wait, since, now) || get().status !== "ready") continue;
+      await openThread(id);
+      for (let i = 0; i < 100 && !get().threads[id]?.loaded; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      const thread = get().threads[id];
+      if (!thread?.loaded || thread.running) continue;
+      if (!holds()) {
+        dropInternetWait(id);
+        continue;
+      }
+      // Counted before it goes out: a flaky connection that drops this turn again asks for a longer pause.
+      storeInternetWaits({ ...get().internetWaits, [id]: { ...wait, attempts: wait.attempts + 1 } });
+      upSince.delete(id);
+      sending.add(id);
+      void runPrompt(id, INTERNET_RESUME_TEXT, undefined, {
+        automatic: true,
+        autoResume: true,
+      }).finally(() => sending.delete(id));
+    }
+  } finally {
+    continuingNet = false;
+  }
+}
+
+/** The user's "Send now": the thread goes on at once instead of waiting out its stop. */
+export function resumeWaitNow(id: string) {
+  const wait = get().limitWaits[id];
+  const offline = get().internetWaits[id];
+  if (!wait && !offline) return;
+  dropWaits(id);
+  if (wait) void runPrompt(id, resumeText(wait), undefined, { automatic: true });
+  else void runPrompt(id, INTERNET_RESUME_TEXT, undefined, { automatic: true });
+}
+
+/** The row's Cancel: this thread is not continuing on its own. */
+export function cancelWait(id: string) {
+  dropWaits(id);
+}
+
 export function setContinueAfterLimit(on: boolean) {
   set({ continueAfterLimit: on });
   store(STORAGE.continueAfterLimit, on ? "1" : "0");
-  if (!on) storeLimitWaits({});
+  if (!on) storeWaitsCleared();
+}
+
+/** Turning the waits off drops both kinds, without two writes of a half-cleared state. */
+function storeWaitsCleared() {
+  storeLimitWaits({});
+  storeInternetWaits({});
 }
 
 // ---------------------------------------------------------------- resuming after a restart

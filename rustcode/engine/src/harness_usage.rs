@@ -136,7 +136,7 @@ fn claude_logs(id: &str, cwd: Option<&Path>, account_config_dir: Option<&Path>) 
     if !safe_id(id) {
         return Vec::new();
     }
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = crate::home::home_dir();
     let configured = std::env::var_os("CLAUDE_CONFIG_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
@@ -207,8 +207,8 @@ fn pi_log(id: &str) -> Option<PathBuf> {
     if !safe_id(id) {
         return None;
     }
-    let home = std::env::var_os("HOME")?;
-    let sessions = PathBuf::from(home).join(".pi/agent/sessions");
+    let home = crate::home::home_dir()?;
+    let sessions = home.join(".pi/agent/sessions");
     let wanted = format!("_{id}.jsonl");
     for entry in std::fs::read_dir(&sessions).ok()?.flatten() {
         let dir = entry.path();

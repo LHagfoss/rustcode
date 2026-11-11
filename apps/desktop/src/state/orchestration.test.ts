@@ -50,6 +50,7 @@ import {
   linksLeft,
   linkThreads,
   listSessions,
+  MACHINE_LOST_TURN,
   MAX_ACTIVITY_ITEMS,
   MAX_DATA_ROWS,
   MAX_DEPTH,
@@ -383,10 +384,10 @@ describe("orchestration rules", () => {
   });
 
   test("the app advertises the version whose arguments it answers", () => {
-    // The engine strips `account` below 5, `attachments` below 10, `machine` below 12 and
-    // `standalone` below 14, and refuses a call that carries one: the app speaks the newest,
-    // so it is offered all four.
-    expect(CAPABILITY_VERSION).toBe(14);
+    // The engine strips `account` below 5, `attachments` below 10, `machine` below 12,
+    // `steer` below 14 and `standalone` below 15, and refuses a call that carries one:
+    // the app speaks the newest, so it is offered all five.
+    expect(CAPABILITY_VERSION).toBe(15);
   });
 
   test("a machine is read from any call that takes one, and absent when it is not named", () => {
@@ -504,7 +505,7 @@ describe("orchestration rules", () => {
 
   test("same project, a thread's delegate limit, one orchestrator per target", () => {
     const a = thread("a");
-    expect(checkMessage(a, thread("b", "/other"), emptyBook())?.code).toBe("not_allowed");
+    expect(checkMessage(a, thread("b", "/other"), emptyBook())).toBeNull();
     expect(checkMessage(a, a, emptyBook())?.code).toBe("not_allowed");
     expect(checkMessage(a, undefined, emptyBook())?.code).toBe("not_found");
     // A worktree thread belongs to its repository's project.
@@ -655,12 +656,12 @@ describe("orchestration rules", () => {
     expect((scoped.sessions as { project?: string }[])[0]?.project).toBeUndefined();
   });
 
-  test("reading reaches another project only when allowed; writing never does", () => {
+  test("reading needs the setting; messaging uses host approval across projects", () => {
     const a = thread("a");
     const other = thread("b", "/other");
     expect(checkMessage(a, other, emptyBook(), true)?.code).toBe("not_allowed");
     expect(checkMessage(a, other, emptyBook(), true, true)).toBeNull();
-    expect(checkMessage(a, other, emptyBook(), false, true)?.code).toBe("not_allowed");
+    expect(checkMessage(a, other, emptyBook(), false, true)).toBeNull();
     expect(checkMessage(a, a, emptyBook(), true, true)?.code).toBe("not_allowed");
     expect(checkMessage(a, undefined, emptyBook(), true, true)?.code).toBe("not_found");
   });
@@ -1010,7 +1011,7 @@ describe("projects", () => {
   test("two repositories stay two projects", () => {
     const other = thread("other", "/Users/me/code/other", { repo: "/Users/me/code/other" });
     expect(checkManage(main, other)?.code).toBe("not_allowed");
-    expect(checkMessage(main, other, emptyBook())?.code).toBe("not_allowed");
+    expect(checkMessage(main, other, emptyBook())).toBeNull();
     expect(listSessions([main, other], main, "").sessions).toEqual([]);
   });
 
@@ -1979,6 +1980,26 @@ describe("answering with the slots and the child's activity", () => {
     expect(entry).toMatchObject({ answer_truncated: true, session_id: "b", link_id: "a/b" });
     // An answer that fits says nothing about truncation.
     expect(linkResult({ ...cut, truncated: false }, "done")).not.toHaveProperty("answer_truncated");
+  });
+});
+
+describe("a delegate whose machine went away mid-turn", () => {
+  test("its link reaches wait_session as done or failed, with that turn's answer", () => {
+    // The settled link is what the parent's row and `wait_session` read (state/store.ts
+    // `lostTurn` settles it once the machine says how the thread ended).
+    const done = linkResult(
+      { ...link("a", "b", "working"), state: "done", answer: "All 12 tests pass." },
+      "done",
+    );
+    expect(done).toMatchObject({ status: "done", link_id: "a/b", answer: "All 12 tests pass." });
+    expect(done).not.toHaveProperty("note");
+    // A machine that never came back is the failure, and the row previews that sentence.
+    expect(MACHINE_LOST_TURN).toBe("The machine disconnected during this turn.");
+    const failed = linkResult(
+      { ...link("a", "b", "working"), state: "failed", error: MACHINE_LOST_TURN },
+      "failed",
+    );
+    expect(failed).toMatchObject({ status: "failed" });
   });
 });
 

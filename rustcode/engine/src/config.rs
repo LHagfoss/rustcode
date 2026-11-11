@@ -554,6 +554,77 @@ pub struct ContextBudget {
     pub history_tokens: u32,
 }
 
+/// Whether `value` is an environment variable name (`^[A-Za-z_][A-Za-z0-9_]*$`).
+/// `env_key` holds the *name* of the variable, never the key itself, so a
+/// pasted secret such as `omlx-…` is not one and must not be looked up or
+/// reported as if it were.
+pub fn is_env_var_name(value: &str) -> bool {
+    let mut characters = value.chars();
+    match characters.next() {
+        Some(first) if first.is_ascii_alphabetic() || first == '_' => {}
+        _ => return false,
+    }
+    characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
+}
+
+/// What is wrong with a profile's `env_key`, phrased so the secret itself is
+/// never part of the message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnvKeyProblem {
+    /// `env_key` repeats `api_key` verbatim: one pasted secret stored twice,
+    /// and the `env_key` copy can never resolve.
+    DuplicatesApiKey,
+    /// `env_key` is not an environment variable name (it carries whitespace,
+    /// `-`, `:`, `=` or similar), so it cannot name a variable.
+    NotAVariableName,
+}
+
+impl EnvKeyProblem {
+    /// The warning body, naming the field and never the value.
+    pub fn describe(self) -> &'static str {
+        match self {
+            EnvKeyProblem::DuplicatesApiKey => concat!(
+                "`env_key` is set to the same value as `api_key`; `env_key` must be the NAME of ",
+                "the environment variable that holds the key (for example `OPENAI_API_KEY`), so ",
+                "this profile stores the secret twice and the `env_key` copy is unusable"
+            ),
+            EnvKeyProblem::NotAVariableName => concat!(
+                "`env_key` is not an environment variable name (expected a name such as ",
+                "`OPENAI_API_KEY`, not the key itself), so it is ignored and the profile falls ",
+                "back to `api_key` or `credential`"
+            ),
+        }
+    }
+}
+
+/// Which field supplies a profile's credential, in resolution order. Carries
+/// variable names only, never a value, so it is safe to print.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CredentialSource {
+    /// A credential-store reference (`credential`) supplies the key.
+    Credential,
+    /// `env_key` names this environment variable.
+    EnvKey(String),
+    /// `api_key` holds the key literally, or names a variable with `env:NAME`.
+    ApiKey { env: Option<String> },
+    /// The profile names no credential at all.
+    None,
+}
+
+impl CredentialSource {
+    /// A short label for `doctor`: which field supplies the credential, with
+    /// no secret in it.
+    pub fn describe(&self) -> String {
+        match self {
+            CredentialSource::Credential => "credential (os credential store)".to_string(),
+            CredentialSource::EnvKey(name) => format!("env_key={name}"),
+            CredentialSource::ApiKey { env: Some(name) } => format!("api_key=env:{name}"),
+            CredentialSource::ApiKey { env: None } => "api_key (literal key in config)".to_string(),
+            CredentialSource::None => "no credential configured".to_string(),
+        }
+    }
+}
+
 impl ModelProfile {
     /// Whether this profile is the provider/model combination whose larger
     /// tool budget has been verified. Other profiles must opt in explicitly
@@ -1028,7 +1099,11 @@ impl ModelProfile {
         // `~/.zshrc` resolve even when RustCode was launched outside the
         // user's interactive shell (desktop entry, systemd, IDE, tmux
         // server). Process env always wins. See `shell_env.rs`.
+        // An `env_key` that is not a variable name is a pasted secret or a
+        // typo, not a reference: ignore it instead of looking it up, so the
+        // profile keeps working through `api_key` (and `doctor` says so).
         if let Some(ref env_name) = self.env_key
+            && is_env_var_name(env_name)
             && let Some(val) = crate::shell_env::env_var(env_name)
             && !val.trim().is_empty()
         {
@@ -1036,7 +1111,8 @@ impl ModelProfile {
         }
         if let Some(ref k) = self.api_key {
             if let Some(var_name) = k.strip_prefix("env:") {
-                if let Some(val) = crate::shell_env::env_var(var_name)
+                if is_env_var_name(var_name)
+                    && let Some(val) = crate::shell_env::env_var(var_name)
                     && !val.trim().is_empty()
                 {
                     return Some(val);
@@ -1053,14 +1129,18 @@ impl ModelProfile {
     }
 
     /// Name of the environment variable holding this profile's key, for
-    /// startup hydration and `doctor` diagnostics.
+    /// startup hydration and `doctor` diagnostics. An `env_key` that is not a
+    /// variable name (a pasted secret, say) is never returned: reporting it as
+    /// a name would echo the secret.
     pub fn api_key_env_name(&self) -> Option<&str> {
-        if let Some(ref env_name) = self.env_key {
+        if let Some(ref env_name) = self.env_key
+            && is_env_var_name(env_name)
+        {
             return Some(env_name);
         }
         if let Some(ref k) = self.api_key {
             if let Some(var_name) = k.strip_prefix("env:") {
-                return Some(var_name);
+                return is_env_var_name(var_name).then_some(var_name);
             }
             // A bare `api_key = "SOME_VAR"` doubles as an env reference when
             // it looks like a variable name; surface it so hydration and
@@ -1076,6 +1156,39 @@ impl ModelProfile {
             }
         }
         None
+    }
+
+    /// Why this profile's `env_key` is unusable or double-stores the secret,
+    /// or `None` when it is a plain variable name (or unset). The value itself
+    /// is never part of the answer.
+    pub fn env_key_problem(&self) -> Option<EnvKeyProblem> {
+        let env_key = self.env_key.as_deref()?;
+        if env_key.trim().is_empty() {
+            return None;
+        }
+        if self.api_key.as_deref() == Some(env_key) {
+            return Some(EnvKeyProblem::DuplicatesApiKey);
+        }
+        (!is_env_var_name(env_key)).then_some(EnvKeyProblem::NotAVariableName)
+    }
+
+    /// Which field supplies this profile's credential, mirroring resolution
+    /// order: `credential`, then a valid `env_key`, then `api_key`.
+    pub fn credential_source(&self) -> CredentialSource {
+        if self.credential.is_some() {
+            return CredentialSource::Credential;
+        }
+        if let Some(env_name) = self.env_key.as_deref()
+            && is_env_var_name(env_name)
+        {
+            return CredentialSource::EnvKey(env_name.to_string());
+        }
+        match self.api_key.as_deref().map(str::trim) {
+            Some(key) if !key.is_empty() => CredentialSource::ApiKey {
+                env: self.api_key_env_name().map(str::to_string),
+            },
+            _ => CredentialSource::None,
+        }
     }
 }
 
@@ -1495,6 +1608,19 @@ pub struct SessionModelScope {
 }
 
 impl AppConfig {
+    /// One warning per profile whose `env_key` is unusable or repeats the
+    /// secret, naming the profile and the field and never the value.
+    pub fn credential_warnings(&self) -> Vec<String> {
+        self.models
+            .iter()
+            .filter_map(|profile| {
+                profile.env_key_problem().map(|problem| {
+                    format!("model profile `{}`: {}", profile.name, problem.describe())
+                })
+            })
+            .collect()
+    }
+
     /// Run the session on `name` without making it the default for new
     /// sessions.
     pub fn use_profile_for_session(&mut self, name: String) {
@@ -1990,6 +2116,32 @@ fn default_endpoint(config: &AppConfig) -> (String, String) {
         .unwrap_or_default()
 }
 
+/// Print each credential warning to stderr and the debug log once per
+/// process, so a profile that stores the same secret in `api_key` and
+/// `env_key` is visible rather than silent. Returns the lines actually
+/// emitted; the secret is never part of any of them.
+pub fn warn_credential_misconfigurations(config: &AppConfig) -> Vec<String> {
+    use std::collections::HashSet;
+    use std::sync::{LazyLock, Mutex};
+
+    static EMITTED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Default::default);
+    let mut emitted = Vec::new();
+    for warning in config.credential_warnings() {
+        let first_time = EMITTED
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(warning.clone());
+        if !first_time {
+            continue;
+        }
+        let line = format!("[rustcode] WARNING: {warning}");
+        eprintln!("{line}");
+        crate::dbg_log!("[config] {warning}");
+        emitted.push(line);
+    }
+    emitted
+}
+
 pub fn load_config() -> (String, String, AppConfig) {
     match get_config_dir() {
         Some(dir) => load_config_from(&dir),
@@ -2016,6 +2168,7 @@ fn overlay_project_config(mut config: AppConfig, workspace: &Path) -> (String, S
             Err(error) => eprintln!("[rustcode] WARNING: {error}"),
         }
     }
+    warn_credential_misconfigurations(&config);
     let (url, model) = resolve_model_endpoint(&config, config.default.big());
     (url, model, config)
 }
@@ -2192,6 +2345,10 @@ pub fn load_config_from(dir: &Path) -> (String, String, AppConfig) {
             profile.context_window = d.context_window;
         }
     }
+
+    // A profile whose `env_key` is a pasted secret rather than a variable name
+    // is a misconfiguration worth surfacing at load time, not a silent no-op.
+    warn_credential_misconfigurations(&config);
 
     let (url, model) = resolve_model_endpoint(&config, config.default.big());
 
