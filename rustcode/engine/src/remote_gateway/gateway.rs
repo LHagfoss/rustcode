@@ -1528,6 +1528,15 @@ impl Gateway {
         &self.shared.gateway_id
     }
 
+    /// Record what this gateway listens on for the next start, through the
+    /// owner lock it holds: the settings are only ever written by the one
+    /// gateway that won the lock (issue 3412).
+    pub fn save_settings(&self, settings: &super::lifecycle::GatewaySettings) -> Result<()> {
+        self._ownership
+            .lifecycle
+            .save_settings(&self._ownership._lock, settings)
+    }
+
     /// Cancel this to stop [`Gateway::run`] and close every connection.
     pub fn shutdown_token(&self) -> CancellationToken {
         self.shared.shutdown.clone()

@@ -72,20 +72,6 @@ pub async fn serve(
     let plan =
         plan_listen_with_preference(bind, advertise, &candidate_addresses(), prefer_interface)?;
     let lifecycle = RemoteLifecycle::new(config_directory);
-    // What this gateway listens on and where it announces itself, kept for
-    // the next start: the RustCode server reads it to start the gateway at
-    // login with no app or terminal around. Best effort — a read-only config
-    // directory must not keep the user's machine unreachable.
-    let settings = GatewaySettings::starting(
-        Some(bind.to_owned()),
-        Some(port),
-        advertise.map(str::to_owned),
-        prefer_interface.map(str::to_owned),
-        GatewayOwner::from_env(),
-    );
-    if let Err(error) = lifecycle.save_settings(&settings) {
-        eprintln!("warning: could not record the gateway's settings: {error:#}");
-    }
     let hub = SessionHub::start(HubLimits::default());
     let gateway = Gateway::bind(
         &lifecycle,
@@ -121,6 +107,23 @@ pub async fn serve(
     )
     .await?;
     let port = gateway.local_addr().port();
+    // What this gateway listens on and where it announces itself, kept for
+    // the next start: the RustCode server reads it to start the gateway at
+    // login with no app or terminal around. Written only now: the bind above
+    // took the owner lock, so a `remote serve` that lost that lock (a stale
+    // login agent, a second start) can never overwrite the durable settings of
+    // the gateway that won. Best effort — a read-only config directory must
+    // not keep the user's machine unreachable.
+    let settings = GatewaySettings::starting(
+        Some(bind.to_owned()),
+        Some(port),
+        advertise.map(str::to_owned),
+        prefer_interface.map(str::to_owned),
+        GatewayOwner::from_env(),
+    );
+    if let Err(error) = gateway.save_settings(&settings) {
+        eprintln!("warning: could not record the gateway's settings: {error:#}");
+    }
     let initial_bind = gateway.local_addr().ip();
     let initial_loopback = plan.advertise.is_loopback();
     let gateway_id = gateway.gateway_id().to_owned();

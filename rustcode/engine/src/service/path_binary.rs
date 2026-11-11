@@ -8,8 +8,15 @@
 //! is an older copy, those checks compare the wrong binary and the service
 //! runs something else than the app.
 //!
-//! This says which copy `PATH` finds, which version it is, and the exact
+//! This says which copy a shell finds, which version it is, and the exact
 //! command that fixes it. Nothing here changes the machine.
+//!
+//! "What a shell finds" is not this process's `PATH`: a desktop app launched
+//! from the Dock inherits launchd's short path, with neither `/opt/homebrew/bin`
+//! nor `~/.rustcode/bin` in it, so the app's own engine would report the copy a
+//! `launchctl` job runs rather than the one the user's terminal runs. On macOS
+//! and Linux the login shell's `PATH` is asked for first (`shell_env`), as
+//! harness detection does for the same reason; Windows keeps its own `PATH`.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -25,8 +32,8 @@ pub struct PathRustcode {
     pub version: Option<String>,
 }
 
-/// `PATH` env value and the extensions to try, as the OS names them.
-fn path_and_extensions() -> (std::ffi::OsString, Vec<String>) {
+/// The extensions to try, as the OS names them.
+fn extensions() -> Vec<String> {
     let mut exts = vec![String::new()];
     if cfg!(windows) {
         let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
@@ -37,7 +44,76 @@ fn path_and_extensions() -> (std::ffi::OsString, Vec<String>) {
                 .map(str::to_ascii_lowercase),
         );
     }
-    (std::env::var_os("PATH").unwrap_or_default(), exts)
+    exts
+}
+
+/// The `PATH` a shell resolves against: the login shell's directories first,
+/// then this process's, so a Dock-launched app reports what the user's
+/// terminal runs. Windows has no login shell to ask and keeps its own.
+fn search_path() -> std::ffi::OsString {
+    let login = login_shell_path();
+    let process = std::env::var_os("PATH");
+    chosen_path(login, process, cfg!(windows))
+}
+
+/// [`search_path`] with both halves named, so the order is testable.
+fn chosen_path(
+    login: Option<std::ffi::OsString>,
+    process: Option<std::ffi::OsString>,
+    windows: bool,
+) -> std::ffi::OsString {
+    let process = process.unwrap_or_default();
+    if windows {
+        return process;
+    }
+    let mut directories: Vec<PathBuf> = Vec::new();
+    for value in [login.as_deref(), Some(process.as_os_str())]
+        .into_iter()
+        .flatten()
+    {
+        if value.is_empty() {
+            continue;
+        }
+        for directory in std::env::split_paths(value) {
+            if !directories.contains(&directory) {
+                directories.push(directory);
+            }
+        }
+    }
+    std::env::join_paths(directories).unwrap_or_default()
+}
+
+/// The login shell's `PATH`. A test never starts a login shell: it would be
+/// slow, and it would read the developer's dotfiles.
+fn login_shell_path() -> Option<std::ffi::OsString> {
+    #[cfg(test)]
+    {
+        None
+    }
+    #[cfg(not(test))]
+    {
+        crate::shell_env::login_shell_var("PATH").map(std::ffi::OsString::from)
+    }
+}
+
+/// Whether a shell could run `path`: `PATH` lookup never returns a directory
+/// or a file without an execute bit, so neither may shadow the real copy.
+fn is_program(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 /// `rustcode` on `path`, trying each of `exts`. The name is fixed, so no
@@ -46,7 +122,7 @@ fn find_on(path: &std::ffi::OsStr, exts: &[String]) -> Option<PathBuf> {
     for directory in std::env::split_paths(path) {
         for ext in exts {
             let candidate = directory.join(format!("rustcode{ext}"));
-            if candidate.is_file() {
+            if is_program(&candidate) {
                 return Some(candidate);
             }
         }
@@ -62,10 +138,15 @@ fn version_from(output: &str) -> Option<String> {
         .then(|| version.to_owned())
 }
 
-/// The `rustcode` a shell runs, or `None` when `PATH` has none.
+/// The `rustcode` a shell runs, or `None` when no `PATH` has one.
 pub async fn observe() -> Option<PathRustcode> {
-    let (path, exts) = path_and_extensions();
-    let binary = find_on(&path, &exts)?;
+    // Asking a login shell is blocking (it spawns one and caches its
+    // environment), and this runs from the status of a live server.
+    let path = match tokio::runtime::Handle::try_current() {
+        Ok(runtime) => runtime.spawn_blocking(search_path).await.ok()?,
+        Err(_) => search_path(),
+    };
+    let binary = find_on(&path, &extensions())?;
     let version = ask_version(&binary).await;
     Some(PathRustcode {
         path: binary,
@@ -78,7 +159,10 @@ async fn ask_version(binary: &Path) -> Option<String> {
     command
         .arg("--version")
         .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stderr(std::process::Stdio::null())
+        // The timeout ends the wait, not the child: a binary that hangs must
+        // not outlive it.
+        .kill_on_drop(true);
     let output = tokio::time::timeout(VERSION_TIMEOUT, command.output())
         .await
         .ok()?
@@ -127,6 +211,27 @@ enum Direction {
     Unknown,
 }
 
+/// Where Homebrew keeps what it installed: Apple Silicon under
+/// `/opt/homebrew`, Intel Macs under `/usr/local/Cellar` with their
+/// executables symlinked into `/usr/local/bin`.
+const HOMEBREW_PREFIXES: &[&str] = &["/opt/homebrew/", "/usr/local/Cellar/"];
+
+/// Whether `path` is one of the given prefixes, directly or through the
+/// symlink Homebrew installs into `/usr/local/bin` (Intel) or
+/// `/opt/homebrew/bin` (Apple Silicon).
+fn under_any(path: &Path, prefixes: &[&str]) -> bool {
+    let matches = |candidate: &Path| {
+        let text = candidate.to_string_lossy();
+        prefixes.iter().any(|prefix| text.starts_with(prefix))
+    };
+    matches(path) || path.canonicalize().is_ok_and(|real| matches(&real))
+}
+
+/// Whether `path` is a copy Homebrew installed, so `brew upgrade` is its fix.
+fn from_homebrew(path: &Path) -> bool {
+    under_any(path, HOMEBREW_PREFIXES)
+}
+
 fn direction(found: &str, this: &str) -> Direction {
     fn numbers(value: &str) -> Option<Vec<u64>> {
         value
@@ -161,10 +266,7 @@ fn advice(
         this.display()
     );
     let direction = direction(found_version, this_version);
-    if !windows
-        && (found.path.starts_with("/opt/homebrew/")
-            || found.path.starts_with("/usr/local/Cellar/"))
-    {
+    if !windows && from_homebrew(&found.path) {
         return match direction {
             Direction::Newer => format!(
                 "{who} Update RustCode here (Settings › About › Check for updates), or remove {path}."
@@ -224,13 +326,23 @@ mod tests {
         let second = dir.join("second");
         std::fs::create_dir_all(&first).unwrap();
         std::fs::create_dir_all(&second).unwrap();
-        std::fs::write(first.join("rustcode-tui"), "").unwrap();
-        std::fs::write(second.join("rustcode"), "").unwrap();
+        // Copies `PATH` could actually run: a file without an execute bit is
+        // not one (see `a_file_that_cannot_be_run_is_not_the_copy_a_shell_runs`).
+        #[cfg(unix)]
+        let executable = |path: &Path| {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::write(path, "").unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        #[cfg(not(unix))]
+        let executable = |path: &Path| std::fs::write(path, "").unwrap();
+        executable(&first.join("rustcode-tui"));
+        executable(&second.join("rustcode"));
         let path = std::env::join_paths([&first, &second]).unwrap();
         let exts = vec![String::new()];
         assert_eq!(find_on(&path, &exts), Some(second.join("rustcode")));
         // On Windows the resolved name carries its extension.
-        std::fs::write(first.join("rustcode.exe"), "").unwrap();
+        executable(&first.join("rustcode.exe"));
         let with_exe = vec![String::new(), ".exe".to_owned()];
         assert_eq!(find_on(&path, &with_exe), Some(first.join("rustcode.exe")));
         std::fs::remove_dir_all(&dir).unwrap();
@@ -286,7 +398,7 @@ mod tests {
 
     #[test]
     fn another_copy_is_updated_or_removed() {
-        let found = found("/usr/local/bin/rustcode", "1.20.0");
+        let found = found("/usr/bin/rustcode", "1.20.0");
         let text = advice(
             &found,
             "1.20.0",
@@ -296,10 +408,110 @@ mod tests {
             Some(Path::new("/Users/ada")),
         );
         assert!(
-            text.contains("Update /usr/local/bin/rustcode to 1.28.0"),
+            text.contains("Update /usr/bin/rustcode to 1.28.0"),
             "{text}"
         );
         assert!(text.contains("or remove it so a shell finds"), "{text}");
+    }
+
+    /// An app launched from the Dock inherits launchd's short `PATH`, which has
+    /// neither Homebrew's nor the install script's directory in it: the copy a
+    /// terminal runs is found through the login shell's `PATH`.
+    #[test]
+    fn the_path_a_shell_uses_comes_before_the_process_path() {
+        let login = std::ffi::OsString::from("/opt/homebrew/bin:/Users/ada/.rustcode/bin");
+        let process = std::ffi::OsString::from("/usr/bin:/bin:/opt/homebrew/bin");
+        let chosen: Vec<PathBuf> =
+            std::env::split_paths(&chosen_path(Some(login), Some(process), false)).collect();
+        assert_eq!(
+            chosen,
+            vec![
+                PathBuf::from("/opt/homebrew/bin"),
+                // Where the install script puts its copy: invisible to a Dock
+                // launch, so the warning must find it through the login shell.
+                PathBuf::from("/Users/ada/.rustcode/bin"),
+                // The process's own directories still count, once.
+                PathBuf::from("/usr/bin"),
+                PathBuf::from("/bin"),
+            ]
+        );
+        // A process that already has the full path is not duplicated.
+        let only = std::ffi::OsString::from("/usr/bin:/bin");
+        assert_eq!(
+            chosen_path(Some(only.clone()), Some(only.clone()), false),
+            only
+        );
+        // No login shell to ask (a test, or a missing one): the process's.
+        assert_eq!(chosen_path(None, Some(only.clone()), false), only);
+        assert_eq!(chosen_path(Some(only.clone()), None, false), only);
+        // Windows keeps its own PATH: there is no login shell to ask.
+        let windows = chosen_path(
+            Some(std::ffi::OsString::from("C:\\Login\\bin")),
+            Some(std::ffi::OsString::from("C:\\Windows\\System32")),
+            true,
+        );
+        assert_eq!(windows, std::ffi::OsString::from("C:\\Windows\\System32"));
+    }
+
+    /// Intel Homebrew is `/usr/local/bin` symlinked into `/usr/local/Cellar`,
+    /// so the link is resolved before the prefix is matched.
+    #[test]
+    fn a_homebrew_copy_is_recognised_through_its_bin_symlink() {
+        let dir = std::env::temp_dir().join(format!("rc-brew-{}", std::process::id()));
+        let cellar = dir.join("Cellar/rustcode/1.28.0/bin");
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&cellar).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(cellar.join("rustcode"), "").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(cellar.join("rustcode"), bin.join("rustcode")).unwrap();
+        #[cfg(unix)]
+        {
+            // `canonicalize` returns the real path (`/private/var/...` on
+            // macOS), so the prefix the copy is matched against is real too.
+            let root = dir.canonicalize().unwrap();
+            let prefixes = [format!("{}/Cellar/", root.display())];
+            let prefixes: Vec<&str> = prefixes.iter().map(String::as_str).collect();
+            assert!(under_any(&bin.join("rustcode"), &prefixes));
+            // A copy that is nobody's symlink is not Homebrew's.
+            let plain = dir.join("plain/rustcode");
+            std::fs::create_dir_all(plain.parent().unwrap()).unwrap();
+            std::fs::write(&plain, "").unwrap();
+            assert!(!under_any(&plain, &prefixes));
+        }
+        // The real prefixes keep matching at the string level.
+        assert!(from_homebrew(Path::new(
+            "/usr/local/Cellar/rustcode/1.28.0/bin/rustcode"
+        )));
+        assert!(from_homebrew(Path::new("/opt/homebrew/bin/rustcode")));
+        assert!(!from_homebrew(Path::new("/usr/bin/rustcode")));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A `rustcode` without an execute bit is no copy `PATH` runs, so it must
+    /// not shadow the real one and leave it unreported.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_cannot_be_run_is_not_the_copy_a_shell_runs() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("rc-exec-{}", std::process::id()));
+        let shadow = dir.join("shadow");
+        let real = dir.join("real");
+        std::fs::create_dir_all(&shadow).unwrap();
+        std::fs::create_dir_all(&real).unwrap();
+        // A copy that is there but cannot be run, as an interrupted install
+        // leaves it.
+        std::fs::write(shadow.join("rustcode"), "").unwrap();
+        std::fs::write(real.join("rustcode"), "").unwrap();
+        std::fs::set_permissions(
+            real.join("rustcode"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        let path = std::env::join_paths([&shadow, &real]).unwrap();
+        let exts = vec![String::new()];
+        assert_eq!(find_on(&path, &exts), Some(real.join("rustcode")));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

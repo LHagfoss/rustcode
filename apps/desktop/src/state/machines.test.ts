@@ -602,13 +602,17 @@ describe("the RustCode server in the background", () => {
       pairedDevices: 1,
       port: 17879,
     };
-    expect(gatewayLine(server)).toBe("Running on 100.90.28.23:17879 (started by the RustCode server)");
+    expect(gatewayLine(server, true)).toBe("Running on 100.90.28.23:17879 (started by the RustCode server)");
     // Started by the app: reachable only while the app runs, and the line says so.
-    expect(gatewayLine({ ...server, owner: "app" })).toBe(
+    expect(gatewayLine({ ...server, owner: "app" }, true)).toBe(
       "Running on 100.90.28.23:17879 (started by the app)",
     );
-    expect(gatewayLine({ ...server, running: false, address: null })).toBe(
+    expect(gatewayLine({ ...server, running: false, address: null }, true)).toBe(
       "Not running · the server starts it on port 17879",
+    );
+    // No server installed: nothing restarts it, so the line must not say one does.
+    expect(gatewayLine({ ...server, running: false, address: null }, false)).toBe(
+      "Not running · `rustcode remote start` starts it on port 17879",
     );
     expect(gatewayLine({ ...gatewayOff(), port: null })).toBe("Off");
     expect(gatewayLine(undefined)).toBe("Not checked yet");

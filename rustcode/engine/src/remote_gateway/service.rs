@@ -87,7 +87,7 @@ pub async fn start(
     let launcher = &effective;
     #[cfg(target_os = "macos")]
     if launcher.owner == GatewayOwner::Server || server_installed() {
-        remove_login_agent(&launcher.config_directory).await;
+        let _removed = remove_login_agent(&launcher.config_directory).await;
     }
     #[cfg(target_os = "macos")]
     if launcher.owner != GatewayOwner::Server
@@ -227,28 +227,59 @@ pub async fn uninstall(config: &Path) -> Result<()> {
     Ok(())
 }
 
+/// How long a removed agent gets to release the gateway it ran.
+#[cfg(target_os = "macos")]
+const AGENT_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Remove the gateway's LaunchAgent, if one was installed, and wait for
 /// launchd to let go of the gateway it ran. A machine that installs the
 /// RustCode server stops using it: the server hosts the gateway instead.
+///
+/// Answers whether an agent was installed — the durable evidence is its
+/// plist, so a server that finds one hands the gateway over deliberately
+/// instead of adopting a gateway that is about to disappear.
 #[cfg(target_os = "macos")]
-pub(crate) async fn remove_login_agent(config: &Path) {
+pub(crate) async fn remove_login_agent(config: &Path) -> bool {
     let label = label(config);
+    let document = std::env::var_os("HOME").map(|home| {
+        PathBuf::from(home)
+            .join("Library/LaunchAgents")
+            .join(format!("{label}.plist"))
+    });
+    let installed = document.as_ref().is_some_and(|path| path.exists());
     // SAFETY: geteuid has no preconditions.
     let service = format!("gui/{}/{label}", unsafe { libc::geteuid() });
-    let _ = crate::platform::tokio_command("/bin/launchctl")
-        .args(["bootout", &service])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .await;
-    if let Some(home) = std::env::var_os("HOME") {
-        let path = PathBuf::from(home)
-            .join("Library/LaunchAgents")
-            .join(format!("{label}.plist"));
-        if path.exists() {
-            let _ = std::fs::remove_file(path);
+    if installed {
+        let _ = crate::platform::tokio_command("/bin/launchctl")
+            .args(["bootout", &service])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await;
+        // Removal finishes after the command returns. A gateway that is still
+        // running is the agent's, about to be killed; wait for launchd to let
+        // go of it so the caller can replace it instead of adopting it.
+        let deadline = tokio::time::Instant::now() + AGENT_STOP_TIMEOUT;
+        while tokio::time::Instant::now() < deadline {
+            let loaded = crate::platform::tokio_command("/bin/launchctl")
+                .args(["print", &service])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .await
+                .is_ok_and(|status| status.success());
+            if !loaded {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
     }
+    if let Some(path) = document.as_ref()
+        && path.exists()
+    {
+        let _ = std::fs::remove_file(path);
+    }
+    installed
 }
 
 /// Whether remote access is switched on for this machine: a gateway has been

@@ -205,7 +205,8 @@ which process owns the gateway:
 
 ```
 Gateway     running on 100.90.28.23:17879 (started by the RustCode server, version 1.23.0), 2 paired devices
-Gateway     stopped (remote access is on; the RustCode server starts it on port 17879 within a few seconds)
+Gateway     stopped (remote access is on; the RustCode server starts it on port 17879)
+Gateway     stopped (remote access is on; nothing starts it until `rustcode remote start` (no server is installed))
 Gateway     stopped (remote access is off: `rustcode remote start`, or Settings › Remote access)
 ```
 
@@ -213,13 +214,22 @@ Gateway     stopped (remote access is off: `rustcode remote start`, or Settings 
 terminal lives only as long as whatever started it; one the server started is
 started again after it stops, and again at login.
 
-`PathRustcode` is the `rustcode` a shell finds first on `PATH`, with the
-version it reports. When that is another version than the engine that
-answered, `problems` carries `path-version-mismatch` with both paths, both
+`PathRustcode` is the `rustcode` a shell finds first, with the version it
+reports. On macOS and Linux the search uses the login shell's `PATH` first and
+this process's second, so an app launched from the Dock reports the copy the
+user's terminal runs rather than the one a `launchctl` job sees; Windows keeps
+its own `PATH`.
+
+When that copy is another version than an engine, `problems` says so, each
+engine compared with its own path and its own version: `path-version-mismatch`
+against the `rustcode` that answered (`cli_version`, whose binary is this one),
+and `path-version-mismatch-server` against the running server (`version` and
+`binary`) when it is a different build. Each message has both paths, both
 versions and the command that fixes it — `brew upgrade lhagfoss/tap/rustcode`
-for Homebrew's copy, or deleting the install script's copy under
-`~/.rustcode/bin` (Windows: `%USERPROFILE%\.rustcode\bin\rustcode.exe`),
-which the app's own updater never touches.
+for Homebrew's copy (Intel's `/usr/local/bin` symlink included), or deleting
+the install script's copy under `~/.rustcode/bin` (Windows:
+`%USERPROFILE%\.rustcode\bin\rustcode.exe`), which the app's own updater never
+touches.
 
 `version`, `pid`, `uptime_secs`, `socket`, `clients` and `running_turns` are
 `null` when no server answers. Each problem is `{ "code", "message" }`:
@@ -231,7 +241,8 @@ which the app's own updater never touches.
 | `linger-disabled` | Linux: the server stops at logout (see above). |
 | `restart-pending` | A `restart --when-idle` is waiting for running turns to finish. |
 | `version-mismatch` | The running server's version is not this `rustcode`'s. |
-| `path-version-mismatch` | The `rustcode` first on `PATH` is another version than this engine; the message names both and the fix. |
+| `path-version-mismatch` | The `rustcode` a shell runs is another version than this engine; the message names both and the fix. |
+| `path-version-mismatch-server` | The same copy is another version than the running server, which is a different build; the message names the server's binary and version. |
 | `unmanaged` | The server that answers was not started by the service (an app started it); `restart` hands it over. |
 
 ### `restart`

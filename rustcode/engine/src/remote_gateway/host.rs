@@ -45,14 +45,27 @@ pub fn spawn() {
         return;
     };
     runtime.spawn(async {
+        let mut watch = Watch::default();
         loop {
             let wait = match crate::config::get_config_dir() {
-                Some(config_directory) => poll(&config_directory).await,
+                Some(config_directory) => poll(&mut watch, &config_directory).await,
                 None => NO_CONFIG,
             };
             tokio::time::sleep(wait).await;
         }
     });
+}
+
+/// What this server has already done about the gateway.
+#[derive(Debug, Default)]
+struct Watch {
+    /// The macOS gateway login agent was looked at: at most once per server,
+    /// and only while remote access is on.
+    #[cfg(target_os = "macos")]
+    agent_reconciled: bool,
+    /// An agent was removed and any gateway it ran has to be replaced by the
+    /// server's own. Always false where there is no agent to remove.
+    handover: bool,
 }
 
 /// What to do on this look at the machine.
@@ -62,12 +75,24 @@ enum Step {
     /// already running (the app's, a terminal's, or ours): ask nothing, bind
     /// nothing, and let one owner keep the port.
     Wait,
+    /// A gateway the removed login agent ran is still there: stop it and
+    /// start the server's own, so launchd and the server do not both
+    /// supervise the port.
+    HandOver,
+    /// No gateway runs, or one older than this server does.
     Start,
 }
 
-fn step(remote_enabled: bool, running_version: Option<&str>) -> Step {
+fn step(remote_enabled: bool, running_version: Option<&str>, handover: bool) -> Step {
     if !remote_enabled {
         return Step::Wait;
+    }
+    if handover {
+        // Nothing left to replace: starting is the handover.
+        return match running_version {
+            Some(_) => Step::HandOver,
+            None => Step::Start,
+        };
     }
     match running_version {
         // A gateway older than this server is replaced after an update,
@@ -81,35 +106,68 @@ fn step(remote_enabled: bool, running_version: Option<&str>) -> Step {
 
 /// One look: start the gateway when it should be running and is not. Answers
 /// how long to wait before looking again.
-async fn poll(config_directory: &Path) -> Duration {
-    let enabled = super::service::enabled(config_directory);
+async fn poll(watch: &mut Watch, config_directory: &Path) -> Duration {
+    if !super::service::enabled(config_directory) {
+        return POLL;
+    }
+    #[cfg(target_os = "macos")]
+    if !watch.agent_reconciled {
+        // The first look while remote access is on. An installed server hosts
+        // the gateway, so the login agent that used to is removed now — even
+        // when its gateway is still running, which is what left launchd and
+        // the server supervising the same port.
+        watch.agent_reconciled = true;
+        if super::service::server_installed() {
+            let removed = super::service::remove_login_agent(config_directory).await;
+            watch.handover = removed && RemoteLifecycle::new(config_directory).running();
+        }
+    }
+    let lifecycle = RemoteLifecycle::new(config_directory);
     // `running_version` reads the registration and checks the process, without
     // the control-socket round trip and address enumeration `status` does:
     // this runs every few seconds for the life of the server.
-    let running = RemoteLifecycle::new(config_directory).running_version();
-    match step(enabled, running.as_deref()) {
+    let running = lifecycle.running_version();
+    let step = step(true, running.as_deref(), watch.handover);
+    match step {
         Step::Wait => POLL,
-        Step::Start => match start(config_directory).await {
-            Ok(status) => {
-                crate::logger::operational_event(
-                    "remote.hosted",
-                    serde_json::json!({
-                        "listen_address": status.listen_address,
-                        "advertised_address": status.advertised_address,
-                        "pid": status.pid,
-                    }),
-                );
-                crate::dbg_log!(
-                    "RustCode server started the remote gateway on {}",
-                    status.listen_address
-                );
-                POLL
+        Step::HandOver | Step::Start => {
+            if step == Step::HandOver {
+                // A handover happens once, at the server's first look. The
+                // agent's gateway is asked to stop through its control socket;
+                // its successor is the server's.
+                watch.handover = false;
+                if let Err(error) = lifecycle.stop().await {
+                    crate::dbg_log!(
+                        "RustCode server could not stop the login agent's gateway: {error:#}"
+                    );
+                    return RETRY;
+                }
             }
-            Err(error) => {
-                crate::dbg_log!("RustCode server could not start the remote gateway: {error:#}");
-                RETRY
+            match start(config_directory).await {
+                Ok(status) => {
+                    crate::logger::operational_event(
+                        "remote.hosted",
+                        serde_json::json!({
+                            "listen_address": status.listen_address,
+                            "advertised_address": status.advertised_address,
+                            "pid": status.pid,
+                            "started_by": status.started_by.as_env(),
+                        }),
+                    );
+                    crate::dbg_log!(
+                        "RustCode server started the remote gateway on {}",
+                        status.listen_address
+                    );
+                    POLL
+                }
+                Err(error) => {
+                    crate::dbg_log!(
+                        "RustCode server could not start the remote gateway: {error:#}"
+                    );
+                    RETRY
+                }
             }
-        },
+        }
     }
 }
 
@@ -176,17 +234,43 @@ mod tests {
 
     #[test]
     fn the_server_starts_the_gateway_only_when_remote_access_is_on_and_it_is_stopped() {
-        assert_eq!(step(true, None), Step::Start);
+        assert_eq!(step(true, None, false), Step::Start);
         // Off: nothing to host.
-        assert_eq!(step(false, None), Step::Wait);
+        assert_eq!(step(false, None, false), Step::Wait);
         // A gateway of this version already runs (the app's or a terminal's):
         // adopting it is what keeps one owner of the port.
-        assert_eq!(step(true, Some(env!("CARGO_PKG_VERSION"))), Step::Wait);
-        assert_eq!(step(false, Some(env!("CARGO_PKG_VERSION"))), Step::Wait);
+        assert_eq!(
+            step(true, Some(env!("CARGO_PKG_VERSION")), false),
+            Step::Wait
+        );
+        assert_eq!(
+            step(false, Some(env!("CARGO_PKG_VERSION")), false),
+            Step::Wait
+        );
         // One from before an update is replaced, as `remote start` does.
-        assert_eq!(step(true, Some("0.0.1")), Step::Start);
+        assert_eq!(step(true, Some("0.0.1"), false), Step::Start);
         // A newer one, from an updated app, is left alone.
-        assert_eq!(step(true, Some("999.0.0")), Step::Wait);
+        assert_eq!(step(true, Some("999.0.0"), false), Step::Wait);
+    }
+
+    /// With the login agent's gateway still running (same version), waiting
+    /// for it to go left launchd and the server both supervising the port, so
+    /// installing the server never handed the gateway over.
+    #[test]
+    fn a_removed_login_agents_gateway_is_replaced_once_even_while_it_still_runs() {
+        let version = env!("CARGO_PKG_VERSION");
+        // The gateway the agent ran is the same version: adopting it is what
+        // the old code did, and it never handed over.
+        assert_eq!(step(true, Some(version), false), Step::Wait);
+        assert_eq!(step(true, Some(version), true), Step::HandOver);
+        // Nothing left by the time the agent was gone: just start.
+        assert_eq!(step(true, None, true), Step::Start);
+        // The handover is one look, not every five seconds: `poll` clears the
+        // flag, so the next look adopts the server's own gateway.
+        assert_eq!(step(true, Some(version), false), Step::Wait);
+        // Remote access off is still nothing to host, handover or not.
+        assert_eq!(step(false, Some(version), true), Step::Wait);
+        assert_eq!(step(false, None, true), Step::Wait);
     }
 
     #[test]

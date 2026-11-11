@@ -345,7 +345,12 @@ impl RemoteLifecycle {
 
     /// Record how this machine's gateway is set up, so the RustCode server can
     /// start it at login with no app or terminal running.
-    pub fn save_settings(&self, settings: &GatewaySettings) -> Result<()> {
+    ///
+    /// `_owner_lock` is the proof that this process is the one gateway: a
+    /// `remote serve` that lost the lock to another gateway, or an agent's
+    /// stale start, returns before it can get here, so it never overwrites the
+    /// durable settings of the gateway that won.
+    pub fn save_settings(&self, _owner_lock: &File, settings: &GatewaySettings) -> Result<()> {
         ensure_private_directory(&self.directory, OWNER)?;
         publish_private_json(&self.settings_path(), settings)
     }
@@ -810,7 +815,14 @@ mod tests {
             Some("netbird".into()),
             GatewayOwner::Server,
         );
-        lifecycle.save_settings(&settings).unwrap();
+        // Only the process holding the owner lock records them, so a second
+        // `remote serve` that loses the lock cannot replace them.
+        let lock = lifecycle.claim().unwrap();
+        lifecycle.save_settings(&lock, &settings).unwrap();
+        assert!(
+            lifecycle.claim().is_err(),
+            "a second gateway must not be able to claim the lock"
+        );
         let read = lifecycle
             .settings()
             .unwrap()

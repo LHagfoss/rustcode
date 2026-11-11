@@ -744,8 +744,9 @@ uses the running one instead of binding its own, and the server adopts the
 app's, so the port never has two owners (`rustcode server status` › `Gateway`
 says which one runs and who started it). What the server starts it with —
 bind, port, advertised address, interface preference — is the settings the
-last gateway recorded in `remote/settings.json`, or `[remote]` in
-`config.toml` on a machine that has not run one since that file existed.
+last gateway recorded in `remote/settings.json`, which only the gateway that
+won the owner lock writes, or `[remote]` in `config.toml` on a machine that has
+not run one since that file existed.
 
 Two honest limits: the threads *this app* starts run in the app's own engine
 and still end with it, because they are not the server's threads; and a

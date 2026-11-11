@@ -190,8 +190,10 @@ pub struct GatewayReport {
 }
 
 impl GatewayReport {
-    /// One `Gateway` line in `rustcode server status`.
-    pub fn human(&self) -> String {
+    /// One `Gateway` line in `rustcode server status`. `server_installed` makes
+    /// the difference between "the server starts it again" and "nothing will
+    /// until you do": with no server installed nothing restarts it.
+    pub fn human(&self, server_installed: bool) -> String {
         if self.running {
             let mut out = format!(
                 "running on {}",
@@ -218,14 +220,16 @@ impl GatewayReport {
         if !self.remote_enabled {
             return "stopped (remote access is off: `rustcode remote start`, or Settings › Remote access)".to_owned();
         }
+        // Who starts it again: only an installed server does, so only then may
+        // the line say so.
+        let what = if server_installed {
+            "the RustCode server starts it"
+        } else {
+            "nothing starts it until `rustcode remote start` (no server is installed)"
+        };
         match self.port {
-            Some(port) => format!(
-                "stopped (remote access is on; the RustCode server starts it on port {port} within a few seconds)"
-            ),
-            None => {
-                "stopped (remote access is on; the RustCode server starts it within a few seconds)"
-                    .to_owned()
-            }
+            Some(port) => format!("stopped (remote access is on; {what} on port {port})"),
+            None => format!("stopped (remote access is on; {what})"),
         }
     }
 }
@@ -335,15 +339,24 @@ pub fn build_report(observed: Observed, now_secs: u64) -> StatusReport {
     }
     // Which `rustcode` a shell runs, against the engine that answered
     // (issue #3411): an older copy on PATH makes `server install` and version
-    // checks between machines use the wrong binary.
-    let engine_version = live
-        .as_ref()
-        .map(|live| live.version.as_str())
-        .unwrap_or(cli_version.as_str());
-    if let Some(found) = &path_rustcode
-        && let Some(message) = super::path_binary::mismatch(found, &cli_program, engine_version)
-    {
-        problems.push(problem("path-version-mismatch", message));
+    // checks between machines use the wrong binary. Each engine is compared
+    // with its own path and its own version — the app's engine, then the
+    // running server when it is another build — so a message never names one
+    // binary's path with the other's version.
+    if let Some(found) = &path_rustcode {
+        if let Some(message) = super::path_binary::mismatch(found, &cli_program, &cli_version) {
+            problems.push(problem("path-version-mismatch", message));
+        }
+        if let Some(live) = &live
+            && live.version != cli_version
+        {
+            let server_binary = state.program.clone().unwrap_or_else(|| cli_program.clone());
+            if let Some(message) =
+                super::path_binary::mismatch(found, &server_binary, &live.version)
+            {
+                problems.push(problem("path-version-mismatch-server", message));
+            }
+        }
     }
     // The description a crashed server left behind says nothing.
     let info = info.filter(|info| live.as_ref().is_some_and(|live| live.pid == info.pid));
@@ -406,7 +419,7 @@ impl StatusReport {
         if let Some(binary) = &self.binary {
             line(&mut out, "Binary", binary.clone());
         }
-        line(&mut out, "Gateway", self.gateway.human());
+        line(&mut out, "Gateway", self.gateway.human(self.installed));
         if let Some(clients) = self.clients {
             line(&mut out, "Clients", clients.to_string());
         }
@@ -964,7 +977,8 @@ mod tests {
             app.human()
         );
 
-        // Stopped with remote access on: the server starts it.
+        // Stopped with remote access on and a server installed: the server
+        // starts it again.
         let mut stopped = gateway("server");
         stopped.running = false;
         stopped.pid = None;
@@ -975,13 +989,33 @@ mod tests {
                 .contains("the RustCode server starts it on port 17879")
         );
         stopped.port = None;
-        assert!(stopped.human().contains("starts it within a few seconds"));
+        assert!(
+            stopped
+                .human(true)
+                .contains("the RustCode server starts it")
+        );
+        // With no server installed nothing restarts it, so the line must not
+        // promise one (`StatusReport::human` passes `installed` down).
+        let alone = build_report(
+            Observed {
+                gateway: stopped.clone(),
+                ..observed(State::default(), None)
+            },
+            0,
+        );
+        assert!(
+            alone
+                .human()
+                .contains("nothing starts it until `rustcode remote start`"),
+            "{}",
+            alone.human()
+        );
         // Off: nothing starts it, and the line says what does.
         let off = GatewayReport::default();
         assert!(
-            off.human().contains("remote access is off"),
+            off.human(true).contains("remote access is off"),
             "{}",
-            off.human()
+            off.human(true)
         );
     }
 
@@ -1046,6 +1080,91 @@ mod tests {
         assert!(
             codes(&report).contains(&"path-version-mismatch"),
             "{report:?}"
+        );
+    }
+
+    /// An older server runs against a newer app. Each engine's warning must
+    /// name that engine's own path and version, never one's path with the
+    /// other's version.
+    #[test]
+    fn each_engine_is_compared_with_its_own_path_and_version() {
+        // Three different copies: the app's engine, the service's, and the
+        // one a shell runs.
+        let mut newer_app = observed(installed_state(), Some(live("1.22.0", 10)));
+        newer_app.cli_version = "1.28.0".to_owned();
+        newer_app.cli_program = "/Applications/RustCode.app/Contents/MacOS/rustcode".into();
+        newer_app.path_rustcode = Some(PathRustcode {
+            path: "/usr/local/bin/rustcode".into(),
+            version: Some("1.25.0".into()),
+        });
+        let report = build_report(newer_app, 0);
+        // The app's engine: its own path, its own version.
+        let app = report
+            .problems
+            .iter()
+            .find(|problem| problem.code == "path-version-mismatch")
+            .expect("this engine's mismatch");
+        assert!(
+            app.message.contains(
+                "this engine is 1.28.0 (/Applications/RustCode.app/Contents/MacOS/rustcode)"
+            ),
+            "{}",
+            app.message
+        );
+        // The running server: the *server's* path with the *server's* version
+        // (`installed_state` runs /usr/bin/rustcode).
+        let server = report
+            .problems
+            .iter()
+            .find(|problem| problem.code == "path-version-mismatch-server")
+            .expect("the running server's mismatch");
+        assert!(
+            server
+                .message
+                .contains("this engine is 1.22.0 (/usr/bin/rustcode)"),
+            "{}",
+            server.message
+        );
+        assert!(
+            server
+                .message
+                .contains("`rustcode` on PATH is 1.25.0 (/usr/local/bin/rustcode)"),
+            "{}",
+            server.message
+        );
+        // Never one binary's path with the other's version.
+        assert!(
+            !server
+                .message
+                .contains("/Applications/RustCode.app/Contents/MacOS/rustcode"),
+            "{}",
+            server.message
+        );
+        assert!(!server.message.contains("1.28.0"), "{}", server.message);
+
+        // A copy that matches the app is still behind the old server: that
+        // mismatch tells the user to update RustCode here, not the copy.
+        let mut matches_app = observed(installed_state(), Some(live("1.22.0", 10)));
+        matches_app.cli_version = "1.28.0".to_owned();
+        matches_app.path_rustcode = Some(PathRustcode {
+            path: "/usr/bin/rustcode".into(),
+            version: Some("1.28.0".into()),
+        });
+        let report = build_report(matches_app, 0);
+        assert_eq!(
+            codes(&report),
+            ["version-mismatch", "path-version-mismatch-server"],
+            "{report:?}"
+        );
+        let server = report
+            .problems
+            .iter()
+            .find(|problem| problem.code == "path-version-mismatch-server")
+            .unwrap();
+        assert!(
+            server.message.contains("Update RustCode here"),
+            "{}",
+            server.message
         );
     }
 

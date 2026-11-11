@@ -802,7 +802,7 @@ export async function installServer(): Promise<boolean> {
     useMachines.setState({ server, serverInstalling: false });
     if (server.installed) {
       toast(
-        "The RustCode server is installed as a background service and starts when you log in. It runs the remote gateway too.",
+        "The RustCode server is installed as a background service and starts when you log in. It runs the remote gateway too, while Remote access is on.",
         "success",
       );
     } else {
@@ -826,7 +826,7 @@ export function askInstallServer(): void {
   askConfirm({
     title: "Install the RustCode server?",
     message:
-      "The RustCode server is where threads can live instead of the app: as a background service it stays up when the app closes and starts when you log in, so those threads keep running. It also runs the remote gateway, so paired devices still reach this computer while the app is closed. The threads this app starts itself still run in its own engine and end with it, until RustCode uses the server. Threads, settings and pairings stay as they are.",
+      "The RustCode server is where threads can live instead of the app: as a background service it stays up when the app closes and starts when you log in, so those threads keep running. It also runs the remote gateway while Remote access is on, so paired devices still reach this computer while the app is closed. The threads this app starts itself still run in its own engine and end with it, until RustCode uses the server. Threads, settings and pairings stay as they are.",
     action: "Install",
     run: () => void installServer(),
   });
@@ -864,18 +864,19 @@ export function gatewayOwnerLabel(owner: GatewayService["owner"]): string {
 /**
  * The gateway in one line: where paired devices reach this computer, and who
  * keeps it there. With the server installed and remote access on, that is the
- * server, so the computer stays reachable when the app closes.
+ * server, so the computer stays reachable when the app closes. `serverInstalled`
+ * is what makes "the server starts it" honest: with no server installed,
+ * nothing restarts it but `rustcode remote start`.
  */
-export function gatewayLine(gateway: GatewayService | undefined): string {
+export function gatewayLine(gateway: GatewayService | undefined, serverInstalled = false): string {
   if (!gateway) return "Not checked yet";
   if (gateway.running) {
     const where = gateway.address ?? "an unknown address";
     return `Running on ${where} (started by ${gatewayOwnerLabel(gateway.owner)})`;
   }
   if (gateway.remoteEnabled) {
-    return gateway.port
-      ? `Not running · the server starts it on port ${gateway.port}`
-      : "Not running · the server starts it";
+    const who = serverInstalled ? "the server starts it" : "`rustcode remote start` starts it";
+    return gateway.port ? `Not running · ${who} on port ${gateway.port}` : `Not running · ${who}`;
   }
   return "Off";
 }
