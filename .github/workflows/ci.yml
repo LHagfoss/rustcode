@@ -378,3 +378,7 @@ jobs:
               # the library's own test modules hold unix-only assertions.
               if: runner.os == 'Windows'
               run: cargo test --locked --test storage_migrations_fresh_profile
+
+            - name: Test Windows private file permissions
+              if: runner.os == 'Windows'
+              run: cargo test --locked --test private_files_windows
