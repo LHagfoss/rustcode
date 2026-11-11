@@ -1610,7 +1610,7 @@ mod tests {
         assert_eq!(prompt_hint(11), PROMPT_HINT_V11);
         assert_eq!(prompt_hint(12), PROMPT_HINT_V12);
         assert_eq!(prompt_hint(13), PROMPT_HINT_V13);
-        assert_eq!(prompt_hint(14), PROMPT_HINT_V13);
+        assert_eq!(prompt_hint(14), PROMPT_HINT_V14);
         assert_eq!(prompt_hint(0), "");
         // Accounts arrived in 5: a v4 hint promises nothing it cannot do.
         assert!(!PROMPT_HINT_V4.contains("account"));
