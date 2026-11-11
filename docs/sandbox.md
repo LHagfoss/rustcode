@@ -62,3 +62,15 @@ filesystem permissions, credentials, SSH keys, and certificates are not treated
 as proven sandbox denials. Enabled network access is never blamed as a network
 restriction. Trusted execution and platforms without a native OS backend receive
 no sandbox attribution.
+
+## A harness's own sandbox
+
+A thread on an external harness (Codex, Claude Code, …) runs under that
+harness's rules, not these; see
+[harnesses](harnesses.md#process-and-safety-rules). Codex's sandbox on Windows
+is the one that changes what a shell can read there: it denies WMI, so
+`Get-CimInstance` fails with `Access denied` (`0x80041003`) while registry and
+.NET reads work
+([the alternatives](harnesses.md#codexs-windows-sandbox)). Full access lifts
+it; Ask and Auto-edit keep Codex's `workspaceWrite`, which is Codex's own
+sandbox and not a RustCode restriction.

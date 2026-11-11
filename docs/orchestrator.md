@@ -288,6 +288,42 @@ Built (`rustcode/engine/src/checkpoints.rs`). Details:
   thread's directory itself leaves its refs; they are ordinary refs under
   `refs/rustcode/checkpoints/<session_id>/`.
 
+## No app attached
+
+The app is the host of the orchestration tools: it asks the user, runs the
+call and keeps the retry receipts. A thread with no app attached — a terminal
+or `rustcode -p` run, a session owner the gateway started for a paired
+machine, or a server thread whose app has closed — still gets the tools, and
+the engine answers the ones that need no approval itself
+(`rustcode/engine/src/orchestration/local.rs`, #3422):
+
+| Tool | Without the app |
+| --- | --- |
+| `list_sessions`, `read_session` | The same thread store the app reads, under the same project gate: `all_projects` and reading another project need the app's "Let agents read threads in other projects" setting, and an Ask-mode thread's read needs the app's approval card, so it is refused. `read_session` renders and pages its turns as the app does. |
+| `list_harnesses` | The engine's own `_rustcode/harnesses` snapshot, with the model cap and `model`/`harness` filters. |
+| `list_machines` | This computer and the machines in `machines.json`; a saved machine's `state` is `unknown`, because the app owns the live connections. |
+| `thread_status` | Status, project, worktree and branch from the thread and link records; pull requests and checks are the app's to read, and the answer says so. |
+| `wait_session` | The link book the app saves; `needs_user` settles the wait so the caller sees the question. Nothing advances a working link while the app is closed, so a wait can time out where an open app would have answered. |
+
+`start_session`, `message_session`, `fan_out`, and every management or merge
+tool still need the app: with no app they are listed, and a call answers
+`{"error": {"code": "unavailable", "message": "… needs the RustCode app open
+to approve and run it …"}}` instead of "unknown tool". A thread that is on
+Full access does not change that yet: the server has no way to start or
+message a thread without the app's host, so the answer names the app rather
+than acting without the approval it would have asked for.
+
+The app stays first whenever one is attached, including by reconnecting to a
+running server. A thread registered locally keeps its running
+`mcp-orchestrator` and its token when an app loads it: only the hub's client
+is swapped, in place. A call made while the app is between connections falls
+back to the same reads; it is only used when no connected client hosts the
+call.
+Retry receipts are kept in memory for the life of the process, keyed by the
+caller and `client_request_id`, so a retry under the same key and arguments
+returns the first answer (marked `replayed`) and the same key with another
+call or other arguments is refused.
+
 ## Orchestration tools v2
 
 Built (`rustcode/engine/src/orchestration.rs`). Offered to root coding turns
@@ -589,6 +625,16 @@ they finish or ask, instead of having to poll with sleeps.
   stays unreachable for two minutes (`LOST_MACHINE_MS`) fails the links with
   `MACHINE_LOST_TURN`, the sentence the thread's own row carries. A `Failed`
   row is the turn's own failure, never a channel that blinked.
+- **A thread a machine has not listed yet.** `session/new` answers at once,
+  while that machine's own `session/list` lists the thread only from its next
+  read. A list read from before it is not news that it is gone: a thread this
+  window made is kept listed until its machine lists it (`state/store.ts`
+  `justMade`, `mergeMachineLists`), and `wait_session` fails a working link as
+  `That thread is gone.` only when no project lists it **and** the app holds no
+  copy of the thread. A wrong `Failed` here carried the answer as its preview
+  and no reason anywhere (issue 3523). A failure says why wherever it is read:
+  `link.error` is in `wait_session`'s answer, in the chip's line under its
+  state, and in the `Failed` event the hover card lists.
 - **After a restart.** A restart resumes the threads it cut off
   (`state/store.ts` `resumeInterrupted`), and the resume is what answers the
   links the quit severed: it is tied to that one turn, never to a turn that
@@ -1094,12 +1140,13 @@ is the follow-up (§10, phases 3.1 and 3.2).
 | Tool | With `machine` |
 | --- | --- |
 | `list_machines` | This computer (`current: true`) and each paired machine: `{ id, name, platform, state, route?, last_connected?, harnesses, projects }`. `harnesses` is that machine's list (`[{ id, name, available }]`). `projects` is its project names: the folders its threads really run in, never the home folder or root its engine lists for a thread that recorded none, and never two spellings of one folder (Windows' `\\?\` prefix is dropped, issue 3425) |
-| `start_session`, `fan_out` | Start on that machine, in its project. `harness`, `model`, `effort` and `account` are that machine's own (never this app's logins or remembered choices). `project` is an absolute path there; without it, the caller's path when the machine has it, else a folder with the same project name, else its only project; otherwise the error lists what it has, and a machine with none is refused with a hint to pass the path. A thread never starts in `/` or the app's install folder (issue 3425) |
+| `start_session`, `fan_out` | Start on that machine, in its project. `harness`, `model`, `effort` and `account` are that machine's own (never this app's logins or remembered choices). `project` is an absolute path there; without it, the caller's path when the machine has it, else a folder with the same project name, else its only project, else its most recently used one; otherwise the error lists what it has, and a machine with none is refused with a hint to pass the path. A thread never starts in `/`, in the app's own data folder, or in the app's install folder (issues 3425, 3524). `title` reaches the thread that machine makes, in `session/new`'s `_meta.rustcode.title`, so it is named there and not from its first message |
 | `list_harnesses` | That machine's harnesses, models and named accounts, without this app's plan numbers |
 | `list_projects`, `list_sessions` | That machine's projects or threads. Its folders are not this one's, so its threads are listed whether or not they share this project |
 | `read_session`, `message_session`, `interrupt_session` | On that machine's thread. A machine's threads are not narrowed to the caller's project: the user named the machine, and the approval card is the gate. A thread the caller started on a machine is reachable even when `machine` is omitted |
 | `wait_session` | Any: the link ids carry their machine already. `machine` must match every link, and a mismatch is refused naming each link's machine; it does not require the machine to be online, so a wait on a link that went away still reports what it last said |
-| `thread_status` | With `session_id`, that thread's machine; without one, the named machine's delegates (this computer's when `machine` is omitted), and `omitted` counts the rest of that set |
+| `thread_status` | With `session_id`, that thread's machine; without one, the named machine's delegates (this computer's when `machine` is omitted), and `omitted` counts the rest of that set. A remote delegate's `last_provider_error` and idle time are asked of that machine's own store |
+| `read_activity` | That thread's activity, from the store on the machine it runs on. A machine that cannot answer it (an older engine, a channel that went away) answers `unavailable` naming it, rather than an empty list that reads as a thread that did nothing (issue 3525) |
 | `list_pending_requests` | That machine's waiting requests. Without `machine`, every thread this thread reaches, wherever it runs (the v10 answer) |
 
 A thread id answers as `‹machine id›/‹thread id›` (`state/threadKeys.ts`), so

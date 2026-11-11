@@ -201,7 +201,12 @@ browse a machine's disk). An engine that does not report a remote falls back to
 the folder name; the mock's Studio reports one. `session/new` is sent over the
 machine's connection with its folder and harness, and the thread is keyed with
 its host, so it appears under the machine's group at once; a thread created
-there is titled by that machine's history (`thread_rename` is this shell's).
+there is named by the title it is made with (`session/new`'s
+`_meta.rustcode.title`), since `thread_rename` is this shell's. Until that
+machine's own `session/list` lists the thread, the app keeps listing it rather
+than reading a list from before it as a deletion (issue 3523). Its
+`read_activity` and its delegates' `last_provider_error` are read from that
+machine's store over the same connection (issue 3525).
 A machine on an older RustCode that does not answer `_rustcode/harnesses` is
 shown as the builtin harness, as this computer's engine is, so a thread can
 still start there. A harness whose models that machine has not learned yet
@@ -753,12 +758,13 @@ composer's keys stay outside the table.
   coming back to a new one shows that choice rather than the default again.
 - **New thread banner.** Settings › Appearance: a wide picture over new
   threads, drawn in coloured text (ASCII, inverted on a light background)
-  or as is, covering the top half of the chat and fading toward the
-  composer, under a frosted title bar. The picture is copied into the app's
-  data folder (`src-tauri/src/banner.rs`; the setting keeps the copy's
-  name), decoded once, and the text drawn once per size on an offscreen
-  canvas (`src/lib/banner.ts`), so a resize scales the last drawing until
-  the new one is ready. It fades in, and does not move under Reduce motion.
+  or as is, filling the whole pane from the title bar down, behind the field
+  and the cards so their glass has a picture to frost, under a frosted title
+  bar. The picture is copied into the app's data folder
+  (`src-tauri/src/banner.rs`; the setting keeps the copy's name), decoded
+  once, and the text drawn once per size on an offscreen canvas
+  (`src/lib/banner.ts`), so a resize scales the last drawing until the new
+  one is ready. It fades in, and does not move under Reduce motion.
   Under the picture, *Darken* (0–80%, black over it), *Blur* (0–40px) and
   *Show in threads* (off by default): on, open threads draw the same picture,
   darkened and blurred the same, behind the transcript, under a heavier wash of
