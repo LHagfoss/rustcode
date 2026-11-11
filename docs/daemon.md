@@ -2,7 +2,11 @@
 
 RustCode owns scheduled work in a local daemon. Jobs and run history are
 stored under the RustCode config directory; the CLI and the harness
-`manage_scheduled_jobs` tool use the same private Unix socket and protocol.
+`manage_scheduled_jobs` tool use the same private local endpoint and protocol.
+On macOS and Linux this is a Unix socket (`daemon/control.sock`). On Windows
+it is loopback TCP with a fresh token published in an owner-only
+`daemon/control.endpoint` file, using the same ACL protection as other private
+RustCode files. The task store remains `daemon/jobs.sqlite` on every platform.
 
 ## Start and inspect the daemon
 
@@ -15,7 +19,9 @@ rustcode daemon stop
 
 `daemon run` is the foreground worker used by `daemon start`. It owns the
 event-driven scheduler and executes due jobs. The socket and registration are
-private to the current user.
+private to the current user. On Windows the worker detaches from the calling
+console, so closing the terminal leaves scheduled jobs running. Starting at
+login still requires configuring a service or startup task.
 
 ## Create a morning Teams job
 

@@ -6,14 +6,14 @@ use super::{
     protocol::{DaemonRequest, DaemonResponse, DaemonStatus, read_async_frame, write_async_frame},
     store::JobStore,
 };
+use crate::remote_gateway::local_socket::LocalListener;
 use anyhow::Result;
 use std::{
-    fs::{self, File},
-    os::unix::fs::PermissionsExt,
+    fs::File,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-use tokio::{io::BufReader, net::UnixListener, sync::Notify};
+use tokio::{io::BufReader, sync::Notify};
 
 /// Task 3 implements this boundary. All mutations, including CLI/harness requests,
 /// pass through RequestHandler; run-now never invents a second execution path.
@@ -150,7 +150,7 @@ impl RequestHandler {
 }
 
 pub struct DaemonServer {
-    listener: UnixListener,
+    listener: LocalListener,
     pub handler: RequestHandler,
     pub request_timeout: Duration,
     shutdown: Arc<Notify>,
@@ -183,13 +183,12 @@ impl Drop for Ownership {
 impl DaemonServer {
     pub(crate) fn bind(lifecycle: DaemonLifecycle, lock: File) -> Result<Self> {
         let registration = DaemonRegistration::current(lifecycle.socket_path())?;
-        let listener = UnixListener::bind(lifecycle.socket_path())?;
+        let listener = LocalListener::bind(&lifecycle.socket_path())?;
         let ownership = Ownership {
             lifecycle: lifecycle.clone(),
             registration: registration.clone(),
             _lock: lock,
         };
-        fs::set_permissions(lifecycle.socket_path(), fs::Permissions::from_mode(0o600))?;
         let store = JobStore::open(lifecycle.database_path())?;
         let handler = RequestHandler::new(
             store,
@@ -249,10 +248,18 @@ impl DaemonServer {
 
     async fn run_control(&self) -> Result<()> {
         loop {
-            let (stream, _) = tokio::select! {
+            let incoming = tokio::select! {
                 biased;
                 _ = self.shutdown.notified() => break,
                 accepted = self.listener.accept() => accepted?,
+            };
+            let stream = tokio::select! {
+                biased;
+                _ = self.shutdown.notified() => break,
+                result = tokio::time::timeout(self.request_timeout, incoming.verify()) => result,
+            };
+            let Ok(Some(stream)) = stream else {
+                continue;
             };
             let mut reader = BufReader::new(stream);
             let request = tokio::select! {
@@ -338,8 +345,9 @@ mod tests {
         model::{JobAction, JobRecord, RetryPolicy, ScheduleSpec},
         protocol::MAX_FRAME_BYTES,
     };
-    use std::os::unix::fs::DirBuilderExt;
-    use tokio::{io::AsyncWriteExt, net::UnixStream};
+    use crate::remote_gateway::local_socket::connect;
+    use std::fs;
+    use tokio::io::AsyncWriteExt;
 
     fn job() -> JobRecord {
         let now = chrono::Utc::now();
@@ -377,7 +385,7 @@ mod tests {
             Self::with_timeout(Duration::from_secs(2))
         }
         fn with_timeout(request_timeout: Duration) -> Self {
-            let directory = tempfile::tempdir_in("/tmp").unwrap();
+            let directory = crate::daemon::test_directory();
             let lifecycle = DaemonLifecycle::new(directory.path());
             let mut server = lifecycle.bind().unwrap();
             server.request_timeout = request_timeout;
@@ -501,7 +509,7 @@ mod tests {
                 })
             }
         }
-        let directory = tempfile::tempdir_in("/tmp").unwrap();
+        let directory = crate::daemon::test_directory();
         let lifecycle = DaemonLifecycle::new(directory.path());
         let mut server = lifecycle.bind().unwrap();
         let store = server.handler.store();
@@ -555,9 +563,7 @@ mod tests {
     async fn malformed_and_oversized_requests_do_not_kill_server() {
         let running = Running::new();
         for payload in [b"{bad json}\n".to_vec(), vec![b'x'; MAX_FRAME_BYTES + 2]] {
-            let mut stream = UnixStream::connect(running.lifecycle.socket_path())
-                .await
-                .unwrap();
+            let mut stream = connect(&running.lifecycle.socket_path()).await.unwrap();
             stream.write_all(&payload).await.unwrap();
             let response: DaemonResponse =
                 read_async_frame(&mut BufReader::new(stream)).await.unwrap();
@@ -579,9 +585,7 @@ mod tests {
     #[tokio::test]
     async fn partial_request_times_out_and_next_client_succeeds() {
         let running = Running::with_timeout(Duration::from_millis(150));
-        let mut stream = UnixStream::connect(running.lifecycle.socket_path())
-            .await
-            .unwrap();
+        let mut stream = connect(&running.lifecycle.socket_path()).await.unwrap();
         stream.write_all(b"{\"type\":").await.unwrap();
         let response: DaemonResponse = tokio::time::timeout(
             Duration::from_secs(2),
@@ -617,19 +621,16 @@ mod tests {
     #[tokio::test]
     async fn shutdown_interrupts_idle_connection_without_leaking_listener() {
         let running = Running::new();
-        let _idle = UnixStream::connect(running.lifecycle.socket_path())
-            .await
-            .unwrap();
+        let _idle = connect(&running.lifecycle.socket_path()).await.unwrap();
         running.finish().await;
     }
 
     #[tokio::test]
     async fn failed_store_initialization_cleans_socket_and_allows_retry() {
-        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let dir = crate::daemon::test_directory();
         let lifecycle = DaemonLifecycle::new(dir.path());
         fs::DirBuilder::new()
             .recursive(true)
-            .mode(0o700)
             .create(lifecycle.database_path())
             .unwrap();
         assert!(lifecycle.bind().is_err());

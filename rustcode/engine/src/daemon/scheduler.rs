@@ -280,7 +280,6 @@ impl Scheduler {
     }
 }
 
-#[cfg(unix)]
 impl super::server::SchedulerControl for Scheduler {
     fn notify_changed(&self) {
         Scheduler::notify_changed(self);

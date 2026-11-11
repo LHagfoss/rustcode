@@ -43,6 +43,10 @@ path = "rustcode/engine/tests/storage_migrations_fresh_profile.rs"
 name = "private_files_windows"
 path = "rustcode/engine/tests/private_files_windows.rs"
 
+[[test]]
+name = "daemon_windows"
+path = "rustcode/engine/tests/daemon_windows.rs"
+
 [dependencies]
 anyhow = "1.0.97"
 agent-client-protocol = "2.0.0"

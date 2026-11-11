@@ -382,3 +382,7 @@ jobs:
             - name: Test Windows private file permissions
               if: runner.os == 'Windows'
               run: cargo test --locked --test private_files_windows
+
+            - name: Test Windows scheduler daemon
+              if: runner.os == 'Windows'
+              run: cargo test --locked --test daemon_windows
