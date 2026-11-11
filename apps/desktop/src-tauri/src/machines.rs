@@ -4,8 +4,10 @@
 //! `Origin`s, and the pairing token is in the operating system credential
 //! store), so this module owns the connection to each saved machine: one
 //! supervisor per machine that connects over the first route that answers,
-//! retries with jittered backoff, and relays the machine's ACP frames to the
-//! webview over a Tauri Channel in the same shape the local engine uses
+//! retries with jittered backoff — the route that worked last first, and at
+//! once when this computer's network changes — and relays the machine's ACP
+//! frames to the webview over a Tauri Channel in the same shape the local
+//! engine uses
 //! (`engine.rs`). `rustcode-client` holds the registry, the tokens, the
 //! pairing flow and the WebSocket; nothing here hands a token to the webview.
 //!
@@ -17,7 +19,7 @@ use anyhow::Error;
 use rustcode_client::machine::{machine_from_pairing, normalize_code, Connector};
 use rustcode_client::tokens::{self as token_store, STORE_TIMEOUT};
 use rustcode_client::{
-    browse_async, Approved, ClientKind, DiscoveredMachine, Machine, MachineRegistry,
+    backoff_delay, browse_async, Approved, ClientKind, DiscoveredMachine, Machine, MachineRegistry,
     OverlayProvider, Route, TokenStore, Unreachable,
 };
 use serde::Serialize;
@@ -33,14 +35,14 @@ use tokio::sync::Notify;
 /// this network.
 pub const DISCOVERY: Duration = Duration::from_secs(4);
 
-/// First wait before a failed machine is tried again, and the longest one.
-pub const BACKOFF_START: Duration = Duration::from_secs(1);
-pub const BACKOFF_MAX: Duration = Duration::from_secs(300);
-
 /// A connection that stayed up this long resets the backoff: a machine that
-/// worked and then dropped is tried again after a second, not after five
-/// minutes.
+/// worked and then dropped is tried again after a second, not after a minute.
 pub const STABLE_AFTER: Duration = Duration::from_secs(30);
+
+/// How often a machine that is waiting looks at this computer's own addresses,
+/// so a network change (a VPN up, another Wi-Fi) is acted on in seconds instead
+/// of at the end of the backoff.
+pub const NETWORK_POLL: Duration = Duration::from_secs(5);
 
 /// Where a machine stands, as the page shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -350,24 +352,6 @@ fn view(machine: &Machine, live: Option<&Live>) -> MachineView {
 
 // ---------------------------------------------------------------- backoff
 
-/// The longest wait after `attempt` failures: 1, 2, 4, 8, 16, 32, 64, 128,
-/// 256, then five minutes. `attempt` counts the failures so far.
-pub fn backoff_cap(attempt: u32) -> Duration {
-    let seconds = BACKOFF_START
-        .as_secs()
-        .saturating_mul(1u64.checked_shl(attempt.min(16)).unwrap_or(u64::MAX / 2));
-    Duration::from_secs(seconds).min(BACKOFF_MAX)
-}
-
-/// The wait before the next attempt: at most [`backoff_cap`] and at least
-/// half of it, spread by `jitter` in `0.0..1.0`, so several machines that lost
-/// the same network do not come back in the same second.
-pub fn backoff_delay(attempt: u32, jitter: f64) -> Duration {
-    let cap = backoff_cap(attempt);
-    let half = cap.as_secs_f64() / 2.0;
-    Duration::from_secs_f64(half + half * jitter.clamp(0.0, 1.0))
-}
-
 /// Cheap jitter without a dependency: the sub-second clock, spread over one.
 fn jitter() -> f64 {
     let nanos = SystemTime::now()
@@ -375,6 +359,31 @@ fn jitter() -> f64 {
         .map(|since| since.subsec_nanos())
         .unwrap_or(0);
     f64::from(nanos % 1_000_000) / 1_000_000.0
+}
+
+/// This computer's own interface addresses, which is what a network change
+/// shows up in: a VPN's address appears or goes away, another Wi-Fi hands out
+/// a lease (#3436).
+///
+/// Loopback and link-local addresses are left out: neither is a network
+/// another machine can be reached over.
+fn local_addresses() -> Vec<IpAddr> {
+    let Ok(interfaces) = if_addrs::get_if_addrs() else {
+        return Vec::new();
+    };
+    interfaces
+        .into_iter()
+        .filter(|interface| interface.is_oper_up() && !interface.is_loopback())
+        .map(|interface| interface.ip())
+        .filter(|address| {
+            !address.is_loopback()
+                && !address.is_unspecified()
+                && !match address {
+                    IpAddr::V4(ip) => ip.is_link_local(),
+                    IpAddr::V6(ip) => ip.is_unicast_link_local(),
+                }
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------- supervisor
@@ -460,7 +469,36 @@ async fn supervise(
             Some(secs),
         );
         emit_closed(&channel, &format!("Waiting {secs} s before trying again."));
-        tokio::time::sleep(delay).await;
+        wait_out(&machines, &id, &channel, delay).await;
+    }
+}
+
+/// Wait out the backoff, ending the wait as soon as this computer's own
+/// network changes: a machine that went away because the VPN dropped is
+/// reachable again the moment it is back, without waiting out the minute
+/// (#3436). The wait is spent in [`NETWORK_POLL`] slices so a change is
+/// noticed in seconds.
+async fn wait_out(
+    machines: &Arc<Machines>,
+    id: &str,
+    channel: &Channel<EngineEvent>,
+    delay: Duration,
+) {
+    let before = local_addresses();
+    let mut left = delay;
+    while !left.is_zero() {
+        let slice = left.min(NETWORK_POLL);
+        tokio::time::sleep(slice).await;
+        left = left.saturating_sub(slice);
+        if rustcode_client::network_changed(&before, &local_addresses()) {
+            emit_log(
+                channel,
+                "desktop: this computer's network changed; trying the machine again now."
+                    .to_owned(),
+            );
+            set_state(machines, id, MachineState::Connecting, None, None);
+            return;
+        }
     }
 }
 
@@ -490,6 +528,12 @@ async fn relay_once(
         Ok(connector) => connector,
         Err(error) => return End::Failed(anyhow::anyhow!(error)),
     };
+    // The route the machine answered on last time is tried first after a
+    // drop; the classes still decide most of the race, so a laptop that comes
+    // home dials the LAN before the overlay (#3436).
+    let mut machine = machine.clone();
+    machine.routes =
+        rustcode_client::prefer_last_working(&machine.routes, machine.last_route.as_deref());
     let connected = match connector.connect_raced(&machine, &tokens).await {
         Ok(connected) => connected,
         Err(error) => return End::Failed(error),
@@ -502,7 +546,7 @@ async fn relay_once(
     let version = session.welcome().version.clone();
     let platform = session.welcome().platform.clone();
     if let Ok(mut registry) = MachineRegistry::load(config_dir) {
-        let _ = registry.mark_connected(&machine.host_id, chrono::Utc::now());
+        let _ = registry.mark_connected(&machine.host_id, &route.address, chrono::Utc::now());
         if !learned.is_empty() {
             let _ = registry.learn_routes(&machine.host_id, &learned);
         }
@@ -1059,7 +1103,11 @@ pub async fn machines_pair(
             "The machine is paired, but could not be saved: {error:#}"
         ));
     }
-    let _ = registry.mark_connected(&machine.host_id, chrono::Utc::now());
+    let _ = registry.mark_connected(
+        &machine.host_id,
+        &machine.routes[0].address,
+        chrono::Utc::now(),
+    );
     let connecting = Live {
         state: MachineState::Connecting,
         ..Live::new()
@@ -1244,43 +1292,6 @@ mod tests {
         MachineView {
             hint: Some("Not reachable over NetBird (100.90.16.237:17879).".to_owned()),
             ..view(&saved, None)
-        }
-    }
-
-    /// The schedule the page's "Retrying in N s" comes from: 1, 2, 4, 8, 16,
-    /// 32, 64, 128, 256, then five minutes, and it never goes back down.
-    #[test]
-    fn the_backoff_doubles_to_five_minutes_and_stops() {
-        let caps: Vec<u64> = (0..12)
-            .map(|attempt| backoff_cap(attempt).as_secs())
-            .collect();
-        assert_eq!(
-            caps,
-            [1, 2, 4, 8, 16, 32, 64, 128, 256, 300, 300, 300],
-            "a long outage waits five minutes between attempts"
-        );
-        for attempt in 1..12 {
-            assert!(backoff_cap(attempt) >= backoff_cap(attempt - 1));
-        }
-        // Nothing overflows however long the outage lasts.
-        assert_eq!(backoff_cap(u32::MAX), BACKOFF_MAX);
-    }
-
-    /// Jitter spreads machines that lost the same network over the second
-    /// half of the window, never below the first half and never past the cap.
-    #[test]
-    fn jitter_stays_between_half_the_cap_and_the_cap() {
-        for attempt in 0..10 {
-            let cap = backoff_cap(attempt);
-            assert_eq!(backoff_delay(attempt, 0.0), cap / 2);
-            assert_eq!(backoff_delay(attempt, 1.0), cap);
-            for step in 0..10 {
-                let delay = backoff_delay(attempt, f64::from(step) / 10.0);
-                assert!(delay >= cap / 2 && delay <= cap, "{delay:?} for {attempt}");
-            }
-            // A jitter outside 0..1 cannot push it out of the window.
-            assert_eq!(backoff_delay(attempt, -1.0), backoff_delay(attempt, 0.0));
-            assert_eq!(backoff_delay(attempt, 4.0), backoff_delay(attempt, 1.0));
         }
     }
 

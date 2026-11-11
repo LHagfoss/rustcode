@@ -304,6 +304,10 @@ pub struct Machine {
     pub added_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_connected_at: Option<DateTime<Utc>>,
+    /// The route that answered last time, tried first after a drop. `None`
+    /// until the machine has been reached once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_route: Option<String>,
     /// The main machine: listed first, and the default **Run on**.
     #[serde(default)]
     pub main: bool,
@@ -335,6 +339,7 @@ impl Machine {
             device_id: device_id.into(),
             added_at: now,
             last_connected_at: None,
+            last_route: None,
             main: false,
         }
     }
@@ -541,14 +546,17 @@ impl MachineRegistry {
         })
     }
 
-    /// Record a successful connection.
-    pub fn mark_connected(&mut self, host_id: &str, now: DateTime<Utc>) -> Result<()> {
+    /// Record a successful connection over `route`, so the row can say when
+    /// the machine was last reached and the next attempt can try the route
+    /// that worked first (#3436).
+    pub fn mark_connected(&mut self, host_id: &str, route: &str, now: DateTime<Utc>) -> Result<()> {
         self.mutate(|machines| {
             if let Some(machine) = machines
                 .iter_mut()
                 .find(|machine| machine.host_id == host_id)
             {
                 machine.last_connected_at = Some(now);
+                machine.last_route = Some(route.to_owned());
             }
             Ok(())
         })
@@ -1090,6 +1098,34 @@ mod tests {
         // Reporting the same one again changes nothing.
         assert!(!store.set_platform("gw-a", Some("windows")).unwrap());
         assert!(store.set_platform("gw-missing", Some("linux")).is_err());
+    }
+
+    /// A successful connection records when it happened and over which route,
+    /// so the next attempt can try the route that worked first (#3436).
+    #[test]
+    fn a_successful_connection_remembers_the_route_it_came_up_over() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let mut store = load(dir.path());
+        store
+            .insert(machine("gw-a", "Studio", "192.168.1.20:17879"))
+            .unwrap();
+        store
+            .add_route(
+                "gw-a",
+                Route::with_kind(RouteKind::Vpn, "100.90.16.237:17879"),
+            )
+            .unwrap();
+        assert_eq!(store.machines()[0].last_route, None);
+        let now = Utc::now();
+        store
+            .mark_connected("gw-a", "100.90.16.237:17879", now)
+            .unwrap();
+        let registry = load(dir.path());
+        let studio = &registry.machines()[0];
+        assert_eq!(studio.last_connected_at, Some(now));
+        assert_eq!(studio.last_route.as_deref(), Some("100.90.16.237:17879"));
+        // The saved routes are untouched: the order is the race's.
+        assert_eq!(studio.preferred_route().unwrap().kind, RouteKind::Lan);
     }
 
     /// Routes a handshake reports are saved in the order the race uses, with
