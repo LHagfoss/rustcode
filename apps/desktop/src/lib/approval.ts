@@ -6,6 +6,7 @@
 
 import type { PermissionOption, PermissionRequest } from "../acp/types";
 import { displayCommand } from "./command";
+import { isAbsolute, isInside } from "./paths";
 
 /** What a call can do, worst first. Unknown calls are `risky`, never `safe`. */
 export type ApprovalRisk = "safe" | "risky" | "destructive";
@@ -255,18 +256,20 @@ export function approvalCwd(request: PermissionRequest): string | undefined {
 
 /** Whether a path leaves the thread's folder (absolute outside it, or climbing out). */
 export function leavesFolder(path: string, cwd: string | undefined, project: string): boolean {
-  if (path.startsWith("~")) return true;
-  if (!path.startsWith("/")) return /(?:^|\/)\.\.(?:\/|$)/.test(path);
+  if (/^(?:~|%[^%]+%|\$(?:env:)?[\w{])/i.test(path)) return true;
+  if (!isAbsolute(path)) return /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(path);
   const root = cwd ?? project;
-  if (!root) return true;
-  return !(path === root || path.startsWith(`${root.replace(/\/$/, "")}/`));
+  return !root || !isInside(path, root);
 }
 
 /** Paths a command writes: its redirects and `--output` targets. */
 function commandWritePaths(command: string): string[] {
   const paths: string[] = [];
-  for (const match of command.matchAll(/(?:>>?\s*|(?:^|\s)(?:-o|--output(?:=|\s+)))([~/\w][^\s;|&]*)/g)) {
-    if (match[1] && !match[1].startsWith("&")) paths.push(match[1]);
+  for (const match of command.matchAll(
+    /(?:>>?\s*|(?:^|\s)(?:-o\s+|--output(?:=|\s+)))(?:"([^"]+)"|'([^']+)'|([^\s;|&]+))/g,
+  )) {
+    const path = match[1] ?? match[2] ?? match[3];
+    if (path && !path.startsWith("&")) paths.push(path);
   }
   return paths;
 }

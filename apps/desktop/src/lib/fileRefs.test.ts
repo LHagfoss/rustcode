@@ -24,3 +24,14 @@ describe("file references", () => {
     expect(resolveRef({ path: "/abs/x.md" }, "/p")).toBe("/abs/x.md");
   });
 });
+
+test("Windows references preserve drives, UNC roots and line numbers", () => {
+  for (const path of ["src\\a.rs", "C:\\repo\\a.rs", "\\\\host\\share\\a.rs"]) {
+    expect(parseInlineRef(`${path}:12:4`)).toEqual({ path, line: 12, column: 4 });
+    expect(parseLinkRef(`${path}#L12`)?.line).toBe(12);
+  }
+  expect(resolveRef({ path: "src/a.rs" }, "C:\\repo")).toBe("C:\\repo\\src\\a.rs");
+  expect(resolveRef({ path: "..\\a.rs" }, "C:\\repo")).toBe("C:\\a.rs");
+  expect(resolveRef({ path: "src\\a.rs" }, "\\\\host\\share")).toBe("\\\\host\\share\\src\\a.rs");
+  expect(resolveRef({ path: "D:\\a.rs" }, "C:\\repo")).toBe("D:\\a.rs");
+});
