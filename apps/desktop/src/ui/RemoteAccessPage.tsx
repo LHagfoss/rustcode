@@ -21,7 +21,7 @@ import {
 } from "../acp/remote";
 import { encodeQr } from "../lib/qr";
 import { deviceLabel, lastSeenLabel } from "../state/connectRequests";
-import { installServer, refreshServerService, serverLine, useMachines } from "../state/machines";
+import { gatewayLine, installServer, refreshServerService, serverLine, useMachines } from "../state/machines";
 import { refusalAgo, refusalCopy } from "../state/refusals";
 import { activeChallenge, remainingPairingSeconds } from "../state/remotePairing";
 import {
@@ -182,8 +182,20 @@ export function RemoteAccessPage() {
         </Row>
         <Row
           title="RustCode server"
-          subtitle="Installs the RustCode server as a background service: it stays up when the app closes, and starts when you log in. Threads that live in it keep running; the threads this app starts still run in its own engine and end with it, until RustCode uses the server. Turning network access on installs it when it is not installed."
-          status={serverLine(server)}
+          subtitle="Installs the RustCode server as a background service: it stays up when the app closes, and starts when you log in. It runs the remote gateway, so paired devices still reach this computer with the app closed. Threads that live in it keep running; the threads this app starts still run in its own engine and end with it, until RustCode uses the server. Turning network access on installs it when it is not installed."
+          status={
+            <>
+              <span className="tabular">{serverLine(server)}</span>
+              {server?.gateway.remoteEnabled || server?.gateway.running ? (
+                <span className="block pt-0.5">Gateway: {gatewayLine(server.gateway, server.installed)}</span>
+              ) : null}
+              {server?.problems.map((problem) => (
+                <span key={problem.code} className="block pt-0.5 text-warning">
+                  {problem.message}
+                </span>
+              ))}
+            </>
+          }
         >
           {server === null ? null : server.installed ? (
             <Chip tone={server.running ? "ok" : "warn"}>{server.running ? "Running" : "Not running"}</Chip>
@@ -352,7 +364,7 @@ function askInstallThenTurnOn(turnOn: () => void) {
   askConfirm({
     title: "Install the RustCode server too?",
     message:
-      "Network access lets paired devices reach this computer's threads. RustCode also installs its server as a background service: it stays up when the app closes and starts when you log in, so the threads that live in it keep running. The threads this app starts itself still run in its own engine and end with it, until RustCode uses the server. Threads, settings and pairings stay as they are. Network access turns on either way.",
+      "Network access lets paired devices reach this computer's threads. RustCode also installs its server as a background service: it stays up when the app closes and starts when you log in, so the threads that live in it keep running and paired devices still reach this computer. The threads this app starts itself still run in its own engine and end with it, until RustCode uses the server. Threads, settings and pairings stay as they are. Network access turns on either way.",
     action: "Turn on and install",
     run: () => {
       turnOn();

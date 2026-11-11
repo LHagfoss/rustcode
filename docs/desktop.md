@@ -710,7 +710,9 @@ composer's keys stay outside the table.
   9.4:1 and 4.3:1. A thread is read line by line and a new thread is not. They are kept with the
   banner (`lib/banner.ts`).
 - **Remote access.** Settings › Remote access ([remote.md](remote.md)) is the
-  machine's switch: **Network access** turned on starts the remote gateway and
+  machine's switch: **Network access** turned on starts the remote gateway
+  (or uses the one the RustCode server runs, which keeps this computer
+  reachable when the app closes) and
   lets paired devices reach every thread on this computer, across all
   projects, not only the ones open here; open threads are also streamed live —
   on the built-in harness and on Codex, Claude Code, Pi or any other external

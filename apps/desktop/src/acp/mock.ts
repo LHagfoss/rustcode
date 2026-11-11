@@ -5197,6 +5197,18 @@ function mockServerService(installed: boolean): JsonObject {
     running: installed,
     version: installed ? "1.28.0" : null,
     cliVersion: "1.28.0",
+    gateway: {
+      remoteEnabled: installed,
+      running: installed,
+      address: installed ? "192.168.1.20:17879" : null,
+      advertised: installed ? "192.168.1.20:17879" : null,
+      owner: installed ? "server" : null,
+      version: installed ? "1.28.0" : null,
+      pid: installed ? 97702 : null,
+      pairedDevices: 1,
+      port: 17879,
+    },
+    pathRustcode: null,
     problems: installed
       ? []
       : [{ code: "not-installed", message: "The RustCode server service is not installed." }],

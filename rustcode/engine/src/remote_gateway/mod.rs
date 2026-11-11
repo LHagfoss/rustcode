@@ -23,6 +23,7 @@ pub mod devices;
 pub mod discovery;
 pub mod gateway;
 pub mod handshake;
+pub mod host;
 pub mod hub;
 pub mod lifecycle;
 pub mod local_socket;

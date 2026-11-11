@@ -6,7 +6,7 @@ use super::devices::DeviceRecord;
 use super::discovery::{self, Advertisement, RECHECK_INTERVAL, Refresh, Watchdog};
 use super::gateway::{Gateway, GatewayConfig, Limits};
 use super::hub::{HubLimits, SessionHub};
-use super::lifecycle::{RemoteLifecycle, Revocation};
+use super::lifecycle::{GatewayOwner, GatewaySettings, RemoteLifecycle, Revocation};
 use super::pairing_watch::{self, PairingWatch, format_progress};
 use super::qr;
 use anyhow::Result;
@@ -107,6 +107,23 @@ pub async fn serve(
     )
     .await?;
     let port = gateway.local_addr().port();
+    // What this gateway listens on and where it announces itself, kept for
+    // the next start: the RustCode server reads it to start the gateway at
+    // login with no app or terminal around. Written only now: the bind above
+    // took the owner lock, so a `remote serve` that lost that lock (a stale
+    // login agent, a second start) can never overwrite the durable settings of
+    // the gateway that won. Best effort — a read-only config directory must
+    // not keep the user's machine unreachable.
+    let settings = GatewaySettings::starting(
+        Some(bind.to_owned()),
+        Some(port),
+        advertise.map(str::to_owned),
+        prefer_interface.map(str::to_owned),
+        GatewayOwner::from_env(),
+    );
+    if let Err(error) = gateway.save_settings(&settings) {
+        eprintln!("warning: could not record the gateway's settings: {error:#}");
+    }
     let initial_bind = gateway.local_addr().ip();
     let initial_loopback = plan.advertise.is_loopback();
     let gateway_id = gateway.gateway_id().to_owned();
@@ -232,6 +249,9 @@ pub async fn serve(
             port: Some(port),
             advertise: advertise.map(str::to_owned),
             prefer_interface: prefer_interface.map(str::to_owned),
+            // The successor replaces this one and is started by the same
+            // launcher, so it keeps the owner this process was given.
+            owner: super::lifecycle::GatewayOwner::from_env(),
         };
         lifecycle.start(launcher.command()).await?;
     }
@@ -606,6 +626,9 @@ pub fn format_status_for(status: Option<&GatewayStatus>, this_session: Option<&s
             "  advertised as  {}{advertise_mode}",
             status.advertised_address
         ),
+        // Whether the machine stays reachable when the app closes: the
+        // RustCode server starts the gateway again, the app does not.
+        format!("  started by     {}", status.started_by.label()),
     ];
     if !status.candidates.is_empty() {
         lines.push("  addresses now".to_string());
@@ -1015,6 +1038,7 @@ mod tests {
             uptime_seconds: 3,
             listen_address: "192.168.31.237:17879".into(),
             advertised_address: "192.168.31.237:17879".into(),
+            started_by: GatewayOwner::App,
             paired_devices: 2,
             connections: vec![ConnectionSummary {
                 device_id: "aa".into(),
@@ -1070,6 +1094,7 @@ mod tests {
         let text = format_status(Some(&status));
         for expected in [
             "listening on   192.168.31.237:17879",
+            "started by     the app",
             "192.168.31.185  (en0)",
             "192.168.31.237 is no longer an address of this machine and the bind is fixed",
             "recover        `rustcode remote stop && rustcode remote serve --bind auto`",

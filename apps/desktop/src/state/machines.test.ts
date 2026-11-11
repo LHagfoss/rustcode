@@ -15,6 +15,8 @@ import {
   DEV_APP_VERSION,
   discoverMachines,
   forgetLocalAppVersion,
+  type GatewayService,
+  gatewayLine,
   installServer,
   lastSeen,
   localAppVersion,
@@ -533,6 +535,20 @@ describe("a machine on another RustCode version", () => {
   });
 });
 
+function gatewayOff(): GatewayService {
+  return {
+    remoteEnabled: false,
+    running: false,
+    address: null,
+    advertised: null,
+    owner: null,
+    version: null,
+    pid: null,
+    pairedDevices: 0,
+    port: null,
+  };
+}
+
 describe("the RustCode server in the background", () => {
   test("its state reads as installed and running, or what is missing", () => {
     expect(serverLine(null)).toBe("Not checked yet");
@@ -542,6 +558,8 @@ describe("the RustCode server in the background", () => {
         running: false,
         version: null,
         cliVersion: "1.28.0",
+        gateway: gatewayOff(),
+        pathRustcode: null,
         problems: [],
         error: null,
       }),
@@ -552,6 +570,8 @@ describe("the RustCode server in the background", () => {
         running: true,
         version: "1.28.0",
         cliVersion: "1.28.0",
+        gateway: gatewayOff(),
+        pathRustcode: null,
         problems: [],
         error: null,
       }),
@@ -562,10 +582,40 @@ describe("the RustCode server in the background", () => {
         running: false,
         version: null,
         cliVersion: "1.28.0",
+        gateway: gatewayOff(),
+        pathRustcode: null,
         problems: [],
         error: null,
       }),
     ).toBe("Installed · Not running");
+  });
+
+  test("the gateway says where it runs and who keeps it running", () => {
+    const server = {
+      remoteEnabled: true,
+      running: true,
+      address: "100.90.28.23:17879",
+      advertised: "100.90.28.23:17879",
+      owner: "server" as const,
+      version: "1.28.0",
+      pid: 97702,
+      pairedDevices: 1,
+      port: 17879,
+    };
+    expect(gatewayLine(server, true)).toBe("Running on 100.90.28.23:17879 (started by the RustCode server)");
+    // Started by the app: reachable only while the app runs, and the line says so.
+    expect(gatewayLine({ ...server, owner: "app" }, true)).toBe(
+      "Running on 100.90.28.23:17879 (started by the app)",
+    );
+    expect(gatewayLine({ ...server, running: false, address: null }, true)).toBe(
+      "Not running · the server starts it on port 17879",
+    );
+    // No server installed: nothing restarts it, so the line must not say one does.
+    expect(gatewayLine({ ...server, running: false, address: null }, false)).toBe(
+      "Not running · `rustcode remote start` starts it on port 17879",
+    );
+    expect(gatewayLine({ ...gatewayOff(), port: null })).toBe("Off");
+    expect(gatewayLine(undefined)).toBe("Not checked yet");
   });
 
   test("reading it, then installing it, leaves the page knowing it runs", async () => {

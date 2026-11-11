@@ -1528,6 +1528,15 @@ impl Gateway {
         &self.shared.gateway_id
     }
 
+    /// Record what this gateway listens on for the next start, through the
+    /// owner lock it holds: the settings are only ever written by the one
+    /// gateway that won the lock (issue 3412).
+    pub fn save_settings(&self, settings: &super::lifecycle::GatewaySettings) -> Result<()> {
+        self._ownership
+            .lifecycle
+            .save_settings(&self._ownership._lock, settings)
+    }
+
     /// Cancel this to stop [`Gateway::run`] and close every connection.
     pub fn shutdown_token(&self) -> CancellationToken {
         self.shared.shutdown.clone()
@@ -1919,6 +1928,7 @@ fn status(shared: &Shared, started: Instant) -> GatewayStatus {
         uptime_seconds: started.elapsed().as_secs(),
         listen_address: registration.listen_address.clone(),
         advertised_address: registration.advertised_address.clone(),
+        started_by: registration.started_by,
         paired_devices: state.devices.list().len(),
         connections: connections.into_iter().map(|(_, c)| c).collect(),
         pairing_open: state.pairing.is_open(now),

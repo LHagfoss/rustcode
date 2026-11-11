@@ -30,6 +30,7 @@ import {
   codeDigits,
   type DiscoveredMachine,
   discoverMachines,
+  gatewayLine,
   lastSeen,
   localAppVersion,
   type Machine,
@@ -164,6 +165,11 @@ function ThisComputer() {
               {" "}
               · it runs {server.version}, this app ships {server.cliVersion}
             </span>
+          ) : null}
+          {/* The gateway with the app closed: the server keeps it running, the
+              app's own threads still end with the app (docs/remote.md). */}
+          {server?.gateway.remoteEnabled || server?.gateway.running ? (
+            <span className="block pt-0.5">Gateway: {gatewayLine(server.gateway, server.installed)}</span>
           ) : null}
           {server?.problems.map((problem) => (
             <span key={problem.code} className="block pt-0.5 text-warning">

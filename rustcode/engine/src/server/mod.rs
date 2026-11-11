@@ -104,6 +104,11 @@ pub async fn run(auto_approve: bool, service: bool) -> anyhow::Result<RunOutcome
     let _kill_harnesses = KillHarnesses;
     lock.publish(&ServerInfo::now(endpoint))?;
     crate::dbg_log!("RustCode server listening");
+    // With remote access on, this server is what keeps the machine reachable
+    // once the app that started it is gone (docs/remote.md): it starts the
+    // remote gateway and starts it again when it stops. The app adopts a
+    // gateway started here instead of binding a second one.
+    crate::remote_gateway::host::spawn();
     serve(&engine, &mut listener, stop_signal()).await;
     crate::dbg_log!("RustCode server stopping");
     engine.shutdown().await;

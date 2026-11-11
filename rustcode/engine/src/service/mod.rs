@@ -11,10 +11,13 @@
 //! every platform's output is tested on every platform; only a manager's
 //! methods touch the machine, and nothing here runs from a test.
 //!
-//! [`server_service`] is the one service today, the RustCode server.
+//! [`server_service`] is the one service today, the RustCode server;
+//! [`path_binary`] reports the `rustcode` a shell runs, which may be an older
+//! copy than the engine the user is talking to (issue #3411).
 
 pub mod launchd;
 pub mod logs;
+pub mod path_binary;
 pub mod server_service;
 pub mod systemd;
 pub mod windows_task;
