@@ -177,19 +177,60 @@ pub fn random_id() -> String {
     hex::encode(random)
 }
 
-/// This computer's name as the owner of another machine should see it. The
-/// shell exports `HOSTNAME`; Windows has `COMPUTERNAME`; otherwise the label
-/// says what this is.
+/// This computer's name as the owner of another machine should see it, in
+/// the order the gateway names itself (`remote_gateway::gateway::host_name`):
+/// Windows' `COMPUTERNAME`, the Mac's Computer Name, an exported `HOSTNAME`,
+/// then the kernel's host name. zsh does not export `HOSTNAME`, so on a Mac
+/// the environment alone said `RustCode on macos` (#3417).
 fn default_device_name() -> String {
-    let name = std::env::var("COMPUTERNAME")
-        .or_else(|_| std::env::var("HOSTNAME"))
-        .ok()
-        .map(|name| name.trim().trim_end_matches(".local").to_owned())
-        .filter(|name| !name.is_empty());
-    match name {
-        Some(name) => name.chars().filter(|c| !c.is_control()).take(64).collect(),
-        None => format!("RustCode on {}", platform()),
+    let candidates = [
+        std::env::var("COMPUTERNAME").ok(),
+        mac_computer_name(),
+        std::env::var("HOSTNAME").ok(),
+        kernel_host_name(),
+    ];
+    pick_device_name(candidates).unwrap_or_else(|| format!("RustCode on {}", platform()))
+}
+
+/// The first usable name: trimmed, without a `.local` suffix or control
+/// characters, at most 64 characters.
+fn pick_device_name(candidates: impl IntoIterator<Item = Option<String>>) -> Option<String> {
+    candidates.into_iter().flatten().find_map(|name| {
+        let name: String = name
+            .trim()
+            .trim_end_matches(".local")
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(64)
+            .collect();
+        let name = name.trim().to_owned();
+        (!name.is_empty()).then_some(name)
+    })
+}
+
+/// The name set in System Settings › General › About.
+fn mac_computer_name() -> Option<String> {
+    if !cfg!(target_os = "macos") {
+        return None;
     }
+    let output = std::process::Command::new("/usr/sbin/scutil")
+        .args(["--get", "ComputerName"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// The host name Linux keeps for the running system.
+fn kernel_host_name() -> Option<String> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .or_else(|_| std::fs::read_to_string("/etc/hostname"))
+        .ok()
 }
 
 /// One client, with the identity and kind it pairs and authenticates as.
@@ -1216,6 +1257,21 @@ fn learned_routes(reported: &[HostRoute]) -> Vec<Route> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_device_name_is_the_first_usable_candidate() {
+        assert_eq!(
+            pick_device_name([None, Some("  \n".into()), Some("Ada's MacBook\n".into())]),
+            Some("Ada's MacBook".into())
+        );
+        assert_eq!(
+            pick_device_name([Some("studio.local".into()), Some("other".into())]),
+            Some("studio".into())
+        );
+        assert_eq!(pick_device_name([None, None]), None);
+        let long = "x".repeat(100);
+        assert_eq!(pick_device_name([Some(long)]).unwrap().len(), 64);
+    }
 
     fn config_dir() -> tempfile::TempDir {
         tempfile::tempdir_in("/tmp").unwrap()
