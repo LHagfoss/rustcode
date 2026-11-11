@@ -1,3 +1,17 @@
+## [v1.29.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.29.0) - 2026-11-11
+
+### Features
+- Show and drive threads from every paired machine in the sidebar, with `Runs on ‹machine›` in the chat and read-only threads while a machine is away. (#3400)
+- New threads can start on another connected machine: pick **Run on** in the composer, with that machine's agents, models and projects, and the thread appears under its group in the sidebar. (#3403)
+- Agents can now answer the approvals and questions their threads wait on, organize several threads in one call, and attach files to the messages they send. (#3401)
+- Show one row per delegate thread with its latest state and message count, and count waiting threads rather than messages. (#3410)
+- `rustcode remote` now listens on a machine's LAN and overlay addresses (NetBird, Tailscale, ZeroTier) with `bind = "auto"`, `rustcode machines` races the routes it knows (LAN first, overlay after a second, five seconds at most) and saves the addresses the machine reports, and `rustcode machines list` says what to check when one network answers and another does not. (#3402)
+- Agents can now read, create, clone, rename and unregister the user's projects, and schedule work on the daemon's cron from chat (`read_project`, `create_project`, `clone_project`, `update_project`, `remove_project`, `schedule_task`, `list_scheduled_tasks`, `delete_scheduled_task`, `run_scheduled_task_now`). (#3406)
+- Edit settings, skills and MCP servers on one machine or on all paired machines, with Mixed where they disagree. (#3405)
+- Settings › Machines lists the machines found on your network — LAN and NetBird/Tailscale — with their RustCode version, connecting in one step; turning on Remote access installs the RustCode server as a background service that starts at login. (#3404)
+- Agents can list the computers this RustCode is paired with (`list_machines`) and start, message, read and wait on threads on any of them by passing `machine`. (#3407)
+- Add `worktree_status` and `handoff_worktree`, so an agent can report where each worktree stands and hand a delegate's branch back to your checkout without losing a commit. (#3413)
+- The RustCode server now runs the remote gateway, so a paired machine still reaches this one after the app closes; `rustcode server status` shows the gateway and warns when the `rustcode` on PATH is an older copy than the app's engine. (#3414)
 ## [v1.28.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.28.0) - 2026-11-10
 
 ### Features
