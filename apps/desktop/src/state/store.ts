@@ -154,6 +154,7 @@ import {
   interruptedLinks,
   linkFinished,
   linkStarted,
+  linkSteered,
   linksFinished,
   linksOf,
   linksResumed,
@@ -3770,6 +3771,8 @@ export async function sendQueuedNow(id: string, queuedId: string): Promise<boole
   if (await steer(id, item.text, item.extras)) {
     removeQueued(id, queuedId);
     glideAway(id, item);
+    // A delegate's message that was waiting: the turn it went into answers its link.
+    linkSteered(id, item.link);
     return true;
   }
   toast(QUEUE_REASON.refused);

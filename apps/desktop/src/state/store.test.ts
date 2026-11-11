@@ -4306,6 +4306,34 @@ describe("what an agent may do with the messages it queued", () => {
     await turning;
   });
 
+  test("steers into a turn end with it: the delegate's links stop working with the thread closed", async () => {
+    const caller = await ready(200);
+    const target = useApp.getState().sessions.find((x) => x.cwd === "/Users/you/code/website")!.id;
+    await openThread(target);
+    selectThread(target);
+    const turning = submit("do the thing");
+    await until(() => useApp.getState().threads[target]?.running === true);
+    const steers: string[] = [];
+    for (const message of ["first change", "second change"]) {
+      const result = await answerOrchestration({
+        sessionId: caller,
+        tool: "message_session",
+        args: { session_id: target, message, steer: true },
+      });
+      expect(result.delivered).toBe("steered");
+      steers.push(result.link_id as string);
+    }
+    // The delegate is not the open thread when its turn ends.
+    selectThread(caller);
+    const linkStates = () =>
+      steers.map((id) => useApp.getState().links.links.find((l) => l.id === id)?.state);
+    expect(linkStates()).toEqual(["working", "working"]);
+    await turning;
+    await until(() => !useApp.getState().threads[target]?.running);
+    expect(linkStates()).toEqual(["done", "done"]);
+    expect(statusOf(useApp.getState(), target)).not.toBe("running");
+  });
+
   test("steer queues for a harness without mid-turn input and its owner can manage it across projects", async () => {
     const caller = await ready();
     const target = useApp.getState().sessions.find((x) => x.cwd === "/Users/you/code/website")!.id;

@@ -3468,7 +3468,7 @@ async function messageNow(
     (await steer(target.id, delivered(text, caller.title), extras))
   ) {
     delivery = "steered";
-    setBook((b) => updateLink(b, id, { state: "working" }));
+    linkSteered(target.id, id);
   } else {
     deliver(target.id, delivered(text, caller.title), id, caller.id, extras);
     delivery = useApp.getState().threads[target.id]?.queue.some((q) => q.link === id) ? "queued" : "started";
@@ -4417,6 +4417,7 @@ export function resetQueues(): void {
   restoredQueues.clear();
   watchedQueues.clear();
   steeredLinks.clear();
+  steeredIntoTurn.clear();
 }
 
 /** The threads whose saved queue this window has already put back. */
@@ -4769,6 +4770,28 @@ export function linkStarted(id: string) {
   setBook((b) => updateLink(b, id, { state: "working", startedAt: Date.now() }));
 }
 
+/** The links whose message went into a running turn of a thread (`steer`), by thread: that turn settles them. */
+const steeredIntoTurn = new Map<string, Set<string>>();
+
+/**
+ * A link's message was steered into the running turn of `thread`. No turn of its own carries the
+ * link (`runPrompt` `options.link`), so the running turn is the one that answers it: the link works
+ * from here and is settled when that turn ends (`threadTurnEnded`), however many steers went in and
+ * whether or not the thread is open. A turn that ended while the steer was in flight has nobody
+ * left to settle it, so it is settled at once.
+ */
+export function linkSteered(thread: string, link: string | undefined): void {
+  if (!link) return;
+  linkStarted(link);
+  if (!useApp.getState().threads[thread]?.running) {
+    linksFinished([link], thread, "completed", undefined, []);
+    return;
+  }
+  const links = steeredIntoTurn.get(thread) ?? new Set<string>();
+  links.add(link);
+  steeredIntoTurn.set(thread, links);
+}
+
 /**
  * The links a resumed turn of `thread` answers: the ones a restart severed while their turn ran
  * (`orchestration.ts` `interruptActive`). A link the restart caught still queued is not one of
@@ -4931,6 +4954,12 @@ export function threadTurnEnded(
   failed: string | undefined,
   items: TranscriptItem[],
 ) {
+  // The links whose messages were steered into this turn end with it: no prompt carries them.
+  const steered = steeredIntoTurn.get(thread);
+  if (steered) {
+    steeredIntoTurn.delete(thread);
+    linksFinished([...steered], thread, outcome, failed, items);
+  }
   // A stopped turn is not an answer: the link turns record their own, and nothing else does. Its
   // end still matters to a parent: this thread no longer runs, so what it owes may be due now.
   if (outcome !== "cancelled") {
