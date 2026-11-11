@@ -254,6 +254,10 @@ pub async fn run_direct_upgrade(client: &reqwest::Client, expected: Version) -> 
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+#[path = "local_signing.rs"]
+mod local_signing;
+
 /// Re-sign the updated binary with the local certificate from
 /// `scripts/macos-stable-signature.sh`, when the user has created it.
 ///
@@ -265,13 +269,7 @@ pub async fn run_direct_upgrade(client: &reqwest::Client, expected: Version) -> 
 #[cfg(target_os = "macos")]
 fn sign_with_local_identity(executable: &std::path::Path) {
     let signed = crate::platform::command("/usr/bin/codesign")
-        .args([
-            "--force",
-            "--sign",
-            "RustCode Local Signing",
-            "--identifier",
-            "org.rustcode.cli",
-        ])
+        .args(local_signing::sign_args(local_signing::CLI_IDENTIFIER))
         .arg(executable)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
