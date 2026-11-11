@@ -127,3 +127,11 @@ pub use worker::InteractiveController;
 /// Shared theme files (TUI + desktop): frontends read and render them
 /// through the controller seam.
 pub use crate::themes;
+
+/// The user's home folder: `HOME`, then `USERPROFILE` on Windows, for a
+/// frontend that shortens paths under it.
+pub use crate::home::home_dir;
+
+/// The home folder written as `~`, cut at a path-component boundary, for a
+/// frontend's path display.
+pub use crate::home::contract_home;

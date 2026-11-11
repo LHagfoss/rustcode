@@ -10,7 +10,7 @@
 //
 // Pure, so the store and its tests share one answer (state/projects.test.ts).
 
-import { projectName, type SessionSummary } from "../acp/types";
+import { plainPath, projectName, type SessionSummary } from "../acp/types";
 import { LOCAL_HOST } from "./threadKeys";
 
 /** A project on one computer: the folder a thread starts in, its name, and its git remote. */
@@ -51,15 +51,30 @@ export function remoteRepository(remote: string | null | undefined): string | nu
 }
 
 /**
+ * Whether a folder is a filesystem root: `/`, `C:\`, a drive on its own. No project lives at one,
+ * so a thread that listed it had no folder of its own to begin with (a service manager's working
+ * directory, the app's install folder), which is issue 3425.
+ */
+export function isRootFolder(path: string): boolean {
+  const plain = plainPath(path).trim();
+  return plain !== "" && /^(?:[A-Za-z]:)?[\\/]*$/.test(plain);
+}
+
+/**
  * The projects a machine's thread list names, most recently used first. A worktree thread names
- * its repository, as the sidebar groups it; two threads in one project are one row.
+ * its repository, as the sidebar groups it; two threads in one project are one row. A thread with
+ * no recorded folder of its own is not one: its machine lists a stand-in such as its home folder,
+ * which made "no project" a project a thread could be started in (issue 3425).
  */
 export function projectsOn(sessions: readonly SessionSummary[], host = LOCAL_HOST): Project[] {
   const projects = new Map<string, { project: Project; updatedAt: number }>();
   for (const session of sessions) {
     if ((session.host ?? LOCAL_HOST) !== host) continue;
-    const path = session.worktree?.repo || session.repo || session.cwd;
-    if (!path) continue;
+    if (session.workspaceUnknown) continue;
+    // One folder is one project, however Windows spelled it: the verbatim prefix an older engine
+    // stored is not part of the path (issue 3425).
+    const path = plainPath(session.worktree?.repo || session.repo || session.cwd);
+    if (!path || isRootFolder(path)) continue;
     const updatedAt = session.updatedAt ?? 0;
     const known = projects.get(path);
     if (known) {

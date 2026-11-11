@@ -577,6 +577,18 @@ they finish or ask, instead of having to poll with sleeps.
   `link_id`, and that the message is the notification. A child that was
   stopped, or interrupted and left interrupted, is no result to wait for:
   nothing ever reports it, so it does not hold its parent back.
+- **A delegate on another machine whose channel goes.** The prompt request that
+  ran a remote turn dies with its machine's connection; the turn there does
+  not. Nothing is settled from the rows that had arrived — a half-written
+  answer is not an answer — so the links keep working and the machine is asked
+  how the thread ended once its channel is back (`state/store.ts`
+  `lostTurn`): a turn still running there is followed, and its rows and answer
+  are read through a reload of the thread (`openThread`'s replay) when the
+  machine reports it stopped; a thread that is idle settles `done` with its
+  last turn's answer, or `failed` with the error it ended in. A machine that
+  stays unreachable for two minutes (`LOST_MACHINE_MS`) fails the links with
+  `MACHINE_LOST_TURN`, the sentence the thread's own row carries. A `Failed`
+  row is the turn's own failure, never a channel that blinked.
 - **After a restart.** A restart resumes the threads it cut off
   (`state/store.ts` `resumeInterrupted`), and the resume is what answers the
   links the quit severed: it is tied to that one turn, never to a turn that
@@ -1081,8 +1093,8 @@ is the follow-up (§10, phases 3.1 and 3.2).
 
 | Tool | With `machine` |
 | --- | --- |
-| `list_machines` | This computer (`current: true`) and each paired machine: `{ id, name, platform, state, route?, last_connected?, harnesses, projects }`. `harnesses` is that machine's list (`[{ id, name, available }]`), `projects` its project names |
-| `start_session`, `fan_out` | Start on that machine, in its project. `harness`, `model`, `effort` and `account` are that machine's own (never this app's logins or remembered choices). `project` is an absolute path there; without it, the caller's path when the machine has it, else a folder with the same project name, else its only project; otherwise the error lists what it has |
+| `list_machines` | This computer (`current: true`) and each paired machine: `{ id, name, platform, state, route?, last_connected?, harnesses, projects }`. `harnesses` is that machine's list (`[{ id, name, available }]`). `projects` is its project names: the folders its threads really run in, never the home folder or root its engine lists for a thread that recorded none, and never two spellings of one folder (Windows' `\\?\` prefix is dropped, issue 3425) |
+| `start_session`, `fan_out` | Start on that machine, in its project. `harness`, `model`, `effort` and `account` are that machine's own (never this app's logins or remembered choices). `project` is an absolute path there; without it, the caller's path when the machine has it, else a folder with the same project name, else its only project; otherwise the error lists what it has, and a machine with none is refused with a hint to pass the path. A thread never starts in `/` or the app's install folder (issue 3425) |
 | `list_harnesses` | That machine's harnesses, models and named accounts, without this app's plan numbers |
 | `list_projects`, `list_sessions` | That machine's projects or threads. Its folders are not this one's, so its threads are listed whether or not they share this project |
 | `read_session`, `message_session`, `interrupt_session` | On that machine's thread. A machine's threads are not narrowed to the caller's project: the user named the machine, and the approval card is the gate. A thread the caller started on a machine is reachable even when `machine` is omitted |
@@ -1134,6 +1146,19 @@ Limits of v1, and what is left:
 The app advertises 12 from `CAPABILITY_VERSION` (`state/orchestration.ts`);
 a v11 app keeps exactly the v11 set and `PROMPT_HINT_V11`, and this engine
 refuses `machine` from it rather than acting on the wrong computer.
+
+## Orchestration tools v14
+
+`message_session` reaches a thread in any project through the existing user
+approval policy. The approval card names the target project when it differs.
+With `steer: true`, a running target receives input mid-turn when its harness
+supports it; otherwise the message queues. An idle target starts a turn.
+The result's `delivered` is `steered`, `queued` or `started`.
+`manage_queue` can list and change only the caller's own queued messages,
+also across projects; changes use the same approval grant as messaging.
+Older clients are not offered `steer` and calls carrying it are refused with
+an instruction to upgrade. Existing chain, delegate, mailbox and machine
+routing rules still apply. No new tools are added in v14.
 
 ## Orchestration tools v13
 

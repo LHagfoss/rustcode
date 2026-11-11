@@ -1,4 +1,5 @@
 import { formatBinding } from "../lib/keys";
+import { basename } from "../lib/paths";
 import { fileManagerName, primaryModifier } from "../lib/platform";
 // The composer, after ContentView.swift's Composer: one glass box floating over
 // the transcript, holding the attachments, the field (with a slash-command token
@@ -16,6 +17,7 @@ import {
   ArrowUp,
   Check,
   ChevronDown,
+  ChevronUp,
   Clock,
   Command,
   Copy,
@@ -35,6 +37,7 @@ import {
   Square,
   SquarePen,
   SquareTerminal,
+  WifiOff,
   X,
 } from "lucide-react";
 import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -94,7 +97,15 @@ import { controlDisabledReason, defaultEffort, orderHarnesses, unavailableReason
 import { usageOf } from "../state/harnessUsage";
 import { childAccountOn, type SignedOutLogins } from "../state/logins";
 import { type MachineState, selfName, useMachines } from "../state/machines";
+import {
+  type MentionEntry,
+  type MentionNode,
+  type MentionSection,
+  mentionNodes,
+} from "../state/mentionDrawer";
 import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
+import { noteRecentFile, recentFiles, recentFirst } from "../state/recentFiles";
+import { scheduledSummary } from "../state/schedule";
 import type { CachedPlan } from "../state/store";
 import {
   acceptsImages,
@@ -102,15 +113,17 @@ import {
   cancel,
   cancelEdit,
   cancelQueuedEdit,
+  cancelWait,
   commandsFor,
-  dropLimitWait,
   endQueuedEdit,
   featureMissing,
   harnessesOn,
   limitTime,
   newThreadChoice,
   permissionModeOf,
+  resumeWaitNow,
   saveQueuedEdit,
+  scheduleMessage,
   sendDecisionFor,
   setDraft,
   setExtras,
@@ -139,6 +152,8 @@ import { ModelPicker } from "./ModelPicker";
 import { PasteChip } from "./PasteChip";
 import { cx, MenuSearchField, MenuShortcut, noTextHelpers, Pill, Tooltip } from "./primitives";
 import { QueuedAnnouncer } from "./QueuedMessages";
+import { ScheduledMessages } from "./ScheduledMessages";
+import { SendLaterDialog } from "./SendLaterDialog";
 
 // The field's line box: 14px at 1.5 (`leading-normal`), a hair tighter than a reply's, which is what
 // makes a draft read as something being typed rather than something read back.
@@ -222,7 +237,7 @@ async function attachmentsFromPaths(
 ): Promise<Attachment[]> {
   const out: Attachment[] = [];
   for (const path of paths) {
-    const name = path.split("/").pop() ?? path;
+    const name = basename(path) || path;
     if (imageMime(name) && images) {
       try {
         const image = await readImage(path);
@@ -253,25 +268,34 @@ function sameComposer(
   return Object.keys(a.thread).length === Object.keys(b.thread).length;
 }
 
-const NO_FILES: string[] = [];
 /** How long a project's file list is used before `@` lists it again. */
 const FILES_FRESH_MS = 30_000;
 
-/** A row of the composer's drawer: a command, a group's keyword, an agent, a thread, or a file. */
-type DrawerEntry =
-  | { kind: "command"; command: SlashCommand }
-  | { kind: "keyword"; scope: MentionScope }
-  | { kind: "agent"; agent: AgentChoice }
-  | { kind: "thread"; thread: ThreadChoice }
-  | { kind: "file"; path: string };
+/** A row of the composer's drawer: a command, or one of the `@` drawer's own rows. */
+type DrawerEntry = { kind: "command"; command: SlashCommand } | MentionEntry;
 
-interface DrawerGroup {
-  label: string;
-  entries: DrawerEntry[];
-}
+/**
+ * A row of the drawer as it is drawn: a section's heading, a harness under it, or a bound row the
+ * arrow keys can land on — one that points at something, or a section's `Show all`.
+ */
+type DrawerRowItem =
+  | { kind: "heading"; label: string }
+  | { kind: "harness"; harness: string; name: string }
+  | { kind: "row"; entry: DrawerEntry; index: number }
+  | { kind: "more"; section: MentionSection; hidden: number; index: number }
+  | { kind: "less"; section: MentionSection; index: number };
 
-/** A row of the drawer as it is drawn: a heading, or a bound row the arrow keys can land on. */
-type DrawerRowItem = { kind: "heading"; label: string } | { kind: "row"; entry: DrawerEntry; index: number };
+/** What a bound row does when it is picked: point at something, or open/close a section. */
+type DrawerPick =
+  | { kind: "entry"; entry: DrawerEntry }
+  | { kind: "more"; section: MentionSection }
+  | { kind: "less"; section: MentionSection };
+
+/** Every match, before the drawer keeps some back behind `Show N more`: what the search looks through. */
+const ALL_MATCHES = 200;
+
+/** Nothing expanded: the drawer's first look at a folder shows a few rows of each section. */
+const NOT_EXPANDED: ReadonlySet<MentionSection> = new Set();
 
 /** No plans to draw: a machine's harness rows, whose plans this computer has not read. */
 const NO_PLANS: Record<string, CachedPlan> = {};
@@ -347,12 +371,9 @@ function agentChoices(
 }
 
 /** The group keywords the drawer offers first, while what is typed is empty or still a prefix. */
-function keywordEntries(query: string): DrawerEntry[] {
+function keywordEntries(query: string): MentionScope[] {
   const asked = query.trim().toLowerCase();
-  return SCOPES.filter((scope) => scope.word.startsWith(asked)).map((scope) => ({
-    kind: "keyword",
-    scope: scope.scope,
-  }));
+  return SCOPES.filter((scope) => scope.word.startsWith(asked)).map((scope) => scope.scope);
 }
 
 /** The folder a thread is grouped by: a worktree's repo, else the thread's own folder. */
@@ -445,6 +466,8 @@ export const Composer = memo(function Composer({
   const [caret, setCaret] = useState(0);
   const [files, setFiles] = useState<{ cwd: string; at: number; paths: string[] } | null>(null);
   const [dropping, setDropping] = useState(false);
+  // The send-later dialog: opened from the + menu, with the draft it is scheduling.
+  const [sendLater, setSendLater] = useState(false);
 
   const running = thread?.running ?? false;
   // A thread on a paired computer that is not connected now is read-only: its turns run there,
@@ -580,60 +603,77 @@ export const Composer = memo(function Composer({
     () => agentChoices(harnesses ?? [], plans, signedOut, parent),
     [harnesses, plans, signedOut, parent],
   );
-  const fileList = useMemo(
-    () => (files?.cwd === cwdForFiles ? rankFiles(files.paths, mentionQuery) : NO_FILES),
-    [files, cwdForFiles, mentionQuery],
-  );
   const mentioning = !!hash || !!at;
-  const drawerGroups = useMemo((): DrawerGroup[] => {
-    if (slash) return [{ label: "", entries: list.map((command) => ({ kind: "command", command })) }];
+  // The sections the reader opened whole with a `Show all` row: a few rows of each is what the
+  // drawer offers first, and this is the rest of the ones they asked for.
+  const [expanded, setExpanded] = useState<ReadonlySet<MentionSection>>(NOT_EXPANDED);
+  // The harnesses' names, for the sub-heading an agent's harness gets (`@` groups by harness).
+  const harnessNames = useMemo(
+    () => Object.fromEntries((harnesses ?? []).map((h) => [h.id, h.name])),
+    [harnesses],
+  );
+  // What the `@` drawer lists: its keywords, then the agents under their own harness, the threads
+  // and the files (state/mentionDrawer.ts). Every item is searched; a few of each are drawn first.
+  const mention = useMemo((): MentionNode[] => {
     if (!mentioning) return [];
-    const groups: DrawerGroup[] = [];
-    if (!scope || scope === "agents") {
-      // The harnesses and their models first, then the threads this one is already running.
-      const rows: DrawerEntry[] = [
-        ...rankAgents(mentionQuery, agents).map((agent): DrawerEntry => ({ kind: "agent", agent })),
-        ...rankThreads(delegates, mentionQuery).map((thread): DrawerEntry => ({ kind: "thread", thread })),
-      ];
-      if (rows.length) groups.push({ label: "Agents", entries: rows });
-    }
-    if (!scope || scope === "threads") {
-      const threads = rankThreads(threadChoices, mentionQuery);
-      if (threads.length)
-        groups.push({
-          label: "Threads",
-          entries: threads.map((thread): DrawerEntry => ({ kind: "thread", thread })),
-        });
-    }
-    if (!scope || scope === "files") {
-      if (fileList.length)
-        groups.push({
-          label: "Files",
-          entries: fileList.map((path): DrawerEntry => ({ kind: "file", path })),
-        });
-    }
-    // The keywords first, so the drawer says how to look in one group before it lists them.
-    const keywords = !scope ? keywordEntries(mentionQuery) : [];
-    if (keywords.length) groups.unshift({ label: "", entries: keywords });
-    return groups;
-  }, [slash, mentioning, scope, mentionQuery, list, agents, delegates, threadChoices, fileList]);
-  // The drawer's rows, as drawn: a group's heading, then its rows, and in one bound list so the
-  // arrow keys walk the rows across the groups and never land on a heading.
+    // The project's files, ranked; while nothing is typed the ones this folder pointed at last
+    // come first, since a folder keeps no record of its own of which were touched.
+    const paths = files?.cwd === cwdForFiles ? files.paths : [];
+    const ranked = rankFiles(paths, mentionQuery, ALL_MATCHES);
+    return mentionNodes({
+      query: mentionQuery,
+      scope,
+      keywords: scope ? [] : keywordEntries(mentionQuery),
+      // Ranked over everything, so a match past the few rows on screen still answers what is typed.
+      agents: rankAgents(mentionQuery, agents, ALL_MATCHES),
+      delegates: rankThreads(delegates, mentionQuery, ALL_MATCHES),
+      threads: rankThreads(threadChoices, mentionQuery, ALL_MATCHES),
+      files: mentionQuery.trim() ? ranked : recentFirst(ranked, recentFiles(cwdForFiles)),
+      expanded,
+      harnessNames,
+    });
+  }, [
+    mentioning,
+    mentionQuery,
+    scope,
+    agents,
+    delegates,
+    threadChoices,
+    files,
+    cwdForFiles,
+    expanded,
+    harnessNames,
+  ]);
+  // The drawer's rows, as drawn: a section's heading, a harness under it, then the bound rows, in
+  // one list so the arrow keys walk the rows across the sections and never land on a heading.
   const drawerRows = useMemo((): DrawerRowItem[] => {
-    const labelled = drawerGroups.filter((group) => group.entries.length).length > 1;
+    if (slash) {
+      return list.map((command, index) => ({ kind: "row", entry: { kind: "command", command }, index }));
+    }
     const rows: DrawerRowItem[] = [];
     let index = 0;
-    for (const group of drawerGroups) {
-      if (!group.entries.length) continue;
-      if (labelled && group.label) rows.push({ kind: "heading", label: group.label });
-      for (const entry of group.entries) rows.push({ kind: "row", entry, index: index++ });
+    for (const node of mention) {
+      if (node.kind === "entry") rows.push({ kind: "row", entry: node.entry, index: index++ });
+      else if (node.kind === "more")
+        rows.push({ kind: "more", section: node.section, hidden: node.hidden, index: index++ });
+      else if (node.kind === "less") rows.push({ kind: "less", section: node.section, index: index++ });
+      else rows.push(node);
     }
     return rows;
-  }, [drawerGroups]);
-  const entries = useMemo(
-    () => drawerRows.flatMap((row) => (row.kind === "row" ? [row.entry] : [])),
+  }, [slash, list, mention]);
+  // What the arrows walk: a row that points at something, or a section's own open/close row.
+  const picks = useMemo(
+    (): DrawerPick[] =>
+      drawerRows.flatMap((row): DrawerPick[] => {
+        if (row.kind === "row") return [{ kind: "entry", entry: row.entry }];
+        if (row.kind === "more") return [{ kind: "more", section: row.section }];
+        if (row.kind === "less") return [{ kind: "less", section: row.section }];
+        return [];
+      }),
     [drawerRows],
   );
+  // What is left to offer at all: an empty drawer says so where the field is about to be typed.
+  const anyRows = picks.length > 0;
   // What the drawer is: `/`'s commands, or `@` and `#`'s agents, threads and files.
   const drawer = slash ? "commands" : hash || at ? "mentions" : null;
   const drawerQuery = mentionQuery;
@@ -726,8 +766,27 @@ export const Composer = memo(function Composer({
     return () => cancelAnimationFrame(frame);
   }, [draft]);
 
+  // What a section's `Show N more` row does: the rest of that section, in place, from here on.
+  const expand = (section: MentionSection) => {
+    setExpanded((held) => new Set(held).add(section));
+  };
+
+  // And what `Show fewer` does: back to the few rows the section opened with.
+  const collapse = (section: MentionSection) => {
+    setExpanded((held) => {
+      const next = new Set(held);
+      next.delete(section);
+      return next;
+    });
+  };
+
+  // A new list starts at the top, and what was opened whole closes again: another word is another
+  // look, and a section left expanded would bury the rows below it before they were seen.
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new suggestion list starts at the top
-  useEffect(() => setSelected(0), [entries]);
+  useEffect(() => {
+    setSelected(0);
+    setExpanded(NOT_EXPANDED);
+  }, [drawer, drawerQuery]);
 
   // A narrower window rewraps the draft, so the field can start or stop scrolling: measure again.
   // biome-ignore lint/correctness/useExhaustiveDependencies: the field and the mirror are refs
@@ -852,8 +911,24 @@ export const Composer = memo(function Composer({
     });
   };
 
+  // Schedule what is in the field for a time the user picked: it leaves the field as a sent message
+  // would, into the card over the composer. A thread that is busy when its time comes queues it.
+  const schedule = (due: number) => {
+    if (!thread) return;
+    if (!scheduleMessage(thread.id, draft, extras, due)) {
+      toast("Could not schedule that message.", "error");
+      return;
+    }
+    setSendLater(false);
+    update("");
+    change(() => emptyExtras);
+    fadeClearedField(fieldBox.current);
+  };
+
   const reference = (path: string) => {
     if (!at) return;
+    // The drawer offers what this folder's picks pointed at last, first, next time it opens.
+    noteRecentFile(cwdForFiles, path);
     const next = insertRef(draft, at, path);
     update(next.text);
     setCaret(next.caret);
@@ -986,16 +1061,19 @@ export const Composer = memo(function Composer({
     // An IME's Enter (keyCode 229) belongs to the field: it commits a candidate. Taking it would
     // complete a command or send a draft that was still being written.
     if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
-    if (entries.length) {
+    if (picks.length) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
-        setSelected((i) => (i + (e.key === "ArrowDown" ? 1 : entries.length - 1)) % entries.length);
+        setSelected((i) => (i + (e.key === "ArrowDown" ? 1 : picks.length - 1)) % picks.length);
         return;
       }
       if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !primaryModifier(e))) {
         e.preventDefault();
-        const entry = entries[selected] ?? entries[0];
-        if (entry) accept(entry, e.key === "Enter");
+        const pick = picks[selected] ?? picks[0];
+        if (!pick) return;
+        if (pick.kind === "more") expand(pick.section);
+        else if (pick.kind === "less") collapse(pick.section);
+        else accept(pick.entry, e.key === "Enter");
         return;
       }
     }
@@ -1170,9 +1248,10 @@ export const Composer = memo(function Composer({
     selectedRow.current?.scrollIntoView({ block: "nearest" });
   }, [selected]);
 
-  const drawerRow = (entry: DrawerEntry, i: number) => {
+  // What every bound row is: one option of the list, lit while the arrows or the pointer are on it.
+  const drawerRowProps = (i: number) => {
     const picked = i === selected;
-    const row = {
+    return {
       type: "button" as const,
       role: "option",
       "aria-selected": picked,
@@ -1181,6 +1260,27 @@ export const Composer = memo(function Composer({
       onMouseEnter: () => setSelected(i),
       className: cx(DRAWER_ROW, picked && "bg-fill"),
     };
+  };
+
+  // The rest of a section, in place — or, with the section open, the way back to its few rows.
+  const restRow = (section: MentionSection, hidden: number, i: number) => (
+    <button key={`m:${section}`} {...drawerRowProps(i)} onClick={() => expand(section)}>
+      <ChevronDown size={16} className="shrink-0 text-fg-muted" />
+      <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">
+        {hidden > 0 ? `Show ${hidden} more` : "Show more"}
+      </span>
+    </button>
+  );
+
+  const fewerRow = (section: MentionSection, i: number) => (
+    <button key={`l:${section}`} {...drawerRowProps(i)} onClick={() => collapse(section)}>
+      <ChevronUp size={16} className="shrink-0 text-fg-muted" />
+      <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">Show fewer</span>
+    </button>
+  );
+
+  const drawerRow = (entry: DrawerEntry, i: number) => {
+    const row = drawerRowProps(i);
     switch (entry.kind) {
       case "command":
         return (
@@ -1303,6 +1403,9 @@ export const Composer = memo(function Composer({
   return (
     <div ref={shell} className={cx("rc-composer-shell relative @container/composer", className)}>
       {thread && <QueuedAnnouncer threadId={thread.id} />}
+      {/* What waits for a time the user picked, over the box: it leaves the transcript's own lane
+          alone, and the stack's bottom edge carries the box down as the cards come and go. */}
+      {thread && <ScheduledMessages threadId={thread.id} />}
       {/* The box: the field and how it is sent. The drawer tucks under its top, the tray under its
           foot, so the three read as one floating surface over the transcript. */}
       <div className="relative">
@@ -1314,21 +1417,37 @@ export const Composer = memo(function Composer({
             aria-label={drawerLabel}
           >
             {/* Nothing at all to offer: the drawer says so where the field is about to be typed in. */}
-            {!entries.length && <p className="px-5 pt-4 pb-7 text-fg-muted text-sub">{emptyText}</p>}
-            {drawerRows.map((item) =>
-              item.kind === "heading" ? (
-                // A group's name: the rows under it are the drawer's options, never this line.
-                <div
-                  key={`g:${item.label}`}
-                  role="presentation"
-                  className="px-2 pt-1.5 pb-0.5 font-medium text-caption text-fg-muted"
-                >
-                  {item.label}
-                </div>
-              ) : (
-                drawerRow(item.entry, item.index)
-              ),
-            )}
+            {!anyRows && <p className="px-5 pt-4 pb-7 text-fg-muted text-sub">{emptyText}</p>}
+            {drawerRows.map((item) => {
+              if (item.kind === "heading") {
+                // A section's name: the rows under it are the drawer's options, never this line.
+                return (
+                  <div
+                    key={`g:${item.label}`}
+                    role="presentation"
+                    className="px-2 pt-1.5 pb-0.5 font-medium text-caption text-fg-muted"
+                  >
+                    {item.label}
+                  </div>
+                );
+              }
+              if (item.kind === "harness") {
+                // Which harness the rows under it run on, marked as the app marks that harness.
+                return (
+                  <div
+                    key={`h:${item.harness}`}
+                    role="presentation"
+                    className="flex items-center gap-1.5 px-2 pt-1 pb-0.5 text-caption text-fg-muted"
+                  >
+                    <HarnessIcon id={item.harness} name={item.name} size={12} />
+                    <span className="truncate">{item.name}</span>
+                  </div>
+                );
+              }
+              if (item.kind === "more") return restRow(item.section, item.hidden, item.index);
+              if (item.kind === "less") return fewerRow(item.section, item.index);
+              return drawerRow(item.entry, item.index);
+            })}
           </div>
         )}
         <div
@@ -1528,6 +1647,25 @@ export const Composer = memo(function Composer({
             <PlusMenu
               onAttach={chooseFiles}
               attachLabel={images ? "Attach Files or Images…" : "Attach Files…"}
+              onSendLater={() => setSendLater(true)}
+              sendLaterDisabled={
+                !thread ||
+                status !== "ready" ||
+                !!queuedEdit ||
+                !!editing ||
+                (!draft.trim() && !hasExtras(extras))
+              }
+              sendLaterTip={
+                !thread
+                  ? "Open a thread first"
+                  : status !== "ready"
+                    ? "Not connected"
+                    : queuedEdit
+                      ? "Finish editing the queued message first"
+                      : editing
+                        ? "Finish editing the sent message first"
+                        : "Write a message first"
+              }
               cwd={cwd}
             />
             <input
@@ -1636,22 +1774,45 @@ export const Composer = memo(function Composer({
           </span>
         </div>
       </div>
+      {thread && (
+        <SendLaterDialog
+          open={sendLater}
+          onOpenChange={setSendLater}
+          preview={scheduledSummary(draft, extras)}
+          onSchedule={schedule}
+        />
+      )}
     </div>
   );
 }, sameComposer);
 
-/** The thread stopped on its plan's limit and carries on by itself when it resets. */
+/**
+ * The thread waits to go on by itself: its plan's limit resetting, a provider that
+ * was overloaded retrying, or the machine's network coming back. Send now skips the
+ * wait; Cancel stops it continuing on its own.
+ */
 function LimitWaitRow({ threadId }: { threadId: string }) {
   const wait = useApp((s) => s.limitWaits[threadId]);
+  const offline = useApp((s) => s.internetWaits[threadId]);
   // Once it is continuing, the turn says so; the wait is settled when it ends.
   const running = useApp((s) => s.threads[threadId]?.running);
-  if (!wait || running) return null;
+  if ((!wait && !offline) || running) return null;
+  const text = offline
+    ? "Waiting for the internet, then it continues"
+    : wait?.reason === "overload"
+      ? `The provider was overloaded — trying again at ${limitTime(wait.until)}`
+      : wait
+        ? `Continues when the limit resets, at ${limitTime(wait.until)}`
+        : "";
   return (
     <div className="flex items-center gap-1.5 px-5 pt-2 text-caption text-fg-muted">
-      <Clock size={11} className="shrink-0" />
-      <span className="min-w-0 truncate">Continues when the limit resets, at {limitTime(wait.until)}</span>
-      <Pill quiet size="sm" className="ml-auto shrink-0" onClick={() => dropLimitWait(threadId)}>
-        Don't continue
+      {offline ? <WifiOff size={11} className="shrink-0" /> : <Clock size={11} className="shrink-0" />}
+      <span className="min-w-0 truncate">{text}</span>
+      <Pill quiet size="sm" className="ml-auto shrink-0" onClick={() => resumeWaitNow(threadId)}>
+        Send now
+      </Pill>
+      <Pill quiet size="sm" className="shrink-0" onClick={() => cancelWait(threadId)}>
+        Cancel
       </Pill>
     </div>
   );
@@ -2127,10 +2288,18 @@ export function PermissionMenu({ threadId, compact }: { threadId?: string; compa
 function PlusMenu({
   onAttach,
   attachLabel,
+  onSendLater,
+  sendLaterDisabled,
+  sendLaterTip,
   cwd,
 }: {
   onAttach: () => void;
   attachLabel: string;
+  onSendLater: () => void;
+  /** Nothing to schedule yet, or the app cannot send now: the row says so instead of opening. */
+  sendLaterDisabled: boolean;
+  /** Why the row is disabled, said on the row itself. */
+  sendLaterTip: string;
   cwd: string;
 }) {
   return (
@@ -2157,6 +2326,14 @@ function PlusMenu({
     >
       <CardMenuItem onSelect={onAttach}>
         <Paperclip size={13} className="text-fg-muted" /> {attachLabel}
+      </CardMenuItem>
+      <CardMenuItem
+        onSelect={onSendLater}
+        disabled={sendLaterDisabled}
+        data-disabled={sendLaterDisabled || undefined}
+        title={sendLaterDisabled ? sendLaterTip : undefined}
+      >
+        <Clock size={13} className="text-fg-muted" /> Send later…
       </CardMenuItem>
       <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />
       <CardMenuItem onSelect={() => startNewThread()}>

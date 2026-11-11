@@ -1199,6 +1199,10 @@ async fn host_status() -> Value {
             "instanceId": status.instance_id,
             "advertisedAddress": status.advertised_address,
             "listenAddress": status.listen_address,
+            // Every address the gateway answers on, with its interface: an
+            // `auto` bind opens the LAN and any overlay, and a machine that
+            // cannot reach one of them needs to see the other.
+            "listenAddresses": status.listening,
             "loopbackOnly": status.loopback_only,
             "routes": status.routes,
             "connectedDevices": status.connections.iter().map(|connection| connection.device_name.clone()).collect::<Vec<_>>(),

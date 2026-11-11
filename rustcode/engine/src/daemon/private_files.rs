@@ -45,11 +45,60 @@ pub(crate) fn access_context(error: std::io::Error, action: &str, path: &Path) -
 
 /// Open `path` for appending in a private directory, creating it owner-only.
 pub(crate) fn open_private_log(path: &Path) -> Result<File> {
-    private_open_options()
-        .append(true)
-        .create(true)
-        .open(path)
+    open_private(path, OpenOptions::new().append(true).create(true))
         .map_err(|error| access_context(error, "open", path))
+}
+
+/// Open a private file and protect it before the caller writes any content.
+/// Existing files are narrowed too; failures are returned rather than ignored.
+pub(crate) fn open_private(path: &Path, options: &OpenOptions) -> std::io::Result<File> {
+    open_private_impl(path, options, false)
+}
+
+pub(crate) fn create_private_new(path: &Path) -> std::io::Result<File> {
+    open_private_impl(path, OpenOptions::new().write(true).create_new(true), true)
+}
+
+fn open_private_impl(path: &Path, options: &OpenOptions, exclusive: bool) -> std::io::Result<File> {
+    let mut options = options.clone();
+    #[cfg(windows)]
+    {
+        // Supply the DACL at creation: another user must never be able to
+        // open even the empty file and retain a handle to subsequent writes.
+        match private_windows_security(path, true) {
+            Ok(()) => {
+                options.create_new(false).create(false);
+            }
+            Err(error) => {
+                let error = error
+                    .downcast::<std::io::Error>()
+                    .unwrap_or_else(std::io::Error::other);
+                if exclusive || error.kind() != std::io::ErrorKind::AlreadyExists {
+                    return Err(error);
+                }
+            }
+        }
+    }
+    let _ = exclusive;
+    #[cfg(unix)]
+    options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    let file = options.open(path)?;
+    protect_private_file(path, &file)?;
+    Ok(file)
+}
+
+pub(crate) fn protect_private_file(path: &Path, file: &File) -> std::io::Result<()> {
+    #[cfg(unix)]
+    file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    #[cfg(windows)]
+    set_private_windows_dacl(path).map_err(std::io::Error::other)?;
+    let _ = (path, file);
+    Ok(())
+}
+
+/// A temporary file is secured before receiving any sensitive bytes.
+pub(crate) fn private_tempfile(directory: &Path) -> std::io::Result<tempfile::NamedTempFile> {
+    tempfile::Builder::new().make_in(directory, create_private_new)
 }
 
 /// Read a bounded JSON file written by [`publish_private_json`].
@@ -74,11 +123,8 @@ pub(crate) fn publish_private_json<T: Serialize>(path: &Path, value: &T) -> Resu
     ensure_private_directory(parent, "private file")?;
     #[cfg(not(windows))]
     create_private_directory(parent).map_err(|error| access_context(error, "create", parent))?;
-    let mut file = tempfile::NamedTempFile::new_in(parent)
+    let mut file = private_tempfile(parent)
         .map_err(|error| access_context(error, "create a file in", parent))?;
-    #[cfg(unix)]
-    file.as_file()
-        .set_permissions(fs::Permissions::from_mode(0o600))?;
     serde_json::to_writer(&mut file, value)?;
     file.flush()?;
     file.as_file().sync_all()?;
@@ -361,6 +407,11 @@ fn current_user_sid() -> Result<String> {
 
 #[cfg(windows)]
 fn set_private_windows_dacl(directory: &Path) -> Result<()> {
+    private_windows_security(directory, false)
+}
+
+#[cfg(windows)]
+fn private_windows_security(directory: &Path, create: bool) -> Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{GetLastError, LocalFree};
     use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
@@ -395,6 +446,43 @@ fn set_private_windows_dacl(directory: &Path) -> Result<()> {
     {
         // SAFETY: GetLastError has no preconditions.
         return Err(std::io::Error::from_raw_os_error(unsafe { GetLastError() } as i32).into());
+    }
+
+    if create {
+        use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+        use windows_sys::Win32::Storage::FileSystem::{
+            CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_DELETE, FILE_SHARE_READ,
+            FILE_SHARE_WRITE,
+        };
+        let attributes = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: descriptor,
+            bInheritHandle: 0,
+        };
+        // SAFETY: the path and security descriptor remain valid for the call;
+        // the returned handle and allocated descriptor are released below.
+        let handle = unsafe {
+            CreateFileW(
+                path.as_ptr(),
+                0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                &attributes,
+                CREATE_NEW,
+                FILE_ATTRIBUTE_NORMAL,
+                std::ptr::null_mut(),
+            )
+        };
+        let error = if handle == INVALID_HANDLE_VALUE {
+            Some(std::io::Error::last_os_error())
+        } else {
+            // SAFETY: this is the valid handle returned above.
+            unsafe { CloseHandle(handle) };
+            None
+        };
+        // SAFETY: the conversion above allocated this descriptor.
+        unsafe { LocalFree(descriptor.cast()) };
+        return error.map_or(Ok(()), |error| Err(error.into()));
     }
 
     // SAFETY: path and descriptor are valid for this call. This replaces the
@@ -455,6 +543,102 @@ pub(crate) fn remove_if_exists(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_files_are_protected_before_writing_and_reopen_without_truncation() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("secret");
+        fs::write(&path, "existing").unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let mut file = open_private(&path, OpenOptions::new().append(true).create(true)).unwrap();
+        #[cfg(unix)]
+        assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+        file.write_all(b" appended").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "existing appended");
+        assert!(create_private_new(&path).is_err());
+        let temporary = private_tempfile(directory.path()).unwrap();
+        #[cfg(unix)]
+        assert_eq!(
+            temporary.as_file().metadata().unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        #[cfg(windows)]
+        for path in [path.as_path(), temporary.path()] {
+            use std::os::windows::ffi::OsStrExt;
+            use windows_sys::Win32::Foundation::LocalFree;
+            use windows_sys::Win32::Security::Authorization::ConvertSecurityDescriptorToStringSecurityDescriptorW;
+            use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, GetFileSecurityW};
+            let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+            let mut needed = 0;
+            // SAFETY: a null buffer queries the descriptor's required size.
+            unsafe {
+                GetFileSecurityW(
+                    path.as_ptr(),
+                    DACL_SECURITY_INFORMATION,
+                    std::ptr::null_mut(),
+                    0,
+                    &mut needed,
+                )
+            };
+            assert!(needed > 0);
+            let mut buffer = vec![0u64; (needed as usize).div_ceil(8)];
+            // SAFETY: buffer is aligned and holds at least needed bytes.
+            assert_ne!(
+                unsafe {
+                    GetFileSecurityW(
+                        path.as_ptr(),
+                        DACL_SECURITY_INFORMATION,
+                        buffer.as_mut_ptr().cast(),
+                        needed,
+                        &mut needed,
+                    )
+                },
+                0
+            );
+            let mut text: *mut u16 = std::ptr::null_mut();
+            // SAFETY: buffer holds a valid descriptor; text receives an allocated string.
+            assert_ne!(
+                unsafe {
+                    ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                        buffer.as_mut_ptr().cast(),
+                        1,
+                        DACL_SECURITY_INFORMATION,
+                        &mut text,
+                        std::ptr::null_mut(),
+                    )
+                },
+                0
+            );
+            let mut length = 0;
+            // SAFETY: the successful conversion returns a NUL-terminated string.
+            let sddl = unsafe {
+                while *text.add(length) != 0 {
+                    length += 1;
+                }
+                String::from_utf16_lossy(std::slice::from_raw_parts(text, length))
+            };
+            // SAFETY: the conversion allocated text with LocalAlloc.
+            unsafe { LocalFree(text.cast()) };
+            assert!(sddl.contains("D:P"), "{sddl}");
+            let user_sid = current_user_sid().unwrap();
+            // Windows abbreviates the built-in Administrator (RID 500) as LA.
+            assert!(
+                sddl.contains(&user_sid) || (user_sid.ends_with("-500") && sddl.contains(";;;LA)")),
+                "{sddl} does not grant access to {user_sid}"
+            );
+            assert!(sddl.contains(";;;SY)"), "{sddl}");
+            for broad in [
+                ";;;WD)",
+                ";;;BU)",
+                ";;;AU)",
+                ";;;S-1-1-0)",
+                ";;;S-1-5-32-545)",
+            ] {
+                assert!(!sddl.contains(broad), "{sddl}");
+            }
+        }
+    }
 
     #[test]
     fn a_held_lock_is_busy_until_dropped() {

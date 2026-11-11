@@ -182,7 +182,7 @@ fn run_gh(args: &[&str], repo: Option<&str>, pending_ok: bool) -> Result<String,
         .output()
         .map_err(|error| match error.kind() {
             std::io::ErrorKind::NotFound => {
-                "The GitHub CLI (gh) is not installed. Ask the user to install it (brew install gh) and connect GitHub in Settings > Connections.".to_owned()
+                format!("The GitHub CLI (gh) is not installed. Ask the user to install it ({}) and connect GitHub in Settings > Connections.", crate::install_hints::host_hint(crate::install_hints::Tool::GitHub))
             }
             _ => format!("failed to run gh: {error}"),
         })?;

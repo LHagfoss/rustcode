@@ -112,12 +112,18 @@ fn string_arg<'a, 'b>(
 }
 
 fn path_with_home(path: &str, home_path: Option<&str>) -> String {
-    let path = if let Some(home) = home_path {
-        path.strip_prefix(home)
-            .map(|suffix| format!("~{suffix}"))
-            .unwrap_or_else(|| path.to_owned())
-    } else {
-        path.to_owned()
+    // Compare path components, not characters: a home of `/home/a` must not
+    // shorten `/home/ab/x`, and a Windows home is written with `\`.
+    let path = match home_path.filter(|home| !home.is_empty()) {
+        Some(home) => match std::path::Path::new(path).strip_prefix(home) {
+            Ok(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+            Ok(rest) => std::path::Path::new("~")
+                .join(rest)
+                .to_string_lossy()
+                .into_owned(),
+            Err(_) => path.to_owned(),
+        },
+        None => path.to_owned(),
     };
     safe_parameter("path", &path, 100)
 }
@@ -221,5 +227,23 @@ mod tests {
         )
         .unwrap();
         assert_eq!(view, "~/src/lib.rs (lines 10-20)");
+    }
+
+    #[test]
+    fn home_is_contracted_only_at_a_folder_boundary() {
+        let under_home = std::path::Path::new("~")
+            .join("code/app")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            path_with_home("/home/a/code/app", Some("/home/a")),
+            under_home
+        );
+        assert_eq!(path_with_home("/home/a", Some("/home/a")), "~");
+        // `/home/ab/x` is another folder, not a file in the home one.
+        assert_eq!(path_with_home("/home/ab/x", Some("/home/a")), "/home/ab/x");
+        assert_eq!(path_with_home("/work/x", None), "/work/x");
+        // An empty home shortens nothing.
+        assert_eq!(path_with_home("/home/a/code", Some("")), "/home/a/code");
     }
 }

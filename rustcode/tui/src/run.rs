@@ -80,7 +80,6 @@ fn hydrate_shell_provider_keys() {
         .unwrap_or_default();
     rustcode::shell_env::hydrate_provider_keys(&configured);
 }
-#[cfg(unix)]
 async fn run_daemon_or_cron_command(
     cli_args: &crate::cli::Cli,
 ) -> Result<bool, Box<dyn std::error::Error>> {
@@ -224,18 +223,6 @@ async fn run_daemon_or_cron_command(
     Ok(true)
 }
 
-#[cfg(not(unix))]
-async fn run_daemon_or_cron_command(
-    cli_args: &crate::cli::Cli,
-) -> Result<bool, Box<dyn std::error::Error>> {
-    if matches!(
-        cli_args.command,
-        Some(crate::cli::Commands::Daemon { .. } | crate::cli::Commands::Cron { .. })
-    ) {
-        return Err("daemon commands are supported on macOS and Linux".into());
-    }
-    Ok(false)
-}
 async fn run_remote_command(
     command: &crate::cli::RemoteCommands,
 ) -> Result<(), Box<dyn std::error::Error>> {

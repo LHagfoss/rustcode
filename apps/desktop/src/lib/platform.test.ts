@@ -62,3 +62,9 @@ test("only macOS paints blur", () => {
   expect(platform.paintsBlur("windows")).toBe(false);
   expect(platform.paintsBlur("linux")).toBe(false);
 });
+
+test("names the recoverable deletion destination for each platform", () => {
+  expect(platform.trashName(platformFor(WINDOWS, true))).toBe("Recycle Bin");
+  expect(platform.trashName(platformFor(MAC, true))).toBe("Trash");
+  expect(platform.trashName(platformFor(LINUX, true))).toBe("Trash");
+});
