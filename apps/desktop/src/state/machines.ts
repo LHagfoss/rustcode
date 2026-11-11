@@ -200,6 +200,8 @@ interface MachinesStore {
   server: ServerService | null;
   /** An install is running now. */
   serverInstalling: boolean;
+  /** Pointing the `rustcode` on PATH at this app's engine is running now. */
+  serverLinking: boolean;
 }
 
 export const useMachines = create<MachinesStore>(() => ({
@@ -216,6 +218,7 @@ export const useMachines = create<MachinesStore>(() => ({
   pairingError: null,
   server: null,
   serverInstalling: false,
+  serverLinking: false,
 }));
 
 // ---------------------------------------------------------------- labels
@@ -678,6 +681,7 @@ export function resetMachinesForTests(): void {
     pairingError: null,
     server: null,
     serverInstalling: false,
+    serverLinking: false,
   });
 }
 
@@ -833,6 +837,34 @@ export async function installServer(): Promise<boolean> {
   } catch (error) {
     useMachines.setState({ serverInstalling: false });
     toast(`Could not install the RustCode server: ${errorText(error)}`, "error");
+    return false;
+  }
+}
+
+/**
+ * Point the `rustcode` a shell runs at this app's engine (issue 3411): the
+ * CLI's own `rustcode server link-path`, run by the app's engine so it is the
+ * app's version that the shell then finds. Homebrew's copy is refused with the
+ * `brew` command. Answers whether the page now reads no version mismatch.
+ */
+export async function linkCliToApp(): Promise<boolean> {
+  useMachines.setState({ serverLinking: true });
+  try {
+    const server = await shellCall<ServerService>("server_link_path");
+    useMachines.setState({ server, serverLinking: false });
+    const stale = server.problems.some((problem) => problem.code.startsWith("path-version-mismatch"));
+    if (stale) {
+      toast("The `rustcode` on PATH still is not this app's version. See the warning on this page.", "error");
+    } else {
+      toast(
+        "`rustcode` in a terminal now runs this app's version. Open a new terminal to use it.",
+        "success",
+      );
+    }
+    return !stale;
+  } catch (error) {
+    useMachines.setState({ serverLinking: false });
+    toast(`Could not point \`rustcode\` at this app: ${errorText(error)}`, "error");
     return false;
   }
 }

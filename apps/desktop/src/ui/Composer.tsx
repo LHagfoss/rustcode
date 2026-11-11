@@ -1,4 +1,5 @@
 import { formatBinding } from "../lib/keys";
+import { basename } from "../lib/paths";
 import { fileManagerName, primaryModifier } from "../lib/platform";
 // The composer, after ContentView.swift's Composer: one glass box floating over
 // the transcript, holding the attachments, the field (with a slash-command token
@@ -222,7 +223,7 @@ async function attachmentsFromPaths(
 ): Promise<Attachment[]> {
   const out: Attachment[] = [];
   for (const path of paths) {
-    const name = path.split("/").pop() ?? path;
+    const name = basename(path) || path;
     if (imageMime(name) && images) {
       try {
         const image = await readImage(path);

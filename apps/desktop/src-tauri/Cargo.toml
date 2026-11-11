@@ -51,6 +51,10 @@ png = "0.18"
 objc2 = "=0.6.5"
 objc2-web-kit = { version = "=0.3.2", default-features = false, features = ["WKWebViewConfiguration", "WKPreferences"] }
 
+[target.'cfg(windows)'.dependencies]
+# Native, recoverable deletion into the Windows Recycle Bin.
+trash = "5.3"
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
 

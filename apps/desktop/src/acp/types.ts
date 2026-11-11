@@ -1,6 +1,7 @@
 // ACP v1 shapes the app uses, and parsers from raw JSON. Ported from the
 // SwiftUI app's RustCodeKit (ACPTypes.swift, FileDiff.swift, SessionUsage.swift).
 
+import { basename, shortenHome } from "../lib/paths";
 import { stripOutputFence } from "../lib/toolOutput";
 import { arr, bool, type Json, type JsonObject, num, obj, rustcodeMeta, str } from "./jsonrpc";
 import { parseStatus, parseWorktree, type ThreadStatus, type Worktree } from "./v2";
@@ -305,11 +306,12 @@ export function byActivity(sessions: SessionSummary[]): SessionSummary[] {
  * The prefix is a Win32 API detail, and it only makes a path harder to read in a tooltip.
  */
 export function displayPath(path: string): string {
-  return path
-    .replace(/^\\\\\?\\UNC\\/, "\\\\")
-    .replace(/^\\\\\?\\/, "")
-    .replace(/^\/Users\/[^/]+/, "~")
-    .replace(/^\/private(?=\/(?:tmp|var|etc)(?:\/|$))/, "");
+  return shortenHome(
+    path
+      .replace(/^\\\\\?\\UNC\\/, "\\\\")
+      .replace(/^\\\\\?\\/, "")
+      .replace(/^\/private(?=\/(?:tmp|var|etc)(?:\/|$))/, ""),
+  );
 }
 
 /**
@@ -321,8 +323,7 @@ export function projectName(cwd: string): string {
   // The path inside `\\?\C:\code\app` (or `\\?\UNC\server\share`), whose own `\` and `?` are
   // separators and prefix, not folders.
   const plain = cwd.replace(/^\\\\\?\\UNC\\/, "\\\\").replace(/^\\\\\?\\/, "");
-  const parts = plain.split(/[\\/]+/).filter(Boolean);
-  return parts[parts.length - 1] ?? cwd;
+  return cwd ? basename(plain) || cwd : "";
 }
 
 /** `provider/model` reads as just the model. */

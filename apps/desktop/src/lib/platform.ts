@@ -58,6 +58,11 @@ export function fileManagerName(platform: Platform = currentPlatform()): string 
   return platform === "mac" ? "Finder" : platform === "windows" ? "Explorer" : "file manager";
 }
 
+/** The system destination for recoverable deletion. */
+export function trashName(platform: Platform = currentPlatform()): string {
+  return platform === "windows" ? "Recycle Bin" : "Trash";
+}
+
 /** The platform primary shortcut modifier. */
 export function primaryModifier(
   event: { metaKey: boolean; ctrlKey: boolean },

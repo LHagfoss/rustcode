@@ -710,7 +710,9 @@ async fn acp_load_session(
     if let Some(response) = attach_open_builtin(server, &request, peer).await? {
         return Ok(response);
     }
-    if let Some(record) = crate::harness::store::load(&session_id) {
+    if let Some(record) = crate::harness::store::load_for_restore(&session_id)
+        .map_err(|error| agent_client_protocol::Error::invalid_params().data(error))?
+    {
         if session_id_is_active(&*server.sessions.lock().await, &session_id) {
             return Err(
                 agent_client_protocol::Error::invalid_params().data("session is already active")
@@ -7198,6 +7200,57 @@ mod tests {
         second.leave().await;
         loader.leave().await;
         server.shutdown().await;
+    }
+
+    #[test]
+    fn restart_restores_external_harness_account_native_session_and_parent() {
+        on_a_large_stack(without_mcp(async {
+            let server = AcpServer::new(false).unwrap();
+            let cwd = tempfile::tempdir().unwrap();
+            let cwd_path = std::fs::canonicalize(cwd.path()).unwrap();
+            let id = on_the_connection_thread({
+                let cwd_path = cwd_path.clone();
+                move || {
+                    let id = crate::config::create_detached_session();
+                    let mut record =
+                        crate::harness::store::HarnessRecord::new("claude-code", cwd_path);
+                    record.account = Some("personal-1".into());
+                    record.native_session_id = Some("saved-native-session".into());
+                    crate::harness::store::save(&id, &record);
+                    crate::config::save_session_parent(
+                        &id,
+                        &rustcode_session::SessionParent {
+                            id: Some("parent-thread".into()),
+                            title: None,
+                            relationship: Some(rustcode_session::SessionRelationship::Delegate),
+                        },
+                    );
+                    id
+                }
+            });
+            let mut client = Noting::connect(&server).await;
+            client.load(&id, &cwd_path, None).await;
+            let session = harnesses::get(&server.external, &id).await.unwrap();
+            assert_eq!(session.harness.id, "claude-code");
+            assert_eq!(session.record().account.as_deref(), Some("personal-1"));
+            assert_eq!(
+                session.record().native_session_id.as_deref(),
+                Some("saved-native-session")
+            );
+            let inspected = id.clone();
+            on_the_connection_thread(move || {
+                let parent = crate::config::load_session_parent(&inspected).unwrap();
+                assert_eq!(parent.id.as_deref(), Some("parent-thread"));
+                assert_eq!(
+                    parent.relationship,
+                    Some(rustcode_session::SessionRelationship::Delegate)
+                );
+                session_repair::repair_session(&inspected).unwrap();
+                assert_eq!(crate::config::load_session_parent(&inspected), Some(parent));
+            });
+            client.leave().await;
+            server.shutdown().await;
+        }));
     }
 
     #[test]
