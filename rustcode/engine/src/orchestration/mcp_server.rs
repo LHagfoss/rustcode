@@ -406,6 +406,16 @@ async fn call(
             ),
         };
     }
+    // And for a standalone thread: an app below version 14 would file it under
+    // the caller as a delegate, which is the opposite of what was asked.
+    if version < super::STANDALONE_VERSION && super::requests_standalone(tool, &args) {
+        return CallAnswer {
+            success: false,
+            content: format!(
+                "error: {tool} with standalone needs a newer RustCode app. Nothing was sent."
+            ),
+        };
+    }
     // The same for a machine: a server that never listed `machine` must not
     // quietly act on this computer when another one was named.
     if version < super::MACHINE_VERSION && super::names_a_machine(tool, &args) {
@@ -901,6 +911,84 @@ mod tests {
                 .unwrap()
                 .contains("newer RustCode app")
         );
+    }
+
+    #[test]
+    fn standalone_is_advertised_from_version_fifteen() {
+        let properties = |version: u8, tool: &str| {
+            tools(version, false)
+                .into_iter()
+                .find(|entry| entry["name"] == tool)
+                .map(|entry| entry["inputSchema"]["properties"].clone())
+                .expect("the tool is listed")
+        };
+        for tool in [super::super::START_SESSION, super::super::FAN_OUT] {
+            assert!(
+                properties(14, tool)["standalone"].is_null(),
+                "{tool} must not offer a v14 app an argument it would ignore"
+            );
+            assert_eq!(
+                properties(super::super::VERSION, tool)["standalone"]["type"],
+                serde_json::json!("boolean"),
+                "{tool} takes standalone"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_version_fourteen_server_refuses_standalone_before_forwarding_it() {
+        let (_dir, hub) = hub().await;
+        let token = hub.register("thread-1", Arc::new(EchoApp), 14);
+        let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                          "params": {"name": "start_session",
+                                     "arguments": {"prompt": "go", "standalone": true}}});
+        let answers = exchange_versioned(
+            Identity {
+                session_id: "thread-1".into(),
+                token,
+            },
+            hub.path().to_owned(),
+            &[call],
+            14,
+            false,
+        )
+        .await;
+        let result = &answers[0]["result"];
+        assert_eq!(result["isError"], true, "{result}");
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("newer RustCode app"), "{text}");
+        assert!(text.contains("Nothing was sent"), "{text}");
+    }
+
+    /// Both modes reach the app unchanged: a delegate is the default, and
+    /// `standalone: true` asks for a top-level thread (issue 3443).
+    #[tokio::test]
+    async fn the_server_forwards_a_delegate_and_a_standalone_call_alike() {
+        let (_dir, hub) = hub().await;
+        let token = hub.register("thread-1", Arc::new(EchoApp), super::super::VERSION);
+        let delegate = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                              "params": {"name": "start_session",
+                                         "arguments": {"prompt": "go"}}});
+        let standalone = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                                "params": {"name": "start_session",
+                                           "arguments": {"prompt": "go", "standalone": true}}});
+        let answers = exchange(
+            Identity {
+                session_id: "thread-1".into(),
+                token,
+            },
+            hub.path().to_owned(),
+            &[delegate, standalone],
+        )
+        .await;
+        let asked = |index: usize| {
+            let text = answers[index]["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap();
+            serde_json::from_str::<Value>(text).unwrap()["asked"]["args"].clone()
+        };
+        assert_eq!(asked(0), json!({"prompt": "go"}));
+        assert_eq!(asked(1), json!({"prompt": "go", "standalone": true}));
     }
 
     #[tokio::test]

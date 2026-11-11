@@ -496,9 +496,11 @@ export function verb(q: GrantAsk): string {
     case "read":
       return `read “${q.target}”`;
     case "start":
-      return "start a thread";
+      return q.standalone ? "start a new thread of yours" : "start a thread";
     case "fan_out":
-      return `run one task on ${q.harnesses?.length ?? 2} harnesses`;
+      return q.standalone
+        ? `open the same task in ${q.harnesses?.length ?? 2} new threads`
+        : `run one task on ${q.harnesses?.length ?? 2} harnesses`;
     case "organize":
       return `change “${q.target}”`;
     case "answer":
@@ -1032,8 +1034,11 @@ async function threadOnMachine(
 
 /** `start_session` on a paired machine: its harness, its project, its thread, this thread's link. */
 async function startOnMachine(machine: MachineRef, caller: RuleThread, call: StartCall): Promise<JsonObject> {
-  const refused = checkStart(caller, book(), 1, delegateLimits());
-  if (refused) return failureJson(refused);
+  const standalone = call.standalone === true;
+  if (!standalone) {
+    const refused = checkStart(caller, book(), 1, delegateLimits());
+    if (refused) return failureJson(refused);
+  }
   const project = projectOnMachine(machine, caller, call.project);
   if (isFailure(project)) return failureJson(project);
   const snapshot = await remoteSnapshot(machine);
@@ -1041,7 +1046,7 @@ async function startOnMachine(machine: MachineRef, caller: RuleThread, call: Sta
   const harness = harnessOn(snapshot, call.harness, machine);
   if (isFailure(harness)) return failureJson(harness);
   const title = call.title ?? titleFrom(call.prompt, 60);
-  const access = childMode(caller);
+  const access = standalone ? ownMode() : childMode(caller);
   const other = !sameProject(project, projectOf(caller));
   const no = await permitted(caller, `start@${machine.id}${other ? `:${project}` : ""}`, {
     kind: "start",
@@ -1054,10 +1059,13 @@ async function startOnMachine(machine: MachineRef, caller: RuleThread, call: Sta
     access,
     worktree: call.worktree ?? true,
     machine: machine.name,
+    standalone: standalone || undefined,
   });
   if (no) return failureJson(no);
-  const again = checkStart(caller, book(), 1, delegateLimits());
-  if (again) return failureJson(again);
+  if (!standalone) {
+    const again = checkStart(caller, book(), 1, delegateLimits());
+    if (again) return failureJson(again);
+  }
   let id: string;
   try {
     id = await threadOnMachine(machine, project, harness.id, {
@@ -1067,7 +1075,7 @@ async function startOnMachine(machine: MachineRef, caller: RuleThread, call: Sta
       account: call.account ?? null,
       title,
       worktree: call.worktree,
-      parent: caller.id,
+      parent: standalone ? undefined : caller.id,
     });
     // Before its first turn, so nothing it does runs broader than the thread that started it.
     setPermissionMode(id, access);
@@ -1075,6 +1083,18 @@ async function startOnMachine(machine: MachineRef, caller: RuleThread, call: Sta
     return failureJson(
       failure("failed", `the thread could not start on ${machine.name}: ${errorText(error)}`),
     );
+  }
+  if (standalone) {
+    deliverOwn(id, call.prompt);
+    return {
+      session_id: id,
+      receipt: "started",
+      title,
+      harness: harness.id,
+      access: accessOf(id),
+      standalone: true,
+      ...machineFields(machine),
+    };
   }
   const link = addLink({
     orchestrator: caller.id,
@@ -1109,8 +1129,11 @@ async function fanOutOnMachine(
   caller: RuleThread,
   call: FanOutCall,
 ): Promise<JsonObject> {
-  const refused = checkStart(caller, book(), call.harnesses.length, delegateLimits());
-  if (refused) return failureJson(refused);
+  const standalone = call.standalone === true;
+  if (!standalone) {
+    const refused = checkStart(caller, book(), call.harnesses.length, delegateLimits());
+    if (refused) return failureJson(refused);
+  }
   const snapshot = await remoteSnapshot(machine);
   if (isFailure(snapshot)) return failureJson(snapshot);
   const project = projectOnMachine(machine, caller, call.project);
@@ -1133,7 +1156,7 @@ async function fanOutOnMachine(
     chosen.push({ harness: h, model: entry.model, effort: entry.effort, account: entry.account ?? null });
   }
   const title = call.title ?? titleFrom(call.prompt, 60);
-  const access = childMode(caller);
+  const access = standalone ? ownMode() : childMode(caller);
   const other = !sameProject(project, projectOf(caller));
   const no = await permitted(caller, `start@${machine.id}${other ? `:${project}` : ""}`, {
     kind: "fan_out",
@@ -1146,10 +1169,13 @@ async function fanOutOnMachine(
     access,
     worktree: true,
     machine: machine.name,
+    standalone: standalone || undefined,
   });
   if (no) return failureJson(no);
-  const again = checkStart(caller, book(), chosen.length, delegateLimits());
-  if (again) return failureJson(again);
+  if (!standalone) {
+    const again = checkStart(caller, book(), chosen.length, delegateLimits());
+    if (again) return failureJson(again);
+  }
   const fanId = localId("fan");
   const out: JsonObject[] = [];
   const linkIds: string[] = [];
@@ -1161,9 +1187,19 @@ async function fanOutOnMachine(
         effort: h.effort,
         account: h.account,
         title: threadTitle,
-        parent: caller.id,
+        parent: standalone ? undefined : caller.id,
       });
       setPermissionMode(id, access);
+      if (standalone) {
+        deliverOwn(id, call.prompt);
+        out.push({
+          session_id: id,
+          harness: h.harness.id,
+          access: accessOf(id),
+          ...machineFields(machine),
+        });
+        continue;
+      }
       const link = addLink({
         orchestrator: caller.id,
         target: id,
@@ -1203,6 +1239,7 @@ async function fanOutOnMachine(
     };
     setBook((b) => ({ ...b, fanOuts: [...b.fanOuts, group] }));
   }
+  if (standalone) return { ...machineFields(machine), links: out, standalone: true };
   return {
     ...machineFields(machine),
     links: out,
@@ -3796,6 +3833,23 @@ function childMode(caller: RuleThread): PermissionMode {
 /** What a thread may do without asking, as the orchestration answers report it. */
 const accessOf = (id: string): PermissionMode => permissionModeOf(useApp.getState(), id);
 
+/**
+ * What a standalone thread runs at: Settings › General › Default access, the
+ * same as a thread the user starts by hand. It is the user's own thread, not a
+ * delegate, so the caller's own limit is not what bounds it.
+ */
+const ownMode = (): PermissionMode => useApp.getState().defaultPermissionMode;
+
+/**
+ * The first message of a standalone thread: the prompt as the user's own, with
+ * no "From thread" header and no delegate report to end with (issue 3443).
+ */
+function deliverOwn(target: string, text: string) {
+  // The thread was created a moment ago, so it is not running: the prompt is
+  // its first turn, as if the user had typed it.
+  void runPrompt(target, text);
+}
+
 async function createThreadFor(
   project: string,
   harness: string,
@@ -3842,8 +3896,14 @@ function start(caller: RuleThread, call: StartCall): Promise<JsonObject> {
 }
 
 async function startNow(caller: RuleThread, call: StartCall): Promise<JsonObject> {
-  const refused = checkStart(caller, book(), 1, delegateLimits());
-  if (refused) return failureJson(refused);
+  // A standalone thread is not a delegate: it takes no delegation slot, so the
+  // depth and slot rules (which bound how much work one thread hands out) do
+  // not apply to it.
+  const standalone = call.standalone === true;
+  if (!standalone) {
+    const refused = checkStart(caller, book(), 1, delegateLimits());
+    if (refused) return failureJson(refused);
+  }
   const project = projectFor(caller, call.project);
   if (isFailure(project)) return failureJson(project);
   const harness = harnessFor(call.harness);
@@ -3857,7 +3917,7 @@ async function startNow(caller: RuleThread, call: StartCall): Promise<JsonObject
   const other = !sameProject(project, projectOf(caller));
   // Fixed before the user is asked, so the card says what the thread runs at and the thread gets
   // exactly that, however long the card waits.
-  const access = childMode(caller);
+  const access = standalone ? ownMode() : childMode(caller);
   const no = await permitted(caller, other ? `start:${project}` : "start", {
     kind: "start",
     caller: caller.id,
@@ -3868,10 +3928,13 @@ async function startNow(caller: RuleThread, call: StartCall): Promise<JsonObject
     harnesses: [choiceLabel(harness.name, accountLabelOf(harness, account), model, call.effort)],
     access,
     worktree: call.worktree ?? true,
+    standalone: standalone || undefined,
   });
   if (no) return failureJson(no);
-  const again = checkStart(caller, book(), 1, delegateLimits());
-  if (again) return failureJson(again);
+  if (!standalone) {
+    const again = checkStart(caller, book(), 1, delegateLimits());
+    if (again) return failureJson(again);
+  }
   let id: string;
   try {
     // The task is the title's fallback: whatever the prompt starts with, a child never goes
@@ -3882,11 +3945,23 @@ async function startNow(caller: RuleThread, call: StartCall): Promise<JsonObject
       title,
       task: call.prompt,
       access,
-      parent: caller.id,
+      parent: standalone ? undefined : caller.id,
       account,
     });
   } catch (error) {
     return failureJson(failure("failed", `the thread could not start: ${errorText(error)}`));
+  }
+  if (standalone) {
+    deliverOwn(id, call.prompt);
+    return {
+      session_id: id,
+      receipt: "started",
+      title,
+      harness: harness.id,
+      access: accessOf(id),
+      standalone: true,
+      ...ranWith(id),
+    };
   }
   const link = addLink({
     orchestrator: caller.id,
@@ -3919,8 +3994,11 @@ function fanOut(caller: RuleThread, call: FanOutCall): Promise<JsonObject> {
 }
 
 async function fanOutNow(caller: RuleThread, call: FanOutCall): Promise<JsonObject> {
-  const refused = checkStart(caller, book(), call.harnesses.length, delegateLimits());
-  if (refused) return failureJson(refused);
+  const standalone = call.standalone === true;
+  if (!standalone) {
+    const refused = checkStart(caller, book(), call.harnesses.length, delegateLimits());
+    if (refused) return failureJson(refused);
+  }
   const chosen: { harness: Harness; model?: string; effort?: string; account: string | null }[] = [];
   const targets = new Set<string>();
   for (const entry of call.harnesses) {
@@ -3947,7 +4025,7 @@ async function fanOutNow(caller: RuleThread, call: FanOutCall): Promise<JsonObje
   const project = projectFor(caller, call.project);
   if (isFailure(project)) return failureJson(project);
   const title = call.title ?? titleFrom(call.prompt, 60);
-  const access = childMode(caller);
+  const access = standalone ? ownMode() : childMode(caller);
   const other = !sameProject(project, projectOf(caller));
   const no = await permitted(caller, other ? `start:${project}` : "start", {
     kind: "fan_out",
@@ -3961,10 +4039,13 @@ async function fanOutNow(caller: RuleThread, call: FanOutCall): Promise<JsonObje
     ),
     access,
     worktree: true,
+    standalone: standalone || undefined,
   });
   if (no) return failureJson(no);
-  const again = checkStart(caller, book(), chosen.length, delegateLimits());
-  if (again) return failureJson(again);
+  if (!standalone) {
+    const again = checkStart(caller, book(), chosen.length, delegateLimits());
+    if (again) return failureJson(again);
+  }
   const fanId = localId("fan");
   const out: JsonObject[] = [];
   const linkIds: string[] = [];
@@ -3980,9 +4061,14 @@ async function fanOutNow(caller: RuleThread, call: FanOutCall): Promise<JsonObje
         account: h.account,
         title: threadTitle,
         task: call.prompt,
-        parent: caller.id,
+        parent: standalone ? undefined : caller.id,
         access,
       });
+      if (standalone) {
+        deliverOwn(id, call.prompt);
+        out.push({ session_id: id, harness: h.harness.id, access: accessOf(id), ...ranWith(id) });
+        continue;
+      }
       const link = addLink({
         orchestrator: caller.id,
         target: id,
@@ -4022,6 +4108,7 @@ async function fanOutNow(caller: RuleThread, call: FanOutCall): Promise<JsonObje
     };
     setBook((b) => ({ ...b, fanOuts: [...b.fanOuts, group] }));
   }
+  if (standalone) return { links: out, standalone: true };
   return { links: out, fan_out_id: fanId, links_left: linksLeft(book(), caller.id, delegateLimits()) };
 }
 

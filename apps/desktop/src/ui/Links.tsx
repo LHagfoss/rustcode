@@ -504,9 +504,15 @@ export function GrantDialog() {
           <div className="flex flex-col gap-1.5 text-callout text-fg-muted">
             {starts && (
               <span>
-                A new thread{grant.harnesses?.length ? ` on ${grant.harnesses.join(", ")}` : ""}
+                {/* The card says which of the two a thread will be: the agent's
+                    sub-task, or a thread of the user's own at the top level. */}
+                <span className="font-medium text-fg">{grant.standalone ? "New thread" : "Delegate"}</span>
+                {grant.standalone ? ", yours to follow up: " : ": "}a new thread
+                {grant.harnesses?.length ? ` on ${grant.harnesses.join(", ")}` : ""}
                 {grant.worktree ? ", each in its own worktree," : ""} gets this as its first message.{" "}
-                {`It runs at ${modeLabel(grant.access ?? "ask")}, never more than this thread, with its own approvals and sandbox.`}
+                {grant.standalone
+                  ? `It runs at ${modeLabel(grant.access ?? "ask")}, with its own approvals and sandbox, and nothing comes back to this thread.`
+                  : `It runs at ${modeLabel(grant.access ?? "ask")}, never more than this thread, with its own approvals and sandbox.`}
               </span>
             )}
             {grant.kind === "message" && (

@@ -13,8 +13,15 @@ import type { PermissionMode } from "./permissions";
 import { snoozeAt } from "./snooze";
 import { formatDuration, type QueuedPrompt, withWakeMark } from "./thread";
 
-/** What the client advertises in `initialize` while the setting is on. */
-export const CAPABILITY_VERSION = 14;
+/**
+ * What the client advertises in `initialize` while the setting is on.
+ *
+ * Version 14 adds `steer` to `message_session`, and version 15 `standalone` to
+ * `start_session` and `fan_out` (issue 3443): a thread of the user's own at the
+ * top level, rather than a delegate the caller waits on. A v14 app is never
+ * offered `standalone`, and the engine refuses a call that carries one.
+ */
+export const CAPABILITY_VERSION = 15;
 /** The most of a child's answer `wait_session` carries; beyond it, `read_session` pages the rest. */
 export const MAX_BYTES = 8 * 1024;
 /** The longest prompt or message a thread may hand another one (32 KiB). */
@@ -495,6 +502,11 @@ export type Call =
       /** Named login of that harness; omitted is the caller's own, else a new thread's default. */
       account?: string;
       worktree?: boolean;
+      /**
+       * A thread of the user's own at the top level, not a delegate (issue 3443):
+       * no parent link, nothing delivered back, `wait_session` does not apply.
+       */
+      standalone?: boolean;
       project?: string;
       /** The paired machine it runs on; omitted is this computer. */
       machine?: string;
@@ -504,6 +516,8 @@ export type Call =
       prompt: string;
       title?: string;
       harnesses: HarnessChoice[];
+      /** Each is a thread of the user's own at the top level, not a delegate. */
+      standalone?: boolean;
       /** The project on that machine; without one, the caller's path there or its only project. */
       project?: string;
       machine?: string;
@@ -971,6 +985,8 @@ export function parseCall(params: JsonObject): Call | Failure {
         effort: s(args.effort),
         account: s(args.account)?.trim() || undefined,
         worktree: typeof args.worktree === "boolean" ? args.worktree : undefined,
+        // A thread of the user's own, not a delegate: no link, nothing delivered back.
+        standalone: args.standalone === true ? true : undefined,
         project: s(args.project),
         ...machineField(args),
       };
@@ -999,6 +1015,7 @@ export function parseCall(params: JsonObject): Call | Failure {
         prompt,
         title: s(args.title)?.trim() || undefined,
         harnesses,
+        standalone: args.standalone === true ? true : undefined,
         project: s(args.project),
         ...machineField(args),
       };
@@ -2707,6 +2724,11 @@ export interface GrantAsk {
   /** The access a new thread starts at (`start`, `fan_out`): never more than the caller's own. */
   access?: PermissionMode;
   worktree?: boolean;
+  /**
+   * A thread of the user's own at the top level (`standalone`), not a delegate:
+   * the card says so and nothing comes back to the caller.
+   */
+  standalone?: boolean;
   /** The paired machine a start or a message acts on, named on the card; absent for this computer. */
   machine?: string;
 }

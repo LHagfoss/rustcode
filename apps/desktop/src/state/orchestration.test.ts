@@ -351,10 +351,43 @@ describe("management tools", () => {
 });
 
 describe("orchestration rules", () => {
+  test("standalone is read from start_session and fan_out, and only when asked for", () => {
+    // A delegate is the default (#3443): the field is absent, not `false`, so the
+    // engine's argument hash and the receipt book see the same call it always did.
+    expect(parseCall({ tool: "start_session", args: { prompt: "go" } })).toEqual({
+      tool: "start_session",
+      prompt: "go",
+      title: undefined,
+      harness: undefined,
+      model: undefined,
+      effort: undefined,
+      account: undefined,
+      worktree: undefined,
+      standalone: undefined,
+      project: undefined,
+    });
+    expect(parseCall({ tool: "start_session", args: { prompt: "go", standalone: true } })).toMatchObject({
+      tool: "start_session",
+      prompt: "go",
+      standalone: true,
+    });
+    const fan = parseCall({
+      tool: "fan_out",
+      args: { prompt: "go", harnesses: [{ harness: "codex" }, { harness: "pi" }], standalone: true },
+    });
+    expect(fan).toMatchObject({ tool: "fan_out", standalone: true });
+    // Anything but a true boolean is not a standalone thread.
+    expect(parseCall({ tool: "start_session", args: { prompt: "go", standalone: "yes" } })).toMatchObject({
+      tool: "start_session",
+      standalone: undefined,
+    });
+  });
+
   test("the app advertises the version whose arguments it answers", () => {
-    // The engine strips `account` below 5, `attachments` below 10 and `machine` below 12, and
-    // refuses a call that carries one: the app speaks the newest, so it is offered all three.
-    expect(CAPABILITY_VERSION).toBe(14);
+    // The engine strips `account` below 5, `attachments` below 10, `machine` below 12,
+    // `steer` below 14 and `standalone` below 15, and refuses a call that carries one:
+    // the app speaks the newest, so it is offered all five.
+    expect(CAPABILITY_VERSION).toBe(15);
   });
 
   test("a machine is read from any call that takes one, and absent when it is not named", () => {
