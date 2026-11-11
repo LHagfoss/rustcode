@@ -94,6 +94,7 @@ pub fn thread_log_open(id: String) -> Result<String, String> {
 }
 
 /// A name in `trash` that is not taken: `id`, `id 2`, `id 3`, …
+#[cfg(not(windows))]
 fn free_name(trash: &Path, id: &str) -> PathBuf {
     let mut candidate = trash.join(id);
     let mut n = 2;
@@ -107,12 +108,27 @@ fn free_name(trash: &Path, id: &str) -> PathBuf {
 #[tauri::command(async)]
 pub fn thread_trash(id: String) -> Result<(), String> {
     let dir = thread_dir(&id)?;
+    move_thread_to_trash(&dir, &id)
+}
+
+#[cfg(windows)]
+fn move_thread_to_trash(dir: &Path, _id: &str) -> Result<(), String> {
+    trash::delete(dir).map_err(recycle_bin_error)
+}
+
+#[cfg(any(windows, test))]
+fn recycle_bin_error(error: impl std::fmt::Display) -> String {
+    format!("Could not move the thread to the Recycle Bin: {error}")
+}
+
+#[cfg(not(windows))]
+fn move_thread_to_trash(dir: &Path, id: &str) -> Result<(), String> {
     let home = std::env::var_os("HOME").ok_or("No home folder.")?;
     let trash = PathBuf::from(home).join(".Trash");
     if !trash.is_dir() {
         return Err("No Trash folder.".into());
     }
-    std::fs::rename(&dir, free_name(&trash, &id))
+    std::fs::rename(dir, free_name(&trash, id))
         .map_err(|e| format!("Could not move the thread to the Trash: {e}"))
 }
 
@@ -169,6 +185,14 @@ mod tests {
         assert!(!valid_id("../x"));
         assert!(!valid_id(""));
         assert!(valid_id("019a2b-cd_3"));
+    }
+
+    #[test]
+    fn recycle_bin_failure_keeps_the_system_error() {
+        assert_eq!(
+            recycle_bin_error("Access is denied."),
+            "Could not move the thread to the Recycle Bin: Access is denied."
+        );
     }
 
     #[test]

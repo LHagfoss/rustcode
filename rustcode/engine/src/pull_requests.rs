@@ -256,7 +256,10 @@ async fn gh(cwd: &Path, args: &[&str], stdin: Option<Vec<u8>>) -> Result<Vec<u8>
         Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => {
             return Err(PullError {
                 code: "gh_missing",
-                message: "The GitHub CLI (gh) is not installed. Install it (brew install gh) and connect GitHub in Settings ▸ Connections.".to_owned(),
+                message: format!(
+                    "The GitHub CLI (gh) is not installed. Install it ({}) and connect GitHub in Settings ▸ Connections.",
+                    crate::install_hints::host_hint(crate::install_hints::Tool::GitHub)
+                ),
             });
         }
         Ok(Err(error)) => {

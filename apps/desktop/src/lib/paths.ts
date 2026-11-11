@@ -53,3 +53,8 @@ export function isInside(child: string, root: string): boolean {
   const path = compare(child);
   return path === base || path.startsWith(`${base}/`);
 }
+
+/** Abbreviate conventional home folders while preserving the path's separators. */
+export function shortenHome(path: string): string {
+  return path.replace(/^(?:\/(?:Users|home)\/[^/]+|[A-Za-z]:[\\/]Users[\\/][^\\/]+)(?=[\\/]|$)/i, "~");
+}

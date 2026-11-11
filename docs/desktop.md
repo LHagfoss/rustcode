@@ -53,10 +53,27 @@ Next, in rough order:
 
 Several machines (#3202): Settings › **Machines** pairs the app with another
 computer's RustCode server and keeps the connection, so one app reaches its
-own threads here and other machines' threads there. The sidebar keeps this computer’s project list. Its Devices entry opens the
-paired machines with their connection state; choosing one shows its threads by
-project. New thread and ⌘N use that machine, named in the draft’s Run on pill.
-The back arrow or Escape returns to this computer. Needs you counts
+own threads here and other machines' threads there. The sidebar keeps this
+computer’s project list, and its foot carries a cluster of two icon buttons,
+**Devices** and **Settings**, shaped like the title row's toggle. Devices opens
+the list in place: this computer first, named as people say it (“This Mac”),
+then each paired machine with its platform's glyph (a laptop for macOS, a
+monitor for Windows, a terminal for Linux, a question mark when it has not
+said), its name, the state as a chip (Connected / Connecting / Offline /
+Needs pairing), the route once, and how many of its threads run now out of all
+of them (“1 of 3 threads running”). A machine that is away shows when it last
+answered, the last error in words (“No answer on port 17879, a firewall may
+block it.”), and the one action that tries again (Reconnect, or Pair again for
+a pairing the machine ended). Choosing a machine replaces the list with a card
+and its threads: the card says the platform, the RustCode version it runs and
+whether that differs from this app's (“Studio runs 1.27.0, this Mac 1.28.0”),
+the state and the route, and offers New thread, Reconnect and Machine settings
+(the latter opens Settings › Machines until the machine's own page lands),
+with the machine's threads grouped by project under it. Back goes one step:
+a machine returns to the Devices list, and the list to the projects; Escape
+does the same. The row and the card both reconnect, because a machine's own
+view is where someone looks when its threads stop answering. New thread and ⌘N use that machine, named in the draft’s Run on pill.
+Needs you counts
 threads across every machine. A delegate that runs on another machine than its
 parent is nested under the parent as usual and also keeps a row in its own
 machine's list, saying `from <thread> on <machine>`; the hint opens the parent
@@ -77,7 +94,9 @@ would be. The Rust shell owns one connection supervisor per machine
 channel (`MachineTransport` in `src/acp/transport.ts`, `src/state/machines.ts`),
 because a web view cannot dial a gateway and the pairing token belongs in the
 credential store. `?machines=paired|connect|offline|revoked` in the mock walks
-the page without a second computer; `paired` is two computers with threads.
+the page without a second computer; `paired` is a Mac, a Windows PC with
+threads, and an offline Linux box, so the Devices list shows a glyph, a chip,
+a count, an older version and a machine to reconnect.
 
 Agents across machines: the orchestration tools take a `machine` (v12), so a
 thread here can list the paired computers (`list_machines`), start, message,

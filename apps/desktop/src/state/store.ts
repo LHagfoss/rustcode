@@ -82,6 +82,7 @@ import {
   SHORTCUTS_KEY,
 } from "../lib/keys";
 import { dismissOverlays } from "../lib/overlays";
+import { trashName } from "../lib/platform";
 import { setShellTransport, shellCall } from "../lib/shell";
 import { BUILTIN_THEMES, parseThemes, ThemeMethod, type ThemesSnapshot } from "../lib/themes";
 import { titleFrom } from "../lib/title";
@@ -214,6 +215,17 @@ import {
 } from "./queue";
 import { parseRecapHours, RECAP_HOURS_DEFAULT } from "./recap";
 import { challengeIsValid, makeChallenge, newPairedDevice, type PairingChallenge } from "./remotePairing";
+import {
+  addScheduled,
+  dueScheduled,
+  parseScheduleBook,
+  persistableSchedule,
+  SCHEDULED_KEY,
+  type ScheduleBook,
+  type ScheduledMessage,
+  scheduledCount,
+  withoutScheduled,
+} from "./schedule";
 import { beginSetup, dismissSetup, type PendingSetup, setupFailed, setupSucceeded } from "./setup";
 import { keepThreads, type SidebarOrder, withoutThreads } from "./sidebarOrder";
 import { dueSnoozes } from "./snooze";
@@ -393,6 +405,8 @@ export interface AppState {
   drafts: Record<string, string>;
   /** Command token, link chips and attachments of each composer, by thread id (or "new"). */
   extras: Record<string, ComposeExtras>;
+  /** Messages written now and sent at a time the user picked, by thread id (state/schedule.ts). */
+  scheduled: ScheduleBook;
   settings: SettingsSection | null;
   switcherOpen: boolean;
   /** A report command's answer (`/status`, `/context`…), shown over the composer of its thread. */
@@ -883,6 +897,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   sessionCommands: {},
   drafts: parseDrafts(stored(DRAFTS_KEY)),
   extras: {},
+  scheduled: parseScheduleBook(stored(SCHEDULED_KEY)),
   settings: null,
   switcherOpen: false,
   modelPickerAsk: 0,
@@ -1451,6 +1466,9 @@ async function handshake(): Promise<void> {
     // Queued messages and wakes come back from app storage, and the threads that kept one open, so a
     // row's own turn marks what it reports before any wake is worked out below.
     restoreQueuedThreads();
+    // Messages written now and sent later come back the same way; one whose time passed while the
+    // app was closed goes out once its thread is open.
+    restoreScheduled();
     // The link book now lives in the data store; local storage is the first paint only. Once the
     // store's copy is in, a child result nobody was told about (a window closed with its wake still
     // queued) is due: the queue is memory, the book is not, so the wake is read back from it here.
@@ -3086,7 +3104,7 @@ export async function renameThread(id: string, title: string): Promise<boolean> 
 /** Move a thread's folder to the Trash, closing it in the engine first, as the SwiftUI app does. */
 export async function trashThread(id: string): Promise<boolean> {
   if (get().threads[id]?.running) {
-    toast("Stop the running turn before moving this thread to the Trash.", "info");
+    toast(`Stop the running turn before moving this thread to the ${trashName()}.`, "info");
     return false;
   }
   // Its delegates stop with it: forgetting their links would free slots they still hold.
@@ -3173,6 +3191,163 @@ export function flushDrafts() {
 export function setExtras(key: string, fn: (extras: ComposeExtras) => ComposeExtras) {
   set((s) => ({ extras: { ...s.extras, [key]: fn(s.extras[key] ?? emptyExtras) } }));
   if (hasExtras(get().extras[key])) noteTyping(key);
+}
+
+// ---------------------------------------------------------------- sending later
+
+/**
+ * A message written now and sent at a time the user picked (state/schedule.ts): the card over the
+ * composer counts down, Send now sends it at once, Delete drops it, and a restart keeps it because
+ * every change is written to app storage. When its time comes it goes out on the thread's normal send
+ * path, so its command, links, pictures, model, effort and permissions are the ones the composer
+ * had; a thread that is busy then queues it like any follow-up.
+ */
+function writeScheduled(next: ScheduleBook) {
+  set({ scheduled: next });
+  store(SCHEDULED_KEY, JSON.stringify(persistableSchedule(next)));
+  syncScheduleTimer();
+}
+
+/** The book as storage has it: read at start-up, and between tests as a window that just started. */
+export function restoreScheduled(): void {
+  set({ scheduled: parseScheduleBook(stored(SCHEDULED_KEY)) });
+  syncScheduleTimer();
+}
+
+/**
+ * Schedule the composer's message for `due`. Null when there is nothing to send, the app is not
+ * connected, or the message is too big to keep; the composer keeps its text then.
+ */
+export function scheduleMessage(
+  threadId: string,
+  text: string,
+  extras: ComposeExtras,
+  due: number,
+): ScheduledMessage | null {
+  if (get().status !== "ready") return null;
+  if (!text.trim() && !hasExtras(extras)) return null;
+  if (!(due > Date.now())) return null;
+  const item: ScheduledMessage = {
+    id: localId("scheduled"),
+    text,
+    due,
+    ...(carriesExtras(extras) ? { extras } : {}),
+  };
+  const next = addScheduled(get().scheduled, threadId, item);
+  if (!next) return null;
+  writeScheduled(next);
+  return item;
+}
+
+/** Delete: the message never goes out. */
+export function removeScheduled(threadId: string, id: string): void {
+  const next = withoutScheduled(get().scheduled, threadId, id);
+  if (next !== get().scheduled) writeScheduled(next);
+}
+
+/** Send now: take it out of the book and send it on the thread's normal path. */
+export async function sendScheduledNow(threadId: string, id: string): Promise<boolean> {
+  const item = get().scheduled[threadId]?.find((row) => row.id === id);
+  if (!item) return false;
+  if (get().status !== "ready") {
+    toast("Not connected: the message stays scheduled.", "error");
+    return false;
+  }
+  const outcome = await deliverScheduled(threadId, item);
+  if (outcome === "wait") {
+    toast("Not connected: the message stays scheduled.", "error");
+    return false;
+  }
+  removeScheduled(threadId, id);
+  return outcome === "sent";
+}
+
+/**
+ * Open the thread if it is not, then send: a busy turn takes it as its next message (runPrompt).
+ * `wait` keeps the message for another try — its computer is away, or the engine is not connected
+ * yet — while a thread that no longer exists is `gone` and one the user deleted meanwhile is too.
+ */
+async function deliverScheduled(threadId: string, item: ScheduledMessage): Promise<"sent" | "gone" | "wait"> {
+  const s = get();
+  if (s.sessionsLoaded && !s.sessions.some((session) => session.id === threadId)) {
+    toast("That thread is gone, so its scheduled message was dropped.", "error");
+    return "gone";
+  }
+  // A thread on a paired computer that is away, or an engine that is not up: the message waits for
+  // it rather than being lost, and the timer tries again.
+  if (!connectionForThread(threadId)) return "wait";
+  if (!get().threads[threadId]?.loaded) {
+    await openThread(threadId);
+    for (let i = 0; i < 100 && !get().threads[threadId]?.loaded; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  if (!get().threads[threadId]?.loaded) return "wait";
+  // Deleted while the thread was opening: nothing goes out.
+  if (!get().scheduled[threadId]?.some((row) => row.id === item.id)) return "gone";
+  const extras = item.extras;
+  const thread = get().threads[threadId]!;
+  // A turn runs, or the queue is held by a stopped turn, or messages wait in it: this goes behind
+  // them and Resume starts the head, exactly as a message typed meanwhile does (`submit`).
+  if (thread.running || thread.queue.length || thread.queueHeld) {
+    unsettleThreads([threadId], { quiet: true });
+    wakeOnWrite(threadId);
+    updateThread(threadId, (t) => ({
+      ...t,
+      queue: [
+        ...t.queue,
+        {
+          id: localId("queued"),
+          text: item.text,
+          ...(extras && carriesExtras(extras) ? { extras } : {}),
+        },
+      ],
+    }));
+    // Held for Resume: nothing starts until the user presses it. A queue with no turn starts its head.
+    if (!thread.running && !thread.queueHeld) void resumeQueue(threadId);
+    return "sent";
+  }
+  void runPrompt(threadId, item.text, extras ?? emptyExtras);
+  return "sent";
+}
+
+let scheduleTimer: ReturnType<typeof setInterval> | null = null;
+let sendingScheduled = false;
+
+/**
+ * One slow timer while something is scheduled: a card's countdown ticks in the UI, and this only has
+ * to notice that a time has come, even after the Mac slept past it.
+ */
+function syncScheduleTimer() {
+  const waiting = scheduledCount(get().scheduled) > 0;
+  if (waiting && !scheduleTimer) {
+    const timer = setInterval(() => void continueDueScheduled(), 1000) as unknown as ReturnType<
+      typeof setInterval
+    > & { unref?: () => void };
+    // A timer does not keep the process alive (a test, or a window with nothing left to do).
+    timer.unref?.();
+    scheduleTimer = timer;
+  } else if (!waiting && scheduleTimer) {
+    clearInterval(scheduleTimer);
+    scheduleTimer = null;
+  }
+}
+
+/** Every message whose time has come goes out, the soonest first. */
+export async function continueDueScheduled(now = Date.now()): Promise<void> {
+  if (sendingScheduled || get().status !== "ready") return;
+  const due = dueScheduled(get().scheduled, now);
+  if (!due.length) return;
+  sendingScheduled = true;
+  try {
+    for (const { threadId, item } of due) {
+      const outcome = await deliverScheduled(threadId, item);
+      // One that waits for its computer stays; anything else has had its one turn out of the book.
+      if (outcome !== "wait") removeScheduled(threadId, item.id);
+    }
+  } finally {
+    sendingScheduled = false;
+  }
 }
 
 /** The harness a thread runs on, or a new thread would start on. */
@@ -6589,6 +6764,9 @@ export function resetForTests() {
   waitTimer = null;
   upSince.clear();
   sending.clear();
+  if (scheduleTimer) clearInterval(scheduleTimer);
+  scheduleTimer = null;
+  sendingScheduled = false;
   clearPageCache();
   stopPlanPolling();
   resetWaits();
@@ -6627,6 +6805,7 @@ export function resetForTests() {
     sessionCommands: {},
     drafts: {},
     extras: {},
+    scheduled: {},
     settings: null,
     switcherOpen: false,
     onboardingOpen: false,

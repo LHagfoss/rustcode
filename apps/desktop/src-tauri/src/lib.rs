@@ -103,6 +103,7 @@ pub fn run() {
             diagnostics::system_info,
             service::server_service_status,
             service::server_service_install,
+            service::server_link_path,
             diagnostics::resolve_binaries,
             diagnostics::logs_folder_open,
             diagnostics::diagnostics_save,

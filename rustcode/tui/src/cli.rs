@@ -398,6 +398,9 @@ pub enum ServerCommands {
         #[arg(short, long)]
         yes: bool,
     },
+    /// Point the `rustcode` a shell runs at this one, when it is another
+    /// version
+    LinkPath,
     /// Remove the background service (threads, settings and pairings stay)
     Uninstall {
         /// Stop a server with turns running without asking
@@ -1462,6 +1465,7 @@ mod tests {
                 yes: true
             }
         ));
+        assert!(matches!(server(&["link-path"]), ServerCommands::LinkPath));
         assert!(matches!(
             server(&["uninstall"]),
             ServerCommands::Uninstall { yes: false }
