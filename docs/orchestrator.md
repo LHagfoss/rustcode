@@ -1135,6 +1135,19 @@ The app advertises 12 from `CAPABILITY_VERSION` (`state/orchestration.ts`);
 a v11 app keeps exactly the v11 set and `PROMPT_HINT_V11`, and this engine
 refuses `machine` from it rather than acting on the wrong computer.
 
+## Orchestration tools v14
+
+`message_session` reaches a thread in any project through the existing user
+approval policy. The approval card names the target project when it differs.
+With `steer: true`, a running target receives input mid-turn when its harness
+supports it; otherwise the message queues. An idle target starts a turn.
+The result's `delivered` is `steered`, `queued` or `started`.
+`manage_queue` can list and change only the caller's own queued messages,
+also across projects; changes use the same approval grant as messaging.
+Older clients are not offered `steer` and calls carrying it are refused with
+an instruction to upgrade. Existing chain, delegate, mailbox and machine
+routing rules still apply. No new tools are added in v14.
+
 ## Orchestration tools v13
 
 Built. Clients advertising `_meta.rustcode.orchestration >= 13` also get the

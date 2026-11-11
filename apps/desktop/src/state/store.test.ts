@@ -4261,11 +4261,88 @@ describe("what an agent may do with the messages it queued", () => {
     await turning;
   });
 
-  test("a thread of another project's queue is refused", async () => {
+  test("cross-project messaging waits for approval and denial delivers nothing", async () => {
     const caller = await ready();
-    const other = useApp.getState().sessions.find((x) => x.cwd === "/Users/you/code/website")!;
-    const refused = await manage(caller, other.id, { action: "list" });
-    expect((refused.error as { code: string }).code).toBe("not_allowed");
+    setPermissionMode(caller, "ask");
+    const target = useApp.getState().sessions.find((x) => x.cwd === "/Users/you/code/website")!.id;
+    const call = () =>
+      answerOrchestration({
+        sessionId: caller,
+        tool: "message_session",
+        args: { session_id: target, message: "cross-project task", steer: true },
+      });
+    const denied = call();
+    await until(() => useApp.getState().grant !== null);
+    expect(useApp.getState().grant?.project).toBe("/Users/you/code/website");
+    expect(useApp.getState().links.links).toHaveLength(0);
+    resolveGrant("deny");
+    expect(((await denied).error as { code: string }).code).toBe("denied");
+    expect(useApp.getState().links.links).toHaveLength(0);
+    const allowed = call();
+    await until(() => useApp.getState().grant !== null);
+    resolveGrant("once");
+    const result = await allowed;
+    expect(result.error).toBeUndefined();
+    expect(result.delivered).toBe("started");
+    expect(useApp.getState().links.links).toHaveLength(1);
+  });
+
+  test("new steer input enters a running turn across projects", async () => {
+    const caller = await ready(200);
+    const target = useApp.getState().sessions.find((x) => x.cwd === "/Users/you/code/website")!.id;
+    await openThread(target);
+    selectThread(target);
+    const turning = submit("do the thing");
+    await until(() => useApp.getState().threads[target]?.running === true);
+    const result = await answerOrchestration({
+      sessionId: caller,
+      tool: "message_session",
+      args: { session_id: target, message: "change direction now", steer: true },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.delivered).toBe("steered");
+    expect(queue(target)).toHaveLength(0);
+    expect(useApp.getState().links.links.find((l) => l.id === result.link_id)?.state).toBe("working");
+    await turning;
+  });
+
+  test("steer queues for a harness without mid-turn input and its owner can manage it across projects", async () => {
+    const caller = await ready();
+    const target = useApp.getState().sessions.find((x) => x.cwd === "/Users/you/code/website")!.id;
+    await openThread(target);
+    const only = {
+      live: false,
+      attachments: false,
+      while_awaiting_user: true,
+      interrupt_restart: true,
+      queue: true,
+    };
+    updateThread(target, (t) => ({
+      ...t,
+      running: true,
+      harness: t.harness && {
+        ...t.harness,
+        capabilities: { ...t.harness.capabilities, steering: only },
+      },
+    }));
+    useApp.setState((s) => ({
+      harnesses: s.harnesses && {
+        ...s.harnesses,
+        harnesses: s.harnesses.harnesses.map((h) => ({
+          ...h,
+          capabilities: { ...h.capabilities, steering: only },
+        })),
+      },
+    }));
+    const result = await answerOrchestration({
+      sessionId: caller,
+      tool: "message_session",
+      args: { session_id: target, message: "next step", steer: true },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.delivered).toBe("queued");
+    expect(queue(target)).toHaveLength(1);
+    expect((await manage(caller, target, { action: "list" })).queued).toHaveLength(1);
   });
 });
 

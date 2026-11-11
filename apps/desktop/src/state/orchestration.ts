@@ -14,7 +14,7 @@ import { snoozeAt } from "./snooze";
 import { formatDuration, type QueuedPrompt, withWakeMark } from "./thread";
 
 /** What the client advertises in `initialize` while the setting is on. */
-export const CAPABILITY_VERSION = 13;
+export const CAPABILITY_VERSION = 14;
 /** The most of a child's answer `wait_session` carries; beyond it, `read_session` pages the rest. */
 export const MAX_BYTES = 8 * 1024;
 /** The longest prompt or message a thread may hand another one (32 KiB). */
@@ -475,7 +475,14 @@ export type Call =
   | { tool: "list_sessions"; query: string; allProjects: boolean; machine?: string }
   | { tool: "read_session"; target: string; lastTurns: number; offset: number; machine?: string }
   /** `attachments` are absolute paths, under the caller's project or worktree. */
-  | { tool: "message_session"; target: string; text: string; attachments: string[]; machine?: string }
+  | {
+      tool: "message_session";
+      target: string;
+      text: string;
+      attachments: string[];
+      steer?: boolean;
+      machine?: string;
+    }
   /** `callId` is the engine's name for this call, so a dropped call can end its wait. */
   | { tool: "wait_session"; links: string[]; timeoutMs: number; callId?: string; machine?: string }
   | {
@@ -922,7 +929,17 @@ export function parseCall(params: JsonObject): Call | Failure {
       if (attachments === null) {
         return failure("invalid", `attachments must be at most ${MAX_ATTACHMENT_FILES} absolute paths`);
       }
-      return { tool: "message_session", target, text, attachments, ...machineField(args) };
+      if (args.steer !== undefined && typeof args.steer !== "boolean") {
+        return failure("invalid", "steer must be a boolean");
+      }
+      return {
+        tool: "message_session",
+        target,
+        text,
+        attachments,
+        ...(args.steer !== undefined ? { steer: args.steer } : {}),
+        ...machineField(args),
+      };
     }
     case "wait_session": {
       // One answer per link: a repeated id is asked about once.
@@ -1197,10 +1214,8 @@ export function listSessions(
 
 /**
  * Whether `caller` may message (or read) `target`, before the user is asked.
- * Reading reaches any project while the app allows it; everything that writes,
- * or that opens a thread to another, stays in the caller's own project — except
- * a thread on a machine the call named (`remote`), whose folders are not this
- * project's and whose card is the gate.
+ * Reading across projects needs the setting. Messaging reaches any project:
+ * the existing user approval policy gates delivery in the host.
  */
 export function checkMessage(
   caller: RuleThread,
@@ -1214,7 +1229,7 @@ export function checkMessage(
   if (!target) return failure("not_found", "no thread has that id; use list_sessions");
   if (target.id === caller.id)
     return failure("not_allowed", `a thread cannot ${read ? "read" : "message"} itself`);
-  if (!remote && !(read && acrossProjects) && !reachesThread(caller, target)) {
+  if (read && !remote && !acrossProjects && !reachesThread(caller, target)) {
     return failure(
       "not_allowed",
       "that thread is in another project; only this project's threads can be reached",

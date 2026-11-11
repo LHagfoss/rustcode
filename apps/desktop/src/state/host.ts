@@ -131,6 +131,7 @@ import {
   renderRead,
   restateLinks,
   sameProject,
+  sameReach,
   shownState,
   type TurnAnswer,
   unheard,
@@ -1385,7 +1386,7 @@ async function perform(
       if (isFailure(machine)) return failureJson(machine);
       const target = scopedTarget(machine, call.target);
       if (isFailure(target)) return failureJson(target);
-      const answer = await message(caller, target, call.text, call.attachments);
+      const answer = await message(caller, target, call.text, call.attachments, call.steer);
       return answer.error ? answer : { ...answer, ...machineFields(machineOfThread(target)) };
     }
     case "manage_queue":
@@ -3303,8 +3304,9 @@ function message(
   targetId: string,
   text: string,
   attachments: readonly string[] = [],
+  steerNow = false,
 ): Promise<JsonObject> {
-  return withLinkGate(() => messageNow(caller, targetId, text, attachments));
+  return withLinkGate(() => messageNow(caller, targetId, text, attachments, steerNow));
 }
 
 /** Do not message a settled or archived thread. */
@@ -3324,6 +3326,7 @@ async function messageNow(
   targetId: string,
   text: string,
   attachments: readonly string[] = [],
+  steerNow = false,
 ): Promise<JsonObject> {
   const state = useApp.getState();
   const target = ruleThread(state, targetId);
@@ -3347,7 +3350,10 @@ async function messageNow(
     caller: caller.id,
     callerTitle: caller.title,
     target: target.title,
-    detail: withFiles,
+    detail: steerNow
+      ? `Deliver into the running turn if supported; otherwise queue.\n\n${withFiles}`
+      : withFiles,
+    ...(!sameReach(caller, target) ? { project: projectOf(target) } : {}),
     machine: targetMachine(target.id),
   });
   if (no) return failureJson(no);
@@ -3396,10 +3402,23 @@ async function messageNow(
     harnessName,
     model: session?.model,
   });
-  deliver(target.id, delivered(text, caller.title), id, caller.id, extras);
+  let delivery: "steered" | "queued" | "started";
+  if (
+    steerNow &&
+    busy &&
+    sendDecisionFor(thread, extras).action === "steer" &&
+    (await steer(target.id, delivered(text, caller.title), extras))
+  ) {
+    delivery = "steered";
+    setBook((b) => updateLink(b, id, { state: "working" }));
+  } else {
+    deliver(target.id, delivered(text, caller.title), id, caller.id, extras);
+    delivery = useApp.getState().threads[target.id]?.queue.some((q) => q.link === id) ? "queued" : "started";
+  }
   return {
     link_id: id,
-    receipt: busy ? "queued" : "started",
+    receipt: delivery,
+    delivered: delivery,
     session_id: target.id,
     title: target.title,
     ...(files.length ? { attachments: files.map((f) => f.path) } : {}),
@@ -3488,9 +3507,9 @@ type ManageQueueCall = Extract<ReturnType<typeof parseCall>, { tool: "manage_que
  */
 async function manageQueue(caller: RuleThread, call: ManageQueueCall): Promise<JsonObject> {
   const target = ruleThread(useApp.getState(), call.target);
-  // The reach is `message_session`'s project rule; the slot, mailbox and chain rules were answered
-  // when the message queued, and re-asking them here could refuse an edit that breaks none of them.
-  const refused = checkMessage(caller, target, book(), true, useApp.getState().readAcrossProjects);
+  // Only the caller's own queued messages are exposed below, in any project.
+  // Slot, mailbox and chain rules were checked when the message queued.
+  const refused = checkMessage(caller, target, book(), true, true);
   if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
   const waiting = () => useApp.getState().threads[target.id]?.queue ?? [];
   const mine = (id: string | undefined) => waiting().find((q) => q.id === id);
@@ -3529,6 +3548,7 @@ async function manageQueue(caller: RuleThread, call: ManageQueueCall): Promise<J
     caller: caller.id,
     callerTitle: caller.title,
     target: target.title,
+    ...(!sameReach(caller, target) ? { project: projectOf(target) } : {}),
     detail: `${verb}: ${call.action === "edit" ? (call.text ?? "").trim() : bodyOf(item, caller.title).slice(0, QUEUE_PREVIEW_CHARS)}`,
   });
   if (no) return failureJson(no);
