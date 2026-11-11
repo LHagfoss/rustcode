@@ -836,6 +836,14 @@ async fn single_instance_stop_and_cleanup() {
     let status = harness.status().await;
     assert_eq!(status.pid, std::process::id());
     assert_eq!(status.listen_address, harness.addr.to_string());
+    // The status lists the addresses a device can dial; a loopback listener
+    // is the one address, and it says why no device can reach it.
+    assert_eq!(status.listening.len(), 1);
+    assert_eq!(status.listening[0].address, harness.addr.to_string());
+    assert_eq!(
+        status.listening[0].label(),
+        format!("{}  (loopback)", harness.addr)
+    );
     assert_eq!(status.advertised_address, harness.addr.to_string());
 
     // A stale caller cannot stop this instance.
