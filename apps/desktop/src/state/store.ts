@@ -1239,16 +1239,64 @@ function scopeInbound(message: Inbound, host: string): Inbound {
 }
 
 /**
- * Threads this window made on a machine, by key, until that machine's own
- * `session/list` has them. `session/new` answers at once, and the next read of
- * that list may be from before the thread: a snapshot without it must not take
- * it out of the app's list while its first turn works there
- * (`mergeMachineLists`, issue 3523).
+ * Threads the app has been told about that a list has not got to yet: one this window made here or
+ * on a machine (`session/new` answers at once), and one another client made (`_rustcode/threads/created`).
+ * Kept by key with the row to draw and when it was kept, until a list names it or a deletion takes
+ * it away; a thread no list ever names expires after {@link KEEP_UNLISTED_MS}. Both lists read this
+ * one set: `refreshSessions` here, `mergeMachineLists` and `machines.ts` `readThreads` for a
+ * machine (issue 3523).
  */
-const justMade = new Map<string, { host: string; summary: SessionSummary; at: number }>();
+const keptUnlistedThreads = new Map<string, { summary: SessionSummary; at: number }>();
 
-/** How long a thread this window made waits for its machine to list it. */
-const JUST_MADE_MS = 5 * 60_000;
+/** How long a thread the app knows about waits for a list to name it. */
+const KEEP_UNLISTED_MS = 5 * 60_000;
+
+/** Keep a thread's row until a list names it, or a deletion takes it away. */
+export function keepUnlisted(summary: SessionSummary): void {
+  keptUnlistedThreads.set(summary.id, { summary, at: Date.now() });
+}
+
+/**
+ * Whether the app still keeps `key`'s row for a list that has not named it: the backstop for a
+ * link whose thread is gone (`state/host.ts` `vanished`). An expired row is dropped here.
+ */
+export function isKeptUnlisted(key: string): boolean {
+  const kept = keptUnlistedThreads.get(key);
+  if (!kept) return false;
+  if (Date.now() - kept.at <= KEEP_UNLISTED_MS) return true;
+  keptUnlistedThreads.delete(key);
+  return false;
+}
+
+/**
+ * The kept rows for `host` that `listed` (that machine's own ids) does not name, without forgetting
+ * any: `mergeMachineLists` draws them, and the cache it merges may itself hold an announced row.
+ * Only an authoritative list read settles a keep (`settleKeptUnlisted`).
+ */
+export function keptUnlisted(host: string, listed: ReadonlySet<string>): SessionSummary[] {
+  const now = Date.now();
+  const rows: SessionSummary[] = [];
+  for (const [key, kept] of keptUnlistedThreads) {
+    if ((kept.summary.host ?? LOCAL_HOST) !== host) continue;
+    if (listed.has(splitThreadKey(key).id) || now - kept.at > KEEP_UNLISTED_MS) continue;
+    rows.push(kept.summary);
+  }
+  return rows;
+}
+
+/**
+ * Forget the kept rows for `host` that a list now names, and ones whose keep expired. Called with
+ * the engine's own `session/list` (or this computer's), never with a cache a client wrote to.
+ */
+export function settleKeptUnlisted(host: string, listed: ReadonlySet<string>): void {
+  const now = Date.now();
+  for (const [key, kept] of keptUnlistedThreads) {
+    if ((kept.summary.host ?? LOCAL_HOST) !== host) continue;
+    if (listed.has(splitThreadKey(key).id) || now - kept.at > KEEP_UNLISTED_MS) {
+      keptUnlistedThreads.delete(key);
+    }
+  }
+}
 
 /** Replaces the sessions of every machine with the list it last gave (this computer's are kept). */
 function mergeMachineLists(lists: Record<string, readonly SessionSummary[]>): void {
@@ -1256,7 +1304,6 @@ function mergeMachineLists(lists: Record<string, readonly SessionSummary[]>): vo
     // A thread the app just started there has the title it was sent with until the machine titles
     // it from its own history: `session/new` carries the title, and the list follows.
     const known = new Map(s.sessions.map((session) => [session.id, session]));
-    const now = Date.now();
     const remote = Object.entries(lists).flatMap(([host, items]) => {
       const listed = new Set(items.map((session) => session.id));
       const rows = items.map((session) => {
@@ -1264,17 +1311,12 @@ function mergeMachineLists(lists: Record<string, readonly SessionSummary[]>): vo
         const title = session.title || known.get(id)?.title;
         return { ...session, id, host, title };
       });
-      // The threads this window made that the list has not got to yet stay: its own answer
-      // has them, and a read that started before them is not news that they are gone.
-      const kept: SessionSummary[] = [];
-      for (const [id, made] of justMade) {
-        if (made.host !== host) continue;
-        if (listed.has(splitThreadKey(id).id) || now - made.at > JUST_MADE_MS) {
-          justMade.delete(id);
-          continue;
-        }
-        kept.push({ ...made.summary, title: made.summary.title || known.get(id)?.title });
-      }
+      // A thread the app was told about, here or by another client, that this list has not got to
+      // yet stays: a read that started before it is not news that it is gone.
+      const kept = keptUnlisted(host, listed).map((summary) => ({
+        ...summary,
+        title: summary.title || known.get(summary.id)?.title,
+      }));
       return [...rows, ...kept];
     });
     return {
@@ -1888,13 +1930,6 @@ function onSessionUpdate(params: JsonObject) {
 // ---------------------------------------------------------------- sessions
 
 /**
- * Threads announced by `_rustcode/threads/created` that the engine has not listed yet: it lists a
- * session once it saved history, and the first turn may still be running. A list read that does
- * not name one keeps its row (`refreshSessions`), and a deletion takes it away.
- */
-const announcedThreads = new Set<string>();
-
-/**
  * A thread the engine started, or another client made on this machine or on a paired one
  * (`_rustcode/threads/created`, docs/remote.md and docs/desktop.md › Several machines): a
  * thread has no row in the store before its first turn, so this is what lists it now.
@@ -1906,20 +1941,22 @@ export function threadCreated(params: unknown) {
   const cwd = str(p?.cwd);
   if (!key || !cwd) return;
   const { host } = splitThreadKey(key);
-  // A machine's own cache keeps its announced rows (`state/machines.ts`), a local one is kept here.
-  if (!host) announcedThreads.add(key);
+  const summary: SessionSummary = {
+    id: key,
+    // A machine's own id reaches the store as `‹host›/‹id›` (state/threadKeys.ts).
+    host: host || undefined,
+    cwd,
+    updatedAt: Date.now(),
+    title: str(p?.title) || undefined,
+    harness: str(p?.harness) || undefined,
+    model: str(p?.model) || undefined,
+  };
+  // Both lists read the one keep-unlisted set: local in `refreshSessions`, a machine's in
+  // `mergeMachineLists` and `machines.ts` `readThreads`. Kept even when the row is already listed:
+  // the list a read is holding may have started before the thread, and must not take it away.
+  keepUnlisted(summary);
   set((s) => {
     if (s.sessions.some((x) => x.id === key)) return {};
-    const summary: SessionSummary = {
-      id: key,
-      // A machine's own id reaches the store as `‹host›/‹id›` (state/threadKeys.ts).
-      host: host || undefined,
-      cwd,
-      updatedAt: Date.now(),
-      title: str(p?.title) || undefined,
-      harness: str(p?.harness) || undefined,
-      model: str(p?.model) || undefined,
-    };
     return { sessions: [summary, ...s.sessions] };
   });
 }
@@ -1949,11 +1986,14 @@ export async function refreshSessions(): Promise<void> {
         applySnooze(x.id, x.snoozedUntil !== null && x.snoozedUntil > Date.now() ? x.snoozedUntil : null);
     // Another computer's list is its own read: ask each connected machine again, too.
     void import("./machines").then((m) => m.refreshMachineThreads());
+    // A thread the engine does not list yet stays while the app keeps it; one it names now (or
+    // one whose keep expired) needs nothing kept.
+    const listed = new Set(all.map((x) => x.id));
+    settleKeptUnlisted(LOCAL_HOST, listed);
+    const stillKept = new Set(keptUnlisted(LOCAL_HOST, listed).map((x) => x.id));
     set((s) => {
-      // Threads started here that the engine does not list yet (it lists a session once it saved history).
-      const listed = new Set(all.map((x) => x.id));
       const started = s.sessions.filter(
-        (x) => !x.host && !listed.has(x.id) && (s.threads[x.id] || announcedThreads.has(x.id)),
+        (x) => !x.host && !listed.has(x.id) && (s.threads[x.id] || stillKept.has(x.id)),
       );
       // Another machine's threads are listed by that machine (state/machines.ts), kept as they are.
       const remote = s.sessions.filter((x) => x.host);
@@ -1967,9 +2007,6 @@ export async function refreshSessions(): Promise<void> {
         projectCwd: s.projectCwd || sessions.find((x) => !x.host)?.cwd || "",
       };
     });
-    // The engine's list is the newer truth about a thread it now has: no row needs the
-    // announcement to stay listed.
-    for (const x of all) announcedThreads.delete(x.id);
     // A thread the engine no longer lists keeps no place in the arrangement. A capped list is not
     // the whole list, so it prunes nothing: the rows of the rest are still there.
     if (!capped) pruneSidebarOrder(get().sessions.map((x) => x.id));
@@ -2618,10 +2655,9 @@ export async function createSession(options: NewSession): Promise<string> {
   // shows goes away and comes back between the session and its model. Any other session is listed
   // at once.
   const pending = !!options.pendingId && get().pendingSetup?.id === options.pendingId;
-  // A machine's own list has not listed this thread yet: it is kept in that list
-  // from here, so a snapshot from before it cannot take it away mid-turn
-  // (`mergeMachineLists`, issue 3523).
-  if (host) justMade.set(id, { host, summary, at: Date.now() });
+  // No list has this thread yet: it is kept here, so a snapshot from before it cannot take it
+  // away mid-turn (`mergeMachineLists`, `refreshSessions`, issue 3523).
+  keepUnlisted(summary);
   set((st) => ({
     threads: { ...st.threads, [id]: thread },
     ...(pending
@@ -3173,7 +3209,7 @@ export async function renameThread(id: string, title: string): Promise<boolean> 
 
 /** Take a thread out of every list, mark and stored place a trashed thread leaves behind. */
 function forgetThreadRow(id: string): void {
-  announcedThreads.delete(id);
+  keptUnlistedThreads.delete(id);
   const { [id]: _gone, ...threads } = get().threads;
   const archived = { ...get().archived };
   delete archived[id];
@@ -7093,13 +7129,11 @@ export function resetForTests() {
   clearPageCache();
   stopPlanPolling();
   resetWaits();
-  announcedThreads.clear();
+  keptUnlistedThreads.clear();
   forgetAutoCompact();
   // A lost turn's timers outlive a test file, and its links belong to that file's book.
   for (const record of lostTurns.values()) clearTimeout(record.timer);
   lostTurns.clear();
-  // A thread one file made on a machine is not the next file's to keep listed.
-  justMade.clear();
   lostMachineMs = LOST_MACHINE_MS;
   engineWatch?.();
   engineWatch = undefined;

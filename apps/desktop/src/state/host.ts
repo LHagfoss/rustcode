@@ -190,6 +190,7 @@ import {
   ensureHarnessModels,
   errorText,
   harnessesOn,
+  isKeptUnlisted,
   lastAccountFor,
   loadMachineHarnesses,
   localChoices,
@@ -4198,14 +4199,15 @@ async function activityFrom(
 const REASON_THREAD_GONE = "That thread is gone.";
 
 /**
- * Whether a link's thread has gone: no project lists it and the app holds no
- * copy of it. A thread this window started on another machine is listed only
- * once that machine's `session/list` catches up, which on a first turn is
- * after the message that started it: a thread the app still holds is unlisted,
- * not gone (issue 3523).
+ * Whether a link's thread has gone: no list names it and the app keeps no row for it. A thread
+ * this window made there, or another client announced, is listed only once a `session/list`
+ * catches up, which on a first turn is after the message that started it: the keep-unlisted set
+ * (`state/store.ts` `isKeptUnlisted`) says which unlisted rows are still due. A thread with a
+ * `threads` copy is no exception — every link target made in this window has one — so the copy
+ * is not what tells an unlisted thread from a gone one (issue 3523).
  */
 const vanished = (s: AppState, target: string) =>
-  !s.sessions.some((x) => x.id === target) && s.threads[target] === undefined;
+  !s.sessions.some((x) => x.id === target) && !isKeptUnlisted(target);
 
 /**
  * `wait_session`: blocks until one of the links settles or asks the user, or

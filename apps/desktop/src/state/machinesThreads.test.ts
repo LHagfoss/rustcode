@@ -245,6 +245,8 @@ describe("a machine's threads", () => {
     refreshMachineThreads();
     await sleep(20);
     expect(useMachines.getState().sessions[LINUX]?.some((s) => s.id === id)).toBe(true);
+    // The app's own list survives the same read's mirror of the machine's list.
+    expect(useApp.getState().sessions.some((s) => s.id === `${LINUX}/${id}`)).toBe(true);
     // Its first turn saves that history: the next read names it once, without the announcement.
     await conn?.request("session/prompt", {
       sessionId: id,
