@@ -824,8 +824,9 @@ impl SessionClients {
     pub(crate) fn update(&self, update: SessionUpdate) -> Result<(), agent_client_protocol::Error> {
         // A title is kept in every client's thread list, like a status: it is sent to the
         // clients that do not have the session below, outside the logged stream.
-        let titled =
-            matches!(&update, SessionUpdate::SessionInfoUpdate(info) if info.title.is_value());
+        let for_list =
+            matches!(&update, SessionUpdate::SessionInfoUpdate(info) if info.title.is_value())
+                .then(|| update.clone());
         // Numbered, recorded, addressed and queued under one lock. A client
         // attaching meanwhile gets the update either in its replay or live,
         // never both and never neither; and concurrent producers cannot put
@@ -848,10 +849,10 @@ impl SessionClients {
                 &self.session_id,
                 cursor,
                 None,
-                notification(&self.session_id, update.clone(), cursor),
+                notification(&self.session_id, update, cursor),
             )
         };
-        if titled {
+        if let Some(update) = for_list {
             self.clients.publish_thread_title(&self.session_id, update);
         }
         outcome

@@ -66,7 +66,10 @@ that is away starts folded to one muted row: opening it lists the copy this
 window kept, read-only, and its chat says “Not connected. Last updated HH:MM”.
 New thread and ⌘N still start here; a heading's New thread starts on that
 machine, named in the draft’s Run on pill, and Settings › Machines keeps the
-pairing, Reconnect and each machine's own page.
+pairing, Reconnect and each machine's own page. Every client that lists threads
+hears of one another makes there (`_rustcode/threads/created`), a just-made
+thread stays listed until that machine's own list names it, and one trashed in
+any app leaves the others' lists (`_rustcode/threads/deleted`).
 Needs you counts
 threads across every machine. A delegate that runs on another machine than its
 parent is nested under the parent as usual and also keeps a row in its own

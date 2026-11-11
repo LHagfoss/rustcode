@@ -1720,6 +1720,7 @@ async function handleInbound(message: Inbound, conn: AcpConnection | null = conn
       if (message.method === Method.sessionUpdate) onSessionUpdate(message.params);
       else if (message.method === Method.sessionActivity) onSessionActivity(message.params);
       else if (message.method === Method.threadCreated) threadCreated(message.params);
+      else if (message.method === Method.threadDeleted) threadDeleted(message.params);
       else if (message.method === V2Method.orchestrationCancelled) orchestrationCallDropped(message.params);
       else if (message.method === PULL_WATCH && conn)
         void deliverPullWatch(conn, message.params, host).catch(() => {});
@@ -1861,6 +1862,13 @@ function onSessionUpdate(params: JsonObject) {
 // ---------------------------------------------------------------- sessions
 
 /**
+ * Threads announced by `_rustcode/threads/created` that the engine has not listed yet: it lists a
+ * session once it saved history, and the first turn may still be running. A list read that does
+ * not name one keeps its row (`refreshSessions`), and a deletion takes it away.
+ */
+const announcedThreads = new Set<string>();
+
+/**
  * A thread the engine started, or another client made on this machine or on a paired one
  * (`_rustcode/threads/created`, docs/remote.md and docs/desktop.md › Several machines): a
  * thread has no row in the store before its first turn, so this is what lists it now.
@@ -1872,6 +1880,8 @@ export function threadCreated(params: unknown) {
   const cwd = str(p?.cwd);
   if (!key || !cwd) return;
   const { host } = splitThreadKey(key);
+  // A machine's own cache keeps its announced rows (`state/machines.ts`), a local one is kept here.
+  if (!host) announcedThreads.add(key);
   set((s) => {
     if (s.sessions.some((x) => x.id === key)) return {};
     const summary: SessionSummary = {
@@ -1916,7 +1926,9 @@ export async function refreshSessions(): Promise<void> {
     set((s) => {
       // Threads started here that the engine does not list yet (it lists a session once it saved history).
       const listed = new Set(all.map((x) => x.id));
-      const started = s.sessions.filter((x) => !x.host && !listed.has(x.id) && s.threads[x.id]);
+      const started = s.sessions.filter(
+        (x) => !x.host && !listed.has(x.id) && (s.threads[x.id] || announcedThreads.has(x.id)),
+      );
       // Another machine's threads are listed by that machine (state/machines.ts), kept as they are.
       const remote = s.sessions.filter((x) => x.host);
       const sessions = byActivity([...started, ...all, ...remote]);
@@ -1929,6 +1941,9 @@ export async function refreshSessions(): Promise<void> {
         projectCwd: s.projectCwd || sessions.find((x) => !x.host)?.cwd || "",
       };
     });
+    // The engine's list is the newer truth about a thread it now has: no row needs the
+    // announcement to stay listed.
+    for (const x of all) announcedThreads.delete(x.id);
     // A thread the engine no longer lists keeps no place in the arrangement. A capped list is not
     // the whole list, so it prunes nothing: the rows of the rest are still there.
     if (!capped) pruneSidebarOrder(get().sessions.map((x) => x.id));
@@ -3122,6 +3137,56 @@ export async function renameThread(id: string, title: string): Promise<boolean> 
   }
 }
 
+/** Take a thread out of every list, mark and stored place a trashed thread leaves behind. */
+function forgetThreadRow(id: string): void {
+  announcedThreads.delete(id);
+  const { [id]: _gone, ...threads } = get().threads;
+  const archived = { ...get().archived };
+  delete archived[id];
+  const pinned = get().pinned.filter((x) => x !== id);
+  const autoCompactOff = { ...get().autoCompactOff };
+  delete autoCompactOff[id];
+  forgetAutoCompact(id);
+  applySnooze(id, null);
+  clearStatusMark(id);
+  set((s) => {
+    const peeking = s.peekId === id;
+    return {
+      threads,
+      archived,
+      pinned,
+      autoCompactOff,
+      sessions: s.sessions.filter((x) => x.id !== id),
+      links: forget(s.links, id),
+      finished: without(s.finished, id),
+      failed: without(s.failed, id),
+      // A thread in the panel's Thread tab that no longer exists is not shown,
+      // and the panel does not stay open on the tab it was in.
+      peekId: peeking ? null : s.peekId,
+      ...(peeking && s.panel === "peek" ? { panel: null } : {}),
+    };
+  });
+  // Its place in the sidebar's arrangement goes with it, or the stored order keeps an id forever.
+  forgetSidebarOrder([id]);
+  store(STORAGE.archived, JSON.stringify(archived));
+  store(STORAGE.pinned, JSON.stringify(pinned));
+  store(STORAGE.autoCompactOff, JSON.stringify(autoCompactOff));
+}
+
+/**
+ * A thread trashed by another client on this engine (`_rustcode/threads/deleted`): the app on the
+ * machine and the app that started the thread there see the row go together. The machine's own
+ * list cache drops it too (`state/machines.ts`).
+ */
+export function threadDeleted(params: unknown) {
+  const key = str(obj(params)?.sessionId);
+  if (!key) return;
+  // Links into the trashed thread failed: their parents may now have something to hear.
+  forgetThreadRow(key);
+  wakeTick();
+  if (get().selectedId === key) startNewThread();
+}
+
 /** Move a thread's folder to the Trash, closing it in the engine first, as the SwiftUI app does. */
 export async function trashThread(id: string): Promise<boolean> {
   if (get().threads[id]?.running) {
@@ -3137,36 +3202,15 @@ export async function trashThread(id: string): Promise<boolean> {
     toast(errorText(error), "error");
     return false;
   }
-  const { [id]: _gone, ...threads } = get().threads;
-  const archived = { ...get().archived };
-  delete archived[id];
-  const pinned = get().pinned.filter((x) => x !== id);
-  const autoCompactOff = { ...get().autoCompactOff };
-  delete autoCompactOff[id];
-  forgetAutoCompact(id);
-  set((s) => {
-    const peeking = s.peekId === id;
-    return {
-      threads,
-      archived,
-      pinned,
-      autoCompactOff,
-      sessions: s.sessions.filter((x) => x.id !== id),
-      links: forget(s.links, id),
-      // A thread in the panel's Thread tab that no longer exists is not shown,
-      // and the panel does not stay open on the tab it was in.
-      peekId: peeking ? null : s.peekId,
-      ...(peeking && s.panel === "peek" ? { panel: null } : {}),
-    };
-  });
+  // Every other client on this engine drops the row; an older engine has no such request.
+  try {
+    await connectionForThread(id)?.request(Method.threadDelete, { sessionId: splitThreadKey(id).id }, 10_000);
+  } catch {
+    // The folder is gone either way.
+  }
+  forgetThreadRow(id);
   // Links into the trashed thread failed: their parents may now have something to hear.
   wakeTick();
-  // Its place in the sidebar's arrangement goes with it, or the stored order keeps an id forever.
-  forgetSidebarOrder([id]);
-  store(STORAGE.archived, JSON.stringify(archived));
-  store(STORAGE.pinned, JSON.stringify(pinned));
-  store(STORAGE.autoCompactOff, JSON.stringify(autoCompactOff));
-
   if (get().selectedId === id) startNewThread();
   return true;
 }
@@ -7015,6 +7059,7 @@ export function resetForTests() {
   clearPageCache();
   stopPlanPolling();
   resetWaits();
+  announcedThreads.clear();
   forgetAutoCompact();
   // A lost turn's timers outlive a test file, and its links belong to that file's book.
   for (const record of lostTurns.values()) clearTimeout(record.timer);

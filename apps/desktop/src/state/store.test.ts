@@ -144,6 +144,7 @@ import {
   submit,
   switchNewThreadHarness,
   threadCreated,
+  threadDeleted,
   toast,
   togglePin,
   toggleRightPanel,
@@ -1342,6 +1343,18 @@ describe("engine controller with the mock engine", () => {
     const remote = useApp.getState().sessions.find((x) => x.id === "gw-7c1d9e4f2a8b6d30/from-studio");
     expect(remote?.host).toBe("gw-7c1d9e4f2a8b6d30");
     expect(remote?.harness).toBe("codex");
+  });
+
+  test("a just-announced thread keeps its row until the engine lists it, and a deletion takes it", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().sessions.length > 0);
+    // The engine lists a session once it saved history, so this one is not in the list yet.
+    threadCreated({ sessionId: "brand-new", cwd: "/tmp/project" });
+    await refreshSessions();
+    expect(useApp.getState().sessions.some((x) => x.id === "brand-new")).toBe(true);
+    // Its folder was trashed before it was ever listed: the engine's notice takes it away.
+    threadDeleted({ sessionId: "brand-new" });
+    expect(useApp.getState().sessions.some((x) => x.id === "brand-new")).toBe(false);
   });
 
   test("pins live in the engine when it has them; Settled is threads marked Done", async () => {

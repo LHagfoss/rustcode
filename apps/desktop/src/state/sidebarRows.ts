@@ -277,9 +277,10 @@ export function isShelf(id: string, layout: SidebarLayout): id is ShelfId {
 }
 
 /**
- * The folds the list still honours: a project's own folder (`project:<path>`). A section header
- * never folds, and older releases stored section ids here (`working`, `threads`) that would shut a
- * list with no control to open it, so those are dropped once on mount (`ui/Sidebar.tsx`).
+ * The folds the list still honours: a project's own folder (`project:<path>`) and a machine's
+ * group (`machine:<id>`). A section header never folds, and older releases stored section ids here
+ * (`working`, `threads`) that would shut a list with no control to open it, so those are dropped
+ * once on mount (`ui/Sidebar.tsx`).
  */
 export function cleanFolds(folded: readonly string[]): string[] {
   return folded.filter((id) => id.startsWith("project:") || id.startsWith("machine:"));

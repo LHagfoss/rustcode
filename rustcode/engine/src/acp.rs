@@ -1598,6 +1598,12 @@ impl AcpServer {
             .broadcast_to(clients::Capability::Threads, notification);
     }
 
+    /// Tell every client that lists threads about a thread just trashed.
+    fn announce_thread_deleted(&self, notification: ThreadDeletedNotification) {
+        self.clients
+            .broadcast_to(clients::Capability::Threads, notification);
+    }
+
     /// Advertise thread creation only while a connected client can list the
     /// thread the engine starts for a paired device.
     fn refresh_thread_host(&self) {
@@ -1767,6 +1773,28 @@ pub(crate) struct ThreadCreatedNotification {
     pub harness: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+}
+
+/// A thread a client trashed (`_rustcode/threads/delete`): every client that lists threads drops
+/// the row, so a machine's app and the app driving it from another computer agree on what is there.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcNotification,
+)]
+#[notification(method = "_rustcode/threads/deleted")]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ThreadDeletedNotification {
+    pub session_id: String,
+}
+
+/// The app trashed a thread's folder (its shell moves it to the trash): this is what tells every
+/// other client, since no one else can see that folder go.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/threads/delete", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ThreadDeleteRequest {
+    pub session_id: String,
 }
 
 #[derive(
@@ -2298,6 +2326,19 @@ async fn serve_connection(
         .on_receive_request(
             async move |request: ListSessionsRequest, responder, _connection| {
                 responder.respond(acp_list_sessions(request)?)
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: ThreadDeleteRequest, responder, _connection| {
+                    server.announce_thread_deleted(ThreadDeletedNotification {
+                        session_id: request.session_id,
+                    });
+                    responder.respond(serde_json::json!({}))?;
+                    Ok(())
+                }
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -6903,6 +6944,7 @@ mod tests {
         let (b_engine, b_transport) = agent_client_protocol::Channel::duplex();
         let (created_tx, mut created) = tokio::sync::mpsc::unbounded_channel();
         let (title_tx, mut titles) = tokio::sync::mpsc::unbounded_channel();
+        let (deleted_tx, mut deleted) = tokio::sync::mpsc::unbounded_channel();
         let (b_ready_tx, b_ready) = tokio::sync::oneshot::channel();
         let (close_b, b_closed) = tokio::sync::oneshot::channel();
         let b_serving = serve_on_thread(&server, b_engine);
@@ -6919,6 +6961,13 @@ mod tests {
                 .on_receive_notification(
                     async move |notification: SessionNotification, _connection| {
                         let _ = title_tx.send(notification);
+                        Ok(())
+                    },
+                    agent_client_protocol::on_receive_notification!(),
+                )
+                .on_receive_notification(
+                    async move |notification: ThreadDeletedNotification, _connection| {
+                        let _ = deleted_tx.send(notification);
                         Ok(())
                     },
                     agent_client_protocol::on_receive_notification!(),
@@ -6999,6 +7048,19 @@ mod tests {
             SessionUpdate::SessionInfoUpdate(info)
                 if info.title.value().map(String::as_str) == Some("Named elsewhere")
         ));
+
+        // Trashing the thread takes the row out of B's list too.
+        a.send_request(ThreadDeleteRequest {
+            session_id: session_id.clone(),
+        })
+        .block_task()
+        .await
+        .expect("the delete request");
+        let gone = tokio::time::timeout(std::time::Duration::from_secs(10), deleted.recv())
+            .await
+            .expect("b is told the thread is gone")
+            .expect("a deletion");
+        assert_eq!(gone.session_id, session_id);
 
         for (close, client, serving) in [
             (close_a, a_client, a_serving),

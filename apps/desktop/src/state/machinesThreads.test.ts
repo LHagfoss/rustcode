@@ -9,7 +9,7 @@
 // of it: another test file's engine must never see these machines.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { AcpConnection, type JsonObject } from "../acp/jsonrpc";
+import { AcpConnection, type JsonObject, obj, str } from "../acp/jsonrpc";
 import { MockMachine } from "../acp/mock";
 import type { Transport } from "../acp/transport";
 import type { PermissionRequest } from "../acp/types";
@@ -18,6 +18,7 @@ import {
   type Machine,
   machineConnection,
   refreshMachines,
+  refreshMachineThreads,
   resetMachinesForTests as resetMachineLinksForTests,
   useMachines,
 } from "./machines";
@@ -228,31 +229,53 @@ describe("a machine's threads", () => {
     const conn = machineConnection(LINUX);
     expect(conn).not.toBeNull();
     const before = useApp.getState().sessions.length;
-    // `_rustcode/threads/created`: the machine's server owns its threads, so it names a new one
-    // to every client that lists them, not only to the client that asked for `session/new`.
-    conn?.receive(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        method: "_rustcode/threads/created",
-        params: {
-          sessionId: "mock-linux-new",
-          cwd: "/home/lars/code/site",
-          title: "Started there",
-          harness: "codex",
-        },
-      }),
-    );
+    // The link listed threads when it initialized, so the machine's server names what any client
+    // makes there (`_rustcode/threads/created`); this request is not `createSession`, so only the
+    // announcement can list the row.
+    const answer = (await conn?.request("session/new", { cwd: "/home/lars/code/site" })) as JsonObject;
+    const id = str(obj(answer)?.sessionId);
+    if (!id) throw new Error("the machine named no thread");
     await sleep(5);
-    const row = useApp.getState().sessions.find((s) => s.id === `${LINUX}/mock-linux-new`);
+    const row = useApp.getState().sessions.find((s) => s.id === `${LINUX}/${id}`);
     expect(row?.host).toBe(LINUX);
-    expect(row?.title).toBe("Started there");
-    expect(row?.harness).toBe("codex");
+    expect(row?.cwd).toBe("/home/lars/code/site");
     expect(useApp.getState().sessions.length).toBe(before + 1);
-    // The machine's own list gained it too, so the next read does not drop the row.
-    expect(useMachines.getState().sessions[LINUX]?.some((s) => s.id === "mock-linux-new")).toBe(true);
-    // Put the list back for the tests after this one.
-    const listed = (useMachines.getState().sessions[LINUX] ?? []).filter((s) => s.id !== "mock-linux-new");
-    useMachines.setState((state) => ({ sessions: { ...state.sessions, [LINUX]: listed } }));
+    // The engine lists a session once it saved history: a read before its first turn keeps the
+    // announced row.
+    refreshMachineThreads();
+    await sleep(20);
+    expect(useMachines.getState().sessions[LINUX]?.some((s) => s.id === id)).toBe(true);
+    // Its first turn saves that history: the next read names it once, without the announcement.
+    await conn?.request("session/prompt", {
+      sessionId: id,
+      prompt: [{ type: "text", text: "Keep it" }],
+    });
+    refreshMachineThreads();
+    await sleep(20);
+    const listed = (useMachines.getState().sessions[LINUX] ?? []).filter((s) => s.id === id);
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.title).toBe("Keep it");
+    // Put the machine's list back for the tests after this one.
+    const rest = (useMachines.getState().sessions[LINUX] ?? []).filter((s) => s.id !== id);
+    useMachines.setState((state) => ({ sessions: { ...state.sessions, [LINUX]: rest } }));
+  });
+
+  test("a thread trashed on a machine leaves both lists", async () => {
+    const conn = machineConnection(LINUX);
+    const answer = (await conn?.request("session/new", { cwd: "/home/lars/code/site" })) as JsonObject;
+    const id = str(obj(answer)?.sessionId);
+    if (!id) throw new Error("the machine named no thread");
+    await sleep(5);
+    expect(useApp.getState().sessions.some((s) => s.id === `${LINUX}/${id}`)).toBe(true);
+    // The machine's app trashes it: `_rustcode/threads/deleted` names it to every client.
+    await conn?.request("_rustcode/threads/delete", { sessionId: id });
+    await sleep(5);
+    expect(useApp.getState().sessions.some((s) => s.id === `${LINUX}/${id}`)).toBe(false);
+    expect(useMachines.getState().sessions[LINUX]?.some((s) => s.id === id)).toBe(false);
+    // A read after it names nothing, and the announcement does not bring the row back.
+    refreshMachineThreads();
+    await sleep(20);
+    expect(useApp.getState().sessions.some((s) => s.id === `${LINUX}/${id}`)).toBe(false);
   });
 
   test("another machine's request is answered on that machine's connection", () => {

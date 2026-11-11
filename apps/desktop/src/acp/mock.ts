@@ -5317,6 +5317,8 @@ export class MockMachine {
   private settings: JsonObject;
   /** A harness change made here, over the machine's seeded snapshot. */
   private harnessOverride: HarnessSnapshot | null = null;
+  /** What this client advertised: only one that lists threads hears about the ones made here. */
+  private showsThreads = false;
   /** Its skills, with the SKILL.md so a copy can be seen. */
   private skills: JsonObject[];
   /** Its MCP servers, with key names but no secret values. */
@@ -5408,8 +5410,11 @@ export class MockMachine {
     }
     const id = frame.id;
     if (typeof id !== "number") return [];
-    if (frame.method === "initialize")
+    if (frame.method === "initialize") {
+      const rustcode = obj(obj(obj(frame.params)?.clientCapabilities)?._meta)?.rustcode;
+      this.showsThreads = !!num(obj(rustcode)?.threads);
       return [JSON.stringify({ jsonrpc: "2.0", id, result: { protocolVersion: 1, agentCapabilities: {} } })];
+    }
     if (frame.method === "session/list")
       return [JSON.stringify({ jsonrpc: "2.0", id, result: { sessions: this.sessions() } })];
     if (frame.method === "_rustcode/harnesses")
@@ -5420,7 +5425,34 @@ export class MockMachine {
           result: (this.harnessOverride ?? this.harnesses()) as unknown as Json,
         }),
       ];
-    if (frame.method === "session/new") return [this.newSession(id, frame.params)];
+    if (frame.method === "session/new") {
+      const created = this.newSession(id, frame.params);
+      return this.showsThreads
+        ? [
+            JSON.stringify({
+              jsonrpc: "2.0",
+              method: "_rustcode/threads/created",
+              params: created.notification,
+            }),
+            created.response,
+          ]
+        : [created.response];
+    }
+    if (frame.method === "_rustcode/threads/delete") {
+      const sessionId = str(obj(frame.params)?.sessionId);
+      const at = sessionId ? this.created.findIndex((entry) => entry.sessionId === sessionId) : -1;
+      if (at >= 0) this.created.splice(at, 1);
+      const gone = sessionId
+        ? [
+            JSON.stringify({
+              jsonrpc: "2.0",
+              method: "_rustcode/threads/deleted",
+              params: { sessionId },
+            }),
+          ]
+        : [];
+      return [...gone, JSON.stringify({ jsonrpc: "2.0", id, result: {} })];
+    }
     if (frame.method === "session/load") return this.load(id, frame.params);
     if (frame.method === "session/prompt") {
       const sessionId = str(obj(frame.params)?.sessionId);
@@ -5626,7 +5658,7 @@ export class MockMachine {
   /** The engine titles a thread from its first prompt; a thread started here does the same. */
   private titleFromPrompt(sessionId: string | undefined, params: Json | undefined): void {
     const session = this.created.find((entry) => entry.sessionId === sessionId);
-    if (!session || session.title !== "New thread") return;
+    if (session?.title !== "New thread") return;
     const text = arr(obj(params)?.prompt)
       .map((block) => str(obj(block)?.text) ?? "")
       .join(" ")
@@ -5635,20 +5667,25 @@ export class MockMachine {
   }
 
   /** `session/new` on this machine: a thread in its folder, run by one of its harnesses. */
-  private newSession(id: number, params: Json | undefined): string {
+  private newSession(id: number, params: Json | undefined): { response: string; notification: JsonObject } {
     const studio = this.name === MOCK_STUDIO.name;
     const meta = obj(obj(params)?._meta)?.rustcode;
     this.createdCount += 1;
     const cwd = str(obj(params)?.cwd) || (studio ? "/Users/lars/code/rustcode" : "/home/lars/code/rustcode");
     const sessionId = `${studio ? "mock-studio" : "mock-linux"}-new-${this.createdCount}`;
+    const harness = str(obj(meta)?.harness) ?? (studio ? "claude-code" : "codex");
     this.created.unshift({
       sessionId,
       cwd,
       title: "New thread",
-      harness: str(obj(meta)?.harness) ?? (studio ? "claude-code" : "codex"),
+      harness,
       updatedAt: Date.now(),
     });
-    return JSON.stringify({ jsonrpc: "2.0", id, result: { sessionId, configOptions: [] } });
+    return {
+      response: JSON.stringify({ jsonrpc: "2.0", id, result: { sessionId, configOptions: [] } }),
+      // What the engine says to a client that lists threads, as the thread is made.
+      notification: { sessionId, cwd, harness },
+    };
   }
 
   /**
@@ -5709,8 +5746,10 @@ export class MockMachine {
           { title: "Draft the release notes", cwd: "/home/lars/code/rustcode", harness: "rustcode" },
         ];
     const count = this.threads ?? (studio ? MOCK_STUDIO.threads : MOCK_MACHINE.threads);
+    // The engine lists a session once it saved history: a just-made thread has none until its
+    // first prompt, and reaches a client through `_rustcode/threads/created` until then.
     const listed = [
-      ...this.created,
+      ...this.created.filter((session) => session.title !== "New thread"),
       ...seeded.slice(0, count).map((session, index) => ({
         ...session,
         sessionId: `${studio ? "mock-studio" : "mock-linux"}-${index + 1}`,
