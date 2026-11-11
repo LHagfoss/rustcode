@@ -26,6 +26,7 @@ pub mod discord_rpc;
 pub mod doctor;
 pub mod harness;
 mod harness_usage;
+pub mod home;
 mod keep_awake;
 pub mod mcp;
 mod memory;

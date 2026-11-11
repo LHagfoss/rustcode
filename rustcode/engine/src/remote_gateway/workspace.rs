@@ -135,21 +135,14 @@ fn log_tail(log: &Path) -> Option<String> {
 }
 
 fn home_directory() -> Result<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
+    crate::home::home_dir()
         .filter(|home| home.is_absolute())
         .context("home directory unavailable")
 }
 
-/// `~` and `~/…` relative to `home`; anything else as written.
+/// `~`, `~/…` and `~\…` relative to `home`; anything else as written.
 fn expand_home(home: &Path, value: &str) -> PathBuf {
-    match value {
-        "~" | "~/" => home.to_path_buf(),
-        _ => match value.strip_prefix("~/") {
-            Some(rest) => home.join(rest),
-            None => PathBuf::from(value),
-        },
-    }
+    crate::home::expand_home(value, Some(home))
 }
 
 /// The folders a device may browse and start sessions in: the home
@@ -758,7 +751,7 @@ impl WorkspaceRouter {
         // A home directory works but tracks hundreds of thousands of files:
         // flag it in the session log so the next slow-turn report starts with
         // the workspace root, not the network (#1954).
-        if std::env::var_os("HOME").is_some_and(|home| directory == Path::new(&home)) {
+        if crate::home::home_dir().is_some_and(|home| directory == home) {
             crate::logger::operational_event(
                 "remote.create_home_workspace",
                 serde_json::json!({

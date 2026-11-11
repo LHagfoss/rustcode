@@ -119,7 +119,7 @@ fn agent_activity_summary(content: &str) -> Option<String> {
     let summary = if let Some(tool_activity) = activity.strip_prefix("→ ") {
         let (tool_name, target) = tool_activity.split_once(' ').unwrap_or((tool_activity, ""));
         let (action, _) = super::format_pi_tool_action(tool_name, &serde_json::Value::Null, None);
-        let home = std::env::var("HOME").ok();
+        let home = rustcode::home::home_dir().map(|home| home.to_string_lossy().into_owned());
         let target = super::contract_home_path(target, home.as_deref());
         if target.is_empty() {
             format!("Agent {id} · {action}")
