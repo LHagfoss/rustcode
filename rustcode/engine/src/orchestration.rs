@@ -1452,7 +1452,8 @@ mod tests {
         assert_eq!(version(json!({"rustcode": {"orchestration": 10}})), 10);
         assert_eq!(version(json!({"rustcode": {"orchestration": 11}})), 11);
         // A newer client gets what this engine speaks.
-        assert_eq!(version(json!({"rustcode": {"orchestration": 14}})), VERSION);
+        assert_eq!(version(json!({"rustcode": {"orchestration": 15}})), VERSION);
+        assert_eq!(version(json!({"rustcode": {"orchestration": 99}})), VERSION);
         assert_eq!(version(json!({"rustcode": {"preview": 1}})), 0);
         assert_eq!(client_meta_version(None), 0);
     }

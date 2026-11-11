@@ -914,7 +914,7 @@ mod tests {
     }
 
     #[test]
-    fn standalone_is_advertised_from_version_fourteen() {
+    fn standalone_is_advertised_from_version_fifteen() {
         let properties = |version: u8, tool: &str| {
             tools(version, false)
                 .into_iter()
@@ -924,8 +924,8 @@ mod tests {
         };
         for tool in [super::super::START_SESSION, super::super::FAN_OUT] {
             assert!(
-                properties(13, tool)["standalone"].is_null(),
-                "{tool} must not offer a v13 app an argument it would ignore"
+                properties(14, tool)["standalone"].is_null(),
+                "{tool} must not offer a v14 app an argument it would ignore"
             );
             assert_eq!(
                 properties(super::super::VERSION, tool)["standalone"]["type"],
@@ -936,9 +936,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_version_thirteen_server_refuses_standalone_before_forwarding_it() {
+    async fn a_version_fourteen_server_refuses_standalone_before_forwarding_it() {
         let (_dir, hub) = hub().await;
-        let token = hub.register("thread-1", Arc::new(EchoApp), 13);
+        let token = hub.register("thread-1", Arc::new(EchoApp), 14);
         let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                           "params": {"name": "start_session",
                                      "arguments": {"prompt": "go", "standalone": true}}});
@@ -949,7 +949,7 @@ mod tests {
             },
             hub.path().to_owned(),
             &[call],
-            13,
+            14,
             false,
         )
         .await;
@@ -961,7 +961,7 @@ mod tests {
     }
 
     /// Both modes reach the app unchanged: a delegate is the default, and
-    /// `standalone: true` asks for a top-level thread (#3443).
+    /// `standalone: true` asks for a top-level thread (issue 3443).
     #[tokio::test]
     async fn the_server_forwards_a_delegate_and_a_standalone_call_alike() {
         let (_dir, hub) = hub().await;
