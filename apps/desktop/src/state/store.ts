@@ -3717,13 +3717,14 @@ export async function steer(id: string, text: string, extras?: ComposeExtras): P
     images: acceptsImages(thread),
     builtin: threadHarness(thread)?.builtin ?? true,
   };
-  const prompt = extras?.attachments.length
-    ? promptBlocks(text, extras, {
-        images: conditions.images,
-        builtin: conditions.builtin,
-        cwd: thread?.cwd ?? "",
-      })
-    : undefined;
+  const prompt =
+    extras && (extras.attachments.length || extras.command?.action === "skill")
+      ? promptBlocks(text, extras, {
+          images: conditions.images,
+          builtin: conditions.builtin,
+          cwd: thread?.cwd ?? "",
+        })
+      : undefined;
   try {
     const conn = connectionForThread(id);
     if (!conn) return false;
