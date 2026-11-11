@@ -476,10 +476,7 @@ mod tests {
         assert_eq!(status["gateway"]["owner"], "server");
         assert_eq!(status["gateway"]["address"], "100.90.28.23:17879");
         assert_eq!(status["gateway"]["pairedDevices"], 2);
-        assert_eq!(
-            status["pathRustcode"]["path"],
-            "/opt/homebrew/bin/rustcode"
-        );
+        assert_eq!(status["pathRustcode"]["path"], "/opt/homebrew/bin/rustcode");
         assert_eq!(status["pathRustcode"]["version"], "0.96.0");
     }
 
