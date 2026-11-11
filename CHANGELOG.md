@@ -1,3 +1,13 @@
+## [v1.29.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.29.1) - 2026-11-11
+
+### Fixes
+- The sidebar groups threads by project again. A Devices list at the bottom opens another computer's threads, and a new thread started there runs on that computer. New threads show a **Run on** picker whenever a computer is paired. (#3427)
+- Settling, marking for review and snoozing a thread on a paired computer now saves on the computer that runs it and stays in sync across apps. (#3430)
+- Agents on a Mac or Linux machine can start threads in a project on a paired Windows machine. (#3426)
+- Delegate rows in the chat no longer show a separate › button; press the row to open the thread. (#3428)
+- A computer asking to connect shows up under its own name instead of "RustCode on macos". (#3424)
+- `rustcode remote accept <id>` and `rustcode remote deny <id>` answer a request to connect from the terminal. (#3423)
+- `rustcode server status` no longer warns about the PATH copy when the server only needs a restart to match it. (#3416)
 ## [v1.29.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.29.0) - 2026-11-11
 
 ### Features
