@@ -293,7 +293,7 @@ pub const LIST_SESSIONS: Tool = Tool {
 
 pub const MESSAGE_SESSION: Tool = Tool {
     name: crate::orchestration::MESSAGE_SESSION,
-    description: "Send another thread of this project a message; it answers in a turn of its own, with its own history and approvals. The user is asked once. Returns a link_id for wait_session; the message queues while that thread is busy. Send the whole task: it does not see this conversation. Carry the repository rules (tell it to read AGENTS.md) and acceptance criteria, and bound commands that can block: a delegated shell has no TTY or default timeout.",
+    description: "Message a thread in any project. The user is asked once. Idle starts a turn; busy queues. steer: true delivers mid-turn if supported, else queues; delivered says steered, queued or started. Returns link_id for wait_session. Send the whole task, repository rules (read AGENTS.md), acceptance criteria and command timeouts: delegates have no TTY or default timeout.",
     arguments: r#"{"session_id": "id from list_sessions", "message": "what to ask or do", "attachments": ["/abs/path/to/file"], "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -303,6 +303,7 @@ pub const MESSAGE_SESSION: Tool = Tool {
             "properties": {
                 "session_id": {"type": "string", "minLength": 1},
                 "message": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_MESSAGE_BYTES},
+                "steer": {"type": "boolean"},
                 "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"},
                 "attachments": {
                     "type": "array",
@@ -1147,7 +1148,7 @@ pub const READ_ACTIVITY: Tool = Tool {
 /// thread queued on another one, and what it may still do to them.
 pub const MANAGE_QUEUE: Tool = Tool {
     name: crate::orchestration::MANAGE_QUEUE,
-    description: "List, edit, cancel or steer the messages this thread queued on another one with message_session while it was busy: each one's queue_id, its first 200 characters and when it was queued, in send order. Only this thread's own queued messages can be changed, never one that has started. edit replaces the text, cancel drops it, steer delivers it into the running turn where that harness takes a message mid-turn. The user is asked once.",
+    description: "List, edit, cancel or steer this thread's queued messages in any project; the user is asked once. Lists queue_id, first 200 characters and time in send order. Only this thread's own queued messages can change, never one that started. steer delivers mid-turn if supported. For new input use message_session with steer: true.",
     arguments: r#"{"session_id": "the busy thread", "action": "list|edit|cancel|steer", "queue_id": "from list", "text": "the new text, for edit"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
