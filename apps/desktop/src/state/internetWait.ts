@@ -1,3 +1,4 @@
+import { networkFailure } from "./turnError";
 // A turn whose harness could not reach its provider because the machine had no
 // network waits instead of dying. The wait is a schedule, not a timer of its own:
 // while any thread waits, the app asks the webview whether the machine is online
@@ -20,6 +21,21 @@ export const INTERNET_STABLE_MS = [5_000, 30_000, 120_000, 300_000] as const;
 export const INTERNET_GIVE_UP_MS = 6 * 3_600_000;
 
 /** What the thread is told when the connection is back. */
+/**
+ * Longest reply that can be a harness's own network error. Claude Code ends a turn that lost the
+ * network with a short assistant line ("API Error: Connection error."); a full answer that merely
+ * mentions being offline or a lost connection is not one, and must not start a wait that sends
+ * "Please continue." after it.
+ */
+export const NETWORK_REPLY_MAX = 300;
+
+/** Whether the turn stopped because the network went away: its failure, or a short error reply. */
+export function networkStop(failure: string | undefined, reply: string | undefined): boolean {
+  if (failure !== undefined) return networkFailure(failure);
+  const text = reply?.trim();
+  return !!text && text.length <= NETWORK_REPLY_MAX && networkFailure(text);
+}
+
 export const INTERNET_RESUME_TEXT = "The internet connection is back. Please continue.";
 
 export interface InternetWait {

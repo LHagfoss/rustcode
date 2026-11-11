@@ -179,6 +179,7 @@ import {
   internetDue,
   internetGaveUp,
   internetHolds,
+  networkStop,
   nextInternetWait,
 } from "./internetWait";
 import {
@@ -283,7 +284,7 @@ import {
   type ToastTone,
 } from "./toasts";
 import { userTypedPrompt } from "./topLevel";
-import { networkFailure, readableTurnError } from "./turnError";
+import { readableTurnError } from "./turnError";
 
 export type { Toast, ToastTone } from "./toasts";
 
@@ -7204,7 +7205,7 @@ function settleStopWait(
   if (resetAt === null && !overload) {
     // Not a stop that waits for a time: the network may be what the turn lost.
     dropLimitWait(id);
-    if (networkFailure(said)) waitForInternet(id, now);
+    if (networkStop(failure, reply?.kind === "assistant" ? reply.text : undefined)) waitForInternet(id, now);
     else dropInternetWait(id);
     return null;
   }
