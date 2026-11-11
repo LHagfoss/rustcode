@@ -401,8 +401,6 @@ export interface AppState {
    * (docs/desktop.md › Several machines).
    */
   newThreadHost: string;
-  /** The sidebar device being browsed; null is local, "devices" is the picker. */
-  sidebarDevice: string | null;
   /**
    * Each paired machine's harnesses, models, accounts and defaults, by host id, read over
    * its own connection. A machine's snapshot is read when the **Run on** picker moves
@@ -904,7 +902,6 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   newThread: null,
   newThreadAccount: null,
   newThreadHost: LOCAL_HOST,
-  sidebarDevice: null,
   remoteHarnesses: {},
   harnesses: null,
   baseCommands: [],
@@ -1147,9 +1144,6 @@ export async function startMachineRouting(): Promise<void> {
         return {
           machineNames: names,
           remoteHarnesses: snapshots,
-          ...(s.sidebarDevice && s.sidebarDevice !== "devices" && !names[s.sidebarDevice]
-            ? { sidebarDevice: null }
-            : {}),
           ...(named ? { newThreadHost: LOCAL_HOST, projectCwd: "" } : {}),
         };
       });
@@ -1867,19 +1861,23 @@ function onSessionUpdate(params: JsonObject) {
 // ---------------------------------------------------------------- sessions
 
 /**
- * A thread the engine started for a paired device (Remote access, `docs/remote.md`): the thread
- * has no row in the engine's list before its first turn, so the engine names it here and the
- * sidebar shows it as any other. Nothing is opened: the device is using it.
+ * A thread the engine started, or another client made on this machine or on a paired one
+ * (`_rustcode/threads/created`, docs/remote.md and docs/desktop.md › Several machines): a
+ * thread has no row in the store before its first turn, so this is what lists it now.
+ * Nothing is opened: the client that asked for it is using it.
  */
 export function threadCreated(params: unknown) {
   const p = obj(params);
-  const id = str(p?.sessionId);
+  const key = str(p?.sessionId);
   const cwd = str(p?.cwd);
-  if (!id || !cwd) return;
+  if (!key || !cwd) return;
+  const { host } = splitThreadKey(key);
   set((s) => {
-    if (s.sessions.some((x) => x.id === id)) return {};
+    if (s.sessions.some((x) => x.id === key)) return {};
     const summary: SessionSummary = {
-      id,
+      id: key,
+      // A machine's own id reaches the store as `‹host›/‹id›` (state/threadKeys.ts).
+      host: host || undefined,
       cwd,
       updatedAt: Date.now(),
       title: str(p?.title) || undefined,
@@ -2151,16 +2149,12 @@ export function selectThread(id: string | null) {
   if (id) void openThread(id);
 }
 
-export function setSidebarDevice(device: string | null) {
-  set({ sidebarDevice: device });
-}
-
 export function startNewThread(cwd?: string, host?: string) {
   const s = get();
-  // An explicit machine wins, then the device being browsed for New thread / ⌘N.
-  // A folder picked on this disk still starts here (docs/desktop.md › Several machines).
-  const browsing = s.sidebarDevice && s.machineNames[s.sidebarDevice] ? s.sidebarDevice : LOCAL_HOST;
-  const target = host ?? (cwd === undefined ? browsing : LOCAL_HOST);
+  // An explicit machine wins, and a folder picked on this disk still starts here.
+  // A new thread started from a machine's group in the sidebar names it (docs/desktop.md › Several
+  // machines).
+  const target = host ?? LOCAL_HOST;
   // Where it starts: a folder picked for this one wins, then the default folder (Settings › General,
   // ⌘⇧O), so the sidebar's button, ⌘N and the command palette land where the reader said even while
   // another thread is open; then the folder of the thread they were in, then the last one used.
@@ -2587,7 +2581,9 @@ export async function createSession(options: NewSession): Promise<string> {
           // Selecting the new thread keeps the picker's choice as the session's draft, so the
           // new-thread screen comes back on it (state/store.ts `startNewThread`).
           ...(options.select ? viewingThread(st, id) : {}),
-          sessions: [summary, ...st.sessions],
+          // The engine announces the thread to every client (`threads/created`) while this
+          // request is still out: the row it added is replaced by this one, never doubled.
+          sessions: [summary, ...st.sessions.filter((x) => x.id !== id)],
           pendingSetup: setupSucceeded(st.pendingSetup, options.pendingId),
         }),
   }));
@@ -2613,7 +2609,7 @@ export async function createSession(options: NewSession): Promise<string> {
     // Listed now, with the setup gone in the same update: the row the message was sent to becomes
     // the thread, in place, and the chat goes on from the message it already shows.
     set((st) => ({
-      sessions: [summary, ...st.sessions],
+      sessions: [summary, ...st.sessions.filter((x) => x.id !== id)],
       ...(options.select && !st.selectedId ? viewingThread(st, id) : {}),
       pendingSetup: setupSucceeded(st.pendingSetup, options.pendingId),
     }));
@@ -7050,7 +7046,6 @@ export function resetForTests() {
     defaultCwd: "",
     newThread: null,
     newThreadHost: LOCAL_HOST,
-    sidebarDevice: null,
     remoteHarnesses: {},
     harnesses: null,
     baseCommands: [],

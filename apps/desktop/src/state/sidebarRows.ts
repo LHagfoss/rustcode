@@ -282,7 +282,7 @@ export function isShelf(id: string, layout: SidebarLayout): id is ShelfId {
  * list with no control to open it, so those are dropped once on mount (`ui/Sidebar.tsx`).
  */
 export function cleanFolds(folded: readonly string[]): string[] {
-  return folded.filter((id) => id.startsWith("project:"));
+  return folded.filter((id) => id.startsWith("project:") || id.startsWith("machine:"));
 }
 
 /**

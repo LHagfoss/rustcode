@@ -1313,7 +1313,7 @@ describe("engine controller with the mock engine", () => {
     expect(useApp.getState().theme).toBe("dark");
   });
 
-  test("a thread the engine started for a paired device joins the list once", async () => {
+  test("a thread another client made joins the list once, on its machine", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
     await until(() => useApp.getState().sessions.length > 0);
     // `_rustcode/threads/created`: Remote access started it while a phone asked for a thread.
@@ -1333,6 +1333,15 @@ describe("engine controller with the mock engine", () => {
     const rows = useApp.getState().sessions.filter((x) => x.id === "phone-thread");
     expect(rows).toHaveLength(1);
     expect(useApp.getState().sessions.some((x) => x.id === "no-folder")).toBe(false);
+    // A machine's own id reaches this window as a key, and its row keeps the machine.
+    threadCreated({
+      sessionId: "gw-7c1d9e4f2a8b6d30/from-studio",
+      cwd: "/home/lars/code/rustcode",
+      harness: "codex",
+    });
+    const remote = useApp.getState().sessions.find((x) => x.id === "gw-7c1d9e4f2a8b6d30/from-studio");
+    expect(remote?.host).toBe("gw-7c1d9e4f2a8b6d30");
+    expect(remote?.harness).toBe("codex");
   });
 
   test("pins live in the engine when it has them; Settled is threads marked Done", async () => {

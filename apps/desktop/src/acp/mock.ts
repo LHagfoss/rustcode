@@ -5173,7 +5173,7 @@ function mockMachineList(option: MockOptions["machines"]): JsonObject[] {
     case "revoked":
       return [mockMachine("needsPairing", savedAt)];
     case "paired":
-      // The Devices view's own happy path: this Mac, a Windows PC with threads, and a machine
+      // The sidebar's own happy path: this Mac, a Windows PC with threads, and a machine
       // that is away, saved during this session so the Mac and the PC read as just saved.
       return [
         mockStudio("connected", Date.now()),

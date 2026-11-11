@@ -450,11 +450,12 @@ describe("the headings the list draws", () => {
 });
 
 describe("the folds the list keeps", () => {
-  test("a stale section id is dropped and a project's own folder stays", () => {
+  test("a stale section id is dropped and a project's or machine's own group stays", () => {
     expect(cleanFolds(["working", "threads", "project:/code/app", "needs", "settled"])).toEqual([
       "project:/code/app",
     ]);
     expect(cleanFolds(["project:/one", "project:/two"])).toEqual(["project:/one", "project:/two"]);
+    expect(cleanFolds(["machine:gw-1", "project:/one"])).toEqual(["machine:gw-1", "project:/one"]);
     expect(cleanFolds([])).toEqual([]);
   });
 });

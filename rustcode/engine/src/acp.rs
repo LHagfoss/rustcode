@@ -1589,6 +1589,15 @@ impl AcpServer {
         }
     }
 
+    /// Tell every client that lists threads about a thread just made: the
+    /// machine's server owns its threads, so the app on it and every other
+    /// connected app list the new row at once, whichever client asked for
+    /// `session/new` (docs/desktop.md › Several machines).
+    fn announce_thread_created(&self, notification: ThreadCreatedNotification) {
+        self.clients
+            .broadcast_to(clients::Capability::Threads, notification);
+    }
+
     /// Advertise thread creation only while a connected client can list the
     /// thread the engine starts for a paired device.
     fn refresh_thread_host(&self) {
@@ -2235,6 +2244,8 @@ async fn serve_connection(
             {
                 let server = server.clone();
                 async move |request: NewSessionRequest, responder, _connection| {
+                    // The row every other client is told about, from the folder the caller named.
+                    let cwd = request.cwd.clone();
                     // `_meta.rustcode.worktree`: the thread starts in a new worktree.
                     let (request, worktree) = match crate::worktrees::prepare_new(request) {
                         Ok(prepared) => prepared,
@@ -2246,19 +2257,38 @@ async fn serve_connection(
                     if let Some(asked) = harnesses::external_request(&request) {
                         let external = server.external.clone();
                         let remote = server.remote.clone();
+                        let harness = asked.harness.clone();
+                        let announced = server.clone();
                         return _connection.spawn(async move {
                             match harnesses::new_session(&external, request, asked, &peer, &remote)
                                 .await
                             {
-                                Ok(response) => responder.respond(
-                                    crate::worktrees::finish_new(response, worktree.as_ref()),
-                                )?,
+                                Ok(response) => {
+                                    announced.announce_thread_created(ThreadCreatedNotification {
+                                        session_id: response.session_id.to_string(),
+                                        cwd: cwd.clone(),
+                                        title: None,
+                                        harness,
+                                        model: None,
+                                    });
+                                    responder.respond(crate::worktrees::finish_new(
+                                        response,
+                                        worktree.as_ref(),
+                                    ))?;
+                                }
                                 Err(error) => responder.respond_with_error(error)?,
                             }
                             Ok(())
                         });
                     }
                     let response = create_builtin_session(&server, &peer, request).await?;
+                    server.announce_thread_created(ThreadCreatedNotification {
+                        session_id: response.session_id.to_string(),
+                        cwd,
+                        title: None,
+                        harness: Some(crate::harness::BUILTIN_ID.to_owned()),
+                        model: None,
+                    });
                     responder.respond(crate::worktrees::finish_new(response, worktree.as_ref()))?;
                     Ok(())
                 }
@@ -6847,6 +6877,133 @@ mod tests {
         assert!(prompt_shown(&said[1]), "b: {:?}", said[1]);
 
         for (_, _, close, serving, client) in clients {
+            let _ = close.send(());
+            client.await.expect("client").expect("client ends cleanly");
+            serving
+                .await
+                .expect("connection")
+                .expect("connection ends cleanly");
+        }
+        server.shutdown().await;
+    }
+
+    /// A thread one client makes is the machine's, not its own: every client
+    /// that lists threads is told about it, so no sidebar waits for a refresh.
+    #[test]
+    fn every_client_that_lists_threads_hears_about_a_new_one() {
+        on_a_large_stack(thread_created_reaches_every_listing_client());
+    }
+
+    async fn thread_created_reaches_every_listing_client() {
+        let server = AcpServer::new(false).expect("server");
+        let cwd = tempfile::tempdir().expect("cwd");
+        let cwd_path = std::fs::canonicalize(cwd.path()).expect("cwd");
+
+        // B lists threads and keeps every creation it is told about.
+        let (b_engine, b_transport) = agent_client_protocol::Channel::duplex();
+        let (created_tx, mut created) = tokio::sync::mpsc::unbounded_channel();
+        let (title_tx, mut titles) = tokio::sync::mpsc::unbounded_channel();
+        let (b_ready_tx, b_ready) = tokio::sync::oneshot::channel();
+        let (close_b, b_closed) = tokio::sync::oneshot::channel();
+        let b_serving = serve_on_thread(&server, b_engine);
+        let b_client = tokio::spawn(async move {
+            agent_client_protocol::Client
+                .builder()
+                .on_receive_notification(
+                    async move |notification: ThreadCreatedNotification, _connection| {
+                        let _ = created_tx.send(notification);
+                        Ok(())
+                    },
+                    agent_client_protocol::on_receive_notification!(),
+                )
+                .on_receive_notification(
+                    async move |notification: SessionNotification, _connection| {
+                        let _ = title_tx.send(notification);
+                        Ok(())
+                    },
+                    agent_client_protocol::on_receive_notification!(),
+                )
+                .connect_with(b_transport, async move |connection| {
+                    let _ = b_ready_tx.send(connection);
+                    let _ = b_closed.await;
+                    Ok(())
+                })
+                .await
+        });
+        let b = b_ready.await.expect("b connects");
+        b.send_request(initialize_with(
+            serde_json::json!({ "rustcode": { "threads": 1 } }),
+        ))
+        .block_task()
+        .await
+        .expect("b initializes");
+
+        // A makes a thread, without listing threads itself.
+        let (a_engine, a_transport) = agent_client_protocol::Channel::duplex();
+        let (a_ready_tx, a_ready) = tokio::sync::oneshot::channel();
+        let (close_a, a_closed) = tokio::sync::oneshot::channel();
+        let a_serving = serve_on_thread(&server, a_engine);
+        let a_client = tokio::spawn(async move {
+            agent_client_protocol::Client
+                .builder()
+                .on_receive_notification(
+                    async move |_notification: SessionNotification, _connection| Ok(()),
+                    agent_client_protocol::on_receive_notification!(),
+                )
+                .connect_with(a_transport, async move |connection| {
+                    let _ = a_ready_tx.send(connection);
+                    let _ = a_closed.await;
+                    Ok(())
+                })
+                .await
+        });
+        let a = a_ready.await.expect("a connects");
+        a.send_request(initialize_with(serde_json::json!({})))
+            .block_task()
+            .await
+            .expect("a initializes");
+        let session_id = a
+            .send_request(NewSessionRequest::new(cwd_path.clone()))
+            .block_task()
+            .await
+            .expect("a creates a session")
+            .session_id
+            .to_string();
+
+        let announced = tokio::time::timeout(std::time::Duration::from_secs(10), created.recv())
+            .await
+            .expect("b is told about the new thread")
+            .expect("a row");
+        assert_eq!(announced.session_id, session_id);
+        assert_eq!(announced.cwd, cwd_path);
+        assert_eq!(
+            announced.harness.as_deref(),
+            Some(crate::harness::BUILTIN_ID)
+        );
+
+        // A name the thread takes is in the list too: B does not have the session, and still hears.
+        server
+            .clients
+            .session(&session_id)
+            .update(SessionUpdate::SessionInfoUpdate(
+                SessionInfoUpdate::new().title("Named elsewhere"),
+            ))
+            .expect("a title");
+        let titled = tokio::time::timeout(std::time::Duration::from_secs(10), titles.recv())
+            .await
+            .expect("b is told the title")
+            .expect("a title");
+        assert_eq!(titled.session_id.to_string(), session_id);
+        assert!(matches!(
+            &titled.update,
+            SessionUpdate::SessionInfoUpdate(info)
+                if info.title.value().map(String::as_str) == Some("Named elsewhere")
+        ));
+
+        for (close, client, serving) in [
+            (close_a, a_client, a_serving),
+            (close_b, b_client, b_serving),
+        ] {
             let _ = close.send(());
             client.await.expect("client").expect("client ends cleanly");
             serving

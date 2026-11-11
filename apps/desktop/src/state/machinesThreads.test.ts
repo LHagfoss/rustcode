@@ -224,6 +224,37 @@ describe("a machine's threads", () => {
     useMachines.setState((state) => ({ sessions: { ...state.sessions, [LINUX]: before } }));
   });
 
+  test("a thread another client starts on a machine is listed here at once", async () => {
+    const conn = machineConnection(LINUX);
+    expect(conn).not.toBeNull();
+    const before = useApp.getState().sessions.length;
+    // `_rustcode/threads/created`: the machine's server owns its threads, so it names a new one
+    // to every client that lists them, not only to the client that asked for `session/new`.
+    conn?.receive(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "_rustcode/threads/created",
+        params: {
+          sessionId: "mock-linux-new",
+          cwd: "/home/lars/code/site",
+          title: "Started there",
+          harness: "codex",
+        },
+      }),
+    );
+    await sleep(5);
+    const row = useApp.getState().sessions.find((s) => s.id === `${LINUX}/mock-linux-new`);
+    expect(row?.host).toBe(LINUX);
+    expect(row?.title).toBe("Started there");
+    expect(row?.harness).toBe("codex");
+    expect(useApp.getState().sessions.length).toBe(before + 1);
+    // The machine's own list gained it too, so the next read does not drop the row.
+    expect(useMachines.getState().sessions[LINUX]?.some((s) => s.id === "mock-linux-new")).toBe(true);
+    // Put the list back for the tests after this one.
+    const listed = (useMachines.getState().sessions[LINUX] ?? []).filter((s) => s.id !== "mock-linux-new");
+    useMachines.setState((state) => ({ sessions: { ...state.sessions, [LINUX]: listed } }));
+  });
+
   test("another machine's request is answered on that machine's connection", () => {
     // The connection the store listens on is the machine's own: what arrives there is routed by
     // `connectionForThread` when the answer goes back (state/store.ts `reply`).
