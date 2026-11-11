@@ -151,8 +151,9 @@ pub async fn server_service_install() -> Result<ServiceStatus, String> {
         });
     }
     // The app installed it, so the definition is this app's to rewrite when a
-    // later update needs the service to run the new engine.
-    remember_installed_by_app();
+    // later update needs the service to run the new engine — and only while it
+    // still names what this line wrote.
+    remember_installed_by_app(&service_program());
     let mut status = read_status().await?;
     if !status.installed {
         status.error = Some(if said.is_empty() {
@@ -316,8 +317,9 @@ struct CatchUp<'a> {
     engine_binary: &'a Path,
     /// The copy `update-cli` replaced, if it replaced one.
     updated: Option<&'a str>,
-    /// The app installed the service, so its definition is this app's to write.
-    installed_by_app: bool,
+    /// The program the app installed the service with, when it did: the one
+    /// definition this app may rewrite.
+    app_program: Option<&'a Path>,
 }
 
 /// Whether two paths name the same file, a link and its target included.
@@ -338,7 +340,7 @@ fn server_catch_up(catch_up: &CatchUp<'_>) -> ServerCatchUp {
         binary,
         engine_binary,
         updated,
-        installed_by_app,
+        app_program,
     } = *catch_up;
     let (true, true, Some(server), Some(engine), Some(binary)) =
         (installed, running, server, engine, binary)
@@ -358,7 +360,10 @@ fn server_catch_up(catch_up: &CatchUp<'_>) -> ServerCatchUp {
     {
         return ServerCatchUp::Restart;
     }
-    if installed_by_app {
+    // The app installed this definition, and it still names what the app put
+    // there (the app moved, or an AppImage's copy did): rewriting it is the
+    // app's own repair.
+    if app_program.is_some_and(|program| same_path(binary, program)) {
         return ServerCatchUp::Repoint;
     }
     ServerCatchUp::Foreign {
@@ -402,15 +407,20 @@ fn write_service_state(name: &str, text: &str) {
     let _ = std::fs::write(path, text);
 }
 
-/// Record that this app installed the server, so the catch-up may re-point the
-/// service definition at its engine. A service a terminal installed is never
-/// rewritten.
-pub fn remember_installed_by_app() {
-    write_service_state("installed-by-app", &format!("{}\n", std::process::id()));
+/// Record that this app installed the server, and with which program, so the
+/// catch-up may re-point the definition at its engine — and only while the
+/// definition still names what the app installed. A service a terminal
+/// installed, or reinstalled, is never rewritten.
+pub fn remember_installed_by_app(program: &Path) {
+    write_service_state("installed-by-app", &format!("{}\n", program.display()));
 }
 
-fn installed_by_app() -> bool {
-    service_state("installed-by-app").is_some_and(|path| path.exists())
+/// The program the app installed the service with, if it installed it. A
+/// definition naming another binary is a terminal's, whatever this says.
+fn installed_by_app_program() -> Option<PathBuf> {
+    let text = std::fs::read_to_string(service_state("installed-by-app")?).ok()?;
+    let program = text.trim();
+    (!program.is_empty()).then(|| PathBuf::from(program))
 }
 
 /// One catch-up attempt, so a pair that cannot converge is not tried again at
@@ -511,6 +521,7 @@ fn restart_outdated_server(updated: Option<&Path>) {
     let Some(report) = read_report() else {
         return;
     };
+    let app_program = installed_by_app_program();
     let catch_up = server_catch_up(&CatchUp {
         installed: report.installed,
         running: report.running,
@@ -519,7 +530,7 @@ fn restart_outdated_server(updated: Option<&Path>) {
         binary: report.binary.as_deref(),
         engine_binary: &service_program(),
         updated: updated.map(|path| path.to_string_lossy()).as_deref(),
-        installed_by_app: installed_by_app(),
+        app_program: app_program.as_deref(),
     });
     if catch_up == ServerCatchUp::Leave {
         // The engine and the server agree: a new update gets a fresh attempt.
@@ -1075,7 +1086,7 @@ mod tests {
         engine: &str,
         binary: Option<&str>,
         updated: Option<&str>,
-        installed_by_app: bool,
+        app_program: Option<&str>,
     ) -> ServerCatchUp {
         server_catch_up(&CatchUp {
             installed: true,
@@ -1085,7 +1096,7 @@ mod tests {
             binary,
             engine_binary: Path::new(ENGINE),
             updated,
-            installed_by_app,
+            app_program: app_program.map(Path::new),
         })
     }
 
@@ -1095,33 +1106,33 @@ mod tests {
     fn only_an_older_installed_server_is_restarted() {
         // The service runs this app's engine: a restart brings the new one.
         assert_eq!(
-            catch_up(Some("1.25.0"), "1.30.0", Some(ENGINE), None, false),
+            catch_up(Some("1.25.0"), "1.30.0", Some(ENGINE), None, None),
             ServerCatchUp::Restart
         );
         // Or a copy `update-cli` just replaced with this engine's bytes.
         let copy = "/Users/ada/.local/bin/rustcode";
         assert_eq!(
-            catch_up(Some("1.25.0"), "1.30.0", Some(copy), Some(copy), false),
+            catch_up(Some("1.25.0"), "1.30.0", Some(copy), Some(copy), None),
             ServerCatchUp::Restart
         );
         // A beta of the release this app is: still behind it.
         assert_eq!(
-            catch_up(Some("1.30.0-beta.2"), "1.30.0", Some(ENGINE), None, false),
+            catch_up(Some("1.30.0-beta.2"), "1.30.0", Some(ENGINE), None, None),
             ServerCatchUp::Restart
         );
         // The same engine, and one ahead of the app: nothing to do, and never
         // a downgrade.
         assert_eq!(
-            catch_up(Some("1.30.0"), "1.30.0", Some(ENGINE), None, false),
+            catch_up(Some("1.30.0"), "1.30.0", Some(ENGINE), None, None),
             ServerCatchUp::Leave
         );
         assert_eq!(
-            catch_up(Some("1.31.0"), "1.30.0", Some(ENGINE), None, false),
+            catch_up(Some("1.31.0"), "1.30.0", Some(ENGINE), None, None),
             ServerCatchUp::Leave
         );
         // A version that cannot be read is not a reason to restart.
         assert_eq!(
-            catch_up(Some("dev"), "1.30.0", Some(ENGINE), None, false),
+            catch_up(Some("dev"), "1.30.0", Some(ENGINE), None, None),
             ServerCatchUp::Leave
         );
         // No service, nothing running, or a definition with no binary.
@@ -1134,36 +1145,50 @@ mod tests {
                 binary: Some(ENGINE),
                 engine_binary: Path::new(ENGINE),
                 updated: None,
-                installed_by_app: false,
+                app_program: None,
             })
         };
         assert_eq!(off(false, true), ServerCatchUp::Leave);
         assert_eq!(off(true, false), ServerCatchUp::Leave);
         assert_eq!(
-            catch_up(Some("1.25.0"), "1.30.0", None, None, true),
+            catch_up(Some("1.25.0"), "1.30.0", None, None, None),
             ServerCatchUp::Leave
         );
     }
 
-    /// The unit runs another `rustcode`: the app rewrites it only when it
-    /// installed the service itself, and otherwise names the copy once instead
-    /// of restarting into it at every launch.
+    /// The unit runs another `rustcode`: the app rewrites it only while the
+    /// definition still names the program it installed, and otherwise names the
+    /// copy once instead of restarting into it at every launch.
     #[test]
     fn another_rustcode_in_the_unit_is_repointed_or_named() {
         let copy = "/Users/ada/.local/bin/rustcode";
+        // Installed by the app, and still naming what it installed.
         assert_eq!(
-            catch_up(Some("1.29.0"), "1.30.0", Some(copy), None, true),
+            catch_up(Some("1.29.0"), "1.30.0", Some(copy), None, Some(copy)),
             ServerCatchUp::Repoint
         );
+        // Installed by a terminal, or reinstalled since: never rewritten.
         assert_eq!(
-            catch_up(Some("1.29.0"), "1.30.0", Some(copy), None, false),
+            catch_up(Some("1.29.0"), "1.30.0", Some(copy), None, None),
+            ServerCatchUp::Foreign {
+                path: copy.to_owned()
+            }
+        );
+        assert_eq!(
+            catch_up(
+                Some("1.29.0"),
+                "1.30.0",
+                Some(copy),
+                None,
+                Some("/Applications/RustCode.app/Contents/MacOS/rustcode")
+            ),
             ServerCatchUp::Foreign {
                 path: copy.to_owned()
             }
         );
         // A copy update-cli updated is the app's, wherever the unit found it.
         assert_eq!(
-            catch_up(Some("1.29.0"), "1.30.0", Some(copy), Some(copy), false),
+            catch_up(Some("1.29.0"), "1.30.0", Some(copy), Some(copy), None),
             ServerCatchUp::Restart
         );
     }

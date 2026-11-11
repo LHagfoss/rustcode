@@ -1734,9 +1734,9 @@ same version (`src-tauri/src/service.rs` `catch_up_after_update`, issue #3487):
 - A background server still running the engine from before the update is
   restarted (`rustcode server restart --when-idle`, so a running turn finishes
   first). When its definition names another `rustcode`, the app rewrites the
-  definition to its engine if it installed the server itself, and otherwise
-  leaves it alone and the Machines page says *Server runs an older rustcode at
-  `<path>`*, once per version pair.
+  definition to its engine while that is still the program it installed the
+  service with, and otherwise leaves it alone and the Machines page says
+  *Server runs an older rustcode at `<path>`*, once per version pair.
 
 Paired machines that lose this computer while its server restarts reconnect on
 their own, as they do after any drop.

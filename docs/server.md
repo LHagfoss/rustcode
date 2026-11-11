@@ -135,11 +135,12 @@ rustcode server uninstall   # remove the service
     #3487). Running turns finish first, and a wait longer than ten minutes
     leaves the old server for the next start, where `status` reports
     `restart-pending`.
-  - The unit runs another `rustcode`, and **the app installed the service**
-    (Settings › Machines › *Install server*, which leaves
-    `<config dir>/service/installed-by-app`): `rustcode server install`
-    rewrites the definition to this app's engine, then the same `--when-idle`
-    restart. A definition a terminal installed is never rewritten.
+  - The unit runs another `rustcode`, and it is still the one **the app
+    installed the service with** (Settings › Machines › *Install server* writes
+    that program to `<config dir>/service/installed-by-app`; the app moved, or
+    an AppImage's copy did): `rustcode server install` rewrites the definition to
+    this app's engine, then the same `--when-idle` restart. A definition a
+    terminal installed — or reinstalled over the app's — is never rewritten.
   - The unit runs another `rustcode` the app does not install (Homebrew's,
     `cargo install`'s): nothing is restarted, since a restart would bring the
     same copy back. The page says `server-other-rustcode` — *Server runs an
