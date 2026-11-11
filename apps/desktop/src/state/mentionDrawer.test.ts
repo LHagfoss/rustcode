@@ -26,6 +26,8 @@ function shape(nodes: MentionNode[]): string[] {
         return `## ${node.name}`;
       case "more":
         return `+ ${node.section} ${node.hidden}`;
+      case "less":
+        return `- ${node.section}`;
       case "entry":
         return node.entry.kind === "agent"
           ? node.entry.agent.token
@@ -44,7 +46,7 @@ const files = (count: number) =>
   Array.from({ length: count }, (_, i) => `src/file-${String(i + 1).padStart(2, "0")}.ts`);
 
 describe("an empty @ drawer", () => {
-  test(`shows ${SHORT_ROWS} rows of each section, the rest behind Show all`, () => {
+  test(`shows ${SHORT_ROWS} rows of each section, the rest behind Show N more`, () => {
     const nodes = mentionNodes({
       query: "",
       keywords: ["agents", "threads", "files"],
@@ -58,6 +60,7 @@ describe("an empty @ drawer", () => {
       "k:threads",
       "k:files",
       "# Agents",
+      "## pi",
       "pi/pi-pro",
       "# Threads",
       "t:t0",
@@ -76,7 +79,7 @@ describe("an empty @ drawer", () => {
     ]);
   });
 
-  test("a section with nothing back has no Show all row", () => {
+  test("a section with nothing back has no Show N more row", () => {
     const nodes = mentionNodes({
       query: "",
       agents: [agent("pi", "pi-pro")],
@@ -86,6 +89,7 @@ describe("an empty @ drawer", () => {
     });
     expect(shape(nodes)).toEqual([
       "# Agents",
+      "## pi",
       "pi/pi-pro",
       "# Files",
       "f:src/file-01.ts",
@@ -94,7 +98,7 @@ describe("an empty @ drawer", () => {
   });
 });
 
-describe("Show all", () => {
+describe("Show more and Show fewer", () => {
   test("draws the rest of that section, and only that one, in place", () => {
     const nodes = mentionNodes({
       query: "",
@@ -105,13 +109,15 @@ describe("Show all", () => {
       files: files(8),
     });
     const drawn = shape(nodes);
-    // Every file, none held back; the threads keep their own five and their row.
+    // Every file, none held back, and the way back to the short list under them; the threads keep
+    // their own five and their own count.
     expect(drawn.filter((row) => row.startsWith("f:"))).toHaveLength(8);
     expect(drawn).toContain("+ threads 2");
     expect(drawn.filter((row) => row.startsWith("+ "))).toEqual(["+ threads 2"]);
+    expect(drawn.filter((row) => row.startsWith("- "))).toEqual(["- files"]);
   });
 
-  test("once everything is drawn there is no Show all row left", () => {
+  test("a section drawn whole says so, and no longer counts what it kept back", () => {
     const nodes = mentionNodes({
       query: "",
       expanded: new Set(["threads"] as const),
@@ -120,7 +126,33 @@ describe("Show all", () => {
       threads: Array.from({ length: 7 }, (_, i) => thread(`t${i}`, "pi")),
       files: [],
     });
-    expect(shape(nodes)).toEqual(["t:t0", "t:t1", "t:t2", "t:t3", "t:t4", "t:t5", "t:t6"]);
+    expect(shape(nodes)).toEqual(["t:t0", "t:t1", "t:t2", "t:t3", "t:t4", "t:t5", "t:t6", "- threads"]);
+  });
+
+  test("closing it again puts the short list and its count back", () => {
+    const threads = Array.from({ length: 7 }, (_, i) => thread(`t${i}`, "pi"));
+    const open = shape(
+      mentionNodes({
+        query: "",
+        expanded: new Set(["threads"] as const),
+        agents: [],
+        delegates: [],
+        threads,
+        files: [],
+      }),
+    );
+    const closed = shape(
+      mentionNodes({
+        query: "",
+        expanded: new Set(),
+        agents: [],
+        delegates: [],
+        threads,
+        files: [],
+      }),
+    );
+    expect(open).toEqual(["t:t0", "t:t1", "t:t2", "t:t3", "t:t4", "t:t5", "t:t6", "- threads"]);
+    expect(closed).toEqual(["t:t0", "t:t1", "t:t2", "t:t3", "t:t4", "+ threads 2"]);
   });
 });
 
@@ -183,7 +215,7 @@ describe("agents grouped by harness", () => {
     expect(shape(nodes)).toEqual(["## Codex", "codex/gpt-6", "## Pi", "pi/pi-pro", "t:running"]);
   });
 
-  test("one harness alone needs no sub-heading", () => {
+  test("two rows under one harness still get its name", () => {
     const nodes = mentionNodes({
       query: "",
       agents: [agent("pi", "pi-pro", "Pi"), agent("pi", "pi-lite", "Pi")],
@@ -191,7 +223,39 @@ describe("agents grouped by harness", () => {
       threads: [],
       files: [],
     });
-    expect(shape(nodes)).toEqual(["pi/pi-pro", "pi/pi-lite"]);
+    expect(shape(nodes)).toEqual(["## Pi", "pi/pi-pro", "pi/pi-lite"]);
+  });
+
+  test("a harness whose one row is the harness by name needs no sub-heading", () => {
+    const nodes = mentionNodes({
+      query: "",
+      agents: [
+        agent("rustcode", "chatgpt/gpt-6-luna", "RustCode"),
+        agent("rustcode", "claude-sonnet-5", "RustCode"),
+        // A harness with no models of its own: its one row is the harness.
+        { harness: "local-agent", harnessName: "Local Agent", name: "Local Agent", token: "local-agent" },
+      ],
+      delegates: [],
+      threads: [],
+      files: [],
+    });
+    expect(shape(nodes)).toEqual([
+      "## RustCode",
+      "rustcode/chatgpt/gpt-6-luna",
+      "rustcode/claude-sonnet-5",
+      "local-agent",
+    ]);
+  });
+
+  test("a harness's one row keeps the sub-heading when the row is another name", () => {
+    const nodes = mentionNodes({
+      query: "",
+      agents: [agent("codex", "gpt-6", "Codex"), agent("pi", "pi-pro", "Pi")],
+      delegates: [],
+      threads: [],
+      files: [],
+    });
+    expect(shape(nodes)).toEqual(["## Codex", "codex/gpt-6", "## Pi", "pi/pi-pro"]);
   });
 
   test("a harness keeps its own rows while the section holds the others'", () => {

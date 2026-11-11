@@ -17,6 +17,7 @@ import {
   ArrowUp,
   Check,
   ChevronDown,
+  ChevronUp,
   Clock,
   Command,
   Copy,
@@ -281,12 +282,16 @@ type DrawerRowItem =
   | { kind: "heading"; label: string }
   | { kind: "harness"; harness: string; name: string }
   | { kind: "row"; entry: DrawerEntry; index: number }
-  | { kind: "more"; section: MentionSection; hidden: number; index: number };
+  | { kind: "more"; section: MentionSection; hidden: number; index: number }
+  | { kind: "less"; section: MentionSection; index: number };
 
-/** What a bound row does when it is picked. */
-type DrawerPick = { kind: "entry"; entry: DrawerEntry } | { kind: "more"; section: MentionSection };
+/** What a bound row does when it is picked: point at something, or open/close a section. */
+type DrawerPick =
+  | { kind: "entry"; entry: DrawerEntry }
+  | { kind: "more"; section: MentionSection }
+  | { kind: "less"; section: MentionSection };
 
-/** Every match, before the drawer keeps some back behind `Show all`: what the search looks through. */
+/** Every match, before the drawer keeps some back behind `Show N more`: what the search looks through. */
 const ALL_MATCHES = 200;
 
 /** Nothing expanded: the drawer's first look at a folder shows a few rows of each section. */
@@ -651,20 +656,20 @@ export const Composer = memo(function Composer({
       if (node.kind === "entry") rows.push({ kind: "row", entry: node.entry, index: index++ });
       else if (node.kind === "more")
         rows.push({ kind: "more", section: node.section, hidden: node.hidden, index: index++ });
+      else if (node.kind === "less") rows.push({ kind: "less", section: node.section, index: index++ });
       else rows.push(node);
     }
     return rows;
   }, [slash, list, mention]);
-  // What the arrows walk: a row that points at something, or a section's `Show all`.
+  // What the arrows walk: a row that points at something, or a section's own open/close row.
   const picks = useMemo(
     (): DrawerPick[] =>
-      drawerRows.flatMap((row): DrawerPick[] =>
-        row.kind === "row"
-          ? [{ kind: "entry", entry: row.entry }]
-          : row.kind === "more"
-            ? [{ kind: "more", section: row.section }]
-            : [],
-      ),
+      drawerRows.flatMap((row): DrawerPick[] => {
+        if (row.kind === "row") return [{ kind: "entry", entry: row.entry }];
+        if (row.kind === "more") return [{ kind: "more", section: row.section }];
+        if (row.kind === "less") return [{ kind: "less", section: row.section }];
+        return [];
+      }),
     [drawerRows],
   );
   // What is left to offer at all: an empty drawer says so where the field is about to be typed.
@@ -761,9 +766,18 @@ export const Composer = memo(function Composer({
     return () => cancelAnimationFrame(frame);
   }, [draft]);
 
-  // What a section's `Show all` row does: the rest of that section, in place, from here on.
+  // What a section's `Show N more` row does: the rest of that section, in place, from here on.
   const expand = (section: MentionSection) => {
     setExpanded((held) => new Set(held).add(section));
+  };
+
+  // And what `Show fewer` does: back to the few rows the section opened with.
+  const collapse = (section: MentionSection) => {
+    setExpanded((held) => {
+      const next = new Set(held);
+      next.delete(section);
+      return next;
+    });
   };
 
   // A new list starts at the top, and what was opened whole closes again: another word is another
@@ -1058,6 +1072,7 @@ export const Composer = memo(function Composer({
         const pick = picks[selected] ?? picks[0];
         if (!pick) return;
         if (pick.kind === "more") expand(pick.section);
+        else if (pick.kind === "less") collapse(pick.section);
         else accept(pick.entry, e.key === "Enter");
         return;
       }
@@ -1247,11 +1262,20 @@ export const Composer = memo(function Composer({
     };
   };
 
-  // The rest of a section, in place: what the drawer kept back while it showed a few rows of each.
-  const showAllRow = (section: MentionSection, hidden: number, i: number) => (
+  // The rest of a section, in place — or, with the section open, the way back to its few rows.
+  const restRow = (section: MentionSection, hidden: number, i: number) => (
     <button key={`m:${section}`} {...drawerRowProps(i)} onClick={() => expand(section)}>
       <ChevronDown size={16} className="shrink-0 text-fg-muted" />
-      <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">Show all ({hidden})</span>
+      <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">
+        {hidden > 0 ? `Show ${hidden} more` : "Show more"}
+      </span>
+    </button>
+  );
+
+  const fewerRow = (section: MentionSection, i: number) => (
+    <button key={`l:${section}`} {...drawerRowProps(i)} onClick={() => collapse(section)}>
+      <ChevronUp size={16} className="shrink-0 text-fg-muted" />
+      <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">Show fewer</span>
     </button>
   );
 
@@ -1420,7 +1444,8 @@ export const Composer = memo(function Composer({
                   </div>
                 );
               }
-              if (item.kind === "more") return showAllRow(item.section, item.hidden, item.index);
+              if (item.kind === "more") return restRow(item.section, item.hidden, item.index);
+              if (item.kind === "less") return fewerRow(item.section, item.index);
               return drawerRow(item.entry, item.index);
             })}
           </div>

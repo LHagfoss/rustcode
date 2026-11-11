@@ -16,12 +16,15 @@ export type MentionEntry =
 /** A group of the drawer that keeps something back behind its `Show all` row. */
 export type MentionSection = "agents" | "threads" | "files";
 
-/** How the drawer draws a section: its name, a harness's name, a row, or the rest of a section. */
+/** How the drawer draws a section: its name, a harness's name, a row, or its rest and its end. */
 export type MentionNode =
   | { kind: "heading"; label: string }
   | { kind: "harness"; harness: string; name: string }
   | { kind: "entry"; entry: MentionEntry }
-  | { kind: "more"; section: MentionSection; hidden: number };
+  /** The rows a section kept back: `Show N more` draws them. */
+  | { kind: "more"; section: MentionSection; hidden: number }
+  /** The section is open whole: `Show fewer` puts the short list back. */
+  | { kind: "less"; section: MentionSection };
 
 /**
  * What a section shows while nothing is typed: enough rows to recognise what is
@@ -67,6 +70,13 @@ function harnessOf(entry: MentionEntry): string {
   return "";
 }
 
+/** What a row calls itself, so a harness's heading can be left out when the row already says it. */
+function nameOfEntry(entry: MentionEntry): string {
+  if (entry.kind === "agent") return entry.agent.name;
+  if (entry.kind === "thread") return entry.thread.title;
+  return "";
+}
+
 /** `entries` bucketed by harness, each harness where its first row put it, rows in the order given. */
 function byHarness(entries: readonly MentionEntry[]): { harness: string; entries: MentionEntry[] }[] {
   const order: string[] = [];
@@ -86,7 +96,8 @@ function byHarness(entries: readonly MentionEntry[]): { harness: string; entries
 /**
  * The drawer's rows, in the order it draws them: the keywords first when it is
  * not narrowed, then each section whose rows it has, with its heading when it
- * lists more than one section and a `Show all` row for what it keeps back. A
+ * lists more than one section and a `Show N more` row for what it keeps back —
+ * or, once that is open, a `Show fewer` row that puts the short list back. A
  * section with nothing in it is left out, heading and all.
  */
 export function mentionNodes(input: MentionInput): MentionNode[] {
@@ -99,7 +110,7 @@ export function mentionNodes(input: MentionInput): MentionNode[] {
   const called = new Map(input.agents.map((agent) => [agent.harness, agent.harnessName]));
   const nameOf = (harness: string) => called.get(harness) ?? harnessNames?.[harness] ?? harness;
 
-  // The keywords are where to look, not something to point at: no heading, and no `Show all`.
+  // The keywords are where to look, not something to point at: no heading, and nothing kept back.
   const keywords: MentionNode[] = scope
     ? []
     : (input.keywords ?? []).map(
@@ -117,8 +128,6 @@ export function mentionNodes(input: MentionInput): MentionNode[] {
       ...input.delegates.map((thread): MentionEntry => ({ kind: "thread", thread })),
     ];
     const harnesses = byHarness(entries);
-    // One harness alone is no grouping: the rows say which harness they are on already.
-    const split = harnesses.length > 1;
     const limit = cap("agents");
     const nodes: MentionNode[] = [];
     let kept = 0;
@@ -126,13 +135,20 @@ export function mentionNodes(input: MentionInput): MentionNode[] {
     for (const group of harnesses) {
       const shown = group.entries.slice(0, limit);
       if (!shown.length) continue;
-      if (split) nodes.push({ kind: "harness", harness: group.harness, name: nameOf(group.harness) });
+      // A harness's name is worth a line of its own when it says more than its rows do: more than
+      // one row under it, or a row that is not simply the harness by name (`Local Agent` over one
+      // `Local Agent` row reads as one row, not a group).
+      const name = nameOf(group.harness);
+      if (shown.length > 1 || nameOfEntry(shown[0]!) !== name) {
+        nodes.push({ kind: "harness", harness: group.harness, name });
+      }
       for (const entry of shown) nodes.push({ kind: "entry", entry });
       kept += shown.length;
       hidden += group.entries.length - shown.length;
     }
     if (kept) {
       if (hidden > 0) nodes.push({ kind: "more", section: "agents", hidden });
+      else if (expanded?.has("agents")) nodes.push({ kind: "less", section: "agents" });
       groups.push({ section: "agents", nodes });
     }
   }
@@ -144,6 +160,7 @@ export function mentionNodes(input: MentionInput): MentionNode[] {
       const nodes: MentionNode[] = shown.map((entry) => ({ kind: "entry", entry }));
       const hidden = entries.length - shown.length;
       if (hidden > 0) nodes.push({ kind: "more", section: "threads", hidden });
+      else if (expanded?.has("threads")) nodes.push({ kind: "less", section: "threads" });
       groups.push({ section: "threads", nodes });
     }
   }
@@ -155,6 +172,7 @@ export function mentionNodes(input: MentionInput): MentionNode[] {
       const nodes: MentionNode[] = shown.map((entry) => ({ kind: "entry", entry }));
       const hidden = entries.length - shown.length;
       if (hidden > 0) nodes.push({ kind: "more", section: "files", hidden });
+      else if (expanded?.has("files")) nodes.push({ kind: "less", section: "files" });
       groups.push({ section: "files", nodes });
     }
   }
