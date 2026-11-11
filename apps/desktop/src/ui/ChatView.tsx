@@ -29,6 +29,7 @@ import { motionAllowed, PENDING_ENTRY_MS } from "../lib/sendFlight";
 import { composedText, emptyExtras, sentAttachments } from "../state/compose";
 import { chooseFolder } from "../state/folders";
 import type { HeaderButtonId } from "../state/headerButtons";
+import { machineGlyph, machineTint, useMachines } from "../state/machines";
 import { heldSetup, type PendingSetup, pendingStatus } from "../state/setup";
 import {
   autoCompactOffFor,
@@ -58,6 +59,7 @@ import { OriginChip } from "./Branches";
 import { Composer } from "./Composer";
 import { HarnessIcon } from "./HarnessIcon";
 import { LinkedThreads } from "./Links";
+import { DeviceGlyphIcon } from "./MachineGlyph";
 import { HEADER_HEIGHT, MainHeader } from "./MainHeader";
 import { NewThreadBanner } from "./NewThreadBanner";
 import { NEW_THREAD_WIDGETS_MIN_HEIGHT, NewThreadWidgets } from "./NewThreadWidgets";
@@ -341,6 +343,8 @@ function Header({
   // A thread on a paired computer: the header says where it runs, with what harness and model, and
   // whether that computer is reachable now (docs/desktop.md › Several machines).
   const machine = useMachineOfThread(thread?.id);
+  const machineHost = thread ? splitThreadKey(thread.id).host : "";
+  const machineEntry = useMachines((s) => s.machines.find((entry) => entry.id === machineHost));
   const offline = useThreadOffline(thread?.id);
   // The harness's name as the machine that runs it lists it, not its id: a thread on another
   // computer runs that computer's harness (docs/desktop.md › Several machines).
@@ -441,7 +445,15 @@ function Header({
               }
             >
               <span className="flex max-w-[300px] shrink-0 items-center gap-1 rounded-full bg-fill-subtle px-2 py-0.5 text-callout text-fg-muted">
-                <Laptop size={12} className="shrink-0" aria-hidden />
+                {machineEntry ? (
+                  <DeviceGlyphIcon
+                    glyph={machineGlyph(machineEntry)}
+                    tint={machineTint(machineEntry)}
+                    size={12}
+                  />
+                ) : (
+                  <Laptop size={12} className="shrink-0" aria-hidden />
+                )}
                 <span className="truncate">
                   Runs on {machine} · {harnessName} · {modelName(session?.model) ?? "model"}
                 </span>

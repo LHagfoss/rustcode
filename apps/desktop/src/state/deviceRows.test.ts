@@ -32,8 +32,8 @@ describe("a device's glyph", () => {
   test("is the platform's own, and a question mark when it is unknown", () => {
     expect(deviceGlyph("macos")).toBe("laptop");
     expect(deviceGlyph("darwin")).toBe("laptop");
-    expect(deviceGlyph("windows")).toBe("monitor");
-    expect(deviceGlyph("linux")).toBe("terminal");
+    expect(deviceGlyph("windows")).toBe("tower");
+    expect(deviceGlyph("linux")).toBe("linux");
     expect(deviceGlyph("unknown")).toBe("unknown");
     expect(deviceGlyph(null)).toBe("unknown");
   });

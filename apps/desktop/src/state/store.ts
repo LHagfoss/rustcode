@@ -1130,7 +1130,9 @@ export async function startMachineRouting(): Promise<void> {
     machines.onMachineLinks((id, conn) => watchMachineConnection(id, conn));
     const mirror = () => {
       const state = machines.useMachines.getState();
-      const names = Object.fromEntries(state.machines.map((machine) => [machine.id, machine.name]));
+      const names = Object.fromEntries(
+        state.machines.map((machine) => [machine.id, machines.machineName(machine)]),
+      );
       set((s) => {
         // A machine that was removed takes its kept harnesses with it, and **Run on** naming it
         // goes back here rather than to a machine that is no longer saved.
@@ -3717,13 +3719,14 @@ export async function steer(id: string, text: string, extras?: ComposeExtras): P
     images: acceptsImages(thread),
     builtin: threadHarness(thread)?.builtin ?? true,
   };
-  const prompt = extras?.attachments.length
-    ? promptBlocks(text, extras, {
-        images: conditions.images,
-        builtin: conditions.builtin,
-        cwd: thread?.cwd ?? "",
-      })
-    : undefined;
+  const prompt =
+    extras && (extras.attachments.length || extras.command?.action === "skill")
+      ? promptBlocks(text, extras, {
+          images: conditions.images,
+          builtin: conditions.builtin,
+          cwd: thread?.cwd ?? "",
+        })
+      : undefined;
   try {
     const conn = connectionForThread(id);
     if (!conn) return false;

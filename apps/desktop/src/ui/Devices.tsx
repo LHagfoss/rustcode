@@ -11,21 +11,11 @@
 // actions a machine has. What all of it says is decided in
 // state/deviceRows.ts, so the words are tested without a window.
 
-import {
-  CircleHelp,
-  Settings as Gear,
-  Laptop,
-  Monitor,
-  RefreshCw,
-  SquarePen,
-  SquareTerminal,
-} from "lucide-react";
+import { Settings as Gear, RefreshCw, SquarePen } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { SessionSummary } from "../acp/types";
 import { appPlatform } from "../lib/platform";
 import {
-  type DeviceGlyph,
-  deviceGlyph,
   deviceMeta,
   devicePlatform,
   deviceRoute,
@@ -41,35 +31,20 @@ import {
   lastSeen,
   localAppVersion,
   type Machine,
+  machineGlyph,
+  machineName,
+  machineTint,
+  platformIcon,
   reconnectMachine,
   selfName,
+  useLocalIdentity,
   useMachines,
 } from "../state/machines";
 import { openSettings, startNewThread, useApp } from "../state/store";
 import { LOCAL_HOST } from "../state/threadKeys";
+import { DeviceGlyphIcon } from "./MachineGlyph";
 import { Pill } from "./primitives";
 import { Chip } from "./settingsKit";
-
-/** The one glyph a platform gets, and a question mark for one that has not said. */
-export function DeviceGlyphIcon({ glyph, size = 16 }: { glyph: DeviceGlyph; size?: number }) {
-  const Icon =
-    glyph === "laptop"
-      ? Laptop
-      : glyph === "monitor"
-        ? Monitor
-        : glyph === "terminal"
-          ? SquareTerminal
-          : CircleHelp;
-  const name =
-    glyph === "laptop"
-      ? "macOS"
-      : glyph === "monitor"
-        ? "Windows"
-        : glyph === "terminal"
-          ? "Linux"
-          : "Platform unknown";
-  return <Icon size={size} className="shrink-0 text-fg-muted" aria-label={name} />;
-}
 
 /** The platform this app runs on, in the names a machine reports. */
 export function localPlatform(): string {
@@ -109,19 +84,21 @@ function ThisComputerRow({
   /** Back to the project list, which is what this computer's row opens. */
   onOpen: () => void;
 }) {
+  const identity = useLocalIdentity();
   const status = localDeviceStatus(engine);
   const counts = machineThreadCounts(sessions, LOCAL_HOST, running);
+  const name = identity.displayName ?? selfName();
   return (
     <div className="rounded-xl px-2 py-2 hover:bg-fill-subtle">
       <button
         type="button"
         onClick={onOpen}
-        aria-label={`${selfName()}, ${status.label}. Back to projects`}
+        aria-label={`${name}, ${status.label}. Back to projects`}
         className="flex w-full flex-col gap-0.5 text-left"
       >
         <span className="flex h-5 min-w-0 items-center gap-2">
-          <DeviceGlyphIcon glyph={deviceGlyph(localPlatform())} />
-          <span className="min-w-0 flex-1 truncate font-medium text-body text-fg">{selfName()}</span>
+          <DeviceGlyphIcon glyph={identity.icon ?? platformIcon(localPlatform())} tint={identity.tint} />
+          <span className="min-w-0 flex-1 truncate font-medium text-body text-fg">{name}</span>
           <StateChip tone={status.tone} label={status.label} />
         </span>
         <span className="min-w-0 truncate pl-6 text-sub text-fg-muted tabular">
@@ -140,9 +117,11 @@ function MachineAction({ machine, connected }: { machine: Machine; connected?: b
       <Pill
         size="sm"
         disabled={!address}
-        title={address ? `Pair with ${machine.name} again` : "That machine announced no address to dial."}
+        title={
+          address ? `Pair with ${machineName(machine)} again` : "That machine announced no address to dial."
+        }
         onClick={() => {
-          if (address) void askMachine(address, machine.name);
+          if (address) void askMachine(address, machineName(machine));
         }}
       >
         <RefreshCw size={12} />
@@ -154,7 +133,7 @@ function MachineAction({ machine, connected }: { machine: Machine; connected?: b
   // connection that reports itself up and answers nothing.
   if (machine.state === "connected" && !connected) return null;
   return (
-    <Pill size="sm" title={`Try ${machine.name} again now`} onClick={() => reconnectMachine(machine)}>
+    <Pill size="sm" title={`Try ${machineName(machine)} again now`} onClick={() => reconnectMachine(machine)}>
       <RefreshCw size={12} />
       Reconnect
     </Pill>
@@ -179,17 +158,18 @@ export function DeviceRow({
   const status = deviceStatus(machine);
   const meta = deviceMeta(machine, counts, now);
   const reason = offlineReason(machine);
+  const name = machineName(machine);
   return (
     <div className="rounded-xl px-2 py-2 hover:bg-fill-subtle">
       <button
         type="button"
         onClick={onOpen}
-        aria-label={`${machine.name}, ${status.label}. ${meta}`}
+        aria-label={`${name}, ${status.label}. ${meta}`}
         className="flex w-full flex-col gap-0.5 text-left"
       >
         <span className="flex h-5 min-w-0 items-center gap-2">
-          <DeviceGlyphIcon glyph={deviceGlyph(machine.platform)} />
-          <span className="min-w-0 flex-1 truncate font-medium text-body text-fg">{machine.name}</span>
+          <DeviceGlyphIcon glyph={machineGlyph(machine)} tint={machineTint(machine)} />
+          <span className="min-w-0 flex-1 truncate font-medium text-body text-fg">{name}</span>
           <StateChip tone={status.tone} label={status.label} />
         </span>
         {/* The address is the hover's: a narrow row keeps the route's name and what works. */}
@@ -272,13 +252,14 @@ export function MachineCard({ machine, now }: { machine: Machine; now: number })
   }, []);
   const status = deviceStatus(machine);
   const reason = offlineReason(machine);
-  const skew = versionLine(machine.name, machine.version, local, selfName());
+  const name = machineName(machine);
+  const skew = versionLine(name, machine.version, local, selfName());
   const connected = machine.state === "connected";
   return (
     <div className="mx-3 mb-2 rounded-lg bg-surface p-3">
       <div className="flex min-w-0 items-center gap-2">
-        <DeviceGlyphIcon glyph={deviceGlyph(machine.platform)} size={18} />
-        <span className="min-w-0 flex-1 truncate font-medium text-title3 text-fg">{machine.name}</span>
+        <DeviceGlyphIcon glyph={machineGlyph(machine)} tint={machineTint(machine)} size={18} />
+        <span className="min-w-0 flex-1 truncate font-medium text-title3 text-fg">{name}</span>
       </div>
       <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 text-sub text-fg-muted">
         <span className="shrink-0">{devicePlatform(machine.platform)}</span>
@@ -309,14 +290,14 @@ export function MachineCard({ machine, now }: { machine: Machine; now: number })
         <Pill
           size="sm"
           disabled={!connected}
-          title={connected ? `New thread on ${machine.name}` : "Reconnect before starting a thread there."}
+          title={connected ? `New thread on ${name}` : "Reconnect before starting a thread there."}
           onClick={() => startNewThread(undefined, machine.id)}
         >
           <SquarePen size={12} />
           New thread
         </Pill>
         <MachineAction machine={machine} connected />
-        <Pill size="sm" quiet title={`Settings for ${machine.name}`} onClick={() => openSettings("machines")}>
+        <Pill size="sm" quiet title={`Settings for ${name}`} onClick={() => openSettings("machines")}>
           <Gear size={12} />
           Machine settings
         </Pill>

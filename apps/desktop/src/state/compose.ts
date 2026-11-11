@@ -498,6 +498,13 @@ export function sentMessages(
   return out;
 }
 
+/** Preserve skill metadata when a drawer row sends immediately, just as a command chip does. */
+export function commandSubmission(command: SlashCommand): { text: string; extras: ComposeExtras } {
+  return command.action === "skill"
+    ? { text: "", extras: { ...emptyExtras, command } }
+    : { text: command.name, extras: emptyExtras };
+}
+
 export interface BlockOptions {
   /** The thread's harness takes image blocks. */
   images: boolean;
