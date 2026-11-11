@@ -452,6 +452,22 @@ fn install_copies(home: Option<&Path>, windows: bool) -> Vec<PathBuf> {
     dirs.into_iter().map(|dir| dir.join(name)).collect()
 }
 
+/// A path as it compares on this platform: Windows file names ignore case, so
+/// `C:\\Users\\Ada` and `c:\\users\\ada` are one folder there.
+fn fold(path: &Path, windows: bool) -> PathBuf {
+    if windows {
+        PathBuf::from(path.to_string_lossy().to_lowercase())
+    } else {
+        path.to_path_buf()
+    }
+}
+
+/// Whether two paths name the same install location: equal as written (case
+/// ignored on Windows), or the same file once links are followed.
+fn same_install_path(a: &Path, b: &Path, windows: bool) -> bool {
+    fold(a, windows) == fold(b, windows) || same_file(a, b)
+}
+
 /// Who owns a `rustcode`, which decides whether this engine may replace it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Owner {
@@ -479,10 +495,11 @@ fn owner(path: &Path, home: Option<&Path>, windows: bool, engine: &Path) -> Owne
     let env_cargo = std::env::var_os("CARGO_HOME")
         .filter(|dir| !dir.is_empty())
         .map(PathBuf::from);
+    let folded = fold(path, windows);
     if home_cargo
         .into_iter()
         .chain(env_cargo)
-        .any(|cargo| path.starts_with(cargo.join("bin")))
+        .any(|cargo| folded.starts_with(fold(&cargo.join("bin"), windows)))
     {
         return Owner::Cargo;
     }
@@ -499,29 +516,38 @@ fn owner(path: &Path, home: Option<&Path>, windows: bool, engine: &Path) -> Owne
     if same_file(path, engine)
         || install_copies(home, windows)
             .iter()
-            .any(|copy| copy == path)
+            .any(|copy| same_install_path(copy, path, windows))
     {
         return Owner::Ours;
     }
     Owner::Foreign
 }
 
-/// The `rustcode` a shell runs first, else the first one an install wrote in a
-/// known folder: the copy this app is responsible for. `None` when there is
-/// none at all.
-async fn find_installed_copy(home: Option<&Path>, windows: bool) -> Option<PathBuf> {
+/// Every `rustcode` this app is responsible for: the one a shell runs first,
+/// then each file an install wrote in a known folder, without the same file
+/// twice. A shell finding a foreign copy first, or `/usr/local/bin` ahead of
+/// the `~/.rustcode/bin` a service runs, must not leave the others stale.
+async fn find_installed_copies(home: Option<&Path>, windows: bool) -> Vec<PathBuf> {
     let found = observe().await.map(|found| found.path);
+    let mut copies: Vec<PathBuf> = Vec::new();
     for path in found.into_iter().chain(install_copies(home, windows)) {
         // `symlink_metadata`: a copy that is a link counts, and a dangling one
         // is still this app's to replace.
-        if std::fs::symlink_metadata(&path).is_ok() {
-            return Some(path);
+        if std::fs::symlink_metadata(&path).is_err() {
+            continue;
         }
+        if copies
+            .iter()
+            .any(|seen| same_install_path(seen, &path, windows))
+        {
+            continue;
+        }
+        copies.push(path);
     }
-    None
+    copies
 }
 
-/// What [`update_installed_copy`] should do about the copy it found.
+/// What [`update_installed_copies`] should do about the copy it found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UpdatePlan {
     /// This engine's version, a newer one, or one that cannot be read: leave
@@ -540,14 +566,17 @@ fn update_plan(copy_version: Option<&str>, engine_version: &str) -> UpdatePlan {
     }
 }
 
-/// What [`update_installed_copy`] did, in the words the CLI prints.
+/// What [`update_installed_copies`] did, in the words the CLI prints.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstalledCopy {
     /// No `rustcode` is installed where a shell or an install would put one.
     Missing,
     /// The copy is this engine's version, a newer one, this engine itself, or
-    /// unreadable.
-    Current(PathBuf),
+    /// unreadable. `version` is what it answers now (`None` when it does not).
+    Current {
+        path: PathBuf,
+        version: Option<String>,
+    },
     /// The copy at `path` now is this engine (it was `was`).
     Replaced { path: PathBuf, was: Option<String> },
     /// Homebrew's or `cargo install`'s copy: its own tool updates it.
@@ -557,29 +586,48 @@ pub enum InstalledCopy {
     /// A copy this app did not write (a person's own build in `~/bin`, a
     /// tarball under `/opt`): named, and left exactly as it is.
     Foreign(PathBuf),
+    /// The copy is this app's to replace, and replacing it failed (a folder the
+    /// user does not own): the others are still brought up to date.
+    Failed { path: PathBuf, error: String },
 }
 
-/// Bring the `rustcode` a shell runs up to this engine's version (issue
-/// #3487): the app's own updater replaces the app and its engine, and the copy
-/// an earlier install left behind would keep a terminal on the old one.
+/// Bring the `rustcode` copies this app is responsible for up to this
+/// engine's version (issue #3487): the app's own updater replaces the app and
+/// its engine, and the copies an earlier install left behind would keep a
+/// terminal, or the background server, on the old one.
 ///
-/// The copy a shell runs first is the one updated; when there is none, the
-/// first one an install wrote (`install_copies`) is. The copy becomes a real
-/// file rather than a link, so it still runs when the app is moved or removed,
-/// and the next app update replaces it again. A copy Homebrew or `cargo
-/// install` owns is named and left to its tool, a development build is never
-/// touched, and only a copy read as *older* is replaced — or a link whose
-/// target is gone, which cannot be read at all.
-pub async fn update_installed_copy(engine_version: &str) -> anyhow::Result<InstalledCopy> {
+/// Every copy [`find_installed_copies`] lists is looked at, the one a shell
+/// runs first leading. A copy becomes a real file rather than a link, so it
+/// still runs when the app is moved or removed, and the next app update
+/// replaces it again. A copy Homebrew or `cargo install` owns is named and left
+/// to its tool, a development build is never touched, a copy outside the
+/// install folders is foreign and left exactly as it is, and only a copy read
+/// as *older* is replaced — or a link whose target is gone, which cannot be
+/// read at all. One copy failing does not stop the others.
+pub async fn update_installed_copies(engine_version: &str) -> anyhow::Result<Vec<InstalledCopy>> {
     let home = home_directory();
     let windows = cfg!(windows);
-    let Some(path) = find_installed_copy(home.as_deref(), windows).await else {
-        return Ok(InstalledCopy::Missing);
-    };
-    update_copy_at(path, &std::env::current_exe()?, engine_version).await
+    let copies = find_installed_copies(home.as_deref(), windows).await;
+    if copies.is_empty() {
+        return Ok(vec![InstalledCopy::Missing]);
+    }
+    let engine = std::env::current_exe()?;
+    let mut outcomes = Vec::with_capacity(copies.len());
+    for path in copies {
+        outcomes.push(
+            match update_copy_at(path.clone(), &engine, engine_version).await {
+                Ok(outcome) => outcome,
+                Err(error) => InstalledCopy::Failed {
+                    path,
+                    error: format!("{error:#}"),
+                },
+            },
+        );
+    }
+    Ok(outcomes)
 }
 
-/// [`update_installed_copy`] for one copy, with `engine` standing in for this
+/// [`update_installed_copies`] for one copy, with `engine` standing in for this
 /// process's own binary: so a test can watch which copies are written and
 /// which are left alone.
 async fn update_copy_at(
@@ -603,15 +651,23 @@ async fn update_copy_at(
         Owner::Foreign => return Ok(InstalledCopy::Foreign(path)),
         Owner::Ours => {}
     }
+    // What an earlier attempt left beside the copy goes whether or not this
+    // one replaces anything (Windows keeps the old file while it runs).
+    if let Some(directory) = path.parent() {
+        remove_stale_copies(directory);
+    }
     // A link that already is this engine needs nothing; a dangling one is the
     // one case a copy cannot be asked its version, and the link is replaced.
     if same_file(&path, engine) {
-        return Ok(InstalledCopy::Current(path));
+        return Ok(InstalledCopy::Current {
+            path,
+            version: Some(engine_version.to_owned()),
+        });
     }
     let gone = dangling(&path);
     let version = if gone { None } else { ask_version(&path).await };
     if !gone && update_plan(version.as_deref(), engine_version) != UpdatePlan::Replace {
-        return Ok(InstalledCopy::Current(path));
+        return Ok(InstalledCopy::Current { path, version });
     }
     super::refuse_dev_binary(engine, false)?;
     copy_over(&path, engine).map_err(|error| {
@@ -654,26 +710,35 @@ fn copy_over(target: &Path, engine: &Path) -> std::io::Result<()> {
     remove_stale_copies(directory);
     let staged = directory.join(format!(".rustcode-copy-{}", std::process::id()));
     let _ = std::fs::remove_file(&staged);
-    // A running executable cannot be overwritten, but it can be renamed.
-    std::fs::copy(engine, &staged)?;
-    let old = directory.join(format!(
-        "{}.old",
-        target
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default()
-    ));
-    let _ = std::fs::remove_file(&old);
-    std::fs::rename(target, &old).inspect_err(|_| {
+    std::fs::copy(engine, &staged).inspect_err(|_| {
         let _ = std::fs::remove_file(&staged);
     })?;
-    if let Err(error) = std::fs::rename(&staged, target) {
-        let _ = std::fs::rename(&old, target);
-        let _ = std::fs::remove_file(&staged);
-        return Err(error);
+    #[cfg(unix)]
+    {
+        // One rename: the name is never missing, and a file the user keeps
+        // beside the target (a `rustcode.old` backup) is never touched.
+        std::fs::rename(&staged, target).inspect_err(|_| {
+            let _ = std::fs::remove_file(&staged);
+        })
     }
-    let _ = std::fs::remove_file(&old);
-    Ok(())
+    #[cfg(not(unix))]
+    {
+        // A running executable cannot be overwritten on Windows, but it can be
+        // renamed. The name is private to this app, so nothing of the user's
+        // is replaced; a file still running stays until the next run clears it.
+        let old = directory.join(format!(".rustcode-old-{}", std::process::id()));
+        let _ = std::fs::remove_file(&old);
+        std::fs::rename(target, &old).inspect_err(|_| {
+            let _ = std::fs::remove_file(&staged);
+        })?;
+        if let Err(error) = std::fs::rename(&staged, target) {
+            let _ = std::fs::rename(&old, target);
+            let _ = std::fs::remove_file(&staged);
+            return Err(error);
+        }
+        let _ = std::fs::remove_file(&old);
+        Ok(())
+    }
 }
 
 fn remove_stale_copies(directory: &Path) {
@@ -681,11 +746,9 @@ fn remove_stale_copies(directory: &Path) {
         return;
     };
     for entry in entries.flatten() {
-        if entry
-            .file_name()
-            .to_string_lossy()
-            .starts_with(".rustcode-copy-")
-        {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(".rustcode-copy-") || name.starts_with(".rustcode-old-") {
             let _ = std::fs::remove_file(entry.path());
         }
     }
@@ -1150,6 +1213,75 @@ mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(left, vec![std::ffi::OsString::from("rustcode")]);
+    }
+
+    /// A backup the user keeps beside the copy is theirs: replacing the copy
+    /// never touches `rustcode.old`, and leaves nothing of its own behind.
+    #[test]
+    fn replacing_a_copy_keeps_the_users_old_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = dir.path().join("engine");
+        std::fs::write(&engine, "new engine").unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let target = bin.join("rustcode");
+        std::fs::write(&target, "old engine").unwrap();
+        let backup = bin.join("rustcode.old");
+        std::fs::write(&backup, "my own backup").unwrap();
+        copy_over(&target, &engine).unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new engine");
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), "my own backup");
+        let mut left: Vec<_> = std::fs::read_dir(&bin)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            vec![
+                std::ffi::OsString::from("rustcode"),
+                std::ffi::OsString::from("rustcode.old")
+            ]
+        );
+    }
+
+    /// What a Windows run left beside the copy (a renamed-aside file that was
+    /// still running) is cleared by the next run, and nothing else is.
+    #[test]
+    fn a_leftover_old_copy_is_cleared() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".rustcode-old-4242"), "left").unwrap();
+        std::fs::write(dir.path().join(".rustcode-copy-4242"), "left").unwrap();
+        std::fs::write(dir.path().join("rustcode.old"), "mine").unwrap();
+        remove_stale_copies(dir.path());
+        let left: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(left, vec![std::ffi::OsString::from("rustcode.old")]);
+    }
+
+    /// Windows file names ignore case: the install folder is recognised
+    /// however the shell's `PATH` spells it.
+    #[test]
+    fn windows_paths_compare_without_case() {
+        let home = Path::new("C:\\Users\\Ada");
+        let engine = Path::new("C:\\Program Files\\RustCode\\rustcode.exe");
+        let spelled = home.join(".RUSTCODE").join("BIN").join("RUSTCODE.EXE");
+        assert_eq!(owner(&spelled, Some(home), true, engine), Owner::Ours);
+        // On other platforms a different case is a different file.
+        assert_eq!(
+            owner(
+                &Path::new("/Users/ada").join(".RUSTCODE/bin/rustcode"),
+                Some(Path::new("/Users/ada")),
+                false,
+                Path::new("/Applications/rustcode")
+            ),
+            Owner::Foreign
+        );
+        // And cargo's folder, however it is spelled on Windows.
+        let cargo = home.join(".CARGO").join("BIN").join("rustcode.exe");
+        assert_eq!(owner(&cargo, Some(home), true, engine), Owner::Cargo);
     }
 
     /// A link to a copy that moved leaves a name nothing can run: the next

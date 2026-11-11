@@ -130,8 +130,9 @@ rustcode server uninstall   # remove the service
   from the app's own engine keeps running the engine it started with, so after
   an app update the app reads `server status` once, and when the server it runs
   is on an *older* engine it acts on what the definition names (`binary`):
-  - The unit runs this app's engine, or the copy `update-cli` just brought up
-    to it: `rustcode server restart --when-idle` in the background (issue
+  - The unit runs this app's engine, or a copy `update-cli` manages (the
+    install script's or the app's, replaced by this start or by an earlier one
+    whose restart was cut short) that runs a newer version than the server: `rustcode server restart --when-idle` in the background (issue
     #3487). Running turns finish first, and a wait longer than ten minutes
     leaves the old server for the next start, where `status` reports
     `restart-pending`: a wait cut off by a long turn is not a failure, nothing
@@ -306,8 +307,10 @@ runs afterwards.
 
 `rustcode server update-cli` brings the `rustcode` a shell runs up to this
 engine's version after an app update (issue #3487). It looks at the copy a shell
-finds first on the login shell's `PATH`, and when there is none, at the files an
-install writes, in this order: `~/.rustcode/bin/rustcode`, `~/.local/bin` and
+finds first on the login shell's `PATH` *and* at every file an install writes,
+so a foreign or `/usr/local/bin` copy first on `PATH` does not leave the
+`~/.rustcode/bin` one a service runs stale. The files an install writes, in this
+order: `~/.rustcode/bin/rustcode`, `~/.local/bin` and
 `/usr/local/bin` (`install.sh` writes to the last two; Windows has the one copy
 the script and the app write, `%USERPROFILE%\.rustcode\bin\rustcode.exe`).
 
@@ -329,10 +332,17 @@ the script and the app write, `%USERPROFILE%\.rustcode\bin\rustcode.exe`).
   under `/opt` is named, never overwritten, whatever its version; update it
   yourself, or remove it so a shell finds this app's version. The command
   exits with a non-zero status and the message says which copy it left.
-- `--json` prints `{ "outcome", "path", "was", "version", "message" }` with
-  `outcome` one of `missing`, `current`, `updated`, `homebrew`, `cargo`,
-  `development`, `foreign`, for the app that runs it at every start: that is what makes an
-  app update reach the copy an earlier install left behind.
+- On macOS and Linux the replacement is one atomic rename, so the name is never
+  missing and a `rustcode.old` you keep beside it is never touched; Windows
+  renames the running file aside to `.rustcode-old-<pid>` and clears what is left
+  of it on the next run.
+- `--json` prints `{ "outcome", "path", "was", "now", "version", "message",
+  "copies" }`: the first copy as the top-level fields, and `copies` with one
+  such entry per copy looked at. `outcome` is one of `missing`, `current`,
+  `updated`, `homebrew`, `cargo`, `development`, `foreign`, `failed`; `now` is
+  the version the copy runs afterwards. One copy failing does not stop the
+  others. The app runs it at every start: that is what makes an app update reach
+  the copies an earlier install left behind.
 
 It is not `link-path`: `link-path` is a person's one action on the copy a shell
 runs, `update-cli` is the app's own catch-up, and it never edits `PATH`.
