@@ -650,11 +650,27 @@ fn optional_title(args: &Value) -> Result<(), String> {
     }
 }
 
+/// Whether `path` is absolute on the machine it names, which may not be this
+/// one: a Mac starting a thread on a Windows machine passes `C:\Users\…`, and
+/// `Path::is_absolute` on macOS calls that relative. The machine that gets
+/// the call matches it against its own projects, so only the shape is checked
+/// here: `/…`, a drive (`C:\` or `C:/`), or a UNC or verbatim path (`\\…`).
+fn absolute_on_any_machine(path: &str) -> bool {
+    if path.starts_with('/') || path.starts_with(r"\\") {
+        return true;
+    }
+    let bytes = path.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/')
+}
+
 /// `path`: the absolute folder of an existing project, which every project
 /// tool names.
 fn absolute_project(args: &Value) -> Result<(), String> {
     match args.get("path") {
-        Some(Value::String(path)) if std::path::Path::new(path).is_absolute() => Ok(()),
+        Some(Value::String(path)) if absolute_on_any_machine(path) => Ok(()),
         Some(Value::String(_)) => Err("path must be an absolute folder".to_owned()),
         _ => Err("path is required".to_owned()),
     }
@@ -941,7 +957,7 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             required_name(args, "url")?;
             match args.get("parent") {
                 None | Some(Value::Null) => Ok(()),
-                Some(Value::String(path)) if std::path::Path::new(path).is_absolute() => Ok(()),
+                Some(Value::String(path)) if absolute_on_any_machine(path) => Ok(()),
                 Some(_) => Err("parent must be an absolute folder".to_owned()),
             }?;
             optional_name(args, "name")
@@ -965,7 +981,7 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             optional_name(args, "model_profile")?;
             match args.get("project") {
                 None | Some(Value::Null) => {}
-                Some(Value::String(path)) if std::path::Path::new(path).is_absolute() => {}
+                Some(Value::String(path)) if absolute_on_any_machine(path) => {}
                 Some(_) => return Err("project must be an absolute path".to_owned()),
             }
             let Some(schedule) = args.get("schedule").filter(|value| value.is_object()) else {
@@ -1022,7 +1038,7 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             }
             match args.get("project") {
                 None | Some(Value::Null) => Ok(()),
-                Some(Value::String(path)) if std::path::Path::new(path).is_absolute() => Ok(()),
+                Some(Value::String(path)) if absolute_on_any_machine(path) => Ok(()),
                 Some(_) => Err("project must be an absolute path".to_owned()),
             }?;
             optional_request_id(args)
@@ -1061,7 +1077,7 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             // The project on that machine, as `start_session` takes it.
             match args.get("project") {
                 None | Some(Value::Null) => Ok(()),
-                Some(Value::String(path)) if std::path::Path::new(path).is_absolute() => Ok(()),
+                Some(Value::String(path)) if absolute_on_any_machine(path) => Ok(()),
                 Some(_) => Err("project must be an absolute path".to_owned()),
             }?;
             optional_request_id(args)
@@ -1322,6 +1338,24 @@ fn output(name: &str, value: Value) -> ToolExecutionOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_project_on_a_windows_machine_is_absolute_from_any_machine() {
+        for path in [
+            "/Users/ada/code/app",
+            r"C:\Users\ada\code\app",
+            "C:/Users/ada/code/app",
+            r"\\?\C:\Users\ada\code\app",
+            r"\\server\share\app",
+        ] {
+            let args = json!({"prompt": "hi", "project": path, "machine": "pc"});
+            assert_eq!(validate(START_SESSION, &args), Ok(()), "{path}");
+        }
+        for path in ["code/app", "C:", "C:code", r"Users\ada"] {
+            let args = json!({"prompt": "hi", "project": path});
+            assert!(validate(START_SESSION, &args).is_err(), "{path}");
+        }
+    }
 
     struct Answering(Value);
 
