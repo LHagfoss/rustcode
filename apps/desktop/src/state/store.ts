@@ -1130,7 +1130,9 @@ export async function startMachineRouting(): Promise<void> {
     machines.onMachineLinks((id, conn) => watchMachineConnection(id, conn));
     const mirror = () => {
       const state = machines.useMachines.getState();
-      const names = Object.fromEntries(state.machines.map((machine) => [machine.id, machine.name]));
+      const names = Object.fromEntries(
+        state.machines.map((machine) => [machine.id, machines.machineName(machine)]),
+      );
       set((s) => {
         // A machine that was removed takes its kept harnesses with it, and **Run on** naming it
         // goes back here rather than to a machine that is no longer saved.

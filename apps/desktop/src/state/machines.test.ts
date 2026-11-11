@@ -9,10 +9,12 @@ import { setShellTransport } from "../lib/shell";
 import {
   askMachine,
   cancelPairing,
+  cleanMachineName,
   codeCheckOverdue,
   codeComplete,
   codeDigits,
   DEV_APP_VERSION,
+  defaultSelfName,
   discoverMachines,
   forgetLocalAppVersion,
   type GatewayService,
@@ -21,18 +23,25 @@ import {
   lastSeen,
   linkCliToApp,
   localAppVersion,
+  localIdentity,
   type Machine,
+  machineGlyph,
   machineLine,
+  machineName,
+  machineTint,
   mergeDiscovered,
   PAIR_DEADLINE_MS,
   pairMachine,
+  platformIcon,
   platformName,
   refreshMachines,
   refreshServerService,
   resetMachinesForTests,
   routeLabel,
   routeName,
+  selfName,
   serverLine,
+  setLocalIdentity,
   stateLabel,
   stateTone,
   threadCount,
@@ -690,5 +699,64 @@ describe("the eight-digit code", () => {
     expect(codeComplete("4821903", 8)).toBe(false);
     expect(codeComplete("482190341", 8)).toBe(false);
     expect(codeComplete("", 8)).toBe(false);
+  });
+});
+
+describe("a machine's local name and icon", () => {
+  test("the display name wins, and a blank one falls back to the reported name", () => {
+    expect(machineName(MACHINE)).toBe("Lars's Linux box");
+    expect(machineName({ ...MACHINE, displayName: "Linux box" })).toBe("Linux box");
+    expect(machineName({ ...MACHINE, displayName: "   " })).toBe("Lars's Linux box");
+    expect(machineName({ ...MACHINE, displayName: null })).toBe("Lars's Linux box");
+    expect(cleanMachineName("  Studio  ")).toBe("Studio");
+    expect(cleanMachineName("  ")).toBeNull();
+  });
+
+  test("a chosen icon wins over the platform's, and an unknown one falls back", () => {
+    expect(platformIcon("macos")).toBe("laptop");
+    expect(platformIcon("darwin")).toBe("laptop");
+    expect(platformIcon("windows")).toBe("tower");
+    expect(platformIcon("linux")).toBe("linux");
+    expect(platformIcon(null)).toBe("unknown");
+    expect(machineGlyph(MACHINE)).toBe("linux");
+    expect(machineGlyph({ ...MACHINE, icon: "studio" })).toBe("studio");
+    expect(machineGlyph({ ...MACHINE, icon: "not-an-icon" })).toBe("linux");
+    expect(machineTint({ iconTint: "4" })).toBe("4");
+    expect(machineTint({ iconTint: "12" })).toBeNull();
+    expect(machineTint({ iconTint: null })).toBeNull();
+  });
+
+  test("this computer's name and icon persist", () => {
+    const scope = globalThis as typeof globalThis & { localStorage: Storage };
+    const previous = scope.localStorage;
+    const data = new Map<string, string>();
+    scope.localStorage = {
+      getItem: (key: string) => data.get(key) ?? null,
+      setItem: (key: string, value: string) => void data.set(key, value),
+      removeItem: (key: string) => void data.delete(key),
+      clear: () => data.clear(),
+      key: (index: number) => [...data.keys()][index] ?? null,
+      get length() {
+        return data.size;
+      },
+    } as Storage;
+    try {
+      setLocalIdentity({ displayName: "  Desk Mac  ", icon: "studio", tint: "2" });
+      expect(selfName()).toBe("Desk Mac");
+      expect(localIdentity()).toEqual({ displayName: "Desk Mac", icon: "studio", tint: "2" });
+      expect(JSON.parse(data.get("rustcode.localMachineIdentity") ?? "null")).toMatchObject({
+        displayName: "Desk Mac",
+        icon: "studio",
+        tint: "2",
+      });
+      // A blank name returns to the platform's own name, and an unknown icon is dropped.
+      setLocalIdentity({ displayName: "   ", icon: "not-an-icon" as never });
+      expect(selfName()).toBe(defaultSelfName());
+      expect(localIdentity()).toEqual({ displayName: null, icon: null, tint: "2" });
+    } finally {
+      if (previous) scope.localStorage = previous;
+      else Reflect.deleteProperty(scope, "localStorage");
+      setLocalIdentity({ displayName: null, icon: null, tint: null });
+    }
   });
 });

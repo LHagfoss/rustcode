@@ -98,6 +98,19 @@ the page without a second computer; `paired` is a Mac, a Windows PC with
 threads, and an offline Linux box, so the Devices list shows a glyph, a chip,
 a count, an older version and a machine to reconnect.
 
+A machine's name and glyph are this app's own: Settings › Machines (and the
+same row for this computer) gives each one a **Name and icon** popover. A name
+is stored as `display_name` in `machines.json` and never sent to the other
+computer, so it keeps the name it reports; **Reset** (or a blank field) shows
+that name again, and pairing the same machine again keeps the local name. The
+glyph is one of a small fixed set (laptop, desktop, Mac Studio/mini, server,
+Windows tower, Linux, cloud, phone), defaulting to the platform's own, with an
+optional tint from the chart palette. Everywhere a machine is named uses both:
+the Devices list, the machine view's header, a thread's `Runs on ‹name›`
+header, the composer's **Run on** control and its menu, and `list_machines`,
+which keeps the reported `name` and adds `display_name`, `icon` and
+`icon_tint`.
+
 Agents across machines: the orchestration tools take a `machine` (v12), so a
 thread here can list the paired computers (`list_machines`), start, message,
 read, wait on and stop threads there, and be woken when a remote delegate

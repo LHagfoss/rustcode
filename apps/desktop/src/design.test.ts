@@ -58,6 +58,11 @@ const PILL_ALLOWED: [file: string, part: string, why: string][] = [
     "a harness in the model card's rail; its fill marks the one browsed",
   ],
   ["ui/Settings.tsx", 'role="option"', "a settings result row"],
+  [
+    "ui/MachineProfile.tsx",
+    "aria-pressed={chosen}",
+    "a glyph in the machine icon picker; its fill marks the one chosen",
+  ],
   ["ui/ShortcutSettings.tsx", "recording ?", "the keycap button; its fill marks recording"],
   [
     "ui/settingsKit.tsx",

@@ -1,6 +1,6 @@
 import { formatBinding } from "../lib/keys";
 import { basename } from "../lib/paths";
-import { fileManagerName, primaryModifier } from "../lib/platform";
+import { appPlatform, fileManagerName, primaryModifier } from "../lib/platform";
 // The composer, after ContentView.swift's Composer: one glass box floating over
 // the transcript, holding the attachments, the field (with a slash-command token
 // in front of it; pasted links stay inline as text) and its foot: + on the left,
@@ -27,7 +27,6 @@ import {
   FolderPlus,
   GitBranch,
   ListEnd,
-  Monitor,
   Paperclip,
   Pencil,
   Plus,
@@ -97,7 +96,16 @@ import { atToken, insertKeyword, insertRef, type MentionScope, rankFiles, SCOPES
 import { controlDisabledReason, defaultEffort, orderHarnesses, unavailableReason } from "../state/harness";
 import { usageOf } from "../state/harnessUsage";
 import { childAccountOn, type SignedOutLogins } from "../state/logins";
-import { type MachineState, selfName, useMachines } from "../state/machines";
+import {
+  type MachineState,
+  machineGlyph,
+  machineName,
+  machineTint,
+  platformIcon,
+  selfName,
+  useLocalIdentity,
+  useMachines,
+} from "../state/machines";
 import {
   type MentionEntry,
   type MentionNode,
@@ -149,6 +157,7 @@ import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
 import { HarnessIcon } from "./HarnessIcon";
 import { openLightbox } from "./Lightbox";
 import { LinkChip } from "./LinkChip";
+import { DeviceGlyphIcon } from "./MachineGlyph";
 import { ModelPicker } from "./ModelPicker";
 import { PasteChip } from "./PasteChip";
 import { cx, MenuSearchField, MenuShortcut, noTextHelpers, Pill, Tooltip } from "./primitives";
@@ -1988,11 +1997,20 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
  */
 function RunOnMenu() {
   const machines = useMachines((s) => s.machines);
+  const local = useLocalIdentity();
+  const platform = appPlatform();
   const host = useApp((s) => s.newThreadHost);
   if (!machines.length) return null;
   const current = machines.find((machine) => machine.id === host);
-  const label = current?.name ?? selfName();
-  const row = (id: string, name: string, state: MachineState, selected: boolean) => {
+  const label = current ? machineName(current) : (local.displayName ?? selfName());
+  const row = (
+    id: string,
+    name: string,
+    state: MachineState,
+    selected: boolean,
+    glyph: ReturnType<typeof machineGlyph>,
+    tint: ReturnType<typeof machineTint>,
+  ) => {
     const online = state === "connected";
     return (
       <CardMenuItem
@@ -2012,6 +2030,7 @@ function RunOnMenu() {
         >
           {online ? "●" : state === "needsPairing" ? "⚠" : "○"}
         </span>
+        <DeviceGlyphIcon glyph={glyph} tint={tint} size={14} />
         <span className="min-w-0 flex-1 truncate text-body text-fg">{name}</span>
         {!online && (
           <span className="shrink-0 text-caption text-fg-faint">
@@ -2039,7 +2058,15 @@ function RunOnMenu() {
             "min-w-0 shrink data-[state=open]:bg-fill disabled:hover:bg-transparent",
           )}
         >
-          <Monitor size={14} className="shrink-0" />
+          <DeviceGlyphIcon
+            glyph={
+              current
+                ? machineGlyph(current)
+                : (local.icon ?? platformIcon(platform === "mac" ? "macos" : platform))
+            }
+            tint={current ? machineTint(current) : local.tint}
+            size={14}
+          />
           <span className="min-w-0 max-w-[200px] truncate @max-lg/composer:max-w-[96px] @max-sm/composer:hidden">
             {label}
           </span>
@@ -2048,8 +2075,24 @@ function RunOnMenu() {
       }
     >
       <div role="menu" aria-label="Run on">
-        {row(LOCAL_HOST, selfName(), "connected", !host)}
-        {machines.map((machine) => row(machine.id, machine.name, machine.state, machine.id === host))}
+        {row(
+          LOCAL_HOST,
+          local.displayName ?? selfName(),
+          "connected",
+          !host,
+          local.icon ?? platformIcon(platform === "mac" ? "macos" : platform),
+          local.tint,
+        )}
+        {machines.map((machine) =>
+          row(
+            machine.id,
+            machineName(machine),
+            machine.state,
+            machine.id === host,
+            machineGlyph(machine),
+            machineTint(machine),
+          ),
+        )}
       </div>
     </CardPopover>
   );

@@ -89,7 +89,14 @@ impl RouteView {
 pub struct MachineView {
     /// The machine's `host_id`, which is what every command takes.
     id: String,
+    /// The name the machine reports.
     name: String,
+    /// The name this app shows for it, or none while the reported one is shown.
+    display_name: Option<String>,
+    /// The glyph this app draws, or none for the platform's own.
+    icon: Option<String>,
+    /// The series tint of that glyph.
+    icon_tint: Option<String>,
     /// `macos`, `windows`, `linux`, or `unknown` for a machine that does not
     /// report one yet.
     platform: String,
@@ -321,6 +328,9 @@ fn view(machine: &Machine, live: Option<&Live>) -> MachineView {
     MachineView {
         id: machine.host_id.clone(),
         name: machine.name.clone(),
+        display_name: machine.display_name.clone(),
+        icon: machine.icon.clone(),
+        icon_tint: machine.icon_tint.clone(),
         platform: machine.platform.clone(),
         main: machine.main,
         version: machine.version.clone(),
@@ -1117,6 +1127,32 @@ pub async fn machines_remove(
         }
     }
     Ok(())
+}
+
+/// Rename a machine here: a local display name, never sent to that machine.
+/// `None` or a blank name shows the name the machine reports again.
+#[tauri::command(async)]
+pub fn machines_set_display_name(id: String, name: Option<String>) -> Result<(), String> {
+    let config_dir = config_dir()?;
+    let mut registry = MachineRegistry::load(&config_dir).map_err(chain)?;
+    registry
+        .set_display_name(&id, name.as_deref())
+        .map_err(chain)
+}
+
+/// Choose the glyph and series tint this app draws for a machine. `icon` of
+/// `None` returns to the platform's own glyph.
+#[tauri::command(async)]
+pub fn machines_set_icon(
+    id: String,
+    icon: Option<String>,
+    tint: Option<String>,
+) -> Result<(), String> {
+    let config_dir = config_dir()?;
+    let mut registry = MachineRegistry::load(&config_dir).map_err(chain)?;
+    registry
+        .set_icon(&id, icon.as_deref(), tint.as_deref())
+        .map_err(chain)
 }
 
 /// Make `id` the main machine: listed first, and the default **Run on**.
