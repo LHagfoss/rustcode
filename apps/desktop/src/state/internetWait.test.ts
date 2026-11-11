@@ -8,6 +8,7 @@ import {
   internetDue,
   internetGaveUp,
   internetHolds,
+  networkStop,
   nextInternetWait,
   stablePeriodMs,
 } from "./internetWait";
@@ -73,5 +74,24 @@ describe("waiting for the internet", () => {
     expect(internetHolds(wait, { harness: "claude-code", account: "work" })).toBe(true);
     expect(internetHolds(wait, { harness: "codex", account: "work" })).toBe(false);
     expect(internetHolds(wait, { harness: "claude-code", account: null })).toBe(false);
+  });
+});
+
+describe("networkStop", () => {
+  test("a failure that lost the network is a stop", () => {
+    expect(networkStop("fetch failed", undefined)).toBe(true);
+  });
+
+  test("a short error reply is a stop, as Claude Code ends such a turn", () => {
+    expect(networkStop(undefined, "API Error: Connection error.")).toBe(true);
+  });
+
+  test("a full answer that only mentions being offline is not", () => {
+    const answer = `The Windows machine is still offline, last seen at 05:47. ${"More detail. ".repeat(30)}`;
+    expect(networkStop(undefined, answer)).toBe(false);
+  });
+
+  test("a failure that is not about the network is not, whatever the reply says", () => {
+    expect(networkStop("HTTP 400 Bad Request", "offline")).toBe(false);
   });
 });
