@@ -285,6 +285,13 @@
         "instance_id": {
           "type": "string"
         },
+        "platform": {
+          "description": "What this host runs: `macos`, `linux` or `windows`. The device's\nmachine list shows it; absent from an older host, whose platform\nstays `unknown`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "protocol_version": {
           "format": "uint32",
           "minimum": 0,
@@ -393,6 +400,13 @@
         },
         "instance_id": {
           "type": "string"
+        },
+        "platform": {
+          "description": "What this host runs, as in `paired`.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "protocol_version": {
           "format": "uint32",

@@ -831,6 +831,7 @@ impl Shared {
                 .map(|issued| rfc3339(issued.access_expires_at)),
             wire_names: None,
             version: Some(host_version()),
+            platform: Some(host_platform().to_owned()),
             routes: routes_now(self),
         };
         Ok(self.register(&mut state, &record, welcome))
@@ -938,6 +939,7 @@ impl Shared {
                 .and_then(|issued| issued.rotation_id.clone()),
             wire_names: None,
             version: Some(host_version()),
+            platform: Some(host_platform().to_owned()),
             routes: routes_now(self),
         };
         Ok(self.register(&mut state, &record, welcome))
@@ -1328,6 +1330,20 @@ fn rfc3339(at: chrono::DateTime<chrono::Utc>) -> String {
 /// `authenticated` so a client can say which machine needs updating.
 fn host_version() -> String {
     env!("CARGO_PKG_VERSION").to_owned()
+}
+
+/// What this host runs, reported in `paired` and `authenticated` so a device's
+/// machine list can name the platform instead of `unknown`.
+fn host_platform() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        "unknown"
+    }
 }
 
 fn routes_now(shared: &Shared) -> Vec<HostRoute> {
@@ -1864,6 +1880,15 @@ fn status(shared: &Shared, started: Instant) -> GatewayStatus {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clone();
+    // The listener knows the IPs; the port is the primary's, which the
+    // registration already names as `host:port`.
+    let bound = shared.bound.borrow().clone();
+    let listening = registration
+        .listen_address
+        .parse::<std::net::SocketAddr>()
+        .ok()
+        .map(|primary| super::address::listening_addresses(&bound, primary.port()))
+        .unwrap_or_default();
     let sessions = shared.sessions.as_ref().map(|sessions| sessions.summary());
     // Owners hold their lease for as long as they live; one that is not in
     // the session list is alive without being shared.
@@ -1927,6 +1952,7 @@ fn status(shared: &Shared, started: Instant) -> GatewayStatus {
         gateway_id: registration.gateway_id.clone(),
         uptime_seconds: started.elapsed().as_secs(),
         listen_address: registration.listen_address.clone(),
+        listening,
         advertised_address: registration.advertised_address.clone(),
         started_by: registration.started_by,
         paired_devices: state.devices.list().len(),
