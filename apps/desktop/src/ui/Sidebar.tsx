@@ -1,4 +1,4 @@
-import { fileManagerName, primaryModifier } from "../lib/platform";
+import { fileManagerName, primaryModifier, trashName } from "../lib/platform";
 // The sidebar: a toolbar clear of the traffic lights (the sidebar toggle only),
 // the app's brand under it (its mark, name and version), then one list: pinned
 // threads first, then one Threads list (by project when asked) that leads with
@@ -434,15 +434,15 @@ function ThreadMenuItems({
             disabled={!canFiles}
             onSelect={() =>
               askConfirm({
-                title: "Move this thread to the Trash?",
-                message: `"${session.title || "New thread"}" and its history move to the Trash, where you can still get them back.`,
-                action: "Move to Trash",
+                title: `Move this thread to the ${trashName()}?`,
+                message: `"${session.title || "New thread"}" and its history move to the ${trashName()}, where you can still get them back.`,
+                action: `Move to ${trashName()}`,
                 destructive: true,
                 run: () => void trashThread(session.id),
               })
             }
           >
-            <Trash2 size={13} /> Move to Trash
+            <Trash2 size={13} /> Move to {trashName()}
           </Item>
         </>
       )}
