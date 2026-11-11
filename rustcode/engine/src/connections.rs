@@ -31,15 +31,29 @@ pub struct ConnectionsSnapshot {
     pub accounts: Vec<ModelAccount>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitHubStatus {
     /// Whether the GitHub CLI was found.
     pub cli_installed: bool,
+    /// Install command for the engine host, independent of the client OS.
+    pub install_hint: &'static str,
     pub accounts: Vec<GitHubAccount>,
     /// A sign-in waiting for the browser step.
     pub pending: Option<DeviceCode>,
     pub error: Option<String>,
+}
+
+impl Default for GitHubStatus {
+    fn default() -> Self {
+        Self {
+            cli_installed: false,
+            install_hint: crate::install_hints::host_hint(crate::install_hints::Tool::GitHub),
+            accounts: Vec::new(),
+            pending: None,
+            error: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -134,6 +148,7 @@ async fn github_status() -> GitHubStatus {
             accounts,
             pending,
             error: None,
+            install_hint: crate::install_hints::host_hint(crate::install_hints::Tool::GitHub),
         },
         None => GitHubStatus {
             cli_installed: true,
@@ -219,8 +234,10 @@ pub async fn start_github_login() -> Result<DeviceCode, String> {
         .spawn()
         .map_err(|error| match error.kind() {
             std::io::ErrorKind::NotFound => {
-                "The GitHub CLI (gh) is not installed. Install it with `brew install gh`."
-                    .to_owned()
+                format!(
+                    "The GitHub CLI (gh) is not installed. Install it with `{}`.",
+                    crate::install_hints::host_hint(crate::install_hints::Tool::GitHub)
+                )
             }
             _ => format!("Could not run gh: {error}"),
         })?;
@@ -368,6 +385,16 @@ mod tests {
     }
 
     #[test]
+    fn missing_github_serializes_host_install_hint() {
+        let value = serde_json::to_value(GitHubStatus::default()).unwrap();
+        assert_eq!(value["cliInstalled"], false);
+        assert_eq!(
+            value["installHint"],
+            crate::install_hints::host_hint(crate::install_hints::Tool::GitHub)
+        );
+    }
+
+    #[test]
     fn the_snapshot_wire_shape_matches_the_mac_app() {
         let snapshot = ConnectionsSnapshot {
             github: GitHubStatus {
@@ -384,6 +411,7 @@ mod tests {
                     url: "https://github.com/login/device".into(),
                 }),
                 error: None,
+                install_hint: crate::install_hints::host_hint(crate::install_hints::Tool::GitHub),
             },
             accounts: vec![ModelAccount {
                 provider: "openai".into(),
@@ -400,6 +428,7 @@ mod tests {
             serde_json::json!({
                 "github": {
                     "cliInstalled": true,
+                    "installHint": crate::install_hints::host_hint(crate::install_hints::Tool::GitHub),
                     "accounts": [{"host": "github.com", "login": "amy", "active": true, "valid": true, "scopes": ["repo"]}],
                     "pending": {"code": "37B2-1C7B", "url": "https://github.com/login/device"},
                     "error": null,
