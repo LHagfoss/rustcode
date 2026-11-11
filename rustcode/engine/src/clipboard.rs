@@ -15,6 +15,19 @@ pub fn paste_image_from_clipboard() -> Option<String> {
         return Some(format!("![image](file://{})", file_path_str));
     }
 
+    if cfg!(windows) {
+        let output = windows_clipboard_command(
+            "$ErrorActionPreference = 'Stop'; Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $image = [Windows.Forms.Clipboard]::GetImage(); if ($null -eq $image) { exit 1 }; try { $image.Save($env:RUSTCODE_CLIPBOARD_IMAGE, [Drawing.Imaging.ImageFormat]::Png) } finally { $image.Dispose() }",
+        )
+        .env("RUSTCODE_CLIPBOARD_IMAGE", &file_path)
+        .output()
+        .ok()?;
+        return output
+            .status
+            .success()
+            .then(|| format!("![image](file://{file_path_str})"));
+    }
+
     let script = format!(
         "write (the clipboard as «class PNGf») to (open for access \"{}\" with write permission)",
         file_path_str
@@ -109,8 +122,26 @@ pub fn warm_image_paste() {
     });
 }
 
+fn windows_clipboard_command(script: &str) -> std::process::Command {
+    let mut command = crate::platform::command("powershell");
+    command.args(["-NoProfile", "-NonInteractive", "-STA", "-Command", script]);
+    command
+}
+
+fn clipboard_text_command(windows: bool, write: bool) -> std::process::Command {
+    if windows {
+        windows_clipboard_command(if write {
+            "$ErrorActionPreference = 'Stop'; [Console]::InputEncoding = [Text.UTF8Encoding]::new($false); $text = [Console]::In.ReadToEnd(); Set-Clipboard -Value $text"
+        } else {
+            "$ErrorActionPreference = 'Stop'; [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); [Console]::Write((Get-Clipboard -Raw))"
+        })
+    } else {
+        crate::platform::command(if write { "pbcopy" } else { "pbpaste" })
+    }
+}
+
 pub fn read_text_from_clipboard() -> Option<String> {
-    let output = crate::platform::command("pbpaste")
+    let output = clipboard_text_command(cfg!(windows), false)
         .env("LANG", "en_US.UTF-8")
         .env("LC_CTYPE", "en_US.UTF-8")
         .output()
@@ -149,13 +180,13 @@ pub fn copy_to_clipboard(text: &str) -> ClipboardCopyStatus {
             stdout.write_all(osc52.as_bytes()).is_ok() && stdout.flush().is_ok()
         },
         |clean| {
-            let Ok(mut child) = crate::platform::command("pbcopy")
+            let Ok(mut child) = clipboard_text_command(cfg!(windows), true)
                 .env("LANG", "en_US.UTF-8")
                 .env("LC_CTYPE", "en_US.UTF-8")
                 .stdin(std::process::Stdio::piped())
                 .spawn()
             else {
-                dbg_log!("[CLIPBOARD] Failed to spawn pbcopy process");
+                dbg_log!("[CLIPBOARD] Failed to spawn native clipboard process");
                 return false;
             };
             let wrote = child
@@ -163,7 +194,7 @@ pub fn copy_to_clipboard(text: &str) -> ClipboardCopyStatus {
                 .take()
                 .is_some_and(|mut stdin| stdin.write_all(clean.as_bytes()).is_ok());
             let status = child.wait();
-            dbg_log!("[CLIPBOARD] pbcopy wait result: {:?}", status);
+            dbg_log!("[CLIPBOARD] Native clipboard wait result: {:?}", status);
             wrote && status.is_ok_and(|status| status.success())
         },
     )
@@ -204,6 +235,30 @@ mod tests {
         assert_eq!(confirmed, ClipboardCopyStatus::Confirmed);
         assert_eq!(requested, ClipboardCopyStatus::Requested);
         assert_eq!(failed, ClipboardCopyStatus::Failed);
+    }
+
+    #[test]
+    fn clipboard_selects_platform_text_commands() {
+        for write in [false, true] {
+            let windows = super::clipboard_text_command(true, write);
+            assert_eq!(windows.get_program(), "powershell");
+            let args: Vec<_> = windows
+                .get_args()
+                .map(|arg| arg.to_string_lossy())
+                .collect();
+            assert!(args.iter().any(|arg| arg == "-STA"));
+            assert!(args.last().unwrap().contains(if write {
+                "Set-Clipboard"
+            } else {
+                "Get-Clipboard"
+            }));
+            let mac = super::clipboard_text_command(false, write);
+            assert_eq!(mac.get_program(), if write { "pbcopy" } else { "pbpaste" });
+        }
+        assert_eq!(
+            copy_to_clipboard_with("text", |_| true, |_| false),
+            ClipboardCopyStatus::Requested
+        );
     }
 
     /// Reads the real pasteboard, so it only runs on request:
