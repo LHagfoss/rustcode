@@ -5040,7 +5040,7 @@ function mockMachine(
     state,
     detail:
       state === "offline"
-        ? "Not connected. Retrying in 4 s."
+        ? "failed to connect to 192.168.1.31:17879: Connection timed out (os error 60)"
         : state === "needsPairing"
           ? "Lars's Linux box ended this computer's pairing. Pair it again to see its threads."
           : null,
@@ -5057,8 +5057,19 @@ const MOCK_STUDIO = {
   name: "Studio",
   platform: "macos",
   route: "192.168.1.20:17879",
+  version: "1.28.0",
   // Two threads in one project and one in another, so **Run on** shows a choice of folders.
   threads: 3,
+};
+
+/** A Windows computer on the same network, one RustCode behind (`?machines=paired`). */
+const MOCK_WINDOWS = {
+  id: "gw-4a2c8e5f1b7d9c30",
+  name: "Lars's Windows box",
+  platform: "windows",
+  route: "192.168.1.44:17879",
+  version: "1.27.0",
+  threads: 2,
 };
 
 /** The Studio row: a Mac on the LAN, connected (or not) like the Linux box. */
@@ -5067,9 +5078,28 @@ function mockStudio(state: "connected" | "offline", addedAt: number): JsonObject
     id: MOCK_STUDIO.id,
     name: MOCK_STUDIO.name,
     platform: MOCK_STUDIO.platform,
+    version: MOCK_STUDIO.version,
     main: false,
     routes: [{ kind: "lan", address: MOCK_STUDIO.route, encrypted: false }],
     route: { kind: "lan", address: MOCK_STUDIO.route, encrypted: false },
+    state,
+    detail: state === "offline" ? "Not connected. Retrying in 8 s." : null,
+    retryInSecs: state === "offline" ? 8 : null,
+    addedAt: new Date(addedAt).toISOString(),
+    lastConnectedAt: new Date(addedAt).toISOString(),
+  };
+}
+
+/** The Windows row: a PC on the LAN, one RustCode behind this app (the version sentence). */
+function mockWindows(state: "connected" | "offline", addedAt: number): JsonObject {
+  return {
+    id: MOCK_WINDOWS.id,
+    name: MOCK_WINDOWS.name,
+    platform: MOCK_WINDOWS.platform,
+    version: MOCK_WINDOWS.version,
+    main: false,
+    routes: [{ kind: "lan", address: MOCK_WINDOWS.route, encrypted: false }],
+    route: { kind: "lan", address: MOCK_WINDOWS.route, encrypted: false },
     state,
     detail: state === "offline" ? "Not connected. Retrying in 8 s." : null,
     retryInSecs: state === "offline" ? 8 : null,
@@ -5097,9 +5127,13 @@ function mockMachineList(option: MockOptions["machines"]): JsonObject[] {
     case "revoked":
       return [mockMachine("needsPairing", savedAt)];
     case "paired":
-      // Saved during this session: the row says "just now". Two computers, so the sidebar's
-      // machine groups (this one, then each paired machine) are what the mock window shows.
-      return [mockMachine("connected", Date.now()), mockStudio("connected", savedAt)];
+      // The Devices view's own happy path: this Mac, a Windows PC with threads, and a machine
+      // that is away, saved during this session so the Mac and the PC read as just saved.
+      return [
+        mockStudio("connected", Date.now()),
+        mockWindows("connected", savedAt),
+        mockMachine("offline", savedAt),
+      ];
     default:
       return [mockMachine("connected", savedAt)];
   }

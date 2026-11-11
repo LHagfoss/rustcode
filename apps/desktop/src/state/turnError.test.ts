@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readableTurnError } from "./turnError";
+import { failureStatus, networkFailure, readableTurnError } from "./turnError";
 
 describe("a failed turn in words", () => {
   test("a JSON body is read for its message, with the harness and the HTTP status", () => {
@@ -61,5 +61,58 @@ describe("a failed turn in words", () => {
 
     const plain = `Codex: ${"y".repeat(2_000)}`;
     expect(readableTurnError(plain).length).toBeLessThanOrEqual(500);
+  });
+});
+
+describe("a turn that lost the network", () => {
+  test("reads the words each harness uses when no answer came back", () => {
+    for (const text of [
+      // Claude Code, whose own wording names nothing else.
+      "Claude Code: API Error: Connection error",
+      "Claude Code: Can't reach the API server. Check your internet connection and try again.",
+      "Claude Code: Unable to reach the API server",
+      // Codex: the stream ends before the answer does.
+      "Codex: stream disconnected before completion: error sending request for url (https://chatgpt.com/backend-api/codex/responses)",
+      "Codex: failed to connect to the model provider",
+      // Pi, on the webview's own fetch.
+      "Pi: TypeError: fetch failed",
+      "Pi: fetch failed",
+      // Node-style and proxy wordings that reach a turn as text.
+      "Codex: connect ECONNREFUSED 127.0.0.1:443",
+      "Codex: getaddrinfo ENOTFOUND api.openai.com",
+      "Codex: socket hang up",
+      "Claude Code: upstream connect error",
+      "Codex: request failed: network error",
+    ]) {
+      expect(networkFailure(text)).toBe(true);
+    }
+  });
+
+  test("a provider that answered is not the network", () => {
+    for (const text of [
+      undefined,
+      "",
+      // Reached, and refused on purpose.
+      'Codex: {"detail":"Bad Request"}',
+      'Claude Code: API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}',
+      'Claude Code: API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"Rate limited"}}',
+      "Codex: 503 Service Unavailable",
+      'Claude Code: API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      // Not network at all.
+      "You've hit your 5-hour limit · resets 2:50pm (Europe/Oslo)",
+      "Claude Code: your credit balance is too low",
+      "Codex: the tool failed to connect to the database",
+    ]) {
+      expect(networkFailure(text)).toBe(false);
+    }
+  });
+});
+
+describe("the HTTP status a failure names", () => {
+  test("is read from a body, a reason phrase or the text before it", () => {
+    expect(failureStatus('Codex: {"detail":"Bad Request"}')).toBe(400);
+    expect(failureStatus('Claude Code: API Error: 529 {"error":{"message":"Overloaded"}}')).toBe(529);
+    expect(failureStatus("Codex: 503 Service Unavailable")).toBe(503);
+    expect(failureStatus("Codex: the run finished")).toBeUndefined();
   });
 });

@@ -636,6 +636,9 @@ async fn a_paired_device_drives_a_shared_session_end_to_end() {
     // Pair, then come back with the device token.
     let (mut pairing, paired) = Phone::pair(&host, "Test iPhone").await;
     assert!(paired["host_name"].is_string(), "{paired}");
+    // The host names its platform so the device's machine list is not
+    // `unknown` (#3418).
+    assert!(paired["platform"].is_string(), "{paired}");
     assert_eq!(paired["device_name"], "Test iPhone");
     let listed = pairing
         .request(None, json!({"type": "list_sessions"}))

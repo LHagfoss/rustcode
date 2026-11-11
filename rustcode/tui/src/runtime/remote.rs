@@ -1512,8 +1512,12 @@ mod tests {
         // listens, the sessions with this terminal's marked, and the logs.
         let status = panel_until(&mut runtime, |report| report.contains("gateway log")).await;
         assert!(status.contains("Attached devices  none"), "{status}");
+        // Every bound address is listed with the interface it is on, so a
+        // loopback listener says why no other machine can reach it.
         assert!(
-            status.contains(&format!("listening on   {address}  (fixed bind)")),
+            status.contains(&format!(
+                "listening on   {address}  (loopback)  (fixed bind)"
+            )),
             "{status}"
         );
         assert!(
