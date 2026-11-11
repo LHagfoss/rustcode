@@ -19,6 +19,7 @@ import {
   gatewayLine,
   installServer,
   lastSeen,
+  linkCliToApp,
   localAppVersion,
   type Machine,
   machineLine,
@@ -86,6 +87,8 @@ class FakeShell implements Transport {
   }[] = [];
   /** What the local search says when it failed; the overlay rows are still listed. */
   discoverNotice: string | null = null;
+  /** Whether a terminal's `rustcode` reads as an older version. */
+  pathStale = false;
   /** Whether the background server reads as installed. */
   serverInstalled = true;
   /** What `server_service_install` refuses with, when it does. */
@@ -131,6 +134,10 @@ class FakeShell implements Transport {
         if (this.installError) throw this.installError;
         this.serverInstalled = this.installAnswersInstalled;
         return this.serverService();
+      case "server_link_path":
+        if (this.installError) throw this.installError;
+        this.pathStale = false;
+        return this.serverService();
       case "app_version":
         return this.appVersion;
       case "machines_remove":
@@ -152,7 +159,14 @@ class FakeShell implements Transport {
       running: installed,
       version: installed ? "1.28.0" : null,
       cliVersion: "1.28.0",
-      problems: [],
+      problems: this.pathStale
+        ? [
+            {
+              code: "path-version-mismatch",
+              message: "`rustcode` on PATH is 1.25.0, but this engine is 1.28.0.",
+            },
+          ]
+        : [],
       // The shell that installs and still reads "not installed" keeps the
       // command's own words here.
       error:
@@ -196,6 +210,7 @@ beforeEach(() => {
     pairingError: null,
     server: null,
     serverInstalling: false,
+    serverLinking: false,
   });
   forgetLocalAppVersion();
 });
@@ -626,6 +641,21 @@ describe("the RustCode server in the background", () => {
     expect(useMachines.getState().server?.running).toBe(true);
     expect(useMachines.getState().serverInstalling).toBe(false);
     expect(updateAdvice("macos")).toContain("brew upgrade rustcode");
+  });
+
+  test("pointing a terminal's rustcode at the app clears the version warning", async () => {
+    shell.pathStale = true;
+    await refreshServerService();
+    expect(useMachines.getState().server?.problems.map((problem) => problem.code)).toEqual([
+      "path-version-mismatch",
+    ]);
+    expect(await linkCliToApp()).toBe(true);
+    expect(useMachines.getState().server?.problems).toEqual([]);
+    expect(useMachines.getState().serverLinking).toBe(false);
+    // A copy the CLI refuses to touch (Homebrew's) keeps its reason on screen.
+    shell.installError = new Error("Homebrew's copy; run `brew upgrade lhagfoss/tap/rustcode`");
+    expect(await linkCliToApp()).toBe(false);
+    expect(useMachines.getState().serverLinking).toBe(false);
   });
 
   test("an install that fails says why, and leaves the page without a server", async () => {

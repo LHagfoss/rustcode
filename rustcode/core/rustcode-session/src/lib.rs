@@ -1069,7 +1069,13 @@ impl SessionStore {
             .iter()
             .any(|message| prompt_text(&message.role, &message.content).is_some());
         let has_assistant = messages.iter().any(|message| message.role == "assistant");
-        if !has_user || !has_assistant {
+        // External harnesses can be interrupted before their first reply. Their
+        // record still makes them reopenable, and their children need the parent
+        // in the list to retain their placement after a restart.
+        let external = path
+            .parent()
+            .is_some_and(|dir| dir.join("harness.json").is_file());
+        if !has_user || (!has_assistant && !external) {
             return None;
         }
 
@@ -2881,6 +2887,44 @@ mod tests {
             .expect("record compaction");
         assert_eq!(store.load_session_compaction(id), Some(compaction));
         assert_eq!(store.load_session_yolo(id), Some(true));
+    }
+
+    #[test]
+    fn external_parent_without_an_assistant_reply_stays_discoverable() {
+        let root = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(root.path());
+        let id = next_session_id();
+        let directory = store.ensure_session(&id);
+        std::fs::write(
+            directory.join("harness.json"),
+            r#"{"harness":"claude-code"}"#,
+        )
+        .unwrap();
+        store.save_session_history(&id, &vec![ChatMessage::new("user", "Continue")]);
+        flush_history();
+        let child = next_session_id();
+        let parent = SessionParent {
+            id: Some(id.clone()),
+            title: None,
+            relationship: Some(SessionRelationship::Delegate),
+        };
+        store.save_session_parent(&child, parent.clone()).unwrap();
+        store.save_session_history(
+            &child,
+            &vec![
+                ChatMessage::new("user", "Delegate task"),
+                ChatMessage::new("assistant", "Working"),
+            ],
+        );
+        flush_history();
+        let reopened = SessionStore::new(root.path());
+        let listed = reopened.list_sessions_in_scope(10, &SessionScope::All).0;
+        assert!(
+            listed
+                .iter()
+                .any(|meta| SessionStore::session_id_from_path(&meta.path).as_deref() == Some(&id))
+        );
+        assert_eq!(reopened.load_session_parent(&child), Some(parent));
     }
 
     #[test]

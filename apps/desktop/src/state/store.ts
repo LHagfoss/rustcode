@@ -82,6 +82,7 @@ import {
   SHORTCUTS_KEY,
 } from "../lib/keys";
 import { dismissOverlays } from "../lib/overlays";
+import { trashName } from "../lib/platform";
 import { setShellTransport, shellCall } from "../lib/shell";
 import { BUILTIN_THEMES, parseThemes, ThemeMethod, type ThemesSnapshot } from "../lib/themes";
 import { titleFrom } from "../lib/title";
@@ -3062,7 +3063,7 @@ export async function renameThread(id: string, title: string): Promise<boolean> 
 /** Move a thread's folder to the Trash, closing it in the engine first, as the SwiftUI app does. */
 export async function trashThread(id: string): Promise<boolean> {
   if (get().threads[id]?.running) {
-    toast("Stop the running turn before moving this thread to the Trash.", "info");
+    toast(`Stop the running turn before moving this thread to the ${trashName()}.`, "info");
     return false;
   }
   // Its delegates stop with it: forgetting their links would free slots they still hold.
