@@ -117,9 +117,10 @@ async fn list(config_dir: &std::path::Path, threads: bool, json: bool) -> Result
     let connector = Connector::new(config_dir, ClientKind::Desktop)?
         .with_timeouts(Duration::from_secs(3), Duration::from_secs(5));
     let mut rows = Vec::new();
-    // Routes learned from a handshake are saved after the run, so the loop
-    // keeps borrowing the loaded registry.
+    // Routes and platforms learned from a handshake are saved after the run,
+    // so the loop keeps borrowing the loaded registry.
     let mut learned: Vec<(String, Vec<Route>)> = Vec::new();
+    let mut platforms: Vec<(String, String)> = Vec::new();
     for machine in registry.ordered() {
         let mut row = Row {
             machine: machine.clone(),
@@ -139,6 +140,12 @@ async fn list(config_dir: &std::path::Path, threads: bool, json: bool) -> Result
                 row.state = State::Connected;
                 if !connected.learned.is_empty() {
                     learned.push((machine.host_id.clone(), connected.learned.clone()));
+                }
+                // A machine paired while its gateway reported no platform
+                // learns it now, so the row stops saying `unknown` (#3418).
+                if let Some(platform) = connected.session.welcome().platform.clone() {
+                    row.machine.platform = platform.clone();
+                    platforms.push((machine.host_id.clone(), platform));
                 }
                 // A LAN win stops the race before the overlay attempts start,
                 // so ask about them to say why they are not used (#3202); an
@@ -171,11 +178,14 @@ async fn list(config_dir: &std::path::Path, threads: bool, json: bool) -> Result
         }
         rows.push(row);
     }
-    if !learned.is_empty()
+    if (!learned.is_empty() || !platforms.is_empty())
         && let Ok(mut registry) = MachineRegistry::load(config_dir)
     {
         for (host_id, routes) in learned {
             let _ = registry.learn_routes(&host_id, &routes);
+        }
+        for (host_id, platform) in platforms {
+            let _ = registry.set_platform(&host_id, Some(&platform));
         }
     }
     if json {

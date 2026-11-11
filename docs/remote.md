@@ -276,7 +276,7 @@ remote access on is the short moment before it has registered.
 | `rustcode remote devices allow <id>` / `deny <id>` | Grant full ACP control, or deny it and immediately disconnect the device. |
 | `rustcode remote devices [--json]` | List paired devices: identifier, kind (phone, desktop or cli), platform, how long ago each was last seen, pairing time, expiry and name. JSON includes the host-controlled `acp` grant. Never a token. |
 | `rustcode remote revoke <device>` | Revoke by identifier, identifier prefix (four characters or more) or unique name. |
-| `rustcode remote status` | The running gateway: listen and advertised address (and whether each follows address changes), who started it (the RustCode server, the app or a terminal), the machine's current addresses with a recovery command when the gateway's address is gone, paired devices and which are connected, the state of pairing (time and wrong codes left, or the lockout), devices the gateway turned away recently with the reason, shared sessions and who is attached to each, session owners that run without being shared, and the paths of the gateway log and the session logs. |
+| `rustcode remote status` | The running gateway: every address the WebSocket listener is bound to, one line each with its interface and the kind of network it is on (so an `auto` bind shows its LAN and its overlay addresses), and the advertised address with whether each follows address changes; who started it (the RustCode server, the app or a terminal), the machine's current addresses with a recovery command when the gateway's address is gone, paired devices and which are connected, the state of pairing (time and wrong codes left, or the lockout), devices the gateway turned away recently with the reason, shared sessions and who is attached to each, session owners that run without being shared, and the paths of the gateway log and the session logs. |
 | `rustcode remote stop` | Stop the running gateway. |
 
 One gateway runs per configuration directory. A second `remote serve` is
@@ -500,7 +500,7 @@ fills in the same saved machines.
 | --- | --- |
 | `rustcode machines add <address> [--name <name>] [--code <digits>]` | Ask the machine to let this one in; the code is exactly the eight digits it shows (spaces and dashes are ignored). It shows *‹name› wants to connect* on that machine; accept it there, then type the eight-digit code it shows (or pass `--code`). Prints `Waiting for … to accept…` while the request is open. Pairs, stores the token and saves the machine. |
 | `rustcode machines add --discover` | The same, choosing the machine from Bonjour when exactly one answers. |
-| `rustcode machines list [--threads] [--json]` | Name, platform, the route in use and whether the machine answers now. Under a machine that is reachable one way and not another, it prints the hint: e.g. `Not reachable over NetBird (100.90.16.237:17879). On that machine, check that NetBird allows inbound connections and that an access policy allows TCP 17879 between the two machines.` The platform is `unknown` until the gateway reports one. With `--threads`, each connected machine's thread titles over ACP (`session/list`). `--json` for scripts, with the same hint under `hint`. |
+| `rustcode machines list [--threads] [--json]` | Name, platform, the route in use and whether the machine answers now. Under a machine that is reachable one way and not another, it prints the hint: e.g. `Not reachable over NetBird (100.90.16.237:17879). On that machine, check that NetBird allows inbound connections and that an access policy allows TCP 17879 between the two machines.` The platform comes from the gateway (`macos`, `windows` or `linux`) and is refreshed whenever the machine is reached; a gateway older than that reports none, and the row keeps `unknown`. With `--threads`, each connected machine's thread titles over ACP (`session/list`). `--json` for scripts, with the same hint under `hint`. |
 | `rustcode machines remove <name-or-id>` | Forget a machine and delete its token. It still lists this computer until it is revoked there. |
 | `rustcode machines discover [--secs <n>] [--json]` | Machines on this network whose record lists `caps=desktops`: name, address and machine id. |
 
@@ -522,11 +522,12 @@ holds until encrypted transport (#2651) lands.
 - Saved machines live in `machines.json` in the configuration directory
   (`0600` on Unix). Each is keyed by the machine's stable `host_id` — its
   gateway identifier — with an ordered list of routes (`lan`, `vpn`,
-  `tailscale`, `public`), the device record, the RustCode version it last
-  reported, and when it was added and last connected. The version is an
-  optional field of the `paired` and `authenticated` frames
-  (`docs/remote-protocol`); an older gateway sends none, and the row says
-  nothing about a version rather than guessing one. A route keeps the product
+  `tailscale`, `public`), the device record, the platform and the RustCode
+  version it last reported, and when it was added and last connected. The
+  platform and the version are optional fields of the `paired` and
+  `authenticated` frames (`docs/remote-protocol`); an older gateway sends
+  neither, so the row keeps `unknown` for the platform and says nothing about
+  a version rather than guessing one. A route keeps the product
   an overlay address is on (`netbird`,
   `zerotier`; a Tailscale address is its own kind and provider). The first
   machine saved is the **main** one. A change takes

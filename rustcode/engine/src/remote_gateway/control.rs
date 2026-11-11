@@ -88,6 +88,11 @@ pub struct GatewayStatus {
     pub gateway_id: String,
     pub uptime_seconds: u64,
     pub listen_address: String,
+    /// Every address a WebSocket listener is bound to, primary first, each
+    /// with the interface it is on. `listen_address` is the first of them.
+    /// Empty from a gateway that does not report them.
+    #[serde(default)]
+    pub listening: Vec<crate::remote_gateway::address::ListenAddress>,
     pub advertised_address: String,
     /// Who started this gateway: the RustCode server, the app, or a terminal.
     /// Absent from a gateway that predates it.

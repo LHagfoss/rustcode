@@ -624,6 +624,29 @@ impl MachineRegistry {
         })
     }
 
+    /// Record the platform a machine reported, so a machine paired before its
+    /// gateway sent one stops reading `unknown` (#3418). `None` — an older
+    /// gateway that says nothing — keeps what is saved. Returns whether it
+    /// changed.
+    pub fn set_platform(&mut self, host_id: &str, platform: Option<&str>) -> Result<bool> {
+        let Some(platform) = platform.filter(|platform| !platform.is_empty()) else {
+            return Ok(false);
+        };
+        self.mutate(|machines| {
+            let Some(machine) = machines
+                .iter_mut()
+                .find(|machine| machine.host_id == host_id)
+            else {
+                bail!("no saved machine has host id {host_id}");
+            };
+            if machine.platform == platform {
+                return Ok(false);
+            }
+            machine.platform = platform.to_owned();
+            Ok(true)
+        })
+    }
+
     /// Learn the addresses a machine reports after authentication, saving
     /// them for the next connection. Returns how many routes changed or were
     /// added; an unknown `host_id` is an error rather than a silent no-op.
@@ -1070,6 +1093,28 @@ mod tests {
     fn reloaded_register(dir: &std::path::Path, machine: Machine) {
         let mut store = load(dir);
         store.insert(machine).unwrap();
+    }
+
+    /// A machine paired while its gateway reported no platform learns it on
+    /// the next connection, and stays `unknown` while the gateway is older
+    /// (#3418).
+    #[test]
+    fn a_reported_platform_refreshes_a_saved_machine() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let mut store = load(dir.path());
+        store
+            .insert(machine("gw-a", "Studio", "192.168.1.20:17879"))
+            .unwrap();
+        store.machines[0].platform = "unknown".into();
+        // An older gateway says nothing: what is saved stays.
+        assert!(!store.set_platform("gw-a", None).unwrap());
+        assert_eq!(store.machines()[0].platform, "unknown");
+        // A newer one reports its platform, which is saved.
+        assert!(store.set_platform("gw-a", Some("windows")).unwrap());
+        assert_eq!(load(dir.path()).machines()[0].platform, "windows");
+        // Reporting the same one again changes nothing.
+        assert!(!store.set_platform("gw-a", Some("windows")).unwrap());
+        assert!(store.set_platform("gw-missing", Some("linux")).is_err());
     }
 
     /// Routes a handshake reports are saved in the order the race uses, with

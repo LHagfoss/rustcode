@@ -1,18 +1,13 @@
-#[cfg(unix)]
 pub mod client;
-#[cfg(unix)]
 pub(crate) mod command;
-#[cfg(unix)]
 pub use command::{CommandError, create_job, format_response};
 pub mod executor;
-#[cfg(unix)]
 pub mod lifecycle;
 pub mod model;
 pub(crate) mod private_files;
 pub mod protocol;
 pub mod schedule;
 pub mod scheduler;
-#[cfg(unix)]
 pub mod server;
 pub mod store;
 
@@ -45,3 +40,12 @@ impl fmt::Display for DaemonError {
 impl std::error::Error for DaemonError {}
 
 pub type Result<T> = std::result::Result<T, DaemonError>;
+
+// macOS's temporary root can exceed the Unix socket path limit.
+#[cfg(test)]
+pub(crate) fn test_directory() -> tempfile::TempDir {
+    #[cfg(unix)]
+    return tempfile::tempdir_in("/tmp").unwrap();
+    #[cfg(not(unix))]
+    return tempfile::tempdir().unwrap();
+}

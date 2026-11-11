@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { SessionSummary } from "../acp/types";
-import { matchProject, projectAt, projectsOn, remoteRepository } from "./projects";
+import { isRootFolder, matchProject, projectAt, projectsOn, remoteRepository } from "./projects";
 import { LOCAL_HOST } from "./threadKeys";
 
 const STUDIO = "gw-8e1f4b7a5c2d4e6f";
@@ -80,6 +80,44 @@ describe("a machine's projects", () => {
     expect(projectsOn(sessions, STUDIO).map((project) => project.path)).toEqual([
       "/Users/lars/code/rustcode",
     ]);
+  });
+
+  test("a thread with no folder of its own is not a project", () => {
+    // Its machine lists a stand-in for it (its home folder, `/` from a service manager), which made
+    // "no project" a place a thread could be started in (issue 3425).
+    const standIns: SessionSummary[] = [
+      session({ id: "x", cwd: "/Users/you", updatedAt: 5000, workspaceUnknown: true }),
+      session({ id: "y", cwd: "/", updatedAt: 4000 }),
+      session({ id: "z", cwd: "C:\\", updatedAt: 3000, host: STUDIO }),
+      session({ id: "w", cwd: "/Users/you/code/website", updatedAt: 1000 }),
+    ];
+    expect(projectsOn(standIns).map((project) => project.path)).toEqual(["/Users/you/code/website"]);
+    expect(projectsOn(standIns, STUDIO)).toEqual([]);
+  });
+
+  test("one folder, however Windows spells it", () => {
+    const spellings: SessionSummary[] = [
+      session({
+        id: "long",
+        cwd: "\\\\?\\C:\\Users\\me\\code\\app",
+        updatedAt: 2000,
+        repo: "\\\\?\\C:\\Users\\me\\code\\app",
+      }),
+      session({ id: "plain", cwd: "C:\\Users\\me\\code\\app", updatedAt: 1000 }),
+    ];
+    // The engine strips the prefix; the app does too, for what an older build stored.
+    expect(projectsOn(spellings)).toEqual([
+      { path: "C:\\Users\\me\\code\\app", name: "app", remote: undefined },
+    ]);
+  });
+
+  test("a folder is a root when nothing but a drive and separators is left", () => {
+    for (const root of ["/", "//", "C:", "C:\\", "\\\\?\\C:\\"]) {
+      expect(isRootFolder(root)).toBe(true);
+    }
+    for (const folder of ["", "  ", "/Users/me", "C:\\Users", "\\\\server\\share"]) {
+      expect(isRootFolder(folder)).toBe(false);
+    }
   });
 
   test("the project a folder is in, exactly", () => {

@@ -1,7 +1,6 @@
 use serde_json::Value;
 
 use super::{Tool, ToolCapability, ToolSafety};
-#[cfg(unix)]
 use crate::daemon::{
     client::DaemonClient,
     command,
@@ -9,14 +8,10 @@ use crate::daemon::{
     protocol::{DaemonRequest, DaemonResponse},
 };
 
-#[cfg(unix)]
 const MAX_SCHEDULED_JOBS_OUTPUT_BYTES: usize = 16_384;
-#[cfg(unix)]
 const MAX_LIST_JOBS: usize = 100;
-#[cfg(unix)]
 const MAX_HISTORY_RUNS: usize = 50;
 
-#[cfg(unix)]
 fn manage_scheduled_jobs_schema() -> Value {
     let misfire = serde_json::json!({"type":"string","enum":["skip_missed","run_once"],"default":"skip_missed"});
     serde_json::json!({
@@ -48,7 +43,6 @@ fn manage_scheduled_jobs_schema() -> Value {
     })
 }
 
-#[cfg(unix)]
 pub const MANAGE_SCHEDULED_JOBS: Tool = Tool {
     name: "manage_scheduled_jobs",
     description: "Create and manage durable scheduled jobs in the RustCode daemon, which must already be running.",
@@ -60,7 +54,6 @@ pub const MANAGE_SCHEDULED_JOBS: Tool = Tool {
     safety: ToolSafety::ControlPlane,
 };
 
-#[cfg(unix)]
 fn manage_scheduled_jobs(args: &Value) -> Result<String, String> {
     let config_dir =
         crate::config::get_config_dir().ok_or("error: config directory unavailable")?;
@@ -68,7 +61,6 @@ fn manage_scheduled_jobs(args: &Value) -> Result<String, String> {
     manage_scheduled_jobs_with_client(args, &client)
 }
 
-#[cfg(unix)]
 pub(crate) fn manage_scheduled_jobs_with_client(
     args: &Value,
     client: &DaemonClient,
@@ -110,7 +102,6 @@ pub(crate) fn manage_scheduled_jobs_with_client(
     format_daemon_response(operation, response)
 }
 
-#[cfg(unix)]
 fn required_string<'a>(args: &'a Value, field: &str) -> Result<&'a str, String> {
     args.get(field)
         .and_then(Value::as_str)
@@ -118,7 +109,6 @@ fn required_string<'a>(args: &'a Value, field: &str) -> Result<&'a str, String> 
         .ok_or_else(|| format!("missing '{field}'"))
 }
 
-#[cfg(unix)]
 fn create_job(args: &Value) -> Result<crate::daemon::model::JobRecord, String> {
     let id = required_string(args, "id")?;
     let name = required_string(args, "name")?;
@@ -144,7 +134,6 @@ fn create_job(args: &Value) -> Result<crate::daemon::model::JobRecord, String> {
     .map_err(|error| error.message)
 }
 
-#[cfg(unix)]
 fn format_daemon_response(operation: &str, response: DaemonResponse) -> Result<String, String> {
     match response {
         DaemonResponse::Error { message, .. } => Err(format!("error: {message}")),
@@ -184,7 +173,6 @@ fn format_daemon_response(operation: &str, response: DaemonResponse) -> Result<S
     }
 }
 
-#[cfg(unix)]
 fn bounded_rows(key: &str, mut rows: Vec<Value>, total: usize) -> Result<String, String> {
     loop {
         let included = rows.len();
@@ -305,7 +293,7 @@ pub const LIST_SESSIONS: Tool = Tool {
 
 pub const MESSAGE_SESSION: Tool = Tool {
     name: crate::orchestration::MESSAGE_SESSION,
-    description: "Send another thread of this project a message; it answers in a turn of its own, with its own history and approvals. The user is asked once. Returns a link_id for wait_session; the message queues while that thread is busy. Send the whole task: it does not see this conversation. Carry the repository rules (tell it to read AGENTS.md) and acceptance criteria, and bound commands that can block: a delegated shell has no TTY or default timeout.",
+    description: "Message a thread in any project. The user is asked once. Idle starts a turn; busy queues. steer: true delivers mid-turn if supported, else queues; delivered says steered, queued or started. Returns link_id for wait_session. Send the whole task, repository rules (read AGENTS.md), acceptance criteria and command timeouts: delegates have no TTY or default timeout.",
     arguments: r#"{"session_id": "id from list_sessions", "message": "what to ask or do", "attachments": ["/abs/path/to/file"], "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -315,6 +303,7 @@ pub const MESSAGE_SESSION: Tool = Tool {
             "properties": {
                 "session_id": {"type": "string", "minLength": 1},
                 "message": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_MESSAGE_BYTES},
+                "steer": {"type": "boolean"},
                 "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"},
                 "attachments": {
                     "type": "array",
@@ -1159,7 +1148,7 @@ pub const READ_ACTIVITY: Tool = Tool {
 /// thread queued on another one, and what it may still do to them.
 pub const MANAGE_QUEUE: Tool = Tool {
     name: crate::orchestration::MANAGE_QUEUE,
-    description: "List, edit, cancel or steer the messages this thread queued on another one with message_session while it was busy: each one's queue_id, its first 200 characters and when it was queued, in send order. Only this thread's own queued messages can be changed, never one that has started. edit replaces the text, cancel drops it, steer delivers it into the running turn where that harness takes a message mid-turn. The user is asked once.",
+    description: "List, edit, cancel or steer this thread's queued messages in any project; the user is asked once. Lists queue_id, first 200 characters and time in send order. Only this thread's own queued messages can change, never one that started. steer delivers mid-turn if supported. For new input use message_session with steer: true.",
     arguments: r#"{"session_id": "the busy thread", "action": "list|edit|cancel|steer", "queue_id": "from list", "text": "the new text, for edit"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
