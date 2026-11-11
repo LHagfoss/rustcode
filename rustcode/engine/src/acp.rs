@@ -7085,6 +7085,99 @@ mod tests {
         server.shutdown().await;
     }
 
+    /// A thread a paired computer asks this one to start (`create_session`, a remote
+    /// `start_session`) is made by the machine's server, not by any client: the app on this
+    /// machine, which never asked, still hears about it and lists it at once (issue 3530).
+    #[test]
+    fn a_thread_started_for_a_paired_computer_reaches_this_machines_app() {
+        on_a_large_stack(remote_thread_reaches_the_local_app());
+    }
+
+    async fn remote_thread_reaches_the_local_app() {
+        let server = AcpServer::new(false).expect("server");
+        // The share the new thread gets connects to a gateway this test holds.
+        let gateways = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let kept = std::sync::Arc::clone(&gateways);
+        struct Held(std::sync::Arc<std::sync::Mutex<Vec<crate::remote::owner::GatewayLink>>>);
+        impl crate::remote::owner::OwnerConnector for Held {
+            fn connect(
+                &mut self,
+                _registration: &crate::remote::SessionRegistration,
+            ) -> Result<crate::remote::owner::OwnerLink, crate::remote::owner::OwnerLinkError>
+            {
+                let (owner, gateway) = crate::remote::owner::owner_link_pair(16, 16);
+                if let Ok(mut held) = self.0.lock() {
+                    held.push(gateway);
+                }
+                Ok(owner)
+            }
+        }
+        server
+            .remote
+            .use_connector(move || Box::new(Held(std::sync::Arc::clone(&kept))));
+
+        // This machine's own app lists threads and keeps every creation it is told about.
+        let (engine, transport) = agent_client_protocol::Channel::duplex();
+        let (created_tx, mut created) = tokio::sync::mpsc::unbounded_channel();
+        let (ready_tx, ready) = tokio::sync::oneshot::channel();
+        let (close, closed) = tokio::sync::oneshot::channel();
+        let serving = serve_on_thread(&server, engine);
+        let app = tokio::spawn(async move {
+            agent_client_protocol::Client
+                .builder()
+                .on_receive_notification(
+                    async move |notification: ThreadCreatedNotification, _connection| {
+                        let _ = created_tx.send(notification);
+                        Ok(())
+                    },
+                    agent_client_protocol::on_receive_notification!(),
+                )
+                .connect_with(transport, async move |connection| {
+                    let _ = ready_tx.send(connection);
+                    let _ = closed.await;
+                    Ok(())
+                })
+                .await
+        });
+        let connection = ready.await.expect("the app connects");
+        connection
+            .send_request(initialize_with(
+                serde_json::json!({ "rustcode": { "threads": 1 } }),
+            ))
+            .block_task()
+            .await
+            .expect("the app initializes");
+
+        // The gateway routes the paired computer's request to the engine's thread host.
+        let folder = tempfile::tempdir().expect("folder");
+        let folder_path = std::fs::canonicalize(folder.path()).expect("folder");
+        let info = hosted::start(
+            &server,
+            remote::ThreadStart {
+                path: Some(folder_path.display().to_string()),
+                harness: Some(crate::harness::BUILTIN_ID.to_owned()),
+                model: None,
+            },
+        )
+        .await
+        .expect("the thread starts");
+
+        let announced = tokio::time::timeout(std::time::Duration::from_secs(10), created.recv())
+            .await
+            .expect("the app is told about the thread")
+            .expect("a row");
+        assert_eq!(announced.session_id, info.session_id);
+        assert_eq!(announced.cwd, folder_path);
+
+        let _ = close.send(());
+        app.await.expect("client").expect("client ends cleanly");
+        serving
+            .await
+            .expect("connection")
+            .expect("connection ends cleanly");
+        server.shutdown().await;
+    }
+
     // ---- the replay cursor (`acp/cursor.rs`) ----
 
     /// One connected test client that keeps every whole `session/update`

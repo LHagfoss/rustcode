@@ -2918,7 +2918,11 @@ async function updateSession(caller: RuleThread, call: UpdateCall): Promise<Json
     session_id: target.id,
     title: after?.title ?? target.title,
     pinned: useApp.getState().pinned.includes(target.id),
-    status: after?.status ?? "idle",
+    // The status this call set, not the live one: a thread settled in the middle of its turn still
+    // runs, and answering "running" read as if the settle had been refused (issue 3529). It is
+    // settled now and leaves the active list when its turn ends; `running` says it still works.
+    status: call.status ? STATUS_OF_CHOICE[call.status] : (after?.status ?? "idle"),
+    running: !!useApp.getState().threads[target.id]?.running,
     snoozed_until: until ? new Date(until).toISOString() : null,
   };
 }

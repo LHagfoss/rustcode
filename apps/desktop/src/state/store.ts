@@ -5847,7 +5847,10 @@ export async function setThreadsStatus(ids: string[], status: "review" | "done" 
       set((s) => ({
         sessions: s.sessions.map((x) => (x.id === id ? { ...x, status } : x)),
         ...(status === "done"
-          ? { failed: Object.fromEntries(Object.entries(s.failed).filter(([key]) => key !== id)) }
+          ? {
+              failed: Object.fromEntries(Object.entries(s.failed).filter(([key]) => key !== id)),
+              finished: without(s.finished, id),
+            }
           : {}),
       }));
     } catch (error) {
@@ -5864,7 +5867,11 @@ export async function setThreadsStatus(ids: string[], status: "review" | "done" 
     // retry (`cleanup_worktree`, a fan-out's losers, a delegate its parent replaced), so its
     // Inbox card goes with the settle.
     ...(status === "done"
-      ? { failed: Object.fromEntries(Object.entries(s.failed).filter(([id]) => !wanted.has(id))) }
+      ? {
+          failed: Object.fromEntries(Object.entries(s.failed).filter(([id]) => !wanted.has(id))),
+          // A settled thread is read: its unseen finish is not news to come back to.
+          finished: Object.fromEntries(Object.entries(s.finished).filter(([id]) => !wanted.has(id))),
+        }
       : {}),
   }));
   if (status === "idle") for (const id of ids) clearStatusMark(id);

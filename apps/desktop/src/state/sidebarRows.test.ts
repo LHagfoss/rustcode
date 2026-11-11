@@ -388,6 +388,21 @@ describe("which section a thread is drawn under", () => {
     expect(place({ snoozed: true, settled: true })).toBe("settled");
   });
 
+  test("a thread settled in the middle of a turn moves to Settled when the turn ends (issue 3529)", () => {
+    // Settled while it works: it stays where it can be watched…
+    expect(place({ settled: true, working: true })).toBe("threads");
+    expect(place({ settled: true, working: true, layout: "shelf" })).toBe("working");
+    // …and the turn ending leaves it "just finished, not seen": the settle still wins.
+    expect(place({ settled: true, fresh: true })).toBe("settled");
+    expect(place({ settled: true, fresh: true, layout: "shelf" })).toBe("settled");
+    // Unsettle, then settle again by hand: it round-trips through the active list.
+    expect(place({ settled: false, fresh: true })).toBe("threads");
+    expect(place({ settled: true, fresh: true })).toBe("settled");
+    // A request it asks still shows it (and a pinned one stays pinned while it works).
+    expect(place({ settled: true, fresh: true, needs: true })).toBe("threads");
+    expect(place({ pinned: true, settled: true, fresh: true })).toBe("settled");
+  });
+
   test("a thread untouched for days is Settled, a freshly finished one is not", () => {
     expect(place({ aged: true })).toBe("settled");
     expect(place({ aged: true, fresh: true })).toBe("threads");

@@ -365,7 +365,9 @@ export function hiddenKind(section: SectionId, rows: readonly HiddenRow[]): Hidd
 
 /**
  * The section a thread is drawn under. A settled thread never sits under Pinned, whatever it was
- * pinned as (the pin returns when it is unsettled); a thread asleep after a snooze stays in Snoozed
+ * pinned as (the pin returns when it is unsettled), and it goes under Settled the moment nothing
+ * works or asks on it, even if the turn it was settled in the middle of has only just ended and
+ * nobody has seen it; a thread asleep after a snooze stays in Snoozed
  * whatever it does.
  *
  * Pinned wins over what asks you and over Working, so a pinned thread stays where the user put it
@@ -381,13 +383,16 @@ export function hiddenKind(section: SectionId, rows: readonly HiddenRow[]): Hidd
  */
 export function placeThread(p: Placement): SectionId {
   const busy = p.needs || p.working;
-  if (p.settled && !busy && !p.fresh) return "settled";
+  // Settling is the user's (or the engine's) word that the thread is done: the turn it was settled
+  // in the middle of ends as "just finished", and that must not hold it in Threads (issue 3529).
+  // Only work that is still going, or a request that waits, keeps a settled thread out of Settled.
+  if (p.settled && !busy) return "settled";
   if (p.pinned) return "pinned";
   // Asleep: nothing it does moves it out of the shelf the user put it in.
   if (p.snoozed) return "snoozed";
   if (p.needs) return "threads";
   if (p.working) return p.layout === "shelf" ? "working" : "threads";
-  if ((p.settled || p.aged) && !busy && !p.fresh) return "settled";
+  if (p.aged && !busy && !p.fresh) return "settled";
   return "threads";
 }
 
