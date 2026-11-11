@@ -226,6 +226,51 @@ describe("a delegate on a paired machine", () => {
     expect(link()?.error).toBeUndefined();
   });
 
+  test("a link whose thread no list names and nothing keeps is failed as gone", async () => {
+    // A link this window did not just make (one from before a restart): the app has a copy of the
+    // thread's own state, but no list names it and the keep-unlisted set does not hold it. The
+    // copy was what the old check looked at, so a gone link could never fail.
+    const at = Date.now();
+    const target = `${WINDOWS}/gone`;
+    useApp.setState((s) => ({
+      links: {
+        ...emptyBook(),
+        links: [
+          {
+            id: LINK,
+            orchestrator: PARENT,
+            target,
+            orchestratorTitle: "Report the specs",
+            targetTitle: "Gone",
+            message: "Report this machine's specs",
+            state: "working",
+            started: true,
+            machine: "Windows",
+            createdAt: at,
+            startedAt: at,
+          },
+        ],
+      },
+      threads: {
+        ...s.threads,
+        [PARENT]: {
+          ...emptyThread(PARENT, "/Users/lagos/code/rustcode", "Report the specs"),
+          running: true,
+          loaded: true,
+        },
+        [target]: emptyThread(target, CWD, "Gone"),
+      },
+    }));
+
+    await answerOrchestration({
+      sessionId: PARENT,
+      tool: "wait_session",
+      args: { link_ids: [LINK], timeout_ms: 1 },
+    });
+    expect(link()?.state).toBe("failed");
+    expect(link()?.error).toBe("That thread is gone.");
+  });
+
   test("read_activity is the machine's own, or says it has none to give", async () => {
     const activity: JsonObject = {
       items: [{ kind: "turn.summary", at: "2026-11-11T20:35:00Z" }],

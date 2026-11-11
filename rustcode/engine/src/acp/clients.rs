@@ -469,6 +469,15 @@ impl Clients {
         self.send_where(notification, |entry| entry.topics.contains(&topic));
     }
 
+    /// Tell every client that lists threads and does not have `session_id`: a
+    /// thread's name is kept in a thread list, not only in the chat it was
+    /// opened in. Sent outside the logged stream, so it has no cursor.
+    pub(crate) fn publish_thread_title(&self, session_id: &str, update: SessionUpdate) {
+        self.send_where(snapshot(session_id, update), |entry| {
+            entry.info.has(Capability::Threads) && !entry.sessions.contains_key(session_id)
+        });
+    }
+
     fn send_where<N: JsonRpcNotification>(&self, notification: N, to: impl Fn(&Entry) -> bool) {
         let connections = self
             .registry()
@@ -813,29 +822,40 @@ impl SessionClients {
     /// A `session/update` of this session. A running turn keeps it for a
     /// client that loads the session later in the turn.
     pub(crate) fn update(&self, update: SessionUpdate) -> Result<(), agent_client_protocol::Error> {
+        // A title is kept in every client's thread list, like a status: it is sent to the
+        // clients that do not have the session below, outside the logged stream.
+        let for_list =
+            matches!(&update, SessionUpdate::SessionInfoUpdate(info) if info.title.is_value())
+                .then(|| update.clone());
         // Numbered, recorded, addressed and queued under one lock. A client
         // attaching meanwhile gets the update either in its replay or live,
         // never both and never neither; and concurrent producers cannot put
         // their cursors on the wire out of order, which would let a client
         // that drops after the higher one skip the lower one on resume.
         // Sending only queues the message.
-        let mut registry = self.clients.registry();
-        let cursor = registry.log(&self.session_id).push(&update);
-        let mut overflow = false;
-        if let Some(turn) = registry.turns.get_mut(&self.session_id) {
-            turn.record(&update);
-            overflow = turn.updates.len() > LIVE_TURN_UPDATES;
+        let outcome = {
+            let mut registry = self.clients.registry();
+            let cursor = registry.log(&self.session_id).push(&update);
+            let mut overflow = false;
+            if let Some(turn) = registry.turns.get_mut(&self.session_id) {
+                turn.record(&update);
+                overflow = turn.updates.len() > LIVE_TURN_UPDATES;
+            }
+            if overflow {
+                registry.turns.remove(&self.session_id);
+                registry.bump(&self.session_id);
+            }
+            registry.deliver(
+                &self.session_id,
+                cursor,
+                None,
+                notification(&self.session_id, update, cursor),
+            )
+        };
+        if let Some(update) = for_list {
+            self.clients.publish_thread_title(&self.session_id, update);
         }
-        if overflow {
-            registry.turns.remove(&self.session_id);
-            registry.bump(&self.session_id);
-        }
-        registry.deliver(
-            &self.session_id,
-            cursor,
-            None,
-            notification(&self.session_id, update, cursor),
-        )
+        outcome
     }
 
     /// A `session/update` for every connection with the session except
