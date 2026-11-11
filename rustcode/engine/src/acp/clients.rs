@@ -882,6 +882,14 @@ impl SessionClients {
         self.clients.requester(&self.session_id, need)
     }
 
+    /// Whether an app that lists threads has this session attached: the
+    /// clients that host orchestration, and the only ones whose absence means
+    /// the engine should answer a call itself (#3422). Another client's app on
+    /// the same server does not count: it cannot answer this session's calls.
+    pub(crate) fn app_attached(&self) -> bool {
+        self.requester(Some(Capability::Threads)).is_some()
+    }
+
     /// Ask the client that most recently attached the session and has `need`.
     /// With no such client the request fails, as a request to a closed
     /// connection did.

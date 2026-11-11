@@ -32,6 +32,30 @@ impl crate::preview::PreviewClient for AcpClientRequests {
         let (method, need) = (self.method, self.need);
         let params = preview_request_params(clients.session_id(), params);
         Box::pin(async move {
+            // No app hosts the orchestration tools any more: the engine answers
+            // what it can itself instead of failing the call (#3422). The app
+            // stays first whenever one is attached.
+            if method == crate::orchestration::METHOD
+                && clients.requester(Some(Capability::Orchestration)).is_none()
+            {
+                let tool = params
+                    .get("tool")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let args = params
+                    .get("args")
+                    .cloned()
+                    .filter(Value::is_object)
+                    .unwrap_or_else(|| serde_json::json!({}));
+                let cancel = tokio_util::sync::CancellationToken::new();
+                return Ok(crate::orchestration::local::answer_json(
+                    clients.session_id(),
+                    &cancel,
+                    tool,
+                    &args,
+                )
+                .await);
+            }
             let message = UntypedMessage::new(method, params).map_err(|error| error.to_string())?;
             clients
                 .request(Some(need), message)

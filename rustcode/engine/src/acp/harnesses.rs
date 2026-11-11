@@ -418,7 +418,27 @@ async fn attach_orchestrator(
     smart_ui: crate::app::SmartUi,
     clients: &SessionClients,
 ) -> bool {
-    if orchestration < 2 || !harness::capabilities(&session.harness).orchestration {
+    if !harness::capabilities(&session.harness).orchestration {
+        return false;
+    }
+    // No app hosts the tools: this engine answers the reads itself and names
+    // the app for the calls that need it (#3422). An app that turned them off
+    // still turns them off, so nothing is attached then.
+    if orchestration == 0 {
+        if clients.app_attached() {
+            return false;
+        }
+        let launch = crate::orchestration::hub::launch_local_for(
+            &session.id,
+            crate::orchestration::VERSION,
+            smart_ui,
+        )
+        .await;
+        let attached = launch.is_some();
+        session.set_orchestrator(launch);
+        return attached;
+    }
+    if orchestration < 2 {
         return false;
     }
     let Some(client) = super::preview::orchestration_client_for(true, clients) else {

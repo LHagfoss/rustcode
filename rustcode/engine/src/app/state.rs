@@ -331,6 +331,12 @@ pub struct AppState {
     /// The orchestration version that client advertised: 1 offers the M1
     /// tools, 2 adds `read_session`, `start_session` and `fan_out`.
     pub orchestration_version: u8,
+    /// No client hosts the orchestration tools, so the engine answers the
+    /// reads itself and names the app for the calls that need it (#3422). A
+    /// terminal, a headless run and a session owner start this way; an app
+    /// that turned the tools off leaves it false, so that setting still hides
+    /// them.
+    pub local_orchestration: bool,
     pub preview_client: Option<std::sync::Arc<dyn crate::preview::PreviewClient>>,
     pub desktop_client: Option<std::sync::Arc<dyn crate::preview::PreviewClient>>,
     /// The client that renders `smart_ui_preview` calls, when Smart UI is on
@@ -1848,6 +1854,7 @@ impl AppState {
             smart_ui_client: None,
             orchestration_client: None,
             orchestration_version: 0,
+            local_orchestration: true,
             pending_preview_images: Vec::new(),
             show_mcp_config: false,
             mcp_picker_index: 0,

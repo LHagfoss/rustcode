@@ -171,7 +171,9 @@ impl Launch {
 
 struct Registered {
     token: String,
-    client: Arc<dyn PreviewClient>,
+    /// The app client that answers the calls, when one hosts them. `None`
+    /// means this engine answers itself (#3422).
+    client: Option<Arc<dyn PreviewClient>>,
     /// The orchestration version this thread's client advertised. The socket
     /// carries calls for one thread, so its version travels with its token and
     /// governs what the hub may forward, whatever the server in front assumes.
@@ -213,6 +215,21 @@ impl Hub {
         client: Arc<dyn PreviewClient>,
         version: u8,
     ) -> String {
+        self.register_with(session_id, Some(client), version)
+    }
+
+    /// Let `session_id` call with the engine answering itself, for a thread
+    /// whose app is not attached (#3422).
+    pub fn register_local(&self, session_id: &str, version: u8) -> String {
+        self.register_with(session_id, None, version)
+    }
+
+    fn register_with(
+        &self,
+        session_id: &str,
+        client: Option<Arc<dyn PreviewClient>>,
+        version: u8,
+    ) -> String {
         let token = random_token();
         self.lock().insert(
             session_id.to_owned(),
@@ -235,12 +252,17 @@ impl Hub {
             .unwrap_or_else(|error| error.into_inner())
     }
 
-    /// The client and its version for a call, when its session and token match.
-    fn authorize(&self, request: &CallRequest) -> Option<(Arc<dyn PreviewClient>, u8)> {
+    /// The client (when one hosts the tools) and its version for a call, when
+    /// its session and token match.
+    fn authorize(&self, request: &CallRequest) -> Option<(Option<Arc<dyn PreviewClient>>, u8)> {
         let sessions = self.lock();
         let registered = sessions.get(&request.session_id)?;
-        same_token(&registered.token, &request.token)
-            .then(|| (Arc::clone(&registered.client), registered.version))
+        same_token(&registered.token, &request.token).then(|| {
+            (
+                registered.client.as_ref().map(Arc::clone),
+                registered.version,
+            )
+        })
     }
 
     /// Answer one decoded call.
@@ -260,9 +282,22 @@ impl Hub {
                 request.tool
             ));
         }
-        let output =
-            super::execute_versioned(Some(client), version, cancel, &request.tool, &request.args)
-                .await;
+        let output = match client {
+            Some(client) => {
+                super::execute_versioned(
+                    Some(client),
+                    version,
+                    cancel,
+                    &request.tool,
+                    &request.args,
+                )
+                .await
+            }
+            None => {
+                super::local::answer(&request.session_id, cancel, &request.tool, &request.args)
+                    .await
+            }
+        };
         CallAnswer {
             success: output.success,
             content: output.content,
@@ -436,6 +471,25 @@ pub async fn launch_for(
     version: u8,
     smart_ui: crate::app::SmartUi,
 ) -> Option<Launch> {
+    launch_with(session_id, Some(client), version, smart_ui).await
+}
+
+/// [`launch_for`] for a thread whose app is not attached: the engine answers
+/// the calls itself (#3422).
+pub async fn launch_local_for(
+    session_id: &str,
+    version: u8,
+    smart_ui: crate::app::SmartUi,
+) -> Option<Launch> {
+    launch_with(session_id, None, version, smart_ui).await
+}
+
+async fn launch_with(
+    session_id: &str,
+    client: Option<Arc<dyn PreviewClient>>,
+    version: u8,
+    smart_ui: crate::app::SmartUi,
+) -> Option<Launch> {
     #[cfg(unix)]
     {
         let hub = match shared().await {
@@ -446,7 +500,10 @@ pub async fn launch_for(
             }
         };
         let command = std::env::current_exe().ok()?;
-        let token = hub.register(session_id, client, version);
+        let token = match client {
+            Some(client) => hub.register(session_id, client, version),
+            None => hub.register_local(session_id, version),
+        };
         Some(
             Launch::new(command, session_id, hub.path(), &token)
                 .with_smart_ui(smart_ui == crate::app::SmartUi::On)
@@ -520,5 +577,41 @@ mod tests {
         let sent = super::call(hub.path(), &request(token)).await;
         assert!(sent.success, "{}", sent.content);
         assert_eq!(asked.load(Ordering::SeqCst), 1);
+    }
+
+    /// A thread whose app is not attached: the engine answers the reads and
+    /// names the app for a call that needs it, instead of "unknown tool".
+    #[tokio::test]
+    async fn the_hub_answers_locally_when_no_client_hosts_the_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let hub = Hub::bind(dir.path().join("run").join("orchestrator-local.sock"))
+            .await
+            .unwrap();
+        let token = hub.register_local("thread-1", super::super::VERSION);
+        let call = |tool: &str, args: Value| CallRequest {
+            session_id: "thread-1".to_owned(),
+            token: token.clone(),
+            tool: tool.to_owned(),
+            args,
+        };
+        let listed = super::call(hub.path(), &call(super::super::LIST_MACHINES, json!({}))).await;
+        assert!(listed.success, "{}", listed.content);
+        let value: Value = serde_json::from_str(&listed.content).unwrap();
+        assert_eq!(value["current"], json!("local"));
+
+        let sent = super::call(
+            hub.path(),
+            &call(
+                super::super::MESSAGE_SESSION,
+                json!({"session_id": "thread-2", "message": "go"}),
+            ),
+        )
+        .await;
+        assert!(!sent.success);
+        assert!(
+            sent.content.contains("RustCode app open"),
+            "{}",
+            sent.content
+        );
     }
 }

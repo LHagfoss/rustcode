@@ -288,6 +288,39 @@ Built (`rustcode/engine/src/checkpoints.rs`). Details:
   thread's directory itself leaves its refs; they are ordinary refs under
   `refs/rustcode/checkpoints/<session_id>/`.
 
+## No app attached
+
+The app is the host of the orchestration tools: it asks the user, runs the
+call and keeps the retry receipts. A thread with no app attached — a terminal
+or `rustcode -p` run, a session owner the gateway started for a paired
+machine, or a server thread whose app has closed — still gets the tools, and
+the engine answers the ones that need no approval itself
+(`rustcode/engine/src/orchestration/local.rs`, #3422):
+
+| Tool | Without the app |
+| --- | --- |
+| `list_sessions`, `read_session` | The same thread store the app reads; `read_session` renders and pages its turns as the app does. |
+| `list_harnesses` | The engine's own `_rustcode/harnesses` snapshot, with the model cap and `model`/`harness` filters. |
+| `list_machines` | This computer and the machines in `machines.json`; a saved machine's `state` is `unknown`, because the app owns the live connections. |
+| `thread_status` | Status, project, worktree and branch from the thread and link records; pull requests and checks are the app's to read, and the answer says so. |
+| `wait_session` | The link book the app saves. Nothing advances a working link while the app is closed, so a wait can time out where an open app would have answered. |
+
+`start_session`, `message_session`, `fan_out`, and every management or merge
+tool still need the app: with no app they are listed, and a call answers
+`{"error": {"code": "unavailable", "message": "… needs the RustCode app open
+to approve and run it …"}}` instead of "unknown tool". A thread that is on
+Full access does not change that yet: the server has no way to start or
+message a thread without the app's host, so the answer names the app rather
+than acting without the approval it would have asked for.
+
+The app stays first whenever one is attached, including by reconnecting to a
+running server. A call made while the app is between connections falls back
+to the same reads; it is only used when no connected client hosts the call.
+Retry receipts are kept in memory for the life of the process, keyed by the
+caller and `client_request_id`, so a retry under the same key and arguments
+returns the first answer (marked `replayed`) and the same key with another
+call or other arguments is refused.
+
 ## Orchestration tools v2
 
 Built (`rustcode/engine/src/orchestration.rs`). Offered to root coding turns

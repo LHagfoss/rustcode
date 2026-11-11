@@ -648,6 +648,9 @@ fn apply_client_info(
     state.desktop_client = preview::desktop_client_for(info.desktop, clients);
     (state.orchestration_client, state.orchestration_version) =
         preview::orchestration_for(info.orchestration, clients);
+    // No app hosting the tools: this engine serves the reads and names the app
+    // for the rest (#3422). An app that turned them off keeps them off.
+    state.local_orchestration = info.orchestration == 0 && !clients.app_attached();
     state.smart_ui_client = preview::smart_ui_client_for(
         info.smart_ui == crate::app::SmartUi::On && info.smart_ui_preview,
         clients,
@@ -6289,6 +6292,7 @@ mod tests {
                 assert_eq!(state.visualization_level, 2);
                 assert_eq!(state.smart_ui, crate::app::SmartUi::On);
                 assert!(state.orchestration_client.is_some());
+                assert!(!state.local_orchestration);
                 state
                     .preview_client
                     .clone()
@@ -6300,6 +6304,9 @@ mod tests {
                 assert_eq!(state.visualization_level, 0);
                 assert_eq!(state.smart_ui, crate::app::SmartUi::Unsupported);
                 assert!(state.orchestration_client.is_none());
+                // No app has this session, so the engine serves its reads
+                // itself (#3422), even though the other client is an app.
+                assert!(state.local_orchestration);
                 assert!(state.preview_client.is_none());
             }
             // And its client answers for it.
