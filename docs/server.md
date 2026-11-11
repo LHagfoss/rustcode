@@ -107,6 +107,18 @@ rustcode server uninstall   # remove the service
   end running turns without asking: it stops with a message, and `--yes`
   stops the server anyway. Nothing is stopped when the install would be
   refused (a development build, or a custom `RUSTCODE_CONFIG_DIR` on Windows).
+- **The server hosts the remote gateway.** With remote access on
+  (`docs/remote.md`), the gateway that lets other machines reach this one is
+  started by the server and started again when it stops, so port 17879 keeps
+  answering and this machine's threads stay reachable with the app closed.
+  What it starts with comes from `<config dir>/remote/settings.json`, which
+  every gateway writes as it starts (bind, port, advertised address and
+  interface preference), falling back to `[remote]` in `config.toml` on a
+  machine that enabled remote access before that file existed. One gateway
+  runs at a time: the app and the server both use whichever is running and
+  never bind a second one (the gateway's owner lock decides). A machine whose
+  gateway was started by the app reports `started by the app` until the
+  server restarts it.
 - `install` is idempotent. If the service is already installed and the
   definition is unchanged it does nothing (but starts it if it is not
   running). If the definition changed while the server runs (a new binary
@@ -126,8 +138,11 @@ rustcode server uninstall   # remove the service
   and a server another process runs is never stopped while a turn is running —
   `--yes` stays a decision for a terminal. Settings › Machines shows the
   result on *This computer* as *Server: Installed · Running*, with **Install
-  server** while it is not installed; Settings › Remote access shows the same
-  and its version.
+  server** while it is not installed, and the `Gateway` line beneath it;
+  Settings › Remote access shows the same and its version. Installed, the
+  server also hosts the remote gateway, so a paired machine still reaches this
+  one with the app closed — but the app's own threads still end with the app,
+  because they run in the app's engine, not in the server.
 - **From an AppImage**, the bundled `rustcode` lives in a mount that goes away
   with the app, so the app copies it to `$XDG_DATA_HOME/rustcode/bin/rustcode`
   (`~/.local/share/rustcode/bin/rustcode`) and installs the service from that
@@ -168,10 +183,43 @@ client) and reads the service manager. `--json` prints:
   "service": { "kind": "launchd", "path": "/Users/ada/Library/LaunchAgents/no.rustcode.server.plist" },
   "clients": 2,
   "running_turns": 1,
+  "gateway": {
+    "remote_enabled": true,
+    "running": true,
+    "address": "100.90.28.23:17879",
+    "advertised": "100.90.28.23:17879",
+    "owner": "server",
+    "version": "1.23.0",
+    "pid": 97702,
+    "paired_devices": 2,
+    "port": 17879
+  },
+  "path_rustcode": { "path": "/opt/homebrew/bin/rustcode", "version": "1.23.0" },
   "log": "/Users/ada/.config/rustcode/logs/server.log",
   "problems": []
 }
 ```
+
+The `Gateway` line says whether other machines can reach this one, where, and
+which process owns the gateway:
+
+```
+Gateway     running on 100.90.28.23:17879 (started by the RustCode server, version 1.23.0), 2 paired devices
+Gateway     stopped (remote access is on; the RustCode server starts it on port 17879 within a few seconds)
+Gateway     stopped (remote access is off: `rustcode remote start`, or Settings › Remote access)
+```
+
+`owner` is `server`, `app` or `terminal`: a gateway started by the app or a
+terminal lives only as long as whatever started it; one the server started is
+started again after it stops, and again at login.
+
+`PathRustcode` is the `rustcode` a shell finds first on `PATH`, with the
+version it reports. When that is another version than the engine that
+answered, `problems` carries `path-version-mismatch` with both paths, both
+versions and the command that fixes it — `brew upgrade lhagfoss/tap/rustcode`
+for Homebrew's copy, or deleting the install script's copy under
+`~/.rustcode/bin` (Windows: `%USERPROFILE%\.rustcode\bin\rustcode.exe`),
+which the app's own updater never touches.
 
 `version`, `pid`, `uptime_secs`, `socket`, `clients` and `running_turns` are
 `null` when no server answers. Each problem is `{ "code", "message" }`:
@@ -183,6 +231,7 @@ client) and reads the service manager. `--json` prints:
 | `linger-disabled` | Linux: the server stops at logout (see above). |
 | `restart-pending` | A `restart --when-idle` is waiting for running turns to finish. |
 | `version-mismatch` | The running server's version is not this `rustcode`'s. |
+| `path-version-mismatch` | The `rustcode` first on `PATH` is another version than this engine; the message names both and the fix. |
 | `unmanaged` | The server that answers was not started by the service (an app started it); `restart` hands it over. |
 
 ### `restart`

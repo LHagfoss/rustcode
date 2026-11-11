@@ -96,6 +96,30 @@ export interface Discovery {
   notice: string | null;
 }
 
+/** This computer's remote gateway, as `server status` reports it (`docs/remote.md`). */
+export interface GatewayService {
+  /** Remote access is on for this computer. */
+  remoteEnabled: boolean;
+  /** A gateway answers now, so paired devices can reach this computer. */
+  running: boolean;
+  /** What devices dial, while it runs. */
+  address: string | null;
+  advertised: string | null;
+  /** Who started it: the server (it outlives the app), the app, or a terminal. */
+  owner: "server" | "app" | "terminal" | null;
+  version: string | null;
+  pid: number | null;
+  pairedDevices: number;
+  /** The port it starts on from its recorded settings, while it runs not. */
+  port: number | null;
+}
+
+/** The `rustcode` a shell finds first on `PATH`; an older copy is issue 3411. */
+export interface PathRustcode {
+  path: string;
+  version: string | null;
+}
+
 /** The RustCode server as this computer runs it in the background (`server status`). */
 export interface ServerService {
   /** A service is in place, so the server starts when you log in. */
@@ -106,7 +130,11 @@ export interface ServerService {
   version: string | null;
   /** The version of the `rustcode` that answered. */
   cliVersion: string | null;
-  /** `linger-disabled`, `version-mismatch` and the rest, as `server status` words them. */
+  /** The remote gateway: whether this computer stays reachable with the app closed. */
+  gateway: GatewayService;
+  /** The `rustcode` on `PATH`, when it is another engine than this app's. */
+  pathRustcode: PathRustcode | null;
+  /** `linger-disabled`, `version-mismatch`, `path-version-mismatch` and the rest, as `server status` words them. */
   problems: { code: string; message: string }[];
   /** Why the status could not be read, when it could not. */
   error: string | null;
@@ -700,6 +728,8 @@ export async function refreshServerService(): Promise<void> {
         running: false,
         version: null,
         cliVersion: null,
+        gateway: emptyGateway(),
+        pathRustcode: null,
         problems: [],
         error: errorText(error),
       },
@@ -721,7 +751,7 @@ export async function installServer(): Promise<boolean> {
     useMachines.setState({ server, serverInstalling: false });
     if (server.installed) {
       toast(
-        "The RustCode server is installed as a background service and starts when you log in.",
+        "The RustCode server is installed as a background service and starts when you log in. It runs the remote gateway too.",
         "success",
       );
     } else {
@@ -738,16 +768,65 @@ export async function installServer(): Promise<boolean> {
 /**
  * Ask before installing the server, in the words that say what it does: it is
  * where threads can live instead of the app, it stays up when the app closes,
- * and it starts when you log in. The app's own threads are still its engine's.
+ * it starts when you log in, and it runs the remote gateway. The app's own
+ * threads are still its engine's.
  */
 export function askInstallServer(): void {
   askConfirm({
     title: "Install the RustCode server?",
     message:
-      "The RustCode server is where threads can live instead of the app: as a background service it stays up when the app closes and starts when you log in, so those threads keep running. The threads this app starts itself still run in its own engine and end with it, until RustCode uses the server. Threads, settings and pairings stay as they are.",
+      "The RustCode server is where threads can live instead of the app: as a background service it stays up when the app closes and starts when you log in, so those threads keep running. It also runs the remote gateway, so paired devices still reach this computer while the app is closed. The threads this app starts itself still run in its own engine and end with it, until RustCode uses the server. Threads, settings and pairings stay as they are.",
     action: "Install",
     run: () => void installServer(),
   });
+}
+
+/** A gateway this page has no reading for yet. */
+function emptyGateway(): GatewayService {
+  return {
+    remoteEnabled: false,
+    running: false,
+    address: null,
+    advertised: null,
+    owner: null,
+    version: null,
+    pid: null,
+    pairedDevices: 0,
+    port: null,
+  };
+}
+
+/** Who started the gateway, in the words the page shows. */
+export function gatewayOwnerLabel(owner: GatewayService["owner"]): string {
+  switch (owner) {
+    case "server":
+      return "the RustCode server";
+    case "app":
+      return "the app";
+    case "terminal":
+      return "a terminal";
+    default:
+      return "an unknown process";
+  }
+}
+
+/**
+ * The gateway in one line: where paired devices reach this computer, and who
+ * keeps it there. With the server installed and remote access on, that is the
+ * server, so the computer stays reachable when the app closes.
+ */
+export function gatewayLine(gateway: GatewayService | undefined): string {
+  if (!gateway) return "Not checked yet";
+  if (gateway.running) {
+    const where = gateway.address ?? "an unknown address";
+    return `Running on ${where} (started by ${gatewayOwnerLabel(gateway.owner)})`;
+  }
+  if (gateway.remoteEnabled) {
+    return gateway.port
+      ? `Not running · the server starts it on port ${gateway.port}`
+      : "Not running · the server starts it";
+  }
+  return "Off";
 }
 
 /** The background server in one line: `Installed · Running`, or what is wrong. */

@@ -89,6 +89,10 @@ pub struct GatewayStatus {
     pub uptime_seconds: u64,
     pub listen_address: String,
     pub advertised_address: String,
+    /// Who started this gateway: the RustCode server, the app, or a terminal.
+    /// Absent from a gateway that predates it.
+    #[serde(default)]
+    pub started_by: super::lifecycle::GatewayOwner,
     pub paired_devices: usize,
     pub connections: Vec<ConnectionSummary>,
     /// Whether a pairing challenge is currently redeemable.

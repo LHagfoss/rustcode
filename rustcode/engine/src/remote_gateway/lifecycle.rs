@@ -31,6 +31,101 @@ const OWNER: &str = "remote gateway";
 #[cfg(unix)]
 const MAX_SOCKET_PATH_BYTES: usize = 100;
 
+/// Who started the gateway process.
+///
+/// One gateway runs at a time (the owner lock), so its owner is also the
+/// answer to "is this machine still reachable when the app is closed": a
+/// server-hosted gateway outlives the app. A gateway started by a terminal is
+/// reported as neither, because no app or server will bring it back.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GatewayOwner {
+    /// The RustCode server started it and starts it again if it stops.
+    Server,
+    /// The desktop app, or a terminal asking for the app's gateway.
+    App,
+    /// A `rustcode remote serve` someone ran by hand.
+    #[default]
+    Terminal,
+}
+
+impl GatewayOwner {
+    /// Set on the gateway process's environment by its launcher
+    /// ([`super::owner_client::Launcher`]).
+    pub const ENV: &str = "RUSTCODE_REMOTE_OWNER";
+
+    /// The owner the launcher of this process named, `Terminal` when it did
+    /// not name one (`rustcode remote serve` from a shell).
+    pub fn from_env() -> Self {
+        match std::env::var(Self::ENV).ok().as_deref() {
+            Some("server") => Self::Server,
+            Some("app") => Self::App,
+            _ => Self::Terminal,
+        }
+    }
+
+    /// The words status output uses.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Server => "the RustCode server",
+            Self::App => "the app",
+            Self::Terminal => "a terminal",
+        }
+    }
+
+    /// The value a launcher puts in [`GatewayOwner::ENV`].
+    pub fn as_env(self) -> &'static str {
+        match self {
+            Self::Server => "server",
+            Self::App => "app",
+            Self::Terminal => "terminal",
+        }
+    }
+}
+
+/// How this machine's gateway started last time: the durable settings the
+/// server needs to start it at login with no app running.
+///
+/// The listening address itself is never stored: an `auto` bind is a policy,
+/// and the address it resolves to belongs to the machine of the moment.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GatewaySettings {
+    /// `auto`, or the address `--bind` named.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub advertise: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefer_interface: Option<String>,
+    /// Who started the gateway that wrote this.
+    #[serde(default)]
+    pub started_by: GatewayOwner,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl GatewaySettings {
+    /// The settings of a gateway this process is about to start.
+    pub fn starting(
+        bind: Option<String>,
+        port: Option<u16>,
+        advertise: Option<String>,
+        prefer_interface: Option<String>,
+        started_by: GatewayOwner,
+    ) -> Self {
+        Self {
+            bind,
+            port,
+            advertise,
+            prefer_interface,
+            started_by,
+            updated_at: Some(chrono::Utc::now()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GatewayRegistration {
     #[serde(default)]
@@ -48,6 +143,10 @@ pub struct GatewayRegistration {
     pub owner_socket_path: Option<PathBuf>,
     pub listen_address: String,
     pub advertised_address: String,
+    /// Who started this gateway. Absent in a registration from before it was
+    /// recorded; those report `Terminal`.
+    #[serde(default)]
+    pub started_by: GatewayOwner,
 }
 
 impl GatewayRegistration {
@@ -68,6 +167,7 @@ impl GatewayRegistration {
             control_protocol_version: control::CONTROL_PROTOCOL_VERSION,
             socket_path,
             owner_socket_path: Some(owner_socket_path),
+            started_by: GatewayOwner::from_env(),
             listen_address,
             advertised_address,
         })
@@ -222,6 +322,51 @@ impl RemoteLifecycle {
     }
     pub fn identity_path(&self) -> PathBuf {
         self.directory.join("gateway.json")
+    }
+    /// The gateway's durable settings, written whenever one starts.
+    pub fn settings_path(&self) -> PathBuf {
+        self.directory.join("settings.json")
+    }
+
+    /// The settings the last gateway started with, if it recorded any.
+    pub fn settings(&self) -> Result<Option<GatewaySettings>> {
+        match read_private_json::<GatewaySettings>(&self.settings_path(), 16 * 1024) {
+            Ok(settings) => Ok(Some(settings)),
+            Err(error)
+                if error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Record how this machine's gateway is set up, so the RustCode server can
+    /// start it at login with no app or terminal running.
+    pub fn save_settings(&self, settings: &GatewaySettings) -> Result<()> {
+        ensure_private_directory(&self.directory, OWNER)?;
+        publish_private_json(&self.settings_path(), settings)
+    }
+
+    /// The version of the gateway this directory has, when its process is
+    /// alive; `None` when no gateway runs.
+    ///
+    /// A supervisor polls this; [`RemoteLifecycle::status`] asks the gateway
+    /// and enumerates this machine's addresses, which a poll every couple of
+    /// seconds should not do.
+    pub fn running_version(&self) -> Option<String> {
+        self.registration()
+            .ok()
+            .flatten()
+            .filter(|registration| registration.is_live().unwrap_or(false))
+            .map(|registration| registration.version)
+    }
+
+    /// Whether a gateway process is alive, without asking it anything.
+    pub fn running(&self) -> bool {
+        self.running_version().is_some()
     }
     pub fn device_store(&self) -> DeviceStore {
         DeviceStore::new(self.devices_path())
@@ -648,6 +793,68 @@ mod tests {
             "{error:#}"
         );
         assert_eq!(lifecycle.devices().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_gateway_settings_are_kept_for_the_next_start() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let lifecycle = RemoteLifecycle::new(dir.path());
+        assert_eq!(lifecycle.settings().unwrap(), None);
+        // No gateway has run here yet, and no process claims to.
+        assert!(!lifecycle.running());
+
+        let settings = GatewaySettings::starting(
+            Some("auto".into()),
+            Some(17879),
+            Some("studio.netbird.cloud".into()),
+            Some("netbird".into()),
+            GatewayOwner::Server,
+        );
+        lifecycle.save_settings(&settings).unwrap();
+        let read = lifecycle
+            .settings()
+            .unwrap()
+            .expect("settings were written");
+        assert_eq!(read.bind.as_deref(), Some("auto"));
+        assert_eq!(read.port, Some(17879));
+        assert_eq!(read.advertise.as_deref(), Some("studio.netbird.cloud"));
+        assert_eq!(read.prefer_interface.as_deref(), Some("netbird"));
+        // Who started it is part of what is kept: `server status` reports it.
+        assert_eq!(read.started_by, GatewayOwner::Server);
+
+        // A registration whose process is gone never counts as a gateway.
+        let mut registration = GatewayRegistration::current(
+            lifecycle.socket_path(),
+            lifecycle.owner_socket_path(),
+            "gw".into(),
+            "127.0.0.1:1".into(),
+            "127.0.0.1:1".into(),
+        )
+        .unwrap();
+        registration.process_start_time += 1;
+        registration
+            .publish(&lifecycle.registration_path())
+            .unwrap();
+        assert!(!lifecycle.running());
+    }
+
+    #[test]
+    fn an_owner_survives_a_round_trip_and_older_registrations_still_read() {
+        let owner = |text: &str| serde_json::from_str::<GatewayOwner>(text).unwrap();
+        assert_eq!(owner("\"server\""), GatewayOwner::Server);
+        assert_eq!(owner("\"app\""), GatewayOwner::App);
+        assert_eq!(owner("\"terminal\""), GatewayOwner::Terminal);
+        // A registration written before the owner was recorded reports the
+        // gateway as a terminal's, which no app or server brings back.
+        let old: GatewayRegistration = serde_json::from_value(serde_json::json!({
+            "version": "1.0.0", "pid": 7, "process_start_time": 1,
+            "instance_id": "i", "gateway_id": "g", "control_protocol_version": 1,
+            "socket_path": "/tmp/c.sock", "listen_address": "127.0.0.1:1",
+            "advertised_address": "127.0.0.1:1",
+        }))
+        .unwrap();
+        assert_eq!(old.started_by, GatewayOwner::Terminal);
+        assert_eq!(GatewayOwner::from_env(), GatewayOwner::Terminal);
     }
 
     #[tokio::test]

@@ -1919,6 +1919,7 @@ fn status(shared: &Shared, started: Instant) -> GatewayStatus {
         uptime_seconds: started.elapsed().as_secs(),
         listen_address: registration.listen_address.clone(),
         advertised_address: registration.advertised_address.clone(),
+        started_by: registration.started_by,
         paired_devices: state.devices.list().len(),
         connections: connections.into_iter().map(|(_, c)| c).collect(),
         pairing_open: state.pairing.is_open(now),

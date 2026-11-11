@@ -26,7 +26,7 @@ use tokio::io::BufReader;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
-use super::lifecycle::RemoteLifecycle;
+use super::lifecycle::{GatewayOwner, RemoteLifecycle};
 use super::owner_ipc::{GatewayFrame, OWNER_IPC_VERSION, OwnerFrame};
 use crate::daemon::protocol::{read_async_frame_with_buffer, write_async_frame};
 use crate::remote::owner::{
@@ -79,6 +79,10 @@ pub struct Launcher {
     pub port: Option<u16>,
     pub advertise: Option<String>,
     pub prefer_interface: Option<String>,
+    /// Who is starting the gateway. It is recorded in the gateway's
+    /// registration, so `server status` can say whether this machine stays
+    /// reachable when the app closes ([`GatewayOwner`]).
+    pub owner: GatewayOwner,
 }
 
 impl Launcher {
@@ -86,6 +90,7 @@ impl Launcher {
         let mut command = crate::platform::tokio_command(&self.program);
         command
             .env("RUSTCODE_CONFIG_DIR", &self.config_directory)
+            .env(GatewayOwner::ENV, self.owner.as_env())
             .args(["remote", "serve"]);
         if let Some(bind) = &self.bind {
             command.args(["--bind", bind]);
@@ -149,6 +154,7 @@ impl GatewayConnector {
             port: None,
             advertise: None,
             prefer_interface: None,
+            owner: GatewayOwner::App,
         }))
     }
 }

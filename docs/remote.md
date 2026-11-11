@@ -276,12 +276,14 @@ remote access on is the short moment before it has registered.
 | `rustcode remote devices allow <id>` / `deny <id>` | Grant full ACP control, or deny it and immediately disconnect the device. |
 | `rustcode remote devices [--json]` | List paired devices: identifier, kind (phone, desktop or cli), platform, how long ago each was last seen, pairing time, expiry and name. JSON includes the host-controlled `acp` grant. Never a token. |
 | `rustcode remote revoke <device>` | Revoke by identifier, identifier prefix (four characters or more) or unique name. |
-| `rustcode remote status` | The running gateway: listen and advertised address (and whether each follows address changes), the machine's current addresses with a recovery command when the gateway's address is gone, paired devices and which are connected, the state of pairing (time and wrong codes left, or the lockout), devices the gateway turned away recently with the reason, shared sessions and who is attached to each, session owners that run without being shared, and the paths of the gateway log and the session logs. |
+| `rustcode remote status` | The running gateway: listen and advertised address (and whether each follows address changes), who started it (the RustCode server, the app or a terminal), the machine's current addresses with a recovery command when the gateway's address is gone, paired devices and which are connected, the state of pairing (time and wrong codes left, or the lockout), devices the gateway turned away recently with the reason, shared sessions and who is attached to each, session owners that run without being shared, and the paths of the gateway log and the session logs. |
 | `rustcode remote stop` | Stop the running gateway. |
 
 One gateway runs per configuration directory. A second `remote serve` is
 refused while the first holds its lock; a gateway that died is detected by
-its process birth time and its files are reclaimed.
+its process birth time and its files are reclaimed. `remote start` adopts a
+gateway that already runs — the RustCode server's, for instance — instead of
+starting a second one.
 
 ## Addresses
 
@@ -731,11 +733,32 @@ exactly like a resume. The terminal shares it again by itself; devices
 re-attach with a fresh epoch. `/adopt` needs the full session id, never runs
 from a device, and refuses when the owner cannot be identified safely.
 
-On macOS an installed `rustcode` runs the gateway as a login agent. The agent
-keeps the search path it was installed with, so asking for the gateway from a
-terminal with another environment no longer rewrites the agent and restarts
-the gateway under its devices. `rustcode remote stop` removes the agent; the
-next start installs it with the current environment.
+## Reachable with the app closed
+
+The gateway is its own process, and whoever starts it is only its launcher.
+With the RustCode server installed (`docs/server.md`), the **server** starts
+the gateway whenever remote access is on and starts it again if it stops, so
+quitting the app leaves port 17879 answering and this machine's server threads
+reachable from the other machines. Only one gateway runs at a time: the app
+uses the running one instead of binding its own, and the server adopts the
+app's, so the port never has two owners (`rustcode server status` › `Gateway`
+says which one runs and who started it). What the server starts it with —
+bind, port, advertised address, interface preference — is the settings the
+last gateway recorded in `remote/settings.json`, or `[remote]` in
+`config.toml` on a machine that has not run one since that file existed.
+
+Two honest limits: the threads *this app* starts run in the app's own engine
+and still end with it, because they are not the server's threads; and a
+gateway the app or a terminal started keeps running only as long as that
+process tree does, until the server restarts it.
+
+On macOS an installed `rustcode` runs the gateway as a login agent when no
+server is installed. The agent keeps the search path it was installed with, so
+asking for the gateway from a terminal with another environment no longer
+rewrites the agent and restarts the gateway under its devices. Installing the
+RustCode server removes the agent: the server supervises the gateway instead,
+and two supervisors would race for the same port. `rustcode remote stop`
+removes the agent; the next start installs it with the current environment.
 
 ## Choosing the address a device dials
 
@@ -824,6 +847,13 @@ the gateway's TCP port; Windows asks the first time the gateway listens.
 
 ## How it holds together
 
+**Settings.** Every gateway writes what it listens on and announces to
+`remote/settings.json` as it starts: `bind` (`auto` or an address), `port`,
+`advertise`, `prefer_interface` and who started it. The RustCode server reads
+it to start the gateway at login with no app or terminal around. The address
+an `auto` bind resolved to is never stored; it belongs to the machine of the
+moment.
+
 **Local sockets.** The gateway has two Unix sockets in `remote/` under the
 configuration directory (`0700`), each `0600`: `control.sock` for the
 `rustcode remote …` commands and `owner.sock` for terminals that share a
@@ -900,11 +930,14 @@ header; see [the connection step](remote-protocol/README.md#connection).
 The gateway, pairing, connection requests, Bonjour and Settings › Remote
 access work as on the other systems. What differs:
 
-- **No login service yet.** Remote access started from the app, `/remote` or
-  `rustcode remote start` runs the gateway as a detached background process
-  (no console window, its own process group). It stops when you sign out or
-  restart; the next RustCode start brings it back while Remote access is on.
-  macOS installs a LaunchAgent for this; a Windows logon task is planned.
+- **No gateway login service of its own.** Remote access started from the app,
+  `/remote` or `rustcode remote start` runs the gateway as a detached
+  background process (no console window, its own process group); macOS also
+  installs a LaunchAgent for it when no RustCode server is installed. With the
+  server installed, the server's own logon task hosts the gateway, so the
+  machine stays reachable the same way as on the other systems. Without a
+  server, the gateway stops when you sign out or restart, and the next
+  RustCode start brings it back while Remote access is on.
 - **Local endpoints** are loopback ports with a token instead of Unix sockets
   (see [How it holds together](#how-it-holds-together)).
 - **`/adopt`** of a thread a device started is refused: Windows cannot ask

@@ -8,10 +8,12 @@
 //! writes a unit file: the CLI is the source of truth for all three systems.
 //!
 //! What that service is today: the shared engine that threads can run in, kept
-//! up by the service manager and started when the user logs in. The threads this
-//! app itself runs stay in the app's own `--acp` engine, so closing the app
-//! still ends them; switching the app to the server is a later step
-//! (`docs/server.md`). The words the page shows say that and no more.
+//! up by the service manager and started when the user logs in, plus the remote
+//! gateway it hosts, so a paired machine still reaches this computer with the
+//! app closed (`docs/remote.md`). The threads this app itself runs stay in the
+//! app's own `--acp` engine, so closing the app still ends them; switching the
+//! app to the server is a later step (`docs/server.md`). The words the page
+//! shows say that and no more.
 //!
 //! An AppImage runs its bundled `rustcode` from a mount that goes away with the
 //! app, so the service is installed from a copy under the user's data directory
@@ -47,8 +49,14 @@ pub struct ServiceStatus {
     pub version: Option<String>,
     /// The version of the `rustcode` that answered.
     pub cli_version: Option<String>,
+    /// This machine's remote gateway: whether another machine reaches it with
+    /// the app closed, where, and who started it (`docs/remote.md`).
+    pub gateway: Gateway,
+    /// The `rustcode` a shell runs, when it is a different engine (issue
+    /// #3411). The warning itself is one of `problems`.
+    pub path_rustcode: Option<PathRustcode>,
     /// What is wrong, in the words `server status` uses: `linger-disabled`,
-    /// `version-mismatch`, and the rest.
+    /// `version-mismatch`, `path-version-mismatch`, and the rest.
     pub problems: Vec<ServiceProblem>,
     /// The command that failed, when reading the status at all did.
     pub error: Option<String>,
@@ -61,6 +69,37 @@ pub struct ServiceProblem {
     pub message: String,
 }
 
+/// This machine's remote gateway, as `server status --json` reports it.
+///
+/// The CLI writes snake_case fields; the page reads camelCase, as it does for
+/// the rest of this status.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all(serialize = "camelCase"))]
+pub struct Gateway {
+    /// Remote access is on for this machine.
+    pub remote_enabled: bool,
+    /// A gateway answers now, so paired devices can reach this machine.
+    pub running: bool,
+    /// What devices dial, while it runs.
+    pub address: Option<String>,
+    pub advertised: Option<String>,
+    /// Who started it: `server`, `app` or `terminal`.
+    pub owner: Option<String>,
+    pub version: Option<String>,
+    pub pid: Option<u32>,
+    pub paired_devices: usize,
+    /// The port it starts on from its recorded settings, while it runs not.
+    pub port: Option<u16>,
+}
+
+/// The `rustcode` a shell finds first on `PATH`, and its version.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PathRustcode {
+    pub path: String,
+    #[serde(default)]
+    pub version: Option<String>,
+}
+
 /// What `server status --json` prints; only the fields the page reads.
 #[derive(Debug, Deserialize)]
 struct Report {
@@ -70,6 +109,10 @@ struct Report {
     version: Option<String>,
     #[serde(default)]
     cli_version: Option<String>,
+    #[serde(default)]
+    gateway: Gateway,
+    #[serde(default)]
+    path_rustcode: Option<PathRustcode>,
     #[serde(default)]
     problems: Vec<ServiceProblem>,
 }
@@ -123,6 +166,8 @@ async fn read_status() -> Result<ServiceStatus, String> {
                 running: report.running,
                 version: report.version,
                 cli_version: report.cli_version,
+                gateway: report.gateway,
+                path_rustcode: report.path_rustcode,
                 problems: report.problems,
                 error: None,
             })
@@ -373,6 +418,8 @@ mod tests {
             running: report.running,
             version: report.version,
             cli_version: report.cli_version,
+            gateway: report.gateway,
+            path_rustcode: report.path_rustcode,
             problems: report.problems,
             error: None,
         };
@@ -383,6 +430,57 @@ mod tests {
         assert_eq!(json["cliVersion"], "1.28.0");
         assert_eq!(json["problems"][0]["code"], "restart-pending");
         assert_eq!(json["error"], serde_json::Value::Null);
+        // A report from a `rustcode` that predates the gateway keeps reading:
+        // the page says the gateway is not running rather than failing.
+        assert_eq!(json["gateway"]["running"], false);
+        assert!(json["pathRustcode"].is_null());
+    }
+
+    /// The gateway and the shell's `rustcode` reach the page as the CLI
+    /// reports them (issues #3411, #3412).
+    #[test]
+    fn the_gateway_and_the_shells_rustcode_come_through() {
+        let report: Report = serde_json::from_str(
+            r#"{
+                "installed": true,
+                "running": true,
+                "version": "1.28.0",
+                "cli_version": "1.28.0",
+                "gateway": {
+                    "remote_enabled": true,
+                    "running": true,
+                    "address": "100.90.28.23:17879",
+                    "advertised": "100.90.28.23:17879",
+                    "owner": "server",
+                    "version": "1.28.0",
+                    "pid": 97702,
+                    "paired_devices": 2,
+                    "port": 17879
+                },
+                "path_rustcode": {"path": "/opt/homebrew/bin/rustcode", "version": "0.96.0"},
+                "problems": [{"code": "path-version-mismatch", "message": "older"}]
+            }"#,
+        )
+        .expect("the CLI's JSON with a gateway");
+        let status = serde_json::to_value(ServiceStatus {
+            installed: report.installed,
+            running: report.running,
+            version: report.version,
+            cli_version: report.cli_version,
+            gateway: report.gateway,
+            path_rustcode: report.path_rustcode,
+            problems: report.problems,
+            error: None,
+        })
+        .unwrap();
+        assert_eq!(status["gateway"]["owner"], "server");
+        assert_eq!(status["gateway"]["address"], "100.90.28.23:17879");
+        assert_eq!(status["gateway"]["pairedDevices"], 2);
+        assert_eq!(
+            status["pathRustcode"]["path"],
+            "/opt/homebrew/bin/rustcode"
+        );
+        assert_eq!(status["pathRustcode"]["version"], "0.96.0");
     }
 
     /// A status with nothing installed is a state, not an error.

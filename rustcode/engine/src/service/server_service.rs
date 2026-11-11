@@ -7,6 +7,7 @@
 //! ([`wait_until_idle`]), so all of it is tested against fakes. Nothing here
 //! runs from a test.
 
+use super::path_binary::PathRustcode;
 use super::{Definition, Installed, Manager, Problem, Process, State};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -120,6 +121,17 @@ pub async fn live_status() -> Option<LiveStatus> {
     tokio::time::timeout(ASK_TIMEOUT, ask).await.ok().flatten()
 }
 
+/// Whether a service definition is in place for this configuration
+/// directory. Reads the manager's state and nothing else, so a caller that
+/// needs a yes/no (does the RustCode server host the remote gateway?) can ask
+/// it on every start.
+pub fn installed() -> bool {
+    current_manager()
+        .and_then(|(manager, _)| manager.state())
+        .map(|state| state.installed)
+        .unwrap_or(false)
+}
+
 /// One problem `server status` can report.
 fn problem(code: &'static str, message: impl Into<String>) -> Problem {
     Problem {
@@ -148,8 +160,83 @@ pub struct StatusReport {
     pub service: ServiceReport,
     pub clients: Option<usize>,
     pub running_turns: Option<usize>,
+    /// This machine's remote gateway: whether another machine can reach it
+    /// with the app closed, and who started it.
+    pub gateway: GatewayReport,
+    /// The `rustcode` a shell runs, when `PATH` has one (issue #3411).
+    pub path_rustcode: Option<PathRustcode>,
     pub log: String,
     pub problems: Vec<Problem>,
+}
+
+/// This machine's remote gateway (`docs/remote.md`), as `server status` shows
+/// it: whether another machine can reach this one, where, and who started it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct GatewayReport {
+    /// Remote access is on for this machine.
+    pub remote_enabled: bool,
+    /// A gateway process answers.
+    pub running: bool,
+    /// What devices dial, while it runs.
+    pub address: Option<String>,
+    pub advertised: Option<String>,
+    /// Who started it: `server`, `app` or `terminal`.
+    pub owner: Option<String>,
+    pub version: Option<String>,
+    pub pid: Option<u32>,
+    pub paired_devices: usize,
+    /// The port its recorded settings name, while it does not run.
+    pub port: Option<u16>,
+}
+
+impl GatewayReport {
+    /// One `Gateway` line in `rustcode server status`.
+    pub fn human(&self) -> String {
+        if self.running {
+            let mut out = format!(
+                "running on {}",
+                self.address.as_deref().unwrap_or("an unknown address")
+            );
+            if let Some(owner) = self.owner.as_deref() {
+                out.push_str(&format!(" (started by {}", owner_words(owner)));
+                if let Some(version) = self.version.as_deref() {
+                    out.push_str(&format!(", version {version}"));
+                }
+                out.push(')');
+            }
+            out.push_str(&format!(
+                ", {} paired {}",
+                self.paired_devices,
+                if self.paired_devices == 1 {
+                    "device"
+                } else {
+                    "devices"
+                }
+            ));
+            return out;
+        }
+        if !self.remote_enabled {
+            return "stopped (remote access is off: `rustcode remote start`, or Settings › Remote access)".to_owned();
+        }
+        match self.port {
+            Some(port) => format!(
+                "stopped (remote access is on; the RustCode server starts it on port {port} within a few seconds)"
+            ),
+            None => {
+                "stopped (remote access is on; the RustCode server starts it within a few seconds)"
+                    .to_owned()
+            }
+        }
+    }
+}
+
+/// `server`, `app` or `terminal` in the words the user reads.
+fn owner_words(owner: &str) -> &'static str {
+    match owner {
+        "server" => "the RustCode server",
+        "app" => "the app",
+        _ => "a terminal",
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -173,6 +260,10 @@ pub struct Observed {
     /// The manager's own problems (lingering).
     pub manager_problems: Vec<Problem>,
     pub cli_version: String,
+    /// The engine this `rustcode` is (`executable_path`).
+    pub cli_program: PathBuf,
+    pub gateway: GatewayReport,
+    pub path_rustcode: Option<PathRustcode>,
     pub log: PathBuf,
 }
 
@@ -196,6 +287,9 @@ pub fn build_report(observed: Observed, now_secs: u64) -> StatusReport {
         restart_waiting,
         manager_problems,
         cli_version,
+        cli_program,
+        gateway,
+        path_rustcode,
         log,
     } = observed;
     let mut problems = Vec::new();
@@ -239,6 +333,18 @@ pub fn build_report(observed: Observed, now_secs: u64) -> StatusReport {
             "A restart is waiting for running turns to finish.",
         ));
     }
+    // Which `rustcode` a shell runs, against the engine that answered
+    // (issue #3411): an older copy on PATH makes `server install` and version
+    // checks between machines use the wrong binary.
+    let engine_version = live
+        .as_ref()
+        .map(|live| live.version.as_str())
+        .unwrap_or(cli_version.as_str());
+    if let Some(found) = &path_rustcode
+        && let Some(message) = super::path_binary::mismatch(found, &cli_program, engine_version)
+    {
+        problems.push(problem("path-version-mismatch", message));
+    }
     // The description a crashed server left behind says nothing.
     let info = info.filter(|info| live.as_ref().is_some_and(|live| live.pid == info.pid));
     StatusReport {
@@ -260,6 +366,8 @@ pub fn build_report(observed: Observed, now_secs: u64) -> StatusReport {
         },
         clients: live.as_ref().map(|live| live.clients),
         running_turns: live.as_ref().map(|live| live.running_turns),
+        gateway,
+        path_rustcode,
         log: log.to_string_lossy().into_owned(),
         problems,
     }
@@ -298,6 +406,7 @@ impl StatusReport {
         if let Some(binary) = &self.binary {
             line(&mut out, "Binary", binary.clone());
         }
+        line(&mut out, "Gateway", self.gateway.human());
         if let Some(clients) = self.clients {
             line(&mut out, "Clients", clients.to_string());
         }
@@ -329,6 +438,8 @@ pub async fn status() -> Result<StatusReport> {
     let (manager, _) = current_manager()?;
     let state = manager.state()?;
     let live = live_status().await;
+    let gateway = observe_gateway().await;
+    let path_rustcode = super::path_binary::observe().await;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_secs());
@@ -345,10 +456,48 @@ pub async fn status() -> Result<StatusReport> {
             info: crate::server::running(),
             restart_waiting: restart_waiting(),
             cli_version: env!("CARGO_PKG_VERSION").to_owned(),
+            cli_program: super::executable_path()?,
+            gateway,
+            path_rustcode,
             log: crate::server::log_path()?,
         },
         now,
     ))
+}
+
+/// This machine's remote gateway, if remote access was ever set up here. A
+/// gateway that does not answer within [`ASK_TIMEOUT`] counts as stopped:
+/// `server status` must not hang on it.
+async fn observe_gateway() -> GatewayReport {
+    let Some(config_directory) = crate::config::get_config_dir() else {
+        return GatewayReport::default();
+    };
+    let lifecycle = crate::remote_gateway::lifecycle::RemoteLifecycle::new(&config_directory);
+    let settings = lifecycle.settings().ok().flatten();
+    let port = settings.as_ref().and_then(|settings| settings.port);
+    let status = tokio::time::timeout(ASK_TIMEOUT, lifecycle.status())
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .flatten();
+    GatewayReport {
+        remote_enabled: crate::remote_gateway::service::enabled(&config_directory),
+        running: status.is_some(),
+        address: status.as_ref().map(|status| status.listen_address.clone()),
+        advertised: status
+            .as_ref()
+            .map(|status| status.advertised_address.clone()),
+        owner: status
+            .as_ref()
+            .map(|status| status.started_by.as_env().to_owned()),
+        version: status.as_ref().map(|status| status.version.clone()),
+        pid: status.as_ref().map(|status| status.pid),
+        paired_devices: status
+            .as_ref()
+            .map(|status| status.paired_devices)
+            .unwrap_or(0),
+        port,
+    }
 }
 
 /// What `install` did.
@@ -728,6 +877,9 @@ mod tests {
             restart_waiting: false,
             manager_problems: Vec::new(),
             cli_version: "1.23.0".to_owned(),
+            cli_program: "/usr/bin/rustcode".into(),
+            gateway: GatewayReport::default(),
+            path_rustcode: None,
             log: "/c/logs/server.log".into(),
         }
     }
@@ -757,9 +909,143 @@ mod tests {
                 },
                 "clients": 2,
                 "running_turns": 1,
+                "gateway": {
+                    "remote_enabled": false,
+                    "running": false,
+                    "address": null,
+                    "advertised": null,
+                    "owner": null,
+                    "version": null,
+                    "pid": null,
+                    "paired_devices": 0,
+                    "port": null
+                },
+                "path_rustcode": null,
                 "log": "/c/logs/server.log",
                 "problems": []
             })
+        );
+    }
+
+    /// The gateway `build_report` reads, as `observe_gateway` gathers it.
+    fn gateway(owner: &str) -> GatewayReport {
+        GatewayReport {
+            remote_enabled: true,
+            running: true,
+            address: Some("100.90.28.23:17879".into()),
+            advertised: Some("100.90.28.23:17879".into()),
+            owner: Some(owner.into()),
+            version: Some("1.23.0".into()),
+            pid: Some(77),
+            paired_devices: 1,
+            port: Some(17879),
+        }
+    }
+
+    #[test]
+    fn the_gateway_line_says_whether_the_machine_stays_reachable_and_who_owns_it() {
+        let report = build_report(observed_gateway(gateway("server")), 0);
+        let line = report
+            .human()
+            .lines()
+            .find(|line| line.starts_with("Gateway"))
+            .expect("a Gateway line")
+            .to_owned();
+        assert_eq!(
+            line,
+            "Gateway     running on 100.90.28.23:17879 (started by the RustCode server, version 1.23.0), 1 paired device"
+        );
+        // The app started it: the line says so, because the machine is
+        // reachable only while the app runs.
+        let app = build_report(observed_gateway(gateway("app")), 0);
+        assert!(
+            app.human().contains("(started by the app, version 1.23.0)"),
+            "{}",
+            app.human()
+        );
+
+        // Stopped with remote access on: the server starts it.
+        let mut stopped = gateway("server");
+        stopped.running = false;
+        stopped.pid = None;
+        stopped.address = None;
+        assert!(
+            build_report(observed_gateway(stopped.clone()), 0)
+                .human()
+                .contains("the RustCode server starts it on port 17879")
+        );
+        stopped.port = None;
+        assert!(stopped.human().contains("starts it within a few seconds"));
+        // Off: nothing starts it, and the line says what does.
+        let off = GatewayReport::default();
+        assert!(
+            off.human().contains("remote access is off"),
+            "{}",
+            off.human()
+        );
+    }
+
+    fn observed_gateway(gateway: GatewayReport) -> Observed {
+        Observed {
+            gateway,
+            ..observed(installed_state(), Some(live("1.23.0", 10)))
+        }
+    }
+
+    #[test]
+    fn an_older_rustcode_on_the_path_is_named_with_its_fix() {
+        let found = PathRustcode {
+            path: "/opt/homebrew/bin/rustcode".into(),
+            version: Some("0.96.0".into()),
+        };
+        let mut with_path = observed(installed_state(), Some(live("1.23.0", 10)));
+        with_path.path_rustcode = Some(found.clone());
+        let report = build_report(with_path, 0);
+        assert!(
+            codes(&report).contains(&"path-version-mismatch"),
+            "{report:?}"
+        );
+        let message = report
+            .problems
+            .iter()
+            .find(|problem| problem.code == "path-version-mismatch")
+            .unwrap()
+            .message
+            .clone();
+        assert!(
+            message.contains("0.96.0 (/opt/homebrew/bin/rustcode)"),
+            "{message}"
+        );
+        assert!(
+            message.contains("this engine is 1.23.0 (/usr/bin/rustcode)"),
+            "{message}"
+        );
+        assert!(
+            message.contains("brew upgrade lhagfoss/tap/rustcode"),
+            "{message}"
+        );
+        assert_eq!(report.path_rustcode, Some(found));
+
+        // The same version, or a copy that does not answer, is no problem.
+        let mut same = observed(installed_state(), Some(live("1.23.0", 10)));
+        same.path_rustcode = Some(PathRustcode {
+            path: "/opt/homebrew/bin/rustcode".into(),
+            version: Some("1.23.0".into()),
+        });
+        assert_eq!(codes(&build_report(same, 0)), Vec::<&'static str>::new());
+
+        // A shell copy older than the *running server* is the mismatch, even
+        // when this rustcode is up to date.
+        let mut behind = observed(installed_state(), Some(live("1.24.0", 10)));
+        behind.cli_version = "1.24.0".to_owned();
+        behind.path_rustcode = Some(PathRustcode {
+            path: "/usr/local/bin/rustcode".into(),
+            version: Some("1.23.0".into()),
+        });
+        let report = build_report(behind, 0);
+        assert!(
+            codes(&report).contains(&"path-version-mismatch"),
+            "{report:?}"
         );
     }
 
