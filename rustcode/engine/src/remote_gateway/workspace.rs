@@ -4,8 +4,8 @@ use super::{
     router::{DeviceContext, FrameRouter, FrameSink},
 };
 use crate::daemon::private_files::{
-    ensure_private_directory, is_lock_busy, lock_private_file, private_open_options,
-    publish_private_json, read_private_json, remove_if_exists,
+    ensure_private_directory, is_lock_busy, lock_private_file, open_private_log,
+    private_open_options, publish_private_json, read_private_json, remove_if_exists,
 };
 use crate::remote::*;
 use anyhow::{Context, Result, ensure};
@@ -895,10 +895,7 @@ impl WorkspaceRouter {
         // waits for that one: a session never has two owner processes.
         let mut child = None;
         if hub.session_info(&session_id).is_none() && !owner_alive(&owners, &session_id) {
-            let log = private_open_options()
-                .create(true)
-                .append(true)
-                .open(&start.log_path)?;
+            let log = open_private_log(&start.log_path)?;
             let mut command = crate::platform::tokio_command(program);
             command
                 .args(["remote", "session-owner", "--session-id", &session_id])

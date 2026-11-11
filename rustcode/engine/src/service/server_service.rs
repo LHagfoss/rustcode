@@ -315,6 +315,9 @@ pub struct Observed {
     pub cli_program: PathBuf,
     pub gateway: GatewayReport,
     pub path_rustcode: Option<PathRustcode>,
+    /// `(server, caller)` Windows logon session ids, when the answering server
+    /// and this process run in different ones.
+    pub other_logon_session: Option<(u32, u32)>,
     pub log: PathBuf,
 }
 
@@ -342,6 +345,7 @@ pub fn build_report(observed: Observed, now_secs: u64) -> StatusReport {
         cli_program,
         gateway,
         path_rustcode,
+        other_logon_session,
         log,
     } = observed;
     let mut problems = Vec::new();
@@ -388,6 +392,18 @@ pub fn build_report(observed: Observed, now_secs: u64) -> StatusReport {
                 ),
             ));
         }
+    }
+    // A server in another logon session (an SSH session is not the desktop's)
+    // owns private files the caller may not open, and a client in this
+    // session may not reach its pipe: the caller sees a different server.
+    if let (Some(live), Some((server, caller))) = (&live, other_logon_session) {
+        problems.push(problem(
+            "other-logon-session",
+            format!(
+                "The server answering (pid {}) runs in Windows logon session {server}, and this rustcode in session {caller} (an SSH or elevated session is not your desktop's). Files it created may be denied to the other session: run `rustcode server restart` from the session you use.",
+                live.pid
+            ),
+        ));
     }
     if restart_waiting {
         problems.push(problem(
@@ -524,6 +540,7 @@ pub async fn status() -> Result<StatusReport> {
     };
     let gateway = observe_gateway().await;
     let path_rustcode = super::path_binary::observe().await;
+    let other_logon_session = live.as_ref().and_then(|live| other_logon_session(live.pid));
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_secs());
@@ -544,10 +561,30 @@ pub async fn status() -> Result<StatusReport> {
             cli_program: super::executable_path()?,
             gateway,
             path_rustcode,
+            other_logon_session,
             log: crate::server::log_path()?,
         },
         now,
     ))
+}
+
+/// `(server, caller)` when the process `server_pid` runs in another Windows
+/// logon session than this one. Only Windows has the notion here.
+#[cfg(windows)]
+fn other_logon_session(server_pid: u32) -> Option<(u32, u32)> {
+    use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
+    let (mut server, mut caller) = (0u32, 0u32);
+    // SAFETY: both outputs are valid u32 storage.
+    let found = unsafe {
+        ProcessIdToSessionId(server_pid, &mut server) != 0
+            && ProcessIdToSessionId(std::process::id(), &mut caller) != 0
+    };
+    (found && server != caller).then_some((server, caller))
+}
+
+#[cfg(not(windows))]
+fn other_logon_session(_server_pid: u32) -> Option<(u32, u32)> {
+    None
 }
 
 /// This machine's remote gateway, if remote access was ever set up here. A
@@ -978,6 +1015,7 @@ mod tests {
             cli_program: "/usr/bin/rustcode".into(),
             gateway: GatewayReport::default(),
             path_rustcode: None,
+            other_logon_session: None,
             log: "/c/logs/server.log".into(),
         }
     }
@@ -1138,6 +1176,31 @@ mod tests {
             off.human(true).contains("remote access is off"),
             "{}",
             off.human(true)
+        );
+    }
+
+    #[test]
+    fn a_server_in_another_logon_session_is_named() {
+        let report = build_report(
+            Observed {
+                other_logon_session: Some((0, 2)),
+                ..observed(installed_state(), Some(live("1.23.0", 10)))
+            },
+            0,
+        );
+        let problem = report
+            .problems
+            .iter()
+            .find(|problem| problem.code == "other-logon-session")
+            .expect("the session mismatch is reported");
+        assert!(problem.message.contains("session 0"), "{}", problem.message);
+        assert!(problem.message.contains("session 2"), "{}", problem.message);
+        // The same session, or no server, says nothing.
+        let same = build_report(observed(installed_state(), Some(live("1.23.0", 10))), 0);
+        assert!(
+            same.problems
+                .iter()
+                .all(|p| p.code != "other-logon-session")
         );
     }
 
