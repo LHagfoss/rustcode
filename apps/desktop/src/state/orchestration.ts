@@ -2050,17 +2050,6 @@ export interface TurnAnswer {
  */
 export const MACHINE_LOST_TURN = "The machine disconnected during this turn.";
 
-/**
- * How a turn on another machine ended when the request that ran it died. `session/prompt` dying
- * says nothing about the turn: the machine keeps running it, and its rows keep arriving until the
- * channel goes, so what the turn wrote decides. A turn that wrote its reply finished (a delegate
- * that answered in full must not read Failed because the channel blinked, issue 3440); one that wrote
- * none is the failure the app has no better word for.
- */
-export function lostTurnOutcome(items: readonly { kind: string; text?: string }[]): "completed" | "failed" {
-  return latestReply(items).trim() ? "completed" : "failed";
-}
-
 /** The last reply in a transcript, whatever turn it belongs to. */
 export function latestReply(items: readonly { kind: string; text?: string }[]): string {
   for (let i = items.length - 1; i >= 0; i--) {

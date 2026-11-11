@@ -579,12 +579,16 @@ they finish or ask, instead of having to poll with sleeps.
   nothing ever reports it, so it does not hold its parent back.
 - **A delegate on another machine whose channel goes.** The prompt request that
   ran a remote turn dies with its machine's connection; the turn there does
-  not, and its rows keep arriving until the channel goes. What the turn wrote
-  decides (`lostTurnOutcome` in `state/orchestration.ts`): one that wrote its
-  reply settles `done` with that answer, and only one that wrote none is
-  `failed`, with the connection's sentence as its preview
-  (`MACHINE_LOST_TURN`). A `Failed` row is the turn's own failure, never a
-  channel that blinked.
+  not. Nothing is settled from the rows that had arrived — a half-written
+  answer is not an answer — so the links keep working and the machine is asked
+  how the thread ended once its channel is back (`state/store.ts`
+  `lostTurn`): a turn still running there is followed, and its rows and answer
+  are read through a reload of the thread (`openThread`'s replay) when the
+  machine reports it stopped; a thread that is idle settles `done` with its
+  last turn's answer, or `failed` with the error it ended in. A machine that
+  stays unreachable for two minutes (`LOST_MACHINE_MS`) fails the links with
+  `MACHINE_LOST_TURN`, the sentence the thread's own row carries. A `Failed`
+  row is the turn's own failure, never a channel that blinked.
 - **After a restart.** A restart resumes the threads it cut off
   (`state/store.ts` `resumeInterrupted`), and the resume is what answers the
   links the quit severed: it is tied to that one turn, never to a turn that

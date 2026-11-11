@@ -50,7 +50,6 @@ import {
   linksLeft,
   linkThreads,
   listSessions,
-  lostTurnOutcome,
   MACHINE_LOST_TURN,
   MAX_ACTIVITY_ITEMS,
   MAX_DATA_ROWS,
@@ -1951,40 +1950,23 @@ describe("answering with the slots and the child's activity", () => {
   });
 });
 
-describe("a turn that lost its machine's connection", () => {
-  test("a turn that wrote its reply finished, so its parent reads Done", () => {
-    // The delegate answered in full and the channel went as it did (issue 3440): what it wrote decides,
-    // not the lost request, or the row says Failed and wait_session hands back a failure.
-    const rows = [
-      { kind: "user", text: "check the numbers" },
-      { kind: "assistant", text: "## Report\n\n| Item | Value |\n| --- | --- |\n| tests | 12 |" },
-      { kind: "turnEnd", outcome: "completed" },
-    ];
-    expect(lostTurnOutcome(rows)).toBe("completed");
-    // The settled link is what the parent's row and `wait_session` read.
-    const settled = linkResult(
-      { ...link("a", "b", "working"), state: "done", answer: "## Report …" },
+describe("a delegate whose machine went away mid-turn", () => {
+  test("its link reaches wait_session as done or failed, with that turn's answer", () => {
+    // The settled link is what the parent's row and `wait_session` read (state/store.ts
+    // `lostTurn` settles it once the machine says how the thread ended).
+    const done = linkResult(
+      { ...link("a", "b", "working"), state: "done", answer: "All 12 tests pass." },
       "done",
     );
-    expect(settled).toMatchObject({ status: "done", link_id: "a/b" });
-  });
-
-  test("a turn that wrote no reply is the failure the connection says it is", () => {
-    const rows = [
-      { kind: "user", text: "check the numbers" },
-      { kind: "tool", title: "bash" },
-      // An assistant row an empty chunk left behind holds no answer either.
-      { kind: "assistant", text: " \n" },
-    ];
-    expect(lostTurnOutcome(rows)).toBe("failed");
-    expect(lostTurnOutcome([])).toBe("failed");
-    // What the row previews is the sentence the app writes on the thread, not a reply.
+    expect(done).toMatchObject({ status: "done", link_id: "a/b", answer: "All 12 tests pass." });
+    expect(done).not.toHaveProperty("note");
+    // A machine that never came back is the failure, and the row previews that sentence.
     expect(MACHINE_LOST_TURN).toBe("The machine disconnected during this turn.");
-    const settled = linkResult(
+    const failed = linkResult(
       { ...link("a", "b", "working"), state: "failed", error: MACHINE_LOST_TURN },
       "failed",
     );
-    expect(settled).toMatchObject({ status: "failed" });
+    expect(failed).toMatchObject({ status: "failed" });
   });
 });
 
