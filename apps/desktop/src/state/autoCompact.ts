@@ -56,9 +56,10 @@ export const AUTO_COMPACT_CACHE_WINDOW_MS = 60_000;
 export const AUTO_COMPACT_FOLLOW_UP_MS = 60 * 60_000;
 
 export const DEFAULT_AUTO_COMPACT: AutoCompactSettings = {
-  // The size rule only: a compaction nobody asked for must not take a thread's
-  // answer away from a reader who has not come back to it yet.
-  mode: "size",
+  // Off: RustCode compacts only when the user turned it on in Settings. A compaction nobody
+  // asked for takes a thread's answer away from a reader who has not come back to it, and it
+  // reads as the harness's doing. The threshold below is what "When context passes" starts at.
+  mode: "off",
   threshold: AUTO_COMPACT_DEFAULT_THRESHOLD,
 };
 
@@ -191,6 +192,14 @@ export function autoCompactDecision(input: AutoCompactInput): AutoCompactDecisio
   }
 
   return NONE("below the threshold");
+}
+
+/** What the "Compacting context…" divider says when RustCode started the compaction. */
+export function autoCompactingText(rule: "size" | "cache", threshold: number): string {
+  const k = `${Math.round(threshold / 1_000)}k`;
+  return rule === "size"
+    ? `Compacting context (auto, over ${k})…`
+    : "Compacting context (auto, before the cache expires)…";
 }
 
 /** The card a compaction leaves says it ran on its own, not that the user asked. */

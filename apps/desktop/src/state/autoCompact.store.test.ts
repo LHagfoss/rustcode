@@ -5,6 +5,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { MockTransport } from "../acp/mock";
 import type { SessionSummary, SessionUsage } from "../acp/types";
+import { DEFAULT_AUTO_COMPACT } from "./autoCompact";
 import { emptyExtras, sentMessages } from "./compose";
 import { foldTurns } from "./fold";
 import type { Link } from "./orchestration";
@@ -86,6 +87,33 @@ async function openClaudeThread(delayMs = 0) {
 beforeEach(() => resetForTests());
 
 describe("auto-compaction in the store", () => {
+  test("a user who never picked a mode gets no automatic compaction", async () => {
+    const id = await openClaudeThread();
+    setAutoCompactMode("off");
+    useApp.setState({ autoCompact: DEFAULT_AUTO_COMPACT });
+    expect(useApp.getState().autoCompact.mode).toBe("off");
+    endedTurn(id, Date.now(), 900_000);
+
+    scheduleAutoCompact(id);
+    await settle(80);
+    expect(compacted(id)).toBe(false);
+    expect(compactPrompt(id)).toBe(false);
+  });
+
+  test("the running divider says RustCode started it and links to the setting", async () => {
+    const id = await openClaudeThread(40);
+    endedTurn(id, Date.now(), 30_000);
+
+    scheduleAutoCompact(id);
+    await until(() =>
+      useApp
+        .getState()
+        .threads[id]!.items.some((item) => item.kind === "notice" && item.text.includes("(auto, over 20k)")),
+    );
+    const row = useApp.getState().threads[id]!.items.find((item) => item.kind === "notice" && item.progress);
+    expect(row).toMatchObject({ text: "Compacting context (auto, over 20k)…", setting: "auto-compact" });
+  });
+
   test("a stopped or failed turn does not start one", async () => {
     const id = await openClaudeThread();
     endedTurn(id, Date.now(), 30_000);

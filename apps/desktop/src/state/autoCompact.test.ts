@@ -7,6 +7,7 @@ import {
   AUTO_COMPACT_FOLLOW_UP_MS,
   type AutoCompactInput,
   autoCompactDecision,
+  autoCompactingText,
   autoCompactMark,
   autoCompactPolicy,
   automaticCompactionText,
@@ -20,8 +21,10 @@ import {
 } from "./autoCompact";
 
 const NOW = 1_800_000_000_000;
+/** The rules are tested with the size rule on: the default is off. */
+const SIZE_ON = { mode: "size" as const, threshold: AUTO_COMPACT_DEFAULT_THRESHOLD };
 const input = (over: Partial<AutoCompactInput> = {}): AutoCompactInput => ({
-  settings: DEFAULT_AUTO_COMPACT,
+  settings: SIZE_ON,
   policy: autoCompactPolicy("claude-code", "acp"),
   canCompact: true,
   usedTokens: 20_000,
@@ -43,8 +46,12 @@ const input = (over: Partial<AutoCompactInput> = {}): AutoCompactInput => ({
 });
 
 describe("auto-compact settings", () => {
-  test("a fresh install compacts on size only, at 150k", () => {
-    expect(DEFAULT_AUTO_COMPACT).toEqual({ mode: "size", threshold: 150_000 });
+  test("a fresh install never compacts on its own; turning it on starts at 150k", () => {
+    expect(DEFAULT_AUTO_COMPACT).toEqual({ mode: "off", threshold: 150_000 });
+    expect(autoCompactDecision(input({ settings: DEFAULT_AUTO_COMPACT, usedTokens: 900_000 }))).toEqual({
+      action: "none",
+      reason: "off",
+    });
     expect(AUTO_COMPACT_DEFAULT_THRESHOLD).toBe(150_000);
   });
 
@@ -55,6 +62,9 @@ describe("auto-compact settings", () => {
       threshold: 90_000,
     });
     expect(parseAutoCompactSettings('"off"')).toEqual({ ...DEFAULT_AUTO_COMPACT, mode: "off" });
+    // A stored choice is kept, whatever the default is now.
+    expect(parseAutoCompactSettings('"size"')).toEqual({ mode: "size", threshold: 150_000 });
+    expect(parseAutoCompactSettings('{"mode":"size","threshold":150000}').mode).toBe("size");
     // A mode written by a build whose default was the cache rule is kept: it was chosen then.
     expect(parseAutoCompactSettings('{"mode":"cache","threshold":150000}').mode).toBe("cache");
     expect(parseAutoCompactSettings("nonsense")).toEqual(DEFAULT_AUTO_COMPACT);
@@ -174,7 +184,7 @@ describe("rule 1: the context size after a turn", () => {
 });
 
 describe("rule 2: before the prompt cache expires", () => {
-  const cache = { ...DEFAULT_AUTO_COMPACT, mode: "cache" as const };
+  const cache = { ...SIZE_ON, mode: "cache" as const };
 
   test("waits until 4.5 minutes after the turn and then compacts above 60k", () => {
     const idleSince = NOW;
@@ -252,7 +262,7 @@ describe("rule 2: before the prompt cache expires", () => {
     expect(
       autoCompactDecision(
         input({
-          settings: DEFAULT_AUTO_COMPACT,
+          settings: SIZE_ON,
           usedTokens: 80_000,
           idleSince: NOW,
           now: NOW + 60_000,
@@ -288,9 +298,15 @@ describe("what the thread shows", () => {
     expect(automaticCompactionText("Compacted automatically.")).toBe("Compacted automatically.");
   });
 
+  test("the divider says RustCode started the compaction, and why", () => {
+    expect(autoCompactingText("size", 150_000)).toBe("Compacting context (auto, over 150k)…");
+    expect(autoCompactingText("cache", 150_000)).toBe("Compacting context (auto, before the cache expires)…");
+  });
+
   test("the context bar marks the threshold only while rule 1 applies", () => {
     const claude = autoCompactPolicy("claude-code", "acp");
-    expect(autoCompactMark(DEFAULT_AUTO_COMPACT, claude)).toBe(150_000);
+    expect(autoCompactMark(DEFAULT_AUTO_COMPACT, claude)).toBeUndefined();
+    expect(autoCompactMark(SIZE_ON, claude)).toBe(150_000);
     expect(autoCompactMark({ mode: "off", threshold: 150_000 }, claude)).toBeUndefined();
     expect(
       autoCompactMark({ mode: "cache", threshold: 150_000 }, autoCompactPolicy("codex", "codex")),
