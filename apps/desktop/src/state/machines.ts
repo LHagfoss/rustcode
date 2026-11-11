@@ -1078,6 +1078,39 @@ export async function setMainMachine(machine: Machine): Promise<void> {
   }
 }
 
+/**
+ * Ask a machine to try again now. The shell stops its supervisor and starts a new
+ * one, so a backoff that had grown to minutes is a fresh attempt; the app keeps
+ * its channel and reopens it as the machine answers. A machine the shell is not
+ * keeping (it was saved after the last read) is picked up by reading the list.
+ */
+export function reconnectMachine(machine: Pick<Machine, "id">): void {
+  const link = links.get(machine.id);
+  if (!link) {
+    void refreshMachines();
+    return;
+  }
+  // The row says it is trying while it asks, rather than staying offline until an answer.
+  useMachines.setState((state) => ({
+    machines: state.machines.map((entry) =>
+      entry.id === machine.id ? { ...entry, state: "connecting", detail: null, retryInSecs: null } : entry,
+    ),
+  }));
+  link.connection?.close("Reconnecting.");
+  link.connection = null;
+  link.ready = false;
+  void link.transport
+    .restart()
+    .then(() => refreshMachines())
+    .catch((error) => {
+      useMachines.setState((state) => ({
+        machines: state.machines.map((entry) =>
+          entry.id === machine.id ? { ...entry, state: "offline", detail: errorText(error) } : entry,
+        ),
+      }));
+    });
+}
+
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
