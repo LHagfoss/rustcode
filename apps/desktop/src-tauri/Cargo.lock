@@ -3634,6 +3634,7 @@ dependencies = [
  "chrono",
  "futures-util",
  "hex",
+ "if-addrs",
  "keyring",
  "mdns-sd",
  "rand 0.10.3",

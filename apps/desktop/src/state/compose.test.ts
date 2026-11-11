@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   carriesExtras,
+  commandSubmission,
   commandSuggestions,
   composedText,
   emptyExtras,
@@ -60,6 +61,25 @@ describe("compose", () => {
     // A command the harness itself advertised goes out as typed, on either harness.
     expect(sent(false, "the diff", { ...emptyExtras, command })).toEqual([
       { type: "text", text: "/review the diff" },
+    ]);
+  });
+
+  test("picking /state delivers a skill invocation on every harness", () => {
+    const skill = { ...command, name: "/state", action: "skill" };
+    const message = commandSubmission(skill);
+    expect(composedText(message.text, message.extras)).toBe("/state");
+    for (const harness of ["claude-code", "codex", "pi", "opencode", "rustcode"]) {
+      expect(
+        promptBlocks(message.text, message.extras, {
+          images: false,
+          cwd: "/p",
+          builtin: harness === "rustcode",
+        }),
+      ).toEqual([{ type: "text", text: harness === "rustcode" ? "/state" : "Use the state skill." }]);
+    }
+    const native = commandSubmission({ ...skill, action: "execute" });
+    expect(promptBlocks(native.text, native.extras, { images: false, cwd: "/p", builtin: false })).toEqual([
+      { type: "text", text: "/state" },
     ]);
   });
 

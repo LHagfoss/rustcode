@@ -121,6 +121,9 @@ async fn list(config_dir: &std::path::Path, threads: bool, json: bool) -> Result
     // so the loop keeps borrowing the loaded registry.
     let mut learned: Vec<(String, Vec<Route>)> = Vec::new();
     let mut platforms: Vec<(String, String)> = Vec::new();
+    // This computer's own interfaces, so a hint never asks about an overlay
+    // this computer is not on (#3421).
+    let local = rustcode_client::local_addresses();
     for machine in registry.ordered() {
         let mut row = Row {
             machine: machine.clone(),
@@ -153,7 +156,7 @@ async fn list(config_dir: &std::path::Path, threads: bool, json: bool) -> Result
                 let probe = connector
                     .probe_overlay_routes(machine, &connected.route)
                     .await;
-                row.hint = hint(&connected.route, connected.failed, probe);
+                row.hint = hint(machine, &connected.route, connected.failed, probe, &local);
                 if threads {
                     row.threads = Some(match read_threads(connected.session).await {
                         Ok(titles) => titles,
@@ -204,10 +207,26 @@ async fn read_threads(session: Session) -> Result<Vec<String>> {
 /// The hint for a connected machine, from both the race's own failures and
 /// the overlay probe's: a LAN win has no overlay failure yet, and an overlay
 /// win keeps the LAN failure that explains why it is not on the local network.
-fn hint(route: &Route, in_race: Vec<RouteFailure>, probe: Vec<RouteFailure>) -> Option<String> {
+///
+/// `local` is this computer's own addresses: a route on an overlay without an
+/// interface here can never answer, and a VPN route that is not needed while
+/// another VPN route answers says nothing (#3421).
+fn hint(
+    machine: &Machine,
+    route: &Route,
+    in_race: Vec<RouteFailure>,
+    probe: Vec<RouteFailure>,
+    local: &[std::net::IpAddr],
+) -> Option<String> {
     let mut failures = in_race;
     failures.extend(probe);
-    rustcode_client::route_hint(route, &failures)
+    rustcode_client::RouteReport {
+        routes: &machine.routes,
+        in_use: route,
+        failures: &failures,
+        local,
+    }
+    .hint()
 }
 
 fn print_rows(rows: &[Row]) {
@@ -235,16 +254,21 @@ fn print_rows(rows: &[Row]) {
     }
     println!("{}", columns(&table));
     for row in rows {
-        if let Some(reason) = row.state.detail() {
-            println!("  {reason}");
-        }
-        if let Some(hint) = &row.hint {
-            println!("  {hint}");
-        }
-        for title in row.threads.iter().flatten() {
-            println!("  {title}");
+        for line in machine_lines(row) {
+            println!("  {line}");
         }
     }
+}
+
+/// What is printed under the table for one machine: what happened to it, the
+/// hint about a route of another kind, then its threads. The hint comes before
+/// the threads so that `--threads` never prints it in the middle of a machine's
+/// thread list (#3421).
+fn machine_lines(row: &Row) -> Vec<String> {
+    let mut lines: Vec<String> = row.state.detail().map(str::to_owned).into_iter().collect();
+    lines.extend(row.hint.clone());
+    lines.extend(row.threads.iter().flatten().cloned());
+    lines
 }
 
 fn print_json(rows: &[Row]) {
@@ -591,17 +615,76 @@ mod tests {
             reason: reason.into(),
             refusal: None,
         };
+        let mut machine = Machine::new(
+            "gw-a",
+            "Studio",
+            "macos",
+            "device-1",
+            lan.clone(),
+            chrono::Utc::now(),
+        );
+        machine.routes.push(netbird.clone());
+        // Both machines on NetBird: this computer has an address in the space
+        // the machine's overlay route is in.
+        let here: Vec<std::net::IpAddr> = ["192.168.1.20", "100.92.13.44"]
+            .iter()
+            .map(|address| address.parse().unwrap())
+            .collect();
         let home = hint(
+            &machine,
             &lan,
             Vec::new(),
             vec![failure(netbird.clone(), "connection timed out")],
+            &here,
         )
         .expect("the LAN works and NetBird does not");
         assert!(home.contains("NetBird"), "{home}");
         assert!(home.contains("100.90.16.237:17879"), "{home}");
-        let away = hint(&netbird, vec![failure(lan, "no route to host")], Vec::new())
-            .expect("the overlay works and the LAN does not");
+        let away = hint(
+            &machine,
+            &netbird,
+            vec![failure(lan.clone(), "no route to host")],
+            Vec::new(),
+            &here,
+        )
+        .expect("the overlay works and the LAN does not");
         assert!(away.contains("not on the LAN"), "{away}");
         assert!(away.contains("192.168.1.20:17879"), "{away}");
+    }
+
+    /// Under a machine, the hint about another kind of route is printed before
+    /// its threads, never between them (#3421).
+    #[test]
+    fn a_machines_hint_is_printed_before_its_threads() {
+        let row = Row {
+            machine: Machine::new(
+                "gw-a",
+                "Studio",
+                "macos",
+                "device-1",
+                Route::new("192.168.1.20:17879"),
+                chrono::Utc::now(),
+            ),
+            route: "192.168.1.20:17879".into(),
+            state: State::Connected,
+            hint: Some("Not reachable over NetBird (100.90.16.237:17879).".into()),
+            threads: Some(vec!["Fix the login form".into(), "Bump the version".into()]),
+        };
+        assert_eq!(
+            machine_lines(&row),
+            [
+                "Not reachable over NetBird (100.90.16.237:17879).",
+                "Fix the login form",
+                "Bump the version",
+            ]
+        );
+        // An offline machine says why, and has no threads to print.
+        let offline = Row {
+            state: State::Offline("connection refused".into()),
+            hint: None,
+            threads: None,
+            ..row
+        };
+        assert_eq!(machine_lines(&offline), ["connection refused"]);
     }
 }

@@ -155,7 +155,7 @@ fn verification_identity_with_environment(
     }
     if let Some(home) = std::env::var_os("CARGO_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".cargo")))
+        .or_else(|| crate::home::home_dir().map(|p| p.join(".cargo")))
     {
         configs.extend([home.join("config"), home.join("config.toml")]);
     }
