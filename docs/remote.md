@@ -599,9 +599,15 @@ are all visible at once.
 | **Pair again** | On a machine whose pairing it ended (*Needs pairing*): asks it again, so a new code can be typed. |
 
 The app keeps one connection per machine, retried with jittered backoff from a
-second up to five minutes (reset after half a minute connected), so a machine
-that is asleep or away comes back on its own. A pairing that was refused is
-not retried: nothing changes until it is paired again, and the row says so.
+second up to a minute (reset after half a minute connected), so a machine that
+is asleep or away comes back on its own. Each attempt tries every known route —
+the LAN, the `.local` name Bonjour gave it, every overlay address — starting
+with the route the machine answered on last time, so a dropped connection comes
+back the way it came. A change to this computer's own network (a VPN coming up
+or going away, another Wi-Fi) ends the wait at once instead of after the
+backoff, and while it waits the row says *Offline · retrying in N s* next to
+when the machine was last reached. A pairing that was refused is not retried:
+nothing changes until it is paired again, and the row says so.
 The connection and the token live in the app's Rust shell
 (`apps/desktop/src-tauri/src/machines.rs`); the page only shows what it is
 told, and the thread count comes from the machine's own `session/list` over

@@ -374,7 +374,11 @@ async fn add(
         return Err(error).context("the machine is paired but could not be saved");
     }
     // Pairing is a successful connection; `list` shows when it happened.
-    registry.mark_connected(&machine.host_id, chrono::Utc::now())?;
+    registry.mark_connected(
+        &machine.host_id,
+        &machine.routes[0].address,
+        chrono::Utc::now(),
+    )?;
     println!(
         "Paired with {} ({}). Saved as \"{}\"; `rustcode machines list` shows it.",
         welcome.machine_name(),

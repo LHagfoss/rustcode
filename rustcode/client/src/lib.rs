@@ -15,6 +15,9 @@
 //!   hint a route that does not answer earns.
 //! - [`machine`]: the ask-to-connect pairing flow, route selection and the one
 //!   ACP read (`session/list`).
+//! - [`reconnect`]: the backoff a client waits out while a machine is away, the
+//!   route that worked last first, and the network change that cuts the wait
+//!   short.
 //! - [`discovery`]: Bonjour, for machines that take a desktop client.
 //! - [`protocol`]: the remote protocol v1 frames this client sends, mirrored
 //!   against the committed contract in `docs/remote-protocol/v1`.
@@ -26,6 +29,7 @@ pub mod config;
 pub mod discovery;
 pub mod machine;
 pub mod protocol;
+pub mod reconnect;
 pub mod registry;
 pub mod routes;
 pub mod tokens;
@@ -40,6 +44,7 @@ pub use protocol::{
     AcpClientFrame, AcpServerFrame, CAPABILITY_TOKEN_ROTATION, ErrorCode, HandshakeRequest,
     HandshakeResponse, PAIRING_CODE_DIGITS, Secret,
 };
+pub use reconnect::{backoff_cap, backoff_delay, network_changed, prefer_last_working};
 pub use registry::{Machine, MachineRegistry, OverlayProvider, Route, RouteKind};
 pub use routes::{
     DialFailure, LAN_GRACE, RACE_DEADLINE, Race, RaceSettings, RouteFailure, route_hint,
