@@ -10,15 +10,29 @@ use crate::orchestration::hub::{
 };
 
 const EXTENSION: &str = include_str!("pi_extension.ts");
-const WRAPPER: &str = "#!/bin/sh\nexec pi --extension \"$RUSTCODE_PI_EXTENSION\" \"$@\"\n";
+/// Keep both script formats testable on every host platform.
+fn wrapper(windows: bool) -> (&'static str, &'static str) {
+    if windows {
+        (
+            "pi-with-thread-tools.cmd",
+            "@echo off\r\npi --extension \"%RUSTCODE_PI_EXTENSION%\" %*\r\n",
+        )
+    } else {
+        (
+            "pi-with-thread-tools",
+            "#!/bin/sh\nexec pi --extension \"$RUSTCODE_PI_EXTENSION\" \"$@\"\n",
+        )
+    }
+}
 
 /// Write the extension and its script into `dir`, and give the script's path.
 fn install(dir: &Path) -> std::io::Result<(PathBuf, PathBuf)> {
     std::fs::create_dir_all(dir)?;
     let extension = dir.join("rustcode-thread-tools.ts");
     std::fs::write(&extension, EXTENSION)?;
-    let wrapper = dir.join("pi-with-thread-tools");
-    std::fs::write(&wrapper, WRAPPER)?;
+    let (name, script) = wrapper(cfg!(windows));
+    let wrapper = dir.join(name);
+    std::fs::write(&wrapper, script)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -73,6 +87,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn wrapper_uses_windows_command_script_and_forwards_arguments() {
+        assert_eq!(
+            wrapper(true),
+            (
+                "pi-with-thread-tools.cmd",
+                "@echo off\r\npi --extension \"%RUSTCODE_PI_EXTENSION%\" %*\r\n"
+            )
+        );
+    }
+
+    #[test]
+    fn wrapper_preserves_unix_script_and_argument_quoting() {
+        assert_eq!(
+            wrapper(false),
+            (
+                "pi-with-thread-tools",
+                "#!/bin/sh\nexec pi --extension \"$RUSTCODE_PI_EXTENSION\" \"$@\"\n"
+            )
+        );
+    }
+
+    #[test]
     fn environment_writes_the_files_and_passes_the_token_outside_the_args() {
         let dir = tempfile::tempdir().unwrap();
         let launch = Launch {
@@ -94,7 +130,10 @@ mod tests {
             Some(crate::orchestration::VERSION.to_string().as_str())
         );
         assert!(!get("RUSTCODE_PI_MCP_ARGS").unwrap().contains("secret"));
-        assert!(Path::new(get("PI_ACP_PI_COMMAND").unwrap()).is_file());
+        let installed_wrapper = Path::new(get("PI_ACP_PI_COMMAND").unwrap());
+        let (name, script) = wrapper(cfg!(windows));
+        assert_eq!(installed_wrapper.file_name().unwrap(), name);
+        assert_eq!(std::fs::read_to_string(installed_wrapper).unwrap(), script);
         assert!(
             std::fs::read_to_string(get("RUSTCODE_PI_EXTENSION").unwrap())
                 .unwrap()
