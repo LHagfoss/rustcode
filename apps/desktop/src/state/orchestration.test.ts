@@ -50,6 +50,7 @@ import {
   linksLeft,
   linkThreads,
   listSessions,
+  MACHINE_LOST_TURN,
   MAX_ACTIVITY_ITEMS,
   MAX_DATA_ROWS,
   MAX_DEPTH,
@@ -1946,6 +1947,26 @@ describe("answering with the slots and the child's activity", () => {
     expect(entry).toMatchObject({ answer_truncated: true, session_id: "b", link_id: "a/b" });
     // An answer that fits says nothing about truncation.
     expect(linkResult({ ...cut, truncated: false }, "done")).not.toHaveProperty("answer_truncated");
+  });
+});
+
+describe("a delegate whose machine went away mid-turn", () => {
+  test("its link reaches wait_session as done or failed, with that turn's answer", () => {
+    // The settled link is what the parent's row and `wait_session` read (state/store.ts
+    // `lostTurn` settles it once the machine says how the thread ended).
+    const done = linkResult(
+      { ...link("a", "b", "working"), state: "done", answer: "All 12 tests pass." },
+      "done",
+    );
+    expect(done).toMatchObject({ status: "done", link_id: "a/b", answer: "All 12 tests pass." });
+    expect(done).not.toHaveProperty("note");
+    // A machine that never came back is the failure, and the row previews that sentence.
+    expect(MACHINE_LOST_TURN).toBe("The machine disconnected during this turn.");
+    const failed = linkResult(
+      { ...link("a", "b", "working"), state: "failed", error: MACHINE_LOST_TURN },
+      "failed",
+    );
+    expect(failed).toMatchObject({ status: "failed" });
   });
 });
 
