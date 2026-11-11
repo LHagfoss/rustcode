@@ -8,6 +8,7 @@
   "host_name": "studio",
   "expires_at": "2026-08-22T09:15:00Z",
   "version": "1.28.0",
+  "platform": "macos",
   "routes": [
     {
       "address": "192.168.1.20:17879",

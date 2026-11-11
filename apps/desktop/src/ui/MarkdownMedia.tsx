@@ -3,18 +3,20 @@
 // - `![alt](path)`: a web or `data:` picture shows as is; a file path
 //   (absolute, `~/…`, `file://…` or relative to the thread's folder) is read
 //   by the shell's `thread_image`, which refuses anything outside the
-//   thread's folder and its worktree. A click opens the lightbox.
+//   thread, project, worktree and OS scratch folders. A click opens the lightbox.
 // - ```mermaid blocks: mermaid is loaded only when the first such block
 //   appears, themed from the tokens, rendered strictly (no scripts, no
 //   links out), capped in size, and shown as code when it does not parse.
 
 import { CircleAlert, ImageOff } from "lucide-react";
 import { useEffect, useState } from "react";
-import { threadImage } from "../lib/native";
+import { openPath, revealPath, threadImage } from "../lib/native";
+import { isAbsolute, join } from "../lib/paths";
+import { appPlatform } from "../lib/platform";
 import { hasShell } from "../lib/shell";
 import { useApp } from "../state/store";
 import { openLightbox } from "./Lightbox";
-import { cx } from "./primitives";
+import { cx, Pill } from "./primitives";
 
 // ---------------------------------------------------------------- pictures
 
@@ -25,7 +27,9 @@ const pictures = new Map<string, Promise<string>>();
 function threadRoots(): string[] {
   const s = useApp.getState();
   const thread = s.selectedId ? s.threads[s.selectedId] : undefined;
-  return [thread?.cwd ?? s.projectCwd, thread?.worktree?.path].filter((r): r is string => !!r);
+  return [thread?.cwd ?? s.projectCwd, thread?.worktree?.path, thread?.worktree?.repo].filter(
+    (r): r is string => !!r,
+  );
 }
 
 function loadPicture(path: string, roots: string[]): Promise<string> {
@@ -46,14 +50,43 @@ export function picturePath(src: string): string | null {
   if (/^(https?:|data:image\/)/i.test(src)) return null;
   if (/^file:\/\//i.test(src)) {
     try {
-      return decodeURIComponent(new URL(src).pathname);
+      const url = new URL(src);
+      const path = decodeURIComponent(url.pathname);
+      if (url.hostname) return `//${url.hostname}${path}`;
+      return /^\/[a-z]:\//i.test(path) ? path.slice(1) : path;
     } catch {
       return null;
     }
   }
   // Any other scheme (javascript:, blob:, …) is not a picture path.
+  if (/^[a-z]:[\\/]/i.test(src)) return src;
   if (/^[a-z][a-z0-9+.-]*:/i.test(src)) return null;
-  return decodeURIComponent(src);
+  try {
+    return decodeURIComponent(src);
+  } catch {
+    return src;
+  }
+}
+
+/** A failed picture remains actionable, including when its file has disappeared. */
+export function BlockedImage({ path, reason }: { path: string; reason: string }) {
+  const reveal =
+    appPlatform() === "windows"
+      ? "Reveal in Explorer"
+      : appPlatform() === "mac"
+        ? "Reveal in Finder"
+        : "Reveal in File Manager";
+  return (
+    <span className="inline-flex max-w-full flex-wrap items-center gap-2 rounded-md bg-fill-subtle px-2 py-1 align-middle text-callout text-fg-muted">
+      <ImageOff size={12} className="shrink-0" />
+      <span className="min-w-0 break-all font-mono">{path}</span>
+      <span className="basis-full truncate" title={reason}>
+        {reason.split("\n")[0]}
+      </span>
+      <Pill onClick={() => openPath(path)}>Open</Pill>
+      <Pill onClick={() => revealPath(path)}>{reveal}</Pill>
+    </span>
+  );
 }
 
 export function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
@@ -66,6 +99,7 @@ export function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
       setState({ error: "Pictures from files show in the desktop app." });
       return;
     }
+    setState({});
     let live = true;
     loadPicture(path, threadRoots()).then(
       (url) => live && setState({ url }),
@@ -76,6 +110,10 @@ export function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
     };
   }, [path]);
   const url = direct ?? state.url;
+  if (state.error && path) {
+    const actionPath = isAbsolute(path) || path.startsWith("~/") ? path : join(threadRoots()[0] ?? "", path);
+    return <BlockedImage path={actionPath} reason={state.error} />;
+  }
   if (!url) {
     if (!state.error && !src) return null;
     return (
@@ -95,6 +133,7 @@ export function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
       <img
         src={url}
         alt={alt ?? ""}
+        onError={() => setState({ error: "Could not display this picture." })}
         loading="lazy"
         draggable={false}
         className="max-h-[360px] max-w-full rounded-lg object-contain"

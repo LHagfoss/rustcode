@@ -68,6 +68,23 @@ pub(crate) fn load(session_id: &str) -> Option<HarnessRecord> {
         .filter(|record| !record.harness.is_empty() && record.harness != super::BUILTIN_ID)
 }
 
+/// Restoration must never turn an unreadable external record into a built-in
+/// thread. Keep the saved harness, account and native id, or report the error.
+pub(crate) fn load_for_restore(session_id: &str) -> Result<Option<HarnessRecord>, String> {
+    let path = record_path(session_id).ok_or("session storage is unavailable")?;
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("cannot read saved harness: {error}")),
+    };
+    let record: HarnessRecord = serde_json::from_str(&text)
+        .map_err(|error| format!("cannot read saved harness: {error}"))?;
+    if record.harness.is_empty() {
+        return Err("saved harness is empty".into());
+    }
+    Ok((record.harness != super::BUILTIN_ID).then_some(record))
+}
+
 pub(crate) fn save(session_id: &str, record: &HarnessRecord) {
     let Some(path) = record_path(session_id) else {
         return;
@@ -87,6 +104,18 @@ pub(crate) fn save(session_id: &str, record: &HarnessRecord) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restart_keeps_the_saved_login_and_native_session_or_reports_damage() {
+        let id = crate::config::create_detached_session();
+        let mut record = HarnessRecord::new("claude-code", std::env::temp_dir());
+        record.account = Some("personal-1".into());
+        record.native_session_id = Some("native-session".into());
+        save(&id, &record);
+        assert_eq!(load_for_restore(&id).unwrap(), Some(record));
+        std::fs::write(record_path(&id).unwrap(), "broken json").unwrap();
+        assert!(load_for_restore(&id).is_err());
+    }
 
     #[test]
     fn records_round_trip_beside_the_thread() {

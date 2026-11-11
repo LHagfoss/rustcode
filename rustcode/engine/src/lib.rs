@@ -27,6 +27,7 @@ pub mod doctor;
 pub mod harness;
 mod harness_usage;
 pub mod home;
+mod install_hints;
 mod keep_awake;
 pub mod mcp;
 mod memory;

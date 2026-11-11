@@ -8,13 +8,15 @@ use super::{
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::{File, OpenOptions},
+    fs::File,
     io::{Read, Seek, SeekFrom},
-    os::unix::{fs::OpenOptionsExt, process::CommandExt},
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
 };
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 // A descriptor marked close-on-exec can still be inherited between fork and exec.
 const START_LOCK_WAIT_TIMEOUT: Duration = Duration::from_secs(1);
@@ -74,7 +76,8 @@ impl DaemonLifecycle {
         }
     }
     pub fn socket_path(&self) -> PathBuf {
-        self.directory.join("control.sock")
+        self.directory
+            .join(crate::remote_gateway::local_socket::CONTROL_ENDPOINT)
     }
     pub fn registration_path(&self) -> PathBuf {
         self.directory.join("registration.json")
@@ -234,17 +237,13 @@ impl DaemonLifecycle {
         if let Some(status) = self.status().await? {
             return Ok(status);
         }
-        let log = OpenOptions::new()
-            .append(true)
-            .create(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(self.log_path())?;
+        let log = super::private_files::open_private_log(&self.log_path())?;
         command
             .stdin(Stdio::null())
             .stdout(log.try_clone()?)
             .stderr(log);
         // SAFETY: setsid is async-signal-safe and the callback accesses no shared state.
+        #[cfg(unix)]
         unsafe {
             command.as_std_mut().pre_exec(|| {
                 if libc::setsid() == -1 {
@@ -253,7 +252,10 @@ impl DaemonLifecycle {
                 Ok(())
             });
         }
+        #[cfg(unix)]
         rustcode_command::hide_console_window(command.as_std_mut());
+        #[cfg(windows)]
+        command.creation_flags(windows_detach_flags());
         let mut child = StartingChild(Some(command.spawn()?));
         let pid = child.0.as_ref().unwrap().id().context("child exited")?;
         let status = tokio::time::timeout(self.health_timeout, async {
@@ -285,7 +287,38 @@ impl Drop for StartingChild {
     }
 }
 
+#[cfg(windows)]
+fn windows_detach_flags() -> u32 {
+    use windows_sys::Win32::System::Threading::{
+        CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, DETACHED_PROCESS,
+    };
+    CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+}
+
 #[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn daemon_paths_share_one_config_root_and_platform_transport() {
+        let root = Path::new("profile");
+        let lifecycle = DaemonLifecycle::new(root);
+        let endpoint = if cfg!(unix) {
+            "control.sock"
+        } else {
+            "control.endpoint"
+        };
+        assert_eq!(lifecycle.socket_path(), root.join("daemon").join(endpoint));
+        assert_eq!(lifecycle.database_path(), root.join("daemon/jobs.sqlite"));
+        assert_eq!(lifecycle.log_path(), root.join("daemon/daemon.log"));
+        assert_eq!(
+            lifecycle.registration_path(),
+            root.join("daemon/registration.json")
+        );
+    }
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::daemon::{client::DaemonClient, protocol::DaemonRequest};

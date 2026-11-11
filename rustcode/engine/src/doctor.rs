@@ -1,11 +1,13 @@
 //! `rustcode doctor` — environment diagnostics with optional `--fix`.
 //!
 //! Checks the local harness prerequisites without network access:
-//! config directory, config load, required binaries (`git`, `rg`, `tmux`),
+//! config directory, config load, required binaries (`git`, `rg`),
 //! and skill directories. `--fix` creates missing directories; binaries are
 //! never auto-installed (we print the install hint instead).
 
 use std::path::PathBuf;
+
+use crate::config::CredentialSource;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DoctorCheck {
@@ -84,43 +86,81 @@ fn ensure_dir(path: &PathBuf) -> bool {
     std::fs::create_dir_all(path).is_ok() && path.is_dir()
 }
 
-/// Check each configured profile's API-key env var and report where it
-/// resolved from (process env vs login shell vs dotfile vs missing).
-/// Never prints values.
+/// Report where each profile's credential comes from (`credential`, a
+/// `env_key=NAME` or an `api_key`), where an env var resolved from (process
+/// env vs login shell vs dotfile vs missing), and any `env_key` that is not a
+/// variable name. Never prints values.
 fn check_provider_keys(workspace: &std::path::Path) -> Vec<DoctorCheck> {
     let config = crate::config::load_config_for_workspace(workspace).2;
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     for profile in &config.models {
-        let Some(env_name) = profile.api_key_env_name() else {
-            continue;
-        };
-        if !seen.insert(env_name.to_string()) {
-            continue;
-        }
-        match crate::shell_env::env_var_source(env_name) {
-            crate::shell_env::EnvSource::Process => out.push(DoctorCheck::pass(
+        // A pasted secret in `env_key`, or the same secret stored in both
+        // fields, is reported once per profile: naming the field and never the
+        // value.
+        if let Some(problem) = profile.env_key_problem() {
+            out.push(DoctorCheck::fail(
                 "provider-key",
-                format!("{env_name}: found in process env"),
-            )),
-            crate::shell_env::EnvSource::LoginShell => out.push(DoctorCheck::pass(
-                "provider-key",
-                format!("{env_name}: found via login shell (exported in shell rc, not in process env)"),
-            )),
-            crate::shell_env::EnvSource::Dotfile => out.push(DoctorCheck::pass(
-                "provider-key",
-                format!("{env_name}: found in shell dotfile (shell probe unavailable; parsed statically)"),
-            )),
-            crate::shell_env::EnvSource::Missing => out.push(DoctorCheck::fail(
-                "provider-key",
-                format!("{env_name}: missing (profile `{}` needs it)", profile.name),
+                format!("profile `{}`: {}", profile.name, problem.describe()),
                 Some(format!(
-                    "export {env_name}=<key> in ~/.zshenv (sourced by all zsh modes) or ~/.zprofile, then restart rustcode from a login shell; interactive-only ~/.zshrc exports are invisible to desktop/systemd/IDE launches"
+                    "set `env_key` for profile `{}` to the name of the environment variable \
+                     holding the key (for example `OPENAI_API_KEY`), or remove it and keep \
+                     `api_key` / `credential`",
+                    profile.name
                 )),
+            ));
+        }
+
+        let source = profile.credential_source();
+        let description = source.describe();
+        match &source {
+            CredentialSource::Credential | CredentialSource::None => out.push(DoctorCheck::pass(
+                "provider-key",
+                format!("profile `{}`: {description}", profile.name),
+            )),
+            CredentialSource::ApiKey { env: Some(name) } | CredentialSource::EnvKey(name) => {
+                if seen.insert(name.clone()) {
+                    out.push(env_source_check(name, &profile.name, &description));
+                }
+            }
+            CredentialSource::ApiKey { env: None } => out.push(DoctorCheck::pass(
+                "provider-key",
+                format!("profile `{}`: {description}", profile.name),
             )),
         }
     }
     out
+}
+
+/// One check for an env var a profile depends on, labelled with the field that
+/// named it.
+fn env_source_check(env_name: &str, profile: &str, field: &str) -> DoctorCheck {
+    match crate::shell_env::env_var_source(env_name) {
+        crate::shell_env::EnvSource::Process => DoctorCheck::pass(
+            "provider-key",
+            format!("profile `{profile}`: {field}: found in process env"),
+        ),
+        crate::shell_env::EnvSource::LoginShell => DoctorCheck::pass(
+            "provider-key",
+            format!(
+                "profile `{profile}`: {field}: found via login shell (exported in shell rc, not in process env)"
+            ),
+        ),
+        crate::shell_env::EnvSource::Dotfile => DoctorCheck::pass(
+            "provider-key",
+            format!(
+                "profile `{profile}`: {field}: found in shell dotfile (shell probe unavailable; parsed statically)"
+            ),
+        ),
+        crate::shell_env::EnvSource::Missing => DoctorCheck::fail(
+            "provider-key",
+            format!("profile `{profile}`: {field}: missing"),
+            Some(crate::install_hints::provider_key_hint(
+                env_name,
+                crate::install_hints::HOST,
+            )),
+        ),
+    }
 }
 
 /// Run all checks. When `fix` is true, create missing config/skill
@@ -178,12 +218,10 @@ pub fn run_checks(fix: bool) -> Vec<DoctorCheck> {
     checks.push(check_binary(
         "rg",
         &["--version"],
-        "install ripgrep: `brew install ripgrep` / `cargo install ripgrep`",
-    ));
-    checks.push(check_binary(
-        "tmux",
-        &["-V"],
-        "install tmux for background tasks: `brew install tmux`",
+        &format!(
+            "install ripgrep: `{}`",
+            crate::install_hints::host_hint(crate::install_hints::Tool::Ripgrep)
+        ),
     ));
 
     // Skill directories (informational; --fix creates only the one RustCode

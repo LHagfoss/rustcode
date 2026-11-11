@@ -1385,6 +1385,25 @@ function seedThreads(): MockThread[] {
         }),
       ],
     },
+    {
+      id: "mock-agent-images",
+      cwd: "/Users/you/code/rustcode",
+      title: "Review agent screenshots",
+      model: "gpt-6-luna",
+      effort: "low",
+      updatedAt: minutes(90),
+      harness: "codex",
+      checkpoints: [],
+      history: [
+        update("mock-agent-images", {
+          sessionUpdate: "agent_message_chunk",
+          content: text(
+            "![Temp screenshot](/tmp/rustcode/mock-agent-images/screenshot.png)\n\n![Blocked screenshot](/Users/you/Private/screenshot.png)",
+          ),
+          ...turn(2000),
+        }),
+      ],
+    },
   ];
 }
 
@@ -2070,6 +2089,7 @@ export class MockEngine {
   private agents = new Map<string, JsonObject[]>();
   /** The inbox seed runs once, after the list the app first reads. */
   private needsYouSeeded = false;
+  private pullEventDelivered = false;
   /** The client's `_meta.rustcode.orchestration` at initialize. */
   private orchestration = 0;
   /** Discord Rich Presence (docs/discord-rich-presence.md), as `discord_rpc_enabled` holds it. */
@@ -3224,6 +3244,20 @@ export class MockEngine {
             resetsAt: Math.floor(Date.now() / 1000) + 3 * 86400,
           },
         };
+      }
+      case "_rustcode/pulls/watches": {
+        const thread = this.threads[0];
+        if (!thread || typeof location === "undefined" || !location.search.includes("pullWatchPreview"))
+          return { watches: [] };
+        const watch = { sessionId: thread.id, number: 3375, link: true };
+        if (obj(params)?.take) {
+          const events = this.pullEventDelivered
+            ? []
+            : [{ message: "CI checks failed", kind: "checks_failed" }];
+          this.pullEventDelivered = true;
+          return { watch, events };
+        }
+        return { watches: [watch] };
       }
       case "_rustcode/pulls":
         return {
@@ -5040,7 +5074,7 @@ function mockMachine(
     state,
     detail:
       state === "offline"
-        ? "Not connected. Retrying in 4 s."
+        ? "failed to connect to 192.168.1.31:17879: Connection timed out (os error 60)"
         : state === "needsPairing"
           ? "Lars's Linux box ended this computer's pairing. Pair it again to see its threads."
           : null,
@@ -5057,8 +5091,19 @@ const MOCK_STUDIO = {
   name: "Studio",
   platform: "macos",
   route: "192.168.1.20:17879",
+  version: "1.28.0",
   // Two threads in one project and one in another, so **Run on** shows a choice of folders.
   threads: 3,
+};
+
+/** A Windows computer on the same network, one RustCode behind (`?machines=paired`). */
+const MOCK_WINDOWS = {
+  id: "gw-4a2c8e5f1b7d9c30",
+  name: "Lars's Windows box",
+  platform: "windows",
+  route: "192.168.1.44:17879",
+  version: "1.27.0",
+  threads: 2,
 };
 
 /** The Studio row: a Mac on the LAN, connected (or not) like the Linux box. */
@@ -5067,9 +5112,28 @@ function mockStudio(state: "connected" | "offline", addedAt: number): JsonObject
     id: MOCK_STUDIO.id,
     name: MOCK_STUDIO.name,
     platform: MOCK_STUDIO.platform,
+    version: MOCK_STUDIO.version,
     main: false,
     routes: [{ kind: "lan", address: MOCK_STUDIO.route, encrypted: false }],
     route: { kind: "lan", address: MOCK_STUDIO.route, encrypted: false },
+    state,
+    detail: state === "offline" ? "Not connected. Retrying in 8 s." : null,
+    retryInSecs: state === "offline" ? 8 : null,
+    addedAt: new Date(addedAt).toISOString(),
+    lastConnectedAt: new Date(addedAt).toISOString(),
+  };
+}
+
+/** The Windows row: a PC on the LAN, one RustCode behind this app (the version sentence). */
+function mockWindows(state: "connected" | "offline", addedAt: number): JsonObject {
+  return {
+    id: MOCK_WINDOWS.id,
+    name: MOCK_WINDOWS.name,
+    platform: MOCK_WINDOWS.platform,
+    version: MOCK_WINDOWS.version,
+    main: false,
+    routes: [{ kind: "lan", address: MOCK_WINDOWS.route, encrypted: false }],
+    route: { kind: "lan", address: MOCK_WINDOWS.route, encrypted: false },
     state,
     detail: state === "offline" ? "Not connected. Retrying in 8 s." : null,
     retryInSecs: state === "offline" ? 8 : null,
@@ -5097,9 +5161,13 @@ function mockMachineList(option: MockOptions["machines"]): JsonObject[] {
     case "revoked":
       return [mockMachine("needsPairing", savedAt)];
     case "paired":
-      // Saved during this session: the row says "just now". Two computers, so the sidebar's
-      // machine groups (this one, then each paired machine) are what the mock window shows.
-      return [mockMachine("connected", Date.now()), mockStudio("connected", savedAt)];
+      // The Devices view's own happy path: this Mac, a Windows PC with threads, and a machine
+      // that is away, saved during this session so the Mac and the PC read as just saved.
+      return [
+        mockStudio("connected", Date.now()),
+        mockWindows("connected", savedAt),
+        mockMachine("offline", savedAt),
+      ];
     default:
       return [mockMachine("connected", savedAt)];
   }
@@ -5759,6 +5827,7 @@ export class MockTransport implements Transport {
       this.serverInstalled = true;
       return mockServerService(true);
     }
+    if (command === "server_link_path") return mockServerService(this.serverInstalled);
     if (command === "machines_set_main") {
       this.machineList = this.machineList.map((machine) => ({
         ...machine,
@@ -5800,10 +5869,10 @@ export class MockTransport implements Transport {
     )
       return null;
     if (command === "thread_image") {
-      // A drawn stand-in for any picture inside the thread's folder; the shell's rules decide the rest.
+      // Canned fixtures only: the actual filesystem policy lives in native.rs.
       const path = String(args.path);
-      if (path.startsWith("/") && !path.startsWith(String((args.roots as string[])[0] ?? "")))
-        throw new Error("Pictures outside the thread's folder are not shown.");
+      if (path === "/Users/you/Private/screenshot.png")
+        throw new Error("Outside the thread, project, worktree and temporary folders.");
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="200" viewBox="0 0 480 200"><rect width="480" height="200" rx="12" fill="#18181a"/><polyline fill="none" stroke="#93a3e8" stroke-width="3" points="20,180 80,170 140,150 200,110 260,40 320,40 380,40 440,40"/><text x="20" y="28" fill="#a1a1a1" font-family="-apple-system" font-size="14">${path}</text></svg>`;
       return { name: path.split("/").pop(), mimeType: "image/svg+xml", data: btoa(svg) };
     }
@@ -5863,15 +5932,27 @@ const MOCK_SYSTEM_INFO: JsonObject = {
   graphicsEnv: [],
 };
 
+/**
+ * A project's files as the shell lists them (git's own order): more than the `@` drawer shows at
+ * once, so its short list and its `Show all` row can be seen in the mock window.
+ */
 const MOCK_PROJECT_FILES = [
+  "Cargo.lock",
+  "Cargo.toml",
   "README.md",
+  "apps/desktop/package.json",
+  "apps/desktop/src/lib/native.ts",
   "apps/desktop/src/main.tsx",
+  "apps/desktop/src/state/compose.ts",
+  "apps/desktop/src/state/store.ts",
   "apps/desktop/src/ui/Composer.tsx",
   "apps/desktop/src/ui/Sidebar.tsx",
-  "apps/desktop/src/state/store.ts",
   "docs/design.md",
+  "docs/desktop.md",
   "docs/my notes.md",
   "rustcode/engine/src/acp.rs",
+  "rustcode/engine/src/tools/mod.rs",
+  "scripts/release.sh",
 ];
 
 /** Canned `git_changes`, as the shell answers it: the branch since its base adds the login form. */

@@ -487,15 +487,8 @@ fn write_private_file(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     let directory = path
         .parent()
         .ok_or_else(|| anyhow!("{} has no directory", path.display()))?;
-    let mut file = tempfile::NamedTempFile::new_in(directory)
-        .context("could not create temporary credential file")?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        file.as_file()
-            .set_permissions(fs::Permissions::from_mode(0o600))
-            .context("could not protect credential file")?;
-    }
+    let mut file = crate::daemon::private_files::private_tempfile(directory)
+        .context("could not create private temporary credential file")?;
     file.write_all(bytes)
         .context("could not write credential file")?;
     file.as_file()
@@ -533,13 +526,7 @@ fn metadata_lock() -> Result<FileLock> {
     let path = dir.join("provider-accounts.lock");
     let mut options = OpenOptions::new();
     options.create(true).read(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let file = options
-        .open(path)
+    let file = crate::daemon::private_files::open_private(&path, &options)
         .context("could not open credential metadata lock")?;
     file.lock_exclusive()
         .context("could not lock credential metadata")?;
@@ -567,13 +554,7 @@ fn file_lock(path: &std::path::Path) -> Result<CredentialFileLock> {
     use fs2::FileExt as _;
     let mut options = OpenOptions::new();
     options.create(true).read(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let file = options
-        .open(path)
+    let file = crate::daemon::private_files::open_private(path, &options)
         .context("could not open credential lock")?;
     file.lock_exclusive()
         .context("could not lock credential file")?;

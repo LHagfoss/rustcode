@@ -330,7 +330,7 @@ pub(crate) async fn new_session(
     peer: &Peer,
     remote: &super::remote::RemoteManager,
 ) -> Result<NewSessionResponse, agent_client_protocol::Error> {
-    let cwd = super::canonical_acp_cwd(&request.cwd, "session/new")?;
+    let cwd = super::session_new_cwd(&request.cwd)?;
     let id = asked.harness.clone().unwrap_or_default();
     let dir = harness::config::config_dir().map_err(failure)?;
     let (defaults, entries) = harness::config::load_in(&dir);
@@ -465,9 +465,10 @@ pub(crate) async fn load_session(
     // Where the thread's log is before its transcript is read: whatever it
     // logs after this is not in the transcript.
     let base = peer.clients().load_mark(&session_id);
-    let history = crate::config::load_session_by_id(&session_id)
-        .map(|(_, history)| history)
-        .unwrap_or_default();
+    // Validate before replay: a failed read must not create an empty writable
+    // thread whose next prompt overwrites the transcript.
+    let _ = handoff_history(&session_id)?;
+    let history = crate::config::load_session_history_direct(&session_id);
     let title = record.title.clone();
     let info = peer.info();
     let usage = record
@@ -625,6 +626,25 @@ fn switch_origin(
     }
 }
 
+/// A handoff must read the transcript independently of listing/resume filters.
+/// Refuse a damaged file before changing the harness record or closing a thread.
+fn handoff_history(
+    session_id: &str,
+) -> Result<Vec<crate::app::ChatMessage>, agent_client_protocol::Error> {
+    crate::config::flush_history();
+    let directory = crate::config::get_active_session_dir(session_id)
+        .ok_or_else(|| failure("session storage is unavailable".into()))?;
+    let path = crate::config::session_meta_by_id(session_id)
+        .map(|meta| meta.path)
+        .unwrap_or_else(|| directory.join("history.json"));
+    match std::fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map_err(|error| failure(format!("cannot read thread history: {error}"))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(failure(format!("cannot read thread history: {error}"))),
+    }
+}
+
 /// Why a thread cannot change harness or account now: its turn is running.
 fn switch_refusal(session_id: &str) -> Option<&'static str> {
     crate::thread_status::is_running(session_id)
@@ -698,6 +718,10 @@ pub(crate) async fn switch(
             .map(|known| known.display_name().to_owned())
     });
     let from_label = harness::handoff::label(&from, from_account_name.as_deref());
+    let mut history = match &current {
+        Some(session) => session.recorded_history(),
+        None => handoff_history(&session_id)?,
+    };
     if current.is_some() {
         close(sessions, &session_id, remote).await;
     }
@@ -725,10 +749,6 @@ pub(crate) async fn switch(
     record.updated_at = chrono::Utc::now().to_rfc3339();
     store::save(&session_id, &record);
 
-    crate::config::flush_history();
-    let mut history = crate::config::load_session_by_id(&session_id)
-        .map(|(_, history)| history)
-        .unwrap_or_default();
     let to_account_name = account
         .as_ref()
         .map(harness::config::HarnessAccount::display_name);
@@ -830,6 +850,23 @@ pub(crate) fn list_meta(session_id: &str) -> Option<(Value, Option<String>)> {
 mod tests {
     use super::*;
     use crate::harness::config::{HarnessAccount, find_account};
+
+    #[test]
+    fn handoff_preserves_an_interrupted_transcript_and_refuses_corruption() {
+        let id = crate::config::create_detached_session();
+        let history = vec![crate::app::ChatMessage::new("user", "Still working")];
+        crate::config::save_session_history(&id, &history);
+        crate::config::flush_history();
+        let loaded = handoff_history(&id).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].content, "Still working");
+        let path = crate::config::get_active_session_dir(&id)
+            .unwrap()
+            .join("history.json");
+        std::fs::write(&path, "broken json").unwrap();
+        assert!(handoff_history(&id).is_err());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "broken json");
+    }
 
     #[test]
     fn an_unknown_account_is_refused_instead_of_falling_back() {

@@ -212,6 +212,10 @@ pub enum HandshakeResponse {
         /// older gateway.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         version: Option<String>,
+        /// What that machine runs: `macos`, `linux` or `windows`. Absent from
+        /// an older gateway, whose machine stays `unknown` until it updates.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        platform: Option<String>,
         /// The addresses this machine answers on now, best first. A newer
         /// gateway sends them; an older one leaves the field out.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -246,6 +250,9 @@ pub enum HandshakeResponse {
         /// That machine's RustCode version, as in `paired`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         version: Option<String>,
+        /// That machine's platform, as in `paired`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        platform: Option<String>,
         /// The addresses this machine answers on now, best first, as in
         /// `paired`.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]

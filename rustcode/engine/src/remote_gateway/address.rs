@@ -8,7 +8,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 /// A local interface address a device could plausibly dial.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -648,6 +648,116 @@ impl HostRouteKind {
             Self::Public => 3,
         }
     }
+
+    /// The word `rustcode remote status` uses for this kind of network.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Lan => "lan",
+            Self::Overlay => "overlay",
+            Self::Hostname => "hostname",
+            Self::Public => "public",
+        }
+    }
+}
+
+/// One address a WebSocket listener is bound to, with the interface that
+/// carries it, as `rustcode remote status` lists them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListenAddress {
+    /// `host:port`, as a device dials it.
+    pub address: String,
+    /// The interface the address is on. `None` for an address this machine no
+    /// longer reports, which a fixed bind can hold on to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface: Option<String>,
+    /// The kind of network the address is on, as in [`HostRoute`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<HostRouteKind>,
+}
+
+impl ListenAddress {
+    /// `address  (interface, kind)`, the way `remote status` prints one line.
+    pub fn label(&self) -> String {
+        let qualifiers: Vec<&str> = self
+            .interface
+            .as_deref()
+            .into_iter()
+            .chain(self.kind.map(HostRouteKind::label))
+            .collect();
+        if qualifiers.is_empty() {
+            self.address.clone()
+        } else {
+            format!("{}  ({})", self.address, qualifiers.join(", "))
+        }
+    }
+}
+
+/// Every address a listener bound to `bound` answers on, primary first, each
+/// with the interface that carries it. A wildcard bind answers on every
+/// candidate of its family, so it is expanded; a specific bind answers on its
+/// own address, even when this machine has stopped reporting it.
+pub fn listening_addresses(bound: &[IpAddr], port: u16) -> Vec<ListenAddress> {
+    listening_addresses_for(bound, port, &candidate_addresses())
+}
+
+/// [`listening_addresses`] against a given set of interfaces, so the listing
+/// is testable without a network.
+fn listening_addresses_for(
+    bound: &[IpAddr],
+    port: u16,
+    candidates: &[Candidate],
+) -> Vec<ListenAddress> {
+    let wildcard_v4 = bound.iter().any(|ip| ip.is_ipv4() && ip.is_unspecified());
+    let wildcard_v6 = bound.iter().any(|ip| ip.is_ipv6() && ip.is_unspecified());
+    let mut listening: Vec<ListenAddress> = Vec::new();
+    let mut push = |address: IpAddr, interface: Option<&str>| {
+        let loopback = address.is_loopback();
+        let entry = ListenAddress {
+            address: SocketAddr::new(address.to_canonical(), port).to_string(),
+            // A loopback listener is on no interface a device can dial, so it
+            // says what it is instead of naming `lo0`.
+            interface: if loopback {
+                Some("loopback".to_owned())
+            } else {
+                interface.map(str::to_owned)
+            },
+            kind: if loopback {
+                None
+            } else {
+                interface.and_then(|interface| {
+                    route_kind_for(interface, address.to_canonical()).map(|(kind, _)| kind)
+                })
+            },
+        };
+        // `::` may be dual-stack: the same address can be reached through two
+        // bound entries, and one line is enough.
+        if listening.iter().all(|known| known.address != entry.address) {
+            listening.push(entry);
+        }
+    };
+    for ip in bound {
+        let ip = ip.to_canonical();
+        if ip.is_unspecified() {
+            // A wildcard answers on every address a device could dial, which
+            // leaves out the bridges, containers and link-local addresses.
+            for candidate in eligible_candidates(candidates) {
+                let reachable = match candidate.address {
+                    IpAddr::V4(_) => wildcard_v4 || wildcard_v6,
+                    IpAddr::V6(_) => wildcard_v6,
+                };
+                if reachable {
+                    push(candidate.address, Some(candidate.interface.as_str()));
+                }
+            }
+            continue;
+        }
+        let interface = candidates
+            .iter()
+            .find(|candidate| candidate.address.to_canonical() == ip)
+            .map(|candidate| candidate.interface.as_str());
+        push(ip, interface);
+    }
+    listening
 }
 
 /// One address a device can dial this host at, as the handshake reports it.
@@ -1503,6 +1613,64 @@ mod tests {
 
         let loopback = AdvertisedAddress::new("127.0.0.1", 17879).unwrap();
         assert!(host_routes(&loopback, &machine(), Some("studio.local")).is_empty());
+    }
+
+    /// `remote status` lists every bound address, so an `auto` gateway that
+    /// answers on the LAN and on a mesh shows both with their interfaces
+    /// (#3420). What it is bound to is what it lists, never every address the
+    /// machine has.
+    #[test]
+    fn listening_addresses_list_every_bound_address_with_its_interface() {
+        let candidates = machine();
+        let bound = [
+            "192.168.31.185".parse::<IpAddr>().unwrap(),
+            "100.90.16.237".parse::<IpAddr>().unwrap(),
+        ];
+        let listening = listening_addresses_for(&bound, 17879, &candidates);
+        assert_eq!(
+            listening
+                .iter()
+                .map(ListenAddress::label)
+                .collect::<Vec<_>>(),
+            [
+                "192.168.31.185:17879  (en0, lan)",
+                "100.90.16.237:17879  (utun4, overlay)",
+            ],
+        );
+        // The other LAN address this machine has is not bound, so a device
+        // cannot dial it and the listing does not claim it can.
+        assert!(
+            listening
+                .iter()
+                .all(|entry| !entry.address.starts_with("10.8.0.2"))
+        );
+
+        // A wildcard bind answers on every candidate of its family a device
+        // could dial: a bridge address is not one of them.
+        let wildcard = listening_addresses_for(&["0.0.0.0".parse().unwrap()], 17879, &candidates);
+        assert_eq!(
+            wildcard
+                .iter()
+                .map(ListenAddress::label)
+                .collect::<Vec<_>>(),
+            [
+                "100.90.16.237:17879  (utun4, overlay)",
+                "10.8.0.2:17879  (utun2, overlay)",
+                "192.168.31.185:17879  (en0, lan)",
+            ],
+        );
+
+        // A fixed bind to an address this machine no longer has stays visible,
+        // without pretending to know its interface.
+        let stale = listening_addresses_for(&["192.168.9.9".parse().unwrap()], 17879, &candidates);
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].label(), "192.168.9.9:17879");
+        assert_eq!(stale[0].interface, None);
+        assert_eq!(stale[0].kind, None);
+
+        // A loopback listener says so instead of naming an interface.
+        let loopback = listening_addresses_for(&["127.0.0.1".parse().unwrap()], 17879, &candidates);
+        assert_eq!(loopback[0].label(), "127.0.0.1:17879  (loopback)");
     }
 
     #[test]

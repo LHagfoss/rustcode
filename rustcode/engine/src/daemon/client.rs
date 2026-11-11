@@ -1,8 +1,9 @@
 //! One request per connection. Transport failures never implicitly start a daemon.
 use super::protocol::{DaemonRequest, DaemonResponse, read_async_frame, write_async_frame};
+use crate::remote_gateway::local_socket;
 use anyhow::Result;
 use std::{future::Future, path::PathBuf, pin::Pin, sync::Arc, time::Duration};
-use tokio::{io::BufReader, net::UnixStream};
+use tokio::io::BufReader;
 
 pub type ResponseFuture<'a> = Pin<Box<dyn Future<Output = Result<DaemonResponse>> + Send + 'a>>;
 
@@ -11,16 +12,16 @@ pub trait DaemonTransport: Send + Sync {
     fn request(&self, request: DaemonRequest) -> ResponseFuture<'_>;
 }
 
-pub struct UnixTransport {
+pub struct LocalTransport {
     pub socket_path: PathBuf,
     pub timeout: Duration,
 }
 
-impl DaemonTransport for UnixTransport {
+impl DaemonTransport for LocalTransport {
     fn request(&self, request: DaemonRequest) -> ResponseFuture<'_> {
         Box::pin(async move {
             tokio::time::timeout(self.timeout, async {
-                let mut stream = UnixStream::connect(&self.socket_path).await?;
+                let mut stream = local_socket::connect(&self.socket_path).await?;
                 write_async_frame(&mut stream, &request).await?;
                 Ok(read_async_frame(&mut BufReader::new(stream)).await?)
             })
@@ -36,7 +37,7 @@ pub struct DaemonClient {
 
 impl DaemonClient {
     pub fn new(socket_path: impl Into<PathBuf>) -> Self {
-        Self::with_transport(UnixTransport {
+        Self::with_transport(LocalTransport {
             socket_path: socket_path.into(),
             timeout: Duration::from_secs(5),
         })
@@ -59,10 +60,10 @@ mod tests {
 
     #[tokio::test]
     async fn silent_peer_cannot_hang_client() {
-        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let dir = crate::daemon::test_directory();
         let path = dir.path().join("silent.sock");
-        let _listener = tokio::net::UnixListener::bind(&path).unwrap();
-        let client = DaemonClient::with_transport(UnixTransport {
+        let _listener = local_socket::LocalListener::bind(&path).unwrap();
+        let client = DaemonClient::with_transport(LocalTransport {
             socket_path: path,
             timeout: Duration::from_millis(30),
         });
