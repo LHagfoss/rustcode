@@ -36,6 +36,7 @@ import {
   Square,
   SquarePen,
   SquareTerminal,
+  WifiOff,
   X,
 } from "lucide-react";
 import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -104,14 +105,15 @@ import {
   cancel,
   cancelEdit,
   cancelQueuedEdit,
+  cancelWait,
   commandsFor,
-  dropLimitWait,
   endQueuedEdit,
   featureMissing,
   harnessesOn,
   limitTime,
   newThreadChoice,
   permissionModeOf,
+  resumeWaitNow,
   saveQueuedEdit,
   scheduleMessage,
   sendDecisionFor,
@@ -1691,18 +1693,33 @@ export const Composer = memo(function Composer({
   );
 }, sameComposer);
 
-/** The thread stopped on its plan's limit and carries on by itself when it resets. */
+/**
+ * The thread waits to go on by itself: its plan's limit resetting, a provider that
+ * was overloaded retrying, or the machine's network coming back. Send now skips the
+ * wait; Cancel stops it continuing on its own.
+ */
 function LimitWaitRow({ threadId }: { threadId: string }) {
   const wait = useApp((s) => s.limitWaits[threadId]);
+  const offline = useApp((s) => s.internetWaits[threadId]);
   // Once it is continuing, the turn says so; the wait is settled when it ends.
   const running = useApp((s) => s.threads[threadId]?.running);
-  if (!wait || running) return null;
+  if ((!wait && !offline) || running) return null;
+  const text = offline
+    ? "Waiting for the internet, then it continues"
+    : wait?.reason === "overload"
+      ? `The provider was overloaded — trying again at ${limitTime(wait.until)}`
+      : wait
+        ? `Continues when the limit resets, at ${limitTime(wait.until)}`
+        : "";
   return (
     <div className="flex items-center gap-1.5 px-5 pt-2 text-caption text-fg-muted">
-      <Clock size={11} className="shrink-0" />
-      <span className="min-w-0 truncate">Continues when the limit resets, at {limitTime(wait.until)}</span>
-      <Pill quiet size="sm" className="ml-auto shrink-0" onClick={() => dropLimitWait(threadId)}>
-        Don't continue
+      {offline ? <WifiOff size={11} className="shrink-0" /> : <Clock size={11} className="shrink-0" />}
+      <span className="min-w-0 truncate">{text}</span>
+      <Pill quiet size="sm" className="ml-auto shrink-0" onClick={() => resumeWaitNow(threadId)}>
+        Send now
+      </Pill>
+      <Pill quiet size="sm" className="shrink-0" onClick={() => cancelWait(threadId)}>
+        Cancel
       </Pill>
     </div>
   );

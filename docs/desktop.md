@@ -969,17 +969,29 @@ composer's keys stay outside the table.
   when the shell brings it back, "The engine restarted" (`state/store.ts`,
   `onEngineStatus`). The mock takes `?boot=<ms>` (a slow start) and
   `?crash=<ms>` (a crash after the first start) to show these.
-- **Continuing after a limit** (`state/limitResume.ts`): a turn that ends on a
-  plan's limit waits for the reset. Claude Code says it as a reply, not a
-  failure (`You've hit your 5-hour limit · resets 2:50pm (Europe/Oslo)`), so
-  the whole reply must be that message; a harness that names no time uses the
-  plan's latest full window, and with neither there is no wait. A row over the
-  composer says when, with **Don't continue**. A minute past the reset the
-  thread gets "Continue where you left off". The wait ends without a turn when
-  the thread moves to another harness or account, when the user sends anything
-  or stops the turn, or under Settings › General. Queued messages hold until
-  then. After three waits for one stop it stays stopped. Waits survive a
-  restart, and the timer catches up after sleep.
+- **Continuing on their own** (`state/limitResume.ts`, `state/internetWait.ts`):
+  a turn that ends on a plan's limit waits for the reset. Claude Code says it as
+  a reply, not a failure (`You've hit your 5-hour limit · resets 2:50pm
+  (Europe/Oslo)`), so the whole reply must be that message; a harness that names
+  no time uses the plan's latest full window, and with neither there is no wait.
+  A provider that was overloaded (HTTP 529/503, `overloaded_error`) is tried
+  again after 30 s, 1 m, 2 m and 4 m, each with up to a quarter of it added at
+  random so an account's threads do not wake together, and no fifth time. A turn
+  that failed because the machine had no network at all (Claude Code "Can't
+  reach the API server", Codex's dropped stream, Pi's "fetch failed";
+  `state/turnError.ts` `networkFailure`) waits for the connection instead of
+  dying: while any thread waits the app asks the webview every 5 s, and at once
+  on `online` or a wake, then sends "Please continue." once the connection has
+  stayed up for 5 s, 30 s, 2 m and then 5 m on later retries, so flaky Wi-Fi
+  cannot burn them; after 6 h it stops and says so. A credit or spend limit is
+  never retried. A row over the composer says what is waited for and when, with
+  **Send now** and **Cancel**. A wait ends without a turn when the thread moves
+  to another harness or account, when the user sends anything or stops the turn,
+  or under Settings › General (Continue threads on their own). Queued messages
+  hold until then. After three waits a limit stays stopped and after four an
+  overload; waits survive a restart, and the timer catches up after sleep.
+  **Continue threads after a restart** is the same idea for a turn a quit, an
+  update or an engine restart cut off (`state/store.ts` `resumeInterrupted`).
 - **Toasts** (`src/ui/Toaster.tsx`, queue in `state/toasts.ts`, `toast()`
   in `state/store.ts`): up to three, newest on top, centred under the chat
   column's header (the window's top while Settings is open), frosted like
