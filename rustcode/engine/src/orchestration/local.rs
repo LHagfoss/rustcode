@@ -1110,25 +1110,12 @@ mod tests {
 
     #[tokio::test]
     async fn thread_status_reaches_only_the_callers_project() {
-        let caller = full_access_caller();
-        let other = crate::config::create_detached_session();
-        let child = crate::config::create_detached_session();
         let mine = tempfile::tempdir().unwrap();
         let theirs = tempfile::tempdir().unwrap();
-        for (id, dir) in [
-            (&caller, mine.path()),
-            (&child, mine.path()),
-            (&other, theirs.path()),
-        ] {
-            let _ = crate::config::save_session_workspace(
-                id,
-                &rustcode_session::SessionWorkspace {
-                    cwd: dir.to_path_buf(),
-                    additional_directories: Vec::new(),
-                    task_workspace_id: None,
-                },
-            );
-        }
+        let caller = super::super::local_threads::test_thread(mine.path());
+        crate::config::save_session_yolo(&caller, true);
+        let child = super::super::local_threads::test_thread(mine.path());
+        let other = super::super::local_threads::test_thread(theirs.path());
         crate::thread_parent::record(
             &child,
             &caller,

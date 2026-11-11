@@ -139,7 +139,7 @@ fn delegation(caller: &str, what: &str) -> Result<(), Value> {
     Err(error(
         "unavailable",
         format!(
-            "{what} needs Full access, and this thread runs at {}; the RustCode app is not attached to ask, so nothing was sent. Open the RustCode app, or set this thread's access to Full, and retry.",
+            "{what} needs Full access, and this thread runs at {}; no app is attached to ask, so it needs the RustCode app open to approve it. Open the app, or set this thread's access to Full, and retry. Nothing was sent.",
             access.label()
         ),
     ))
@@ -1259,6 +1259,27 @@ fn title_from(text: &str, max: usize) -> String {
     format!("{trimmed}…")
 }
 
+/// A thread with a saved history and folder, which the store lists and
+/// `session_meta_by_id` finds (a bare detached session has no row yet).
+#[cfg(test)]
+pub(super) fn test_thread(dir: &std::path::Path) -> String {
+    let id = crate::config::create_detached_session();
+    let _ = crate::config::save_session_workspace(
+        &id,
+        &rustcode_session::SessionWorkspace {
+            cwd: dir.to_path_buf(),
+            additional_directories: Vec::new(),
+            task_workspace_id: None,
+        },
+    );
+    crate::config::save_session_history(
+        &id,
+        &vec![crate::app::ChatMessage::new("user", "a test thread")],
+    );
+    crate::config::flush_history();
+    id
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1450,20 +1471,11 @@ mod tests {
 
     #[tokio::test]
     async fn a_message_reaches_only_a_thread_the_caller_may_reach() {
-        let caller = caller_with(Access::Full);
-        let other = crate::config::create_detached_session();
         let mine = tempfile::tempdir().unwrap();
         let theirs = tempfile::tempdir().unwrap();
-        for (id, dir) in [(&caller, mine.path()), (&other, theirs.path())] {
-            let _ = crate::config::save_session_workspace(
-                id,
-                &rustcode_session::SessionWorkspace {
-                    cwd: dir.to_path_buf(),
-                    additional_directories: Vec::new(),
-                    task_workspace_id: None,
-                },
-            );
-        }
+        let caller = test_thread(mine.path());
+        crate::config::save_session_yolo(&caller, true);
+        let other = test_thread(theirs.path());
         set_setting("read-across-projects", json!(false));
         let before = link_book()["links"].as_array().map(Vec::len);
         let refused = message(&caller, &json!({"session_id": other, "message": "hi"})).await;
@@ -1495,16 +1507,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_start_in_a_folder_that_is_not_a_project_is_refused_before_anything_starts() {
-        let caller = caller_with(Access::Full);
         let dir = tempfile::tempdir().unwrap();
-        let _ = crate::config::save_session_workspace(
-            &caller,
-            &rustcode_session::SessionWorkspace {
-                cwd: dir.path().to_path_buf(),
-                additional_directories: Vec::new(),
-                task_workspace_id: None,
-            },
-        );
+        let caller = test_thread(dir.path());
+        crate::config::save_session_yolo(&caller, true);
         let answer = start(
             &caller,
             &json!({"prompt": "go", "project": "/nowhere/at/all"}),
@@ -1561,7 +1566,7 @@ mod tests {
         );
         assert_eq!(
             title_from("a very long title that keeps going", 12),
-            "a very long…"
+            "a very…"
         );
         assert_eq!(title_from("short", 60), "short");
     }
