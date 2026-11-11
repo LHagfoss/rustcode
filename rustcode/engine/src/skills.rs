@@ -156,7 +156,7 @@ fn current_root_inputs() -> SkillRootInputs {
         // back to the process CWD when no session has established one.
         workspace: crate::tools::active_workspace_root().or_else(|| std::env::current_dir().ok()),
         config_dir,
-        home: std::env::var_os("HOME").map(PathBuf::from),
+        home: crate::home::home_dir(),
         extra_dirs,
         extra_dirs_env: std::env::var_os("RUSTCODE_EXTRA_SKILL_DIRS"),
         harness_account_dirs,

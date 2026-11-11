@@ -2043,6 +2043,13 @@ export interface TurnAnswer {
   filesChanged: number;
 }
 
+/**
+ * What the app says about a turn whose machine went away while it ran (`state/store.ts`
+ * `watchMachineConnection` and the prompt that died with it). One sentence, so the thread's row and
+ * the link's preview tell the same story.
+ */
+export const MACHINE_LOST_TURN = "The machine disconnected during this turn.";
+
 /** The last reply in a transcript, whatever turn it belongs to. */
 export function latestReply(items: readonly { kind: string; text?: string }[]): string {
   for (let i = items.length - 1; i >= 0; i--) {

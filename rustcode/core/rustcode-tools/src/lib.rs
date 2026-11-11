@@ -141,15 +141,42 @@ pub fn resolve_tool_path_with_context(raw_path: &str, context: &ToolContext) -> 
         return resolved;
     }
 
-    if (raw_path.starts_with("~/") || raw_path == "~")
-        && let Ok(home) = std::env::var("HOME")
+    if let Some(tail) = tilde_tail(raw_path)
+        && let Some(home) = home_dir()
     {
-        let tail = raw_path.strip_prefix('~').unwrap_or("");
-        let tail = tail.strip_prefix('/').unwrap_or(tail);
-        return PathBuf::from(home).join(tail);
+        return if tail.is_empty() {
+            home
+        } else {
+            home.join(tail)
+        };
     }
 
     PathBuf::from(raw_path)
+}
+
+/// The user's home folder: `HOME`, else `USERPROFILE`, which is what Windows
+/// sets (this crate sits below the engine's `home` module, #3467).
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .or_else(|| std::env::var_os("USERPROFILE").filter(|home| !home.is_empty()))
+        .map(PathBuf::from)
+}
+
+/// What a `~` path names after the tilde: `~` itself, `~/…`, and on Windows
+/// `~\…`. Anything else (`~someone`) is another user's folder.
+fn tilde_tail(raw_path: &str) -> Option<&str> {
+    if raw_path == "~" {
+        return Some("");
+    }
+    let rest = raw_path.strip_prefix('~')?;
+    rest.strip_prefix('/').or_else(|| {
+        if cfg!(windows) {
+            rest.strip_prefix('\\')
+        } else {
+            None
+        }
+    })
 }
 
 /// Resolve a tool path and enforce the workspace boundary. Mutating paths are
@@ -248,6 +275,21 @@ mod tests {
     use super::{ToolContext, resolve_tool_path_with_context, search, with_context};
     use serde_json::json;
     use std::path::PathBuf;
+
+    #[test]
+    fn a_tilde_path_names_the_home_folder() {
+        assert_eq!(super::tilde_tail("~"), Some(""));
+        assert_eq!(super::tilde_tail("~/code/app"), Some("code/app"));
+        // Another user's folder, and a path with no tilde, are not home paths.
+        assert_eq!(super::tilde_tail("~someone/x"), None);
+        assert_eq!(super::tilde_tail("/home/me"), None);
+        // A backslash names a file on Unix and a folder separator on Windows.
+        if cfg!(windows) {
+            assert_eq!(super::tilde_tail("~\\code"), Some("code"));
+        } else {
+            assert_eq!(super::tilde_tail("~\\code"), None);
+        }
+    }
 
     #[test]
     fn path_resolution_preserves_workspace_and_session_roots() {
