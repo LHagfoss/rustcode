@@ -621,7 +621,13 @@ mod tests {
             // SAFETY: the conversion allocated text with LocalAlloc.
             unsafe { LocalFree(text.cast()) };
             assert!(sddl.contains("D:P"), "{sddl}");
-            assert!(sddl.contains(&current_user_sid().unwrap()), "{sddl}");
+            let user_sid = current_user_sid().unwrap();
+            // Windows abbreviates the built-in Administrator (RID 500) as LA.
+            assert!(
+                sddl.contains(&user_sid)
+                    || (user_sid.ends_with("-500") && sddl.contains(";;;LA)")),
+                "{sddl} does not grant access to {user_sid}"
+            );
             assert!(sddl.contains(";;;SY)"), "{sddl}");
             for broad in [
                 ";;;WD)",
