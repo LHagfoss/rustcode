@@ -1873,13 +1873,11 @@ function RunOnMenu() {
           aria-label={`Run on: ${label}`}
           className={cx(
             footerButton,
-            "min-w-0 shrink data-[state=open]:bg-fill disabled:hover:bg-transparent",
+            "min-w-0 shrink-0 bg-fill-subtle font-medium text-fg data-[state=open]:bg-fill disabled:hover:bg-transparent",
           )}
         >
           <Monitor size={14} className="shrink-0" />
-          <span className="min-w-0 max-w-[160px] truncate @max-xl/composer:max-w-[96px] @max-sm/composer:hidden">
-            {label}
-          </span>
+          <span className="min-w-0 max-w-[200px] truncate">Run on {label}</span>
           <ChevronDown size={12} className="shrink-0 text-fg-faint" />
         </button>
       }

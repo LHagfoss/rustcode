@@ -15,6 +15,7 @@ import { fileManagerName, primaryModifier } from "../lib/platform";
 // one 32px line, with a second only for a branch, a pull request or a stack.
 
 import {
+  ArrowLeft,
   Check,
   ChevronDown,
   ChevronRight,
@@ -85,7 +86,13 @@ import {
   subscribePulls,
 } from "../state/pulls";
 import { type PendingSetup, pendingSummary } from "../state/setup";
-import { type MachineHead, machineGroups, type ProjectGroup } from "../state/sidebarGroups";
+import {
+  hostOf,
+  type MachineHead,
+  type ProjectGroup,
+  sidebarHost,
+  sidebarProjects,
+} from "../state/sidebarGroups";
 import { applyOrder, moveBy, reorder, sectionOrderKey } from "../state/sidebarOrder";
 import { PREF, usePref, useRowLayout } from "../state/sidebarPrefs";
 import {
@@ -135,6 +142,7 @@ import {
   setAutoCompactForThread,
   setPinned,
   setSectionOrder,
+  setSidebarDevice,
   setThreadStatus,
   settleThread,
   settleThreads,
@@ -1581,8 +1589,20 @@ const NO_AGENTS: SubagentInfo[] = [];
 
 export function Sidebar() {
   const sessions = useApp((s) => s.sessions);
-  // This app's paired computers: their threads are listed in one group each (state/machines.ts).
+  // Paired computers are browsed through Devices; the local list keeps its project layout.
   const machines = useMachines((s) => s.machines);
+  const deviceView = useApp((s) => s.sidebarDevice);
+  const setDeviceView = setSidebarDevice;
+  const host = sidebarHost(deviceView, machines);
+  const device = machines.find((m) => m.id === host);
+  useEffect(() => {
+    if (deviceView === null) return;
+    const back = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDeviceView(null);
+    };
+    window.addEventListener("keydown", back);
+    return () => window.removeEventListener("keydown", back);
+  }, [deviceView]);
   const pending = useApp((s) => s.pendingSetup);
   const sessionsLoaded = useApp((s) => s.sessionsLoaded);
   const selectedId = useApp((s) => s.selectedId);
@@ -1698,9 +1718,15 @@ export function Sidebar() {
   const filtered = useMemo(
     () =>
       sessions.filter(
-        (s) => !onlyProject || !projectCwd || s.cwd === projectCwd || s.worktree?.repo === projectCwd,
+        (s) =>
+          hostOf(s) === host &&
+          (host !== LOCAL_HOST ||
+            !onlyProject ||
+            !projectCwd ||
+            s.cwd === projectCwd ||
+            s.worktree?.repo === projectCwd),
       ),
-    [sessions, onlyProject, projectCwd],
+    [sessions, onlyProject, projectCwd, host],
   );
   // The threads waiting on work they handed out, though no turn of theirs runs: the Threads list
   // holds them beside the ones running (state/waiting.ts).
@@ -1786,7 +1812,10 @@ export function Sidebar() {
   // The projects whose branches a pull request could name: a thread in a worktree has one to look
   // up, and its pulls live in the repository the worktree came from.
   const branchProjects = useMemo(
-    () => projectFolders(sessions.filter((s) => s.worktree?.branch).map((s) => s.worktree?.repo || s.cwd)),
+    () =>
+      projectFolders(
+        sessions.filter((s) => !s.host && s.worktree?.branch).map((s) => s.worktree?.repo || s.cwd),
+      ),
     [sessions],
   );
   // One read per project, a moment after the list settles: `gh` is slow, and a row is not worth it.
@@ -1817,6 +1846,7 @@ export function Sidebar() {
     // row will be, so it keeps its place when it becomes one.
     const pendingRow =
       pending &&
+      hostOf(pendingSummary(pending)) === host &&
       (!onlyProject || !projectCwd || pending.cwd === projectCwd || pending.worktree?.repo === projectCwd)
         ? pendingSummary(pending)
         : null;
@@ -1861,39 +1891,12 @@ export function Sidebar() {
     // their section gives them (state/sidebarRows.ts `sortSection`).
     const arranged = (id: SectionId, items: SessionSummary[], project?: string) =>
       applyOrder(sortSection(id, items, keyOf), layout[sectionOrderKey(id, project)]);
-    // The active threads by project: a worktree thread belongs to its repository.
-    const byKey = new Map<string, SessionSummary[]>();
-    for (const s of active) {
-      const key = s.worktree?.repo || s.cwd || "";
-      byKey.set(key, [...(byKey.get(key) ?? []), s]);
-    }
-    // One group per machine once a computer is paired: this one first, then each machine with the
-    // state of its connection, and the threads by project inside (docs/desktop.md › Several machines).
-    // Working and Pinned are grouped too, so a running thread on another computer is never drawn
-    // beside a local one as if it were here; a machine with no rows keeps a heading only in Threads
-    // (state/sidebarGroups.ts `machineGroups`). A project's label is the display name the project
-    // tools set for it, in both shapes.
-    const groupsFor = (id: SectionId, rows: SessionSummary[]): ProjectGroup[] | undefined => {
-      if (!machines.length) return undefined;
-      const groups = machineGroups(id, rows, machines);
-      for (const group of groups) {
-        if (group.project) group.label = projectLabel(group.project);
-        group.items = arranged(id, group.items, group.key);
-      }
-      return groups;
-    };
-    // The Threads list's project groups: by machine when one is paired, else by the preference.
+    const grouped = sidebarProjects(active, host);
     let projects: ProjectGroup[] | undefined;
-    if (machines.length) projects = groupsFor("threads", active);
-    else if (byProject && byKey.size > 1) {
-      projects = [...byKey.entries()].map(([key, items]) => ({
-        key,
-        label: key ? projectLabel(key) : "No folder",
-        project: key || undefined,
-        items,
-      }));
-      // Each project's own rows are arranged on their own: two projects never share one order.
+    if ((byProject || host !== LOCAL_HOST) && grouped.length > (host === LOCAL_HOST ? 1 : 0)) {
+      projects = grouped;
       for (const project of projects) {
+        if (host === LOCAL_HOST && project.project) project.label = projectLabel(project.project);
         project.items = arranged("threads", project.items, project.key);
       }
     }
@@ -1903,12 +1906,7 @@ export function Sidebar() {
       id,
       label: LABELS[id],
       items: arranged(id, placed[id]),
-      projects:
-        id === "threads"
-          ? projects
-          : id === "working" || id === "pinned"
-            ? groupsFor(id, placed[id])
-            : undefined,
+      projects: id === "threads" ? projects : undefined,
     }));
     for (const g of all) {
       // A Snoozed shelf advertises nothing: what its rows did while asleep is not news
@@ -1942,7 +1940,7 @@ export function Sidebar() {
     projectCwd,
     orphanOpen,
     layout,
-    machines,
+    host,
   ]);
 
   const settledSection = sections.find((g) => g.id === "settled");
@@ -2260,6 +2258,7 @@ export function Sidebar() {
     const mark = editable || e.repeat ? null : listCommandFor(shortcuts, e);
     if (!action && !mark) return;
     if (action?.kind === "clear") {
+      if (host !== LOCAL_HOST) setDeviceView(null);
       e.preventDefault();
       clearSelection();
       return;
@@ -2423,6 +2422,15 @@ export function Sidebar() {
         {/* One row: the traffic lights, then the toggle at its trailing edge (docs/design.md › Title row). */}
         <TitlebarRow className="justify-end pr-3">
           <Cluster className="shrink-0">
+            {device && (
+              <ClusterButton
+                label="New thread"
+                tooltip={`New thread on ${device.name}`}
+                onClick={() => startNewThread()}
+              >
+                <SquarePen size={14} />
+              </ClusterButton>
+            )}
             <ClusterButton
               label="Hide sidebar"
               tooltip={`Hide sidebar (${toggleKey})`}
@@ -2433,6 +2441,18 @@ export function Sidebar() {
           </Cluster>
         </TitlebarRow>
         <NeedsYouRow />
+        {deviceView !== null && (deviceView === "devices" || device) && (
+          <div className="flex items-center gap-1 px-3 py-2">
+            <Pill quiet size="sm" aria-label="Back to this computer" onClick={() => setDeviceView(null)}>
+              <ArrowLeft size={14} />
+            </Pill>
+            {device ? (
+              <MachineHeader machine={device} />
+            ) : (
+              <span className="font-medium text-callout">Devices</span>
+            )}
+          </div>
+        )}
         <nav
           ref={list}
           // One tab stop for the whole list (the row the keyboard is on), ↑ ↓ through its rows,
@@ -2446,124 +2466,106 @@ export function Sidebar() {
           className="relative min-h-0 flex-1 overflow-y-auto px-3 pb-2"
           style={{ maskImage: fade, WebkitMaskImage: fade }}
         >
-          {!sessionsLoaded && <ThreadRowsSkeleton />}
-          {sessionsLoaded && !filtered.length && (
-            <div className="px-2 py-3 text-callout text-fg-muted">
-              {onlyProject ? "No threads in this project yet." : "No threads yet."}
-            </div>
-          )}
-          <div className="flex min-h-full flex-col">
-            {sections.map((section) => {
-              const open = isOpen(section.id);
-              const shelf = isShelf(section.id, layoutMode);
-              return (
-                <Fragment key={section.id}>
-                  {/* The shelves sit at the foot, under one hairline, apart from Pinned and Threads. */}
-                  {section.id === firstShelf && (
-                    <div aria-hidden className="mt-2 min-h-2 flex-1 border-border border-b" />
-                  )}
-                  <section
-                    className={cx("mt-2 first:mt-0", section.id === firstShelf && "mt-0")}
-                    aria-label={section.label}
-                    data-shelf={shelf ? section.id : undefined}
-                  >
-                    {/* Pinned and Threads carry a label (they never fold) while there is another
-                      list beside them; a shelf's header folds it. */}
-                    {shelf ? (
-                      <SectionHeader section={section} open={open} onToggle={() => toggle(section.id)} />
-                    ) : (
-                      labelled(section.id) && <SectionLabel section={section} />
-                    )}
-                    <Fold open={open}>
-                      {section.projects
-                        ? section.projects.map((p) => {
-                            const projectOpen = isOpen(`project:${p.key}`);
-                            // A new thread started in this group runs on the computer the group is
-                            // for: the row's machine is where its folder is (docs/desktop.md ›
-                            // Several machines).
-                            const onNew = p.project
-                              ? () =>
-                                  startNewThread(
-                                    p.project,
-                                    p.machine && p.machine.id !== LOCAL_HOST ? p.machine.id : undefined,
-                                  )
-                              : undefined;
-                            // A machine that is away cannot start a thread, and one with no project
-                            // yet has no folder to start in: its heading offers none.
-                            const canStart =
-                              !!p.project &&
-                              (!p.machine || p.machine.id === LOCAL_HOST || p.machine.state === "connected");
-                            const head =
-                              p.first && p.machine ? (
-                                <MachineHeader
-                                  key={`machine:${p.machine.id}`}
-                                  machine={p.machine}
-                                  onNew={
-                                    canStart
-                                      ? () =>
-                                          startNewThread(
-                                            p.project,
-                                            p.machine!.id === LOCAL_HOST ? undefined : p.machine!.id,
-                                          )
-                                      : undefined
-                                  }
-                                />
-                              ) : null;
-                            if (p.only)
-                              return (
-                                <Fragment key={p.key}>
-                                  {head}
-                                  <div className="mb-1">{rows(p.items, true)}</div>
-                                </Fragment>
-                              );
-                            return (
-                              <div key={p.key} className="mb-1">
-                                {head}
-                                <ProjectHeader
-                                  label={p.label}
-                                  count={p.items.length}
-                                  hidden={
-                                    p.items.some((x) => flags.includes(`${x.id}:n`))
-                                      ? "needs"
-                                      : p.items.some((x) => flags.includes(`${x.id}:w`))
-                                        ? "working"
-                                        : p.items.some((x) => !!finished[x.id])
-                                          ? "finished"
-                                          : undefined
-                                  }
-                                  open={projectOpen}
-                                  onToggle={() => toggle(`project:${p.key}`)}
-                                  onNew={onNew}
-                                />
-                                {/* Under its project's heading the row drops the mark: its title then
-                                    lines up under the folder's name. */}
-                                <Fold open={projectOpen}>
-                                  <div className="pl-5">{rows(p.items, true)}</div>
-                                </Fold>
-                              </div>
-                            );
-                          })
-                        : rows(
-                            section.id === "settled" ? section.items.slice(0, settledLimit) : section.items,
-                            // Under its project's heading the row drops the mark and the name.
-                            !!section.projects,
-                          )}
-                      {section.id === "settled" && section.items.length > settledLimit && (
-                        <button
-                          type="button"
-                          onClick={() => setSettledShown((n) => n + 25)}
-                          className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-callout text-fg-muted hover:bg-fill-subtle hover:text-fg"
-                        >
-                          <ChevronDown size={14} className="shrink-0" />
-                          Show {Math.min(25, section.items.length - settledShown)} more
-                        </button>
+          {deviceView === "devices" ? (
+            machines.map((machine) => (
+              <button
+                key={machine.id}
+                type="button"
+                className="w-full rounded-lg text-left hover:bg-fill-subtle"
+                onClick={() => setDeviceView(machine.id)}
+              >
+                <MachineHeader machine={machine} />
+              </button>
+            ))
+          ) : (
+            <>
+              {!sessionsLoaded && <ThreadRowsSkeleton />}
+              {sessionsLoaded && !filtered.length && (
+                <div className="px-2 py-3 text-callout text-fg-muted">
+                  {onlyProject ? "No threads in this project yet." : "No threads yet."}
+                </div>
+              )}
+              <div className="flex min-h-full flex-col">
+                {sections.map((section) => {
+                  const open = isOpen(section.id);
+                  const shelf = isShelf(section.id, layoutMode);
+                  return (
+                    <Fragment key={section.id}>
+                      {/* The shelves sit at the foot, under one hairline, apart from Pinned and Threads. */}
+                      {section.id === firstShelf && (
+                        <div aria-hidden className="mt-2 min-h-2 flex-1 border-border border-b" />
                       )}
-                    </Fold>
-                  </section>
-                </Fragment>
-              );
-            })}
-          </div>
+                      <section
+                        className={cx("mt-2 first:mt-0", section.id === firstShelf && "mt-0")}
+                        aria-label={section.label}
+                        data-shelf={shelf ? section.id : undefined}
+                      >
+                        {/* Pinned and Threads carry a label (they never fold) while there is another
+                      list beside them; a shelf's header folds it. */}
+                        {shelf ? (
+                          <SectionHeader section={section} open={open} onToggle={() => toggle(section.id)} />
+                        ) : (
+                          labelled(section.id) && <SectionLabel section={section} />
+                        )}
+                        <Fold open={open}>
+                          {section.projects
+                            ? section.projects.map((p) => {
+                                const projectOpen = isOpen(`project:${p.key}`);
+                                const onNew =
+                                  p.project && (!device || device.state === "connected")
+                                    ? () => startNewThread(p.project, device?.id)
+                                    : undefined;
+                                return (
+                                  <div key={p.key} className="mb-1">
+                                    <ProjectHeader
+                                      label={p.label}
+                                      count={p.items.length}
+                                      hidden={
+                                        p.items.some((x) => flags.includes(`${x.id}:n`))
+                                          ? "needs"
+                                          : p.items.some((x) => flags.includes(`${x.id}:w`))
+                                            ? "working"
+                                            : p.items.some((x) => !!finished[x.id])
+                                              ? "finished"
+                                              : undefined
+                                      }
+                                      open={projectOpen}
+                                      onToggle={() => toggle(`project:${p.key}`)}
+                                      onNew={onNew}
+                                    />
+                                    {/* Under its project's heading the row drops the mark: its title then
+                                    lines up under the folder's name. */}
+                                    <Fold open={projectOpen}>
+                                      <div className="pl-5">{rows(p.items, true)}</div>
+                                    </Fold>
+                                  </div>
+                                );
+                              })
+                            : rows(
+                                section.id === "settled"
+                                  ? section.items.slice(0, settledLimit)
+                                  : section.items,
+                                // Under its project's heading the row drops the mark and the name.
+                                !!section.projects,
+                              )}
+                          {section.id === "settled" && section.items.length > settledLimit && (
+                            <button
+                              type="button"
+                              onClick={() => setSettledShown((n) => n + 25)}
+                              className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-callout text-fg-muted hover:bg-fill-subtle hover:text-fg"
+                            >
+                              <ChevronDown size={14} className="shrink-0" />
+                              Show {Math.min(25, section.items.length - settledShown)} more
+                            </button>
+                          )}
+                        </Fold>
+                      </section>
+                    </Fragment>
+                  );
+                })}
+              </div>
+            </>
+          )}
           {/* Where a dragged row would land: one rule, over the rows, never in the layout. */}
           {drag.line && (
             <div
@@ -2622,6 +2624,16 @@ export function Sidebar() {
               Clear
             </Pill>
           </div>
+        )}
+        {machines.length > 0 && (
+          <button
+            type="button"
+            aria-label="Devices"
+            className="mx-3 mb-2 flex h-8 shrink-0 items-center gap-2 rounded-lg px-2 text-callout text-fg-muted hover:bg-fill-subtle hover:text-fg"
+            onClick={() => setDeviceView(deviceView === "devices" ? null : "devices")}
+          >
+            <Laptop size={14} /> Devices <ChevronRight size={12} className="ml-auto" />
+          </button>
         )}
         <UpdateRow />
       </div>

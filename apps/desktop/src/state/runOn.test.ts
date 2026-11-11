@@ -20,6 +20,7 @@ import {
   resetMachinesForTests as resetMachineLinksForTests,
   useMachines,
 } from "./machines";
+import { runShortcut } from "./shortcuts";
 import {
   connectionFor,
   createSession,
@@ -31,6 +32,7 @@ import {
   resetForTests,
   runCommandAction,
   setNewThreadHost,
+  setSidebarDevice,
   startMachineRouting,
   startNewThread,
   useApp,
@@ -380,5 +382,36 @@ describe("a machine's own operations", () => {
     await setNewThreadHost(old);
     expect(useApp.getState().newThreadHost).toBe(old);
     watchMachineConnection(old, null);
+  });
+});
+
+describe("new drafts from the Devices sidebar", () => {
+  test("New thread and the global shortcut inherit the browsed machine", () => {
+    localThreads();
+    useApp.setState({ machineNames: { [STUDIO]: "Studio" } });
+    setSidebarDevice(STUDIO);
+    expect(runShortcut("new-thread")).toBe(true);
+    expect(useApp.getState().newThreadHost).toBe(STUDIO);
+    expect(useApp.getState().projectCwd).toBe(STUDIO_CWD);
+    setSidebarDevice(null);
+    startNewThread();
+    expect(useApp.getState().newThreadHost).toBe(LOCAL_HOST);
+  });
+  test("the device picker and a removed device default to this computer", () => {
+    localThreads();
+    for (const view of ["devices", "removed"]) {
+      setSidebarDevice(view);
+      startNewThread();
+      expect(useApp.getState().newThreadHost).toBe(LOCAL_HOST);
+    }
+    setSidebarDevice(null);
+  });
+  test("a folder chosen on this computer overrides the browsed device", () => {
+    localThreads();
+    useApp.setState({ machineNames: { [STUDIO]: "Studio" } });
+    setSidebarDevice(STUDIO);
+    startNewThread(LOCAL_CWD);
+    expect(useApp.getState().newThreadHost).toBe(LOCAL_HOST);
+    setSidebarDevice(null);
   });
 });
