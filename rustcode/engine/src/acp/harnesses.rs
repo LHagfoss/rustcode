@@ -330,7 +330,7 @@ pub(crate) async fn new_session(
     peer: &Peer,
     remote: &super::remote::RemoteManager,
 ) -> Result<NewSessionResponse, agent_client_protocol::Error> {
-    let cwd = super::canonical_acp_cwd(&request.cwd, "session/new")?;
+    let cwd = super::session_new_cwd(&request.cwd)?;
     let id = asked.harness.clone().unwrap_or_default();
     let dir = harness::config::config_dir().map_err(failure)?;
     let (defaults, entries) = harness::config::load_in(&dir);

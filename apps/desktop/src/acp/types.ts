@@ -221,6 +221,11 @@ export interface SessionSummary {
   status?: ThreadStatus;
   /** Pinned in the engine (`_meta.rustcode.pinned`). */
   pinned?: boolean;
+  /**
+   * The thread has no recorded folder of its own (`_meta.rustcode.workspaceUnknown`): the machine
+   * lists a stand-in (its home folder) so the row still reads, and `cwd` is not a project (issue 3425).
+   */
+  workspaceUnknown?: boolean;
   snoozedUntil?: number | null;
   /**
    * The thread an agent started this one from (`_meta.rustcode.parent`), kept
@@ -277,6 +282,7 @@ export function parseSessionList(result: Json): { sessions: SessionSummary[]; ne
       remote: str(rc?.remote),
       status: parseStatus(rc?.status),
       pinned: bool(rc?.pinned),
+      workspaceUnknown: bool(rc?.workspaceUnknown),
       snoozedUntil: rc?.snoozedUntil === null ? null : num(rc?.snoozedUntil),
       account: str(rc?.account),
       parent: parentId || parentTitle ? { id: parentId, title: parentTitle, relationship } : undefined,
@@ -300,14 +306,21 @@ export function byActivity(sessions: SessionSummary[]): SessionSummary[] {
 }
 
 /**
+ * A path without Windows' extended-length prefix: `\\?\C:\code\app` is `C:\code\app`, and
+ * `\\?\UNC\server\share` is `\\server\share`. The prefix is a Win32 API detail, not part of the
+ * folder, so keeping it counted one project twice: two spellings of one folder, and a thread in an
+ * install folder that was already a project (issue 3425). Every other path is unchanged.
+ */
+export function plainPath(path: string): string {
+  return path.replace(/^\\\\\?\\UNC\\/, "\\\\").replace(/^\\\\\?\\/, "");
+}
+
+/**
  * A folder as people read it: the home folder as `~`, macOS's /private/tmp as /tmp, and Windows'
- * extended-length prefix (`\\?\C:\code\app`, `\\?\UNC\server\share`) as the plain path it wraps.
- * The prefix is a Win32 API detail, and it only makes a path harder to read in a tooltip.
+ * extended-length prefix as the plain path it wraps (`plainPath`).
  */
 export function displayPath(path: string): string {
-  return path
-    .replace(/^\\\\\?\\UNC\\/, "\\\\")
-    .replace(/^\\\\\?\\/, "")
+  return plainPath(path)
     .replace(/^\/Users\/[^/]+/, "~")
     .replace(/^\/private(?=\/(?:tmp|var|etc)(?:\/|$))/, "");
 }
@@ -320,7 +333,7 @@ export function displayPath(path: string): string {
 export function projectName(cwd: string): string {
   // The path inside `\\?\C:\code\app` (or `\\?\UNC\server\share`), whose own `\` and `?` are
   // separators and prefix, not folders.
-  const plain = cwd.replace(/^\\\\\?\\UNC\\/, "\\\\").replace(/^\\\\\?\\/, "");
+  const plain = plainPath(cwd);
   const parts = plain.split(/[\\/]+/).filter(Boolean);
   return parts[parts.length - 1] ?? cwd;
 }

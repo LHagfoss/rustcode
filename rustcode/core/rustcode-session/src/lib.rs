@@ -544,11 +544,50 @@ pub struct SessionMeta {
     pub workspace_cwd: Option<PathBuf>,
 }
 
+/// Windows' extended-length prefix, which `std::fs::canonicalize` returns on
+/// that platform: `\\?\C:\code\app`.
+const VERBATIM: &str = "\\\\?\\";
+
+/// The marker a verbatim UNC path carries after the prefix, `\\?\UNC\server`.
+const VERBATIM_UNC: &str = "UNC\\";
+
+/// A path without Windows' extended-length prefix, which is a Win32 API detail
+/// rather than part of the folder: `\\?\C:\code\app` is `C:\code\app`, and
+/// `\\?\UNC\server\share` is `\\server\share`. A path that keeps the prefix
+/// counts as another folder, so one project was listed twice and a thread
+/// started in an install folder that was already a project (#3425). Every
+/// other path, POSIX ones included, is returned unchanged.
+pub fn strip_verbatim(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    let Some(rest) = text.strip_prefix(VERBATIM) else {
+        return path.to_path_buf();
+    };
+    // `std::fs::canonicalize` writes the marker in capitals, a hand-written path
+    // may not; Windows compares the prefix case-insensitively either way.
+    if let Some(marker) = rest
+        .get(..VERBATIM_UNC.len())
+        .filter(|marker| marker.eq_ignore_ascii_case(VERBATIM_UNC))
+    {
+        let share = &rest[marker.len()..];
+        // With no share after the marker there is no folder to unwrap.
+        if share.is_empty() {
+            return path.to_path_buf();
+        }
+        return PathBuf::from(format!("\\\\{share}"));
+    }
+    if rest.is_empty() {
+        return path.to_path_buf();
+    }
+    PathBuf::from(rest)
+}
+
 /// Best-effort canonicalization for workspace matching: canonicalize when
 /// possible, otherwise fall back to the raw path so non-existent or
-/// removed directories still compare deterministically.
+/// removed directories still compare deterministically. The verbatim prefix a
+/// canonical Windows path carries is dropped, so a recorded and a requested
+/// spelling of one folder are one workspace.
 pub fn canonicalize_best_effort(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    strip_verbatim(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))
 }
 
 /// Parent/child workspace match: equal, recorded inside current, or current
@@ -2076,6 +2115,43 @@ mod tests {
         assert!(workspaces_match(&project, &nested));
         assert!(!workspaces_match(&project, &other));
         assert!(!workspaces_match(&other, &project));
+    }
+
+    /// The verbatim prefix is a Win32 detail, not part of the folder: a project
+    /// stored and reported in two spellings was listed twice (#3425).
+    #[test]
+    fn strip_verbatim_drops_only_the_extended_length_prefix() {
+        let cases: [(&str, &str); 8] = [
+            (r"\\?\C:\Users\me\code\app", r"C:\Users\me\code\app"),
+            (r"\\?\C:\", r"C:\"),
+            (r"\\?\UNC\server\share\code", r"\\server\share\code"),
+            (r"\\?\unc\server\share\code", r"\\server\share\code"),
+            (r"C:\Users\me\code\app", r"C:\Users\me\code\app"),
+            (r"\\server\share\code", r"\\server\share\code"),
+            ("/Users/me/code/app", "/Users/me/code/app"),
+            ("", ""),
+        ];
+        for (from, want) in cases {
+            assert_eq!(strip_verbatim(Path::new(from)), Path::new(want), "{from}");
+        }
+        // The prefix on its own, or followed by an empty share, names no folder:
+        // a path with nothing after it stays as it is rather than becoming `/`.
+        for kept in [r"\\?\", r"\\?\UNC\", r"\\?\unc\"] {
+            assert_eq!(strip_verbatim(Path::new(kept)), Path::new(kept), "{kept}");
+        }
+    }
+
+    /// Canonicalization keeps the prefix on Windows, so workspace matching dropped
+    /// it: two spellings of one folder are one workspace.
+    #[test]
+    fn best_effort_canonicalization_drops_the_verbatim_prefix() {
+        let root = tempfile::tempdir().expect("temp root");
+        let canonical = std::fs::canonicalize(root.path()).expect("canonical");
+        assert_eq!(
+            canonicalize_best_effort(root.path()),
+            strip_verbatim(&canonical),
+            "one spelling per folder, whatever canonicalize returned"
+        );
     }
 
     #[test]
