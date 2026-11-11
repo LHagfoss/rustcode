@@ -299,11 +299,11 @@ the engine answers the ones that need no approval itself
 
 | Tool | Without the app |
 | --- | --- |
-| `list_sessions`, `read_session` | The same thread store the app reads; `read_session` renders and pages its turns as the app does. |
+| `list_sessions`, `read_session` | The same thread store the app reads, under the same project gate: `all_projects` and reading another project need the app's "Let agents read threads in other projects" setting, and an Ask-mode thread's read needs the app's approval card, so it is refused. `read_session` renders and pages its turns as the app does. |
 | `list_harnesses` | The engine's own `_rustcode/harnesses` snapshot, with the model cap and `model`/`harness` filters. |
 | `list_machines` | This computer and the machines in `machines.json`; a saved machine's `state` is `unknown`, because the app owns the live connections. |
 | `thread_status` | Status, project, worktree and branch from the thread and link records; pull requests and checks are the app's to read, and the answer says so. |
-| `wait_session` | The link book the app saves. Nothing advances a working link while the app is closed, so a wait can time out where an open app would have answered. |
+| `wait_session` | The link book the app saves; `needs_user` settles the wait so the caller sees the question. Nothing advances a working link while the app is closed, so a wait can time out where an open app would have answered. |
 
 `start_session`, `message_session`, `fan_out`, and every management or merge
 tool still need the app: with no app they are listed, and a call answers
@@ -314,8 +314,11 @@ message a thread without the app's host, so the answer names the app rather
 than acting without the approval it would have asked for.
 
 The app stays first whenever one is attached, including by reconnecting to a
-running server. A call made while the app is between connections falls back
-to the same reads; it is only used when no connected client hosts the call.
+running server. A thread registered locally keeps its running
+`mcp-orchestrator` and its token when an app loads it: only the hub's client
+is swapped, in place. A call made while the app is between connections falls
+back to the same reads; it is only used when no connected client hosts the
+call.
 Retry receipts are kept in memory for the life of the process, keyed by the
 caller and `client_request_id`, so a retry under the same key and arguments
 returns the first answer (marked `replayed`) and the same key with another

@@ -137,6 +137,32 @@ fn local_machine(args: &Value) -> Result<(), Value> {
     ))
 }
 
+/// The app's "Let agents read threads in other projects" setting, which it
+/// seeds into `<config>/settings.json`. On unless the machine says otherwise,
+/// as the registry default is.
+fn read_across_projects() -> bool {
+    crate::acp::settings::value("read-across-projects")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(true)
+}
+
+fn reach_refused() -> String {
+    "reading across projects is off; turn on “Let agents read threads in other projects” in Settings › Harnesses".to_owned()
+}
+
+/// Whether a read would have shown the app's approval card: a Full-access
+/// thread reads without one, Auto-edit lets reads through, Ask asks first.
+fn read_needs_approval(session_id: &str) -> bool {
+    let full = crate::config::load_session_yolo(session_id)
+        .unwrap_or_else(|| crate::config::load_config().2.yolo);
+    if full {
+        return false;
+    }
+    crate::acp::settings::value("default-permission-mode")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .is_none_or(|mode| mode == "ask")
+}
+
 /// `list_sessions`: the caller's project's threads, or every project's, newest
 /// first and without transcripts.
 fn list_sessions(session_id: &str, args: &Value) -> Value {
@@ -147,6 +173,11 @@ fn list_sessions(session_id: &str, args: &Value) -> Value {
         .get("all_projects")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    // The app refuses a whole-store read while its cross-project setting is
+    // off; a closed app must not widen that (#3422).
+    if all_projects && !read_across_projects() {
+        return error("not_allowed", reach_refused());
+    }
     let words: Vec<String> = args
         .get("query")
         .and_then(Value::as_str)
@@ -229,6 +260,28 @@ fn read_session(caller: &str, args: &Value) -> Value {
     let Some(meta) = crate::config::session_meta_by_id(target) else {
         return error("not_found", "no thread has that id; use list_sessions");
     };
+    let caller_meta = crate::config::session_meta_by_id(caller);
+    let reaches = caller_meta.as_ref().is_some_and(|caller_meta| {
+        same_project(
+            Some(&reach_of(caller, caller_meta)),
+            &reach_of(target, &meta),
+        )
+    }) || crate::config::load_session_parent(target)
+        .and_then(|parent| parent.id)
+        .is_some_and(|parent| parent == caller);
+    if !reaches && !read_across_projects() {
+        return error("not_allowed", reach_refused());
+    }
+    // In Ask mode the app shows a read card before it reads another thread.
+    // No app means no card, so refuse instead of reading without the answer.
+    if read_needs_approval(caller) {
+        return error(
+            "unavailable",
+            format!(
+                "read_session on {target} needs the RustCode app open to approve the read; this thread runs on a machine whose app is not attached. Open the RustCode app and retry. Nothing was sent."
+            ),
+        );
+    }
     let title = meta.title.clone();
     let status = crate::thread_status::current(target).as_str().to_owned();
     let project = project_of(target, &meta);
@@ -267,7 +320,8 @@ fn read_session(caller: &str, args: &Value) -> Value {
 /// and how many files its tools changed.
 struct Turn {
     user: String,
-    assistant: Vec<String>,
+    /// The turn's last assistant item, as the app's `turnsOf` keeps it.
+    assistant: String,
     files: BTreeSet<String>,
 }
 
@@ -279,7 +333,7 @@ fn turns(history: &[ChatMessage]) -> Vec<Turn> {
             out.extend(current.take());
             current = Some(Turn {
                 user: message.content.clone(),
-                assistant: Vec::new(),
+                assistant: String::new(),
                 files: BTreeSet::new(),
             });
             continue;
@@ -291,7 +345,7 @@ fn turns(history: &[ChatMessage]) -> Vec<Turn> {
             && !message.conversation_recap
             && !message.content.trim().is_empty()
         {
-            turn.assistant.push(message.content.clone());
+            turn.assistant = message.content.clone();
         }
         if let Some(result) = &message.tool_result {
             turn.files.extend(result.changed_paths.iter().cloned());
@@ -323,8 +377,7 @@ fn render_read(
             lines.push(format!("    {line}"));
         }
         lines.push("  assistant:".to_owned());
-        let assistant = turn.assistant.join("\n");
-        for line in assistant.split('\n') {
+        for line in turn.assistant.split('\n') {
             lines.push(format!("    {line}"));
         }
         lines.push(format!("  files changed: {}", turn.files.len()));
@@ -461,23 +514,24 @@ async fn list_harnesses(args: &Value) -> Value {
                 })
                 .collect(),
         };
-        if filter.is_some() && matched.is_empty() {
-            return error(
-                "invalid",
-                "no model matches; pass a shorter substring".to_owned(),
-            );
-        }
         let cap = if filter.is_some() {
             FILTERED_MODELS
         } else {
             LISTED_MODELS
         };
+        let matched_any = !matched.is_empty();
         if matched.len() > cap {
             let omitted = matched.len() - cap;
             matched.truncate(cap);
             row["omitted_models"] = json!(omitted);
+            row["filter"] = json!("pass model to search the omitted ones");
         }
         row["models"] = Value::Array(matched);
+        // A filter that misses this harness does not fail the others, as in
+        // the app: the row says so and the caller sees every harness.
+        if filter.is_some() && !matched_any {
+            row["filter"] = json!("no model matches; pass a shorter substring");
+        }
     }
     json!({
         "machine": local_name(),
@@ -702,7 +756,9 @@ async fn wait_session(caller: &str, cancel: &CancellationToken, args: &Value) ->
                 .get("status")
                 .and_then(Value::as_str)
                 .unwrap_or("failed");
-            if !matches!(state, "queued" | "working" | "needs_user") {
+            // `needs_user` is an answer, as it is in the app: the caller sees
+            // the question instead of waiting out the timeout.
+            if !matches!(state, "queued" | "working") {
                 settled.get_or_insert_with(|| json!({ "links": [row.clone()] }));
             }
             current.push(row);
@@ -753,6 +809,11 @@ fn link_result(link: &Value) -> Value {
         row["files_changed"] = json!(files);
     }
     row["thread_status"] = json!(crate::thread_status::current(target).as_str());
+    if state == "needs_user" {
+        row["note"] = json!(
+            "That thread is waiting for the user to answer it in the app, in its chat or the one above it."
+        );
+    }
     row
 }
 
@@ -951,6 +1012,20 @@ fn replay(mut answer: Value) -> Value {
 mod tests {
     use super::*;
 
+    /// A caller thread with Full access, so a read does not need the app's card.
+    fn full_access_caller() -> String {
+        let caller = crate::config::create_detached_session();
+        crate::config::save_session_yolo(&caller, true);
+        caller
+    }
+
+    fn set_setting(key: &str, value: Value) {
+        let mut values = serde_json::Map::new();
+        values.insert(key.to_owned(), value);
+        crate::acp::settings::write(crate::acp::settings::SetSettingsRequest { values })
+            .expect("the test setting is written");
+    }
+
     #[test]
     fn a_retry_key_replays_the_same_call_and_refuses_another() {
         let receipts = Receipts::default();
@@ -1032,8 +1107,9 @@ mod tests {
         crate::config::save_session_history(&session_id, &history);
         crate::config::flush_history();
 
+        let caller = full_access_caller();
         let listed = answer_json(
-            "another-thread",
+            &caller,
             &CancellationToken::new(),
             super::super::LIST_SESSIONS,
             &json!({"all_projects": true}),
@@ -1048,7 +1124,7 @@ mod tests {
         );
 
         let read = answer_json(
-            "another-thread",
+            &caller,
             &CancellationToken::new(),
             super::super::READ_SESSION,
             &json!({"session_id": session_id}),
@@ -1060,7 +1136,7 @@ mod tests {
         assert!(text.contains("The test is in `a.rs`."), "{read}");
 
         let machines = answer_json(
-            "another-thread",
+            &caller,
             &CancellationToken::new(),
             super::super::LIST_MACHINES,
             &json!({}),
@@ -1078,8 +1154,9 @@ mod tests {
         history.push(ChatMessage::new("assistant", "done"));
         crate::config::save_session_history(&session_id, &history);
         crate::config::flush_history();
+        let caller = full_access_caller();
         let first = answer_json(
-            "another-thread",
+            &caller,
             &CancellationToken::new(),
             super::super::READ_SESSION,
             &json!({"session_id": session_id, "last_turns": 1}),
@@ -1089,7 +1166,7 @@ mod tests {
         assert!(next > 0 && next % 2 == 0, "a cut inside å: {next}");
         assert_eq!(next, READ_BYTES);
         let second = answer_json(
-            "another-thread",
+            &caller,
             &CancellationToken::new(),
             super::super::READ_SESSION,
             &json!({"session_id": session_id, "last_turns": 1, "offset": next}),
@@ -1098,6 +1175,69 @@ mod tests {
         assert!(second["text"].is_string(), "{second}");
         let _ = crate::config::get_active_session_dir(&session_id)
             .map(|dir| std::fs::remove_dir_all(dir));
+    }
+
+    #[tokio::test]
+    async fn a_closed_app_does_not_widen_cross_project_reads() {
+        let caller = full_access_caller();
+        let target = crate::config::create_detached_session();
+        let history = vec![
+            ChatMessage::new("user", "the other project's work"),
+            ChatMessage::new("assistant", "done"),
+        ];
+        crate::config::save_session_history(&target, &history);
+        crate::config::flush_history();
+
+        // The app's setting is off: neither the whole-store list nor a
+        // cross-project read may go through while the app is closed.
+        set_setting("read-across-projects", json!(false));
+        let listed = answer_json(
+            &caller,
+            &CancellationToken::new(),
+            super::super::LIST_SESSIONS,
+            &json!({"all_projects": true}),
+        )
+        .await;
+        assert_eq!(listed["error"]["code"], json!("not_allowed"), "{listed}");
+        let read = answer_json(
+            &caller,
+            &CancellationToken::new(),
+            super::super::READ_SESSION,
+            &json!({"session_id": target}),
+        )
+        .await;
+        assert_eq!(read["error"]["code"], json!("not_allowed"), "{read}");
+
+        // The setting is on, but the thread is on Ask: the app would show a
+        // read card, so without the app the read waits for the app.
+        set_setting("read-across-projects", json!(true));
+        set_setting("default-permission-mode", json!("ask"));
+        crate::config::save_session_yolo(&caller, false);
+        let read = answer_json(
+            &caller,
+            &CancellationToken::new(),
+            super::super::READ_SESSION,
+            &json!({"session_id": target}),
+        )
+        .await;
+        let message = read["error"]["message"].as_str().unwrap_or("");
+        assert!(message.contains("RustCode app open"), "{read}");
+        let _ =
+            crate::config::get_active_session_dir(&caller).map(|dir| std::fs::remove_dir_all(dir));
+        let _ =
+            crate::config::get_active_session_dir(&target).map(|dir| std::fs::remove_dir_all(dir));
+    }
+
+    #[test]
+    fn a_turn_keeps_its_last_assistant_item() {
+        let history = vec![
+            ChatMessage::new("user", "do it"),
+            ChatMessage::new("assistant", "first"),
+            ChatMessage::new("assistant", "last"),
+        ];
+        let turns = turns(&history);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].assistant, "last");
     }
 
     #[test]

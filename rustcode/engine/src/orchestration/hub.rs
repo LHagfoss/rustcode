@@ -224,6 +224,25 @@ impl Hub {
         self.register_with(session_id, None, version)
     }
 
+    /// Answer this thread's calls through `client` from now on, leaving its
+    /// token alone: the `mcp-orchestrator` already running was started with
+    /// that token, so an app that attaches later can take the calls over
+    /// without restarting it (#3422). Whether the thread was registered.
+    pub fn set_client(
+        &self,
+        session_id: &str,
+        client: Arc<dyn PreviewClient>,
+        version: u8,
+    ) -> bool {
+        let mut sessions = self.lock();
+        let Some(registered) = sessions.get_mut(session_id) else {
+            return false;
+        };
+        registered.client = Some(client);
+        registered.version = version.min(super::VERSION);
+        true
+    }
+
     fn register_with(
         &self,
         session_id: &str,
@@ -517,6 +536,24 @@ async fn launch_with(
     }
 }
 
+/// Let an app that just attached to `session_id` answer its calls, keeping
+/// the token its `mcp-orchestrator` already has. `false` when the thread is
+/// not registered (no server was started for it).
+pub async fn swap_client(session_id: &str, client: Arc<dyn PreviewClient>, version: u8) -> bool {
+    #[cfg(unix)]
+    {
+        let Ok(hub) = shared().await else {
+            return false;
+        };
+        hub.set_client(session_id, client, version)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (session_id, client, version);
+        false
+    }
+}
+
 /// Forget a closed thread's registration.
 pub fn release(session_id: &str) {
     #[cfg(unix)]
@@ -613,5 +650,45 @@ mod tests {
             "{}",
             sent.content
         );
+    }
+
+    /// An app that attaches to a locally registered thread takes its calls
+    /// over without a new token: the `mcp-orchestrator` already running keeps
+    /// working (#3422).
+    #[tokio::test]
+    async fn an_app_attaching_takes_over_without_changing_the_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let hub = Hub::bind(dir.path().join("run").join("orchestrator-swap.sock"))
+            .await
+            .unwrap();
+        let token = hub.register_local("thread-1", super::super::VERSION);
+        let asked = Arc::new(AtomicUsize::new(0));
+        assert!(hub.set_client(
+            "thread-1",
+            Arc::new(Counted(Arc::clone(&asked))),
+            super::super::VERSION,
+        ));
+        let sent = super::call(
+            hub.path(),
+            &CallRequest {
+                session_id: "thread-1".to_owned(),
+                token,
+                tool: super::super::LIST_SESSIONS.to_owned(),
+                args: json!({}),
+            },
+        )
+        .await;
+        assert!(sent.success, "{}", sent.content);
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            1,
+            "the app answered with the old token"
+        );
+        // A thread with no registration is not made orchestrated by an attach.
+        assert!(!hub.set_client(
+            "unknown",
+            Arc::new(Counted(Arc::new(AtomicUsize::new(0)))),
+            super::super::VERSION,
+        ));
     }
 }

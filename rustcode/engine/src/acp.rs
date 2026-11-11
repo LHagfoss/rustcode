@@ -22,7 +22,7 @@ mod server_status;
 mod session;
 pub(crate) mod session_move;
 mod session_repair;
-mod settings;
+pub(crate) mod settings;
 mod steer;
 mod streaming;
 mod telemetry;
