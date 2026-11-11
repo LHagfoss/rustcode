@@ -2448,3 +2448,178 @@ fn session_model_choice_falls_back_when_the_file_default_is_gone() {
     assert_eq!(written.default.big(), "new");
     assert_eq!(written.session_model, SessionModelScope::default());
 }
+
+/// A profile built from the fields these tests care about, deserialized like a
+/// `config.toml` entry so the serde defaults apply.
+fn credential_profile(value: serde_json::Value) -> ModelProfile {
+    serde_json::from_value(value).expect("profile")
+}
+
+fn warnings_for(profile: ModelProfile) -> Vec<String> {
+    let mut config = AppConfig::default();
+    config.models = vec![profile];
+    config.credential_warnings()
+}
+
+#[test]
+fn env_var_names_follow_the_shell_grammar() {
+    for valid in ["OPENAI_API_KEY", "_PRIVATE", "a1", "LM_STUDIO_KEY"] {
+        assert!(is_env_var_name(valid), "{valid} should be a variable name");
+    }
+    for invalid in [
+        "",
+        "omlx-1234",
+        "omlx:1234",
+        "OMLX=1234",
+        "OMLX 1234",
+        "1OMLX_KEY",
+        "OMLX.KEY",
+    ] {
+        assert!(
+            !is_env_var_name(invalid),
+            "{invalid} is not a variable name"
+        );
+    }
+}
+
+#[test]
+fn a_pasted_key_in_env_key_is_ignored_and_the_profile_keeps_using_api_key() {
+    let api_key = "omlx-2f4c9b7e-literal-key";
+    for pasted in ["omlx-1234", "omlx:1234", "omlx=1234", "omlx 1234"] {
+        let profile = credential_profile(serde_json::json!({
+            "name": "llama-3.2",
+            "url": "https://tokmax.paral.no/v1/chat/completions",
+            "model": "Llama-3.2-3B-Instruct-4bit",
+            "api_key": api_key,
+            "env_key": pasted,
+        }));
+        assert_eq!(
+            profile.env_key_problem(),
+            Some(EnvKeyProblem::NotAVariableName)
+        );
+        // The secret is never reported as a variable name.
+        assert_eq!(profile.api_key_env_name(), None);
+        assert_eq!(profile.resolved_api_key().as_deref(), Some(api_key));
+
+        let warnings = warnings_for(profile.clone());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("llama-3.2"));
+        assert!(warnings[0].contains("env_key"));
+        assert!(!warnings[0].contains(pasted));
+        assert!(!warnings[0].contains(api_key));
+    }
+}
+
+#[test]
+fn an_env_key_that_repeats_api_key_is_reported_as_a_double_stored_secret() {
+    let secret = "omlx-2f4c9b7e-stored-twice";
+    let profile = credential_profile(serde_json::json!({
+        "name": "llama-3.2",
+        "url": "https://tokmax.paral.no/v1/chat/completions",
+        "model": "Llama-3.2-3B-Instruct-4bit",
+        "api_key": secret,
+        "env_key": secret,
+    }));
+
+    assert_eq!(
+        profile.env_key_problem(),
+        Some(EnvKeyProblem::DuplicatesApiKey)
+    );
+    assert_ne!(
+        EnvKeyProblem::DuplicatesApiKey.describe(),
+        EnvKeyProblem::NotAVariableName.describe(),
+        "a double-stored secret is a distinct misconfiguration"
+    );
+
+    let warnings = warnings_for(profile.clone());
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("api_key"));
+    assert!(!warnings[0].contains(secret));
+    // The profile still works through api_key.
+    assert_eq!(profile.resolved_api_key().as_deref(), Some(secret));
+}
+
+#[test]
+fn a_valid_env_key_still_resolves_through_the_shell_environment() {
+    const NAME: &str = "RUSTCODE_TEST_VALID_ENV_KEY_3480";
+    // SAFETY: test-only mutation of a key unique to this test.
+    unsafe { std::env::set_var(NAME, "from-process") };
+
+    let profile = credential_profile(serde_json::json!({
+        "name": "env-key-profile",
+        "url": "https://example.test/v1/chat/completions",
+        "model": "main",
+        "env_key": NAME,
+    }));
+    assert_eq!(profile.env_key_problem(), None);
+    assert_eq!(profile.api_key_env_name(), Some(NAME));
+    assert_eq!(profile.resolved_api_key().as_deref(), Some("from-process"));
+    assert_eq!(
+        profile.credential_source(),
+        CredentialSource::EnvKey(NAME.to_string())
+    );
+    assert!(warnings_for(profile).is_empty());
+
+    // SAFETY: see above; the test is done with the variable.
+    unsafe { std::env::remove_var(NAME) };
+}
+
+#[test]
+fn doctor_labels_name_the_credential_field_without_the_value() {
+    let literal = credential_profile(serde_json::json!({
+        "name": "literal-key",
+        "url": "https://example.test/v1/chat/completions",
+        "model": "main",
+        "api_key": "sk-literal-secret-value",
+    }));
+    let label = literal.credential_source().describe();
+    assert_eq!(label, "api_key (literal key in config)");
+    assert!(!label.contains("sk-literal-secret-value"));
+
+    let reference = credential_profile(serde_json::json!({
+        "name": "env-reference",
+        "url": "https://example.test/v1/chat/completions",
+        "model": "main",
+        "api_key": "env:OPENAI_API_KEY",
+    }));
+    assert_eq!(
+        reference.credential_source().describe(),
+        "api_key=env:OPENAI_API_KEY"
+    );
+
+    let named = credential_profile(serde_json::json!({
+        "name": "named-variable",
+        "url": "https://example.test/v1/chat/completions",
+        "model": "main",
+        "env_key": "OPENAI_API_KEY",
+    }));
+    assert_eq!(
+        named.credential_source().describe(),
+        "env_key=OPENAI_API_KEY"
+    );
+}
+
+#[test]
+fn the_env_key_warning_is_never_written_with_the_secret_to_the_debug_log() {
+    let secret = "omlx-2f4c9b7e-pasted-into-env-key";
+    let profile = credential_profile(serde_json::json!({
+        "name": "pasted-env-key-3480",
+        "url": "https://tokmax.paral.no/v1/chat/completions",
+        "model": "Llama-3.2-3B-Instruct-4bit",
+        "api_key": secret,
+        "env_key": secret,
+    }));
+    let mut config = AppConfig::default();
+    config.models = vec![profile];
+
+    let written = warn_credential_misconfigurations(&config);
+    assert_eq!(written.len(), 1);
+    assert!(!written[0].contains(secret));
+    // Loading the same configuration again does not repeat the warning.
+    assert!(warn_credential_misconfigurations(&config).is_empty());
+
+    let log = get_config_dir().expect("config dir").join("debug.log");
+    let logged = fs::read_to_string(&log).expect("debug log");
+    assert!(logged.contains("pasted-env-key-3480"));
+    assert!(!logged.contains(secret));
+}
