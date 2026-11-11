@@ -203,7 +203,7 @@ function NoMachines() {
   );
 }
 
-function MachineRow({
+export function MachineRow({
   machine,
   count,
   now,
