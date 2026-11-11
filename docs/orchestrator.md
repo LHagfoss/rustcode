@@ -303,15 +303,54 @@ the engine answers the ones that need no approval itself
 | `list_harnesses` | The engine's own `_rustcode/harnesses` snapshot, with the model cap and `model`/`harness` filters. |
 | `list_machines` | This computer and the machines in `machines.json`; a saved machine's `state` is `unknown`, because the app owns the live connections. |
 | `thread_status` | Status, project, worktree and branch from the thread and link records; pull requests and checks are the app's to read, and the answer says so. |
-| `wait_session` | The link book the app saves; `needs_user` settles the wait so the caller sees the question. Nothing advances a working link while the app is closed, so a wait can time out where an open app would have answered. |
+| `wait_session` | The link book the app saves; `needs_user` settles the wait so the caller sees the question. Nothing advances a link the app started while the app is closed, so a wait can time out where an open app would have answered; a link the engine started itself settles when its turn ends. |
+| `thread_status` with a `session_id` | The same reach a read needs: a thread in the caller's project, one the caller started, or any thread when "Let agents read threads in other projects" is on (the app's `checkManage`); otherwise `not_allowed`. |
+| `start_session`, `fan_out` | The engine starts the thread itself (below), only when the caller runs at Full access. |
+| `message_session` (incl. `steer`) | The engine opens the target thread and runs the message as its next turn (below), only at Full access, and only for a thread the caller reaches (same rule as `thread_status`). |
 
-`start_session`, `message_session`, `fan_out`, and every management or merge
-tool still need the app: with no app they are listed, and a call answers
-`{"error": {"code": "unavailable", "message": "… needs the RustCode app open
-to approve and run it …"}}` instead of "unknown tool". A thread that is on
-Full access does not change that yet: the server has no way to start or
-message a thread without the app's host, so the answer names the app rather
-than acting without the approval it would have asked for.
+`start_session`, `message_session` and `fan_out` open a loopback ACP connection
+to the endpoint this same engine published (`run/engine.json`) and send the
+same `session/new` and `session/prompt` the app sends
+(`rustcode/engine/src/orchestration/local_threads.rs`), so the new thread is an
+ordinary engine thread on any harness: it is saved in the store, listed by
+`session/list`, announced to every connected client that lists threads
+(`_rustcode/threads/created`, `announce_thread_created` in
+`rustcode/engine/src/acp/hosted.rs`) and opens in the app later like any other.
+The link is written to the same link book the app saves, and the turn that
+ends it runs in the engine, so `wait_session` settles it (`done` with the
+reply, `cancelled`, or `failed`) with no app to update it. Slots follow the
+app's settings (delegates per thread, delegates in total), delegation goes two
+levels deep, and `harness`, `model`, `effort`, `account`, `title`, `project`,
+`worktree` (default true for a git project) and `standalone` mean what they
+mean in the app. A `standalone` thread has no link and nothing comes back.
+
+What it does not do, and says so by name:
+
+- **Access.** With no app there is no card to ask on, so these three proceed
+  only when the caller runs at Full access; anything less answers
+  `unavailable`: "needs Full access … the RustCode app is not attached to ask".
+  The new thread runs at Full access too, and any permission request it makes
+  is allowed by the engine; a question to the user (`ask_question`) is
+  cancelled, not answered in the user's place.
+- **Another machine.** A `machine` that is not this computer is refused;
+  server-to-server delegation is not built.
+- **Attachments.** `message_session` with `attachments` needs the app.
+- **A thread open elsewhere.** A thread open in another RustCode process is not
+  opened a second time: the answer says to open the app or close it there.
+- **Per-thread access (known gap).** The access the engine reads for the caller
+  is its own `/yolo` flag, else Settings › General › Default access. A mode the
+  app narrowed one thread to (Ask under a Full default) is app-only state in
+  the app's store (`permissionModes`); the engine persists only the Full flag,
+  so such a thread is treated by the default. This applies to the Ask check on
+  reads (`list_sessions`, `read_session` refuse Ask) and to the Full check
+  above. Persisting the per-thread mode in the thread record would close it.
+
+Management and merge tools (`update_session`, `configure_session`,
+`transfer_session`, `interrupt_session`, `merge_when_green`, `cleanup_worktree`,
+`handoff_worktree` and the rest) still need the app: with no app they are
+listed, and a call answers `{"error": {"code": "unavailable", "message": "…
+needs the RustCode app open to approve and run it …"}}` instead of "unknown
+tool".
 
 The app stays first whenever one is attached, including by reconnecting to a
 running server. A thread registered locally keeps its running

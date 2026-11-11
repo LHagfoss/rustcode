@@ -7,10 +7,12 @@
 //!
 //! Reads need no approval, so they are served here directly from the same
 //! store the app reads: threads, harnesses, the paired machines on disk, the
-//! link book the app saves, and the thread status files. The tools that change
-//! another thread or ask the user (`start_session`, `message_session`,
-//! `fan_out`, and every management tool) still need the app, and say so by
-//! name instead of disappearing.
+//! link book the app saves, and the thread status files. Starting and
+//! messaging threads (`start_session`, `message_session`, `fan_out`) open a
+//! loopback ACP connection to this engine and run the same `session/new` and
+//! `session/prompt` the app would ([`local_threads`]), and only at Full
+//! access: with no app there is nobody to approve a card. The management
+//! tools still need the app, and say so by name instead of disappearing.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
@@ -87,6 +89,9 @@ pub(crate) async fn answer_json(
         super::LIST_MACHINES => list_machines(),
         super::THREAD_STATUS => thread_status(session_id, args),
         super::WAIT_SESSION => wait_session(session_id, cancel, args).await,
+        super::START_SESSION => super::local_threads::start(session_id, args).await,
+        super::MESSAGE_SESSION => super::local_threads::message(session_id, args).await,
+        super::FAN_OUT => super::local_threads::fan_out(session_id, args).await,
         _ => app_required(name),
     };
     if let Some(key) = key
@@ -117,7 +122,7 @@ fn app_required(name: &str) -> Value {
 
 /// The call's `machine` names this computer, or the tool needs the app to
 /// reach another one.
-fn local_machine(args: &Value) -> Result<(), Value> {
+pub(super) fn local_machine(args: &Value) -> Result<(), Value> {
     let Some(asked) = args
         .get("machine")
         .and_then(Value::as_str)
@@ -146,21 +151,29 @@ fn read_across_projects() -> bool {
         .unwrap_or(true)
 }
 
-fn reach_refused() -> String {
+pub(super) fn reach_refused() -> String {
     "reading across projects is off; turn on “Let agents read threads in other projects” in Settings › Harnesses".to_owned()
+}
+
+/// Whether `caller` may act on `target`: the same project, a thread it
+/// started, or the cross-project setting (the app's `checkManage`).
+pub(super) fn may_reach(caller: &str, target: &str, meta: &crate::config::SessionMeta) -> bool {
+    let caller_meta = crate::config::session_meta_by_id(caller);
+    caller_meta.as_ref().is_some_and(|caller_meta| {
+        same_project(
+            Some(&reach_of(caller, caller_meta)),
+            &reach_of(target, meta),
+        )
+    }) || crate::config::load_session_parent(target)
+        .and_then(|parent| parent.id)
+        .is_some_and(|parent| parent == caller)
+        || read_across_projects()
 }
 
 /// Whether a read would have shown the app's approval card: a Full-access
 /// thread reads without one, Auto-edit lets reads through, Ask asks first.
 fn read_needs_approval(session_id: &str) -> bool {
-    let full = crate::config::load_session_yolo(session_id)
-        .unwrap_or_else(|| crate::config::load_config().2.yolo);
-    if full {
-        return false;
-    }
-    crate::acp::settings::value("default-permission-mode")
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .is_none_or(|mode| mode == "ask")
+    super::local_threads::read_needs_approval(session_id)
 }
 
 /// `list_sessions`: the caller's project's threads, or every project's, newest
@@ -633,33 +646,36 @@ fn thread_status(caller: &str, args: &Value) -> Value {
             "a thread reports its own pull request through list_pull_requests",
         );
     }
-    let targets: Vec<String> = match asked {
-        Some(target) => vec![target.to_owned()],
-        None => {
-            let mut seen = BTreeSet::new();
-            let mut ids: Vec<String> = links
-                .iter()
-                .rev()
-                .filter(|link| link.get("orchestrator").and_then(Value::as_str) == Some(caller))
-                .filter_map(|link| link.get("target").and_then(Value::as_str))
-                .filter(|target| *target != caller && seen.insert((*target).to_owned()))
-                .map(str::to_owned)
-                .collect();
-            let omitted = ids.len().saturating_sub(MAX_DELEGATES);
-            ids.truncate(MAX_DELEGATES);
-            if omitted > 0 {
-                let mut answer = delegates(&ids);
-                answer["omitted"] = json!(omitted);
-                return answer;
-            }
-            ids
+    if let Some(target) = asked {
+        // The same reach a read needs: the caller's project, or a thread it
+        // started, or the cross-project setting (the app's `checkManage`).
+        let Some(meta) = crate::config::session_meta_by_id(target) else {
+            return error("not_found", "no thread has that id; use list_sessions");
+        };
+        if !may_reach(caller, target, &meta) {
+            return error("not_allowed", reach_refused());
         }
-    };
-    if let Some(target) = targets.first()
-        && crate::config::session_meta_by_id(target).is_none()
-    {
-        return error("not_found", "no thread has that id; use list_sessions");
+        return delegates(&[target.to_owned()]);
     }
+    let targets: Vec<String> = {
+        let mut seen = BTreeSet::new();
+        let mut ids: Vec<String> = links
+            .iter()
+            .rev()
+            .filter(|link| link.get("orchestrator").and_then(Value::as_str) == Some(caller))
+            .filter_map(|link| link.get("target").and_then(Value::as_str))
+            .filter(|target| *target != caller && seen.insert((*target).to_owned()))
+            .map(str::to_owned)
+            .collect();
+        let omitted = ids.len().saturating_sub(MAX_DELEGATES);
+        ids.truncate(MAX_DELEGATES);
+        if omitted > 0 {
+            let mut answer = delegates(&ids);
+            answer["omitted"] = json!(omitted);
+            return answer;
+        }
+        ids
+    };
     delegates(&targets)
 }
 
@@ -821,6 +837,12 @@ fn link_result(link: &Value) -> Value {
 const MAX_ANSWER_BYTES: usize = 8 * 1024;
 
 fn last_reply(session_id: &str) -> Option<String> {
+    last_reply_cut(session_id).map(|(text, _)| text)
+}
+
+/// A thread's last assistant reply cut to [`MAX_ANSWER_BYTES`], and whether
+/// anything was cut.
+pub(super) fn last_reply_cut(session_id: &str) -> Option<(String, bool)> {
     let meta = crate::config::session_meta_by_id(session_id)?;
     let history = crate::config::load_session_file(&meta.path);
     let reply = history
@@ -831,7 +853,7 @@ fn last_reply(session_id: &str) -> Option<String> {
     while !reply.content.is_char_boundary(end) {
         end -= 1;
     }
-    Some(reply.content[..end].to_owned())
+    Some((reply.content[..end].to_owned(), end < reply.content.len()))
 }
 
 fn waited_until(wait: Duration) -> String {
@@ -848,7 +870,7 @@ fn link_book() -> Vec<Value> {
 }
 
 /// A thread's project: its worktree's repository, else its folder.
-fn project_of(session_id: &str, meta: &crate::config::SessionMeta) -> String {
+pub(super) fn project_of(session_id: &str, meta: &crate::config::SessionMeta) -> String {
     let path = crate::worktrees::list_meta(session_id)
         .and_then(|worktree| {
             worktree
@@ -867,7 +889,7 @@ fn project_of(session_id: &str, meta: &crate::config::SessionMeta) -> String {
 
 /// The reach of a thread's tools: its repository, where a worktree and its
 /// checkout meet, else its folder.
-fn reach_of(session_id: &str, meta: &crate::config::SessionMeta) -> String {
+pub(super) fn reach_of(session_id: &str, meta: &crate::config::SessionMeta) -> String {
     crate::worktrees::of_session(session_id)
         .map(|worktree| clean_path(&worktree.repo.to_string_lossy()))
         .or_else(|| {
@@ -884,7 +906,7 @@ fn same_project(left: Option<&str>, right: &str) -> bool {
 
 /// A project path as people write it: no Windows verbatim prefix, no trailing
 /// slash, and no macOS `/private` in front of `/tmp`, `/var` or `/etc`.
-fn clean_path(path: &str) -> String {
+pub(super) fn clean_path(path: &str) -> String {
     if path.is_empty() {
         return String::new();
     }
@@ -1069,15 +1091,6 @@ mod tests {
     #[tokio::test]
     async fn the_tools_that_need_the_app_say_so_by_name() {
         let cases = [
-            (super::super::START_SESSION, json!({"prompt": "go"})),
-            (
-                super::super::MESSAGE_SESSION,
-                json!({"session_id": "thread-b", "message": "go"}),
-            ),
-            (
-                super::super::FAN_OUT,
-                json!({"prompt": "go", "harnesses": [{"harness": "codex"}, {"harness": "claude-code"}]}),
-            ),
             (
                 super::super::UPDATE_SESSION,
                 json!({"session_id": "thread-b", "title": "renamed"}),
@@ -1092,6 +1105,70 @@ mod tests {
             let message = answer["error"]["message"].as_str().unwrap_or("");
             assert!(message.contains(tool), "{message}");
             assert!(message.contains("RustCode app open"), "{message}");
+        }
+    }
+
+    #[tokio::test]
+    async fn thread_status_reaches_only_the_callers_project() {
+        let caller = full_access_caller();
+        let other = crate::config::create_detached_session();
+        let child = crate::config::create_detached_session();
+        let mine = tempfile::tempdir().unwrap();
+        let theirs = tempfile::tempdir().unwrap();
+        for (id, dir) in [
+            (&caller, mine.path()),
+            (&child, mine.path()),
+            (&other, theirs.path()),
+        ] {
+            let _ = crate::config::save_session_workspace(
+                id,
+                &rustcode_session::SessionWorkspace {
+                    cwd: dir.to_path_buf(),
+                    additional_directories: Vec::new(),
+                    task_workspace_id: None,
+                },
+            );
+        }
+        crate::thread_parent::record(
+            &child,
+            &caller,
+            rustcode_session::SessionRelationship::Delegate,
+        );
+        set_setting("read-across-projects", json!(false));
+
+        let refused = answer_json(
+            &caller,
+            &CancellationToken::new(),
+            super::super::THREAD_STATUS,
+            &json!({"session_id": other}),
+        )
+        .await;
+        assert_eq!(refused["error"]["code"], json!("not_allowed"), "{refused}");
+
+        // The same project, and a thread the caller started, are reachable.
+        for reachable in [&caller, &child] {
+            let answer = answer_json(
+                &caller,
+                &CancellationToken::new(),
+                super::super::THREAD_STATUS,
+                &json!({"session_id": reachable}),
+            )
+            .await;
+            assert!(answer["error"].is_null(), "{answer}");
+        }
+        let own = answer_json(
+            &caller,
+            &CancellationToken::new(),
+            super::super::THREAD_STATUS,
+            &json!({"session_id": caller}),
+        )
+        .await;
+        assert_eq!(own["error"]["code"], json!("not_allowed"), "{own}");
+
+        set_setting("read-across-projects", json!(true));
+        for id in [&caller, &other, &child] {
+            let _ =
+                crate::config::get_active_session_dir(id).map(|dir| std::fs::remove_dir_all(dir));
         }
     }
 

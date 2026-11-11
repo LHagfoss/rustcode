@@ -23,7 +23,7 @@ mod session;
 pub(crate) mod session_move;
 mod session_repair;
 pub(crate) mod settings;
-mod steer;
+pub(crate) mod steer;
 mod streaming;
 mod telemetry;
 mod themes;
@@ -1260,6 +1260,51 @@ fn route_task_event(routes: &TaskRoutes, event: TaskEvent) {
     }
 }
 
+/// What a `session/new` that asks to be announced tells the clients that list
+/// threads, read before the request is handed on.
+struct ThreadAnnouncement {
+    cwd: std::path::PathBuf,
+    title: Option<String>,
+    harness: Option<String>,
+    model: Option<String>,
+}
+
+impl ThreadAnnouncement {
+    fn of(request: &NewSessionRequest) -> Option<Self> {
+        let rustcode = request.meta.as_ref()?.get("rustcode")?;
+        if rustcode
+            .get("announce")
+            .and_then(serde_json::Value::as_bool)
+            != Some(true)
+        {
+            return None;
+        }
+        let text = |key: &str| {
+            rustcode
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        };
+        Some(Self {
+            cwd: request.cwd.clone(),
+            title: text("title"),
+            harness: Some(text("harness").unwrap_or_else(|| crate::harness::BUILTIN_ID.to_owned())),
+            model: text("model"),
+        })
+    }
+
+    fn send(&self, clients: &clients::Clients, session_id: &str) {
+        hosted::announce_thread_created(
+            clients,
+            session_id,
+            &self.cwd,
+            self.title.as_deref(),
+            self.harness.as_deref(),
+            self.model.as_deref(),
+        );
+    }
+}
+
 #[derive(Clone)]
 struct AcpServer {
     sessions: Sessions,
@@ -2248,22 +2293,36 @@ async fn serve_connection(
                     // An external harness starts a process, which can take a
                     // while; it does not hold the dispatch loop.
                     let peer = server.clients.peer(client_id, &_connection);
+                    // `_meta.rustcode.announce`: a client with no list of its own
+                    // (the engine's own orchestration, `orchestration/local_threads.rs`)
+                    // started this thread for the clients that do list threads.
+                    let announce = ThreadAnnouncement::of(&request);
                     if let Some(asked) = harnesses::external_request(&request) {
                         let external = server.external.clone();
                         let remote = server.remote.clone();
+                        let clients = server.clients.clone();
                         return _connection.spawn(async move {
                             match harnesses::new_session(&external, request, asked, &peer, &remote)
                                 .await
                             {
-                                Ok(response) => responder.respond(
-                                    crate::worktrees::finish_new(response, worktree.as_ref()),
-                                )?,
+                                Ok(response) => {
+                                    if let Some(announce) = announce {
+                                        announce.send(&clients, &response.session_id.to_string());
+                                    }
+                                    responder.respond(crate::worktrees::finish_new(
+                                        response,
+                                        worktree.as_ref(),
+                                    ))?
+                                }
                                 Err(error) => responder.respond_with_error(error)?,
                             }
                             Ok(())
                         });
                     }
                     let response = create_builtin_session(&server, &peer, request).await?;
+                    if let Some(announce) = announce {
+                        announce.send(&server.clients, &response.session_id.to_string());
+                    }
                     responder.respond(crate::worktrees::finish_new(response, worktree.as_ref()))?;
                     Ok(())
                 }

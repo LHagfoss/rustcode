@@ -161,17 +161,43 @@ pub(crate) async fn start(
         .ok_or_else(|| internal(format!("the new thread {session_id} is not shared")))?;
     // The app lists its threads from the store, which has no row for a thread
     // before its first turn: this is what puts it in the sidebar now.
-    server.clients.broadcast_to(
-        Capability::Threads,
-        super::ThreadCreatedNotification {
-            session_id: info.session_id.clone(),
-            cwd: cwd.clone(),
-            title: (!info.title.trim().is_empty()).then(|| info.title.clone()),
-            harness: info.harness.clone(),
-            model: (!info.model.trim().is_empty()).then(|| info.model.clone()),
-        },
+    announce_thread_created(
+        &server.clients,
+        &info.session_id,
+        &cwd,
+        Some(info.title.as_str()),
+        info.harness.as_deref(),
+        Some(info.model.as_str()),
     );
     Ok(info)
+}
+
+/// Tell every client that lists threads about a thread the engine started on
+/// its own: a paired device asked for it, or a thread's orchestration tool did
+/// with no app attached (`orchestration/local_threads.rs`).
+pub(crate) fn announce_thread_created(
+    clients: &super::clients::Clients,
+    session_id: &str,
+    cwd: &Path,
+    title: Option<&str>,
+    harness: Option<&str>,
+    model: Option<&str>,
+) {
+    let present = |text: Option<&str>| {
+        text.map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_owned)
+    };
+    clients.broadcast_to(
+        Capability::Threads,
+        super::ThreadCreatedNotification {
+            session_id: session_id.to_owned(),
+            cwd: cwd.to_path_buf(),
+            title: present(title),
+            harness: present(harness),
+            model: present(model),
+        },
+    );
 }
 
 /// A thread on the built-in harness: the same session `session/new` creates,
