@@ -666,6 +666,8 @@ async fn create_builtin_session(
     let cwd = session_new_cwd(&request.cwd)?;
     let mut state = new_session_state(&cwd);
     let session_id = state.active_session_id.clone();
+    // The name the thread was made with, from the app that made it (issue 3524).
+    crate::config::save_requested_title(&session_id, request.meta.as_ref());
     // Who started this thread, from the `_meta.rustcode.parent` its
     // caller gave: kept in the thread's own metadata, not only in
     // the link book the app prunes (`thread_parent.rs`).

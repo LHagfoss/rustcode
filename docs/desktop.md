@@ -199,7 +199,12 @@ browse a machine's disk). An engine that does not report a remote falls back to
 the folder name; the mock's Studio reports one. `session/new` is sent over the
 machine's connection with its folder and harness, and the thread is keyed with
 its host, so it appears under the machine's group at once; a thread created
-there is titled by that machine's history (`thread_rename` is this shell's).
+there is named by the title it is made with (`session/new`'s
+`_meta.rustcode.title`), since `thread_rename` is this shell's. Until that
+machine's own `session/list` lists the thread, the app keeps listing it rather
+than reading a list from before it as a deletion (issue 3523). Its
+`read_activity` and its delegates' `last_provider_error` are read from that
+machine's store over the same connection (issue 3525).
 A machine on an older RustCode that does not answer `_rustcode/harnesses` is
 shown as the builtin harness, as this computer's engine is, so a thread can
 still start there. A harness whose models that machine has not learned yet
