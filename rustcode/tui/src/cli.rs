@@ -451,6 +451,17 @@ pub enum RemoteCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Accept a device's request to connect and show the code to type on it
+    /// (the request ids are in `rustcode remote status`)
+    Accept {
+        /// Request id from `rustcode remote status`
+        id: String,
+    },
+    /// Deny a device's request to connect
+    Deny {
+        /// Request id from `rustcode remote status`
+        id: String,
+    },
     /// Revoke a paired device and close its connections
     Revoke {
         /// Device identifier, identifier prefix, or unique name

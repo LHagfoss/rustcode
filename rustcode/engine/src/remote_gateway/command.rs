@@ -568,6 +568,32 @@ pub fn devices_json(devices: &[DeviceRecord]) -> serde_json::Value {
         .collect()
 }
 
+/// The answer `rustcode remote accept|deny` gives: on accepting, the code
+/// the person types on the device that asked.
+pub fn format_connect_answer(answer: &super::control::ConnectAnswer) -> String {
+    if !answer.accepted {
+        return format!("Denied {}.", answer.device_name);
+    }
+    let Some(code) = &answer.code else {
+        return format!("Accepted {}.", answer.device_name);
+    };
+    let mut text = format!(
+        "Accepted {}. Type this code on it: {}",
+        answer.device_name,
+        code.expose()
+    );
+    if let Some(secs) = answer.expires_in_secs {
+        text.push_str(&format!(" (expires in {secs} s)"));
+    }
+    text.push('.');
+    if let Some(locked) = answer.locked_for_secs {
+        text.push_str(&format!(
+            " Pairing is locked for {locked} s after too many wrong codes: the code is refused until then."
+        ));
+    }
+    text
+}
+
 pub fn format_revocation(revocation: &Revocation) -> String {
     let connections = if revocation.gateway_running {
         format!(
@@ -667,7 +693,7 @@ pub fn format_status_for(status: Option<&GatewayStatus>, this_session: Option<&s
     lines.push(format!("  pairing        {pairing}"));
     if !status.connect_requests.is_empty() {
         lines.push(format!(
-            "  asking to connect {} (answer in the desktop app)",
+            "  asking to connect {} (answer in the desktop app, or `rustcode remote accept|deny <id>`)",
             status.connect_requests.len()
         ));
         for request in &status.connect_requests {
@@ -1220,6 +1246,28 @@ mod tests {
             "{text}"
         );
         assert!(!format_status(Some(&status)).contains("[this terminal]"));
+    }
+
+    #[test]
+    fn a_connect_answer_names_the_code_to_type() {
+        use super::super::control::ConnectAnswer;
+        use crate::remote_gateway::handshake::Secret;
+        let mut answer = ConnectAnswer {
+            id: "r1".into(),
+            device_name: "MacBook".into(),
+            instance_id: "i".into(),
+            accepted: true,
+            code: Some(Secret::new("2029-7330")),
+            expires_in_secs: Some(120),
+            locked_for_secs: None,
+        };
+        assert_eq!(
+            format_connect_answer(&answer),
+            "Accepted MacBook. Type this code on it: 2029-7330 (expires in 120 s)."
+        );
+        answer.accepted = false;
+        answer.code = None;
+        assert_eq!(format_connect_answer(&answer), "Denied MacBook.");
     }
 
     #[test]

@@ -328,6 +328,14 @@ async fn run_remote_command(
                 println!("{}", remote::format_devices(&devices));
             }
         }
+        RemoteCommands::Accept { id } => {
+            let answer = lifecycle.answer_connect_request(id, true).await?;
+            println!("{}", remote::format_connect_answer(&answer));
+        }
+        RemoteCommands::Deny { id } => {
+            let answer = lifecycle.answer_connect_request(id, false).await?;
+            println!("{}", remote::format_connect_answer(&answer));
+        }
         RemoteCommands::Revoke { device } => {
             println!(
                 "{}",
