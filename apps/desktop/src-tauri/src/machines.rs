@@ -91,6 +91,8 @@ impl RouteView {
 pub struct MachineView {
     /// The machine's `host_id`, which is what every command takes.
     id: String,
+    /// New threads are not started here from this app.
+    paused: bool,
     /// The name the machine reports.
     name: String,
     /// The name this app shows for it, or none while the reported one is shown.
@@ -329,6 +331,7 @@ impl Machines {
 fn view(machine: &Machine, live: Option<&Live>) -> MachineView {
     MachineView {
         id: machine.host_id.clone(),
+        paused: machine.paused,
         name: machine.name.clone(),
         display_name: machine.display_name.clone(),
         icon: machine.icon.clone(),
@@ -1201,6 +1204,15 @@ pub fn machines_set_icon(
     registry
         .set_icon(&id, icon.as_deref(), tint.as_deref())
         .map_err(chain)
+}
+
+/// Pause or resume new threads on a machine: Run on refuses a paused one,
+/// while its connection and its existing threads stay as they are.
+#[tauri::command(async)]
+pub fn machines_set_paused(id: String, paused: bool) -> Result<(), String> {
+    let config_dir = config_dir()?;
+    let mut registry = MachineRegistry::load(&config_dir).map_err(chain)?;
+    registry.set_paused(&id, paused).map_err(chain)
 }
 
 /// Make `id` the main machine: listed first, and the default **Run on**.

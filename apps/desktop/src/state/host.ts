@@ -762,6 +762,7 @@ async function machineEntry(machine: MachineRef): Promise<JsonObject> {
     display_name: saved?.displayName ?? (machine.host ? null : localIdentity().displayName),
     icon: saved?.icon ?? (machine.host ? null : localIdentity().icon),
     icon_tint: saved?.iconTint ?? (machine.host ? null : localIdentity().tint),
+    ...(saved?.paused ? { paused: true } : {}),
     platform: machine.platform,
     ...(machine.host ? {} : { current: true }),
     state,
