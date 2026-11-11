@@ -182,8 +182,9 @@ version than the engine that answered, with both paths and the command that
 fixes it: update that copy, or remove it so the shell finds the one the app runs
 ([server](server.md#status)). After a desktop app update the app also does it
 itself: the next start replaces the copy a shell runs when it is an older one
-the install script or the app wrote, and names a Homebrew or `cargo install`
-copy as theirs ([server](server.md#update-cli)).
+the install script or the app wrote in its own folders, and names a Homebrew or
+`cargo install` copy, or any other (your own build in `~/bin`, a tarball under
+`/opt`), as not the app's, leaving it as it is ([server](server.md#update-cli)).
 
 ### Updating pre-v0.31.0 native installs
 

@@ -275,7 +275,8 @@ fn service_program() -> PathBuf {
 /// What `rustcode server update-cli --json` said it found and did.
 #[derive(Debug, Deserialize)]
 struct UpdatedCli {
-    /// `missing`, `current`, `updated`, `homebrew`, `cargo` or `development`.
+    /// `missing`, `current`, `updated`, `homebrew`, `cargo`, `development` or
+    /// `foreign`.
     outcome: String,
     #[serde(default)]
     path: Option<String>,
@@ -578,22 +579,83 @@ fn restart_outdated_server(updated: Option<&Path>) {
         ServerCatchUp::Restart => {}
     }
     // `--when-idle` waits for running turns, so a turn in the middle of its
-    // work is not cut off; a wait longer than this leaves the old server to the
-    // next start (`status` says `restart-pending` until then).
+    // work is not cut off. This thread's own deadline can end that wait, which
+    // is not a failure: nothing is remembered, and the next start asks again.
+    let busy = restart_when_idle();
+    let after = read_report();
+    let outcome = after_restart(
+        busy,
+        after.as_ref().and_then(|report| report.version.as_deref()),
+        after
+            .as_ref()
+            .and_then(|report| report.cli_version.as_deref()),
+    );
+    match outcome {
+        // Server and engine are one version now: a new update gets a fresh try.
+        AfterRestart::Converged => remember_attempt(None),
+        // A turn outlasted this start's patience: remembered nothing.
+        AfterRestart::StillBusy => {}
+        // A refusal, or a server that came back on the old engine: remembered,
+        // so the same pair is not attempted at every launch.
+        AfterRestart::Failed => remember_attempt(Some(&attempt)),
+    }
+}
+
+/// What a restart left behind, which decides whether it is remembered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AfterRestart {
+    /// The server runs this engine's version (or a newer one) now.
+    Converged,
+    /// This thread's deadline ended the `--when-idle` wait: a turn was still
+    /// running, so the next start tries again instead of remembering a failure
+    /// that never happened.
+    StillBusy,
+    /// The CLI refused, or the server came back on the old engine.
+    Failed,
+}
+
+fn after_restart(busy: bool, server: Option<&str>, engine: Option<&str>) -> AfterRestart {
+    if busy {
+        return AfterRestart::StillBusy;
+    }
+    match (server, engine) {
+        (Some(server), Some(engine)) if !crate::updater::newer(engine, server) => {
+            AfterRestart::Converged
+        }
+        _ => AfterRestart::Failed,
+    }
+}
+
+/// Run `server restart --when-idle`, and answer whether this thread's deadline
+/// ended the wait (running turns) rather than the CLI answering.
+fn restart_when_idle() -> bool {
     match run_sync(&["server", "restart", "--when-idle"], RESTART_IDLE_TIMEOUT) {
-        Ok(output) if output.status.success() => {}
-        Ok(output) => eprintln!(
-            "[service] the server did not restart: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ),
-        Err(error) => eprintln!("[service] the server did not restart: {error}"),
+        Ok(output) if output.status.success() => false,
+        Ok(output) => {
+            eprintln!(
+                "[service] the server did not restart: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            false
+        }
+        Err(error) => {
+            if cut_short(&error) {
+                eprintln!(
+                    "[service] the server restart is still waiting for running turns; the next start tries again."
+                );
+                true
+            } else {
+                eprintln!("[service] the server did not restart: {error}");
+                false
+            }
+        }
     }
-    // A restart that did not take is remembered, so the same pair is not tried
-    // at every launch; one that did leaves nothing behind.
-    match read_report() {
-        Some(after) if after.version == after.cli_version => remember_attempt(None),
-        _ => remember_attempt(Some(&attempt)),
-    }
+}
+
+/// Whether a command error is this thread's own deadline rather than a failure:
+/// `run_program`'s timeout wording.
+fn cut_short(error: &str) -> bool {
+    error.contains("did not answer within")
 }
 
 /// The `rustcode` the service commands run and that `server install` writes
@@ -1190,6 +1252,33 @@ mod tests {
         assert_eq!(
             catch_up(Some("1.29.0"), "1.30.0", Some(copy), Some(copy), None),
             ServerCatchUp::Restart
+        );
+    }
+
+    /// A `--when-idle` restart this start cut short waits for a turn, which is
+    /// not a failure: it is not remembered, and the next start asks again
+    /// (issue #3487).
+    #[test]
+    fn a_long_turn_is_not_remembered_as_a_failure() {
+        assert_eq!(
+            after_restart(true, Some("1.29.0"), Some("1.30.0")),
+            AfterRestart::StillBusy
+        );
+        // A restart that answered but did not take is remembered.
+        assert_eq!(
+            after_restart(false, Some("1.29.0"), Some("1.30.0")),
+            AfterRestart::Failed
+        );
+        // Nothing answered after the restart: remembered too.
+        assert_eq!(after_restart(false, None, None), AfterRestart::Failed);
+        // Converged, including a server that came back newer than the app.
+        assert_eq!(
+            after_restart(false, Some("1.30.0"), Some("1.30.0")),
+            AfterRestart::Converged
+        );
+        assert_eq!(
+            after_restart(false, Some("1.31.0"), Some("1.30.0")),
+            AfterRestart::Converged
         );
     }
 

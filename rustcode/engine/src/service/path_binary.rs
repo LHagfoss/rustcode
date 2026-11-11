@@ -464,9 +464,14 @@ enum Owner {
     Development,
     /// The install script's or the app's: this engine may replace it.
     Ours,
+    /// Somewhere else on `PATH`: a copy a person put there (their own build in
+    /// `~/bin`, a tarball under `/opt`, a `cargo install --root`), which is
+    /// named and never touched. Replacing it would delete work this app did
+    /// not write.
+    Foreign,
 }
 
-fn owner(path: &Path, home: Option<&Path>, windows: bool) -> Owner {
+fn owner(path: &Path, home: Option<&Path>, windows: bool, engine: &Path) -> Owner {
     if !windows && from_homebrew(path) {
         return Owner::Homebrew;
     }
@@ -488,7 +493,17 @@ fn owner(path: &Path, home: Option<&Path>, windows: bool) -> Owner {
     if super::is_dev_binary(&program, target_dir.as_deref()) {
         return Owner::Development;
     }
-    Owner::Ours
+    // Only the files this app and the install script write are this app's:
+    // anywhere else on PATH is somebody's copy, and is named rather than
+    // replaced, whatever version it is.
+    if same_file(path, engine)
+        || install_copies(home, windows)
+            .iter()
+            .any(|copy| copy == path)
+    {
+        return Owner::Ours;
+    }
+    Owner::Foreign
 }
 
 /// The `rustcode` a shell runs first, else the first one an install wrote in a
@@ -539,6 +554,9 @@ pub enum InstalledCopy {
     Managed { path: PathBuf, by: &'static str },
     /// A cargo build: never replaced, since the next build replaces it.
     Development(PathBuf),
+    /// A copy this app did not write (a person's own build in `~/bin`, a
+    /// tarball under `/opt`): named, and left exactly as it is.
+    Foreign(PathBuf),
 }
 
 /// Bring the `rustcode` a shell runs up to this engine's version (issue
@@ -558,7 +576,20 @@ pub async fn update_installed_copy(engine_version: &str) -> anyhow::Result<Insta
     let Some(path) = find_installed_copy(home.as_deref(), windows).await else {
         return Ok(InstalledCopy::Missing);
     };
-    match owner(&path, home.as_deref(), windows) {
+    update_copy_at(path, &std::env::current_exe()?, engine_version).await
+}
+
+/// [`update_installed_copy`] for one copy, with `engine` standing in for this
+/// process's own binary: so a test can watch which copies are written and
+/// which are left alone.
+async fn update_copy_at(
+    path: PathBuf,
+    engine: &Path,
+    engine_version: &str,
+) -> anyhow::Result<InstalledCopy> {
+    let home = home_directory();
+    let windows = cfg!(windows);
+    match owner(&path, home.as_deref(), windows, engine) {
         Owner::Homebrew => {
             return Ok(InstalledCopy::Managed {
                 path,
@@ -569,12 +600,12 @@ pub async fn update_installed_copy(engine_version: &str) -> anyhow::Result<Insta
             return Ok(InstalledCopy::Managed { path, by: "cargo" });
         }
         Owner::Development => return Ok(InstalledCopy::Development(path)),
+        Owner::Foreign => return Ok(InstalledCopy::Foreign(path)),
         Owner::Ours => {}
     }
-    let engine = std::env::current_exe()?;
     // A link that already is this engine needs nothing; a dangling one is the
     // one case a copy cannot be asked its version, and the link is replaced.
-    if same_file(&path, &engine) {
+    if same_file(&path, engine) {
         return Ok(InstalledCopy::Current(path));
     }
     let gone = dangling(&path);
@@ -582,8 +613,8 @@ pub async fn update_installed_copy(engine_version: &str) -> anyhow::Result<Insta
     if !gone && update_plan(version.as_deref(), engine_version) != UpdatePlan::Replace {
         return Ok(InstalledCopy::Current(path));
     }
-    super::refuse_dev_binary(&engine, false)?;
-    copy_over(&path, &engine).map_err(|error| {
+    super::refuse_dev_binary(engine, false)?;
+    copy_over(&path, engine).map_err(|error| {
         anyhow::Error::new(error).context(format!(
             "could not replace {} (does your user own its folder?)",
             path.display()
@@ -1019,20 +1050,29 @@ mod tests {
         );
     }
 
-    /// Homebrew and `cargo install` own their copies, and a build is never
-    /// replaced: only the install script's and the app's are this engine's.
+    /// Homebrew and `cargo install` own their copies, a build is never
+    /// replaced, and anything outside the folders an install writes is
+    /// somebody else's: only the install script's, the app's own and the app's
+    /// engine are this engine's to replace.
     #[test]
     fn only_the_install_scripts_copy_is_this_apps_to_replace() {
         let home = Path::new("/Users/ada");
+        let engine = Path::new("/Applications/RustCode.app/Contents/MacOS/rustcode");
         assert_eq!(
-            owner(Path::new("/opt/homebrew/bin/rustcode"), Some(home), false),
+            owner(
+                Path::new("/opt/homebrew/bin/rustcode"),
+                Some(home),
+                false,
+                engine
+            ),
             Owner::Homebrew
         );
         assert_eq!(
             owner(
                 Path::new("/Users/ada/.cargo/bin/rustcode"),
                 Some(home),
-                false
+                false,
+                engine
             ),
             Owner::Cargo
         );
@@ -1040,7 +1080,8 @@ mod tests {
             owner(
                 Path::new("/Users/ada/code/rustcode/target/debug/rustcode"),
                 Some(home),
-                false
+                false,
+                engine
             ),
             Owner::Development
         );
@@ -1050,20 +1091,65 @@ mod tests {
             "/usr/local/bin/rustcode",
         ] {
             assert_eq!(
-                owner(Path::new(path), Some(home), false),
+                owner(Path::new(path), Some(home), false, engine),
                 Owner::Ours,
                 "{path}"
             );
         }
+        // The app's own engine, whatever path it was installed at.
+        assert_eq!(owner(engine, Some(home), false, engine), Owner::Ours);
         // Windows has no Homebrew, and its one install folder is the app's.
         assert_eq!(
             owner(
                 Path::new("C:\\Users\\ada\\.rustcode\\bin\\rustcode.exe"),
                 Some(home),
-                true
+                true,
+                engine
             ),
             Owner::Ours
         );
+        // A copy a person put somewhere else is not the app's, whatever its
+        // version: their own build in `~/bin`, a `cargo install --root`, a
+        // tarball under `/opt`.
+        for path in [
+            "/Users/ada/bin/rustcode",
+            "/Users/ada/.local/rustcode/bin/rustcode",
+            "/opt/rustcode/bin/rustcode",
+        ] {
+            assert_eq!(
+                owner(Path::new(path), Some(home), false, engine),
+                Owner::Foreign,
+                "{path}"
+            );
+        }
+    }
+
+    /// A copy somewhere else is named and left exactly as it was: the app
+    /// replaces only files it writes, never a person's own build (issue
+    /// #3487).
+    #[tokio::test]
+    async fn a_foreign_copy_is_left_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = dir.path().join("engine");
+        std::fs::write(&engine, "new engine").unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let copy = bin.join("rustcode");
+        std::fs::write(&copy, "a person's own build").unwrap();
+        let outcome = update_copy_at(copy.clone(), &engine, "1.30.0")
+            .await
+            .expect("a foreign copy is not an error");
+        assert_eq!(outcome, InstalledCopy::Foreign(copy.clone()));
+        // Untouched: not replaced, not renamed aside, nothing staged beside it.
+        assert_eq!(
+            std::fs::read_to_string(&copy).unwrap(),
+            "a person's own build"
+        );
+        let left: Vec<_> = std::fs::read_dir(&bin)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(left, vec![std::ffi::OsString::from("rustcode")]);
     }
 
     /// A link to a copy that moved leaves a name nothing can run: the next

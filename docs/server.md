@@ -134,7 +134,9 @@ rustcode server uninstall   # remove the service
     to it: `rustcode server restart --when-idle` in the background (issue
     #3487). Running turns finish first, and a wait longer than ten minutes
     leaves the old server for the next start, where `status` reports
-    `restart-pending`.
+    `restart-pending`: a wait cut off by a long turn is not a failure, nothing
+    is remembered, and the next start asks again. Only a refusal, or a server
+    that came back on the old engine, is remembered.
   - The unit runs another `rustcode`, and it is still the one **the app
     installed the service with** (Settings › Machines › *Install server* writes
     that program to `<config dir>/service/installed-by-app`; the app moved, or
@@ -319,9 +321,17 @@ the script and the app write, `%USERPROFILE%\.rustcode\bin\rustcode.exe`).
   are named as *managed by Homebrew* / *managed by cargo* and left to
   `brew upgrade lhagfoss/tap/rustcode` or `cargo install --path rustcode/tui`.
   A development build is never replaced either.
+- Any other copy is *foreign* and left exactly as it is. Only the files the
+  install script and the app write are the app's to replace
+  (`~/.rustcode/bin`, `~/.local/bin`, `/usr/local/bin`, or
+  `%USERPROFILE%\.rustcode\bin` on Windows, and the app's own engine), so
+  your own build in `~/bin`, a `cargo install --root` elsewhere or a tarball
+  under `/opt` is named, never overwritten, whatever its version; update it
+  yourself, or remove it so a shell finds this app's version. The command
+  exits with a non-zero status and the message says which copy it left.
 - `--json` prints `{ "outcome", "path", "was", "version", "message" }` with
   `outcome` one of `missing`, `current`, `updated`, `homebrew`, `cargo`,
-  `development`, for the app that runs it at every start: that is what makes an
+  `development`, `foreign`, for the app that runs it at every start: that is what makes an
   app update reach the copy an earlier install left behind.
 
 It is not `link-path`: `link-path` is a person's one action on the copy a shell

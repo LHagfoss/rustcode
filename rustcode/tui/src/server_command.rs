@@ -149,7 +149,8 @@ async fn link_path() -> anyhow::Result<i32> {
 /// looked at, what the copy was, and why nothing was done when nothing was.
 #[derive(serde::Serialize)]
 struct UpdatedCli {
-    /// `missing`, `current`, `updated`, `homebrew`, `cargo` or `development`.
+    /// `missing`, `current`, `updated`, `homebrew`, `cargo`, `development` or
+    /// `foreign`.
     outcome: &'static str,
     /// The copy it looked at, when one was there.
     path: Option<String>,
@@ -164,7 +165,8 @@ struct UpdatedCli {
 /// Bring the `rustcode` a shell runs up to this engine's version (issue
 /// #3487). The app runs this after an update, when its own engine is the new
 /// version; a copy that is current, newer or unreadable is left alone, as is
-/// one Homebrew or `cargo install` owns and a development build.
+/// one Homebrew or `cargo install` owns, a development build, and any copy
+/// this app did not write.
 async fn update_cli(json: bool) -> anyhow::Result<i32> {
     use rustcode::service::path_binary::{InstalledCopy, update_installed_copy};
     let version = env!("CARGO_PKG_VERSION");
@@ -240,6 +242,19 @@ async fn update_cli(json: bool) -> anyhow::Result<i32> {
                 version,
                 message: format!(
                     "{} is a development build (inside a cargo target directory); a released RustCode does not replace it.",
+                    path.display()
+                ),
+            },
+            1,
+        ),
+        InstalledCopy::Foreign(path) => (
+            UpdatedCli {
+                outcome: "foreign",
+                path: Some(path.display().to_string()),
+                was: None,
+                version,
+                message: format!(
+                    "{} is a copy this app did not install, so it is left as it is; update it yourself, or remove it so a shell finds this app's version.",
                     path.display()
                 ),
             },
