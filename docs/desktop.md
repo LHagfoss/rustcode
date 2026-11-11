@@ -1695,6 +1695,12 @@ SwiftUI updater already trust; Developer ID signing adds to it once set up.
 
 ## Not yet ported
 
+Linked pull request watches (`_rustcode/pulls/watch`) deliver each pending event
+once into the linked thread through its ordinary turn queue, including after
+a reconnect. The live thread status update also applies the review badge.
+
+The mock’s `?pullWatchPreview` path seeds a linked PR check failure.
+
 From the SwiftUI app, still missing or partial:
 
 - Picking diff lines for a message. Files dropped in
@@ -1710,8 +1716,7 @@ From the SwiftUI app, still missing or partial:
 - The auto-approve (YOLO) toggle on approval cards.
 - Subagents' verification status and background agents of threads off
   screen (subagents of a thread whose agents were listed nest under it).
-- Pull request line comments, the diff view in the review, and watches
-  (`_rustcode/pulls/watch*`).
+- Pull request line comments and the diff view in the review.
 - Changes panel: branch mode, renames' old paths, syntax colours in diffs.
 - Localhost preview, the Smart UI agent preview (`smart_ui_preview`,
   `smartUi = 2`). `rustcode-viz` cards have Copy source but not Copy as
