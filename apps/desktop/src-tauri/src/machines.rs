@@ -22,6 +22,7 @@ use rustcode_client::{
 };
 use serde::Serialize;
 use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -696,10 +697,14 @@ pub async fn machines_discover(
     let saved = machines.list().unwrap_or_default();
     let mut notice = None;
     let mut views: Vec<DiscoveredView> = match browse_async(DISCOVERY).await {
-        Ok(found) => found
-            .iter()
-            .map(|machine| discovered(machine, &saved))
-            .collect(),
+        Ok(found) => {
+            let this = ThisComputer::read();
+            found
+                .iter()
+                .filter(|machine| !this.is(machine))
+                .map(|machine| discovered(machine, &saved))
+                .collect()
+        }
         // A network without multicast (a container, a firewall) cannot browse,
         // but the overlay rows come from this machine's own registry: the sheet
         // lists them and says what failed, instead of showing nothing.
@@ -715,6 +720,67 @@ pub async fn machines_discover(
         rows: views,
         notice,
     })
+}
+
+/// How this computer is told apart from another one in a browse: Bonjour
+/// announces the gateway this computer runs too, and the Add sheet must not
+/// offer to connect it to itself.
+struct ThisComputer {
+    /// The gateway id this computer presents (its own gateway's, when it runs one).
+    gateway_id: Option<String>,
+    /// The port its gateway listens on.
+    port: u16,
+    /// Whether an address belongs to one of this computer's interfaces.
+    owns: fn(IpAddr) -> bool,
+}
+
+impl ThisComputer {
+    fn read() -> Self {
+        let dir = config_dir().ok();
+        Self {
+            gateway_id: dir
+                .as_deref()
+                .and_then(|dir| rustcode_client::machine::Identity::load(dir).ok())
+                .map(|identity| identity.host_id),
+            port: dir
+                .as_deref()
+                .and_then(gateway_port)
+                .unwrap_or(rustcode_client::DEFAULT_PORT),
+            owns: is_local_address,
+        }
+    }
+
+    /// The same gateway id, or one of this computer's own addresses on its
+    /// gateway port (an announcement that carries no id, or an old one).
+    fn is(&self, machine: &DiscoveredMachine) -> bool {
+        if let (Some(own), Some(found)) = (&self.gateway_id, &machine.gateway_id) {
+            if own == found {
+                return true;
+            }
+        }
+        machine.port == self.port
+            && machine
+                .addresses
+                .iter()
+                .any(|address| (self.owns)(*address))
+    }
+}
+
+/// The port the local gateway listens on, from its registration file.
+fn gateway_port(config_dir: &Path) -> Option<u16> {
+    let bytes = std::fs::read(config_dir.join("remote/registration.json")).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let listen = value.get("listen_address")?.as_str()?;
+    listen
+        .parse::<SocketAddr>()
+        .ok()
+        .map(|address| address.port())
+}
+
+/// Whether `address` is one of this computer's own: only an address on a local
+/// interface can be bound.
+fn is_local_address(address: IpAddr) -> bool {
+    address.is_loopback() || std::net::UdpSocket::bind((address, 0)).is_ok()
 }
 
 /// What one Bonjour record says, plus what this app already knows of the
@@ -1339,6 +1405,36 @@ mod tests {
         assert_eq!(bonjour["version"], "0.96.0");
         assert_eq!(bonjour["platform"], "macos");
         assert_eq!(bonjour["saved"], true);
+    }
+
+    fn record(gateway_id: Option<&str>, address: &str, port: u16) -> DiscoveredMachine {
+        DiscoveredMachine {
+            name: "This Mac".into(),
+            port,
+            addresses: vec![address.parse().unwrap()],
+            gateway_id: gateway_id.map(Into::into),
+            protocol: Some("1".into()),
+            caps: vec!["desktops".into()],
+        }
+    }
+
+    /// Bonjour hears this computer's own gateway too: it is not a machine to
+    /// ask to connect (#3432).
+    #[test]
+    fn this_computer_is_left_out_of_the_machines_found() {
+        let this = ThisComputer {
+            gateway_id: Some("gw-own".into()),
+            port: 17879,
+            owns: |address| address == "192.168.1.5".parse::<IpAddr>().unwrap(),
+        };
+        // By gateway id, whatever address it announced.
+        assert!(this.is(&record(Some("gw-own"), "192.168.1.99", 17879)));
+        // By address: one of this computer's own, on its gateway port.
+        assert!(this.is(&record(None, "192.168.1.5", 17879)));
+        assert!(this.is(&record(Some("gw-other"), "192.168.1.5", 17879)));
+        // Another computer, and another gateway on this one's address.
+        assert!(!this.is(&record(Some("gw-other"), "192.168.1.20", 17879)));
+        assert!(!this.is(&record(Some("gw-other"), "192.168.1.5", 18000)));
     }
 
     /// A machine with nothing but a LAN route is not offered as an overlay

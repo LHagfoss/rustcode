@@ -312,12 +312,10 @@ export function routeLabel(route: MachineRoute | null | undefined): string {
  */
 export function machineLine(machine: Machine): string {
   switch (machine.state) {
-    case "connected": {
-      const line = routeLabel(machine.route);
-      // Why another route to the same machine is not used, when the shell
-      // knows: the LAN works and NetBird does not, or the other way round.
-      return machine.hint ? `${line}. ${machine.hint}` : line;
-    }
+    // The shell's hint (why another route to this machine is not used) is
+    // the row's own line under this one, so it is not repeated here.
+    case "connected":
+      return routeLabel(machine.route);
     case "connecting":
       return `Connecting over ${routeLabel(machine.route)}`;
     case "needsPairing":
