@@ -119,6 +119,22 @@ pull request merged and the thread runs in a worktree, the thread becomes
 `done`. Without a watch nothing polls GitHub; `manage_pull_links` (below) is
 how a thread starts one without the app.
 
+### Paired machines and snooze
+
+The desktop sends status changes to the thread's owning machine using its
+paired ACP connection. The gateway permits the exact status and snooze methods
+under the same authorization as other desktop thread operations. An offline
+owner, or an older gateway that rejects the method, leaves the thread visible
+and reports an error.
+
+`_rustcode/session/snooze` takes `{ "session_id", "until": <Unix milliseconds or null> }`
+and returns `{}`. The owner stores the deadline in `snooze.json`, includes it as
+`_meta.rustcode.snoozedUntil` in session lists, and broadcasts it in
+`session_info_update`. Null wakes the thread. Apps ignore elapsed deadlines.
+Engines re-read status and snooze files for known threads every five seconds,
+so an owner's separate desktop engine and the gateway's engine also observe
+writes from each other and from the CLI.
+
 ### From the CLI
 
 A shell changes the same stored status, through the same engine function the

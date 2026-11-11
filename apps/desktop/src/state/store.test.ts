@@ -2837,7 +2837,7 @@ describe("engine controller with the mock engine", () => {
     setPanel("changes");
     expect(useApp.getState().panel).toBe("changes");
 
-    settleThread(a!.id);
+    await settleThread(a!.id);
     let s = useApp.getState();
     expect(s.selectedId).toBeNull();
     expect(s.panel).toBeNull();
@@ -2863,7 +2863,7 @@ describe("engine controller with the mock engine", () => {
 
     // Settling a thread in the background with the user's action changes
     // nothing on screen either.
-    settleThread(c!.id);
+    await settleThread(c!.id);
     s = useApp.getState();
     expect(s.selectedId).toBe(b!.id);
     expect(s.panel).toBe("changes");
@@ -2883,7 +2883,7 @@ describe("engine controller with the mock engine", () => {
     setView({ kind: "board" });
     expect(useApp.getState().view.kind).toBe("board");
 
-    settleThreads([a!.id, b!.id]);
+    await settleThreads([a!.id, b!.id]);
     let s = useApp.getState();
     expect(s.view.kind).toBe("board");
     expect(s.selectedId).toBe(a!.id);
@@ -2908,7 +2908,7 @@ describe("engine controller with the mock engine", () => {
     setDraft("new", "the next idea");
     updateThread(a.id, (t) => ({ ...t, running: true }));
 
-    settleThread(a.id);
+    await settleThread(a.id);
     const s = useApp.getState();
     expect(s.selectedId).toBeNull();
     expect(s.drafts[a.id]).toBe("half-written reply");
@@ -2924,7 +2924,7 @@ describe("engine controller with the mock engine", () => {
     await until(() => useApp.getState().threads[a!.id]?.loaded === true);
     setPanel("changes");
 
-    snoozeThread(a!.id, Date.now() + 3_600_000);
+    await snoozeThread(a!.id, Date.now() + 3_600_000);
     let s = useApp.getState();
     expect(a!.id in s.snoozed).toBe(true);
     expect(s.selectedId).toBeNull();
@@ -2934,7 +2934,7 @@ describe("engine controller with the mock engine", () => {
 
     // Waking it, on the thread the user has opened since, does not send them away.
     selectThread(b!.id);
-    snoozeThread(a!.id, null);
+    await snoozeThread(a!.id, null);
     s = useApp.getState();
     expect(a!.id in s.snoozed).toBe(false);
     expect(s.selectedId).toBe(b!.id);
@@ -2948,7 +2948,7 @@ describe("engine controller with the mock engine", () => {
     await until(() => useApp.getState().threads[b!.id]?.loaded === true);
     setPanel("changes");
 
-    snoozeThread(a!.id, Date.now() + 3_600_000);
+    await snoozeThread(a!.id, Date.now() + 3_600_000);
     let s = useApp.getState();
     expect(a!.id in s.snoozed).toBe(true);
     expect(s.selectedId).toBe(b!.id);
@@ -2956,7 +2956,7 @@ describe("engine controller with the mock engine", () => {
 
     // An agent's `update_session` writes the time and stays put, as an agent's
     // settle does.
-    setSnoozed(b!.id, Date.now() + 3_600_000);
+    await setSnoozed(b!.id, Date.now() + 3_600_000);
     s = useApp.getState();
     expect(b!.id in s.snoozed).toBe(true);
     expect(s.selectedId).toBe(b!.id);
@@ -2965,7 +2965,7 @@ describe("engine controller with the mock engine", () => {
     // The board has no new-thread screen, so snoozing there stays on the board.
     selectThread(a!.id);
     setView({ kind: "board" });
-    snoozeThread(a!.id, Date.now() + 3_600_000);
+    await snoozeThread(a!.id, Date.now() + 3_600_000);
     s = useApp.getState();
     expect(s.view.kind).toBe("board");
     expect(s.selectedId).toBe(a!.id);
@@ -3016,7 +3016,7 @@ describe("a thread that sleeps through its work", () => {
     const seen = toastIds();
     // The turn starts first, so the snooze is the user's wish about a thread already at work.
     const running = runPrompt(a.id, "fail this turn");
-    snoozeThread(a.id, Date.now() + 3_600_000);
+    await snoozeThread(a.id, Date.now() + 3_600_000);
     await running;
     const s = useApp.getState();
     expect(a.id in s.snoozed).toBe(true);
@@ -3039,7 +3039,7 @@ describe("a thread that sleeps through its work", () => {
     const { a } = await background();
     const seen = toastIds();
     const running = runPrompt(a.id, "ask me a question");
-    snoozeThread(a.id, Date.now() + 3_600_000);
+    await snoozeThread(a.id, Date.now() + 3_600_000);
     await until(() => (useApp.getState().threads[a.id]?.permissions.length ?? 0) > 0);
     const s = useApp.getState();
     expect(a.id in s.snoozed).toBe(true);
@@ -3059,7 +3059,7 @@ describe("a thread that sleeps through its work", () => {
   test("a turn the app starts on a sleeping thread does not bring it back", async () => {
     const { a } = await background();
     const seen = toastIds();
-    setSnoozed(a.id, Date.now() + 3_600_000);
+    await setSnoozed(a.id, Date.now() + 3_600_000);
     // A turn the app starts after a restart is not the user writing in the thread.
     await runPrompt(a.id, "fail this turn", undefined, { automatic: true });
     const s = useApp.getState();
@@ -3073,7 +3073,7 @@ describe("a thread that sleeps through its work", () => {
     // Long enough that the turn is still running when the message arrives: it waits in the queue.
     const running = runPrompt(a.id, "keep working");
     await until(() => useApp.getState().threads[a.id]?.running === true);
-    setSnoozed(a.id, Date.now() + 3_600_000);
+    await setSnoozed(a.id, Date.now() + 3_600_000);
     expect(await submit("one more thing")).toBe(true);
     const s = useApp.getState();
     // The write is the user asking for it, so it does not wait for the queued row's turn.
@@ -3088,7 +3088,7 @@ describe("a thread that sleeps through its work", () => {
   test("the next message of the queue is not a new send, and lets it sleep", async () => {
     const { a } = await background();
     const seen = toastIds();
-    setSnoozed(a.id, Date.now() + 3_600_000);
+    await setSnoozed(a.id, Date.now() + 3_600_000);
     // Exactly what starting the row behind a finished turn passes: typed earlier, not now.
     await runPrompt(a.id, "fail this turn", undefined, { queued: true });
     expect(a.id in useApp.getState().snoozed).toBe(true);
@@ -3098,7 +3098,7 @@ describe("a thread that sleeps through its work", () => {
   test("a sleeping thread with nothing to say comes back quietly", async () => {
     const { a } = await background();
     const seen = toastIds();
-    setSnoozed(a.id, Date.now() - 1);
+    await setSnoozed(a.id, Date.now() - 1);
     wakeSnoozed();
     const s = useApp.getState();
     expect(a.id in s.snoozed).toBe(false);
@@ -3111,7 +3111,7 @@ describe("a thread that sleeps through its work", () => {
   test("a sleeping thread that finished comes back done, and waking twice says it once", async () => {
     const { a } = await background();
     const seen = toastIds();
-    setSnoozed(a.id, Date.now() - 1);
+    await setSnoozed(a.id, Date.now() - 1);
     markFinished(a.id);
     wakeSnoozed();
     let s = useApp.getState();
@@ -3128,7 +3128,7 @@ describe("a thread that sleeps through its work", () => {
 
   test("opening a sleeping thread is the user's call, and only opening it", async () => {
     const { a } = await background();
-    setSnoozed(a.id, Date.now() + 3_600_000);
+    await setSnoozed(a.id, Date.now() + 3_600_000);
     selectThread(a.id);
     const s = useApp.getState();
     expect(s.selectedId).toBe(a.id);

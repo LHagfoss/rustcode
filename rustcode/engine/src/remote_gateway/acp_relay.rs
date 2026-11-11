@@ -100,6 +100,8 @@ impl PendingRequests {
 
 const EXACT_METHODS: &[&str] = &[
     "initialize",
+    "_rustcode/session/status",
+    "_rustcode/session/snooze",
     "_rustcode/harnesses",
     "_rustcode/harnesses/default",
     "_rustcode/harnesses/set",
@@ -313,6 +315,8 @@ mod tests {
             EXACT_METHODS,
             &[
                 "initialize",
+                "_rustcode/session/status",
+                "_rustcode/session/snooze",
                 "_rustcode/harnesses",
                 "_rustcode/harnesses/default",
                 "_rustcode/harnesses/set",
@@ -328,6 +332,8 @@ mod tests {
         );
         for method in [
             "initialize",
+            "_rustcode/session/status",
+            "_rustcode/session/snooze",
             "session/load",
             "session/new",
             "session/prompt",

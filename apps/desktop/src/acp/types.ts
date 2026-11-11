@@ -221,6 +221,7 @@ export interface SessionSummary {
   status?: ThreadStatus;
   /** Pinned in the engine (`_meta.rustcode.pinned`). */
   pinned?: boolean;
+  snoozedUntil?: number | null;
   /**
    * The thread an agent started this one from (`_meta.rustcode.parent`), kept
    * in the thread's own metadata: the link book prunes old links, this does
@@ -276,6 +277,7 @@ export function parseSessionList(result: Json): { sessions: SessionSummary[]; ne
       remote: str(rc?.remote),
       status: parseStatus(rc?.status),
       pinned: bool(rc?.pinned),
+      snoozedUntil: rc?.snoozedUntil === null ? null : num(rc?.snoozedUntil),
       account: str(rc?.account),
       parent: parentId || parentTitle ? { id: parentId, title: parentTitle, relationship } : undefined,
       id,
