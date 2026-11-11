@@ -752,11 +752,35 @@ pub fn attached_files(paths: Vec<String>, roots: Vec<String>) -> Result<Vec<Atta
     Ok(out)
 }
 
-/// `~/…` from the engine or the mock, against `$HOME`.
+/// `~`, `~/…` and, on Windows, `~\…` from the engine or the mock, against the
+/// user's home folder (`USERPROFILE` on Windows, where `HOME` is normally
+/// unset).
 fn expand_home(path: &str) -> PathBuf {
-    match (path.strip_prefix("~/"), std::env::var_os("HOME")) {
-        (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
-        _ => PathBuf::from(path),
+    expand_home_in(path, crate::diagnostics::home_dir().as_deref())
+}
+
+fn expand_home_in(path: &str, home: Option<&Path>) -> PathBuf {
+    let Some(home) = home else {
+        return PathBuf::from(path);
+    };
+    let Some(rest) = path.strip_prefix('~') else {
+        return PathBuf::from(path);
+    };
+    if rest.is_empty() {
+        return home.to_path_buf();
+    }
+    let tail = rest.strip_prefix('/').or_else(|| {
+        if cfg!(windows) {
+            rest.strip_prefix('\\')
+        } else {
+            None
+        }
+    });
+    match tail {
+        Some("") => home.to_path_buf(),
+        Some(tail) => home.join(tail),
+        // `~someone` is another user's folder.
+        None => PathBuf::from(path),
     }
 }
 
@@ -971,6 +995,37 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_tilde_path_expands_against_the_home_folder() {
+        let home = Path::new("/home/me");
+        assert_eq!(expand_home_in("~", Some(home)), PathBuf::from("/home/me"));
+        assert_eq!(expand_home_in("~/", Some(home)), PathBuf::from("/home/me"));
+        assert_eq!(
+            expand_home_in("~/code/app", Some(home)),
+            home.join("code/app")
+        );
+        // Another user's folder, and a path with no tilde, stay as written.
+        assert_eq!(
+            expand_home_in("~someone/x", Some(home)),
+            PathBuf::from("~someone/x")
+        );
+        assert_eq!(
+            expand_home_in("/etc/hosts", Some(home)),
+            PathBuf::from("/etc/hosts")
+        );
+        // With no known home folder the path is left as written, not truncated.
+        assert_eq!(expand_home_in("~/code", None), PathBuf::from("~/code"));
+        // A backslash names a file on Unix and a folder separator on Windows.
+        if cfg!(windows) {
+            assert_eq!(expand_home_in("~\\code", Some(home)), home.join("code"));
+        } else {
+            assert_eq!(
+                expand_home_in("~\\code", Some(home)),
+                PathBuf::from("~\\code")
+            );
+        }
+    }
 
     #[test]
     fn opens_only_existing_files_in_the_editor() {

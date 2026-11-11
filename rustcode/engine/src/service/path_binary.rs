@@ -203,10 +203,7 @@ pub fn mismatch(found: &PathRustcode, this: &Path, this_version: &str) -> Option
 }
 
 fn home_directory() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .filter(|home| !home.is_empty())
-        .map(PathBuf::from)
+    crate::home::home_dir()
 }
 
 /// Which copy is newer, when both versions can be read as numbers.
