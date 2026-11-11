@@ -1489,6 +1489,38 @@ fn test_session_title_first_prompt_truncated() {
 }
 
 #[test]
+fn a_session_new_title_is_read_from_its_meta() {
+    let meta = |body: serde_json::Value| body.as_object().unwrap().clone();
+    assert_eq!(
+        requested_title(Some(&meta(
+            serde_json::json!({ "rustcode": { "title": "Windows PC specs" } })
+        ))),
+        Some("Windows PC specs".to_owned())
+    );
+    // Nothing asked for, an empty title, or the wrong shape: the thread names itself.
+    assert_eq!(requested_title(None), None);
+    assert_eq!(
+        requested_title(Some(&meta(serde_json::json!({ "rustcode": {} })))),
+        None
+    );
+    assert_eq!(
+        requested_title(Some(&meta(
+            serde_json::json!({ "rustcode": { "title": "   " } })
+        ))),
+        None
+    );
+    // Bounded, so a request cannot write an essay into the thread's title.
+    let long = "x".repeat(MAX_REQUESTED_TITLE_CHARS + 50);
+    let read = requested_title(Some(&meta(
+        serde_json::json!({ "rustcode": { "title": long } }),
+    )));
+    assert_eq!(
+        read.map(|title| title.chars().count()),
+        Some(MAX_REQUESTED_TITLE_CHARS)
+    );
+}
+
+#[test]
 fn test_delete_session_file_only_in_sessions_dir() {
     let dir = temp_dir("delete-guard");
     let outside = dir.join("history.json");
