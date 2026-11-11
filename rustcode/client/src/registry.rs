@@ -1120,7 +1120,8 @@ mod tests {
         store
             .mark_connected("gw-a", "100.90.16.237:17879", now)
             .unwrap();
-        let studio = &load(dir.path()).machines()[0];
+        let registry = load(dir.path());
+        let studio = &registry.machines()[0];
         assert_eq!(studio.last_connected_at, Some(now));
         assert_eq!(studio.last_route.as_deref(), Some("100.90.16.237:17879"));
         // The saved routes are untouched: the order is the race's.
