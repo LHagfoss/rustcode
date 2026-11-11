@@ -5932,15 +5932,27 @@ const MOCK_SYSTEM_INFO: JsonObject = {
   graphicsEnv: [],
 };
 
+/**
+ * A project's files as the shell lists them (git's own order): more than the `@` drawer shows at
+ * once, so its short list and its `Show all` row can be seen in the mock window.
+ */
 const MOCK_PROJECT_FILES = [
+  "Cargo.lock",
+  "Cargo.toml",
   "README.md",
+  "apps/desktop/package.json",
+  "apps/desktop/src/lib/native.ts",
   "apps/desktop/src/main.tsx",
+  "apps/desktop/src/state/compose.ts",
+  "apps/desktop/src/state/store.ts",
   "apps/desktop/src/ui/Composer.tsx",
   "apps/desktop/src/ui/Sidebar.tsx",
-  "apps/desktop/src/state/store.ts",
   "docs/design.md",
+  "docs/desktop.md",
   "docs/my notes.md",
   "rustcode/engine/src/acp.rs",
+  "rustcode/engine/src/tools/mod.rs",
+  "scripts/release.sh",
 ];
 
 /** Canned `git_changes`, as the shell answers it: the branch since its base adds the login form. */
