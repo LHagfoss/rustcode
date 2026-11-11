@@ -2561,9 +2561,18 @@ export class MockEngine {
       (result) => {
         if (id !== undefined) this.send({ id, result });
       },
-      (error: Error & { code?: number }) => {
+      (error: Error & { code?: number; data?: Json }) => {
+        // `data` travels as the engine sends it: the refusals an orchestration
+        // tool maps (`{ reason, message }`, `error.data.reason`) are read there.
         if (id !== undefined)
-          this.send({ id, error: { code: error.code ?? -32603, message: error.message } });
+          this.send({
+            id,
+            error: {
+              code: error.code ?? -32603,
+              message: error.message,
+              ...(error.data === undefined ? {} : { data: error.data }),
+            },
+          });
       },
     );
   }
@@ -3399,6 +3408,80 @@ export class MockEngine {
             commit_count: 0,
           },
         };
+      case "_rustcode/worktrees/state": {
+        const paths = Array.isArray(params.paths) ? params.paths : [];
+        return {
+          worktrees: paths.map((path) => {
+            const t = this.threads.find((x) => x.worktree?.path === path);
+            if (!t?.worktree) return { path, exists: false } as unknown as Json;
+            return {
+              path,
+              exists: true,
+              branch: t.worktree.branch,
+              against: "origin/main",
+              ahead: t.worktree.ahead ?? 1,
+              behind: t.worktree.behind ?? 0,
+              dirty: t.worktree.dirty ? 1 : 0,
+              last_commit: new Date(Date.now() - 12 * 60_000).toISOString(),
+              last_commit_subject: "feat(desktop): the delegate's last commit",
+            } as unknown as Json;
+          }),
+        };
+      }
+      case "_rustcode/worktrees/handoff": {
+        const sessionId = str(params.sessionId ?? params.session_id);
+        const t = this.threads.find((x) => x.id === sessionId);
+        if (!t) throw Object.assign(new Error(`unknown session: ${sessionId}`), { code: -32602 });
+        const to = str(params.to) ?? "checkout";
+        if (to === "checkout") {
+          if (!t.worktree) {
+            throw Object.assign(new Error("this thread does not run in a worktree"), {
+              code: -32000,
+              data: { reason: "no_worktree" },
+            });
+          }
+          if (t.worktree.dirty) {
+            throw Object.assign(new Error("the worktree has uncommitted changes"), {
+              code: -32000,
+              data: { reason: "dirty" },
+            });
+          }
+          const repo = t.worktree.repo;
+          const branch = t.worktree.branch;
+          const path = t.worktree.path;
+          this.removedWorktrees.add(path);
+          t.worktree = undefined;
+          t.cwd = repo;
+          return {
+            session_id: sessionId,
+            to,
+            moved: true,
+            worktree_removed: true,
+            switched: true,
+            branch,
+            path: repo,
+          } as unknown as Json;
+        }
+        if (t.worktree) {
+          throw Object.assign(new Error("this thread already runs in a worktree"), {
+            code: -32000,
+            data: { reason: "has_worktree" },
+          });
+        }
+        const worktree = this.makeWorktree(t.cwd, undefined, t.title);
+        t.worktree = worktree;
+        t.cwd = worktree.path;
+        return {
+          session_id: sessionId,
+          to,
+          moved: true,
+          path: worktree.path,
+          branch: worktree.branch,
+          repo: worktree.repo,
+          base: worktree.base,
+          checkout_branch: "main",
+        } as unknown as Json;
+      }
       case "_rustcode/pulls/view":
         return {
           pull: {

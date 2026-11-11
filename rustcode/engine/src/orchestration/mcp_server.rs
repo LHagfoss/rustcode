@@ -681,6 +681,51 @@ mod tests {
         assert_eq!(with.len(), names(false).len() + 1);
     }
 
+    #[test]
+    fn the_worktree_tools_are_listed_from_version_thirteen() {
+        let names = |version: u8| {
+            tools(version, false)
+                .into_iter()
+                .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        };
+        let twelve = names(12);
+        let thirteen = names(13);
+        for name in super::super::V13_TOOL_NAMES {
+            assert!(
+                !twelve.contains(&name.to_owned()),
+                "{name} must not reach a v12 app"
+            );
+            assert!(
+                thirteen.contains(&name.to_owned()),
+                "{name} is listed for a v13 app"
+            );
+        }
+        // Their schemas travel with them: an argument a client cannot answer
+        // is never advertised.
+        let handoff = tools(13, false)
+            .into_iter()
+            .find(|tool| tool["name"] == super::super::HANDOFF_WORKTREE)
+            .expect("handoff_worktree");
+        assert_eq!(
+            handoff["inputSchema"]["properties"]["to"]["enum"],
+            serde_json::json!(super::super::HANDOFF_TARGETS)
+        );
+        assert_eq!(
+            handoff["inputSchema"]["required"],
+            serde_json::json!(["session_id"])
+        );
+        let status = tools(13, false)
+            .into_iter()
+            .find(|tool| tool["name"] == super::super::WORKTREE_STATUS)
+            .expect("worktree_status");
+        assert_eq!(
+            status["inputSchema"]["properties"]["all_projects"]["type"],
+            serde_json::json!("boolean")
+        );
+        assert_eq!(status["inputSchema"]["required"], serde_json::json!([]));
+    }
+
     #[tokio::test]
     async fn the_block_check_is_answered_by_the_server_without_the_app() {
         // A socket nothing listens on: the check must not need one.

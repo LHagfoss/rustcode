@@ -54,6 +54,7 @@ export function delegationAllowed(
     | "configure"
     | "merge"
     | "cleanup"
+    | "handoff"
     | "project"
     | "schedule",
 ): boolean {

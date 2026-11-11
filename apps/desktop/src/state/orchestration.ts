@@ -13,7 +13,7 @@ import { snoozeAt } from "./snooze";
 import { formatDuration, type QueuedPrompt, withWakeMark } from "./thread";
 
 /** What the client advertises in `initialize` while the setting is on. */
-export const CAPABILITY_VERSION = 12;
+export const CAPABILITY_VERSION = 13;
 /** The most of a child's answer `wait_session` carries; beyond it, `read_session` pages the rest. */
 export const MAX_BYTES = 8 * 1024;
 /** The longest prompt or message a thread may hand another one (32 KiB). */
@@ -130,7 +130,8 @@ export type LinkEventKind =
   | "stopped"
   | "interrupted"
   | "merged"
-  | "cleaned";
+  | "cleaned"
+  | "handed_off";
 
 export type LinkEvent = {
   kind: LinkEventKind;
@@ -155,6 +156,7 @@ export const LINK_EVENT_LABEL: Record<LinkEventKind, string> = {
   interrupted: "Interrupted",
   merged: "Merged",
   cleaned: "Cleaned up",
+  handed_off: "Handed off",
 };
 
 /** The event a link reaches when it newly takes a state. */
@@ -549,6 +551,10 @@ export type Call =
   | { tool: "thread_status"; target?: string; machine?: string }
   | { tool: "merge_when_green"; target: string; timeoutMs: number; callId?: string }
   | { tool: "cleanup_worktree"; target: string; settle: boolean }
+  /** Where worktrees stand: one thread's, or every worktree this thread reaches. */
+  | { tool: "worktree_status"; target?: string; allProjects: boolean }
+  /** Move a thread's work between the user's checkout and a worktree of its own. */
+  | { tool: "handoff_worktree"; target: string; to: HandoffTarget }
   /** The computers this RustCode is paired with (orchestration version 12). */
   | { tool: "list_machines" }
   | { tool: "read_project"; path: string }
@@ -596,6 +602,10 @@ export const MAX_DATA_ROWS = 1000;
 export const DEFAULT_ACTIVITY_ITEMS = 50;
 export const MAX_ACTIVITY_ITEMS = 200;
 
+/** Where `handoff_worktree` may move a thread's work. */
+export type HandoffTarget = "checkout" | "worktree";
+const HANDOFF_TARGETS: readonly string[] = ["checkout", "worktree"];
+
 /** What `manage_queue` may do to a message this thread queued on another one. */
 export type QueueAction = "list" | "edit" | "cancel" | "steer";
 const QUEUE_ACTIONS: readonly string[] = ["list", "edit", "cancel", "steer"];
@@ -618,6 +628,10 @@ export const MAX_PULL_REQUESTS = 30;
 export const MAX_PROJECTS = 50;
 /** Delegates `thread_status` reports in one answer: one gh read each, run together. */
 export const MAX_DELEGATES = 12;
+/** Worktree threads `worktree_status` reports in one answer. */
+export const MAX_WORKTREES = 20;
+/** Pull requests `worktree_status` reads: one gh read each, run together, capped like `thread_status`. */
+export const MAX_WORKTREE_PULLS = MAX_DELEGATES;
 
 const s = (v: Json | undefined) => (typeof v === "string" ? v : undefined);
 /** `all_projects`: the user's threads in every project, when the setting allows it. */
@@ -666,6 +680,25 @@ export function parseCall(params: JsonObject): Call | Failure {
     }
     case "list_worktrees":
       return { tool: "list_worktrees", allProjects: allProjects(args) };
+    case "worktree_status": {
+      const target = s(args.session_id)?.trim() || undefined;
+      return {
+        tool: "worktree_status",
+        ...(target ? { target } : {}),
+        allProjects: allProjects(args),
+      };
+    }
+    case "handoff_worktree": {
+      const target = s(args.session_id) ?? "";
+      if (!target) return failure("invalid", "session_id is required");
+      // The direction an orchestrator means when it says "the user takes over"
+      // is the checkout, so it is the default.
+      const to = s(args.to) ?? "checkout";
+      if (!HANDOFF_TARGETS.includes(to)) {
+        return failure("invalid", `to must be one of ${HANDOFF_TARGETS.join(", ")}`);
+      }
+      return { tool: "handoff_worktree", target, to: to as HandoffTarget };
+    }
     case "list_projects":
       return { tool: "list_projects", ...machineField(args) };
     case "list_machines":
@@ -2634,6 +2667,7 @@ export interface GrantAsk {
     | "configure"
     | "merge"
     | "cleanup"
+    | "handoff"
     | "project"
     | "schedule";
   caller: string;

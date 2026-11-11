@@ -9,6 +9,8 @@ export const V2Method = {
   worktreeList: "_rustcode/worktrees/list",
   worktreeRemove: "_rustcode/worktrees/remove",
   worktreeCleanup: "_rustcode/worktrees/cleanup",
+  worktreeState: "_rustcode/worktrees/state",
+  worktreeHandoff: "_rustcode/worktrees/handoff",
   sessionStatus: "_rustcode/session/status",
   sessionPin: "_rustcode/session/pin",
   checkpointList: "_rustcode/checkpoints/list",
@@ -83,6 +85,115 @@ export function parseWorktree(value: Json | undefined): Worktree | undefined {
 
 export function parseWorktreeList(result: Json | undefined): Worktree[] {
   return arr(obj(result)?.worktrees).flatMap((w) => parseWorktree(w) ?? []);
+}
+
+/** Where one worktree stands now, as `_rustcode/worktrees/state` answers a row. */
+export interface WorktreeState {
+  path: string;
+  /** False when the worktree's folder is gone (it may have been removed since a list). */
+  exists: boolean;
+  /** The branch HEAD is on now; a detached HEAD has none. */
+  branch?: string;
+  /** The ref `ahead`/`behind` are counted against (a branch's upstream, else origin/<branch>, else its base). */
+  against?: string;
+  ahead?: number;
+  behind?: number;
+  /** Files with uncommitted changes, untracked ones included. */
+  dirty?: number;
+  /** The last commit's committer time, ISO 8601. */
+  lastCommit?: string;
+  lastCommitSubject?: string;
+  /** Why the counts are unknown: a git that could not answer (`git status failed: …`). */
+  error?: string;
+}
+
+export function parseWorktreeState(value: Json | undefined): WorktreeState | undefined {
+  const o = obj(value);
+  const path = str(o?.path);
+  if (!o || !path) return undefined;
+  return {
+    path,
+    exists: bool(o.exists) ?? false,
+    branch: str(o.branch),
+    against: str(o.against),
+    ahead: num(o.ahead),
+    behind: num(o.behind),
+    dirty: num(o.dirty),
+    lastCommit: str(o.last_commit),
+    lastCommitSubject: str(o.last_commit_subject),
+    error: str(o.error),
+  };
+}
+
+export function parseWorktreeStates(result: Json | undefined): WorktreeState[] {
+  return arr(obj(result)?.worktrees).flatMap((w) => parseWorktreeState(w) ?? []);
+}
+
+/** Why `_rustcode/worktrees/handoff` refused (`error.data.reason`). */
+export type HandoffRefusal =
+  | "no_worktree"
+  | "has_worktree"
+  | "not_checkout"
+  | "dirty"
+  | "dirty_checkout"
+  | "unpushed_checkout"
+  | "ignored_files"
+  | "detached_checkout"
+  | "not_git"
+  | "no_folder"
+  | "unknown"
+  | "failed";
+
+const HANDOFF_REFUSALS: readonly string[] = [
+  "no_worktree",
+  "has_worktree",
+  "not_checkout",
+  "dirty",
+  "dirty_checkout",
+  "unpushed_checkout",
+  "ignored_files",
+  "detached_checkout",
+  "not_git",
+  "no_folder",
+  "unknown",
+  "failed",
+];
+
+export function handoffRefusal(data: Json | undefined): HandoffRefusal | undefined {
+  const reason = str(obj(data)?.reason);
+  return reason && HANDOFF_REFUSALS.includes(reason) ? (reason as HandoffRefusal) : undefined;
+}
+
+/** What a handoff did, as `_rustcode/worktrees/handoff` answers it. */
+export interface HandoffAnswer {
+  sessionId?: string;
+  to: "checkout" | "worktree";
+  moved: boolean;
+  /** `to: "checkout"`: whether the worktree was removed. Always true when it moved. */
+  worktreeRemoved?: boolean;
+  /** `to: "checkout"`: whether the checkout switched to the branch. False means it stayed where it was; `detail` says why. */
+  switched?: boolean;
+  branch?: string;
+  /** The folder the thread runs in now: the checkout, or the new worktree. */
+  path?: string;
+  repo?: string;
+  detail?: string;
+}
+
+export function parseHandoff(result: Json | undefined): HandoffAnswer | undefined {
+  const o = obj(result);
+  if (!o) return undefined;
+  return {
+    sessionId: str(o.session_id),
+    to: str(o.to) === "worktree" ? "worktree" : "checkout",
+    moved: bool(o.moved) ?? false,
+    worktreeRemoved: bool(o.worktree_removed),
+    switched: bool(o.switched),
+    branch: str(o.branch),
+    path: str(o.path),
+    repo: str(o.repo),
+    detail: str(o.detail),
+  };
 }
 
 /** Why the engine refused to remove a worktree (`error.data.reason`). */

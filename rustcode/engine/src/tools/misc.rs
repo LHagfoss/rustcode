@@ -994,6 +994,50 @@ pub const RUN_SCHEDULED_TASK_NOW: Tool = Tool {
     safety: ToolSafety::Interactive,
 };
 
+/// Orchestration version 13 (`docs/orchestrator.md`): where a worktree stands,
+/// and handing its work back to the user.
+pub const WORKTREE_STATUS: Tool = Tool {
+    name: crate::orchestration::WORKTREE_STATUS,
+    description: "Report where worktrees stand: the owning thread, its branch and path, commits ahead of and behind the ref it tracks, uncommitted files, the last commit and the pull request its branch heads. Omit session_id for every worktree thread this thread reaches (all_projects for every project); pass it for one thread, its own included. A read: no approval.",
+    arguments: r#"{"session_id": "a thread's id, or omit for every worktree"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "minLength": 1, "description": "One thread, its own included; omit for every worktree this thread can reach"},
+                "all_projects": {"type": "boolean", "description": "Every project's worktree threads, with each one's project path"}
+            },
+            "required": [],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const HANDOFF_WORKTREE: Tool = Tool {
+    name: crate::orchestration::HANDOFF_WORKTREE,
+    description: "Move a thread's work to where the user can continue it, keeping every commit. `to: \"checkout\"` (the default) removes a delegate's worktree, switches the user's active checkout to its branch and moves the thread there, so the user can work locally; `to: \"worktree\"` gives a thread that runs in the checkout a worktree of its own on a new branch from the checkout's HEAD, leaving the checkout untouched. It refuses rather than forces: a worktree with uncommitted or ignored files, a checkout with uncommitted changes, a checkout on another branch holding commits no remote has, and a running thread. Nothing is stashed, rebased or reset, and no branch is deleted. The user approves it.",
+    arguments: r#"{"session_id": "the delegate whose work the user takes over", "to": "checkout"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "minLength": 1},
+                "to": {"type": "string", "enum": crate::orchestration::HANDOFF_TARGETS, "description": "checkout (default) moves a worktree's branch into the user's checkout; worktree moves a checkout thread into its own worktree"}
+            },
+            "required": ["session_id"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
 /// Link a thread to a pull request (#3369) and read it back: the engine keeps
 /// checking through the watch machinery (`pull_watch.rs`), so the thread hears
 /// about a change once instead of polling `gh` itself.

@@ -1774,6 +1774,146 @@ describe("engine controller with the mock engine", () => {
     await merged;
   });
 
+  /** A worktree thread the engine knows, and the parent that can reach it. */
+  const stagedWorktree = async () => {
+    const { parent, transport } = await stagedMerge();
+    // The engine makes the worktree through the same `session/new` a start uses,
+    // so its own state read finds the folder.
+    const child = await createSession({
+      cwd: "/Users/you/code/rustcode",
+      harness: "rustcode",
+      parent,
+      title: "Login form",
+      worktree: { repo: "/Users/you/code/rustcode", title: "Login form" },
+    });
+    const worktree = useApp.getState().sessions.find((x) => x.id === child)!.worktree!;
+    return { parent, child, worktree, transport };
+  };
+
+  test("worktree_status reports a worktree's branch, distance, changes and pull request", async () => {
+    const { parent, child, worktree, transport } = await stagedWorktree();
+    const answer = await answerOrchestration({
+      sessionId: parent,
+      tool: "worktree_status",
+      args: { session_id: child },
+    });
+    expect(answer.error).toBeUndefined();
+    // One git read for the row, and the same `gh` read `thread_status` makes.
+    expect(transport.asked(V2Method.worktreeState)[0]?.params).toEqual({ paths: [worktree.path] });
+    expect(transport.asked(Method.pullState)).toHaveLength(1);
+    const row = (answer.worktrees as JsonObject[])[0]!;
+    expect(row).toMatchObject({
+      session_id: child,
+      branch: worktree.branch,
+      path: worktree.path,
+      exists: true,
+      against: "origin/main",
+      ahead: 0,
+      behind: 0,
+      dirty: 0,
+    });
+    expect(typeof row.last_commit).toBe("string");
+    expect(row.pull).toMatchObject({ number: 2790, state: "open" });
+    // A thread that does not run in a worktree says so instead of an empty row.
+    const none = await answerOrchestration({
+      sessionId: parent,
+      tool: "worktree_status",
+      args: { session_id: parent },
+    });
+    expect(none.worktrees).toEqual([]);
+    expect(String(none.note)).toContain("does not run in a worktree");
+  });
+
+  test("handoff_worktree moves a delegate's branch into the checkout and follows it", async () => {
+    const { parent, child, worktree, transport } = await stagedWorktree();
+    const asked = answerOrchestration({
+      sessionId: parent,
+      tool: "handoff_worktree",
+      args: { session_id: child },
+    });
+    await until(() => useApp.getState().grant !== null, 3000);
+    // The user is told exactly what moves where before anything does.
+    expect(useApp.getState().grant?.kind).toBe("handoff");
+    expect(useApp.getState().grant?.detail).toContain(worktree.path);
+    resolveGrant("once");
+    const answer = await asked;
+    expect(answer.error).toBeUndefined();
+    expect(answer).toMatchObject({
+      session_id: child,
+      to: "checkout",
+      moved: true,
+      worktree_removed: true,
+      switched: true,
+      branch: worktree.branch,
+    });
+    expect(transport.asked(V2Method.worktreeHandoff)[0]?.params).toMatchObject({
+      sessionId: child,
+      to: "checkout",
+    });
+    // The thread's row and folder follow the move: no removed worktree is offered.
+    const summary = useApp.getState().sessions.find((x) => x.id === child)!;
+    expect(summary.worktree).toBeUndefined();
+    expect(summary.cwd).toBe(worktree.repo);
+    expect(useApp.getState().threads[child]?.worktree).toBeUndefined();
+  });
+
+  test("handoff_worktree refuses what it cannot move before it asks the user", async () => {
+    const { parent, child, transport } = await stagedWorktree();
+    const refuse = (args: JsonObject) =>
+      answerOrchestration({ sessionId: parent, tool: "handoff_worktree", args });
+    // A thread in the checkout has no branch to hand over there.
+    const noWorktree = await refuse({ session_id: parent });
+    expect(noWorktree.error).toMatchObject({ code: "not_allowed" });
+    expect(String((noWorktree.error as { message?: string }).message)).toContain(
+      "does not run in a worktree",
+    );
+    // The other direction has nothing to do for a thread already in a worktree.
+    const inWorktree = await refuse({ session_id: child, to: "worktree" });
+    expect(inWorktree.error).toMatchObject({ code: "not_allowed" });
+    expect(String((inWorktree.error as { message?: string }).message)).toContain(
+      "already runs in a worktree",
+    );
+    // A thread mid-turn would keep writing in a folder it is losing.
+    updateThread(child, (t) => ({ ...t, running: true }));
+    const running = await refuse({ session_id: child });
+    expect(running.error).toMatchObject({ code: "conflict" });
+    updateThread(child, (t) => ({ ...t, running: false }));
+    // None of them asked the user, and none reached the engine.
+    expect(useApp.getState().grant).toBeNull();
+    expect(transport.asked(V2Method.worktreeHandoff)).toHaveLength(0);
+  });
+
+  test("a worktree the engine finds dirty is refused with the reason that names it", async () => {
+    setOrchestration(true);
+    const transport = new MergeTransport({ delayMs: 0 });
+    await connect(transport);
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    const parent = useApp.getState().sessions[0]!.id;
+    useApp.setState((st) => ({
+      sessions: st.sessions.map((x) => ({ ...x, cwd: "/Users/you/code/rustcode" })),
+    }));
+    selectThread(parent);
+    await until(() => selected()?.loaded === true);
+    updateThread(parent, (t) => ({ ...t, running: true, cwd: "/Users/you/code/rustcode" }));
+    // The mock's login-form thread has uncommitted changes in its worktree.
+    const dirty = useApp.getState().sessions.find((x) => x.worktree?.branch === "feat/login-form");
+    expect(dirty).toBeDefined();
+    const asked = answerOrchestration({
+      sessionId: parent,
+      tool: "handoff_worktree",
+      args: { session_id: dirty!.id },
+    });
+    await until(() => useApp.getState().grant !== null, 3000);
+    resolveGrant("once");
+    const answer = await asked;
+    expect(answer.error).toMatchObject({ code: "conflict" });
+    const message = String((answer.error as { message?: string }).message);
+    expect(message).toContain("dirty");
+    expect(message).toContain("uncommitted changes");
+    // Nothing moved: the thread keeps its worktree.
+    expect(useApp.getState().sessions.find((x) => x.id === dirty!.id)?.worktree).toBeDefined();
+  });
+
   test("a finished link records its harness and how long its turn worked", async () => {
     const { link, target, linkOf } = await stagedWait();
     linkStarted(link.id);

@@ -1557,6 +1557,8 @@ pub const TOOLS: &[Tool] = &[
     misc::DELETE_SCHEDULED_TASK,
     misc::RUN_SCHEDULED_TASK_NOW,
     misc::MANAGE_PULL_LINKS,
+    misc::WORKTREE_STATUS,
+    misc::HANDOFF_WORKTREE,
 ];
 
 pub fn is_agent_tool(name: &str) -> bool {
