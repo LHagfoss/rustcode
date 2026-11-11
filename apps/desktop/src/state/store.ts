@@ -204,6 +204,7 @@ import { autoAnswer, effectiveMode, type PermissionMode, parsePermissionMode } f
 import { NO_PAUSES, type PlanPauses, type PlansAsk, pausesAfter, plansAskFor, queueAsks } from "./plans";
 import { projectChoice } from "./projectBook";
 import { matchProject, projectAt, projectsOn } from "./projects";
+import { deliverPullWatch, PULL_WATCH, subscribePullWatches } from "./pullWatch";
 import {
   nextQueued,
   QUEUE_REASON,
@@ -1195,6 +1196,7 @@ export function watchMachineConnection(id: string, next: AcpConnection | null): 
     return;
   }
   machineConnections.set(id, next);
+  void subscribePullWatches(next, id).catch(() => {});
   machineOff.set(
     id,
     next.onInbound((message) => void handleInbound(scopeInbound(message, id), next, id)),
@@ -1466,6 +1468,7 @@ async function handshake(): Promise<void> {
     // Queued messages and wakes come back from app storage, and the threads that kept one open, so a
     // row's own turn marks what it reports before any wake is worked out below.
     restoreQueuedThreads();
+    void subscribePullWatches(conn).catch(() => {});
     // Messages written now and sent later come back the same way; one whose time passed while the
     // app was closed goes out once its thread is open.
     restoreScheduled();
@@ -1706,6 +1709,8 @@ async function handleInbound(message: Inbound, conn: AcpConnection | null = conn
       else if (message.method === Method.sessionActivity) onSessionActivity(message.params);
       else if (message.method === Method.threadCreated) threadCreated(message.params);
       else if (message.method === V2Method.orchestrationCancelled) orchestrationCallDropped(message.params);
+      else if (message.method === PULL_WATCH && conn)
+        void deliverPullWatch(conn, message.params, host).catch(() => {});
       else if (message.method === ThemeMethod.changed) onThemesChanged(message.params);
       return;
     case "request":

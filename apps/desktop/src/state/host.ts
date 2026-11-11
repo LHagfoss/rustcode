@@ -3428,7 +3428,7 @@ function addLink(link: Omit<Link, "id" | "createdAt" | "events">): string {
 }
 
 /** After the turn the target runs, never into it: the same queue a typed message uses. */
-function deliver(target: string, text: string, link: string, from: string, extras?: ComposeExtras) {
+export function deliver(target: string, text: string, link: string, from: string, extras?: ComposeExtras) {
   const thread = useApp.getState().threads[target];
   if (thread?.running) {
     // `from` is who queued it, so that thread can correct it while it waits (`manageQueue`).
