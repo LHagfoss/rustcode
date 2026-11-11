@@ -286,12 +286,11 @@ export function AgentRow({
   const bottom = oneLine ? undefined : (detail ?? status ?? AGENT_LABEL[state]);
   // The row's own text starts where the composer's does: the card's 4px and the row's 12px.
   const rowClass = "flex w-full min-w-0 flex-1 items-center gap-2 rounded-lg py-1.5 pr-2 pl-3 text-left";
-  // A row that opens draws its way in as its own control: the arrow answers the pointer and the
-  // keyboard, and says in words where it goes. A row that folds (a subagent and its steps) says
-  // what the arrow does in its own words, and still turns it as it opens.
-  const opens = onClick !== undefined && expanded === undefined;
-  const chevron = arrow && (onClick !== undefined || expanded !== undefined);
-  const chevronWord = opens ? `Open ${title}` : expanded ? "Hide the steps" : "Show the steps";
+  // A row that opens is its own way in: pressing its name opens the thread, so a second arrow
+  // beside it doing the same was one control too many. Only a row that folds (a subagent and its
+  // steps) draws the arrow, says what it does in its own words, and turns it as it opens.
+  const chevron = arrow && expanded !== undefined;
+  const chevronWord = expanded ? "Hide the steps" : "Show the steps";
   const body = (
     <>
       <AgentAvatar harness={harness} state={state} />
