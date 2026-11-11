@@ -2277,13 +2277,15 @@ async fn serve_connection(
             {
                 let server = server.clone();
                 async move |request: NewSessionRequest, responder, _connection| {
-                    // The row every other client is told about, from the folder the caller named.
-                    let cwd = request.cwd.clone();
                     // `_meta.rustcode.worktree`: the thread starts in a new worktree.
                     let (request, worktree) = match crate::worktrees::prepare_new(request) {
                         Ok(prepared) => prepared,
                         Err(error) => return responder.respond_with_error(error),
                     };
+                    // The row every other client is told about: the folder the thread runs in,
+                    // which is the worktree's when it starts in one, not the checkout the caller
+                    // named (it would otherwise be listed under the wrong project).
+                    let cwd = request.cwd.clone();
                     // An external harness starts a process, which can take a
                     // while; it does not hold the dispatch loop.
                     let peer = server.clients.peer(client_id, &_connection);
@@ -7168,6 +7170,84 @@ mod tests {
             .expect("a row");
         assert_eq!(announced.session_id, info.session_id);
         assert_eq!(announced.cwd, folder_path);
+
+        let _ = close.send(());
+        app.await.expect("client").expect("client ends cleanly");
+        serving
+            .await
+            .expect("connection")
+            .expect("connection ends cleanly");
+        server.shutdown().await;
+    }
+
+    /// A thread that starts in a new worktree is announced under the worktree, the folder it
+    /// runs in, not under the checkout the caller named.
+    #[test]
+    fn a_worktree_thread_is_announced_under_its_worktree() {
+        on_a_large_stack(worktree_thread_is_announced_under_its_worktree());
+    }
+
+    async fn worktree_thread_is_announced_under_its_worktree() {
+        let server = AcpServer::new(false).expect("server");
+        let (_repo_dir, repo) = crate::worktrees::tests::repo();
+
+        let (engine, transport) = agent_client_protocol::Channel::duplex();
+        let (created_tx, mut created) = tokio::sync::mpsc::unbounded_channel();
+        let (ready_tx, ready) = tokio::sync::oneshot::channel();
+        let (close, closed) = tokio::sync::oneshot::channel();
+        let serving = serve_on_thread(&server, engine);
+        let app = tokio::spawn(async move {
+            agent_client_protocol::Client
+                .builder()
+                .on_receive_notification(
+                    async move |notification: ThreadCreatedNotification, _connection| {
+                        let _ = created_tx.send(notification);
+                        Ok(())
+                    },
+                    agent_client_protocol::on_receive_notification!(),
+                )
+                .connect_with(transport, async move |connection| {
+                    let _ = ready_tx.send(connection);
+                    let _ = closed.await;
+                    Ok(())
+                })
+                .await
+        });
+        let connection = ready.await.expect("the app connects");
+        connection
+            .send_request(initialize_with(
+                serde_json::json!({ "rustcode": { "threads": 1 } }),
+            ))
+            .block_task()
+            .await
+            .expect("the app initializes");
+
+        let mut request = NewSessionRequest::new(repo.clone());
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "rustcode".to_owned(),
+            serde_json::json!({ "worktree": { "repo": repo.display().to_string() } }),
+        );
+        request.meta = Some(meta);
+        let response = connection
+            .send_request(request)
+            .block_task()
+            .await
+            .expect("the thread starts in a worktree");
+        let worktree = response
+            .meta
+            .as_ref()
+            .and_then(|meta| meta["rustcode"]["worktree"]["path"].as_str())
+            .expect("the answer names the worktree")
+            .to_owned();
+        assert_ne!(std::path::Path::new(&worktree), repo.as_path());
+
+        let announced = tokio::time::timeout(std::time::Duration::from_secs(10), created.recv())
+            .await
+            .expect("the app is told about the thread")
+            .expect("a row");
+        assert_eq!(announced.session_id, response.session_id.to_string());
+        assert_eq!(announced.cwd, std::path::PathBuf::from(&worktree));
 
         let _ = close.send(());
         app.await.expect("client").expect("client ends cleanly");

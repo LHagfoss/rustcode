@@ -19,8 +19,17 @@ import { initializeParams, Method, parseSessionList, type SessionSummary } from 
 import { currentPlatform } from "../lib/platform";
 import { hasShell, shellCall } from "../lib/shell";
 import { appVersion } from "../lib/updater";
-import { APP_VERSION, askConfirm, keptUnlisted, settleKeptUnlisted, toast } from "./store";
-import { splitThreadKey } from "./threadKeys";
+import {
+  APP_VERSION,
+  askConfirm,
+  deferAnnouncement,
+  isTombstoned,
+  keptUnlisted,
+  settleKeptUnlisted,
+  toast,
+  tombstoneThread,
+} from "./store";
+import { splitThreadKey, threadKey } from "./threadKeys";
 import { compareVersions } from "./updates";
 
 /** Where a machine stands, as the shell reports it. */
@@ -754,6 +763,10 @@ function rememberCreated(machine: string, params: JsonObject): void {
   const id = str(params.sessionId);
   const cwd = str(params.cwd);
   if (!id || !cwd) return;
+  // While this window has a `session/new` out, the creation says which thread is its own.
+  if (deferAnnouncement(threadKey(machine, id), () => rememberCreated(machine, params))) return;
+  // A thread trashed a moment ago is not made again by a late announcement.
+  if (isTombstoned(threadKey(machine, id))) return;
   useMachines.setState((state) => {
     const listed = state.sessions[machine] ?? [];
     // The client that asked for it may have listed it already, through its own `session/new`.
@@ -776,6 +789,16 @@ function rememberCreated(machine: string, params: JsonObject): void {
 /** A thread trashed on a machine (`_rustcode/threads/deleted`): its row leaves this window too. */
 function forgetCreated(machine: string, sessionId: string | undefined): void {
   if (!sessionId) return;
+  forgetMachineThread(machine, sessionId);
+}
+
+/**
+ * Take a trashed thread out of a machine's list cache, whether the machine said so or this window
+ * trashed it while the link was down, and refuse it to the reads that follow (a `session/list` that
+ * was in flight already names it).
+ */
+export function forgetMachineThread(machine: string, sessionId: string): void {
+  tombstoneThread(threadKey(machine, sessionId));
   useMachines.setState((state) => {
     const listed = state.sessions[machine];
     if (!listed?.some((session) => session.id === sessionId)) return {};
@@ -964,6 +987,10 @@ async function readThreads(id: string, connection: AcpConnection, link?: Link): 
     if (connection.isClosed) return;
     // Rows the app keeps that this read does not name yet stay: a snapshot from before a thread
     // was announced is not news that it is gone. The ones it names now need no keeping.
+    // A thread trashed while this read was out is not news that it came back.
+    for (let i = sessions.length - 1; i >= 0; i--) {
+      if (isTombstoned(threadKey(id, sessions[i]?.id ?? ""))) sessions.splice(i, 1);
+    }
     const listed = new Set(sessions.map((session) => session.id));
     settleKeptUnlisted(id, listed);
     for (const summary of keptUnlisted(id, listed)) {

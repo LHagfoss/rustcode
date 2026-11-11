@@ -1251,6 +1251,21 @@ const keptUnlistedThreads = new Map<string, { summary: SessionSummary; at: numbe
 /** How long a thread the app knows about waits for a list to name it. */
 const KEEP_UNLISTED_MS = 5 * 60_000;
 
+/**
+ * Whether a keep is still due. The engine lists a thread once its first turn saved history, so a
+ * first turn that runs past {@link KEEP_UNLISTED_MS} must not lose the row of a thread that is
+ * alive: a keep for a thread this window sees running is renewed, not expired (a delegate's
+ * `wait_session` would otherwise say "That thread is gone" for it).
+ */
+function keepDue(key: string, kept: { at: number }): boolean {
+  const now = Date.now();
+  if (now - kept.at <= KEEP_UNLISTED_MS) return true;
+  const s = get();
+  if (!s.threads[key]?.running && sessionById(s, key)?.status !== "running") return false;
+  kept.at = now;
+  return true;
+}
+
 /** Keep a thread's row until a list names it, or a deletion takes it away. */
 export function keepUnlisted(summary: SessionSummary): void {
   keptUnlistedThreads.set(summary.id, { summary, at: Date.now() });
@@ -1263,7 +1278,7 @@ export function keepUnlisted(summary: SessionSummary): void {
 export function isKeptUnlisted(key: string): boolean {
   const kept = keptUnlistedThreads.get(key);
   if (!kept) return false;
-  if (Date.now() - kept.at <= KEEP_UNLISTED_MS) return true;
+  if (keepDue(key, kept)) return true;
   keptUnlistedThreads.delete(key);
   return false;
 }
@@ -1274,11 +1289,10 @@ export function isKeptUnlisted(key: string): boolean {
  * Only an authoritative list read settles a keep (`settleKeptUnlisted`).
  */
 export function keptUnlisted(host: string, listed: ReadonlySet<string>): SessionSummary[] {
-  const now = Date.now();
   const rows: SessionSummary[] = [];
   for (const [key, kept] of keptUnlistedThreads) {
     if ((kept.summary.host ?? LOCAL_HOST) !== host) continue;
-    if (listed.has(splitThreadKey(key).id) || now - kept.at > KEEP_UNLISTED_MS) continue;
+    if (listed.has(splitThreadKey(key).id) || !keepDue(key, kept)) continue;
     rows.push(kept.summary);
   }
   return rows;
@@ -1289,13 +1303,69 @@ export function keptUnlisted(host: string, listed: ReadonlySet<string>): Session
  * the engine's own `session/list` (or this computer's), never with a cache a client wrote to.
  */
 export function settleKeptUnlisted(host: string, listed: ReadonlySet<string>): void {
-  const now = Date.now();
   for (const [key, kept] of keptUnlistedThreads) {
     if ((kept.summary.host ?? LOCAL_HOST) !== host) continue;
-    if (listed.has(splitThreadKey(key).id) || now - kept.at > KEEP_UNLISTED_MS) {
+    if (listed.has(splitThreadKey(key).id) || !keepDue(key, kept)) {
       keptUnlistedThreads.delete(key);
     }
   }
+}
+
+/**
+ * Threads trashed a moment ago, by key. A `session/list` that was already in flight when the
+ * deletion arrived still names the row, and a machine whose link was down never heard of it: the
+ * list merges (`refreshSessions`, `mergeMachineLists`, `machines.ts` `readThreads`) skip these
+ * until the tombstone expires, by which time every list has caught up.
+ */
+const deletedThreads = new Map<string, number>();
+
+/** How long a trashed thread's row stays refused by the list merges. */
+const TOMBSTONE_MS = 2 * 60_000;
+
+/** Remember that `key` was trashed, so no list read brings its row back. */
+export function tombstoneThread(key: string): void {
+  deletedThreads.set(key, Date.now());
+  keptUnlistedThreads.delete(key);
+}
+
+/** Whether `key` was trashed a moment ago; an expired tombstone is dropped here. */
+export function isTombstoned(key: string): boolean {
+  const at = deletedThreads.get(key);
+  if (at === undefined) return false;
+  if (Date.now() - at <= TOMBSTONE_MS) return true;
+  deletedThreads.delete(key);
+  return false;
+}
+
+/**
+ * Announcements (`_rustcode/threads/created`) that arrived while this window had a `session/new`
+ * out. The engine tells the creating client before it answers, so the row an announcement adds
+ * would sit beside the pending-setup row `createSession` holds back, or stay when the creation
+ * fails afterwards. They wait here: the creation's own thread is dropped from them, and the others
+ * (a thread another client made meanwhile) are applied once no creation is out.
+ */
+let creatingSessions = 0;
+const deferredAnnouncements: { key: string; apply: () => void }[] = [];
+
+/**
+ * Hold an announcement for `key` back while a creation is out. True means it was held and `apply`
+ * runs later (or never, for the creation's own thread).
+ */
+export function deferAnnouncement(key: string, apply: () => void): boolean {
+  if (creatingSessions === 0) return false;
+  deferredAnnouncements.push({ key, apply });
+  return true;
+}
+
+/** A creation ended: drop the announcements of its own thread, apply the rest when none is out. */
+function releaseAnnouncements(own: string | undefined): void {
+  if (own) {
+    for (let i = deferredAnnouncements.length - 1; i >= 0; i--) {
+      if (deferredAnnouncements[i]?.key === own) deferredAnnouncements.splice(i, 1);
+    }
+  }
+  if (creatingSessions > 0) return;
+  for (const { apply } of deferredAnnouncements.splice(0)) apply();
 }
 
 /** Replaces the sessions of every machine with the list it last gave (this computer's are kept). */
@@ -1306,11 +1376,13 @@ function mergeMachineLists(lists: Record<string, readonly SessionSummary[]>): vo
     const known = new Map(s.sessions.map((session) => [session.id, session]));
     const remote = Object.entries(lists).flatMap(([host, items]) => {
       const listed = new Set(items.map((session) => session.id));
-      const rows = items.map((session) => {
-        const id = threadKey(host, session.id);
-        const title = session.title || known.get(id)?.title;
-        return { ...session, id, host, title };
-      });
+      const rows = items
+        .filter((session) => !isTombstoned(threadKey(host, session.id)))
+        .map((session) => {
+          const id = threadKey(host, session.id);
+          const title = session.title || known.get(id)?.title;
+          return { ...session, id, host, title };
+        });
       // A thread the app was told about, here or by another client, that this list has not got to
       // yet stays: a read that started before it is not news that it is gone.
       const kept = keptUnlisted(host, listed).map((summary) => ({
@@ -1940,6 +2012,9 @@ export function threadCreated(params: unknown) {
   const key = str(p?.sessionId);
   const cwd = str(p?.cwd);
   if (!key || !cwd) return;
+  if (deferAnnouncement(key, () => threadCreated(params))) return;
+  // A thread trashed a moment ago is not made again by a late announcement.
+  if (isTombstoned(key)) return;
   const { host } = splitThreadKey(key);
   const summary: SessionSummary = {
     id: key,
@@ -1979,6 +2054,8 @@ export async function refreshSessions(): Promise<void> {
       if (!cursor) break;
       if (page === 9) capped = true;
     }
+    // A thread trashed while this read was out is not news that it came back.
+    for (let i = all.length - 1; i >= 0; i--) if (isTombstoned(all[i]?.id ?? "")) all.splice(i, 1);
     // The engine's list is the newer truth about a status.
     reconcileStatusMarks(all);
     for (const x of all)
@@ -2580,6 +2657,21 @@ export interface NewSession {
 
 /** `session/new` with the harness, model, effort and worktree in `_meta.rustcode`; the thread is added to the list. */
 export async function createSession(options: NewSession): Promise<string> {
+  // The engine announces the thread to this very client before it answers: those announcements
+  // wait until the answer says which thread is this one's (`deferAnnouncement`).
+  creatingSessions++;
+  let own: string | undefined;
+  try {
+    return await makeSession(options, (id) => {
+      own = id;
+    });
+  } finally {
+    creatingSessions--;
+    releaseAnnouncements(own);
+  }
+}
+
+async function makeSession(options: NewSession, made: (id: string) => void): Promise<string> {
   const host = options.host ?? LOCAL_HOST;
   // A thread on another computer is made there, over that computer's own connection: its
   // folder, its harness and its worktree are on that machine, never here.
@@ -2616,6 +2708,7 @@ export async function createSession(options: NewSession): Promise<string> {
   const raw = str(result.sessionId);
   if (!raw) throw new Error("The server did not return a thread id.");
   const id = threadKey(host, raw);
+  made(id);
   const worktree: Worktree | undefined = parseWorktree(
     ((result._meta as JsonObject | undefined)?.rustcode as JsonObject | undefined)?.worktree,
   );
@@ -2684,11 +2777,21 @@ export async function createSession(options: NewSession): Promise<string> {
   // from `session/new` (an older engine, or a harness that ignores it there).
   const current = (configId: string) => thread.configOptions.find((o) => o.id === configId)?.current;
   const has = (configId: string) => thread.configOptions.some((o) => o.id === configId);
-  if (options.model && current("model") !== options.model && has("model")) {
-    await setConfigOption(id, "model", options.model, { remember: false });
-  }
-  if (options.effort && current("effort") !== options.effort && has("effort")) {
-    await setConfigOption(id, "effort", options.effort, { remember: false });
+  try {
+    if (options.model && current("model") !== options.model && has("model")) {
+      await setConfigOption(id, "model", options.model, { remember: false });
+    }
+    if (options.effort && current("effort") !== options.effort && has("effort")) {
+      await setConfigOption(id, "effort", options.effort, { remember: false });
+    }
+  } catch (error) {
+    // The creation failed: the row it kept and listed must not linger for the keep's five minutes.
+    keptUnlistedThreads.delete(id);
+    set((st) => {
+      const { [id]: _gone, ...threads } = st.threads;
+      return { threads, sessions: st.sessions.filter((x) => x.id !== id) };
+    });
+    throw error;
   }
   if (pending) {
     // Listed now, with the setup gone in the same update: the row the message was sent to becomes
@@ -3210,6 +3313,7 @@ export async function renameThread(id: string, title: string): Promise<boolean> 
 /** Take a thread out of every list, mark and stored place a trashed thread leaves behind. */
 function forgetThreadRow(id: string): void {
   keptUnlistedThreads.delete(id);
+  tombstoneThread(id);
   const { [id]: _gone, ...threads } = get().threads;
   const archived = { ...get().archived };
   delete archived[id];
@@ -3279,6 +3383,11 @@ export async function trashThread(id: string): Promise<boolean> {
     // The folder is gone either way.
   }
   forgetThreadRow(id);
+  // A machine whose link is down never heard of it: its list cache drops the row here.
+  if (threadIsRemote(id)) {
+    const { host, id: raw } = splitThreadKey(id);
+    void import("./machines").then((m) => m.forgetMachineThread(host, raw));
+  }
   // Links into the trashed thread failed: their parents may now have something to hear.
   wakeTick();
   if (get().selectedId === id) startNewThread();
@@ -7137,6 +7246,9 @@ export function resetForTests() {
   stopPlanPolling();
   resetWaits();
   keptUnlistedThreads.clear();
+  deletedThreads.clear();
+  deferredAnnouncements.length = 0;
+  creatingSessions = 0;
   forgetAutoCompact();
   // A lost turn's timers outlive a test file, and its links belong to that file's book.
   for (const record of lostTurns.values()) clearTimeout(record.timer);

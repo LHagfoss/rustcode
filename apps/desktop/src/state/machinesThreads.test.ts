@@ -15,6 +15,7 @@ import type { Transport } from "../acp/transport";
 import type { PermissionRequest } from "../acp/types";
 import { setShellTransport } from "../lib/shell";
 import {
+  forgetMachineThread,
   type Machine,
   machineConnection,
   refreshMachines,
@@ -277,6 +278,24 @@ describe("a machine's threads", () => {
     // A read after it names nothing, and the announcement does not bring the row back.
     refreshMachineThreads();
     await sleep(20);
+    expect(useApp.getState().sessions.some((s) => s.id === `${LINUX}/${id}`)).toBe(false);
+  });
+
+  test("a machine thread trashed while its link was down is gone from both lists, and stays gone", async () => {
+    const conn = machineConnection(LINUX);
+    const answer = (await conn?.request("session/new", { cwd: "/home/lars/code/site" })) as JsonObject;
+    const id = str(obj(answer)?.sessionId);
+    if (!id) throw new Error("the machine named no thread");
+    await sleep(5);
+    expect(useApp.getState().sessions.some((s) => s.id === `${LINUX}/${id}`)).toBe(true);
+    // The window trashed it with no link, so the machine never said `_rustcode/threads/deleted`.
+    forgetMachineThread(LINUX, id);
+    expect(useMachines.getState().sessions[LINUX]?.some((s) => s.id === id)).toBe(false);
+    expect(useApp.getState().sessions.some((s) => s.id === `${LINUX}/${id}`)).toBe(false);
+    // A read that was in flight, or a late announcement, does not bring it back.
+    refreshMachineThreads();
+    await sleep(20);
+    expect(useMachines.getState().sessions[LINUX]?.some((s) => s.id === id)).toBe(false);
     expect(useApp.getState().sessions.some((s) => s.id === `${LINUX}/${id}`)).toBe(false);
   });
 
