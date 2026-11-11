@@ -4198,12 +4198,29 @@ export function answerQuestionText(request: PermissionRequest, text: string) {
 
 // ---------------------------------------------------------------- harnesses
 
+/**
+ * Every answer carries the whole harness snapshot, and answers to requests in
+ * flight together arrive in any order. A request takes a number when it is
+ * sent, and an answer replaces the snapshot only when no later request's
+ * answer has been applied already: a late, older one would bring back a stale
+ * detection (a Ready harness read as Not installed).
+ */
+let harnessRequestSeq = 0;
+let harnessSnapshotSeq = 0;
+
+function applyHarnessSnapshot(seq: number, snapshot: HarnessSnapshot) {
+  if (seq < harnessSnapshotSeq) return;
+  harnessSnapshotSeq = seq;
+  set({ harnesses: snapshot });
+}
+
 export async function refreshHarnesses(): Promise<HarnessSnapshot | null> {
   const conn = connection;
   if (!conn) return null;
+  const seq = ++harnessRequestSeq;
   try {
     const snapshot = parseHarnessSnapshot(await conn.request(Method.harnesses, {}, 15_000));
-    set({ harnesses: snapshot });
+    applyHarnessSnapshot(seq, snapshot);
     if (!snapshot.onboarded) set({ onboardingOpen: true });
     return snapshot;
   } catch (error) {
@@ -4223,9 +4240,10 @@ async function harnessCall(
   params: JsonObject,
   report = true,
 ): Promise<HarnessSnapshot | null> {
+  const seq = ++harnessRequestSeq;
   try {
     const snapshot = parseHarnessSnapshot(await engine().request(method, params, 15_000));
-    set({ harnesses: snapshot });
+    applyHarnessSnapshot(seq, snapshot);
     return snapshot;
   } catch (error) {
     if (!report) throw error;

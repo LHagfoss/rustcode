@@ -573,6 +573,7 @@ function AgentsPage() {
   const [saved, setSaved] = useState(false);
   const [adding, setAdding] = useState(false);
   const checking = useHarnessChecks((s) => Object.values(s.byHarness).some((e) => "running" in e));
+  const checkingAll = useHarnessChecks((s) => s.all);
   // Installed, signed in, versions: detected again each time the page opens and the window is back.
   useAutoDetect();
   // An unsaved choice stays here while it is not valid yet (a harness that still lists models).
@@ -631,7 +632,9 @@ function AgentsPage() {
             <div className="flex items-center gap-1">
               <Action quiet size="sm" onClick={() => void runAllHarnessChecks()} disabled={checking}>
                 {checking && <Spinner size={11} />}
-                Check all
+                {checkingAll
+                  ? `Checking ${Math.min(checkingAll.done + 1, checkingAll.total)} of ${checkingAll.total}…`
+                  : "Check all"}
               </Action>
               <Action size="sm" onClick={() => setAdding(true)} disabled={adding}>
                 <Plus size={11} />
