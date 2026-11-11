@@ -355,23 +355,28 @@ impl RemoteLifecycle {
         publish_private_json(&self.settings_path(), settings)
     }
 
-    /// The version of the gateway this directory has, when its process is
-    /// alive; `None` when no gateway runs.
+    /// The registration of the gateway whose process is alive, if one is.
     ///
     /// A supervisor polls this; [`RemoteLifecycle::status`] asks the gateway
     /// and enumerates this machine's addresses, which a poll every couple of
     /// seconds should not do.
-    pub fn running_version(&self) -> Option<String> {
+    pub fn running_registration(&self) -> Option<GatewayRegistration> {
         self.registration()
             .ok()
             .flatten()
             .filter(|registration| registration.is_live().unwrap_or(false))
-            .map(|registration| registration.version)
     }
 
-    /// Whether a gateway process is alive, without asking it anything.
-    pub fn running(&self) -> bool {
-        self.running_version().is_some()
+    /// The version of the gateway this directory has, when its process is
+    /// alive; `None` when no gateway runs.
+    pub fn running_version(&self) -> Option<String> {
+        self.running_registration().map(|running| running.version)
+    }
+
+    /// The pid of the gateway that runs, when one does: the identity that
+    /// says whether a process launchd ran is the one still listening.
+    pub fn running_pid(&self) -> Option<u32> {
+        self.running_registration().map(|running| running.pid)
     }
     pub fn device_store(&self) -> DeviceStore {
         DeviceStore::new(self.devices_path())
@@ -806,7 +811,7 @@ mod tests {
         let lifecycle = RemoteLifecycle::new(dir.path());
         assert_eq!(lifecycle.settings().unwrap(), None);
         // No gateway has run here yet, and no process claims to.
-        assert!(!lifecycle.running());
+        assert_eq!(lifecycle.running_pid(), None);
 
         let settings = GatewaySettings::starting(
             Some("auto".into()),
@@ -847,7 +852,7 @@ mod tests {
         registration
             .publish(&lifecycle.registration_path())
             .unwrap();
-        assert!(!lifecycle.running());
+        assert_eq!(lifecycle.running_pid(), None);
     }
 
     #[test]

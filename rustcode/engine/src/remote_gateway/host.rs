@@ -83,6 +83,14 @@ enum Step {
     Start,
 }
 
+/// Whether the gateway that runs is the one the login agent ran, and so is
+/// the one to replace. A plist left behind while its job is not loaded proves
+/// nothing: the gateway that happens to be running is the app's or a
+/// terminal's, and the server adopts it (`docs/remote.md`).
+fn handover_required(agent_pid: Option<u32>, running_pid: Option<u32>) -> bool {
+    matches!((agent_pid, running_pid), (Some(agent), Some(running)) if agent == running)
+}
+
 fn step(remote_enabled: bool, running_version: Option<&str>, handover: bool) -> Step {
     if !remote_enabled {
         return Step::Wait;
@@ -118,8 +126,13 @@ async fn poll(watch: &mut Watch, config_directory: &Path) -> Duration {
         // the server supervising the same port.
         watch.agent_reconciled = true;
         if super::service::server_installed() {
-            let removed = super::service::remove_login_agent(config_directory).await;
-            watch.handover = removed && RemoteLifecycle::new(config_directory).running();
+            // The pid launchd was running, read before the job is booted out.
+            // Only that process is displaced; a gateway from the app or a
+            // terminal is adopted, which is what keeps one owner of the port
+            // without bouncing working devices.
+            let agent_pid = super::service::remove_login_agent(config_directory).await;
+            let running_pid = RemoteLifecycle::new(config_directory).running_pid();
+            watch.handover = handover_required(agent_pid, running_pid);
         }
     }
     let lifecycle = RemoteLifecycle::new(config_directory);
@@ -271,6 +284,27 @@ mod tests {
         // Remote access off is still nothing to host, handover or not.
         assert_eq!(step(false, Some(version), true), Step::Wait);
         assert_eq!(step(false, None, true), Step::Wait);
+    }
+
+    /// A plist left behind by an agent whose job is not loaded says nothing
+    /// about a gateway that happens to run: the app's or a terminal's is
+    /// adopted, never stopped and replaced under its paired devices.
+    #[test]
+    fn a_stale_plist_never_displaces_a_gateway_the_agent_did_not_run() {
+        // launchd had no job (no pid to read), yet a gateway runs: adopt it.
+        let version = env!("CARGO_PKG_VERSION");
+        assert!(!handover_required(None, Some(4242)));
+        assert_eq!(step(true, Some(version), false), Step::Wait);
+        // The agent's job ran another process than the one listening: that is
+        // not the agent's gateway either (a restart it did not survive).
+        assert!(!handover_required(Some(100), Some(4242)));
+        // Only the process launchd was running is replaced.
+        assert!(handover_required(Some(4242), Some(4242)));
+        assert_eq!(step(true, Some(version), true), Step::HandOver);
+        // No gateway at all: starting is the handover, whatever the agent did.
+        assert!(!handover_required(Some(4242), None));
+        assert!(!handover_required(None, None));
+        assert_eq!(step(true, None, false), Step::Start);
     }
 
     #[test]

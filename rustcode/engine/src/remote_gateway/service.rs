@@ -87,7 +87,9 @@ pub async fn start(
     let launcher = &effective;
     #[cfg(target_os = "macos")]
     if launcher.owner == GatewayOwner::Server || server_installed() {
-        let _removed = remove_login_agent(&launcher.config_directory).await;
+        // The server supervises the gateway now; which process the agent ran
+        // is only interesting to the server's own reconcile step.
+        let _agent_pid = remove_login_agent(&launcher.config_directory).await;
     }
     #[cfg(target_os = "macos")]
     if launcher.owner != GatewayOwner::Server
@@ -222,7 +224,7 @@ pub async fn start(
 /// An explicit `remote stop` also disables restart at login.
 pub async fn uninstall(config: &Path) -> Result<()> {
     #[cfg(target_os = "macos")]
-    remove_login_agent(config).await;
+    let _agent_pid = remove_login_agent(config).await;
     let _ = config;
     Ok(())
 }
@@ -231,15 +233,44 @@ pub async fn uninstall(config: &Path) -> Result<()> {
 #[cfg(target_os = "macos")]
 const AGENT_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// The pid launchd runs for a job, read from `launchctl print` (`pid = 4242`).
+/// `None` when the job is not loaded or runs nothing: a plist on disk alone
+/// does not mean launchd has a gateway.
+#[cfg(target_os = "macos")]
+fn pid_of_print(text: &str) -> Option<u32> {
+    text.lines()
+        .find_map(|line| line.trim().strip_prefix("pid = "))
+        .and_then(|pid| pid.trim().parse().ok())
+}
+
+/// The pid launchd runs for `service`, when it is loaded and running.
+#[cfg(target_os = "macos")]
+async fn launchd_pid(service: &str) -> Option<u32> {
+    let printed = tokio::time::timeout(
+        AGENT_STOP_TIMEOUT,
+        crate::platform::tokio_command("/bin/launchctl")
+            .args(["print", service])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    pid_of_print(&String::from_utf8_lossy(&printed.stdout))
+}
+
 /// Remove the gateway's LaunchAgent, if one was installed, and wait for
 /// launchd to let go of the gateway it ran. A machine that installs the
 /// RustCode server stops using it: the server hosts the gateway instead.
 ///
-/// Answers whether an agent was installed — the durable evidence is its
-/// plist, so a server that finds one hands the gateway over deliberately
-/// instead of adopting a gateway that is about to disappear.
+/// Answers the pid of the gateway launchd was running, read *before* the job
+/// is booted out: only that process is the server's to replace. A plist left
+/// behind by an agent whose job is not loaded proves nothing about a gateway
+/// that happens to run — the app's or a terminal's, which the server adopts
+/// instead of stopping.
 #[cfg(target_os = "macos")]
-pub(crate) async fn remove_login_agent(config: &Path) -> bool {
+pub(crate) async fn remove_login_agent(config: &Path) -> Option<u32> {
     let label = label(config);
     let document = std::env::var_os("HOME").map(|home| {
         PathBuf::from(home)
@@ -247,39 +278,33 @@ pub(crate) async fn remove_login_agent(config: &Path) -> bool {
             .join(format!("{label}.plist"))
     });
     let installed = document.as_ref().is_some_and(|path| path.exists());
+    if !installed {
+        return None;
+    }
     // SAFETY: geteuid has no preconditions.
     let service = format!("gui/{}/{label}", unsafe { libc::geteuid() });
-    if installed {
-        let _ = crate::platform::tokio_command("/bin/launchctl")
-            .args(["bootout", &service])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .await;
-        // Removal finishes after the command returns. A gateway that is still
-        // running is the agent's, about to be killed; wait for launchd to let
-        // go of it so the caller can replace it instead of adopting it.
-        let deadline = tokio::time::Instant::now() + AGENT_STOP_TIMEOUT;
-        while tokio::time::Instant::now() < deadline {
-            let loaded = crate::platform::tokio_command("/bin/launchctl")
-                .args(["print", &service])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .await
-                .is_ok_and(|status| status.success());
-            if !loaded {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let agent_pid = launchd_pid(&service).await;
+    let _ = crate::platform::tokio_command("/bin/launchctl")
+        .args(["bootout", &service])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await;
+    // Removal finishes after the command returns; wait for launchd to let go
+    // of the job so a successor can bind without racing it.
+    let deadline = tokio::time::Instant::now() + AGENT_STOP_TIMEOUT;
+    while tokio::time::Instant::now() < deadline {
+        if launchd_pid(&service).await.is_none() {
+            break;
         }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     if let Some(path) = document.as_ref()
         && path.exists()
     {
         let _ = std::fs::remove_file(path);
     }
-    installed
+    agent_pid
 }
 
 /// Whether remote access is switched on for this machine: a gateway has been
@@ -493,6 +518,21 @@ mod tests {
         assert_eq!(hosted.port, Some(17879));
         assert_eq!(hosted.bind, None);
     }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_agents_pid_comes_from_launchctl_print_and_nowhere_else() {
+        // `launchctl print gui/<uid>/<label>` while the job runs.
+        let printed = "\tstate = running\n\tpid = 97702\n\tprogram = /usr/local/bin/rustcode\n";
+        assert_eq!(pid_of_print(printed), Some(97702));
+        // A loaded job that runs nothing (`launchctl list` shows `-`): no pid,
+        // so its plist alone never marks a running gateway as the agent's.
+        assert_eq!(pid_of_print("\tstate = spawn scheduled\n"), None);
+        assert_eq!(pid_of_print("\tpid = -\n"), None);
+        assert_eq!(pid_of_print(""), None);
+        // A pid in another key is not the job's.
+        assert_eq!(pid_of_print("\tparent_pid = 1\n"), None);
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn an_installed_agent_keeps_its_search_path() {

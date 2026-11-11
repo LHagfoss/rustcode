@@ -758,7 +758,10 @@ server is installed. The agent keeps the search path it was installed with, so
 asking for the gateway from a terminal with another environment no longer
 rewrites the agent and restarts the gateway under its devices. Installing the
 RustCode server removes the agent: the server supervises the gateway instead,
-and two supervisors would race for the same port. `rustcode remote stop`
+and two supervisors would race for the same port. Only the process launchd was
+running for the agent is replaced — its pid is read before the job is booted
+out — so a plist left behind after the job was unloaded never stops a gateway
+the app or a terminal started, which the server adopts as usual. `rustcode remote stop`
 removes the agent; the next start installs it with the current environment.
 
 ## Choosing the address a device dials
