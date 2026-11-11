@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   INTERNET_GIVE_UP_MS,
+  INTERNET_MAX_ATTEMPTS,
   INTERNET_POLL_MS,
   INTERNET_RESUME_TEXT,
   INTERNET_STABLE_MS,
@@ -56,6 +57,15 @@ describe("waiting for the internet", () => {
     expect(internetGaveUp(wait, NOW + INTERNET_GIVE_UP_MS)).toBe(true);
     expect(INTERNET_GIVE_UP_MS).toBe(6 * 3_600_000);
     expect(internetDue(wait, NOW + 3_600_000, NOW + INTERNET_GIVE_UP_MS)).toBe(false);
+  });
+
+  test("gives up after its last retry, even while the connection is up", () => {
+    // A local model server that is down says "connection refused" with the network fine.
+    const wait = { ...nextInternetWait(undefined, NOW, ON), attempts: INTERNET_MAX_ATTEMPTS - 1 };
+    expect(internetGaveUp(wait, NOW + 60_000)).toBe(false);
+    const spent = { ...wait, attempts: INTERNET_MAX_ATTEMPTS };
+    expect(internetGaveUp(spent, NOW + 60_000)).toBe(true);
+    expect(internetDue(spent, NOW, NOW + 3_600_000)).toBe(false);
   });
 
   test("holds only on what lost the network", () => {

@@ -38,9 +38,16 @@ export function stablePeriodMs(attempts: number): number {
   return INTERNET_STABLE_MS[index]!;
 }
 
+/**
+ * Retries a wait gets. A failure that comes back while the machine is online (a local model server
+ * that is down answers "connection refused" too) is not a lost network, and must not be told to
+ * continue every few minutes for six hours.
+ */
+export const INTERNET_MAX_ATTEMPTS = 6;
+
 /** Whether the wait has run out of patience: the thread stays stopped and the app says so. */
 export function internetGaveUp(wait: InternetWait, now: number): boolean {
-  return now - wait.since >= INTERNET_GIVE_UP_MS;
+  return now - wait.since >= INTERNET_GIVE_UP_MS || wait.attempts >= INTERNET_MAX_ATTEMPTS;
 }
 
 /** The wait a network failure starts, or the one it continues: the first failure's time stays. */
