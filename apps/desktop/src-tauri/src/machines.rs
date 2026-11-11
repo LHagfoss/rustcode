@@ -490,6 +490,7 @@ async fn relay_once(
     let learned = connected.learned.clone();
     let session = connected.session;
     let version = session.welcome().version.clone();
+    let platform = session.welcome().platform.clone();
     if let Ok(mut registry) = MachineRegistry::load(config_dir) {
         let _ = registry.mark_connected(&machine.host_id, chrono::Utc::now());
         if !learned.is_empty() {
@@ -497,6 +498,11 @@ async fn relay_once(
         }
         if version.is_some() {
             let _ = registry.set_version(&machine.host_id, version.as_deref());
+        }
+        // A machine paired while its gateway reported no platform learns it
+        // on the next connection (#3418).
+        if platform.is_some() {
+            let _ = registry.set_platform(&machine.host_id, platform.as_deref());
         }
     }
     let mut acp = match session.acp().await {

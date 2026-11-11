@@ -139,6 +139,9 @@ async fn a_machine_is_asked_paired_and_authenticated_then_speaks_acp() {
     // does with the same answer.
     let mut registry = MachineRegistry::load(config.path()).unwrap();
     let machine = machine_from_pairing(paired.session.welcome(), Route::new(host.address()), None);
+    // The gateway names its platform, so the machine is not saved as
+    // `unknown` (#3418).
+    assert_eq!(machine.platform, rustcode_client::platform());
     registry.insert(machine.clone()).unwrap();
     let tokens = TokenStore::in_file(config.path()).unwrap();
     tokens.set(&machine.host_id, &paired.secret).unwrap();

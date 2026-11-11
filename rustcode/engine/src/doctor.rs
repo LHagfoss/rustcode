@@ -1,7 +1,7 @@
 //! `rustcode doctor` — environment diagnostics with optional `--fix`.
 //!
 //! Checks the local harness prerequisites without network access:
-//! config directory, config load, required binaries (`git`, `rg`, `tmux`),
+//! config directory, config load, required binaries (`git`, `rg`),
 //! and skill directories. `--fix` creates missing directories; binaries are
 //! never auto-installed (we print the install hint instead).
 
@@ -155,8 +155,9 @@ fn env_source_check(env_name: &str, profile: &str, field: &str) -> DoctorCheck {
         crate::shell_env::EnvSource::Missing => DoctorCheck::fail(
             "provider-key",
             format!("profile `{profile}`: {field}: missing"),
-            Some(format!(
-                "export {env_name}=<key> in ~/.zshenv (sourced by all zsh modes) or ~/.zprofile, then restart rustcode from a login shell; interactive-only ~/.zshrc exports are invisible to desktop/systemd/IDE launches"
+            Some(crate::install_hints::provider_key_hint(
+                env_name,
+                crate::install_hints::HOST,
             )),
         ),
     }
@@ -217,12 +218,10 @@ pub fn run_checks(fix: bool) -> Vec<DoctorCheck> {
     checks.push(check_binary(
         "rg",
         &["--version"],
-        "install ripgrep: `brew install ripgrep` / `cargo install ripgrep`",
-    ));
-    checks.push(check_binary(
-        "tmux",
-        &["-V"],
-        "install tmux for background tasks: `brew install tmux`",
+        &format!(
+            "install ripgrep: `{}`",
+            crate::install_hints::host_hint(crate::install_hints::Tool::Ripgrep)
+        ),
     ));
 
     // Skill directories (informational; --fix creates only the one RustCode

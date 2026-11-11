@@ -645,9 +645,25 @@ pub fn format_status_for(status: Option<&GatewayStatus>, this_session: Option<&s
         Some(true) => "  (fixed --advertise)",
         _ => "",
     };
-    let mut lines = vec![
-        format!("Remote gateway: running (pid {})", status.pid),
-        format!("  listening on   {}{bind_mode}", status.listen_address),
+    // Every address a listener is bound to, one line each: an `auto` gateway
+    // answers on the LAN and on any overlay, and a device that cannot reach
+    // one of them needs to see the other. A gateway that does not report them
+    // shows the primary alone.
+    let mut listening: Vec<String> = status.listening.iter().map(|entry| entry.label()).collect();
+    if listening.is_empty() {
+        listening.push(status.listen_address.clone());
+    }
+    let mut lines = vec![format!("Remote gateway: running (pid {})", status.pid)];
+    for (index, entry) in listening.iter().enumerate() {
+        let prefix = if index == 0 {
+            "  listening on   "
+        } else {
+            "                 "
+        };
+        let suffix = if index == 0 { bind_mode } else { "" };
+        lines.push(format!("{prefix}{entry}{suffix}"));
+    }
+    lines.extend([
         format!(
             "  advertised as  {}{advertise_mode}",
             status.advertised_address
@@ -655,7 +671,7 @@ pub fn format_status_for(status: Option<&GatewayStatus>, this_session: Option<&s
         // Whether the machine stays reachable when the app closes: the
         // RustCode server starts the gateway again, the app does not.
         format!("  started by     {}", status.started_by.label()),
-    ];
+    ]);
     if !status.candidates.is_empty() {
         lines.push("  addresses now".to_string());
         lines.extend(status.candidates.iter().map(|line| format!("    {line}")));
@@ -1063,6 +1079,7 @@ mod tests {
             gateway_id: "gateway".into(),
             uptime_seconds: 3,
             listen_address: "192.168.31.237:17879".into(),
+            listening: Vec::new(),
             advertised_address: "192.168.31.237:17879".into(),
             started_by: GatewayOwner::App,
             paired_devices: 2,
@@ -1158,6 +1175,61 @@ mod tests {
         });
         let old: GatewayStatus = serde_json::from_value(old).unwrap();
         assert!(format_status(Some(&old)).contains("pairing        closed"));
+    }
+
+    /// An `auto` bind listens on the LAN and on a mesh at once, and `remote
+    /// status` lists every one of them with its interface: reading only the
+    /// primary made the VPN look unreachable (#3420).
+    #[test]
+    fn status_lists_every_address_the_gateway_listens_on() {
+        use crate::remote_gateway::address::{HostRouteKind, ListenAddress};
+        let mut status = running(
+            "192.168.1.20:17879",
+            "192.168.1.20:17879",
+            &["192.168.1.20  (en0)", "100.90.16.237  (utun4)"],
+        );
+        status.automatic_bind = Some(true);
+        status.listening = vec![
+            ListenAddress {
+                address: "192.168.1.20:17879".into(),
+                interface: Some("en0".into()),
+                kind: Some(HostRouteKind::Lan),
+            },
+            ListenAddress {
+                address: "100.90.16.237:17879".into(),
+                interface: Some("utun4".into()),
+                kind: Some(HostRouteKind::Overlay),
+            },
+        ];
+        let text = format_status(Some(&status));
+        assert!(
+            text.contains(
+                "listening on   192.168.1.20:17879  (en0, lan)  (auto: follows address changes)"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("\n                 100.90.16.237:17879  (utun4, overlay)\n"),
+            "{text}"
+        );
+        // The JSON carries the same list, so an app can show both.
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(
+            json["listening"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| entry["address"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["192.168.1.20:17879", "100.90.16.237:17879"]
+        );
+        // A gateway that reports only the primary still prints one line.
+        status.listening.clear();
+        let text = format_status(Some(&status));
+        assert!(
+            text.contains("listening on   192.168.1.20:17879  (auto: follows address changes)"),
+            "{text}"
+        );
     }
 
     fn running(listen: &str, advertised: &str, candidates: &[&str]) -> GatewayStatus {

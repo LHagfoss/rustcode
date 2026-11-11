@@ -246,3 +246,45 @@ describe("a path with its middle given up", () => {
     expect(middleEllipsis("/tmp/app", 4)).toBe("/tmp");
   });
 });
+
+describe("Windows folders", () => {
+  test("names projects and removes drive, home and nested containers", () => {
+    const repo = "C:\\Users\\ada\\code\\work\\app";
+    expect(
+      folderRows(
+        ["C:\\", "C:\\Users\\ada", "C:\\Users\\ada\\code", "C:\\Users\\ada\\code\\work", repo].map((cwd) => ({
+          cwd,
+        })),
+      ),
+    ).toEqual([{ path: repo, name: "app" }]);
+  });
+
+  test("nests AppData worktrees beneath their repo without worktree metadata", () => {
+    const repo = "C:\\Users\\ada\\code\\app";
+    const cut = "C:\\Users\\ada\\AppData\\Roaming\\rustcode\\worktrees\\app\\fix-folder";
+    expect(folderRows([{ cwd: repo }, { cwd: cut }])).toEqual([
+      { path: repo, name: "app" },
+      { path: cut, name: "fix-folder", repo },
+    ]);
+  });
+
+  test("names UNC projects and nests worktrees with explicit repo metadata", () => {
+    const repo = "\\\\server\\share\\app";
+    const cut = "\\\\server\\share\\worktrees\\fix-folder";
+    expect(
+      folderRows([
+        { cwd: "\\\\server\\share" },
+        { cwd: repo },
+        { cwd: cut, worktree: { path: cut, repo, branch: "fix-folder" } },
+      ]),
+    ).toEqual([
+      { path: repo, name: "app" },
+      { path: cut, name: "fix-folder", repo },
+    ]);
+  });
+
+  test("middle ellipsis retains a whole Windows tail folder", () => {
+    expect(middleEllipsis("C:\\Users\\ada\\code\\rustcode", 20)).toBe("C:\\Users…\\rustcode");
+    expect(middleEllipsis("\\\\server\\share\\code\\rustcode", 20)).toBe("\\\\server…\\rustcode");
+  });
+});

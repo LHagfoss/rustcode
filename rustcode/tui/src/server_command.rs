@@ -33,6 +33,7 @@ async fn execute(command: &ServerCommands) -> anyhow::Result<i32> {
             Ok(0)
         }
         ServerCommands::Restart { when_idle, yes } => restart(*when_idle, *yes).await,
+        ServerCommands::LinkPath => link_path().await,
         ServerCommands::Uninstall { yes } => uninstall(*yes).await,
         ServerCommands::Logs { follow, lines } => show_logs(*follow, *lines).await,
         ServerCommands::Run { .. } | ServerCommands::Connect => {
@@ -105,6 +106,40 @@ async fn restart(when_idle: bool, yes: bool) -> anyhow::Result<i32> {
         }
         None => {
             anyhow::bail!("the server did not answer after the restart; see `rustcode server logs`")
+        }
+    }
+}
+
+async fn link_path() -> anyhow::Result<i32> {
+    use rustcode::service::path_binary::{Linked, link};
+    match link(env!("CARGO_PKG_VERSION")).await? {
+        Linked::NotOnPath => {
+            println!("No `rustcode` is on PATH, so there is nothing to point at this one.");
+            Ok(1)
+        }
+        Linked::Current(path) => {
+            println!(
+                "{} already runs this version ({}).",
+                path.display(),
+                env!("CARGO_PKG_VERSION")
+            );
+            Ok(0)
+        }
+        Linked::Homebrew(path) => {
+            println!(
+                "{} is Homebrew's copy; update it with `brew upgrade lhagfoss/tap/rustcode`.",
+                path.display()
+            );
+            Ok(1)
+        }
+        Linked::Replaced { path, was } => {
+            println!(
+                "{} now runs this version ({}){}.",
+                path.display(),
+                env!("CARGO_PKG_VERSION"),
+                was.map(|was| format!(", it was {was}")).unwrap_or_default()
+            );
+            Ok(0)
         }
     }
 }

@@ -252,6 +252,19 @@ touches.
 | `path-version-mismatch-server` | The same copy is another version than the running server, which is a different build; the message names the server's binary and version. |
 | `unmanaged` | The server that answers was not started by the service (an app started it); `restart` hands it over. |
 
+### `link-path`
+
+`rustcode server link-path` is the one action behind that warning (Settings ›
+Machines › "Use this app's version in a terminal"). It points the `rustcode` a
+shell finds at the engine that runs it: on macOS and Linux the copy becomes a
+symlink to this engine, so the next app update reaches it too; Windows has no
+unprivileged symlink and gets a copy (a running `rustcode.exe` is renamed
+aside first). It replaces the file in place and never touches `PATH`. It does
+nothing when a shell already finds this version, leaves Homebrew's copy to
+`brew upgrade lhagfoss/tap/rustcode`, and refuses a development build. Run by
+the app, it is the app's engine, so it is the app's version that a terminal
+runs afterwards.
+
 ### `restart`
 
 `restart` stops the server and starts it from the installed definition, then

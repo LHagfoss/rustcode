@@ -4925,6 +4925,139 @@ describe("continuing after a limit", () => {
     setContinueAfterLimit(true);
     await continueDueThreads();
   });
+
+  test("a thread waiting for the internet is cancelled and cleared the same way", async () => {
+    const { continueInternetThreads, dropInternetWait, setContinueAfterLimit } = await import("./store");
+    const wait = { since: Date.now(), attempts: 0, harness: "claude-code", account: null };
+    useApp.setState({ internetWaits: { gone: wait } });
+    dropInternetWait("gone");
+    expect(useApp.getState().internetWaits).toEqual({});
+    useApp.setState({ internetWaits: { a: wait } });
+    setContinueAfterLimit(false);
+    expect(useApp.getState().internetWaits).toEqual({});
+    setContinueAfterLimit(true);
+    await continueInternetThreads();
+  });
+});
+
+/** A mock engine whose turns fail with whatever message the test sets, until it clears it. */
+class FailingPromptTransport implements Transport {
+  readonly name = "mock" as const;
+  private readonly mock = new MockTransport({ delayMs: 0 });
+  private onEvent: ((event: TransportEvent) => void) | null = null;
+  readonly requests: JsonObject[] = [];
+  failure: string | null = null;
+
+  async start(onEvent: (event: TransportEvent) => void): Promise<void> {
+    this.onEvent = onEvent;
+    await this.mock.start(onEvent);
+  }
+
+  send(line: string): void {
+    const request = JSON.parse(line) as JsonObject;
+    this.requests.push(request);
+    if (request.method === Method.sessionPrompt && this.failure) {
+      queueMicrotask(() =>
+        this.onEvent?.({
+          type: "line",
+          line: JSON.stringify({
+            jsonrpc: "2.0",
+            id: request.id,
+            error: { code: -32603, message: this.failure },
+          }),
+        }),
+      );
+      return;
+    }
+    this.mock.send(line);
+  }
+
+  async restart(): Promise<void> {
+    await this.mock.restart();
+  }
+
+  async stop(): Promise<void> {
+    await this.mock.stop();
+  }
+}
+
+/** A ready app with one open thread, on a transport whose turns can be made to fail. */
+async function readyWithFailingTurns() {
+  const storage = testStorage();
+  const transport = new FailingPromptTransport();
+  await connect(transport);
+  await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0);
+  const id = useApp.getState().sessions[0]!.id;
+  await openThread(id);
+  const sent = () => transport.requests.filter((request) => request.method === Method.sessionPrompt);
+  return { storage, transport, id, sent };
+}
+
+/** The words a turn was started with, as the request carries them (content blocks). */
+const prompted = (request: JsonObject) => JSON.stringify((request.params as JsonObject | undefined)?.prompt);
+
+describe("a turn that stopped on something other than a limit", () => {
+  test("an overload waits out a backoff, then sends the turn again", async () => {
+    const { continueDueThreads } = await import("./store");
+    const { storage, transport, id } = await readyWithFailingTurns();
+    transport.failure =
+      'Codex: {"type":"error","error":{"type":"overloaded_error","message":"Our servers are currently overloaded. Please try again later."}}';
+    const before = Date.now();
+    await runPrompt(id, "do the thing");
+
+    const wait = useApp.getState().limitWaits[id]!;
+    expect(wait.reason).toBe("overload");
+    expect(wait.attempts).toBe(1);
+    // 30 s, plus the jitter that keeps an account's threads from waking together.
+    expect(wait.until - before).toBeGreaterThanOrEqual(30_000);
+    expect(wait.until - before).toBeLessThanOrEqual(37_500 + 2_000);
+
+    // Due: the thread is sent its resume, and it goes on when the provider answers again.
+    useApp.setState({ limitWaits: { [id]: { ...wait, until: Date.now() - 1 } } });
+    transport.failure = null;
+    const turns = transport.requests.filter((r) => r.method === Method.sessionPrompt).length;
+    await continueDueThreads();
+    await until(() => transport.requests.filter((r) => r.method === Method.sessionPrompt).length > turns);
+    expect(prompted(transport.requests.filter((r) => r.method === Method.sessionPrompt).at(-1)!)).toContain(
+      "overloaded and stopped",
+    );
+    // The wait stays while that turn runs, and is settled when it ends.
+    expect(useApp.getState().limitWaits[id]).toMatchObject({ reason: "overload", attempts: 1 });
+    storage.done();
+  });
+
+  test("a credit limit never waits: the thread stays stopped", async () => {
+    const { storage, transport, id } = await readyWithFailingTurns();
+    transport.failure =
+      'Claude Code: API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the API. Please go to Plans & Billing to upgrade or purchase credits."}}';
+    await runPrompt(id, "do the thing");
+    expect(useApp.getState().limitWaits[id]).toBeUndefined();
+    expect(useApp.getState().internetWaits[id]).toBeUndefined();
+    storage.done();
+  });
+
+  test("a lost network waits for the connection to stay up, then continues", async () => {
+    const { continueInternetThreads } = await import("./store");
+    const { storage, transport, id, sent } = await readyWithFailingTurns();
+    transport.failure = "Pi: TypeError: fetch failed";
+    await runPrompt(id, "do the thing");
+
+    expect(useApp.getState().limitWaits[id]).toBeUndefined();
+    expect(useApp.getState().internetWaits[id]).toMatchObject({ attempts: 0 });
+
+    // The connection has only just come back: the first retry wants 5 s of it.
+    transport.failure = null;
+    const turns = sent().length;
+    const now = Date.now();
+    await continueInternetThreads(now);
+    expect(sent().length).toBe(turns);
+    await continueInternetThreads(now + 5_000);
+    await until(() => sent().length > turns);
+    expect(prompted(transport.requests.filter((r) => r.method === Method.sessionPrompt).at(-1)!)).toContain(
+      "Please continue.",
+    );
+    storage.done();
+  });
 });
 
 describe("a delegate whose turn failed", () => {

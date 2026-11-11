@@ -1806,10 +1806,16 @@ pub(crate) fn of_session(session_id: &str) -> Option<Worktree> {
     serde_json::from_str(&text).ok()
 }
 
-/// `{path, branch, repo}` of a thread's worktree, for `session/list`.
+/// `{path, branch, repo}` of a thread's worktree, for `session/list`. Every
+/// path here is a project path, so it is reported without Windows' verbatim
+/// prefix: keeping it made one folder two projects (#3425).
 pub(crate) fn list_meta(session_id: &str) -> Option<Value> {
     of_session(session_id).map(|worktree| {
-        json!({ "path": worktree.path, "branch": worktree.branch, "repo": worktree.repo })
+        json!({
+            "path": rustcode_session::strip_verbatim(&worktree.path),
+            "branch": worktree.branch,
+            "repo": rustcode_session::strip_verbatim(&worktree.repo),
+        })
     })
 }
 
@@ -1820,10 +1826,11 @@ pub(crate) fn recorded_repo(
     session_id: &str,
     metadata: Option<&rustcode_session::SessionMetadata>,
 ) -> Option<PathBuf> {
-    if let Some(repo) = metadata.and_then(|metadata| metadata.repo.clone()) {
-        return Some(repo);
+    // A project path, reported as people write it: no `\\?\` prefix (#3425).
+    if let Some(repo) = metadata.and_then(|metadata| metadata.repo.as_deref()) {
+        return Some(rustcode_session::strip_verbatim(repo));
     }
-    of_session(session_id).map(|worktree| worktree.repo)
+    of_session(session_id).map(|worktree| rustcode_session::strip_verbatim(&worktree.repo))
 }
 
 /// The repository recorded on a thread, resolving and recording it once when it

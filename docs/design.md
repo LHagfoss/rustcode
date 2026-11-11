@@ -654,7 +654,10 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   mount; only a project's folder (`project:<path>`) is kept. The sidebar has no
   search field or filter menu, and none of the buttons it used to carry past
   the toggle in its toolbar: no Add project or New thread row above the list,
-  no Settings, Pull requests or Usage row at its foot. Threads are found with
+  and no Pull requests or Usage row at its foot. The foot carries one cluster
+  of icon buttons, shaped like the title row's: **Devices** and **Settings**
+  (docs/desktop.md › Several machines), which open in place and keep the
+  project list as it is. Threads are found with
   ⌘K, which also holds the view options (group by project, Working at the top,
   one project), New thread, Add project folder, Open Settings, Open Git, Open
   Usage and Statistics, each with the shortcut it has. A snoozed row shows when

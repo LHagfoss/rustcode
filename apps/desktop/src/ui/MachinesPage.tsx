@@ -32,6 +32,7 @@ import {
   discoverMachines,
   gatewayLine,
   lastSeen,
+  linkCliToApp,
   localAppVersion,
   type Machine,
   machineLine,
@@ -143,6 +144,7 @@ function ThisComputer() {
   const open = useApp((s) => Object.values(s.threads).filter((thread) => thread.loaded).length);
   const server = useMachines((s) => s.server);
   const installing = useMachines((s) => s.serverInstalling);
+  const linking = useMachines((s) => s.serverLinking);
   const platform = currentPlatform();
   const running = status === "ready";
   const installed = server?.installed === true;
@@ -188,6 +190,14 @@ function ThisComputer() {
         <Action disabled={installing} onClick={() => askInstallServer()}>
           {installing ? <Spinner /> : <Server size={13} />}
           Install server
+        </Action>
+      )}
+      {/* One action for a terminal's older `rustcode`: the install script's copy
+          or any other that Homebrew does not own (issue 3411). */}
+      {server?.problems.some((problem) => problem.code === "path-version-mismatch") && (
+        <Action disabled={linking} onClick={() => void linkCliToApp()}>
+          {linking ? <Spinner /> : <SquareTerminal size={13} />}
+          Use this app's version in a terminal
         </Action>
       )}
     </Row>
