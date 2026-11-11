@@ -848,7 +848,7 @@ fn default_dir() -> Option<PathBuf> {
     crate::shell_env::env_var("CLAUDE_CONFIG_DIR")
         .filter(|dir| !dir.trim().is_empty())
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude")))
+        .or_else(|| crate::home::home_dir().map(|home| home.join(".claude")))
 }
 
 async fn read_credentials_file(dir: PathBuf) -> Option<Value> {

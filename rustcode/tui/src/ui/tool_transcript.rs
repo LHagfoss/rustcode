@@ -19,16 +19,12 @@ pub(super) fn to_pascal_case(name: &str) -> String {
 }
 
 pub(super) fn contract_home_path(path: &str, home_path: Option<&str>) -> String {
-    if path.is_empty() {
-        return String::new();
-    }
-    // An empty `HOME` would otherwise turn every path into `~/…`.
-    if let Some(home) = home_path.filter(|home| !home.is_empty()) {
-        if path.starts_with(&home) {
-            return format!("~{}", &path[home.len()..]);
-        }
-    }
-    path.to_string()
+    rustcode::controller::contract_home(
+        std::path::Path::new(path),
+        home_path.map(std::path::Path::new),
+    )
+    .to_string_lossy()
+    .into_owned()
 }
 
 pub(super) fn format_pi_tool_action(

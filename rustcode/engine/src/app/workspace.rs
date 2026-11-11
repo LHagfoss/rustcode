@@ -14,13 +14,9 @@ pub(crate) struct WorkspaceLocation {
 
 impl WorkspaceLocation {
     pub(crate) fn detect(cwd: &Path) -> Self {
-        let absolute_path = cwd.to_string_lossy().to_string();
-        let path = match std::env::var("HOME") {
-            Ok(home) if !home.is_empty() && absolute_path.starts_with(&home) => {
-                absolute_path.replacen(&home, "~", 1)
-            }
-            _ => absolute_path,
-        };
+        let path = crate::home::contract_home(cwd, crate::home::home_dir().as_deref())
+            .to_string_lossy()
+            .into_owned();
 
         let branch = crate::platform::command("git")
             .args(["rev-parse", "--abbrev-ref", "HEAD"])

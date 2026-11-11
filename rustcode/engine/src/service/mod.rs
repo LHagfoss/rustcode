@@ -272,11 +272,7 @@ pub(crate) fn windows_argument(value: &str) -> String {
 
 /// The user's home directory.
 pub(crate) fn home_dir() -> Result<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-        .filter(|home| !home.as_os_str().is_empty())
-        .context("the home directory is unknown")
+    crate::home::home_dir().context("the home directory is unknown")
 }
 
 /// Run a service manager's command line tool.
