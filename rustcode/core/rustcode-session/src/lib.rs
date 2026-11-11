@@ -575,7 +575,10 @@ pub fn strip_verbatim(path: &Path) -> PathBuf {
         }
         return PathBuf::from(format!("\\\\{share}"));
     }
-    if rest.is_empty() {
+    // Only a drive path unwraps: `\\?\Volume{…}\` and `\\?\GLOBALROOT\…` have no
+    // spelling without the prefix, so they stay as they are.
+    let bytes = rest.as_bytes();
+    if bytes.len() < 2 || !bytes[0].is_ascii_alphabetic() || bytes[1] != b':' {
         return path.to_path_buf();
     }
     PathBuf::from(rest)
@@ -2142,7 +2145,14 @@ mod tests {
         }
         // The prefix on its own, or followed by an empty share, names no folder:
         // a path with nothing after it stays as it is rather than becoming `/`.
-        for kept in [r"\\?\", r"\\?\UNC\", r"\\?\unc\"] {
+        // A volume or device path has no spelling without the prefix, so it stays too.
+        for kept in [
+            r"\\?\",
+            r"\\?\UNC\",
+            r"\\?\unc\",
+            r"\\?\Volume{0b0c3a4e-1d2f-4a5b-9c8d-7e6f5a4b3c2d}\code",
+            r"\\?\GLOBALROOT\Device\HarddiskVolume2\code",
+        ] {
             assert_eq!(strip_verbatim(Path::new(kept)), Path::new(kept), "{kept}");
         }
     }
