@@ -278,6 +278,17 @@ pub struct Machine {
     pub host_id: String,
     /// The name the machine reports, or the one given with `--name`.
     pub name: String,
+    /// A name only this app shows, in place of the reported one. Never sent
+    /// to the machine, so renaming one here does not rename it there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    /// The glyph this app draws for the machine, from its fixed icon set.
+    /// `None` means the platform's own glyph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// A colour tint for the glyph, from the app's series palette.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_tint: Option<String>,
     /// What the machine runs, when it says: `macos`, `windows`, `linux`, …
     /// `unknown` for a gateway that does not report it yet.
     #[serde(default = "unknown_platform")]
@@ -319,6 +330,9 @@ impl Machine {
         Self {
             host_id: host_id.into(),
             name: name.into(),
+            display_name: None,
+            icon: None,
+            icon_tint: None,
             platform: platform.into(),
             routes: vec![route],
             version: None,
@@ -328,6 +342,12 @@ impl Machine {
             last_route: None,
             main: false,
         }
+    }
+
+    /// The name this app shows: the local display name when one is set, else
+    /// the name the machine reports.
+    pub fn display(&self) -> &str {
+        self.display_name.as_deref().unwrap_or(&self.name)
     }
 
     /// The route in use: the first one configured. Which one actually answers
@@ -558,6 +578,52 @@ impl MachineRegistry {
             }
             machine.version = version;
             Ok(true)
+        })
+    }
+
+    /// Set the name this app shows for a machine. A blank name clears it, so
+    /// the reported name is shown again. It never changes what the machine
+    /// calls itself, and pairing again keeps it.
+    pub fn set_display_name(&mut self, host_id: &str, display_name: Option<&str>) -> Result<()> {
+        let display_name = display_name
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned);
+        self.mutate(|machines| {
+            let Some(machine) = machines
+                .iter_mut()
+                .find(|machine| machine.host_id == host_id)
+            else {
+                bail!("no saved machine has host id {host_id}");
+            };
+            machine.display_name = display_name;
+            Ok(())
+        })
+    }
+
+    /// Set the glyph this app draws for a machine, and its tint. Both `None`
+    /// returns to the platform's own glyph. Pairing again keeps the choice.
+    pub fn set_icon(
+        &mut self,
+        host_id: &str,
+        icon: Option<&str>,
+        tint: Option<&str>,
+    ) -> Result<()> {
+        let icon = icon.map(str::trim).filter(|icon| !icon.is_empty());
+        let tint = icon
+            .and_then(|_| tint.map(str::trim).filter(|tint| !tint.is_empty()))
+            .map(str::to_owned);
+        let icon = icon.map(str::to_owned);
+        self.mutate(|machines| {
+            let Some(machine) = machines
+                .iter_mut()
+                .find(|machine| machine.host_id == host_id)
+            else {
+                bail!("no saved machine has host id {host_id}");
+            };
+            machine.icon = icon;
+            machine.icon_tint = tint;
+            Ok(())
         })
     }
 
@@ -945,6 +1011,71 @@ mod tests {
         assert_eq!(reloaded.machines().len(), 1);
         assert_eq!(studio.routes.len(), 3);
         assert_eq!(studio.preferred_route().unwrap().kind, RouteKind::Lan);
+    }
+
+    /// A file written before the display name and icon existed still loads,
+    /// and a rename and icon survive a reload. A blank name clears the local
+    /// name, and pairing the same machine again keeps both choices.
+    #[test]
+    fn a_display_name_and_icon_round_trip_and_old_files_still_load() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let path = crate::config::machines_file(dir.path());
+        // What an older build wrote: no display_name, icon or icon_tint.
+        std::fs::write(
+            &path,
+            br#"{"version": 1, "machines": [{"host_id": "gw-old", "name": "Studio", "platform": "macos", "routes": [{"kind": "lan", "address": "10.0.0.2:17879"}], "device_id": "device-1", "added_at": "2026-01-02T03:04:05Z"}]}"#,
+        )
+        .unwrap();
+        let mut store = load(dir.path());
+        let studio = &store.machines()[0];
+        assert_eq!(studio.name, "Studio");
+        assert_eq!(studio.display_name, None);
+        assert_eq!(studio.icon, None);
+        assert_eq!(studio.display(), "Studio");
+
+        store
+            .set_display_name("gw-old", Some("  Studio desk  "))
+            .unwrap();
+        store.set_icon("gw-old", Some("studio"), Some("4")).unwrap();
+        let reloaded = load(dir.path());
+        let studio = &reloaded.machines()[0];
+        assert_eq!(studio.name, "Studio");
+        assert_eq!(studio.display_name.as_deref(), Some("Studio desk"));
+        assert_eq!(studio.display(), "Studio desk");
+        assert_eq!(studio.icon.as_deref(), Some("studio"));
+        assert_eq!(studio.icon_tint.as_deref(), Some("4"));
+        // A re-pair keeps the local name and icon: they are this app's, not the
+        // machine's, and pairing again only refreshes what the machine reports.
+        let mut repaired = machine("gw-old", "Studio (reported)", "10.0.0.3:17879");
+        repaired.display_name = None;
+        repaired.icon = None;
+        reloaded_register(dir.path(), repaired);
+        let repaired_store = load(dir.path());
+        let studio = &repaired_store.machines()[0];
+        assert_eq!(studio.name, "Studio (reported)");
+        assert_eq!(studio.display_name.as_deref(), Some("Studio desk"));
+        assert_eq!(studio.icon.as_deref(), Some("studio"));
+
+        // A blank name (or an icon cleared) returns to the reported name and
+        // the platform's own glyph.
+        let mut store = load(dir.path());
+        store.set_display_name("gw-old", Some("   ")).unwrap();
+        store.set_icon("gw-old", None, Some("4")).unwrap();
+        let studio = &store.machines()[0];
+        assert_eq!(studio.display_name, None);
+        assert_eq!(studio.display(), "Studio (reported)");
+        assert_eq!(studio.icon, None);
+        assert_eq!(studio.icon_tint, None);
+        // The fields are left out of the file when unset, so an older build
+        // reads a file this one wrote.
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("display_name"), "{text}");
+        assert!(!text.contains("icon"), "{text}");
+    }
+
+    fn reloaded_register(dir: &std::path::Path, machine: Machine) {
+        let mut store = load(dir);
+        store.insert(machine).unwrap();
     }
 
     /// A machine paired while its gateway reported no platform learns it on

@@ -10,6 +10,9 @@ anyhow = "1.0.97"
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
 futures-util = "0.3.32"
 hex = "0.4"
+# This computer's own interface addresses, for telling an overlay it is on from
+# one a machine reports and it is not (`routes::local_addresses`).
+if-addrs = "0.15"
 keyring = { version = "3.6", default-features = false, features = ["apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust"] }
 mdns-sd = { version = "0.21.7", default-features = false }
 rand = "0.10.2"
