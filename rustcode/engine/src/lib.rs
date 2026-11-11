@@ -2,7 +2,7 @@
 // future type; past ~20 handlers its layout exceeds the default query depth
 // in release builds only, where v0.90.0 failed on every target. The binary
 // that lays it out carries the same limit.
-#![recursion_limit = "512"]
+#![recursion_limit = "1024"]
 
 pub mod evidence;
 #[macro_use]
