@@ -42,6 +42,25 @@ export function hostOf(session: Pick<SessionSummary, "host">): string {
 }
 
 /**
+ * The delegates that run on another machine than their parent. A delegate is drawn under its
+ * parent's row, never as a row of its own — but the parent's row lives in another machine's
+ * list, so in the machine the delegate runs on it would be listed nowhere. Those keep a row in
+ * their own machine's list, with a hint that names the parent (`parentOf`: child → parent id).
+ */
+export function crossMachineDelegates(
+  sessions: readonly Pick<SessionSummary, "id" | "host">[],
+  parentOf: ReadonlyMap<string, string>,
+): Set<string> {
+  const hosts = new Map(sessions.map((session) => [session.id, hostOf(session)] as const));
+  const out = new Set<string>();
+  for (const [child, parent] of parentOf) {
+    const parentHost = hosts.get(parent);
+    if (parentHost !== undefined && parentHost !== hosts.get(child)) out.add(child);
+  }
+  return out;
+}
+
+/**
  * The machine groups of one section's rows.
  *
  * The Threads list keeps a heading for a machine that has listed no thread yet (away, or just

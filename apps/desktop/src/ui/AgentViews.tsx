@@ -11,6 +11,7 @@ import { type ReactNode, useEffect, useState } from "react";
 import { agentActive, agentElapsed, type SubagentInfo, spawnedAgentId } from "../acp/rustcode";
 import { modelName } from "../acp/types";
 import type { StackAgent } from "../state/agentStack";
+import { answerPreview } from "../state/answerPreview";
 import { AGENT_WORD, type AgentState, LINK_AGENT_STATE } from "../state/delegates";
 import { dismissLink, stateOf } from "../state/host";
 import {
@@ -137,16 +138,7 @@ export function AgentAvatar({
 
 /** The first line of a result, without the markdown around it. */
 function firstLine(text: string | null | undefined): string | undefined {
-  const line = text
-    ?.split("\n")
-    .map((l) => l.trim())
-    .find((l) => l.length > 0);
-  if (!line) return undefined;
-  const plain = line
-    .replace(/^[>\-*+\s]+/, "")
-    .replace(/[*`]/g, "")
-    .trim();
-  return plain || undefined;
+  return answerPreview(text);
 }
 
 /** What a hover on an agent row says: what it was asked, in full, what it is to
@@ -447,7 +439,9 @@ export function ThreadAgentRow({
           ? state === "queued"
             ? undefined
             : (step ?? "Working")
-          : firstLine(stripHarnessMarkup(link.answer ?? ""))
+          : state === "failed" && link.error
+            ? firstLine(link.error)
+            : firstLine(stripHarnessMarkup(link.answer ?? ""))
       }
       elapsed={elapsed}
       note={messages !== undefined && messages > 1 ? `${messages} messages` : undefined}

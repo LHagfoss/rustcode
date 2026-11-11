@@ -4751,6 +4751,7 @@ export function linksFinished(
         {
           state,
           answer: says.text,
+          ...(state === "failed" && failed?.trim() ? { error: failed.trim() } : {}),
           truncated: says.truncated,
           filesChanged: says.filesChanged,
           settledAt: now,
