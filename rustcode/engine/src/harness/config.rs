@@ -151,18 +151,9 @@ impl HarnessAccount {
 
 /// Expand a leading `~` with the user's home directory.
 pub fn expand_tilde(path: &str) -> String {
-    let Some(rest) = path.strip_prefix('~') else {
-        return path.to_owned();
-    };
-    let Some(home) = std::env::var_os("HOME") else {
-        return path.to_owned();
-    };
-    let mut resolved = PathBuf::from(home);
-    let rest = rest.strip_prefix('/').unwrap_or(rest);
-    if !rest.is_empty() {
-        resolved.push(rest);
-    }
-    resolved.to_string_lossy().into_owned()
+    crate::home::expand_home(path, crate::home::home_dir().as_deref())
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// What `_rustcode/harnesses/accounts/add` asks for.
@@ -532,7 +523,7 @@ pub(crate) fn is_default_dir(harness: &str, dir: &Path) -> bool {
     let Some(layout) = account_layout(harness) else {
         return false;
     };
-    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+    let Some(home) = crate::home::home_dir() else {
         return false;
     };
     dir == home.join(layout.dir_name)
@@ -564,7 +555,7 @@ pub(crate) fn discovered_accounts(
     harness: &str,
     registered: &[HarnessAccount],
 ) -> Vec<DiscoveredAccount> {
-    match std::env::var_os("HOME").map(PathBuf::from) {
+    match crate::home::home_dir() {
         Some(home) => discovered_accounts_in(&home, harness, registered),
         None => Vec::new(),
     }

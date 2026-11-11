@@ -101,9 +101,7 @@ thread_local! {
 }
 
 fn home_directory_is(root: &Path) -> bool {
-    std::env::var_os("HOME")
-        .map(|home| root == Path::new(&home))
-        .unwrap_or(false)
+    crate::home::home_dir().is_some_and(|home| root == home)
 }
 static WORKSPACES: LazyLock<Mutex<HashMap<PathBuf, State>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
