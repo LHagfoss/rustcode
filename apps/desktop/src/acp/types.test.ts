@@ -490,3 +490,20 @@ describe("remote access", () => {
     expect(status.offer).toBeUndefined();
   });
 });
+
+describe("home path display across platforms", () => {
+  test("shortens Windows and POSIX home folders on segment boundaries", () => {
+    for (const [path, expected] of [
+      ["C:\\Users\\ada\\code", "~\\code"],
+      ["c:/Users/ada/code", "~/code"],
+      ["C:\\Users\\ada", "~"],
+      ["/home/ada/code", "~/code"],
+      ["/Users/ada/code", "~/code"],
+      ["\\\\?\\C:\\Users\\ada\\code", "~\\code"],
+      ["\\\\server\\share\\code", "\\\\server\\share\\code"],
+      ["/home", "/home"],
+      ["C:\\Users", "C:\\Users"],
+    ])
+      expect(displayPath(path!)).toBe(expected!);
+  });
+});

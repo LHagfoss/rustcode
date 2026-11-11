@@ -1,5 +1,6 @@
 import { setTabMovesFocus, tabMovesFocus } from "../lib/focusModality";
-import { currentPlatform } from "../lib/platform";
+import { dirname } from "../lib/paths";
+import { appPlatform, currentPlatform } from "../lib/platform";
 // Settings, a full panel inside the window: the shell stays mounted behind it,
 // hidden and inert, so closing Settings shows the thread exactly where it was.
 // A grouped nav on the left searches every row's title and keywords
@@ -1040,9 +1041,12 @@ function AppearancePage() {
   const supported = useApp((s) => s.features.themes);
   const [creating, setCreating] = useState(false);
   const themes = snapshot?.themes.length ? snapshot.themes : BUILTIN_THEMES;
-  const userDir =
-    themes.find((t) => t.source === "user" && t.path)?.path?.replace(/\/[^/]+$/, "") ??
-    "~/.config/rustcode/themes";
+  const userPath = themes.find((t) => t.source === "user" && t.path)?.path;
+  const userDir = userPath
+    ? dirname(userPath)
+    : appPlatform() === "windows"
+      ? "%APPDATA%\\rustcode\\themes"
+      : "~/.config/rustcode/themes";
   return (
     <>
       <Group title="Sidebar">
