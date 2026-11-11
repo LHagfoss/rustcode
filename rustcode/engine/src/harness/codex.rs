@@ -76,6 +76,11 @@ struct State {
     /// A `/compact` is running: its completed `contextCompaction` item ends the
     /// wait. Codex's own auto-compaction inside a turn does not.
     compacting: bool,
+    /// Whether the client runs this thread with Full access, from the last prompt that said so.
+    /// Full access runs Codex without its sandbox; anything else keeps the workspace sandbox.
+    full_access: Option<bool>,
+    /// Which policy Codex holds for this thread now, so a turn sends it only when it changes.
+    sent_full_access: Option<bool>,
     /// Codex's own subagents, by the Codex thread each runs in, which is how
     /// every notification about it names it.
     collab: HashMap<String, CollabAgent>,
@@ -166,6 +171,17 @@ fn parse_models(answer: &Value) -> Vec<CodexModel> {
 fn set_policy(params: &mut Value) {
     params["sandbox"] = json!("workspace-write");
     params["approvalPolicy"] = json!("on-request");
+}
+
+/// The policy a turn runs under when the client's access level is known. A turn's policy stays
+/// with the thread, so each access level is sent explicitly: Full access leaves the sandbox
+/// (`dangerFullAccess`, nothing to ask for), anything else is `set_policy`'s again.
+fn access_policy(full_access: bool) -> (Value, &'static str) {
+    if full_access {
+        (json!({"type": "dangerFullAccess"}), "never")
+    } else {
+        (json!({"type": "workspaceWrite"}), "on-request")
+    }
 }
 
 /// The `config` overrides for `thread/start` and `thread/resume`: the orchestrator when the thread
@@ -365,9 +381,14 @@ impl CodexAdapter {
         !self.killed.load(Ordering::Acquire) && !self.peer.is_closed()
     }
 
+    /// The client's access level for this thread, applied from its next turn.
+    pub(crate) fn set_full_access(&self, full: bool) {
+        lock(&self.state).full_access = Some(full);
+    }
+
     pub(crate) async fn prompt(&self, prompt: Vec<ContentBlock>) -> Result<StopReason, String> {
         let (sender, receiver) = oneshot::channel();
-        let (model, effort) = {
+        let (model, effort, access) = {
             let mut state = lock(&self.state);
             state.waiter = Some(sender);
             state.turn_id = None;
@@ -375,7 +396,12 @@ impl CodexAdapter {
             // has started, and is applied as soon as it has an id.
             state.last_error = None;
             state.last_message_item = None;
-            (state.model.clone(), state.effort.clone())
+            // The policy goes out when the client's access level is known and is not the one
+            // Codex already holds (a thread starts in `set_policy`'s workspace sandbox).
+            let access = state
+                .full_access
+                .filter(|full| state.sent_full_access.unwrap_or(false) != *full);
+            (state.model.clone(), state.effort.clone(), access)
         };
         // `/compact` alone is Codex's own compaction, not a message for the model
         // (`thread/compact/start`); its `contextCompaction`
@@ -392,6 +418,11 @@ impl CodexAdapter {
             if let Some(effort) = effort {
                 params["effort"] = json!(effort);
             }
+            if let Some(full) = access {
+                let (sandbox, approval) = access_policy(full);
+                params["sandboxPolicy"] = sandbox;
+                params["approvalPolicy"] = json!(approval);
+            }
             ("turn/start", params)
         };
         let started = match self.peer.request(method, params).await {
@@ -403,6 +434,9 @@ impl CodexAdapter {
                 return Err(format!("Codex: {}", error.describe()));
             }
         };
+        if let (Some(full), false) = (access, compact) {
+            lock(&self.state).sent_full_access = Some(full);
+        }
         let turn_id = started
             .pointer("/turn/id")
             .and_then(Value::as_str)

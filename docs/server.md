@@ -174,6 +174,7 @@ client) and reads the service manager. `--json` prints:
 {
   "installed": true,
   "running": true,
+  "socket_denied": false,
   "version": "1.23.0",
   "cli_version": "1.23.0",
   "pid": 4242,
@@ -199,6 +200,12 @@ client) and reads the service manager. `--json` prints:
   "problems": []
 }
 ```
+
+A shell that the operating system keeps from the server's socket (a sandboxed
+agent shell) cannot tell whether the server runs. `status` then prints
+`Running     unknown (socket not reachable: permission denied)`, sets
+`socket_denied` to `true` and reports a `socket-denied` problem instead of
+`stopped`. Run it from an unsandboxed shell for the real answer.
 
 The `Gateway` line says whether other machines can reach this one, where, and
 which process owns the gateway:

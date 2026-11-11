@@ -215,9 +215,20 @@ pub async fn connect(program: PathBuf) -> anyhow::Result<()> {
 }
 
 /// A connection to the server this user runs.
+///
+/// A caller the operating system keeps from the server's files or socket (a sandboxed shell) gets
+/// `PermissionDenied`, never `NotFound`: a server may well run behind a door the caller cannot
+/// open, and "no server is running" would be a wrong answer.
 pub(crate) async fn connect_running() -> io::Result<listen::ClientStream> {
-    let info = running()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no RustCode server is running"))?;
+    let Some(info) = running() else {
+        if let Some(error) = run_dir().ok().and_then(|dir| lock::info_denied(&dir)) {
+            return Err(error);
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "no RustCode server is running",
+        ));
+    };
     listen::connect(&info.endpoint).await
 }
 

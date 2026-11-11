@@ -232,6 +232,42 @@ fn text(text: &str) -> Vec<ContentBlock> {
 }
 
 #[tokio::test]
+async fn full_access_runs_the_turn_outside_codexs_sandbox_and_ask_puts_it_back() {
+    let (thread, mut seen) = start(Script::Reply, Some("accept"), StartOptions::default()).await;
+    let turn_start = |seen: &mut mpsc::UnboundedReceiver<(String, Value)>| {
+        requests(seen)
+            .into_iter()
+            .find(|(method, _)| method == "turn/start")
+            .expect("a turn was started")
+            .1
+    };
+
+    // Nothing said about access: the thread keeps the policy it started with.
+    thread.session.prompt(text("one")).await.unwrap();
+    let first = turn_start(&mut seen);
+    assert!(first.get("sandboxPolicy").is_none() && first.get("approvalPolicy").is_none());
+
+    // Full access leaves the sandbox, so the shell can list processes and reach the server socket.
+    thread.session.set_full_access(true);
+    thread.session.prompt(text("two")).await.unwrap();
+    let full = turn_start(&mut seen);
+    assert_eq!(full["sandboxPolicy"], json!({"type": "dangerFullAccess"}));
+    assert_eq!(full["approvalPolicy"], "never");
+
+    // The policy stays with Codex's thread, so a turn that changes nothing does not resend it.
+    thread.session.prompt(text("three")).await.unwrap();
+    let same = turn_start(&mut seen);
+    assert!(same.get("sandboxPolicy").is_none(), "{same}");
+
+    // Back to a lower access level: the workspace sandbox again.
+    thread.session.set_full_access(false);
+    thread.session.prompt(text("four")).await.unwrap();
+    let ask = turn_start(&mut seen);
+    assert_eq!(ask["sandboxPolicy"], json!({"type": "workspaceWrite"}));
+    assert_eq!(ask["approvalPolicy"], "on-request");
+}
+
+#[tokio::test]
 async fn a_turn_streams_as_acp_updates_and_approvals_reach_the_client() {
     let (mut thread, mut seen) = start(
         Script::Reply,
