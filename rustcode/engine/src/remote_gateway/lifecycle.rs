@@ -13,7 +13,7 @@ use super::control::{
 use super::devices::{DeviceRecord, DeviceStore, RevocationNotes};
 use super::local_socket::{CONTROL_ENDPOINT, OWNER_ENDPOINT};
 use crate::daemon::private_files::{
-    ensure_private_directory, is_lock_busy, lock_private_file, private_open_options,
+    ensure_private_directory, is_lock_busy, lock_private_file, open_private_log,
     process_start_time, publish_private_json, random_instance_id, read_private_json,
     remove_if_exists,
 };
@@ -458,10 +458,7 @@ impl RemoteLifecycle {
             self.stop().await?;
         }
         ensure_private_directory(&self.directory, OWNER)?;
-        let log = private_open_options()
-            .append(true)
-            .create(true)
-            .open(self.log_path())?;
+        let log = open_private_log(&self.log_path())?;
         command
             .stdin(Stdio::null())
             .stdout(log.try_clone()?)

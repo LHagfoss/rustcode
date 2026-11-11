@@ -3,7 +3,9 @@
 //!
 //! On Unix every file is created 0600 in a 0700 directory and opened without
 //! following a final symlink. Windows has no mode bits, so private directories
-//! get a protected owner-only DACL that their files inherit.
+//! get a protected DACL that their files inherit. It names the current user's
+//! SID, not only `OWNER RIGHTS`, so a file an elevated process created (which
+//! Windows then owns by `BUILTIN\Administrators`) stays usable by the user.
 use anyhow::{Context, Result, ensure};
 use serde::{Serialize, de::DeserializeOwned};
 use std::fs::{self, File, OpenOptions};
@@ -19,10 +21,42 @@ pub(crate) fn random_instance_id() -> Result<String> {
     Ok(random.iter().map(|b| format!("{b:02x}")).collect())
 }
 
+/// Name the file an I/O error is about. Windows reports a denied open as a bare
+/// `Access is denied. (os error 5)`; this adds the path and, on Windows, the
+/// usual cause and fix. Errors that are not a denial pass through unchanged, so
+/// callers that look for `NotFound` or `WouldBlock` keep working.
+pub(crate) fn access_context(error: std::io::Error, action: &str, path: &Path) -> anyhow::Error {
+    if error.kind() != std::io::ErrorKind::PermissionDenied {
+        return error.into();
+    }
+    let hint = if cfg!(windows) {
+        format!(
+            "; a process running as administrator probably created it, so run `icacls \"{}\" /reset /T` from an elevated prompt",
+            path.display()
+        )
+    } else {
+        String::new()
+    };
+    anyhow::Error::new(error).context(format!(
+        "access denied to {action} {}{hint}",
+        path.display()
+    ))
+}
+
+/// Open `path` for appending in a private directory, creating it owner-only.
+pub(crate) fn open_private_log(path: &Path) -> Result<File> {
+    private_open_options()
+        .append(true)
+        .create(true)
+        .open(path)
+        .map_err(|error| access_context(error, "open", path))
+}
+
 /// Read a bounded JSON file written by [`publish_private_json`].
 pub(crate) fn read_private_json<T: DeserializeOwned>(path: &Path, max_bytes: u64) -> Result<T> {
     let mut bytes = Vec::new();
-    File::open(path)?
+    File::open(path)
+        .map_err(|error| access_context(error, "open", path))?
         .take(max_bytes + 1)
         .read_to_end(&mut bytes)?;
     ensure!(bytes.len() as u64 <= max_bytes, "private file too large");
@@ -39,15 +73,17 @@ pub(crate) fn publish_private_json<T: Serialize>(path: &Path, value: &T) -> Resu
     #[cfg(windows)]
     ensure_private_directory(parent, "private file")?;
     #[cfg(not(windows))]
-    create_private_directory(parent)?;
-    let mut file = tempfile::NamedTempFile::new_in(parent)?;
+    create_private_directory(parent).map_err(|error| access_context(error, "create", parent))?;
+    let mut file = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|error| access_context(error, "create a file in", parent))?;
     #[cfg(unix)]
     file.as_file()
         .set_permissions(fs::Permissions::from_mode(0o600))?;
     serde_json::to_writer(&mut file, value)?;
     file.flush()?;
     file.as_file().sync_all()?;
-    file.persist(path)?;
+    file.persist(path)
+        .map_err(|error| access_context(error.error, "replace", path))?;
     // A directory cannot be opened as a file on Windows; the rename is
     // durable there once the file itself was synced.
     #[cfg(unix)]
@@ -66,8 +102,10 @@ fn create_private_directory(directory: &Path) -> std::io::Result<()> {
 /// Create `directory` 0700 if missing and refuse one that is not a private
 /// directory (a symlink, or readable by group/other on Unix).
 pub(crate) fn ensure_private_directory(directory: &Path, owner: &str) -> Result<()> {
-    create_private_directory(directory)?;
-    let metadata = fs::symlink_metadata(directory)?;
+    create_private_directory(directory)
+        .map_err(|error| access_context(error, "create", directory))?;
+    let metadata = fs::symlink_metadata(directory)
+        .map_err(|error| access_context(error, "inspect", directory))?;
     ensure!(
         metadata.is_dir() && owner_only(&metadata),
         "{owner} directory must be private (0700)"
@@ -109,7 +147,8 @@ pub(crate) fn lock_private_file(directory: &Path, name: &str, owner: &str) -> Re
         .write(true)
         .create(true)
         .truncate(false)
-        .open(&lock_path)?;
+        .open(&lock_path)
+        .map_err(|error| access_context(error, "open", &lock_path))?;
     match try_lock(&file) {
         Ok(()) => Ok(file),
         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -248,6 +287,78 @@ pub(crate) fn process_start_time(pid: u32) -> Result<Option<u64>> {
     ))
 }
 
+/// The protected DACL of a private directory: full control, inherited by its
+/// files, for the owner, for SYSTEM and for the user identified by `user_sid`.
+#[cfg(any(windows, test))]
+fn private_dacl_sddl(user_sid: &str) -> String {
+    format!("D:P(A;OICI;FA;;;OW)(A;OICI;FA;;;SY)(A;OICI;FA;;;{user_sid})")
+}
+
+/// The string form (`S-1-5-21-…`) of the SID of the user this process runs as.
+/// An elevated token of the same user carries the same SID.
+#[cfg(windows)]
+fn current_user_sid() -> Result<String> {
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, LocalFree};
+    use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
+    use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    fn last_error() -> anyhow::Error {
+        // SAFETY: GetLastError has no preconditions.
+        std::io::Error::from_raw_os_error(unsafe { GetLastError() } as i32).into()
+    }
+
+    let mut token: HANDLE = std::ptr::null_mut();
+    // SAFETY: the pseudo handle of this process is always valid and token is a
+    // valid output pointer. The token is closed below.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return Err(last_error().context("failed to open the process token"));
+    }
+    let result = (|| {
+        // The first call reports the size the TOKEN_USER and its SID need.
+        let mut length = 0u32;
+        // SAFETY: a null buffer of length 0 only asks for the required size.
+        unsafe { GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut length) };
+        if length == 0 {
+            return Err(last_error().context("failed to size the token user"));
+        }
+        // u64 elements keep the buffer aligned for TOKEN_USER.
+        let mut buffer = vec![0u64; (length as usize).div_ceil(8)];
+        // SAFETY: the buffer holds at least `length` bytes.
+        if unsafe {
+            GetTokenInformation(
+                token,
+                TokenUser,
+                buffer.as_mut_ptr().cast(),
+                length,
+                &mut length,
+            )
+        } == 0
+        {
+            return Err(last_error().context("failed to read the token user"));
+        }
+        // SAFETY: the buffer now holds a TOKEN_USER whose SID points into it.
+        let sid = unsafe { (*buffer.as_ptr().cast::<TOKEN_USER>()).User.Sid };
+        let mut text: *mut u16 = std::ptr::null_mut();
+        // SAFETY: sid is valid and text is a valid output pointer; the string
+        // is allocated with LocalAlloc and freed below.
+        if unsafe { ConvertSidToStringSidW(sid, &mut text) } == 0 {
+            return Err(last_error().context("failed to format the user SID"));
+        }
+        // SAFETY: text is a NUL-terminated UTF-16 string.
+        let sid = unsafe {
+            let length = (0..).take_while(|&i| *text.add(i) != 0).count();
+            String::from_utf16_lossy(std::slice::from_raw_parts(text, length))
+        };
+        // SAFETY: text was allocated by ConvertSidToStringSidW with LocalAlloc.
+        unsafe { LocalFree(text.cast()) };
+        Ok(sid)
+    })();
+    // SAFETY: token is the valid handle opened above.
+    unsafe { CloseHandle(token) };
+    result
+}
+
 #[cfg(windows)]
 fn set_private_windows_dacl(directory: &Path) -> Result<()> {
     use std::os::windows::ffi::OsStrExt;
@@ -263,9 +374,10 @@ fn set_private_windows_dacl(directory: &Path) -> Result<()> {
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
-    // Protect the DACL from parent inheritance and grant full control only to
-    // the owner of each object. OI/CI carry that rule to endpoint files.
-    let sddl: Vec<u16> = "D:P(A;OICI;FA;;;OW)"
+    // Protect the DACL from parent inheritance. OI/CI carry the rules to the
+    // files inside. The user's SID is explicit because `OWNER RIGHTS` follows
+    // the owner, and an elevated process makes that `BUILTIN\Administrators`.
+    let sddl: Vec<u16> = private_dacl_sddl(&current_user_sid()?)
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
@@ -305,7 +417,9 @@ fn set_private_windows_dacl(directory: &Path) -> Result<()> {
     // SAFETY: ConvertStringSecurityDescriptorToSecurityDescriptorW allocated
     // this descriptor with LocalAlloc.
     unsafe { LocalFree(descriptor.cast()) };
-    error.map_or(Ok(()), |error| Err(error.into()))
+    error.map_or(Ok(()), |error| {
+        Err(access_context(error, "set permissions on", directory))
+    })
 }
 
 /// Seconds since the epoch, from the process's creation time.
@@ -378,6 +492,30 @@ mod tests {
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    #[test]
+    fn the_private_dacl_names_the_user_and_system_beside_the_owner() {
+        let sddl = private_dacl_sddl("S-1-5-21-1-2-3-1001");
+        // Protected, so a parent directory's rules are not inherited.
+        assert!(sddl.starts_with("D:P"), "{sddl}");
+        for trustee in ["OW", "SY", "S-1-5-21-1-2-3-1001"] {
+            assert!(sddl.contains(&format!("(A;OICI;FA;;;{trustee})")), "{sddl}");
+        }
+    }
+
+    #[test]
+    fn a_denied_open_names_the_file_and_other_errors_pass_through() {
+        let path = Path::new("remote/owner.lock");
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let message = format!("{:#}", access_context(denied, "open", path));
+        assert!(message.contains("access denied to open"), "{message}");
+        assert!(message.contains("owner.lock"), "{message}");
+        assert_eq!(message.contains("icacls"), cfg!(windows), "{message}");
+
+        let missing = access_context(std::io::ErrorKind::NotFound.into(), "open", path);
+        let missing = missing.downcast::<std::io::Error>().unwrap();
+        assert_eq!(missing.kind(), std::io::ErrorKind::NotFound);
     }
 
     #[test]
