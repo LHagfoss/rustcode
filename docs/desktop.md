@@ -57,7 +57,11 @@ own threads here and other machines' threads there. The sidebar keeps this compu
 paired machines with their connection state; choosing one shows its threads by
 project. New thread and ⌘N use that machine, named in the draft’s Run on pill.
 The back arrow or Escape returns to this computer. Needs you counts
-threads across every machine.
+threads across every machine. A delegate that runs on another machine than its
+parent is nested under the parent as usual and also keeps a row in its own
+machine's list, saying `from <thread> on <machine>`; the hint opens the parent
+(`crossMachineDelegates`, `src/state/sidebarGroups.ts`). A machine with no
+threads says so and offers New thread there.
 A thread key carries its machine (`local` keeps its bare id, another one reads
 `‹host›/‹id›`, `src/state/threadKeys.ts`), and every operation on it goes over
 that machine's own connection: `connectionFor` in `src/state/store.ts` returns

@@ -380,6 +380,8 @@ export interface Link {
   events?: LinkEvent[];
   fanOut?: string;
   answer?: string;
+  /** Why a turn failed, apart from the reply it gave: a failed row's preview is this, not the reply. */
+  error?: string;
   truncated?: boolean;
   filesChanged?: number;
   createdAt: number;

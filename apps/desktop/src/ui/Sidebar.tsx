@@ -87,6 +87,7 @@ import {
 } from "../state/pulls";
 import { type PendingSetup, pendingSummary } from "../state/setup";
 import {
+  crossMachineDelegates,
   hostOf,
   type MachineHead,
   type ProjectGroup,
@@ -663,6 +664,7 @@ const ThreadRow = memo(function ThreadRow({
   machine,
   now,
   hint,
+  onHint,
   pull,
   agents,
   navActive,
@@ -686,6 +688,8 @@ const ThreadRow = memo(function ThreadRow({
   now: number;
   /** No parent row above it (a search result, or a filtered-out parent): the thread it belongs under. */
   hint?: string;
+  /** Opens the thread the hint names (a delegate from another machine: its parent). */
+  onHint?: () => void;
   /** The thread's branch's pull request, from the project's read (state/pulls.ts). */
   pull?: PullRequest;
   /** Threads this one started and still runs: the stack on its second line, in place of child rows. */
@@ -1108,7 +1112,21 @@ const ThreadRow = memo(function ThreadRow({
               {/* What it asks of you, or which thread a delegated one without a parent row above it
                 belongs under. */}
               {(request || hint) && (
-                <span className="relative truncate text-fg-muted text-sub">
+                <span
+                  className={cx(
+                    "relative truncate text-fg-muted text-sub",
+                    !request && onHint && "hover:text-fg hover:underline",
+                  )}
+                  {...(!request && onHint
+                    ? {
+                        role: "link",
+                        onClick: (e: React.MouseEvent) => {
+                          e.stopPropagation();
+                          onHint();
+                        },
+                      }
+                    : {})}
+                >
                   {request ? (request.question ? request.question.text : request.title) : hint}
                 </span>
               )}
@@ -1758,6 +1776,9 @@ export function Sidebar() {
     return parentOf;
   }, [sessions, links, pinned, messaged]);
   const byId = useMemo(() => new Map(sessions.map((s) => [s.id, s] as const)), [sessions]);
+  // A delegate that runs on another machine than its parent has no parent row in this machine's
+  // list: it keeps a row of its own here, saying where it came from.
+  const remoteDelegates = useMemo(() => crossMachineDelegates(sessions, parentOf), [sessions, parentOf]);
   // The threads with a row of their own, before the open delegate's chain is drawn under its parent.
   const topRows = useMemo(
     () => new Set(filtered.filter((s) => !parentOf.has(s.id)).map((s) => s.id)),
@@ -1852,8 +1873,8 @@ export function Sidebar() {
         : null;
     for (const s of filtered) {
       // A delegated thread has no row of its own, unless the filter left the open one with no row
-      // to hang under (`orphanOpen`).
-      if (parentOf.has(s.id) && s.id !== orphanOpen) continue;
+      // to hang under (`orphanOpen`), or it runs on another machine than its parent.
+      if (parentOf.has(s.id) && s.id !== orphanOpen && !remoteDelegates.has(s.id)) continue;
       const listed = s.status === "done" || s.status === "review" ? s.status : "idle";
       // Settled: threads settled (by the user, or the engine for a merged branch), and
       // threads untouched for three days unless they wait for review.
@@ -1931,6 +1952,7 @@ export function Sidebar() {
     failed,
     pinned,
     parentOf,
+    remoteDelegates,
     byProject,
     now,
     snoozed,
@@ -2345,7 +2367,26 @@ export function Sidebar() {
   const hintFor = (s: SessionSummary): string | undefined => {
     const above = parentOf.get(s.id);
     if (!above) return undefined;
-    return `in ${byId.get(above)?.title || "another thread"}`;
+    const title = byId.get(above)?.title || "another thread";
+    if (!remoteDelegates.has(s.id)) return `in ${title}`;
+    // Started from another computer: the parent's row is in that machine's list.
+    const parentHost = byId.get(above) ? hostOf(byId.get(above)!) : LOCAL_HOST;
+    const where =
+      parentHost === LOCAL_HOST
+        ? "This computer"
+        : (machines.find((m) => m.id === parentHost)?.name ?? "another computer");
+    return `from ${title} on ${where}`;
+  };
+  // A click on that hint goes to the parent, on the machine it runs on.
+  const openParent = (s: SessionSummary): (() => void) | undefined => {
+    const above = parentOf.get(s.id);
+    const parent = above ? byId.get(above) : undefined;
+    if (!parent || !remoteDelegates.has(s.id)) return undefined;
+    return () => {
+      const parentHost = hostOf(parent);
+      setDeviceView(parentHost === LOCAL_HOST ? null : parentHost);
+      selectThread(parent.id);
+    };
   };
   const rowFor = (s: SessionSummary, grouped: boolean, hint = true) => (
     <ThreadRow
@@ -2359,6 +2400,7 @@ export function Sidebar() {
       pull={pullOf(s)}
       now={now}
       hint={hint ? hintFor(s) : undefined}
+      onHint={hint ? openParent(s) : undefined}
       agents={stacks.get(s.id)}
       navActive={s.id === currentId}
       picked={picked.has(s.id)}
@@ -2482,7 +2524,20 @@ export function Sidebar() {
               {!sessionsLoaded && <ThreadRowsSkeleton />}
               {sessionsLoaded && !filtered.length && (
                 <div className="px-2 py-3 text-callout text-fg-muted">
-                  {onlyProject ? "No threads in this project yet." : "No threads yet."}
+                  {device ? (
+                    <>
+                      <div>No threads on this machine yet.</div>
+                      {device.state === "connected" && (
+                        <Pill size="sm" className="mt-2" onClick={() => startNewThread(undefined, device.id)}>
+                          <SquarePen size={14} /> New thread
+                        </Pill>
+                      )}
+                    </>
+                  ) : onlyProject ? (
+                    "No threads in this project yet."
+                  ) : (
+                    "No threads yet."
+                  )}
                 </div>
               )}
               <div className="flex min-h-full flex-col">

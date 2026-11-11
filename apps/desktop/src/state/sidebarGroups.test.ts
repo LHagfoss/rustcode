@@ -4,7 +4,13 @@
 
 import { describe, expect, test } from "bun:test";
 import type { SessionSummary } from "../acp/types";
-import { type GroupedMachine, machineGroups, sidebarHost, sidebarProjects } from "./sidebarGroups";
+import {
+  crossMachineDelegates,
+  type GroupedMachine,
+  machineGroups,
+  sidebarHost,
+  sidebarProjects,
+} from "./sidebarGroups";
 import { LOCAL_HOST } from "./threadKeys";
 
 const LINUX = "gw-7c1d9e4f2a8b6d30";
@@ -156,4 +162,29 @@ test("selected machine projects exclude other hosts and keep repository groups",
   expect(groups[0]?.key).not.toBe(sidebarProjects([{ ...local, cwd: linux.cwd }], LOCAL_HOST)[0]?.key);
   expect(sidebarProjects([local], LOCAL_HOST)[0]?.key).toBe(local.cwd);
   expect(sidebarProjects([], STUDIO)).toEqual([]);
+});
+
+describe("delegates that run on another machine than their parent", () => {
+  const delegate = thread("delegate-1", "/home/lars/code/rustcode", LINUX);
+  const sameHost = thread("delegate-2", "/home/lars/code/rustcode", LINUX);
+
+  test("a remote delegate of a local parent keeps a row in its own machine's group", () => {
+    const parentOf = new Map([[delegate.id, local.id]]);
+    const own = crossMachineDelegates([local, delegate], parentOf);
+    expect([...own]).toEqual([delegate.id]);
+    // The rows the sidebar draws: every thread without a parent row above it, plus these.
+    const drawn = [local, delegate].filter((s) => !parentOf.has(s.id) || own.has(s.id));
+    const groups = machineGroups("threads", drawn, [mac(LINUX, "Lars's Linux box")]);
+    const linuxGroup = groups.find((g) => g.machine?.id === LINUX);
+    expect(linuxGroup?.items.map((s) => s.id)).toEqual([delegate.id]);
+  });
+
+  test("a delegate on its parent's machine stays nested under it", () => {
+    const parentOf = new Map([[sameHost.id, linux.id]]);
+    expect(crossMachineDelegates([linux, sameHost], parentOf).size).toBe(0);
+  });
+
+  test("a delegate whose parent is not listed is left to the rule for a missing parent", () => {
+    expect(crossMachineDelegates([delegate], new Map([[delegate.id, "gone"]])).size).toBe(0);
+  });
 });
