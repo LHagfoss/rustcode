@@ -284,7 +284,7 @@ fn orchestration_unavailable(_args: &Value) -> Result<String, String> {
 /// message goes, and runs it as an attributed turn of the target thread.
 pub const LIST_SESSIONS: Tool = Tool {
     name: crate::orchestration::LIST_SESSIONS,
-    description: "List the user's threads, newest first: id, title, project, last update and whether one is working. Reads no transcripts. This project's threads by default, every project's with all_projects. It answers what the user has been working on and which threads exist, so ask it instead of looking for RustCode's data elsewhere.",
+    description: "List the user's threads, newest first: id, title, project, last update, the machine it runs on and whether one is working. Pass `machine` for one paired computer's threads. Reads no transcripts. This project's threads by default, every project's with all_projects. It answers what the user has been working on and which threads exist, so ask it instead of looking for RustCode's data elsewhere.",
     arguments: r#"{"query": "optional words in the title", "all_projects": false}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -293,7 +293,8 @@ pub const LIST_SESSIONS: Tool = Tool {
             "type": "object",
             "properties": {
                 "query": {"type": "string"},
-                "all_projects": {"type": "boolean", "description": "Every project's threads, with each thread's project path"}
+                "all_projects": {"type": "boolean", "description": "Every project's threads, with each thread's project path"},
+                "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"}
             },
             "additionalProperties": false
         })
@@ -314,6 +315,7 @@ pub const MESSAGE_SESSION: Tool = Tool {
             "properties": {
                 "session_id": {"type": "string", "minLength": 1},
                 "message": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_MESSAGE_BYTES},
+                "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"},
                 "attachments": {
                     "type": "array",
                     "maxItems": crate::orchestration::MAX_ATTACHMENTS,
@@ -342,6 +344,7 @@ pub const WAIT_SESSION: Tool = Tool {
             "properties": {
                 "link_id": {"type": "string"},
                 "link_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+                "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"},
                 "timeout_ms": {"type": "integer", "minimum": 1, "maximum": crate::orchestration::MAX_WAIT_MS, "default": crate::orchestration::DEFAULT_WAIT_MS}
             },
             "additionalProperties": false
@@ -365,6 +368,7 @@ pub const READ_SESSION: Tool = Tool {
             "properties": {
                 "session_id": {"type": "string", "minLength": 1},
                 "last_turns": {"type": "integer", "minimum": 1, "maximum": crate::orchestration::MAX_LAST_TURNS, "default": crate::orchestration::DEFAULT_LAST_TURNS},
+                "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"},
                 "offset": {"type": "integer", "minimum": 0, "description": "Bytes into the rendered answer to start from; pass the previous page's next_offset"}
             },
             "required": ["session_id"],
@@ -377,7 +381,7 @@ pub const READ_SESSION: Tool = Tool {
 
 pub const START_SESSION: Tool = Tool {
     name: crate::orchestration::START_SESSION,
-    description: "Start a new thread with prompt as its first message, on another harness, model or named account if given, in its own worktree by default. Pass the whole task as prompt: the new thread does not see this conversation. Carry the repository rules (tell it to read AGENTS.md) and acceptance criteria, and bound commands that can block: a delegated shell has no TTY or default timeout. The user approves in the app, where the harness, account, model and effort are shown, so choose sensible ones and call it rather than asking first. Returns session_id and a link_id for wait_session.",
+    description: "Start a new thread with prompt as its first message, on another harness, model or named account if given, in its own worktree by default. Pass `machine` (id or name from list_machines) to start it on another paired computer; omit it for this one. Pass the whole task as prompt: the new thread does not see this conversation. Carry the repository rules (tell it to read AGENTS.md) and acceptance criteria, and bound commands that can block: a delegated shell has no TTY or default timeout. The user approves in the app, where the harness, account, model and effort are shown, so choose sensible ones and call it rather than asking first. Returns session_id and a link_id for wait_session.",
     arguments: r#"{"prompt": "the task", "title": "short title", "harness": "codex", "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -393,6 +397,7 @@ pub const START_SESSION: Tool = Tool {
                 "account": {"type": "string", "description": "Named login of the harness's accounts as list_harnesses lists them; omitted is the caller's account on the same harness, else the login a new thread would start on"},
                 "worktree": {"type": "boolean"},
                 "project": {"type": "string", "description": "absolute path of another project"},
+                "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"},
                 "client_request_id": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_CLIENT_REQUEST_ID_CHARS, "description": "Retry key: a repeat returns the first result"}
             },
             "required": ["prompt"],
@@ -405,7 +410,7 @@ pub const START_SESSION: Tool = Tool {
 
 pub const FAN_OUT: Tool = Tool {
     name: crate::orchestration::FAN_OUT,
-    description: "Start the same task on 2-4 harnesses, each in its own worktree thread, so the user can compare the results. Pass the whole task as the shared prompt: they do not see this conversation. Carry the repository rules (tell each to read AGENTS.md) and acceptance criteria, and bound commands that can block: a delegated shell has no TTY or default timeout. Each entry may name a harness, model, effort and named account as list_harnesses lists them. The user is asked first. Returns one link per thread for wait_session.",
+    description: "Start the same task on 2-4 harnesses, each in its own worktree thread, so the user can compare the results. Pass `machine` (id or name from list_machines) to run them on another paired computer; omit it for this one (with `project`, its absolute path there). Pass the whole task as the shared prompt: they do not see this conversation. Carry the repository rules (tell each to read AGENTS.md) and acceptance criteria, and bound commands that can block: a delegated shell has no TTY or default timeout. Each entry may name a harness, model, effort and named account as list_harnesses lists them. The user is asked first. Returns one link per thread for wait_session.",
     arguments: r#"{"prompt": "the task", "harnesses": [{"harness": "codex"}, {"harness": "claude-code"}], "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -431,6 +436,8 @@ pub const FAN_OUT: Tool = Tool {
                         "additionalProperties": false
                     }
                 },
+                "project": {"type": "string", "description": "absolute path of the project on that machine"},
+                "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"},
                 "client_request_id": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_CLIENT_REQUEST_ID_CHARS, "description": "Retry key: a repeat returns the first result"}
             },
             "required": ["prompt", "harnesses"],
@@ -445,7 +452,7 @@ pub const FAN_OUT: Tool = Tool {
 /// clients that advertise `_meta.rustcode.orchestration >= 3`.
 pub const LIST_HARNESSES: Tool = Tool {
     name: crate::orchestration::LIST_HARNESSES,
-    description: "List the harnesses that can run a thread, each with its models, efforts and named accounts or why it cannot run, and what this thread runs on. Each leads with the model a new thread starts on and the ones this project used recently, then caps at 12: `omitted_models` counts the rest, reachable with `model`. `harness` keeps one (id, else name); `model` matches part of a model id or name, any case (up to 50). Every login a plan was read for carries `usage`: `{ status, as_of, windows: [{ label, used_percent, window_minutes, resets_at }] }` — read it before choosing an account, so a delegate skips a nearly used window.",
+    description: "List the harnesses that can run a thread, each with its models, efforts and named accounts or why it cannot run, and what this thread runs on. Pass `machine` for another paired computer's harnesses. Each leads with the model a new thread starts on and the ones this project used recently, then caps at 12: `omitted_models` counts the rest, reachable with `model`. `harness` keeps one (id, else name); `model` matches part of a model id or name, any case (up to 50). Every login a plan was read for carries `usage`: `{ status, as_of, windows: [{ label, used_percent, window_minutes, resets_at }] }` — read it before choosing an account, so a delegate skips a nearly used window.",
     arguments: r#"{"harness": "codex", "model": "opus"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -454,7 +461,8 @@ pub const LIST_HARNESSES: Tool = Tool {
             "type": "object",
             "properties": {
                 "harness": {"type": "string", "description": "Only this harness"},
-                "model": {"type": "string", "description": "Part of a model id or name, any case"}
+                "model": {"type": "string", "description": "Part of a model id or name, any case"},
+                "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"}
             },
             "required": [],
             "additionalProperties": false
@@ -540,7 +548,8 @@ pub const INTERRUPT_SESSION: Tool = Tool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "session_id": {"type": "string", "minLength": 1}
+                "session_id": {"type": "string", "minLength": 1},
+                "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"}
             },
             "required": ["session_id"],
             "additionalProperties": false
@@ -595,14 +604,16 @@ pub const TRANSFER_SESSION: Tool = Tool {
 
 pub const LIST_PENDING_REQUESTS: Tool = Tool {
     name: crate::orchestration::LIST_PENDING_REQUESTS,
-    description: "List the approvals and questions this project's open threads are waiting on from the user: session_id, request_id, thread title, whether it is an approval or a question, and what it asks. Ask it when the user asks what is waiting on them, then answer_request one of them if the user says what to answer.",
+    description: "List the approvals and questions this project's open threads are waiting on from the user: session_id, request_id, thread title, whether it is an approval or a question, and what it asks. Ask it when the user asks what is waiting on them, then answer_request one of them if the user says what to answer. Pass `machine` to ask another paired computer.",
     arguments: r#"{}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
     schema: || {
         serde_json::json!({
             "type": "object",
-            "properties": {},
+            "properties": {
+                "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"}
+            },
             "required": [],
             "additionalProperties": false
         })
@@ -665,7 +676,29 @@ pub const ORGANIZE_THREADS: Tool = Tool {
 
 pub const LIST_PROJECTS: Tool = Tool {
     name: crate::orchestration::LIST_PROJECTS,
-    description: "List the projects the user has threads in, newest first, at most 50: path, name, how many threads each has and whether any is working. Ask it when the user asks what they have been working on or where a thread lives. Use a path as start_session's project and all_projects on list_sessions and search_sessions.",
+    description: "List the projects the user has threads in, newest first, at most 50: path, name, how many threads each has and whether any is working. Ask it when the user asks what they have been working on or where a thread lives. Use a path as start_session's project and all_projects on list_sessions and search_sessions. Pass `machine` for another paired computer's projects.",
+    arguments: r#"{}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"}
+            },
+            "required": [],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+/// Orchestration version 12 (`docs/orchestrator.md`): the machines the user has
+/// paired, which `start_session` and the other machine-aware tools take.
+pub const LIST_MACHINES: Tool = Tool {
+    name: crate::orchestration::LIST_MACHINES,
+    description: "List the computers this RustCode is paired with: this one (current: true) and each machine with id, name, platform, state (connected or offline), route in use, its harnesses and project names. Ask it when the user asks what machines they have, which one a thread runs on, or where a task can run. Pass a machine's id or name as `machine` to start_session, fan_out, list_harnesses, list_projects, list_sessions, read_session, message_session, wait_session, interrupt_session, thread_status or list_pending_requests; omit it to act on this computer. Threads on another machine answer with an id that carries that machine, so later calls need no `machine`. Acting on another machine asks the user first, and an offline one is refused by name.",
     arguments: r#"{}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -713,7 +746,8 @@ pub const THREAD_STATUS: Tool = Tool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "session_id": {"type": "string", "minLength": 1, "description": "One delegate; omit to report every delegate of this thread"}
+                "session_id": {"type": "string", "minLength": 1, "description": "One delegate; omit to report every delegate of this thread"},
+                "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"}
             },
             "required": [],
             "additionalProperties": false
@@ -953,6 +987,50 @@ pub const RUN_SCHEDULED_TASK_NOW: Tool = Tool {
                 "id": {"type": "string", "minLength": 1}
             },
             "required": ["id"],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+/// Orchestration version 13 (`docs/orchestrator.md`): where a worktree stands,
+/// and handing its work back to the user.
+pub const WORKTREE_STATUS: Tool = Tool {
+    name: crate::orchestration::WORKTREE_STATUS,
+    description: "Report where worktrees stand: the owning thread, its branch and path, commits ahead of and behind the ref it tracks, uncommitted files, the last commit and the pull request its branch heads. Omit session_id for every worktree thread this thread reaches (all_projects for every project); pass it for one thread, its own included. A read: no approval.",
+    arguments: r#"{"session_id": "a thread's id, or omit for every worktree"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "minLength": 1, "description": "One thread, its own included; omit for every worktree this thread can reach"},
+                "all_projects": {"type": "boolean", "description": "Every project's worktree threads, with each one's project path"}
+            },
+            "required": [],
+            "additionalProperties": false
+        })
+    },
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+pub const HANDOFF_WORKTREE: Tool = Tool {
+    name: crate::orchestration::HANDOFF_WORKTREE,
+    description: "Move a thread's work to where the user can continue it, keeping every commit. `to: \"checkout\"` (the default) removes a delegate's worktree, switches the user's active checkout to its branch and moves the thread there, so the user can work locally; `to: \"worktree\"` gives a thread that runs in the checkout a worktree of its own on a new branch from the checkout's HEAD, leaving the checkout untouched. It refuses rather than forces: a worktree with uncommitted or ignored files, a checkout with uncommitted changes, a checkout on another branch holding commits no remote has, and a running thread. Nothing is stashed, rebased or reset, and no branch is deleted. The user approves it.",
+    arguments: r#"{"session_id": "the delegate whose work the user takes over", "to": "checkout"}"#,
+    handler: orchestration_unavailable,
+    requires_confirmation: false,
+    schema: || {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "minLength": 1},
+                "to": {"type": "string", "enum": crate::orchestration::HANDOFF_TARGETS, "description": "checkout (default) moves a worktree's branch into the user's checkout; worktree moves a checkout thread into its own worktree"}
+            },
+            "required": ["session_id"],
             "additionalProperties": false
         })
     },

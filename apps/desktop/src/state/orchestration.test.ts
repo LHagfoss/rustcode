@@ -314,6 +314,31 @@ describe("management tools", () => {
       settle: false,
     });
     expect(isFailure(parseCall({ tool: "cleanup_worktree", args: {} }))).toBe(true);
+    // Where worktrees stand, and handing one back to the user.
+    expect(parseCall({ tool: "worktree_status", args: {} })).toEqual({
+      tool: "worktree_status",
+      allProjects: false,
+    });
+    expect(parseCall({ tool: "worktree_status", args: { session_id: "d1", all_projects: true } })).toEqual({
+      tool: "worktree_status",
+      target: "d1",
+      allProjects: true,
+    });
+    // Handing off defaults to the checkout: the direction the user asks for.
+    expect(parseCall({ tool: "handoff_worktree", args: { session_id: "d1" } })).toEqual({
+      tool: "handoff_worktree",
+      target: "d1",
+      to: "checkout",
+    });
+    expect(parseCall({ tool: "handoff_worktree", args: { session_id: "d1", to: "worktree" } })).toEqual({
+      tool: "handoff_worktree",
+      target: "d1",
+      to: "worktree",
+    });
+    expect(isFailure(parseCall({ tool: "handoff_worktree", args: {} }))).toBe(true);
+    expect(
+      isFailure(parseCall({ tool: "handoff_worktree", args: { session_id: "d1", to: "nowhere" } })),
+    ).toBe(true);
   });
 
   test("checkManage keeps a thread to its own project", () => {
@@ -326,9 +351,46 @@ describe("management tools", () => {
 
 describe("orchestration rules", () => {
   test("the app advertises the version whose arguments it answers", () => {
-    // The engine strips `account` below 5 and `attachments` below 10, and refuses a call that
-    // carries one: the app speaks the newest, so it is offered both.
-    expect(CAPABILITY_VERSION).toBe(11);
+    // The engine strips `account` below 5, `attachments` below 10 and `machine` below 12, and
+    // refuses a call that carries one: the app speaks the newest, so it is offered all three.
+    expect(CAPABILITY_VERSION).toBe(13);
+  });
+
+  test("a machine is read from any call that takes one, and absent when it is not named", () => {
+    // An id or a name `list_machines` gave; whitespace is not a machine.
+    expect(parseCall({ tool: "list_sessions", args: { machine: " Studio " } })).toMatchObject({
+      machine: "Studio",
+    });
+    expect(parseCall({ tool: "list_sessions", args: { machine: "  " } })).toEqual({
+      tool: "list_sessions",
+      query: "",
+      allProjects: false,
+    });
+    expect(parseCall({ tool: "list_machines", args: {} })).toEqual({ tool: "list_machines" });
+    expect(parseCall({ tool: "list_projects", args: { machine: "gw-1" } })).toMatchObject({
+      machine: "gw-1",
+    });
+    expect(
+      parseCall({ tool: "start_session", args: { prompt: "run it", machine: "Lars's Linux box" } }),
+    ).toMatchObject({ machine: "Lars's Linux box", prompt: "run it" });
+    expect(parseCall({ tool: "wait_session", args: { link_id: "a/1", machine: "Studio" } })).toMatchObject({
+      machine: "Studio",
+    });
+    // A call that acts on a thread takes it too; the id may carry the machine itself.
+    expect(
+      parseCall({ tool: "interrupt_session", args: { session_id: "gw-1/t", machine: "Studio" } }),
+    ).toEqual({ tool: "interrupt_session", target: "gw-1/t", machine: "Studio" });
+    expect(parseCall({ tool: "thread_status", args: { session_id: "t", machine: "Studio" } })).toEqual({
+      tool: "thread_status",
+      target: "t",
+      machine: "Studio",
+    });
+    // The tools that cannot work across machines take no machine at all.
+    expect(parseCall({ tool: "merge_when_green", args: { session_id: "t", machine: "Studio" } })).toEqual({
+      tool: "merge_when_green",
+      target: "t",
+      timeoutMs: DEFAULT_MERGE_MS,
+    });
   });
 
   test("parses the v2 calls and refuses bad arguments", () => {
@@ -350,6 +412,18 @@ describe("orchestration rules", () => {
       args: { prompt: "do it", harnesses: [{ harness: "rustcode" }, { harness: "codex", model: "m" }] },
     });
     expect(!isFailure(fan) && fan.tool === "fan_out" && fan.harnesses.length).toBe(2);
+    // A fan-out names the project on the machine it runs on, as a start does.
+    expect(
+      parseCall({
+        tool: "fan_out",
+        args: {
+          prompt: "go",
+          harnesses: [{ harness: "a" }, { harness: "b" }],
+          project: "/srv/app",
+          machine: "Studio",
+        },
+      }),
+    ).toMatchObject({ project: "/srv/app", machine: "Studio" });
     // A named login rides on start_session and each fan_out entry.
     const started = parseCall({
       tool: "start_session",

@@ -42,6 +42,7 @@ import {
   refreshServerService,
   removeMachine,
   routeName,
+  selfName,
   serverLine,
   setMainMachine,
   stateLabel,
@@ -69,18 +70,6 @@ function MachineIcon({ platform }: { platform: string }) {
           ? SquareTerminal
           : CircleHelp;
   return <Icon size={16} className="shrink-0 text-fg-muted" aria-hidden />;
-}
-
-/** This computer's name as people say it (docs/terminology.md). */
-function selfName(): string {
-  switch (currentPlatform()) {
-    case "mac":
-      return "This Mac";
-    case "windows":
-      return "This PC";
-    default:
-      return "This computer";
-  }
 }
 
 export function MachinesPage() {

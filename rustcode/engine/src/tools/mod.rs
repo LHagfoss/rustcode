@@ -1534,6 +1534,7 @@ pub const TOOLS: &[Tool] = &[
     misc::INTERRUPT_SESSION,
     misc::CONFIGURE_SESSION,
     misc::LIST_PROJECTS,
+    misc::LIST_MACHINES,
     misc::LIST_PULL_REQUESTS,
     misc::TRANSFER_SESSION,
     misc::LIST_PENDING_REQUESTS,
@@ -1556,6 +1557,8 @@ pub const TOOLS: &[Tool] = &[
     misc::DELETE_SCHEDULED_TASK,
     misc::RUN_SCHEDULED_TASK_NOW,
     misc::MANAGE_PULL_LINKS,
+    misc::WORKTREE_STATUS,
+    misc::HANDOFF_WORKTREE,
 ];
 
 pub fn is_agent_tool(name: &str) -> bool {
