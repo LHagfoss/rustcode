@@ -1244,19 +1244,45 @@ function scopeInbound(message: Inbound, host: string): Inbound {
   return { ...message, params: { ...message.params, sessionId: threadKey(host, sessionId) } };
 }
 
+/**
+ * Threads this window made on a machine, by key, until that machine's own
+ * `session/list` has them. `session/new` answers at once, and the next read of
+ * that list may be from before the thread: a snapshot without it must not take
+ * it out of the app's list while its first turn works there
+ * (`mergeMachineLists`, issue 3523).
+ */
+const justMade = new Map<string, { host: string; summary: SessionSummary; at: number }>();
+
+/** How long a thread this window made waits for its machine to list it. */
+const JUST_MADE_MS = 5 * 60_000;
+
 /** Replaces the sessions of every machine with the list it last gave (this computer's are kept). */
 function mergeMachineLists(lists: Record<string, readonly SessionSummary[]>): void {
   set((s) => {
     // A thread the app just started there has the title it was sent with until the machine titles
-    // it from its own history: `session/new` carries no title, and `thread_rename` is this shell's.
+    // it from its own history: `session/new` carries the title, and the list follows.
     const known = new Map(s.sessions.map((session) => [session.id, session]));
-    const remote = Object.entries(lists).flatMap(([host, items]) =>
-      items.map((session) => {
+    const now = Date.now();
+    const remote = Object.entries(lists).flatMap(([host, items]) => {
+      const listed = new Set(items.map((session) => session.id));
+      const rows = items.map((session) => {
         const id = threadKey(host, session.id);
         const title = session.title || known.get(id)?.title;
         return { ...session, id, host, title };
-      }),
-    );
+      });
+      // The threads this window made that the list has not got to yet stay: its own answer
+      // has them, and a read that started before them is not news that they are gone.
+      const kept: SessionSummary[] = [];
+      for (const [id, made] of justMade) {
+        if (made.host !== host) continue;
+        if (listed.has(splitThreadKey(id).id) || now - made.at > JUST_MADE_MS) {
+          justMade.delete(id);
+          continue;
+        }
+        kept.push({ ...made.summary, title: made.summary.title || known.get(id)?.title });
+      }
+      return [...rows, ...kept];
+    });
     return {
       sessions: byActivity([...s.sessions.filter((x) => !x.host), ...remote]),
       snoozed: {
@@ -2535,6 +2561,10 @@ export async function createSession(options: NewSession): Promise<string> {
     meta.parent = splitThreadKey(options.parent).id;
     if (options.relationship && options.relationship !== "delegate") meta.relationship = options.relationship;
   }
+  // The title this thread is made with, so a thread on another machine is named
+  // there too: `thread_rename` is this computer's shell, and it never reaches a
+  // machine's own history (issue 3524).
+  if (options.title) meta.title = options.title;
   if (Object.keys(meta).length) params._meta = { rustcode: meta };
   const result = (await conn.request(Method.sessionNew, params, 120_000)) as JsonObject;
   const raw = str(result.sessionId);
@@ -2579,6 +2609,10 @@ export async function createSession(options: NewSession): Promise<string> {
   // shows goes away and comes back between the session and its model. Any other session is listed
   // at once.
   const pending = !!options.pendingId && get().pendingSetup?.id === options.pendingId;
+  // A machine's own list has not listed this thread yet: it is kept in that list
+  // from here, so a snapshot from before it cannot take it away mid-turn
+  // (`mergeMachineLists`, issue 3523).
+  if (host) justMade.set(id, { host, summary, at: Date.now() });
   set((st) => ({
     threads: { ...st.threads, [id]: thread },
     ...(pending
@@ -2593,8 +2627,8 @@ export async function createSession(options: NewSession): Promise<string> {
   }));
   // Saved, not only shown: otherwise the thread's first message replaces it at the next list.
   // A pending setup lets its rename run beside it: the message starts the moment the thread is listed.
-  // A thread on another computer is titled by that machine's own history: only this computer's
-  // folder is renamed from here (`thread_rename` is the shell's).
+  // A thread on another computer is titled by the `session/new` it was made with: only this
+  // computer's folder is renamed from here (`thread_rename` is this computer's shell).
   if (options.title && !host) {
     const saved = renameThread(id, options.title);
     if (!pending) await saved;
@@ -7023,6 +7057,8 @@ export function resetForTests() {
   // A lost turn's timers outlive a test file, and its links belong to that file's book.
   for (const record of lostTurns.values()) clearTimeout(record.timer);
   lostTurns.clear();
+  // A thread one file made on a machine is not the next file's to keep listed.
+  justMade.clear();
   lostMachineMs = LOST_MACHINE_MS;
   engineWatch?.();
   engineWatch = undefined;

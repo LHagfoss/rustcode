@@ -360,6 +360,8 @@ pub(crate) async fn new_session(
     if session_id.is_empty() {
         return Err(failure("session storage is unavailable".to_owned()));
     }
+    // The name the thread was made with, from the app that made it (issue 3524).
+    crate::config::save_requested_title(&session_id, request.meta.as_ref());
     // The thread that started this one, kept in its metadata so a pruned link
     // cannot turn it into a top-level thread (`thread_parent.rs`).
     if let Some((parent, relationship)) = crate::thread_parent::requested(request.meta.as_ref()) {

@@ -61,10 +61,23 @@ export function isRootFolder(path: string): boolean {
 }
 
 /**
+ * Whether a folder is RustCode's own data folder, or one of the folders inside
+ * it: the session store and the worktrees live there on every platform
+ * (`~/.config/rustcode`, `%APPDATA%\rustcode`). No project lives there, and a
+ * thread started in one was started outside any project (issue 3524).
+ */
+export function isDataFolder(path: string): boolean {
+  return /(?:^|[\\/])(?:\.config[\\/]rustcode|appdata[\\/](?:local|roaming)[\\/]rustcode)(?:[\\/]|$)/i.test(
+    plainPath(path).trim(),
+  );
+}
+
+/**
  * The projects a machine's thread list names, most recently used first. A worktree thread names
  * its repository, as the sidebar groups it; two threads in one project are one row. A thread with
  * no recorded folder of its own is not one: its machine lists a stand-in such as its home folder,
- * which made "no project" a project a thread could be started in (issue 3425).
+ * which made "no project" a project a thread could be started in (issue 3425). The app's own data
+ * folder is a stand-in too, on the machine that lists it as well as here (issue 3524).
  */
 export function projectsOn(sessions: readonly SessionSummary[], host = LOCAL_HOST): Project[] {
   const projects = new Map<string, { project: Project; updatedAt: number }>();
@@ -74,7 +87,7 @@ export function projectsOn(sessions: readonly SessionSummary[], host = LOCAL_HOS
     // One folder is one project, however Windows spelled it: the verbatim prefix an older engine
     // stored is not part of the path (issue 3425).
     const path = plainPath(session.worktree?.repo || session.repo || session.cwd);
-    if (!path || isRootFolder(path)) continue;
+    if (!path || isRootFolder(path) || isDataFolder(path)) continue;
     const updatedAt = session.updatedAt ?? 0;
     const known = projects.get(path);
     if (known) {
