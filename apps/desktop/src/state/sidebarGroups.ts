@@ -95,3 +95,24 @@ export function machineGroups(
   }
   return groups;
 }
+
+/** Resolve a sidebar selection safely when a paired device is removed. */
+export function sidebarHost(selection: string | null, machines: readonly GroupedMachine[]): string {
+  return machines.some((machine) => machine.id === selection) ? selection! : LOCAL_HOST;
+}
+
+/** Project identity is scoped to the selected computer, including worktree repositories. */
+export function sidebarProjects(items: readonly SessionSummary[], host: string): ProjectGroup[] {
+  const projects = new Map<string, SessionSummary[]>();
+  for (const item of items) {
+    if (hostOf(item) !== host) continue;
+    const project = item.worktree?.repo || item.cwd || "";
+    projects.set(project, [...(projects.get(project) ?? []), item]);
+  }
+  return [...projects].map(([project, rows]) => ({
+    key: host === LOCAL_HOST ? project : `${host}\u0000${project}`,
+    label: project ? projectName(project) : "No folder",
+    project: project || undefined,
+    items: rows,
+  }));
+}

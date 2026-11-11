@@ -53,9 +53,10 @@ Next, in rough order:
 
 Several machines (#3202): Settings › **Machines** pairs the app with another
 computer's RustCode server and keeps the connection, so one app reaches its
-own threads here and other machines' threads there. The sidebar lists every
-machine in a group of its own — this computer first, then each paired machine
-with ● connected, ○ offline or ⚠ revoked — and its threads by project inside.
+own threads here and other machines' threads there. The sidebar keeps this computer’s project list. Its Devices entry opens the
+paired machines with their connection state; choosing one shows its threads by
+project. The back arrow or Escape returns to this computer. Needs you counts
+threads across every machine.
 A thread key carries its machine (`local` keeps its bare id, another one reads
 `‹host›/‹id›`, `src/state/threadKeys.ts`), and every operation on it goes over
 that machine's own connection: `connectionFor` in `src/state/store.ts` returns

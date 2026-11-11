@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import type { SessionSummary } from "../acp/types";
-import { type GroupedMachine, machineGroups } from "./sidebarGroups";
+import { type GroupedMachine, machineGroups, sidebarHost, sidebarProjects } from "./sidebarGroups";
 import { LOCAL_HOST } from "./threadKeys";
 
 const LINUX = "gw-7c1d9e4f2a8b6d30";
@@ -130,4 +130,30 @@ describe("the sidebar's machine groups", () => {
     expect(groups[1]?.machine?.name).toBe("Another computer");
     expect(groups[1]?.items).toEqual([orphan]);
   });
+});
+
+describe("sidebar device selection", () => {
+  const machines = [mac(LINUX, "Linux"), mac(STUDIO, "Studio", "offline")];
+  test("local and device picker show no remote threads", () => {
+    expect(sidebarHost(null, machines)).toBe(LOCAL_HOST);
+    expect(sidebarHost("devices", machines)).toBe(LOCAL_HOST);
+  });
+  test("connected and offline devices can both be browsed", () => {
+    expect(sidebarHost(LINUX, machines)).toBe(LINUX);
+    expect(sidebarHost(STUDIO, machines)).toBe(STUDIO);
+  });
+  test("removing the selected device returns to this computer", () => {
+    expect(sidebarHost(STUDIO, [])).toBe(LOCAL_HOST);
+  });
+});
+
+test("selected machine projects exclude other hosts and keep repository groups", () => {
+  const worktree = { ...linuxOther, worktree: { repo: linux.cwd, path: "/tmp/tree", branch: "task" } };
+  const groups = sidebarProjects([local, linux, worktree, studio], LINUX);
+  expect(groups).toHaveLength(1);
+  expect(groups[0]?.items).toEqual([linux, worktree]);
+  expect(groups[0]?.project).toBe(linux.cwd);
+  expect(groups[0]?.key).not.toBe(sidebarProjects([{ ...local, cwd: linux.cwd }], LOCAL_HOST)[0]?.key);
+  expect(sidebarProjects([local], LOCAL_HOST)[0]?.key).toBe(local.cwd);
+  expect(sidebarProjects([], STUDIO)).toEqual([]);
 });
