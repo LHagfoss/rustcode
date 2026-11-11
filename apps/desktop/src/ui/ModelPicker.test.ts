@@ -9,6 +9,7 @@ import {
   modelDisplayName,
   modelProviderOf,
   modelThreadWrites,
+  moveChip,
   movePickerIndex,
   orderEfforts,
   panelHeight,
@@ -340,6 +341,25 @@ describe("account rows", () => {
   test("two logins are rows, and the selected one is kept", () => {
     const chips = [chip("Paral", true), chip("Work", false)];
     expect(shownAccounts(chips)).toEqual(chips);
+  });
+});
+
+describe("account chips", () => {
+  const chip = (name: string, extra = {}) => ({ id: name, name, selected: false, ...extra });
+  const chips = [chip("A"), chip("B", { signedOut: true }), chip("C"), chip("D", { gone: true })];
+
+  test("→ and ← skip chips that cannot be pressed", () => {
+    expect(moveChip(chips, 0, 1, false)).toBe(2);
+    expect(moveChip(chips, 2, -1, false)).toBe(0);
+  });
+
+  test("the row does not wrap: past either end there is no chip", () => {
+    expect(moveChip(chips, 2, 1, false)).toBe(-1);
+    expect(moveChip(chips, 0, -1, false)).toBe(-1);
+  });
+
+  test("a running turn disables them all", () => {
+    expect(moveChip(chips, 0, 1, true)).toBe(-1);
   });
 });
 

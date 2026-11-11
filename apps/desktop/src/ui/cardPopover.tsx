@@ -279,15 +279,20 @@ export function menuKeys(event: ReactKeyboardEvent<HTMLElement>) {
   );
   if (!rows.length) return;
   const current = document.activeElement;
+  // A group of side-by-side controls (`data-menu-group`) is one stop for ↑↓: the group's own row,
+  // whichever of its controls holds focus, since ←→ walk inside it.
+  const group = current instanceof HTMLElement ? current.closest("[data-menu-group]") : null;
+  const stop = group?.querySelector<HTMLElement>("[data-menu-row]");
   const at = current instanceof HTMLElement ? rows.indexOf(current) : -1;
+  const from = at < 0 && stop ? rows.indexOf(stop) : at;
   const focus = (index: number) => {
     const row = rows[(index + rows.length) % rows.length];
     if (!row) return;
     row.focus({ preventScroll: true });
     row.scrollIntoView({ block: "nearest" });
   };
-  if (event.key === "ArrowDown") focus(at < 0 ? 0 : at + 1);
-  else if (event.key === "ArrowUp") focus(at < 0 ? rows.length - 1 : at - 1);
+  if (event.key === "ArrowDown") focus(from < 0 ? 0 : from + 1);
+  else if (event.key === "ArrowUp") focus(from < 0 ? rows.length - 1 : from - 1);
   else if (event.key === "Home") focus(0);
   else if (event.key === "End") focus(rows.length - 1);
   else return;
