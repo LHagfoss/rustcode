@@ -1758,7 +1758,6 @@ fn replace_file_content_schema_advertises_few_names_but_accepts_every_alias() {
     // other aliases too, so `patternProperties` must admit each of them.
     let schema = replace_file_content_schema();
     let root = &schema["properties"];
-    let items = &schema["properties"]["edits"]["items"]["properties"];
     for name in [
         "target_content",
         "replacement_content",
@@ -1766,7 +1765,6 @@ fn replace_file_content_schema_advertises_few_names_but_accepts_every_alias() {
         "new_string",
     ] {
         assert!(root.get(name).is_some(), "schema missing root {name}");
-        assert!(items.get(name).is_some(), "schema missing edits[] {name}");
     }
     let pattern = schema["patternProperties"]
         .as_object()
@@ -1792,16 +1790,14 @@ fn replace_file_content_schema_advertises_few_names_but_accepts_every_alias() {
         assert!(alternatives.contains(&alias), "pattern rejects {alias}");
     }
     assert!(!alternatives.contains(&"replacements"));
+    // `edits[]` entries go through the same alias reader
+    // (`edit_target_and_replacement`), so the schema declares them as a plain
+    // object rather than repeating the names above: every alias pair the
+    // handler takes stays admitted, nothing is required, and the block sent on
+    // every turn is ~240 bytes smaller (#3376).
     assert_eq!(
-        schema["properties"]["edits"]["items"]["patternProperties"],
-        schema["patternProperties"]
-    );
-    // edits[] items must not require old_string/new_string specifically: any
-    // alias pair is valid for the handler.
-    assert!(
-        schema["properties"]["edits"]["items"]
-            .get("required")
-            .is_none()
+        schema["properties"]["edits"]["items"],
+        serde_json::json!({"type": "object"})
     );
 }
 

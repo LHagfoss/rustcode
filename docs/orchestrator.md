@@ -169,10 +169,10 @@ thread reads what changed instead of polling `gh` itself (#3369).
 `manage_pull_links` is listed by `rustcode mcp-orchestrator` for every
 external harness thread, and the server answers it itself — no
 `_rustcode/orchestration` request, no user approval — because a link only
-writes the watch store and reads GitHub through `gh`. It is deliberately not
-in the built-in tool block: that block is at its byte budget (see
-`schema_budget_tests`), and the tool needs no client, so paying for it on
-every built-in request would cut a tool a client can answer instead.
+writes the watch store and reads GitHub through `gh`. The engine answers the
+built-in tool too (`tools/misc.rs`), so a RustCode thread has it as well: it
+was left out only while the built-in block was at its byte budget, and
+shortening the schemas freed the room for it (#3376).
 
 | Args | Answer |
 | --- | --- |
@@ -1230,12 +1230,12 @@ this computer's folders: a thread on a paired machine is answered "that runs on
 <machine>: do that there", as `merge_when_green` and `cleanup_worktree` are,
 because the git that decides a handoff is the one holding the worktree.
 
-Like v9's three tools, the pair reaches an orchestrator through the `rustcode`
-MCP server an external harness runs. The built-in schema's byte cap is already
-exceeded at v9, so the built-in harness's own threads do not list these either;
-a v12 client loses none of the tools it had at v11
-(`the_orchestration_tools_fit_the_hard_cap`, which loops every
-version).
+Like every versioned tool, the pair reaches an orchestrator through the
+`rustcode` MCP server an external harness runs, and through the built-in
+block for a RustCode thread whose client advertises v13. The cap is high
+enough for the newest version again (57 KiB, room to spare after #3376), and
+`the_orchestration_tools_fit_the_hard_cap` loops every version and fails if
+one loses a tool or the newest has no room for the next.
 
 The app advertises 13 from `CAPABILITY_VERSION` (`state/orchestration.ts`); a
 v12 app keeps exactly the v12 set and `PROMPT_HINT_V12`.

@@ -39,20 +39,44 @@ fn schema_exposes_typed_create_shapes_and_mutations_require_confirmation() {
             "create", "list", "pause", "resume", "run", "history", "delete"
         ])
     );
+    // One flat shape each (#3376): every field is still declared, and the
+    // daemon validates the fields each kind and action type needs.
     assert_eq!(
-        schema["properties"]["schedule"]["oneOf"]
-            .as_array()
-            .unwrap()
-            .len(),
-        4
+        schema["properties"]["schedule"]["properties"]["kind"]["enum"],
+        json!(["daily", "monthly", "cron", "once"])
     );
+    for field in ["hour", "minute", "day", "timezone", "expression", "at"] {
+        assert!(
+            schema["properties"]["schedule"]["properties"][field].is_object(),
+            "schedule.{field} is declared"
+        );
+    }
     assert_eq!(
-        schema["properties"]["action"]["oneOf"]
-            .as_array()
-            .unwrap()
-            .len(),
-        4
+        schema["properties"]["action"]["properties"]["type"]["enum"],
+        json!(["mcp_call", "prompt", "shell_command", "poll"])
     );
+    for field in [
+        "server",
+        "tool",
+        "arguments",
+        "prompt",
+        "command",
+        "working_directory",
+        "environment_allowlist",
+        "timeout_seconds",
+        "authorized",
+        "model_profile",
+        "session_id",
+        "interval_seconds",
+        "max_runs",
+        "deadline_seconds",
+        "stop_on_change",
+    ] {
+        assert!(
+            schema["properties"]["action"]["properties"][field].is_object(),
+            "action.{field} is declared"
+        );
+    }
     assert!(super::misc::MANAGE_SCHEDULED_JOBS.requires_confirmation);
     assert_eq!(
         super::misc::MANAGE_SCHEDULED_JOBS.safety,

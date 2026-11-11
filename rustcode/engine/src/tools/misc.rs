@@ -13,6 +13,13 @@ const MAX_LIST_JOBS: usize = 100;
 const MAX_HISTORY_RUNS: usize = 50;
 
 fn manage_scheduled_jobs_schema() -> Value {
+    // One flat object for each nested spec instead of one branch per kind: the
+    // native `tools` block carries this schema on every request, and the four
+    // `oneOf` branches repeated `timezone`, `hour`, `minute` and
+    // `misfire_policy` up to four times each (#3376). Every field is still
+    // declared, and the daemon (`create_job`) validates the fields each kind
+    // and type needs, so a call the schema no longer rules out fails there with
+    // the field it wants.
     let misfire = serde_json::json!({"type":"string","enum":["skip_missed","run_once"],"default":"skip_missed"});
     serde_json::json!({
         "type":"object",
@@ -23,19 +30,36 @@ fn manage_scheduled_jobs_schema() -> Value {
             "name": {"type":"string","minLength":1},
             "workspace": {"type":"string","minLength":1},
             "target_session": {"type":["string","null"]},
-            "schedule": {"oneOf":[
-                {"type":"object","properties":{"kind":{"const":"daily"},"hour":{"type":"integer","minimum":0,"maximum":23},"minute":{"type":"integer","minimum":0,"maximum":59},"timezone":{"type":"string"},"misfire_policy":misfire.clone()},"required":["kind","hour","minute","timezone"],"additionalProperties":false},
-                {"type":"object","properties":{"kind":{"const":"monthly"},"day":{"type":"integer","minimum":1,"maximum":31},"hour":{"type":"integer","minimum":0,"maximum":23},"minute":{"type":"integer","minimum":0,"maximum":59},"timezone":{"type":"string"},"misfire_policy":misfire.clone()},"required":["kind","day","hour","minute","timezone"],"additionalProperties":false},
-                {"type":"object","properties":{"kind":{"const":"cron"},"expression":{"type":"string"},"timezone":{"type":"string"},"misfire_policy":misfire},"required":["kind","expression","timezone"],"additionalProperties":false},
-                {"type":"object","properties":{"kind":{"const":"once"},"at":{"type":"string","format":"date-time"}},"required":["kind","at"],"additionalProperties":false}
-            ]},
-            "action": {"oneOf":[
-                {"type":"object","properties":{"type":{"const":"mcp_call"},"server":{"type":"string"},"tool":{"type":"string"},"arguments":{},"workspace":{"type":"string"}},"required":["type","server","tool","workspace"],"additionalProperties":false},
-                {"type":"object","properties":{"type":{"const":"prompt"},"prompt":{"type":"string"},"workspace":{"type":"string"},"model_profile":{"type":["string","null"]},"session_id":{"type":["string","null"]}},"required":["type","prompt","workspace"],"additionalProperties":false},
-                {"type":"object","properties":{"type":{"const":"shell_command"},"command":{"type":"string"},"working_directory":{"type":"string"},"environment_allowlist":{"type":"array","items":{"type":"string"}},"timeout_seconds":{"type":"integer","minimum":1},"authorized":{"type":"boolean"}},"required":["type","command","working_directory","timeout_seconds"],"additionalProperties":false},
-                {"type":"object","properties":{"type":{"const":"poll"},"action":{"type":"object"},"interval_seconds":{"type":"integer","minimum":1},"max_runs":{"type":"integer","minimum":1},"deadline_seconds":{"type":"integer","minimum":1},"stop_on_change":{"type":"boolean"}},"required":["type","action","interval_seconds","max_runs","deadline_seconds"],"additionalProperties":false}
-            ]},
-            "retry_policy": {"type":"object","properties":{"max_attempts":{"type":"integer","minimum":1},"initial_backoff_seconds":{"type":"integer"},"max_backoff_seconds":{"type":"integer"}},"required":["max_attempts","initial_backoff_seconds","max_backoff_seconds"],"additionalProperties":false},
+            "schedule": {"type":"object","properties":{
+                "kind":{"type":"string","enum":["daily","monthly","cron","once"]},
+                "hour":{"type":"integer","minimum":0,"maximum":23},
+                "minute":{"type":"integer","minimum":0,"maximum":59},
+                "day":{"type":"integer","minimum":1,"maximum":31},
+                "timezone":{"type":"string"},
+                "expression":{"type":"string"},
+                "at":{"type":"string","format":"date-time"},
+                "misfire_policy":misfire
+            },"required":["kind"],"additionalProperties":false},
+            "action": {"type":"object","properties":{
+                "type":{"type":"string","enum":["mcp_call","prompt","shell_command","poll"]},
+                "server":{"type":"string"},
+                "tool":{"type":"string"},
+                "arguments":{},
+                "prompt":{"type":"string"},
+                "command":{"type":"string"},
+                "working_directory":{"type":"string"},
+                "environment_allowlist":{"type":"array","items":{"type":"string"}},
+                "timeout_seconds":{"type":"integer","minimum":1},
+                "authorized":{"type":"boolean"},
+                "model_profile":{"type":["string","null"]},
+                "session_id":{"type":["string","null"]},
+                "action":{"type":"object"},
+                "interval_seconds":{"type":"integer","minimum":1},
+                "max_runs":{"type":"integer","minimum":1},
+                "deadline_seconds":{"type":"integer","minimum":1},
+                "stop_on_change":{"type":"boolean"}
+            },"required":["type"],"additionalProperties":false},
+            "retry_policy": {"type":"object","description":"max_attempts, initial_backoff_seconds and max_backoff_seconds; the daemon fills in its defaults"},
             "limit": {"type":"integer","minimum":1,"maximum":50}
         },
         "required":["operation"],
@@ -45,7 +69,7 @@ fn manage_scheduled_jobs_schema() -> Value {
 
 pub const MANAGE_SCHEDULED_JOBS: Tool = Tool {
     name: "manage_scheduled_jobs",
-    description: "Create and manage durable scheduled jobs in the RustCode daemon, which must already be running.",
+    description: "Create and manage durable scheduled jobs in the RustCode daemon, which must already be running. Each schedule kind and action type needs its own fields: daily hour, minute and timezone; monthly also day; cron expression and timezone; once at; mcp_call server, tool and workspace; prompt prompt and workspace; shell_command command, working_directory and timeout_seconds; poll action, interval_seconds, max_runs and deadline_seconds. The daemon reports any a call left out.",
     arguments: r#"{"operation":"create|list|pause|resume|run|history|delete", "job_id":"required for job operations", "id":"required for create", "name":"required for create", "workspace":"required for create", "schedule":{"kind":"daily|monthly|cron|once",...}, "action":{"type":"mcp_call|prompt|shell_command|poll",...}, "limit":50}"#,
     handler: manage_scheduled_jobs,
     requires_confirmation: true,
@@ -293,7 +317,7 @@ pub const LIST_SESSIONS: Tool = Tool {
 
 pub const MESSAGE_SESSION: Tool = Tool {
     name: crate::orchestration::MESSAGE_SESSION,
-    description: "Message a thread in any project. The user is asked once. Idle starts a turn; busy queues. steer: true delivers mid-turn if supported, else queues; delivered says steered, queued or started. Returns link_id for wait_session. Send the whole task, repository rules (read AGENTS.md), acceptance criteria and command timeouts: delegates have no TTY or default timeout.",
+    description: "Message a thread in any project. The user is asked once. Idle starts a turn; busy queues. steer: true delivers mid-turn if supported, else queues; delivered says steered, queued or started. Returns link_id for wait_session. Send the whole task and brief it fully, as start_session's description says.",
     arguments: r#"{"session_id": "id from list_sessions", "message": "what to ask or do", "attachments": ["/abs/path/to/file"], "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -399,7 +423,7 @@ pub const START_SESSION: Tool = Tool {
 
 pub const FAN_OUT: Tool = Tool {
     name: crate::orchestration::FAN_OUT,
-    description: "Start the same task on 2-4 harnesses, each in its own worktree thread, so the user can compare the results. Pass `machine` (id or name from list_machines) to run them on another paired computer; omit it for this one (with `project`, its absolute path there). Pass the whole task as the shared prompt: they do not see this conversation. Carry the repository rules (tell each to read AGENTS.md) and acceptance criteria, and bound commands that can block: a delegated shell has no TTY or default timeout. Each entry may name a harness, model, effort and named account as list_harnesses lists them. The user is asked first. Returns one link per thread for wait_session.",
+    description: "Start the same task on 2-4 harnesses, each in its own worktree thread, so the user can compare the results. Pass `machine` (id or name from list_machines) to run them on another paired computer; omit it for this one (with `project`, its absolute path there). Pass the whole task as the shared prompt: they do not see this conversation. Brief each fully, as start_session's description says. Each entry may name a harness, model, effort and named account as list_harnesses lists them. The user is asked first. Returns one link per thread for wait_session.",
     arguments: r#"{"prompt": "the task", "harnesses": [{"harness": "codex"}, {"harness": "claude-code"}], "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -441,7 +465,7 @@ pub const FAN_OUT: Tool = Tool {
 /// clients that advertise `_meta.rustcode.orchestration >= 3`.
 pub const LIST_HARNESSES: Tool = Tool {
     name: crate::orchestration::LIST_HARNESSES,
-    description: "List the harnesses that can run a thread, each with its models, efforts and named accounts or why it cannot run, and what this thread runs on. Pass `machine` for another paired computer's harnesses. Each leads with the model a new thread starts on and the ones this project used recently, then caps at 12: `omitted_models` counts the rest, reachable with `model`. `harness` keeps one (id, else name); `model` matches part of a model id or name, any case (up to 50). Every login a plan was read for carries `usage`: `{ status, as_of, windows: [{ label, used_percent, window_minutes, resets_at }] }` — read it before choosing an account, so a delegate skips a nearly used window.",
+    description: "List the harnesses that can run a thread, each with its models, efforts and named accounts or why it cannot run, and what this thread runs on. Pass `machine` for another paired computer's harnesses. Each leads with the model a new thread starts on and the ones this project used recently, then caps at 12: `omitted_models` counts the rest, reachable with `model`. `harness` keeps one (id, else name); `model` matches part of a model id or name (up to 50). Every login a plan was read for carries `usage`: `{ status, as_of, windows: [{ label, used_percent, window_minutes, resets_at }] }` — read it before choosing an account, so a delegate skips a nearly used window.",
     arguments: r#"{"harness": "codex", "model": "opus"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -636,7 +660,7 @@ pub const ANSWER_REQUEST: Tool = Tool {
 
 pub const ORGANIZE_THREADS: Tool = Tool {
     name: crate::orchestration::ORGANIZE_THREADS,
-    description: "Set the title, pin, unread or archived (settled) state of several threads at once. The batch form of update_session: the same changes reach every listed thread, the user approves once, and a thread outside this project is skipped with the reason. unread: true marks them unread, false marks them read. changed counts the threads one of the changes actually reached; a thread that already had the value is not one.",
+    description: "Set the title, pin, unread or archived (settled) state of several threads at once. The batch form of update_session: the same changes reach every listed thread, the user approves once, and a thread outside this project is skipped with the reason. changed counts the threads a change actually reached; one that already had the value is not counted.",
     arguments: r#"{"session_ids": ["id from list_sessions"], "pinned": true, "archived": false}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -687,7 +711,7 @@ pub const LIST_PROJECTS: Tool = Tool {
 /// paired, which `start_session` and the other machine-aware tools take.
 pub const LIST_MACHINES: Tool = Tool {
     name: crate::orchestration::LIST_MACHINES,
-    description: "List the computers this RustCode is paired with: this one (current: true) and each machine with id, name (the name the machine reports), display_name (the name the app shows, or null), icon, icon_tint, platform, state (connected or offline), paused, route in use, its harnesses and project names. Ask it when the user asks what machines they have, which one a thread runs on, or where a task can run. Pass a machine's id or name as `machine` to start_session, fan_out, list_harnesses, list_projects, list_sessions, read_session, message_session, wait_session, interrupt_session, thread_status or list_pending_requests; omit it to act on this computer. Threads on another machine answer with an id that carries that machine, so later calls need no `machine`. Acting on another machine asks the user first, and an offline one is refused by name.",
+    description: "List the computers this RustCode is paired with: this one (current: true) and each machine with id, name (the name the machine reports), display_name (the name the app shows, or null), icon, icon_tint, platform, state (connected or offline), paused, route in use, its harnesses and project names. Ask it when the user asks what machines they have, which one a thread runs on, or where a task can run. Every tool whose schema has a `machine` argument takes an id or name from here; omit it to act on this computer. Threads on another machine answer with an id that carries that machine, so later calls need no `machine`. Acting on another machine asks the user first, and an offline one is refused by name.",
     arguments: r#"{}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -748,7 +772,7 @@ pub const THREAD_STATUS: Tool = Tool {
 
 pub const MERGE_WHEN_GREEN: Tool = Tool {
     name: crate::orchestration::MERGE_WHEN_GREEN,
-    description: "Wait for a delegate's pull request checks to pass, then squash-merge it and delete its branch, the way scripts/pr-merge.sh does: advisory portability jobs are ignored, a cancelled or superseded run does not block, a failing check stops it before anything merges (the failing names come back), and two quiet rounds catch a job that registers late. A pull request with no checks stops at once as no_checks instead of waiting. Returns merged, failing, closed, no_checks or pending (still waiting when the wait ran out). Waits at most 25 minutes per call; call again to keep waiting. The user approves it; nothing merges without that.",
+    description: "Wait for a delegate's pull request checks to pass, then squash-merge it and delete its branch, the way scripts/pr-merge.sh does: advisory portability jobs are ignored, a cancelled or superseded run does not block, a failing check stops it before anything merges (the failing names come back), and two quiet rounds catch a job that registers late. A pull request with no checks stops at once as no_checks instead of waiting. Returns merged, failing, closed, no_checks or pending. Waits at most 25 minutes per call; call again to keep waiting. The user approves it; nothing merges without that.",
     arguments: r#"{"session_id": "the delegate whose PR should merge", "timeout_ms": 1500000}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -769,7 +793,7 @@ pub const MERGE_WHEN_GREEN: Tool = Tool {
 
 pub const CLEANUP_WORKTREE: Tool = Tool {
     name: crate::orchestration::CLEANUP_WORKTREE,
-    description: "Remove a merged delegate's worktree and its branch, then settle the thread when settle is not false. It refuses a worktree on the base or default branch, dirtied, holding ignored files that are not build output, or with commits `git cherry <base> <branch>` shows are not on the base and not part of the merged pull request's head; the refusal says which commits or files those are. A branch the delegate renamed after the caller read its pull request is accepted when that branch's pull request merged and nothing there would be lost, and the branch it was recorded on is removed too; otherwise the refusal names the merged-pull-request check that failed. Only worktrees under RustCode's worktrees folder are touched, never the main checkout, and a git that cannot answer refuses instead of guessing. The user approves it.",
+    description: "Remove a merged delegate's worktree and its branch, then settle the thread unless settle is false. It refuses a worktree on the base or default branch, dirtied, holding ignored files that are not build output, or with commits `git cherry <base> <branch>` shows are not on the base and not part of the merged pull request's head; the refusal says which commits or files those are. A branch the delegate renamed after the caller read its pull request is accepted when that branch's pull request merged and nothing would be lost, and the branch it was recorded on is removed too; otherwise the refusal names the merged-pull-request check that failed. Only worktrees under RustCode's worktrees folder are touched, never the main checkout, and a git that cannot answer refuses instead of guessing. The user approves it.",
     arguments: r#"{"session_id": "the merged delegate", "settle": true}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -987,7 +1011,7 @@ pub const RUN_SCHEDULED_TASK_NOW: Tool = Tool {
 /// and handing its work back to the user.
 pub const WORKTREE_STATUS: Tool = Tool {
     name: crate::orchestration::WORKTREE_STATUS,
-    description: "Report where worktrees stand: the owning thread, its branch and path, commits ahead of and behind the ref it tracks, uncommitted files, the last commit and the pull request its branch heads. Omit session_id for every worktree thread this thread reaches (all_projects for every project); pass it for one thread, its own included. A read: no approval.",
+    description: "Report where worktrees stand: the owning thread, its branch and path, commits ahead of and behind the ref it tracks, uncommitted files, the last commit and the pull request its branch heads. A read: no approval.",
     arguments: r#"{"session_id": "a thread's id, or omit for every worktree"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -1008,7 +1032,7 @@ pub const WORKTREE_STATUS: Tool = Tool {
 
 pub const HANDOFF_WORKTREE: Tool = Tool {
     name: crate::orchestration::HANDOFF_WORKTREE,
-    description: "Move a thread's work to where the user can continue it, keeping every commit. `to: \"checkout\"` (the default) removes a delegate's worktree, switches the user's active checkout to its branch and moves the thread there, so the user can work locally; `to: \"worktree\"` gives a thread that runs in the checkout a worktree of its own on a new branch from the checkout's HEAD, leaving the checkout untouched. It refuses rather than forces: a worktree with uncommitted or ignored files, a checkout with uncommitted changes, a checkout on another branch holding commits no remote has, and a running thread. Nothing is stashed, rebased or reset, and no branch is deleted. The user approves it.",
+    description: "Move a thread's work to where the user can continue it, keeping every commit. `to: \"checkout\"` (the default) removes a delegate's worktree, switches the user's active checkout to its branch and moves the thread there; `to: \"worktree\"` gives a thread that runs in the checkout a worktree of its own on a new branch from the checkout's HEAD, leaving the checkout untouched. It refuses rather than forces: a worktree with uncommitted or ignored files, a checkout with uncommitted changes, a checkout on another branch holding commits no remote has, and a running thread. Nothing is stashed, rebased or reset, and no branch is deleted. The user approves it.",
     arguments: r#"{"session_id": "the delegate whose work the user takes over", "to": "checkout"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -1029,10 +1053,11 @@ pub const HANDOFF_WORKTREE: Tool = Tool {
 
 /// Link a thread to a pull request (#3369) and read it back: the engine keeps
 /// checking through the watch machinery (`pull_watch.rs`), so the thread hears
-/// about a change once instead of polling `gh` itself.
+/// about a change once instead of polling `gh` itself. Built in since #3376
+/// freed the room for it; the `rustcode` MCP server answers it too.
 pub const MANAGE_PULL_LINKS: Tool = Tool {
     name: crate::pull_watch::LINK_TOOL_NAME,
-    description: "Link this thread to a pull request and keep it checked without polling: `link` with `repo` (owner/name) and `number` answers its state now, then this thread hears about each change once (failed or recovered checks, reviews, comments, conflicts, merged or closed) through `status`. `unlink` stops. A link stops itself when the PR merges or closes, after six failed GitHub reads, or after two weeks; 5 per thread, 20 at once, and a PR several threads link is read once.",
+    description: "Link this thread to a pull request and keep it checked without polling: `link` answers its state now, then each change reaches this thread once through `status` (checks, reviews, comments, conflicts, merged, closed); `unlink` stops. It stops itself when the PR merges or closes, after six failed GitHub reads, or after two weeks; 5 per thread, 20 at once, and a PR several threads link is read once.",
     arguments: r#"{"action": "link|status|unlink", "repo": "owner/name", "number": 7}"#,
     handler: manage_pull_links,
     requires_confirmation: false,
@@ -1041,8 +1066,8 @@ pub const MANAGE_PULL_LINKS: Tool = Tool {
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": crate::pull_watch::LINK_ACTIONS},
-                "repo": {"type": "string", "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$", "description": "owner/name; omit to use this thread's folder"},
-                "number": {"type": "integer", "minimum": 1, "description": "Pull request number"}
+                "repo": {"type": "string", "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$", "description": "owner/name; defaults to this thread's folder"},
+                "number": {"type": "integer", "minimum": 1}
             },
             "required": ["action"],
             "additionalProperties": false
@@ -1073,7 +1098,7 @@ fn manage_pull_links(args: &Value) -> Result<String, String> {
 /// "Let agents read threads in other projects".
 pub const THREAD_USAGE: Tool = Tool {
     name: crate::orchestration::THREAD_USAGE,
-    description: "Tokens and cost from what RustCode recorded of every turn, as rows with totals: input, output, cached and cache-write tokens, cost_usd (only the USD a harness reported, never a price RustCode computed), turns, per-column counts of turns that reported no input, output, cached or cache-write tokens, and how many reported no cost. Ask it when the user asks what they have spent or used. group_by: harness (default), model, day, project or thread; since is a day or month, YYYY-MM-DD or YYYY-MM; project limits it to one project's threads.",
+    description: "Tokens and cost from what RustCode recorded of every turn, as rows with totals: input, output, cached and cache-write tokens, cost_usd (only the USD a harness reported, never a price RustCode computed), turns, per-column counts of turns that reported no input, output, cached or cache-write tokens, and how many reported no cost. Ask it when the user asks what they have spent or used. group_by: harness (default), model, day, project or thread; since takes a day or month, YYYY-MM-DD or YYYY-MM; project limits it to one project's threads.",
     arguments: r#"{"since": "2026-11-01", "group_by": "harness", "project": "/abs/project"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,

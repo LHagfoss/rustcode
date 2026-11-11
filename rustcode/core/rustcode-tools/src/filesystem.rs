@@ -60,11 +60,11 @@ pub fn replace_file_content_schema() -> Value {
             "new_string": { "type": "string", "description": "Alias of replacement_content" },
             "start_line": { "type": "integer", "minimum": 1, "description": "1-indexed line anchoring the edit" },
             "end_line": { "type": "integer", "minimum": 1 },
-            "edits": { "type": "array", "items": { "type": "object", "patternProperties": aliases, "properties": {
-                "target_content": { "type": "string" }, "replacement_content": { "type": "string" },
-                "old_string": { "type": "string" }, "new_string": { "type": "string" },
-                "start_line": { "type": "integer" }, "end_line": { "type": "integer" }
-            } } }
+            // The batch form is a compatibility path: the same names as the
+            // top level, which the tool description and the handler already
+            // define. Declaring them again cost every request ~240 bytes
+            // (#3376), so the entries stay a plain object.
+            "edits": { "type": "array", "items": { "type": "object" } }
         }, "required": ["path"]
     })
 }

@@ -4543,7 +4543,7 @@ fn the_run_command_spec_forbids_moving_the_user_checkout() {
         "AGENTS.md",
         "outranks generic workflow skills",
         "git worktree add",
-        "only when it is genuinely required",
+        "only when genuinely required",
         "git worktree remove",
         "git worktree prune",
         "git pull --ff-only",
@@ -4589,7 +4589,7 @@ fn repository_branch_policy_resolves_generic_switch_recipe_without_moving_checko
     );
     assert!(
         run_command_spec
-            .contains("follows the repository `AGENTS.md`, which outranks generic workflow skills"),
+            .contains("follow the repository `AGENTS.md`, which outranks generic workflow skills"),
         "run_command must defer to the repository policy"
     );
 }
