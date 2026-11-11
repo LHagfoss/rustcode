@@ -96,6 +96,7 @@ import { usageOf } from "../state/harnessUsage";
 import { childAccountOn, type SignedOutLogins } from "../state/logins";
 import { type MachineState, selfName, useMachines } from "../state/machines";
 import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
+import { scheduledSummary } from "../state/schedule";
 import type { CachedPlan } from "../state/store";
 import {
   acceptsImages,
@@ -112,6 +113,7 @@ import {
   newThreadChoice,
   permissionModeOf,
   saveQueuedEdit,
+  scheduleMessage,
   sendDecisionFor,
   setDraft,
   setExtras,
@@ -140,6 +142,8 @@ import { ModelPicker } from "./ModelPicker";
 import { PasteChip } from "./PasteChip";
 import { cx, MenuSearchField, MenuShortcut, noTextHelpers, Pill, Tooltip } from "./primitives";
 import { QueuedAnnouncer } from "./QueuedMessages";
+import { ScheduledMessages } from "./ScheduledMessages";
+import { SendLaterDialog } from "./SendLaterDialog";
 
 // The field's line box: 14px at 1.5 (`leading-normal`), a hair tighter than a reply's, which is what
 // makes a draft read as something being typed rather than something read back.
@@ -446,6 +450,8 @@ export const Composer = memo(function Composer({
   const [caret, setCaret] = useState(0);
   const [files, setFiles] = useState<{ cwd: string; at: number; paths: string[] } | null>(null);
   const [dropping, setDropping] = useState(false);
+  // The send-later dialog: opened from the + menu, with the draft it is scheduling.
+  const [sendLater, setSendLater] = useState(false);
 
   const running = thread?.running ?? false;
   // A thread on a paired computer that is not connected now is read-only: its turns run there,
@@ -851,6 +857,20 @@ export const Composer = memo(function Composer({
         change(() => sentExtras);
       }
     });
+  };
+
+  // Schedule what is in the field for a time the user picked: it leaves the field as a sent message
+  // would, into the card over the composer. A thread that is busy when its time comes queues it.
+  const schedule = (due: number) => {
+    if (!thread) return;
+    if (!scheduleMessage(thread.id, draft, extras, due)) {
+      toast("Could not schedule that message.", "error");
+      return;
+    }
+    setSendLater(false);
+    update("");
+    change(() => emptyExtras);
+    fadeClearedField(fieldBox.current);
   };
 
   const reference = (path: string) => {
@@ -1304,6 +1324,9 @@ export const Composer = memo(function Composer({
   return (
     <div ref={shell} className={cx("rc-composer-shell relative @container/composer", className)}>
       {thread && <QueuedAnnouncer threadId={thread.id} />}
+      {/* What waits for a time the user picked, over the box: it leaves the transcript's own lane
+          alone, and the stack's bottom edge carries the box down as the cards come and go. */}
+      {thread && <ScheduledMessages threadId={thread.id} />}
       {/* The box: the field and how it is sent. The drawer tucks under its top, the tray under its
           foot, so the three read as one floating surface over the transcript. */}
       <div className="relative">
@@ -1529,6 +1552,25 @@ export const Composer = memo(function Composer({
             <PlusMenu
               onAttach={chooseFiles}
               attachLabel={images ? "Attach Files or Images…" : "Attach Files…"}
+              onSendLater={() => setSendLater(true)}
+              sendLaterDisabled={
+                !thread ||
+                status !== "ready" ||
+                !!queuedEdit ||
+                !!editing ||
+                (!draft.trim() && !hasExtras(extras))
+              }
+              sendLaterTip={
+                !thread
+                  ? "Open a thread first"
+                  : status !== "ready"
+                    ? "Not connected"
+                    : queuedEdit
+                      ? "Finish editing the queued message first"
+                      : editing
+                        ? "Finish editing the sent message first"
+                        : "Write a message first"
+              }
               cwd={cwd}
             />
             <input
@@ -1637,6 +1679,14 @@ export const Composer = memo(function Composer({
           </span>
         </div>
       </div>
+      {thread && (
+        <SendLaterDialog
+          open={sendLater}
+          onOpenChange={setSendLater}
+          preview={scheduledSummary(draft, extras)}
+          onSchedule={schedule}
+        />
+      )}
     </div>
   );
 }, sameComposer);
@@ -2128,10 +2178,18 @@ export function PermissionMenu({ threadId, compact }: { threadId?: string; compa
 function PlusMenu({
   onAttach,
   attachLabel,
+  onSendLater,
+  sendLaterDisabled,
+  sendLaterTip,
   cwd,
 }: {
   onAttach: () => void;
   attachLabel: string;
+  onSendLater: () => void;
+  /** Nothing to schedule yet, or the app cannot send now: the row says so instead of opening. */
+  sendLaterDisabled: boolean;
+  /** Why the row is disabled, said on the row itself. */
+  sendLaterTip: string;
   cwd: string;
 }) {
   return (
@@ -2158,6 +2216,14 @@ function PlusMenu({
     >
       <CardMenuItem onSelect={onAttach}>
         <Paperclip size={13} className="text-fg-muted" /> {attachLabel}
+      </CardMenuItem>
+      <CardMenuItem
+        onSelect={onSendLater}
+        disabled={sendLaterDisabled}
+        data-disabled={sendLaterDisabled || undefined}
+        title={sendLaterDisabled ? sendLaterTip : undefined}
+      >
+        <Clock size={13} className="text-fg-muted" /> Send later…
       </CardMenuItem>
       <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />
       <CardMenuItem onSelect={() => startNewThread()}>
