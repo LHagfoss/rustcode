@@ -17,7 +17,7 @@
 // A row of another machine says which RustCode version it runs, so an old one
 // is a sentence with a command, not a silent connection failure.
 
-import { CircleHelp, Laptop, Monitor, RefreshCw, Search, Server, SquareTerminal } from "lucide-react";
+import { RefreshCw, Search, Server, SquareTerminal } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { currentPlatform } from "../lib/platform";
 import { hasShell } from "../lib/shell";
@@ -29,15 +29,20 @@ import {
   codeComplete,
   codeDigits,
   type DiscoveredMachine,
+  defaultSelfName,
   discoverMachines,
   gatewayLine,
   lastSeen,
   linkCliToApp,
   localAppVersion,
   type Machine,
+  machineGlyph,
   machineLine,
+  machineName,
+  machineTint,
   type Pairing,
   pairMachine,
+  platformIcon,
   platformName,
   refreshMachines,
   refreshServerService,
@@ -45,33 +50,26 @@ import {
   routeName,
   selfName,
   serverLine,
+  setLocalIdentity,
+  setMachineDisplayName,
+  setMachineIcon,
   setMainMachine,
   stateLabel,
   stateTone,
   threadCount,
   threadLabel,
+  useLocalIdentity,
   useMachines,
   versionSkew,
 } from "../state/machines";
 import { toast, useApp } from "../state/store";
+import { DeviceGlyphIcon } from "./MachineGlyph";
+import { MachineIdentityEditor } from "./MachineProfile";
 import { cx, noTextHelpers, Spinner, Switch } from "./primitives";
 import { Action, Chip, fieldClass, Group, Loading, Row } from "./settingsKit";
 
 /** How often the page asks the shell where the machines stand. */
 const POLL_MS = 3000;
-
-/** A machine's icon by what it runs: a laptop, a monitor, or a terminal. */
-function MachineIcon({ platform }: { platform: string }) {
-  const Icon =
-    platform === "macos"
-      ? Laptop
-      : platform === "windows"
-        ? Monitor
-        : platform === "linux"
-          ? SquareTerminal
-          : CircleHelp;
-  return <Icon size={16} className="shrink-0 text-fg-muted" aria-hidden />;
-}
 
 export function MachinesPage() {
   const ready = useMachines((s) => s.ready);
@@ -145,14 +143,16 @@ function ThisComputer() {
   const server = useMachines((s) => s.server);
   const installing = useMachines((s) => s.serverInstalling);
   const linking = useMachines((s) => s.serverLinking);
+  const local = useLocalIdentity();
   const platform = currentPlatform();
+  const reported = platform === "mac" ? "macos" : platform;
   const running = status === "ready";
   const installed = server?.installed === true;
   return (
     <Row
       title={
         <>
-          <MachineIcon platform={platform === "mac" ? "macos" : platform} />
+          <DeviceGlyphIcon glyph={local.icon ?? platformIcon(reported)} tint={local.tint} size={16} />
           {selfName()}
         </>
       }
@@ -192,6 +192,19 @@ function ThisComputer() {
           Install server
         </Action>
       )}
+      <MachineIdentityEditor
+        label={`${selfName()} on this computer`}
+        reportedName={defaultSelfName()}
+        platform={reported}
+        identity={local}
+        onName={(name) => setLocalIdentity({ displayName: name })}
+        onIcon={(icon, tint) => setLocalIdentity({ icon, tint })}
+        trigger={
+          <Action quiet size="sm">
+            Name and icon
+          </Action>
+        }
+      />
       {/* One action for a terminal's older `rustcode`: the install script's copy
           or any other that Homebrew does not own (issue 3411). */}
       {server?.problems.some((problem) => problem.code === "path-version-mismatch") && (
@@ -229,13 +242,14 @@ export function MachineRow({
   const threads = threadLabel(count);
   const skew = versionSkew(machine.version, local, machine.platform);
   const hint = machine.hint;
+  const name = machineName(machine);
   return (
     <Row
       stacked
       title={
         <>
-          <MachineIcon platform={machine.platform} />
-          {machine.name}
+          <DeviceGlyphIcon glyph={machineGlyph(machine)} tint={machineTint(machine)} size={16} />
+          {name}
         </>
       }
       subtitle={
@@ -261,15 +275,32 @@ export function MachineRow({
       badge={<Chip tone={stateTone(machine)}>{stateLabel(machine)}</Chip>}
     >
       {machine.state === "needsPairing" && <PairAgainAction machine={machine} />}
+      <MachineIdentityEditor
+        label={`${name} on this computer`}
+        reportedName={machine.name}
+        platform={machine.platform}
+        identity={{
+          displayName: machine.displayName ?? null,
+          icon: machineGlyph(machine),
+          tint: machineTint(machine),
+        }}
+        onName={(next) => void setMachineDisplayName(machine, next)}
+        onIcon={(icon, tint) => void setMachineIcon(machine, icon, tint)}
+        trigger={
+          <Action quiet size="sm">
+            Name and icon
+          </Action>
+        }
+      />
       <span className="flex items-center gap-2">
         <span className="text-caption text-fg-muted">Main machine</span>
         <Switch
-          label={`Make ${machine.name} the main machine`}
+          label={`Make ${name} the main machine`}
           checked={machine.main}
           onChange={(next) => next && void setMainMachine(machine)}
         />
       </span>
-      <Action quiet size="sm" aria-label={`Remove ${machine.name}`} onClick={() => removeMachine(machine)}>
+      <Action quiet size="sm" aria-label={`Remove ${name}`} onClick={() => removeMachine(machine)}>
         Remove
       </Action>
     </Row>
@@ -283,7 +314,7 @@ function PairAgainAction({ machine }: { machine: Machine }) {
     <Action
       disabled={!address}
       onClick={() => {
-        if (address) void askMachine(address, machine.name);
+        if (address) void askMachine(address, machineName(machine));
       }}
     >
       <RefreshCw size={12} /> Pair again
@@ -380,7 +411,7 @@ function DiscoveredRow({ found, local }: { found: DiscoveredMachine; local: stri
     <Row
       title={
         <>
-          {found.platform && <MachineIcon platform={found.platform} />}
+          {found.platform && <DeviceGlyphIcon glyph={platformIcon(found.platform)} size={16} />}
           {found.name}
         </>
       }

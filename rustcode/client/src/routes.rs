@@ -12,14 +12,22 @@
 //! the deadlines are tokio timers, which a unit test pauses and advances.
 //! Moving between routes is the same race run again, so a connection that
 //! drops re-orders itself without any extra state.
+//!
+//! One thing outside the race decides what a route is worth: whether this
+//! computer is on the overlay the route is on at all. A machine that runs
+//! Radmin VPN and NetBird reports both, and a computer with only NetBird can
+//! never reach the Radmin address, so that route is dialled last and a hint is
+//! never printed asking its owner to fix a VPN this computer is not on
+//! ([`on_local_overlay`], [`ordered_for_this_computer`], [`RouteReport`]).
 
 use crate::protocol::ErrorCode;
 use crate::registry::{OverlayProvider, Route, RouteKind};
-use crate::transport::port_or_default;
+use crate::transport::{host_part, port_or_default};
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
 use std::collections::VecDeque;
 use std::future::Future;
+use std::net::IpAddr;
 use std::pin::Pin;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -116,6 +124,127 @@ pub enum Race<T> {
 pub fn ordered(routes: &[Route]) -> Vec<Route> {
     let mut ordered = routes.to_vec();
     ordered.sort_by_key(|route| route.kind.rank());
+    ordered
+}
+
+/// The address space an address is in, which is how a route's overlay is
+/// compared with this computer's own interfaces.
+///
+/// Meshes do not announce themselves in the routing table and macOS names
+/// every VPN `utunN`, so the address is what is left to compare: two addresses
+/// in the same space are on the same kind of overlay, and an address in a
+/// space this computer has no interface in is on an overlay it is not on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AddressSpace {
+    /// `100.64.0.0/10`, the shared address space NetBird and Tailscale hand
+    /// out. One space for all of them: only a machine's own address range
+    /// tells those products apart, and it does not matter here.
+    SharedV4,
+    /// A private, loopback or link-local IPv4 range, keyed by its first two
+    /// octets: `10.8.0.2` (a WireGuard tunnel) and `10.147.20.5` (a ZeroTier
+    /// network) are different spaces, and this computer's own address on the
+    /// same ZeroTier network is the same one.
+    PrivateV4(u8, u8),
+    /// IPv6 unique-local (`fc00::/7`), keyed by its first two octets, which is
+    /// what a VPN hands out: Tailscale's `fd7a:115c:a1e0::/48` is one space and
+    /// Radmin's `fdfd::` another.
+    UniqueLocalV6(u8, u8),
+    /// IPv6 loopback and link-local.
+    LocalV6,
+    /// A globally routed IPv4 address.
+    GlobalV4,
+    /// A globally routed IPv6 address.
+    GlobalV6,
+}
+
+/// The space `address` is in (see [`AddressSpace`]).
+pub fn address_space(address: IpAddr) -> AddressSpace {
+    match address {
+        IpAddr::V4(ip) => {
+            let [first, second, ..] = ip.octets();
+            if first == 100 && (64..128).contains(&second) {
+                AddressSpace::SharedV4
+            } else if ip.is_loopback() || ip.is_private() || ip.is_link_local() {
+                AddressSpace::PrivateV4(first, second)
+            } else {
+                AddressSpace::GlobalV4
+            }
+        }
+        IpAddr::V6(ip) => {
+            let octets = ip.octets();
+            if (octets[0] & 0xfe) == 0xfc {
+                AddressSpace::UniqueLocalV6(octets[0], octets[1])
+            } else if ip.is_loopback() || ip.is_unicast_link_local() {
+                AddressSpace::LocalV6
+            } else {
+                AddressSpace::GlobalV6
+            }
+        }
+    }
+}
+
+/// This computer's own interface addresses, for telling an overlay this
+/// computer is on from one it is not.
+///
+/// Loopback and link-local addresses are left out: neither is on an overlay,
+/// and a link-local one needs a scope a route does not carry. A machine that
+/// cannot read its interfaces gets an empty list, which shows no hint about a
+/// VPN and tries its overlay routes last instead of dropping them.
+pub fn local_addresses() -> Vec<IpAddr> {
+    let Ok(interfaces) = if_addrs::get_if_addrs() else {
+        return Vec::new();
+    };
+    interfaces
+        .into_iter()
+        .filter(|interface| interface.is_oper_up() && !interface.is_loopback())
+        .map(|interface| interface.ip())
+        .filter(|address| {
+            !address.is_loopback()
+                && !address.is_unspecified()
+                && !match address {
+                    IpAddr::V4(ip) => ip.is_link_local(),
+                    IpAddr::V6(ip) => ip.is_unicast_link_local(),
+                }
+        })
+        .collect()
+}
+
+/// Whether `route` is on an overlay this computer has an interface on.
+///
+/// `true` for every route that is not on an overlay — the question means
+/// nothing for a LAN or public route — and for an overlay route whose address
+/// is a name rather than an address: a `.ts.net` name is resolved by the
+/// overlay's own resolver, so it never answers from a space this computer is
+/// not on the way a saved raw address does.
+///
+/// `local` is [`local_addresses`], passed in so the answer is a pure function
+/// of what the caller read and a unit test can state both sides.
+pub fn on_local_overlay(route: &Route, local: &[IpAddr]) -> bool {
+    let Some(space) = overlay_space(route) else {
+        return true;
+    };
+    local.iter().any(|address| address_space(*address) == space)
+}
+
+/// The address space an overlay route is in, or `None` for a route that is not
+/// on an overlay and for a name that does not say.
+fn overlay_space(route: &Route) -> Option<AddressSpace> {
+    if !matches!(route.kind, RouteKind::Vpn | RouteKind::Tailscale) {
+        return None;
+    }
+    host_part(&route.address)
+        .parse::<IpAddr>()
+        .ok()
+        .map(address_space)
+}
+
+/// [`ordered`] with the routes on an overlay this computer is not on at the
+/// back of their class: they cannot answer, so they are dialled only after
+/// every route that can. Stable, so the order inside each group is kept, and a
+/// public route stays last where [`ordered`] puts it.
+pub fn ordered_for_this_computer(routes: &[Route], local: &[IpAddr]) -> Vec<Route> {
+    let mut ordered = ordered(routes);
+    ordered.sort_by_key(|route| (route.kind.rank(), !on_local_overlay(route, local)));
     ordered
 }
 
@@ -220,28 +349,66 @@ where
     Race::Lost { failures }
 }
 
-/// What a route that does not answer means when another route to the same
-/// machine does answer. `None` when nothing failed on a different kind of
-/// network: there is nothing to compare and nothing the user can act on.
+/// What a caller knows about a machine's routes when it asks for the hint to
+/// show under its row.
 ///
 /// This is the words `rustcode machines list` prints under a machine and the
 /// app shows in its status, so the reason a machine is reachable one way and
 /// not the other is on screen instead of being guessed at.
-pub fn route_hint(in_use: &Route, failures: &[RouteFailure]) -> Option<String> {
-    let overlay = |route: &Route| matches!(route.kind, RouteKind::Vpn | RouteKind::Tailscale);
-    if !overlay(in_use) {
-        let failure = failures.iter().find(|failure| overlay(&failure.route))?;
-        return Some(overlay_hint(&failure.route));
+pub struct RouteReport<'a> {
+    /// Every route saved for the machine.
+    pub routes: &'a [Route],
+    /// The route that answered.
+    pub in_use: &'a Route,
+    /// The routes that did not answer: the race's first, then the probe's.
+    pub failures: &'a [RouteFailure],
+    /// This computer's own interface addresses, from [`local_addresses`].
+    pub local: &'a [IpAddr],
+}
+
+impl RouteReport<'_> {
+    /// The hint for a route that does not answer while another one does, or
+    /// `None` when there is nothing the owner can act on.
+    ///
+    /// An overlay route earns no hint when this computer has no interface on
+    /// that overlay — it can never answer, so asking its owner to fix that VPN
+    /// sends them looking for a setting on a network they are not on — or when
+    /// another overlay route to the same machine answers, because then the
+    /// machine is reachable over a VPN already (#3421).
+    pub fn hint(&self) -> Option<String> {
+        if is_overlay(self.in_use) {
+            let lan = self
+                .failures
+                .iter()
+                .find(|failure| failure.route.kind == RouteKind::Lan)?;
+            return Some(format!(
+                "Reachable over {name} but not on the LAN ({address}). That is expected away from \
+                 home; the LAN route stays saved and is tried first when both machines are on the \
+                 same network.",
+                name = self.in_use.network_name(),
+                address = lan.route.address,
+            ));
+        }
+        let failure = self.failures.iter().find(|failure| {
+            is_overlay(&failure.route) && on_local_overlay(&failure.route, self.local)
+        })?;
+        // Another overlay route to the machine is not among the failures, so it
+        // answered (or is the one in use): the VPN between the two machines
+        // works, and this one address is only a route that is not needed.
+        let another_answers = self.routes.iter().any(|route| {
+            is_overlay(route)
+                && route.address != failure.route.address
+                && !self
+                    .failures
+                    .iter()
+                    .any(|failed| failed.route.address == route.address)
+        });
+        (!another_answers).then(|| overlay_hint(&failure.route))
     }
-    let lan = failures
-        .iter()
-        .find(|failure| failure.route.kind == RouteKind::Lan)?;
-    Some(format!(
-        "Reachable over {name} but not on the LAN ({address}). That is expected away from home; \
-         the LAN route stays saved and is tried first when both machines are on the same network.",
-        name = in_use.network_name(),
-        address = lan.route.address,
-    ))
+}
+
+fn is_overlay(route: &Route) -> bool {
+    matches!(route.kind, RouteKind::Vpn | RouteKind::Tailscale)
 }
 
 fn overlay_hint(route: &Route) -> String {
@@ -533,16 +700,48 @@ mod tests {
         );
     }
 
+    /// The addresses this computer has, as `local_addresses` would report them.
+    fn local(addresses: &[&str]) -> Vec<IpAddr> {
+        addresses
+            .iter()
+            .map(|address| address.parse().expect("an address"))
+            .collect()
+    }
+
+    fn failure(route: Route, reason: &str) -> RouteFailure {
+        RouteFailure {
+            route,
+            reason: reason.into(),
+            refusal: None,
+        }
+    }
+
+    /// The hint for a machine whose routes are `routes`, connected over
+    /// `in_use`, with `failures` that did not answer.
+    fn hint_with(
+        routes: &[Route],
+        in_use: &Route,
+        failures: &[RouteFailure],
+        local: &[IpAddr],
+    ) -> Option<String> {
+        RouteReport {
+            routes,
+            in_use,
+            failures,
+            local,
+        }
+        .hint()
+    }
+
     #[test]
     fn an_overlay_that_fails_while_the_lan_works_says_what_to_check() {
-        let route = overlay("100.90.16.237:17879", Some(OverlayProvider::Netbird));
-        let hint = route_hint(
-            &lan("192.168.1.20:17879"),
-            &[RouteFailure {
-                route,
-                reason: "connection timed out".into(),
-                refusal: None,
-            }],
+        let netbird = overlay("100.90.16.237:17879", Some(OverlayProvider::Netbird));
+        let home = lan("192.168.1.20:17879");
+        let hint = hint_with(
+            &[home.clone(), netbird.clone()],
+            &home,
+            &[failure(netbird, "connection timed out")],
+            &local(&["192.168.1.20", "100.92.13.44"]),
         )
         .expect("a hint");
         assert_eq!(
@@ -555,13 +754,13 @@ mod tests {
 
     #[test]
     fn a_tailscale_hint_names_tailscales_own_control() {
-        let hint = route_hint(
-            &lan("192.168.1.20:17879"),
-            &[RouteFailure {
-                route: overlay("100.101.1.2:17879", Some(OverlayProvider::Tailscale)),
-                reason: "timed out".into(),
-                refusal: None,
-            }],
+        let tailscale = overlay("100.101.1.2:17879", Some(OverlayProvider::Tailscale));
+        let home = lan("192.168.1.20:17879");
+        let hint = hint_with(
+            &[home.clone(), tailscale.clone()],
+            &home,
+            &[failure(tailscale, "timed out")],
+            &local(&["192.168.1.20", "100.101.1.9"]),
         )
         .expect("a hint");
         assert!(
@@ -576,13 +775,13 @@ mod tests {
 
     #[test]
     fn a_zerotier_hint_names_flow_rules() {
-        let hint = route_hint(
-            &lan("192.168.1.20:17879"),
-            &[RouteFailure {
-                route: overlay("10.147.20.5:17879", Some(OverlayProvider::Zerotier)),
-                reason: "timed out".into(),
-                refusal: None,
-            }],
+        let zerotier = overlay("10.147.20.5:17879", Some(OverlayProvider::Zerotier));
+        let home = lan("192.168.1.20:17879");
+        let hint = hint_with(
+            &[home.clone(), zerotier.clone()],
+            &home,
+            &[failure(zerotier, "timed out")],
+            &local(&["192.168.1.20", "10.147.20.9"]),
         )
         .expect("a hint");
         assert!(hint.contains("ZeroTier's flow rules"), "{hint}");
@@ -590,13 +789,13 @@ mod tests {
 
     #[test]
     fn an_overlay_without_a_provider_still_names_what_to_check() {
-        let hint = route_hint(
-            &lan("192.168.1.20:17879"),
-            &[RouteFailure {
-                route: overlay("100.90.16.237:17879", None),
-                reason: "timed out".into(),
-                refusal: None,
-            }],
+        let vpn = overlay("100.90.16.237:17879", None);
+        let home = lan("192.168.1.20:17879");
+        let hint = hint_with(
+            &[home.clone(), vpn.clone()],
+            &home,
+            &[failure(vpn, "timed out")],
+            &local(&["192.168.1.20", "100.92.13.44"]),
         )
         .expect("a hint");
         assert!(
@@ -608,13 +807,13 @@ mod tests {
 
     #[test]
     fn a_lan_that_fails_while_the_overlay_works_reads_as_expected() {
-        let hint = route_hint(
-            &overlay("100.90.16.237:17879", Some(OverlayProvider::Tailscale)),
-            &[RouteFailure {
-                route: lan("192.168.1.20:17879"),
-                reason: "no route to host".into(),
-                refusal: None,
-            }],
+        let netbird = overlay("100.90.16.237:17879", Some(OverlayProvider::Tailscale));
+        let home = lan("192.168.1.20:17879");
+        let hint = hint_with(
+            &[home.clone(), netbird.clone()],
+            &netbird,
+            &[failure(home, "no route to host")],
+            &local(&["192.168.1.20", "100.92.13.44"]),
         )
         .expect("a hint");
         assert!(hint.contains("Reachable over Tailscale"), "{hint}");
@@ -623,22 +822,173 @@ mod tests {
 
     #[test]
     fn only_a_different_kind_of_network_earns_a_hint() {
-        let in_use = lan("192.168.1.20:17879");
+        let home = lan("192.168.1.20:17879");
+        let other = lan("10.0.0.9:17879");
         assert!(
-            route_hint(
-                &in_use,
-                &[RouteFailure {
-                    route: lan("10.0.0.9:17879"),
-                    reason: "refused".into(),
-                    refusal: None,
-                }]
+            hint_with(
+                &[home.clone(), other.clone()],
+                &home,
+                &[failure(other, "refused")],
+                &local(&["192.168.1.20"]),
             )
             .is_none(),
             "two LAN routes say nothing about a VPN"
         );
         assert!(
-            route_hint(&in_use, &[]).is_none(),
+            hint_with(&[home.clone()], &home, &[], &local(&["192.168.1.20"])).is_none(),
             "no failures, nothing to say"
+        );
+    }
+
+    /// A machine that runs Radmin VPN as well as NetBird reports both, and
+    /// this computer is on neither: asking its owner to fix a VPN this
+    /// computer is not on sends them looking for a setting that is not theirs
+    /// (#3421).
+    #[test]
+    fn a_route_on_an_overlay_this_computer_is_not_on_earns_no_hint() {
+        let radmin = overlay("[fdfd::2]:17879", None);
+        let home = lan("192.168.1.20:17879");
+        let routes = [home.clone(), radmin.clone()];
+        let failures = [failure(radmin.clone(), "connection timed out")];
+        // This computer has the LAN and NetBird, not Radmin's IPv6 overlay.
+        assert!(
+            hint_with(
+                &routes,
+                &home,
+                &failures,
+                &local(&["192.168.1.20", "100.92.13.44"])
+            )
+            .is_none(),
+            "no interface on that overlay, so no hint about it"
+        );
+        // On a computer that is on Radmin, the same failure is worth a hint.
+        let hint = hint_with(
+            &routes,
+            &home,
+            &failures,
+            &local(&["192.168.1.20", "fdfd::9"]),
+        )
+        .expect("a hint");
+        assert!(hint.contains("fdfd::2"), "{hint}");
+    }
+
+    /// A VPN route that fails matters only while no other VPN route to that
+    /// machine answers: a machine reachable over NetBird needs no advice about
+    /// its Radmin address (#3421).
+    #[test]
+    fn another_overlay_that_answers_silences_the_same_vpn_hint() {
+        let home = lan("192.168.1.20:17879");
+        let netbird = overlay("100.90.16.237:17879", Some(OverlayProvider::Netbird));
+        let radmin = overlay("[fdfd::2]:17879", None);
+        let routes = [home.clone(), netbird.clone(), radmin.clone()];
+        let here = local(&["192.168.1.20", "100.92.13.44", "fdfd::9"]);
+        // NetBird answered, so it is not among the failures.
+        assert!(
+            hint_with(
+                &routes,
+                &home,
+                &[failure(radmin.clone(), "timed out")],
+                &here
+            )
+            .is_none(),
+            "the machine is reachable over NetBird already"
+        );
+        // With no other overlay route answering, the Radmin failure is the
+        // one thing worth saying.
+        let hint = hint_with(
+            &[home.clone(), radmin.clone()],
+            &home,
+            &[failure(radmin, "timed out")],
+            &here,
+        )
+        .expect("a hint");
+        assert!(hint.contains("fdfd::2"), "{hint}");
+    }
+
+    #[test]
+    fn an_address_space_is_what_tells_two_overlays_apart() {
+        for (address, space) in [
+            ("100.92.13.44", AddressSpace::SharedV4),
+            ("100.64.0.1", AddressSpace::SharedV4),
+            ("100.128.0.1", AddressSpace::GlobalV4),
+            ("10.8.0.2", AddressSpace::PrivateV4(10, 8)),
+            ("10.147.20.5", AddressSpace::PrivateV4(10, 147)),
+            ("192.168.1.20", AddressSpace::PrivateV4(192, 168)),
+            (
+                "[fd7a:115c:a1e0::1]",
+                AddressSpace::UniqueLocalV6(0xfd, 0x7a),
+            ),
+            ("[fdfd::2]", AddressSpace::UniqueLocalV6(0xfd, 0xfd)),
+            ("[fe80::1]", AddressSpace::LocalV6),
+            ("[2001:db8::20]", AddressSpace::GlobalV6),
+            ("203.0.113.9", AddressSpace::GlobalV4),
+        ] {
+            let address: IpAddr = address.trim_matches(['[', ']']).parse().unwrap();
+            assert_eq!(address_space(address), space, "{address}");
+        }
+    }
+
+    /// Only an overlay route is on an overlay; a name never rules itself out,
+    /// because the overlay's own resolver answers it.
+    #[test]
+    fn only_an_overlay_route_can_be_on_an_overlay_this_computer_is_not_on() {
+        let here = local(&["192.168.1.20", "100.92.13.44"]);
+        assert!(on_local_overlay(&lan("192.168.1.20:17879"), &here));
+        assert!(
+            on_local_overlay(&lan("10.9.9.9:17879"), &here),
+            "a LAN route"
+        );
+        assert!(on_local_overlay(
+            &overlay("100.90.16.237:17879", None),
+            &here
+        ));
+        assert!(!on_local_overlay(&overlay("[fdfd::2]:17879", None), &here));
+        assert!(!on_local_overlay(
+            &overlay("10.147.20.5:17879", Some(OverlayProvider::Zerotier)),
+            &here
+        ));
+        assert!(on_local_overlay(
+            &Route::with_kind(RouteKind::Tailscale, "mac.tail1234.ts.net:17879"),
+            &here
+        ));
+    }
+
+    /// A route this computer cannot reach is dialled only after the ones it
+    /// can, and the race's own order inside each group is kept.
+    #[test]
+    fn a_route_on_an_overlay_this_computer_is_not_on_is_tried_last() {
+        let routes = [
+            overlay("[fdfd::2]:17879", None),
+            lan("192.168.1.20:17879"),
+            overlay("100.90.16.237:17879", Some(OverlayProvider::Netbird)),
+            Route::with_kind(RouteKind::Public, "example.com:17879"),
+        ];
+        let ordered = ordered_for_this_computer(&routes, &local(&["192.168.1.20", "100.92.13.44"]));
+        assert_eq!(
+            ordered
+                .iter()
+                .map(|route| route.address.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "192.168.1.20:17879",
+                "100.90.16.237:17879",
+                "[fdfd::2]:17879",
+                "example.com:17879",
+            ]
+        );
+        // Without any interface the list keeps the plain order: guessing that
+        // nothing is reachable would be worse than trying.
+        let none = ordered_for_this_computer(&routes, &[]);
+        assert_eq!(
+            none.iter()
+                .map(|route| route.address.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "192.168.1.20:17879",
+                "[fdfd::2]:17879",
+                "100.90.16.237:17879",
+                "example.com:17879",
+            ]
         );
     }
 }

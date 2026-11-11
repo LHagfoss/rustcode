@@ -12,25 +12,23 @@
 // is a sentence, not a silent connection failure.
 
 import type { SessionSummary } from "../acp/types";
-import { DEV_APP_VERSION, lastSeen, type Machine, platformName, routeName } from "./machines";
+import {
+  DEV_APP_VERSION,
+  lastSeen,
+  type Machine,
+  type MachineIcon,
+  platformIcon,
+  platformName,
+  routeName,
+} from "./machines";
 import { LOCAL_HOST } from "./threadKeys";
 
-/** The glyph a machine's platform gets; `unknown` when it has not said. */
-export type DeviceGlyph = "laptop" | "monitor" | "terminal" | "unknown";
+/** The glyph a machine gets; `unknown` when it has not said. A machine may pick one. */
+export type DeviceGlyph = MachineIcon;
 
-/** One platform, one glyph: a laptop for macOS, a monitor for Windows, a terminal for Linux. */
+/** The platform's own glyph, for a machine that has not picked one: a laptop for macOS, a tower for Windows, a terminal for Linux. */
 export function deviceGlyph(platform: string | null | undefined): DeviceGlyph {
-  switch (platform?.toLowerCase()) {
-    case "macos":
-    case "darwin":
-      return "laptop";
-    case "windows":
-      return "monitor";
-    case "linux":
-      return "terminal";
-    default:
-      return "unknown";
-  }
+  return platformIcon(platform);
 }
 
 export interface DeviceStatus {

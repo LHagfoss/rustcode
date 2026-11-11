@@ -500,7 +500,7 @@ fills in the same saved machines.
 | --- | --- |
 | `rustcode machines add <address> [--name <name>] [--code <digits>]` | Ask the machine to let this one in; the code is exactly the eight digits it shows (spaces and dashes are ignored). It shows *‹name› wants to connect* on that machine; accept it there, then type the eight-digit code it shows (or pass `--code`). Prints `Waiting for … to accept…` while the request is open. Pairs, stores the token and saves the machine. |
 | `rustcode machines add --discover` | The same, choosing the machine from Bonjour when exactly one answers. |
-| `rustcode machines list [--threads] [--json]` | Name, platform, the route in use and whether the machine answers now. Under a machine that is reachable one way and not another, it prints the hint: e.g. `Not reachable over NetBird (100.90.16.237:17879). On that machine, check that NetBird allows inbound connections and that an access policy allows TCP 17879 between the two machines.` The platform comes from the gateway (`macos`, `windows` or `linux`) and is refreshed whenever the machine is reached; a gateway older than that reports none, and the row keeps `unknown`. With `--threads`, each connected machine's thread titles over ACP (`session/list`). `--json` for scripts, with the same hint under `hint`. |
+| `rustcode machines list [--threads] [--json]` | Name, platform, the route in use and whether the machine answers now. Under a machine that is reachable one way and not another, it prints the hint: e.g. `Not reachable over NetBird (100.90.16.237:17879). On that machine, check that NetBird allows inbound connections and that an access policy allows TCP 17879 between the two machines.` The platform comes from the gateway (`macos`, `windows` or `linux`) and is refreshed whenever the machine is reached; a gateway older than that reports none, and the row keeps `unknown`. With `--threads`, each connected machine's thread titles over ACP (`session/list`), printed under the machine's row and after its hint. `--json` for scripts, with the same hint under `hint`. |
 | `rustcode machines remove <name-or-id>` | Forget a machine and delete its token. It still lists this computer until it is revoked there. |
 | `rustcode machines discover [--secs <n>] [--json]` | Machines on this network whose record lists `caps=desktops`: name, address and machine id. |
 
@@ -575,6 +575,13 @@ holds until encrypted transport (#2651) lands.
   LAN that fails while the overlay works is expected away from home). The
   overlay probe is a plain TCP connect after the LAN wins — it never carries a
   token — so the diagnosis costs nothing when there is no overlay route.
+- An overlay route earns no hint when this computer is not on that overlay,
+  and none when another overlay route to the same machine answers (#3421). A
+  machine that runs Radmin VPN as well as NetBird reports both; on a computer
+  with only NetBird there is no interface in Radmin's address space, so its
+  route can never answer, and telling the owner to check Radmin's firewall
+  would send them to a network they are not on. Those routes are still kept
+  and dialled, but only after every route that can answer.
 
 ### In the desktop app
 

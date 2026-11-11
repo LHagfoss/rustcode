@@ -38,7 +38,14 @@ export interface MachineRoute {
 /** A saved machine, as `machines_list` reports it. */
 export interface Machine {
   id: string;
+  /** The name the machine reports. */
   name: string;
+  /** The name this app shows, or null while the reported one is shown. */
+  displayName?: string | null;
+  /** The glyph this app draws, or null for the platform's own. */
+  icon?: string | null;
+  /** The series tint of that glyph, `1`..`8`. */
+  iconTint?: string | null;
   /** `macos`, `windows`, `linux`, or `unknown`. */
   platform: string;
   /** The RustCode version it reported when it last answered, or null. */
@@ -198,6 +205,8 @@ interface MachinesStore {
   pairingError: string | null;
   /** This computer's RustCode server as a background service, once asked. */
   server: ServerService | null;
+  /** This computer's own name and icon, kept here because it is not paired. */
+  local: MachineIdentity;
   /** An install is running now. */
   serverInstalling: boolean;
   /** Pointing the `rustcode` on PATH at this app's engine is running now. */
@@ -219,6 +228,7 @@ export const useMachines = create<MachinesStore>(() => ({
   server: null,
   serverInstalling: false,
   serverLinking: false,
+  local: readLocalIdentity(),
 }));
 
 // ---------------------------------------------------------------- labels
@@ -226,11 +236,133 @@ export const useMachines = create<MachinesStore>(() => ({
 /** The id `list_machines` gives this computer: the machine a call is on when it names none. */
 export const LOCAL_MACHINE_ID = "local";
 
-/**
- * This computer's name as people say it (docs/terminology.md): the local entry
- * `list_machines` returns, and what an approval card calls it.
- */
-export function selfName(): string {
+/** The glyph a machine gets: one of a small fixed set, so it always draws. */
+export type MachineIcon =
+  | "laptop"
+  | "desktop"
+  | "studio"
+  | "server"
+  | "tower"
+  | "linux"
+  | "cloud"
+  | "phone"
+  | "unknown";
+
+/** The icons the picker offers, in the order it shows them. */
+export const MACHINE_ICONS: readonly MachineIcon[] = [
+  "laptop",
+  "desktop",
+  "studio",
+  "server",
+  "tower",
+  "linux",
+  "cloud",
+  "phone",
+  "unknown",
+];
+
+/** A colour from the app's chart palette, `--rc-series-1`..`8`. */
+export type MachineTint = "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8";
+
+export const MACHINE_TINTS: readonly MachineTint[] = ["1", "2", "3", "4", "5", "6", "7", "8"];
+
+/** What this app shows for one computer: its local name and glyph. */
+export interface MachineIdentity {
+  displayName: string | null;
+  icon: MachineIcon | null;
+  tint: MachineTint | null;
+}
+
+const LOCAL_IDENTITY_KEY = "rustcode.localMachineIdentity";
+
+/** A name as it is stored: trimmed, or null when blank so the fallback shows. */
+export function cleanMachineName(value: string | null | undefined): string | null {
+  const name = value?.trim();
+  return name ? name : null;
+}
+
+/** An icon id the app knows, or null for one it does not (an older or newer file). */
+export function machineIconOf(value: string | null | undefined): MachineIcon | null {
+  return MACHINE_ICONS.includes(value as MachineIcon) ? (value as MachineIcon) : null;
+}
+
+/** A tint id the app knows, or null. */
+export function machineTintOf(value: string | null | undefined): MachineTint | null {
+  return MACHINE_TINTS.includes(value as MachineTint) ? (value as MachineTint) : null;
+}
+
+/** The glyph a platform gets when the user has not picked one. */
+export function platformIcon(platform: string | null | undefined): MachineIcon {
+  switch (platform?.toLowerCase()) {
+    case "macos":
+    case "darwin":
+      return "laptop";
+    case "windows":
+      return "tower";
+    case "linux":
+      return "linux";
+    default:
+      return "unknown";
+  }
+}
+
+/** The name to show for a paired machine: the local one, else what it reports. */
+export function machineName(machine: Pick<Machine, "name" | "displayName">): string {
+  return cleanMachineName(machine.displayName) ?? machine.name;
+}
+
+/** The glyph to draw for a paired machine: the chosen one, else its platform's. */
+export function machineGlyph(machine: Pick<Machine, "platform" | "icon">): MachineIcon {
+  return machineIconOf(machine.icon) ?? platformIcon(machine.platform);
+}
+
+/** The tint of that glyph, or null for the plain foreground colour. */
+export function machineTint(machine: Pick<Machine, "iconTint">): MachineTint | null {
+  return machineTintOf(machine.iconTint);
+}
+
+function readLocalIdentity(): MachineIdentity {
+  try {
+    const raw = JSON.parse(localStorage.getItem(LOCAL_IDENTITY_KEY) ?? "null") as unknown;
+    const root = obj(raw);
+    return {
+      displayName: cleanMachineName(typeof root?.displayName === "string" ? root.displayName : null),
+      icon: machineIconOf(typeof root?.icon === "string" ? root.icon : null),
+      tint: machineTintOf(typeof root?.tint === "string" ? root.tint : null),
+    };
+  } catch {
+    return { displayName: null, icon: null, tint: null };
+  }
+}
+
+/** This computer's name and glyph, outside React. */
+export function localIdentity(): MachineIdentity {
+  return useMachines.getState().local;
+}
+
+/** This computer's name and glyph in a component, so a rename redraws it. */
+export function useLocalIdentity(): MachineIdentity {
+  return useMachines((state) => state.local);
+}
+
+/** Rename this computer here, or give it a glyph. Stored on this computer only. */
+export function setLocalIdentity(patch: Partial<MachineIdentity>): void {
+  const current = localIdentity();
+  const next: MachineIdentity = {
+    displayName: patch.displayName === undefined ? current.displayName : cleanMachineName(patch.displayName),
+    icon: patch.icon === undefined ? current.icon : machineIconOf(patch.icon),
+    tint: patch.tint === undefined ? current.tint : machineTintOf(patch.tint),
+  };
+  try {
+    localStorage.setItem(LOCAL_IDENTITY_KEY, JSON.stringify(next));
+  } catch {
+    // A full or disabled store keeps the choice for this run only.
+  }
+  useMachines.setState({ local: next });
+}
+
+/** The name a platform gives this computer before the user renames it. */
+export function defaultSelfName(): string {
   switch (currentPlatform()) {
     case "mac":
       return "This Mac";
@@ -238,6 +370,49 @@ export function selfName(): string {
       return "This PC";
     default:
       return "This computer";
+  }
+}
+
+/**
+ * This computer's name as people say it (docs/terminology.md): the local entry
+ * `list_machines` returns, and what an approval card calls it. Renaming it here
+ * changes every place that names it; the platform's default is the fallback.
+ */
+export function selfName(): string {
+  return localIdentity().displayName ?? defaultSelfName();
+}
+
+/** Rename a paired machine on this computer. The machine keeps its own name. */
+export async function setMachineDisplayName(
+  machine: Pick<Machine, "id">,
+  displayName: string | null,
+): Promise<void> {
+  try {
+    await shellCall("machines_set_display_name", {
+      id: machine.id,
+      name: cleanMachineName(displayName),
+    });
+    await refreshMachines();
+  } catch (error) {
+    toast(errorText(error), "error");
+  }
+}
+
+/** Choose a paired machine's glyph and tint, or clear both for its platform's. */
+export async function setMachineIcon(
+  machine: Pick<Machine, "id">,
+  icon: MachineIcon | null,
+  tint: MachineTint | null,
+): Promise<void> {
+  try {
+    await shellCall("machines_set_icon", {
+      id: machine.id,
+      icon: icon ?? null,
+      tint: icon ? (tint ?? null) : null,
+    });
+    await refreshMachines();
+  } catch (error) {
+    toast(errorText(error), "error");
   }
 }
 

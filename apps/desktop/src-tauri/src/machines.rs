@@ -89,7 +89,14 @@ impl RouteView {
 pub struct MachineView {
     /// The machine's `host_id`, which is what every command takes.
     id: String,
+    /// The name the machine reports.
     name: String,
+    /// The name this app shows for it, or none while the reported one is shown.
+    display_name: Option<String>,
+    /// The glyph this app draws, or none for the platform's own.
+    icon: Option<String>,
+    /// The series tint of that glyph.
+    icon_tint: Option<String>,
     /// `macos`, `windows`, `linux`, or `unknown` for a machine that does not
     /// report one yet.
     platform: String,
@@ -321,6 +328,9 @@ fn view(machine: &Machine, live: Option<&Live>) -> MachineView {
     MachineView {
         id: machine.host_id.clone(),
         name: machine.name.clone(),
+        display_name: machine.display_name.clone(),
+        icon: machine.icon.clone(),
+        icon_tint: machine.icon_tint.clone(),
         platform: machine.platform.clone(),
         main: machine.main,
         version: machine.version.clone(),
@@ -485,7 +495,7 @@ async fn relay_once(
         Err(error) => return End::Failed(error),
     };
     let route = connected.route.clone();
-    let hint = connected.hint();
+    let hint = connected.hint(&machine.routes, &rustcode_client::local_addresses());
     let failed = connected.failed.clone();
     let learned = connected.learned.clone();
     let session = connected.session;
@@ -636,7 +646,13 @@ fn schedule_overlay_probe(
         };
         let mut failures = failed;
         failures.extend(connector.probe_overlay_routes(&machine, &route).await);
-        let hint = rustcode_client::route_hint(&route, &failures);
+        let hint = rustcode_client::RouteReport {
+            routes: &machine.routes,
+            in_use: &route,
+            failures: &failures,
+            local: &rustcode_client::local_addresses(),
+        }
+        .hint();
         let mut live = machines.live.lock().unwrap();
         let still_connected = live.get(&id).is_some_and(|entry| {
             entry.state == MachineState::Connected
@@ -1113,6 +1129,32 @@ pub async fn machines_remove(
     Ok(())
 }
 
+/// Rename a machine here: a local display name, never sent to that machine.
+/// `None` or a blank name shows the name the machine reports again.
+#[tauri::command(async)]
+pub fn machines_set_display_name(id: String, name: Option<String>) -> Result<(), String> {
+    let config_dir = config_dir()?;
+    let mut registry = MachineRegistry::load(&config_dir).map_err(chain)?;
+    registry
+        .set_display_name(&id, name.as_deref())
+        .map_err(chain)
+}
+
+/// Choose the glyph and series tint this app draws for a machine. `icon` of
+/// `None` returns to the platform's own glyph.
+#[tauri::command(async)]
+pub fn machines_set_icon(
+    id: String,
+    icon: Option<String>,
+    tint: Option<String>,
+) -> Result<(), String> {
+    let config_dir = config_dir()?;
+    let mut registry = MachineRegistry::load(&config_dir).map_err(chain)?;
+    registry
+        .set_icon(&id, icon.as_deref(), tint.as_deref())
+        .map_err(chain)
+}
+
 /// Make `id` the main machine: listed first, and the default **Run on**.
 #[tauri::command(async)]
 pub fn machines_set_main(id: String) -> Result<(), String> {
@@ -1341,20 +1383,28 @@ mod tests {
     /// prints (#3202).
     #[test]
     fn a_machine_reachable_one_way_says_why_the_other_route_is_not_used() {
-        use rustcode_client::{route_hint, OverlayProvider, RouteFailure};
+        use rustcode_client::{OverlayProvider, RouteFailure, RouteReport};
         let mut saved = machine();
         let mut overlay = Route::with_kind(RouteKind::Vpn, "100.90.16.237:17879");
         overlay.provider = Some(OverlayProvider::Netbird);
         saved.routes.push(overlay.clone());
         let in_use = Route::new("192.168.1.20:17879");
-        let hint = route_hint(
-            &in_use,
-            &[RouteFailure {
+        // This computer is on NetBird, so its route to the machine can answer.
+        let local: Vec<std::net::IpAddr> = ["192.168.1.20", "100.92.13.44"]
+            .iter()
+            .map(|address| address.parse().unwrap())
+            .collect();
+        let hint = RouteReport {
+            routes: &saved.routes,
+            in_use: &in_use,
+            failures: &[RouteFailure {
                 route: overlay,
                 reason: "connection timed out".into(),
                 refusal: None,
             }],
-        )
+            local: &local,
+        }
+        .hint()
         .expect("a hint");
         let live = Live {
             state: MachineState::Connected,

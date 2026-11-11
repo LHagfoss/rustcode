@@ -572,6 +572,12 @@ impl Connector {
         if routes.is_empty() {
             return Err(plain_ws_refusal(&machine.routes[0].address));
         }
+        // A route on an overlay this computer is not on can never answer, so it
+        // is dialled after the ones that can, and its failure earns no hint
+        // (#3421). [`race`] orders by class only, and its order is stable
+        // inside a class, so this order survives it.
+        let routes =
+            crate::routes::ordered_for_this_computer(&routes, &crate::routes::local_addresses());
         let settings = RaceSettings::default();
         let outcome = race(&routes, &settings, |route| async move {
             // Dial before taking the credential lock: a LAN route that hangs
@@ -652,10 +658,15 @@ impl Connector {
         machine: &Machine,
         in_use: &Route,
     ) -> Vec<RouteFailure> {
+        // A route on an overlay this computer has no interface for can never
+        // answer, so it is not asked about: its failure would earn no hint and
+        // the diagnosis costs a connect (#3421).
+        let local = crate::routes::local_addresses();
         let probes = machine.routes.iter().filter(|route| {
             matches!(route.kind, RouteKind::Vpn | RouteKind::Tailscale)
                 && route.address != in_use.address
                 && may_send_secrets(&route.address)
+                && crate::routes::on_local_overlay(route, &local)
         });
         let attempts = probes.map(|route| async move {
             let Ok(target) = crate::transport::dial_target(&route.address) else {
@@ -719,8 +730,19 @@ pub struct Connected {
 impl Connected {
     /// The hint for a route that does not answer while another one does, as
     /// `rustcode machines list` and the app show it.
-    pub fn hint(&self) -> Option<String> {
-        crate::routes::route_hint(&self.route, &self.failed)
+    ///
+    /// `routes` is every route saved for the machine, so an overlay that does
+    /// answer can silence a hint about one that does not, and `local` is this
+    /// computer's own addresses ([`crate::routes::local_addresses`]), so no
+    /// hint asks about an overlay this computer is not on (#3421).
+    pub fn hint(&self, routes: &[Route], local: &[std::net::IpAddr]) -> Option<String> {
+        crate::routes::RouteReport {
+            routes,
+            in_use: &self.route,
+            failures: &self.failed,
+            local,
+        }
+        .hint()
     }
 }
 
