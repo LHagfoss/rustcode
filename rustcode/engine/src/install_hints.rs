@@ -45,6 +45,17 @@ pub(crate) const fn host_hint(tool: Tool) -> &'static str {
     hint(tool, HOST)
 }
 
+pub(crate) fn provider_key_hint(env_name: &str, platform: Platform) -> String {
+    match platform {
+        Platform::Windows => format!(
+            "In PowerShell, run [Environment]::SetEnvironmentVariable('{env_name}', '<key>', 'User'), then restart RustCode so it inherits the updated environment"
+        ),
+        _ => format!(
+            "export {env_name}=<key> in ~/.zshenv (sourced by all zsh modes) or ~/.zprofile, then restart rustcode from a login shell; interactive-only ~/.zshrc exports are invisible to desktop/systemd/IDE launches"
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -61,6 +72,19 @@ mod tests {
             (Tool::Ripgrep, "winget install BurntSushi.ripgrep.MSVC"),
         ] {
             assert_eq!(hint(tool, Platform::Windows), expected);
+        }
+    }
+
+    #[test]
+    fn provider_key_setup_matches_platform() {
+        let windows = provider_key_hint("OPENAI_API_KEY", Platform::Windows);
+        assert!(windows.contains("SetEnvironmentVariable('OPENAI_API_KEY', '<key>', 'User')"));
+        assert!(!windows.contains("zsh"));
+        for platform in [Platform::MacOs, Platform::Linux] {
+            assert!(
+                provider_key_hint("OPENAI_API_KEY", platform)
+                    .starts_with("export OPENAI_API_KEY=<key>")
+            );
         }
     }
 

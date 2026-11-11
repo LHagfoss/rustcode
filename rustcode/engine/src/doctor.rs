@@ -114,8 +114,9 @@ fn check_provider_keys(workspace: &std::path::Path) -> Vec<DoctorCheck> {
             crate::shell_env::EnvSource::Missing => out.push(DoctorCheck::fail(
                 "provider-key",
                 format!("{env_name}: missing (profile `{}` needs it)", profile.name),
-                Some(format!(
-                    "export {env_name}=<key> in ~/.zshenv (sourced by all zsh modes) or ~/.zprofile, then restart rustcode from a login shell; interactive-only ~/.zshrc exports are invisible to desktop/systemd/IDE launches"
+                Some(crate::install_hints::provider_key_hint(
+                    env_name,
+                    crate::install_hints::HOST,
                 )),
             )),
         }
