@@ -1669,6 +1669,9 @@ pub(crate) struct PullWatchStopRequest {
 #[serde(rename_all = "camelCase")]
 #[request(method = "_rustcode/pulls/watches", response = serde_json::Value)]
 pub(crate) struct PullWatchesRequest {
+    /// Claim a linked PR’s pending events and advance its delivered cursor.
+    #[serde(default)]
+    pub take: Option<u64>,
     #[serde(default)]
     pub session_id: Option<String>,
 }
@@ -3538,6 +3541,16 @@ async fn serve_connection(
                 // carry on from here.
                 server.clients.subscribe(client_id, clients::Topic::PullWatches);
                 start_pull_watching(&server.clients);
+                if let (Some(number), Some(session_id)) = (request.take, request.session_id.as_deref()) {
+                    let taken = crate::pull_watch::WatchStore::default_store()
+                        .map(|store| store.take(session_id, number))
+                        .transpose();
+                    return responder.respond(match taken {
+                        Ok(Some(Some((watch, events)))) => serde_json::json!({ "watch": watch, "events": events }),
+                        Ok(_) => serde_json::json!({ "events": [] }),
+                        Err(error) => serde_json::json!({ "error": error.to_string() }),
+                    });
+                }
                 let watches = crate::pull_watch::WatchStore::default_store()
                     .map(|store| store.list(request.session_id.as_deref()))
                     .unwrap_or_default();

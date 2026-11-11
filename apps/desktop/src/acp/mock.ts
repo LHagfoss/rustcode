@@ -2070,6 +2070,7 @@ export class MockEngine {
   private agents = new Map<string, JsonObject[]>();
   /** The inbox seed runs once, after the list the app first reads. */
   private needsYouSeeded = false;
+  private pullEventDelivered = false;
   /** The client's `_meta.rustcode.orchestration` at initialize. */
   private orchestration = 0;
   /** Discord Rich Presence (docs/discord-rich-presence.md), as `discord_rpc_enabled` holds it. */
@@ -3224,6 +3225,20 @@ export class MockEngine {
             resetsAt: Math.floor(Date.now() / 1000) + 3 * 86400,
           },
         };
+      }
+      case "_rustcode/pulls/watches": {
+        const thread = this.threads[0];
+        if (!thread || typeof location === "undefined" || !location.search.includes("pullWatchPreview"))
+          return { watches: [] };
+        const watch = { sessionId: thread.id, number: 3375, link: true };
+        if (obj(params)?.take) {
+          const events = this.pullEventDelivered
+            ? []
+            : [{ message: "CI checks failed", kind: "checks_failed" }];
+          this.pullEventDelivered = true;
+          return { watch, events };
+        }
+        return { watches: [watch] };
       }
       case "_rustcode/pulls":
         return {
