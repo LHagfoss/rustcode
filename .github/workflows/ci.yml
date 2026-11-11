@@ -191,9 +191,15 @@ jobs:
 
             - name: Install bubblewrap
               if: env.AFFECTED_PACKAGES != ''
+              # The sandbox tests need bubblewrap. When the runner's Azure Ubuntu
+              # mirror cannot be reached, retry once against archive.ubuntu.com.
               run: |
-                  sudo apt-get update
-                  sudo apt-get install --no-install-recommends -y bubblewrap
+                  install_bwrap() { sudo apt-get update && sudo apt-get install --no-install-recommends -y bubblewrap; }
+                  if ! install_bwrap; then
+                      echo "::warning::the runner's Ubuntu mirror failed; retrying with archive.ubuntu.com"
+                      echo "http://archive.ubuntu.com/ubuntu/" | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+                      install_bwrap
+                  fi
 
             - name: Run tests
               if: env.AFFECTED_PACKAGES != ''
