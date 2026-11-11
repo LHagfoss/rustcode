@@ -69,6 +69,7 @@ import {
   type AgentChoice,
   type Attachment,
   type ComposeExtras,
+  commandSubmission,
   commandSuggestions,
   emptyExtras,
   hasExtras,
@@ -943,7 +944,8 @@ export const Composer = memo(function Composer({
     if (slash.start === 0 && slash.start + 1 + slash.query.length === draft.length) {
       if (run && (!command.takesArguments || command.action !== "execute")) {
         update("");
-        void submit(command.name);
+        const message = commandSubmission(command);
+        void submit(message.text, message.extras);
       } else {
         change((e) => ({ ...e, command }));
         update("");
