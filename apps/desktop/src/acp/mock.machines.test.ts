@@ -51,10 +51,21 @@ describe("mock machines", () => {
     expect(String(machines[0]!.detail)).toContain("Pair it again");
   });
 
-  test("?machines=paired saves the machine just now", async () => {
+  test("?machines=paired is a Mac just saved, a Windows PC, and a machine that is away", async () => {
     const machines = await machineList("paired");
+    expect(machines.map((machine) => machine.name)).toEqual([
+      "Studio",
+      "Lars's Windows box",
+      "Lars's Linux box",
+    ]);
+    expect(machines.map((machine) => machine.platform)).toEqual(["macos", "windows", "linux"]);
     expect(machines[0]!.state).toBe("connected");
     expect(Date.now() - Date.parse(String(machines[0]!.addedAt))).toBeLessThan(5_000);
+    // The Windows PC is one RustCode behind, which the machine card says in words.
+    expect(machines[1]!.version).toBe("1.27.0");
+    // The Linux box is away, with the socket error the row turns into what to check.
+    expect(machines[2]!.state).toBe("offline");
+    expect(String(machines[2]!.detail)).toContain("Connection timed out");
   });
 
   test("?machines=connect starts with one saved machine on an older RustCode, its server not installed", async () => {
