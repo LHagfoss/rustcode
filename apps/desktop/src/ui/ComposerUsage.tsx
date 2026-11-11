@@ -345,8 +345,10 @@ export function ContextInspector({
       )}
       {shown.length === 0 && (
         <p className="px-0.5 text-caption text-fg-muted">
-          This harness reports its totals only, not what fills the window. It compacts on its own when the
-          window runs low.
+          This harness reports its totals only, not what fills the window.{" "}
+          {autoCompactAt !== undefined && autoCompactAt > 0
+            ? `RustCode compacts it above ${formatTokens(autoCompactAt)}.`
+            : "RustCode is not compacting it automatically; the harness may compact on its own when the window runs low."}
         </p>
       )}
       {shown.length > 0 && (

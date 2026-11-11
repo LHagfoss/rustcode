@@ -90,6 +90,7 @@ import {
   type AutoCompactMode,
   type AutoCompactSettings,
   autoCompactDecision,
+  autoCompactingText,
   autoCompactMark,
   autoCompactPolicy,
   automaticCompactionText,
@@ -3696,6 +3697,8 @@ export async function runPrompt(
     automatic?: boolean;
     /** A `/compact` the app sent because the context or the cache said so. */
     autoCompact?: boolean;
+    /** What the "Compacting context…" divider says for that `/compact` (`autoCompactingText`). */
+    autoCompactText?: string;
     /** The turn that continues after a limit: its wait is settled when it ends. */
     limitResume?: boolean;
     /**
@@ -3791,7 +3794,7 @@ export async function runPrompt(
   updateThread(id, (t) =>
     options.autoCompact
       ? // The turn writes no rows, so "Compacting context…" is the one sign the thread is busy.
-        startCompaction(beginQuietTurn(t))
+        startCompaction(beginQuietTurn(t), options.autoCompactText, "auto-compact")
       : beginTurn(
           t,
           shown,
@@ -5083,6 +5086,7 @@ function compactedNotice() {
     id: localId("compaction"),
     text: "Compacted automatically.",
     tone: "info",
+    setting: "auto-compact",
   } as const;
 }
 
@@ -5102,7 +5106,11 @@ function runAutoCompact(id: string): void {
   const userStopped = lastTurnInterrupted(s.threads[id]);
   // Where the transcript is now: whatever a turn writes after it ran while the compaction did.
   const itemsBefore = s.threads[id]?.items.length ?? 0;
-  void runPrompt(id, "/compact", emptyExtras, { automatic: true, autoCompact: true })
+  void runPrompt(id, "/compact", emptyExtras, {
+    automatic: true,
+    autoCompact: true,
+    autoCompactText: autoCompactingText(decision.rule, s.autoCompact.threshold),
+  })
     // The compaction's own row is settled whether or not the prompt became a turn.
     .then(
       (outcome) => {

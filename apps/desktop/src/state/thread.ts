@@ -99,6 +99,8 @@ export type TranscriptItem =
       resumable?: boolean;
       /** A compaction that is running: the row shows a spinner until its card replaces it. */
       progress?: boolean;
+      /** The row was caused by a setting and links to it (RustCode's auto-compaction). */
+      setting?: "auto-compact";
       /**
        * The same notice said this many times in a row, drawn as one row (`×6`). Set when the
        * transcript draws the row (`state/fold.ts` `collapseNotices`), not by what appended it.
@@ -674,12 +676,17 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
       // One quiet row, whichever harness compacted: "Compacting context…" while it runs, which the
       // card (or the reason it failed) then takes the place of.
       const text = update.text.split("\n")[0] ?? update.text;
-      if (update.phase === "started") return startCompaction(state, text);
+      // A compaction RustCode started says so, and links to the setting that started it.
+      const setting = /^compact(ed|ing) (automatically|context \(auto)/i.test(text)
+        ? "auto-compact"
+        : undefined;
+      if (update.phase === "started") return startCompaction(state, text, setting);
       return settleCompaction(state, {
         kind: "notice",
         id: localId("compaction"),
         text,
         tone: update.phase === "failed" ? "error" : "info",
+        ...(setting && update.phase !== "failed" ? { setting } : {}),
       });
     }
     case "handoff":
@@ -918,11 +925,25 @@ const COMPACTING_ID = "compaction-running";
 const isCompacting = (item: TranscriptItem) => item.kind === "notice" && item.id === COMPACTING_ID;
 
 /** "Compacting context…" as a row, once: the engine and the app may both announce the same one. */
-export function startCompaction(state: ThreadState, text = "Compacting context…"): ThreadState {
+export function startCompaction(
+  state: ThreadState,
+  text = "Compacting context…",
+  setting?: "auto-compact",
+): ThreadState {
   if (state.items.some(isCompacting)) return state;
   return {
     ...state,
-    items: [...state.items, { kind: "notice", id: COMPACTING_ID, text, tone: "info", progress: true }],
+    items: [
+      ...state.items,
+      {
+        kind: "notice",
+        id: COMPACTING_ID,
+        text,
+        tone: "info",
+        progress: true,
+        ...(setting ? { setting } : {}),
+      },
+    ],
   };
 }
 

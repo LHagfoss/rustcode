@@ -45,7 +45,15 @@ import { messageCollapses, splitImageMarkers, splitSlashCommand } from "../state
 import { foldLabel, inferToolKind, type ToolGroup, type TurnFold } from "../state/fold";
 import { stateOf } from "../state/host";
 import { LINK_LABEL } from "../state/orchestration";
-import { editMessage, forkThread, openSideChat, retryMessage, selectThread, useApp } from "../state/store";
+import {
+  editMessage,
+  forkThread,
+  openSettings,
+  openSideChat,
+  retryMessage,
+  selectThread,
+  useApp,
+} from "../state/store";
 import {
   diffCounts,
   formatDuration,
@@ -791,6 +799,15 @@ export function NoticeRow({
           {item.progress ? <Spinner size={11} /> : <Layers size={11} className="shrink-0 text-fg-faint" />}
           <span className="truncate">{item.text}</span>
           {times}
+          {item.setting === "auto-compact" && (
+            <button
+              type="button"
+              onClick={() => openSettings("general")}
+              className="shrink-0 rounded-sm text-fg-faint underline-offset-2 hover:text-fg hover:underline"
+            >
+              Auto-compact setting
+            </button>
+          )}
         </span>
         <span className="h-px flex-1 bg-border" />
       </div>

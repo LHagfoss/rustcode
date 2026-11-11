@@ -365,7 +365,7 @@ function GeneralPage() {
               ? () => void autoCompactMode.set(SETTINGS_DEFAULTS.autoCompact.mode)
               : undefined
           }
-          subtitle="RustCode asks the harness to compact its own context when a turn ends above the threshold; the second mode also compacts shortly before Claude Code's or Codex's prompt cache expires. Never while a turn runs, a message waits, an approval is open or the thread's last answer is unread, and never over the answer itself: the compaction leaves one quiet row under it. Turn it off for one thread in its menu."
+          subtitle="Off by default. When on, RustCode asks the harness to compact its own context when a turn ends above the threshold; the second mode also compacts shortly before Claude Code's or Codex's prompt cache expires. Never while a turn runs, a message waits, an approval is open or the thread's last answer is unread, and never over the answer itself: the compaction leaves one quiet row under it. Turn it off for one thread in its menu."
         >
           <ScopedValue mixed={autoCompactMode.mixed} breakdown={autoCompactMode.breakdown}>
             <Choice
