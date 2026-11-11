@@ -129,6 +129,15 @@ pub(crate) fn read_info_file(path: &Path) -> Option<ServerInfo> {
     serde_json::from_slice(&bytes).ok()
 }
 
+/// Why the published description cannot be read, when the file is there but the caller may not
+/// open it (a sandboxed shell). `None` when it is absent, readable or fails for another reason.
+pub(crate) fn info_denied(dir: &Path) -> Option<io::Error> {
+    match File::open(dir.join(INFO_FILE)) {
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => Some(error),
+        _ => None,
+    }
+}
+
 fn open_private(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);

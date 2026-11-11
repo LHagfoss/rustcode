@@ -3744,6 +3744,13 @@ async fn serve_connection(
                 async move |request: PromptRequest, responder, connection| {
                     let session_id = request.session_id.to_string();
                     if let Some(external) = harnesses::get(&server.external, &session_id).await {
+                        // The access level the client runs the thread at: a harness that
+                        // sandboxes its own shell leaves the sandbox for Full access.
+                        if let Some(full) =
+                            crate::harness::requested_full_access(request.meta.as_ref())
+                        {
+                            external.set_full_access(full);
+                        }
                         // A device reading the shared thread sees this prompt
                         // too: a harness does not echo it back.
                         let prompt_text = request

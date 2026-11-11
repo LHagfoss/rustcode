@@ -3828,7 +3828,14 @@ export async function runPrompt(
   let unused: string[] = [];
   try {
     const request: JsonObject = { sessionId: splitThreadKey(id).id, prompt };
-    if (options.autoCompact) request._meta = { rustcode: { autoCompact: true } };
+    // The access level rides on every prompt: a harness that sandboxes its own shell (Codex) leaves
+    // the sandbox for Full access, on this machine and on a remote one alike.
+    request._meta = {
+      rustcode: {
+        access: permissionModeOf(get(), id),
+        ...(options.autoCompact ? { autoCompact: true } : {}),
+      },
+    };
     const result = (await conn.request(Method.sessionPrompt, request)) as JsonObject | null;
     if (str(result?.stopReason) === "cancelled") outcome = "cancelled";
     const meta = (result?._meta as JsonObject | undefined)?.rustcode as JsonObject | undefined;

@@ -112,13 +112,55 @@ where
     Err(std::io::ErrorKind::UnexpectedEof.into())
 }
 
+/// What asking the server for its status found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Probe {
+    /// A server answered.
+    Live(LiveStatus),
+    /// The operating system did not let this process reach the server's socket or description
+    /// (a sandboxed shell): the server may run, and nothing here says it does not.
+    Denied(String),
+    /// Nothing answered.
+    Absent,
+}
+
+impl Probe {
+    /// What a failed connection or request says: denied when the operating system refused this
+    /// process, in the words every report uses, and absent for anything else.
+    fn from_error(error: &std::io::Error) -> Self {
+        if error.kind() == std::io::ErrorKind::PermissionDenied {
+            Probe::Denied(format!(
+                "{error}. This shell is sandboxed from the RustCode server's socket, so it cannot tell whether the server runs"
+            ))
+        } else {
+            Probe::Absent
+        }
+    }
+}
+
+/// Ask the server for its status, and tell "no server answers" from "this process may not ask".
+pub async fn probe_status() -> Probe {
+    let ask = async {
+        let stream = match crate::server::connect_running().await {
+            Ok(stream) => stream,
+            Err(error) => return Probe::from_error(&error),
+        };
+        match ask_status(stream).await {
+            Ok(live) => Probe::Live(live),
+            Err(error) => Probe::from_error(&error),
+        }
+    };
+    tokio::time::timeout(ASK_TIMEOUT, ask)
+        .await
+        .unwrap_or(Probe::Absent)
+}
+
 /// The running server's status, or `None` when none answers.
 pub async fn live_status() -> Option<LiveStatus> {
-    let ask = async {
-        let stream = crate::server::connect_running().await.ok()?;
-        ask_status(stream).await.ok()
-    };
-    tokio::time::timeout(ASK_TIMEOUT, ask).await.ok().flatten()
+    match probe_status().await {
+        Probe::Live(live) => Some(live),
+        Probe::Denied(_) | Probe::Absent => None,
+    }
 }
 
 /// Whether a service definition is in place for this configuration
@@ -147,6 +189,9 @@ pub struct StatusReport {
     pub installed: bool,
     /// A server answers on its socket.
     pub running: bool,
+    /// The socket could not be asked: the operating system denied this process (a sandboxed
+    /// shell). `running` is then `false` without meaning that no server runs.
+    pub socket_denied: bool,
     /// The running server's version.
     pub version: Option<String>,
     /// This `rustcode`'s version.
@@ -257,6 +302,8 @@ pub struct Observed {
     pub state: State,
     /// From a socket that answered.
     pub live: Option<LiveStatus>,
+    /// Why the socket could not be asked, when the operating system denied this process.
+    pub denied: Option<String>,
     /// From the description the server published.
     pub info: Option<crate::server::ServerInfo>,
     /// A `restart --when-idle` is waiting.
@@ -287,6 +334,7 @@ pub fn build_report(observed: Observed, now_secs: u64) -> StatusReport {
         kind,
         state,
         live,
+        denied,
         info,
         restart_waiting,
         manager_problems,
@@ -304,12 +352,22 @@ pub fn build_report(observed: Observed, now_secs: u64) -> StatusReport {
         ));
     } else {
         problems.extend(manager_problems);
-        if live.is_none() {
+        if live.is_none() && denied.is_none() {
             problems.push(problem(
                 "stopped",
                 "The service is installed but no server answers. See `rustcode server logs`, or run `rustcode server restart`.",
             ));
         }
+    }
+    if live.is_none()
+        && let Some(reason) = &denied
+    {
+        problems.push(problem(
+            "socket-denied",
+            format!(
+                "Socket not reachable (permission denied): {reason}. Run `rustcode server status` from an unsandboxed shell."
+            ),
+        ));
     }
     if let Some(live) = &live {
         if live.version != cli_version {
@@ -368,6 +426,7 @@ pub fn build_report(observed: Observed, now_secs: u64) -> StatusReport {
     StatusReport {
         installed: state.installed,
         running: live.is_some(),
+        socket_denied: live.is_none() && denied.is_some(),
         version: live.as_ref().map(|live| live.version.clone()),
         cli_version,
         pid: live.as_ref().map(|live| live.pid),
@@ -412,6 +471,9 @@ impl StatusReport {
             "Running",
             match (&self.version, self.pid) {
                 (Some(version), Some(pid)) => format!("yes (version {version}, pid {pid})"),
+                _ if self.socket_denied => {
+                    "unknown (socket not reachable: permission denied)".to_owned()
+                }
                 _ => "no".to_owned(),
             },
         );
@@ -455,7 +517,11 @@ fn human_duration(secs: u64) -> String {
 pub async fn status() -> Result<StatusReport> {
     let (manager, _) = current_manager()?;
     let state = manager.state()?;
-    let live = live_status().await;
+    let (live, denied) = match probe_status().await {
+        Probe::Live(live) => (Some(live), None),
+        Probe::Denied(reason) => (None, Some(reason)),
+        Probe::Absent => (None, None),
+    };
     let gateway = observe_gateway().await;
     let path_rustcode = super::path_binary::observe().await;
     let now = std::time::SystemTime::now()
@@ -471,6 +537,7 @@ pub async fn status() -> Result<StatusReport> {
             },
             state,
             live,
+            denied,
             info: crate::server::running(),
             restart_waiting: restart_waiting(),
             cli_version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -904,6 +971,7 @@ mod tests {
                 started_at: 1_000,
             }),
             live,
+            denied: None,
             restart_waiting: false,
             manager_problems: Vec::new(),
             cli_version: "1.23.0".to_owned(),
@@ -919,6 +987,42 @@ mod tests {
     }
 
     #[test]
+    fn a_denied_socket_is_not_a_stopped_server() {
+        let denied = Probe::from_error(&std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        let Probe::Denied(reason) = denied else {
+            panic!("a permission error is a denied probe, not {denied:?}");
+        };
+        assert_eq!(
+            Probe::from_error(&std::io::Error::from(std::io::ErrorKind::NotFound)),
+            Probe::Absent
+        );
+        assert_eq!(
+            Probe::from_error(&std::io::Error::from(std::io::ErrorKind::ConnectionRefused)),
+            Probe::Absent
+        );
+
+        let mut seen = observed(installed_state(), None);
+        seen.denied = Some(reason);
+        let report = build_report(seen, 0);
+        assert!(report.socket_denied && !report.running, "{report:?}");
+        assert!(codes(&report).contains(&"socket-denied"), "{report:?}");
+        assert!(
+            !codes(&report).contains(&"stopped"),
+            "a sandboxed caller must not be told the server is stopped: {report:?}"
+        );
+        let human = report.human();
+        assert!(
+            human.contains("Running     unknown (socket not reachable: permission denied)"),
+            "{human}"
+        );
+
+        // Nothing denied and nothing answering is still a stopped server.
+        let stopped = build_report(observed(installed_state(), None), 0);
+        assert!(codes(&stopped).contains(&"stopped") && !stopped.socket_denied);
+        assert!(stopped.human().contains("Running     no"));
+    }
+
+    #[test]
     fn status_json_has_the_documented_shape() {
         let report = build_report(observed(installed_state(), Some(live("1.23.0", 10))), 1_090);
         let json = serde_json::to_value(&report).expect("json");
@@ -927,6 +1031,7 @@ mod tests {
             serde_json::json!({
                 "installed": true,
                 "running": true,
+                "socket_denied": false,
                 "version": "1.23.0",
                 "cli_version": "1.23.0",
                 "pid": 10,

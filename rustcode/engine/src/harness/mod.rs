@@ -1199,9 +1199,45 @@ pub(crate) fn requested(meta: Option<&serde_json::Map<String, Value>>) -> Harnes
     }
 }
 
+/// Whether the client runs the thread with Full access, from a prompt's
+/// `_meta.rustcode.access` (`"ask"`, `"edits"` or `"full"`). `None` when the prompt does not say:
+/// an older client leaves the harness's policy as it is.
+pub(crate) fn requested_full_access(meta: Option<&serde_json::Map<String, Value>>) -> Option<bool> {
+    let access = meta?.get("rustcode")?.get("access")?.as_str()?;
+    Some(access == "full")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_prompts_access_level_says_whether_it_is_full() {
+        let meta = |access: Value| {
+            serde_json::Map::from_iter([(
+                "rustcode".to_owned(),
+                serde_json::json!({"access": access}),
+            )])
+        };
+        assert_eq!(
+            requested_full_access(Some(&meta(serde_json::json!("full")))),
+            Some(true)
+        );
+        assert_eq!(
+            requested_full_access(Some(&meta(serde_json::json!("edits")))),
+            Some(false)
+        );
+        assert_eq!(
+            requested_full_access(Some(&meta(serde_json::json!("ask")))),
+            Some(false)
+        );
+        assert_eq!(
+            requested_full_access(Some(&meta(serde_json::json!(3)))),
+            None
+        );
+        assert_eq!(requested_full_access(Some(&serde_json::Map::new())), None);
+        assert_eq!(requested_full_access(None), None);
+    }
 
     #[test]
     fn requested_harness_reads_meta() {

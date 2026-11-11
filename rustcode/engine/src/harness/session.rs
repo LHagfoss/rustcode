@@ -249,6 +249,14 @@ impl Adapter {
         }
     }
 
+    /// Tell the harness whether its thread runs with Full access. Only Codex sandboxes its own
+    /// shell and takes the policy from the client; the others have no policy to change.
+    pub(crate) fn apply_access(&self, full: Option<bool>) {
+        if let (Adapter::Codex(adapter), Some(full)) = (self, full) {
+            adapter.set_full_access(full);
+        }
+    }
+
     pub(crate) fn cancel(&self) {
         match self {
             Adapter::Acp(adapter) => adapter.cancel(),
@@ -706,6 +714,10 @@ pub(crate) struct ExternalSession {
     closed: AtomicBool,
     persist: bool,
     client_display: StdMutex<super::ClientDisplay>,
+    /// Whether the client runs this thread with Full access, as its last prompt said
+    /// (`harness::requested_full_access`). `None` until a prompt says: the harness keeps the
+    /// policy it started with.
+    full_access: StdMutex<Option<bool>>,
     orchestrator: StdMutex<Option<crate::orchestration::hub::Launch>>,
     /// The turn in flight's progress, for the silence deadline.
     progress: Arc<watchdog::Progress>,
@@ -802,6 +814,7 @@ impl ExternalSession {
             closed: AtomicBool::new(false),
             persist,
             client_display: StdMutex::new(super::ClientDisplay::default()),
+            full_access: StdMutex::new(None),
             orchestrator: StdMutex::new(None),
             progress,
             silence: StdMutex::new(None),
@@ -836,6 +849,16 @@ impl ExternalSession {
             .client_display
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = display;
+    }
+
+    /// Record the access level the client runs this thread at, from its next turn on. The access
+    /// level is the client's (`Ask`, `Auto-edit`, `Full access`); a harness that sandboxes its own
+    /// shell needs to know it, or Full access still runs in the sandbox.
+    pub(crate) fn set_full_access(&self, full: bool) {
+        *self
+            .full_access
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(full);
     }
 
     pub(crate) fn record(&self) -> HarnessRecord {
@@ -1601,6 +1624,12 @@ impl ExternalSession {
         // Nothing a finished turn left running still counts against this one.
         self.progress.begin_turn();
         let silence = self.silence_timeout();
+        adapter.apply_access(
+            *self
+                .full_access
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+        );
         let turn = adapter.prompt(prompt);
         tokio::pin!(turn);
         let silent = async {
