@@ -1723,13 +1723,23 @@ prerelease both skip).
 **After an update, the copies outside the app catch up.** The updater replaces
 the app and its engine; the next start of the new app brings the rest to the
 same version (`src-tauri/src/service.rs` `catch_up_after_update`, issue #3487):
-a `rustcode` an earlier install left in `~/.rustcode/bin` is replaced when it
-is older (`rustcode server update-cli`), a service installed from an AppImage
-gets the new engine copied to it, and a background server still running the
-engine from before the update is restarted (`rustcode server restart
---when-idle`, so a running turn finishes first). Paired machines that lose this
-computer while its server restarts reconnect on their own, as they do after any
-drop.
+
+- The `rustcode` a terminal runs — the install script's copy in `~/.local/bin`
+  or `/usr/local/bin`, `~/.rustcode/bin`, or whatever the login shell finds
+  first — is replaced by `rustcode server update-cli` when it is older and this
+  app may own it. Homebrew's copy and `cargo install`'s are named as theirs and
+  left to `brew upgrade` / `cargo install`, a development build is never
+  touched, and a link that already points at the app needs nothing.
+- A service installed from an AppImage gets the new engine copied to it.
+- A background server still running the engine from before the update is
+  restarted (`rustcode server restart --when-idle`, so a running turn finishes
+  first). When its definition names another `rustcode`, the app rewrites the
+  definition to its engine if it installed the server itself, and otherwise
+  leaves it alone and the Machines page says *Server runs an older rustcode at
+  `<path>`*, once per version pair.
+
+Paired machines that lose this computer while its server restarts reconnect on
+their own, as they do after any drop.
 
 It does not use `tauri-plugin-updater`: that plugin requires its own
 signing key pair, and a release without the private key in CI would fail.

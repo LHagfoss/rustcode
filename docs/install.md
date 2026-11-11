@@ -174,12 +174,16 @@ Native installations update from GitHub Releases; Homebrew installations use Hom
 - **Desktop app:** see [Updating the app](#updating-the-app)
 
 A machine can hold several copies, and the one first on `PATH` is what a shell
-runs: the app's bundled engine, Homebrew's, the install script's copy under
-`~/.rustcode/bin` (`%USERPROFILE%\.rustcode\bin\rustcode.exe` on Windows), or
-`cargo install`'s. `rustcode server status` reports when the `rustcode` a shell
-finds is another version than the engine that answered, with both paths and the
-command that fixes it: update that copy, or remove it so the shell finds the
-one the app runs ([server](server.md#status)).
+runs: the app's bundled engine, Homebrew's, the install script's copy in
+`~/.local/bin` or `/usr/local/bin` (and `~/.rustcode/bin`,
+`%USERPROFILE%\.rustcode\bin\rustcode.exe` on Windows), or `cargo install`'s.
+`rustcode server status` reports when the `rustcode` a shell finds is another
+version than the engine that answered, with both paths and the command that
+fixes it: update that copy, or remove it so the shell finds the one the app runs
+([server](server.md#status)). After a desktop app update the app also does it
+itself: the next start replaces the copy a shell runs when it is an older one
+the install script or the app wrote, and names a Homebrew or `cargo install`
+copy as theirs ([server](server.md#update-cli)).
 
 ### Updating pre-v0.31.0 native installs
 

@@ -34,7 +34,7 @@ async fn execute(command: &ServerCommands) -> anyhow::Result<i32> {
         }
         ServerCommands::Restart { when_idle, yes } => restart(*when_idle, *yes).await,
         ServerCommands::LinkPath => link_path().await,
-        ServerCommands::UpdateCli => update_cli().await,
+        ServerCommands::UpdateCli { json } => update_cli(*json).await,
         ServerCommands::Uninstall { yes } => uninstall(*yes).await,
         ServerCommands::Logs { follow, lines } => show_logs(*follow, *lines).await,
         ServerCommands::Run { .. } | ServerCommands::Connect => {
@@ -145,33 +145,113 @@ async fn link_path() -> anyhow::Result<i32> {
     }
 }
 
-/// Bring a `rustcode` an earlier install left in `~/.rustcode/bin` up to this
-/// engine's version (issue #3487). The app runs this after an update, when its
-/// own engine is the new version; a copy that is current, newer or unreadable
-/// is left alone, and a development build is refused.
-async fn update_cli() -> anyhow::Result<i32> {
+/// What `update-cli` found and did, for a person and for the app: the copy it
+/// looked at, what the copy was, and why nothing was done when nothing was.
+#[derive(serde::Serialize)]
+struct UpdatedCli {
+    /// `missing`, `current`, `updated`, `homebrew`, `cargo` or `development`.
+    outcome: &'static str,
+    /// The copy it looked at, when one was there.
+    path: Option<String>,
+    /// The version the copy reported before it was replaced.
+    was: Option<String>,
+    /// The version this engine is.
+    version: &'static str,
+    /// What a person should read.
+    message: String,
+}
+
+/// Bring the `rustcode` a shell runs up to this engine's version (issue
+/// #3487). The app runs this after an update, when its own engine is the new
+/// version; a copy that is current, newer or unreadable is left alone, as is
+/// one Homebrew or `cargo install` owns and a development build.
+async fn update_cli(json: bool) -> anyhow::Result<i32> {
     use rustcode::service::path_binary::{InstalledCopy, update_installed_copy};
     let version = env!("CARGO_PKG_VERSION");
-    match update_installed_copy(version).await? {
-        InstalledCopy::Missing => {
-            println!(
-                "No `rustcode` is installed in `~/.rustcode/bin`, so there is nothing to update."
-            );
-            Ok(0)
-        }
-        InstalledCopy::Current(path) => {
-            println!("{} is already current ({version}).", path.display());
-            Ok(0)
-        }
+    let brew = "`brew upgrade lhagfoss/tap/rustcode`";
+    let (report, code) = match update_installed_copy(version).await? {
+        InstalledCopy::Missing => (
+            UpdatedCli {
+                outcome: "missing",
+                path: None,
+                was: None,
+                version,
+                message: "No `rustcode` is installed where a shell or an install puts one, so there is nothing to update.".to_owned(),
+            },
+            0,
+        ),
+        InstalledCopy::Current(path) => (
+            UpdatedCli {
+                outcome: "current",
+                path: Some(path.display().to_string()),
+                was: None,
+                version,
+                message: format!("{} is already current ({version}).", path.display()),
+            },
+            0,
+        ),
         InstalledCopy::Replaced { path, was } => {
-            println!(
-                "{} now runs this version ({version}){}.",
-                path.display(),
-                was.map(|was| format!(", it was {was}")).unwrap_or_default()
-            );
-            Ok(0)
+            let before = was
+                .as_ref()
+                .map(|was| format!(", it was {was}"))
+                .unwrap_or_default();
+            (
+                UpdatedCli {
+                    outcome: "updated",
+                    path: Some(path.display().to_string()),
+                    was,
+                    version,
+                    message: format!("{} now runs this version ({version}){before}.", path.display()),
+                },
+                0,
+            )
         }
+        InstalledCopy::Managed { path, by: "Homebrew" } => (
+            UpdatedCli {
+                outcome: "homebrew",
+                path: Some(path.display().to_string()),
+                was: None,
+                version,
+                message: format!(
+                    "{} is Homebrew's copy (managed by Homebrew); update it with {brew}.",
+                    path.display()
+                ),
+            },
+            1,
+        ),
+        InstalledCopy::Managed { path, by } => (
+            UpdatedCli {
+                outcome: "cargo",
+                path: Some(path.display().to_string()),
+                was: None,
+                version,
+                message: format!(
+                    "{} is `cargo install`'s copy (managed by {by}); update it with `cargo install --path rustcode/tui`, or remove it.",
+                    path.display()
+                ),
+            },
+            1,
+        ),
+        InstalledCopy::Development(path) => (
+            UpdatedCli {
+                outcome: "development",
+                path: Some(path.display().to_string()),
+                was: None,
+                version,
+                message: format!(
+                    "{} is a development build (inside a cargo target directory); a released RustCode does not replace it.",
+                    path.display()
+                ),
+            },
+            1,
+        ),
+    };
+    if json {
+        println!("{}", serde_json::to_string(&report)?);
+    } else {
+        println!("{}", report.message);
     }
+    Ok(code)
 }
 
 async fn uninstall(yes: bool) -> anyhow::Result<i32> {

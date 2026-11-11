@@ -129,12 +129,28 @@ rustcode server uninstall   # remove the service
 - **The app brings the server up to date at every start.** A service installed
   from the app's own engine keeps running the engine it started with, so after
   an app update the app reads `server status` once, and when the server it runs
-  is on an *older* engine it runs `rustcode server restart --when-idle` in the
-  background (issue #3487): running turns finish first, and
-  a wait longer than ten minutes leaves the old server for the next start,
-  where `status` reports `restart-pending`. A server on a *newer* engine (a
-  Homebrew one, a beta) is never restarted by an older app. A development build
-  does none of this: it is not the engine a released service runs.
+  is on an *older* engine it acts on what the definition names (`binary`):
+  - The unit runs this app's engine, or the copy `update-cli` just brought up
+    to it: `rustcode server restart --when-idle` in the background (issue
+    #3487). Running turns finish first, and a wait longer than ten minutes
+    leaves the old server for the next start, where `status` reports
+    `restart-pending`.
+  - The unit runs another `rustcode`, and **the app installed the service**
+    (Settings › Machines › *Install server*, which leaves
+    `<config dir>/service/installed-by-app`): `rustcode server install`
+    rewrites the definition to this app's engine, then the same `--when-idle`
+    restart. A definition a terminal installed is never rewritten.
+  - The unit runs another `rustcode` the app does not install (Homebrew's,
+    `cargo install`'s): nothing is restarted, since a restart would bring the
+    same copy back. The page says `server-other-rustcode` — *Server runs an
+    older rustcode at `<path>`* — in place of `version-mismatch`, once per
+    version pair: the pair, the engine and the unit's binary are remembered in
+    `<config dir>/service/catch-up.json`, and any of them changing is a fresh
+    decision.
+
+  A server on a *newer* engine (a Homebrew one, a beta) is never restarted by
+  an older app, and a development build does none of this: it is not the engine
+  a released service runs.
 - `uninstall` stops the server the service runs and removes the service.
   Threads, settings, pairings and logs stay. It asks first when turns are
   running (`--yes` skips the question).
@@ -263,6 +279,13 @@ touches.
 | `path-version-mismatch-server` | The same copy is another version than the running server, which is a different build; the message names the server's binary and version. |
 | `unmanaged` | The server that answers was not started by the service (an app started it); `restart` hands it over. |
 
+The desktop app adds one code of its own to this list: `server-other-rustcode`,
+when the service definition runs a `rustcode` that is older than the app's and
+that the app does not install (Homebrew's, `cargo install`'s). A restart would
+bring the same copy back, so the app says *Server runs an older rustcode at
+`<path>`* instead of the `version-mismatch` advice, and leaves the restart to
+whoever updates that copy (see *Running in the background*).
+
 ### `link-path`
 
 `rustcode server link-path` is the one action behind that warning (Settings ›
@@ -278,17 +301,30 @@ runs afterwards.
 
 ### `update-cli`
 
-`rustcode server update-cli` brings a `rustcode` that the install script left in
-`~/.rustcode/bin` (`%USERPROFILE%\.rustcode\bin\rustcode.exe` on Windows) up to
-this engine's version, when that file exists and reports an *older* version.
-It replaces the file in place, as `link-path` does, but with a copy rather than
-a link: the copy still runs if the app is moved or removed, and the next app
-update replaces it again. The same exclusions apply — a copy that is current,
-newer or does not answer is left alone, and a development build is refused. It is not `link-path`: Homebrew's copy and the order of
-`PATH` take no part, so an older home copy is fixed even when `brew`'s copy is
-what a shell runs first. The app runs it at every start, which is what makes an
-app update reach that copy (issue #3487): the updater replaces the app, and the
-next start of the new app replaces the copy an earlier install left behind.
+`rustcode server update-cli` brings the `rustcode` a shell runs up to this
+engine's version after an app update (issue #3487). It looks at the copy a shell
+finds first on the login shell's `PATH`, and when there is none, at the files an
+install writes, in this order: `~/.rustcode/bin/rustcode`, `~/.local/bin` and
+`/usr/local/bin` (`install.sh` writes to the last two; Windows has the one copy
+the script and the app write, `%USERPROFILE%\.rustcode\bin\rustcode.exe`).
+
+- A copy it may replace (the install script's or the app's) is replaced in
+  place, as a copy rather than a link: it still runs if the app is moved or
+  removed, and the next app update replaces it again. Only a copy read as
+  *older* is replaced — or a link whose target is gone, which cannot be read at
+  all. A link that already is this engine needs nothing.
+- Homebrew's copy (`/opt/homebrew`, or a `/usr/local/bin` link into
+  `/usr/local/Cellar`) and `cargo install`'s (`~/.cargo/bin`, `$CARGO_HOME/bin`)
+  are named as *managed by Homebrew* / *managed by cargo* and left to
+  `brew upgrade lhagfoss/tap/rustcode` or `cargo install --path rustcode/tui`.
+  A development build is never replaced either.
+- `--json` prints `{ "outcome", "path", "was", "version", "message" }` with
+  `outcome` one of `missing`, `current`, `updated`, `homebrew`, `cargo`,
+  `development`, for the app that runs it at every start: that is what makes an
+  app update reach the copy an earlier install left behind.
+
+It is not `link-path`: `link-path` is a person's one action on the copy a shell
+runs, `update-cli` is the app's own catch-up, and it never edits `PATH`.
 
 ### `restart`
 
