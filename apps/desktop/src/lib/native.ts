@@ -82,7 +82,7 @@ export function openTerminalAt(path: string): Promise<void> {
 }
 
 export function revealPath(path: string): void {
-  if (isTauri()) void invoke("reveal_path", { path });
+  if (hasShell()) void invoke("reveal_path", { path }).catch((e) => console.warn("reveal_path", e));
 }
 
 /**
@@ -125,8 +125,8 @@ export async function readImage(path: string): Promise<ImageFile> {
 
 /**
  * A picture a reply shows: an absolute path, or one relative to the first of
- * `roots` (the thread's folder, then its worktree). The shell refuses any
- * path that resolves outside them, and anything that is not a picture.
+ * `roots` (thread, worktree and project). The shell adds OS temporary roots
+ * and validates the resolved path, image signature and size.
  */
 export async function threadImage(path: string, roots: string[]): Promise<ImageFile> {
   return invoke<ImageFile>("thread_image", { path, roots });

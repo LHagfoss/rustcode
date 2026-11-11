@@ -1385,6 +1385,25 @@ function seedThreads(): MockThread[] {
         }),
       ],
     },
+    {
+      id: "mock-agent-images",
+      cwd: "/Users/you/code/rustcode",
+      title: "Review agent screenshots",
+      model: "gpt-6-luna",
+      effort: "low",
+      updatedAt: minutes(90),
+      harness: "codex",
+      checkpoints: [],
+      history: [
+        update("mock-agent-images", {
+          sessionUpdate: "agent_message_chunk",
+          content: text(
+            "![Temp screenshot](/tmp/rustcode/mock-agent-images/screenshot.png)\n\n![Blocked screenshot](/Users/you/Private/screenshot.png)",
+          ),
+          ...turn(2000),
+        }),
+      ],
+    },
   ];
 }
 
@@ -5850,10 +5869,10 @@ export class MockTransport implements Transport {
     )
       return null;
     if (command === "thread_image") {
-      // A drawn stand-in for any picture inside the thread's folder; the shell's rules decide the rest.
+      // Canned fixtures only: the actual filesystem policy lives in native.rs.
       const path = String(args.path);
-      if (path.startsWith("/") && !path.startsWith(String((args.roots as string[])[0] ?? "")))
-        throw new Error("Pictures outside the thread's folder are not shown.");
+      if (path === "/Users/you/Private/screenshot.png")
+        throw new Error("Outside the thread, project, worktree and temporary folders.");
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="200" viewBox="0 0 480 200"><rect width="480" height="200" rx="12" fill="#18181a"/><polyline fill="none" stroke="#93a3e8" stroke-width="3" points="20,180 80,170 140,150 200,110 260,40 320,40 380,40 440,40"/><text x="20" y="28" fill="#a1a1a1" font-family="-apple-system" font-size="14">${path}</text></svg>`;
       return { name: path.split("/").pop(), mimeType: "image/svg+xml", data: btoa(svg) };
     }
