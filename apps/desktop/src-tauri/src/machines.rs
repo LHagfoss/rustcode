@@ -485,7 +485,7 @@ async fn relay_once(
         Err(error) => return End::Failed(error),
     };
     let route = connected.route.clone();
-    let hint = connected.hint();
+    let hint = connected.hint(&machine.routes, &rustcode_client::local_addresses());
     let failed = connected.failed.clone();
     let learned = connected.learned.clone();
     let session = connected.session;
@@ -636,7 +636,13 @@ fn schedule_overlay_probe(
         };
         let mut failures = failed;
         failures.extend(connector.probe_overlay_routes(&machine, &route).await);
-        let hint = rustcode_client::route_hint(&route, &failures);
+        let hint = rustcode_client::RouteReport {
+            routes: &machine.routes,
+            in_use: &route,
+            failures: &failures,
+            local: &rustcode_client::local_addresses(),
+        }
+        .hint();
         let mut live = machines.live.lock().unwrap();
         let still_connected = live.get(&id).is_some_and(|entry| {
             entry.state == MachineState::Connected
@@ -1341,20 +1347,28 @@ mod tests {
     /// prints (#3202).
     #[test]
     fn a_machine_reachable_one_way_says_why_the_other_route_is_not_used() {
-        use rustcode_client::{route_hint, OverlayProvider, RouteFailure};
+        use rustcode_client::{OverlayProvider, RouteFailure, RouteReport};
         let mut saved = machine();
         let mut overlay = Route::with_kind(RouteKind::Vpn, "100.90.16.237:17879");
         overlay.provider = Some(OverlayProvider::Netbird);
         saved.routes.push(overlay.clone());
         let in_use = Route::new("192.168.1.20:17879");
-        let hint = route_hint(
-            &in_use,
-            &[RouteFailure {
+        // This computer is on NetBird, so its route to the machine can answer.
+        let local: Vec<std::net::IpAddr> = ["192.168.1.20", "100.92.13.44"]
+            .iter()
+            .map(|address| address.parse().unwrap())
+            .collect();
+        let hint = RouteReport {
+            routes: &saved.routes,
+            in_use: &in_use,
+            failures: &[RouteFailure {
                 route: overlay,
                 reason: "connection timed out".into(),
                 refusal: None,
             }],
-        )
+            local: &local,
+        }
+        .hint()
         .expect("a hint");
         let live = Live {
             state: MachineState::Connected,
