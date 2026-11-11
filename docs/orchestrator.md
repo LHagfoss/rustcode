@@ -577,6 +577,14 @@ they finish or ask, instead of having to poll with sleeps.
   `link_id`, and that the message is the notification. A child that was
   stopped, or interrupted and left interrupted, is no result to wait for:
   nothing ever reports it, so it does not hold its parent back.
+- **A delegate on another machine whose channel goes.** The prompt request that
+  ran a remote turn dies with its machine's connection; the turn there does
+  not, and its rows keep arriving until the channel goes. What the turn wrote
+  decides (`lostTurnOutcome` in `state/orchestration.ts`): one that wrote its
+  reply settles `done` with that answer, and only one that wrote none is
+  `failed`, with the connection's sentence as its preview
+  (`MACHINE_LOST_TURN`). A `Failed` row is the turn's own failure, never a
+  channel that blinked.
 - **After a restart.** A restart resumes the threads it cut off
   (`state/store.ts` `resumeInterrupted`), and the resume is what answers the
   links the quit severed: it is tied to that one turn, never to a turn that

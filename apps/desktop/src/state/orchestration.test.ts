@@ -50,6 +50,8 @@ import {
   linksLeft,
   linkThreads,
   listSessions,
+  lostTurnOutcome,
+  MACHINE_LOST_TURN,
   MAX_ACTIVITY_ITEMS,
   MAX_DATA_ROWS,
   MAX_DEPTH,
@@ -1946,6 +1948,43 @@ describe("answering with the slots and the child's activity", () => {
     expect(entry).toMatchObject({ answer_truncated: true, session_id: "b", link_id: "a/b" });
     // An answer that fits says nothing about truncation.
     expect(linkResult({ ...cut, truncated: false }, "done")).not.toHaveProperty("answer_truncated");
+  });
+});
+
+describe("a turn that lost its machine's connection", () => {
+  test("a turn that wrote its reply finished, so its parent reads Done", () => {
+    // The delegate answered in full and the channel went as it did (issue 3440): what it wrote decides,
+    // not the lost request, or the row says Failed and wait_session hands back a failure.
+    const rows = [
+      { kind: "user", text: "check the numbers" },
+      { kind: "assistant", text: "## Report\n\n| Item | Value |\n| --- | --- |\n| tests | 12 |" },
+      { kind: "turnEnd", outcome: "completed" },
+    ];
+    expect(lostTurnOutcome(rows)).toBe("completed");
+    // The settled link is what the parent's row and `wait_session` read.
+    const settled = linkResult(
+      { ...link("a", "b", "working"), state: "done", answer: "## Report …" },
+      "done",
+    );
+    expect(settled).toMatchObject({ status: "done", link_id: "a/b" });
+  });
+
+  test("a turn that wrote no reply is the failure the connection says it is", () => {
+    const rows = [
+      { kind: "user", text: "check the numbers" },
+      { kind: "tool", title: "bash" },
+      // An assistant row an empty chunk left behind holds no answer either.
+      { kind: "assistant", text: " \n" },
+    ];
+    expect(lostTurnOutcome(rows)).toBe("failed");
+    expect(lostTurnOutcome([])).toBe("failed");
+    // What the row previews is the sentence the app writes on the thread, not a reply.
+    expect(MACHINE_LOST_TURN).toBe("The machine disconnected during this turn.");
+    const settled = linkResult(
+      { ...link("a", "b", "working"), state: "failed", error: MACHINE_LOST_TURN },
+      "failed",
+    );
+    expect(settled).toMatchObject({ status: "failed" });
   });
 });
 

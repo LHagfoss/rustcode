@@ -2,7 +2,16 @@
 // Components read slices with `useApp(selector)` and call the actions below.
 
 import { create } from "zustand";
-import { AcpConnection, type Inbound, type Json, type JsonObject, obj, RpcError, str } from "../acp/jsonrpc";
+import {
+  AcpConnection,
+  ConnectionClosedError,
+  type Inbound,
+  type Json,
+  type JsonObject,
+  obj,
+  RpcError,
+  str,
+} from "../acp/jsonrpc";
 import { parseRemoteStatus, RemoteMethod, type RemoteStatus } from "../acp/remote";
 import {
   agentActive,
@@ -194,6 +203,8 @@ import {
   type GrantAsk,
   isActive,
   type LinkBook,
+  lostTurnOutcome,
+  MACHINE_LOST_TURN,
   MAX_DELEGATES_PER_THREAD,
   MAX_DELEGATES_TOTAL,
   MIN_DELEGATES_PER_THREAD,
@@ -1187,8 +1198,7 @@ export function watchMachineConnection(id: string, next: AcpConnection | null): 
       threads: Object.fromEntries(
         Object.entries(s.threads).map(([key, t]) => {
           if (splitThreadKey(key).host !== id) return [key, t];
-          if (t.running)
-            return [key, finishTurn(t, "failed", Date.now(), "The machine disconnected during this turn.")];
+          if (t.running) return [key, finishTurn(t, "failed", Date.now(), MACHINE_LOST_TURN)];
           return [key, t.permissions.length ? { ...t, permissions: [] } : t];
         }),
       ),
@@ -4053,8 +4063,19 @@ export async function runPrompt(
       ? meta.unusedSteers.filter((x): x is string => typeof x === "string")
       : [];
   } catch (error) {
-    outcome = "failed";
-    failure = errorText(error);
+    // A turn on another machine outlives the request that asked for it: the request dies with the
+    // machine's connection, the turn there does not, and its rows keep arriving until the channel
+    // goes. What it wrote says how it ended, so a delegate that answered in full is not Failed
+    // because the channel blinked (issue 3440). Anything else is the engine's own refusal, and a failure.
+    const lost = error instanceof ConnectionClosedError && threadIsRemote(id);
+    const wrote = get().threads[id]?.items.slice(startIndex) ?? [];
+    if (lost && lostTurnOutcome(wrote) === "completed") {
+      outcome = "completed";
+    } else {
+      outcome = "failed";
+      // The same sentence the thread's own row now carries, rather than the channel's.
+      failure = lost ? MACHINE_LOST_TURN : errorText(error);
+    }
   }
   // A provider's raw answer (`Codex: {"detail":"Bad Request"}`) is said in words, with what to do
   // when the conversation is full; the raw text stays on the thread, behind the error's Details.
