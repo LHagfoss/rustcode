@@ -111,6 +111,23 @@ header, the composer's **Run on** control and its menu, and `list_machines`,
 which keeps the reported `name` and adds `display_name`, `icon` and
 `icon_tint`.
 
+A machine's own **Machine settings** page (`src/ui/MachineSettingsPage.tsx`) is
+one screen per computer, reached from the machine view's **Machine settings**
+button and from a Machines row in Settings. Its header says the local name and
+glyph, the platform, the RustCode version it runs (with the skew warning), the
+state, the route and when it was last seen. The controls are Reconnect,
+Disconnect (keeps the machine saved), Forget, **Make default for new threads**
+(the main machine) and **Pause new threads here**: a paused machine keeps its
+connection and its existing threads, and **Run on** refuses it until it is
+resumed. Below them are that machine's harnesses with their install and
+sign-in state and one **Check** (re-detect there, read its snapshot again), and
+**What syncs**: one row per Settings row, generated from the same registry the
+**Applying to** bar reads, in three columns — Shared, This machine only, This
+app only — with **Differs** where that machine's value differs from this Mac's.
+Choosing a row opens its page with **Applying to** set to the machine, and the
+footer says a value set remotely takes effect there on its next launch. An
+offline machine shows what was last read, read-only.
+
 Agents across machines: the orchestration tools take a `machine` (v12), so a
 thread here can list the paired computers (`list_machines`), start, message,
 read, wait on and stop threads there, and be woken when a remote delegate

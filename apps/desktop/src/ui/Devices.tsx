@@ -40,7 +40,7 @@ import {
   useLocalIdentity,
   useMachines,
 } from "../state/machines";
-import { openSettings, startNewThread, useApp } from "../state/store";
+import { openMachineSettings, openSettings, startNewThread, useApp } from "../state/store";
 import { LOCAL_HOST } from "../state/threadKeys";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { Pill } from "./primitives";
@@ -297,7 +297,7 @@ export function MachineCard({ machine, now }: { machine: Machine; now: number })
           New thread
         </Pill>
         <MachineAction machine={machine} connected />
-        <Pill size="sm" quiet title={`Settings for ${name}`} onClick={() => openSettings("machines")}>
+        <Pill size="sm" quiet title={`Settings for ${name}`} onClick={() => openMachineSettings(machine.id)}>
           <Gear size={12} />
           Machine settings
         </Pill>

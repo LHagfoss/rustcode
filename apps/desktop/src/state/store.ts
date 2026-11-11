@@ -390,6 +390,8 @@ export interface AppState {
   /** Messages written now and sent at a time the user picked, by thread id (state/schedule.ts). */
   scheduled: ScheduleBook;
   settings: SettingsSection | null;
+  /** Which machine's own page Settings › Machines shows, or null for the list. */
+  settingsMachine: string | null;
   switcherOpen: boolean;
   /** A report command's answer (`/status`, `/context`…), shown over the composer of its thread. */
   report: { threadId: string; text: string } | null;
@@ -876,6 +878,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   extras: {},
   scheduled: parseScheduleBook(stored(SCHEDULED_KEY)),
   settings: null,
+  settingsMachine: null,
   switcherOpen: false,
   modelPickerAsk: 0,
   report: null,
@@ -6490,7 +6493,13 @@ function stopPlanPolling() {
  */
 export function openSettings(section: SettingsSection | string | null) {
   dismissOverlays();
-  set({ settings: settingsSection(section), switcherOpen: false });
+  set({ settings: settingsSection(section), settingsMachine: null, switcherOpen: false });
+}
+
+/** Open one machine's own Settings page, reached from its card and the Machines list. */
+export function openMachineSettings(id: string) {
+  dismissOverlays();
+  set({ settings: "machines", settingsMachine: id, switcherOpen: false });
 }
 
 export function setSwitcher(open: boolean) {

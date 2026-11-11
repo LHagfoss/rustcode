@@ -123,6 +123,7 @@ import { CapabilitiesPage } from "./Capabilities";
 import { DiagnosticsPage } from "./DiagnosticsPage";
 import { DefaultsForm, HarnessList, useAutoDetect } from "./Harnesses";
 import { HeaderButtonsSetting } from "./HeaderButtonsSetting";
+import { MachineSettingsPage } from "./MachineSettingsPage";
 import { MachinesPage } from "./MachinesPage";
 import { NewThreadBanner } from "./NewThreadBanner";
 import { ChromeButton, cx, Kbd, noTextHelpers, Spinner, Switch } from "./primitives";
@@ -1580,7 +1581,9 @@ function UpdateChannelRow() {
  */
 export function Settings() {
   const section = useApp((s) => s.settings) ?? "general";
+  const machine = useApp((s) => s.settingsMachine);
   const current = PAGES.find((s) => s.id === section) ?? PAGES[0]!;
+  const label = section === "machines" && machine ? "Machine settings" : current.label;
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const field = useRef<HTMLInputElement>(null);
@@ -1771,7 +1774,7 @@ export function Settings() {
               </div>
             </nav>
             <div className="flex min-w-0 flex-1 flex-col">
-              <PanelHeader label={current.label} />
+              <PanelHeader label={label} />
               <main className="scroll-stable min-h-0 flex-1">
                 <div className="@container mx-auto w-full max-w-[760px] px-4 pt-4 pb-24">
                   {section === "general" && <GeneralPage />}
@@ -1780,7 +1783,8 @@ export function Settings() {
                   {section === "connections" && <ConnectionsPage />}
                   {section === "capabilities" && <CapabilitiesPage />}
                   {section === "remote" && <RemoteAccessPage />}
-                  {section === "machines" && <MachinesPage />}
+                  {section === "machines" &&
+                    (machine ? <MachineSettingsPage id={machine} /> : <MachinesPage />)}
                   {section === "appearance" && <AppearancePage />}
                   {section === "keyboard" && <ShortcutsPage />}
                   {section === "usage" && <UsagePage />}

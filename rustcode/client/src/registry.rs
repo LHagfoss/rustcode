@@ -307,6 +307,10 @@ pub struct Machine {
     /// The main machine: listed first, and the default **Run on**.
     #[serde(default)]
     pub main: bool,
+    /// New threads are not started here from this app, though its threads
+    /// still open and the connection stays up. A local choice, never sent.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paused: bool,
 }
 
 fn unknown_platform() -> String {
@@ -336,6 +340,7 @@ impl Machine {
             added_at: now,
             last_connected_at: None,
             main: false,
+            paused: false,
         }
     }
 
@@ -661,6 +666,21 @@ impl MachineRegistry {
             for machine in machines.iter_mut() {
                 machine.main = machine.host_id == host_id;
             }
+            Ok(())
+        })
+    }
+
+    /// Pause or resume new threads on a machine. Its connection and its
+    /// existing threads are untouched; only **Run on** refuses it.
+    pub fn set_paused(&mut self, host_id: &str, paused: bool) -> Result<()> {
+        self.mutate(|machines| {
+            let Some(machine) = machines
+                .iter_mut()
+                .find(|machine| machine.host_id == host_id)
+            else {
+                bail!("no saved machine has host id {host_id}");
+            };
+            machine.paused = paused;
             Ok(())
         })
     }
@@ -1013,6 +1033,11 @@ mod tests {
         assert_eq!(studio.display(), "Studio desk");
         assert_eq!(studio.icon.as_deref(), Some("studio"));
         assert_eq!(studio.icon_tint.as_deref(), Some("4"));
+        // Old files have no pause flag either, and it round-trips when set.
+        assert!(!studio.paused);
+        store.set_paused("gw-old", true).unwrap();
+        let paused = load(dir.path());
+        assert!(paused.machines()[0].paused);
         // A re-pair keeps the local name and icon: they are this app's, not the
         // machine's, and pairing again only refreshes what the machine reports.
         let mut repaired = machine("gw-old", "Studio (reported)", "10.0.0.3:17879");
