@@ -218,6 +218,10 @@ pub(crate) struct KnownHarness {
     pub version: Option<(&'static str, &'static [&'static str])>,
     /// A cheap command whose answer says whether the user is signed in.
     pub auth_probe: Option<AuthProbe>,
+    /// A program the command needs on `PATH` even though it does not name it:
+    /// `npx -y pi-acp` starts, but the `pi` it spawns does not. Missing means
+    /// not installed, not a turn that fails at start.
+    pub requires: Option<&'static str>,
 }
 
 pub(crate) const KNOWN: &[KnownHarness] = &[
@@ -232,6 +236,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         )),
         version: Some(("codex", &["--version"])),
         auth_probe: Some(AuthProbe::Text(&["codex", "login", "status"])),
+        requires: None,
     },
     KnownHarness {
         id: "claude-code",
@@ -244,6 +249,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         )),
         version: Some(("claude", &["--version"])),
         auth_probe: Some(AuthProbe::Json(&["claude", "auth", "status", "--json"])),
+        requires: None,
     },
     KnownHarness {
         id: "gemini",
@@ -256,6 +262,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         )),
         version: Some(("gemini", &["--version"])),
         auth_probe: None,
+        requires: None,
     },
     KnownHarness {
         id: "opencode",
@@ -268,6 +275,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         )),
         version: Some(("opencode", &["--version"])),
         auth_probe: None,
+        requires: None,
     },
     // Pi speaks its own RPC protocol; `pi-acp` adapts it to ACP, as claude-agent-acp does for
     // Claude Code. Pi keeps its own models, logins, skills and sessions (~/.pi).
@@ -282,6 +290,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         )),
         version: Some(("pi", &["--version"])),
         auth_probe: None,
+        requires: Some("pi"),
     },
 ];
 
@@ -931,7 +940,14 @@ pub(crate) fn remove_account(harness: &str, id: &str) -> Result<(), String> {
 /// (`_rustcode/harnesses/accounts/check`, the Accounts list's Refresh).
 pub(crate) async fn check_accounts(redetect: &[String]) -> Result<Value, String> {
     let dir = config::config_dir()?;
-    // A Check looks again at the install itself, not at a detection up to a minute old.
+    // A Check looks again at the shell's environment and at the install itself,
+    // not at a cached answer up to a minute old. The launch-time shell probe
+    // can lose to a cold start, and without this the process would keep its
+    // dotfile-only fallback for the rest of its life (#3447).
+    if !redetect.is_empty() {
+        // The retry starts a login shell, which blocks for up to its timeout.
+        let _ = tokio::task::spawn_blocking(crate::shell_env::retry_failed_probe).await;
+    }
     for id in redetect {
         detect::forget(id.trim());
     }
