@@ -1209,6 +1209,14 @@
   clip-path: inset(-1px -1px calc(1rem - 1px) -1px);
 }
 /*
+ * The drawer's first row sits 6px (`px-1.5 pt-1.5`) inside its rounded top, so its lit top corners
+ * follow that curve, 6px tighter, instead of the rows' own smaller radius.
+ */
+.rc-composer-drawer > [role="option"]:first-child {
+  border-top-left-radius: calc(var(--rc-composer-radius) - 6px);
+  border-top-right-radius: calc(var(--rc-composer-radius) - 6px);
+}
+/*
  * The field, once its text is taller than the box: the edge it is cut at fades over `--rc-fade-top`
  * / `--rc-fade-bottom` px, so a line never stops on a hard edge (the mask, not a painted gradient,
  * so nothing shows as a band on the glass). Composer.tsx sets each to 0 for an edge the reader can
