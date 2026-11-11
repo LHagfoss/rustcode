@@ -405,7 +405,7 @@ pub const READ_SESSION: Tool = Tool {
 
 pub const START_SESSION: Tool = Tool {
     name: crate::orchestration::START_SESSION,
-    description: "Start a new thread with prompt as its first message, on another harness, model or named account if given, in its own worktree by default. Pass `machine` (id or name from list_machines) to start it on another paired computer; omit it for this one. Pass the whole task as prompt: the new thread does not see this conversation. Carry the repository rules (tell it to read AGENTS.md) and acceptance criteria, and bound commands that can block: a delegated shell has no TTY or default timeout. The user approves in the app, where the harness, account, model and effort are shown, so choose sensible ones and call it rather than asking first. Returns session_id and a link_id for wait_session.",
+    description: "Start a new thread with prompt as its first message, on another harness, model or named account if given, in its own worktree by default. Without `standalone` it is a delegate: a sub-task whose result you need, and it returns a link_id for `wait_session`. `standalone: true` starts a thread of the user's own, listed at the top level of its project rather than under this one; nothing is delivered back and `wait_session` does not apply, so name the session_id to the user. Pass `machine` (id or name from list_machines) to start it on another paired computer; omit it for this one. Pass the whole task as prompt: the new thread does not see this conversation. Carry the repository rules (tell it to read AGENTS.md) and acceptance criteria, and bound commands that can block: a delegated shell has no TTY or default timeout. The user approves in the app, where the harness, account, model and effort are shown, so choose sensible ones and call it rather than asking first.",
     arguments: r#"{"prompt": "the task", "title": "short title", "harness": "codex", "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -420,6 +420,7 @@ pub const START_SESSION: Tool = Tool {
                 "effort": {"type": "string"},
                 "account": {"type": "string", "description": "Named login of the harness's accounts as list_harnesses lists them; omitted is the caller's account on the same harness, else the login a new thread would start on"},
                 "worktree": {"type": "boolean"},
+                "standalone": {"type": "boolean", "description": "A thread of the user's own at the top level, not a delegate: nothing comes back"},
                 "project": {"type": "string", "description": "absolute path of another project"},
                 "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"},
                 "client_request_id": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_CLIENT_REQUEST_ID_CHARS, "description": "Retry key: a repeat returns the first result"}
@@ -434,7 +435,7 @@ pub const START_SESSION: Tool = Tool {
 
 pub const FAN_OUT: Tool = Tool {
     name: crate::orchestration::FAN_OUT,
-    description: "Start the same task on 2-4 harnesses, each in its own worktree thread, so the user can compare the results. Pass `machine` (id or name from list_machines) to run them on another paired computer; omit it for this one (with `project`, its absolute path there). Pass the whole task as the shared prompt: they do not see this conversation. Brief each fully, as start_session's description says. Each entry may name a harness, model, effort and named account as list_harnesses lists them. The user is asked first. Returns one link per thread for wait_session.",
+    description: "Start the same task on 2-4 harnesses, each in its own worktree thread, so the user can compare the results. Each is a delegate whose results you wait for, unless `standalone: true`: then each is a thread of the user's own at the top level, nothing comes back and `wait_session` does not apply, so name the session ids to the user. Pass `machine` (id or name from list_machines) to run them on another paired computer; omit it for this one (with `project`, its absolute path there). Pass the whole task as the shared prompt: they do not see this conversation. Brief each fully, as start_session's description says. Each entry may name a harness, model, effort and named account as list_harnesses lists them. The user is asked first. Returns one link per thread for wait_session, or the session ids when standalone.",
     arguments: r#"{"prompt": "the task", "harnesses": [{"harness": "codex"}, {"harness": "claude-code"}], "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -460,6 +461,7 @@ pub const FAN_OUT: Tool = Tool {
                         "additionalProperties": false
                     }
                 },
+                "standalone": {"type": "boolean", "description": "Threads of the user's own at the top level, not delegates: nothing comes back"},
                 "project": {"type": "string", "description": "absolute path of the project on that machine"},
                 "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"},
                 "client_request_id": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_CLIENT_REQUEST_ID_CHARS, "description": "Retry key: a repeat returns the first result"}

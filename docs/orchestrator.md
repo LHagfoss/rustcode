@@ -1212,8 +1212,33 @@ enough for the newest version again (57 KiB, room to spare after #3376), and
 `the_orchestration_tools_fit_the_hard_cap` loops every version and fails if
 one loses a tool or the newest has no room for the next.
 
-The app advertises 13 from `CAPABILITY_VERSION` (`state/orchestration.ts`); a
-v12 app keeps exactly the v12 set and `PROMPT_HINT_V12`.
+The app advertises 14 from `CAPABILITY_VERSION` (`state/orchestration.ts`); a
+v12 app keeps exactly the v12 set and `PROMPT_HINT_V12`, and a v13 app keeps
+its exact set and `PROMPT_HINT_V13`.
+
+## Orchestration v14: a thread of the user's own
+
+Built. Version 14 adds no tool: it adds `standalone` to `start_session` and
+`fan_out`, because those two could only ever start a delegate — a child nested
+under the calling thread, whose answer is delivered back and who is settled
+with its parent. When the user asks an orchestrator for "a brand new thread",
+that thread landed under the orchestrator and disappeared with it.
+
+`standalone: true` starts the thread at the top level of its project: no parent
+link, no delivery back, no `wait_session` (there is no link to wait on), so an
+orchestrator names the session id to the user instead, and the thread survives
+the caller being settled or archived. It takes no delegation slot and is not
+bounded by the caller's depth, which bounds how much work one thread hands out;
+it runs at Settings › General › Default access, what a thread the user starts
+by hand gets. Its prompt is delivered as the user's own first message, without
+the `From thread …` header or the delegate report a child gets. The approval
+card says **New thread** rather than **Delegate**, and the grant key is the
+same `start`/`start:‹project›`.
+
+A client below 14 is never shown the argument and has a call that carries one
+refused (`start_session with standalone needs a newer RustCode app`), so an
+older app cannot file the thread under the caller and then wait for an answer
+that never comes. `PROMPT_HINT_V14` teaches it to a v14 orchestrator.
 
 
 
@@ -1237,7 +1262,8 @@ v3 app is never offered `thread_usage` or `query_data`, which it could not
 answer, a v5 app is never offered `read_activity`, a v6 app is never offered
 `manage_queue`, a v9 app is never offered `answer_request` or
 `organize_threads` nor told that `message_session` takes `attachments`, and a
-v12 app is never offered the v13 worktree pair.
+v12 app is never offered the v13 worktree pair, and a v13 app is never told
+`start_session` or `fan_out` takes `standalone`.
 
 While the user has Smart UI on, the same environment carries
 `RUSTCODE_SMART_UI=1` and the server also lists **`smart_ui_check`**
@@ -1299,12 +1325,12 @@ can inject the server (unix), and in a thread's answer whether it did.
 engine does both); a thread's answer sets `checkpoints` to whether its cwd is
 in a git repository. `initialize` also advertises `_meta.rustcode.worktrees`,
 `checkpoints` and `threadStatus` (each `1`). The app advertises
-`_meta.rustcode.orchestration = 13` while threads may orchestrate
+`_meta.rustcode.orchestration = 14` while threads may orchestrate
 (`state/orchestration.ts` `CAPABILITY_VERSION`), and the newest client gets the
 v4 data-store tools, the v6 activity read, the v7 queue control, the v9
 delegate pull-request tools, v10's `answer_request` and `organize_threads`, the
 v11 project and scheduled-task tools, the v12 machine tools and the v13 worktree
-pair; v8 adds no tool, only its prompt hint.
+pair, plus the v14 standalone argument; v8 adds no tool, only its prompt hint.
 
 ## Keeping an orchestrator's context small
 
@@ -1313,16 +1339,18 @@ reads costs again on each later call. In measured Opus orchestrator threads,
 most of that context came from the orchestrator reading diffs, files and logs
 itself, then from delegates' final answers. Four things keep it small:
 
-- The version 10, 11, 12 and 13 hints tell the orchestrator to leave reading,
+- The version 10, 11, 12, 13 and 14 hints tell the orchestrator to leave reading,
   reviews and CI triage to delegates, check pull requests with `thread_status`,
   wait on all links in one long `wait_session` (or end the turn and be woken),
   and call `list_harnesses` once. Version 13 adds where worktrees stand
   (`worktree_status`) and handing one back to the user (`handoff_worktree`),
   which replace a `run_command` per worktree and the shell steps that used to
   move work by hand.
-- A thread `start_session` or `fan_out` starts gets its task with one more
-  paragraph after it (`DELEGATE_REPORT`, `state/orchestration.ts`): end with a
-  report of about 12 lines, with no code, diffs or logs. `message_session`
+- A thread `start_session` or `fan_out` starts as a delegate gets its task
+  with one more paragraph after it (`DELEGATE_REPORT`,
+  `state/orchestration.ts`): end with a report of about 12 lines, with no code,
+  diffs or logs. A standalone thread gets the prompt as the user's own, with
+  neither the header nor the report. `message_session`
   messages are delivered as written.
 - Answers are compact JSON, and `thread_status` names a worktree's or pull
   request's branch only where it differs from `branch`.

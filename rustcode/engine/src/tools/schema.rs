@@ -3310,6 +3310,10 @@ mod schema_budget_tests {
         };
         assert!(start_schema(4)["function"]["parameters"]["properties"]["account"].is_null());
         assert!(start_schema(5)["function"]["parameters"]["properties"]["account"].is_object());
+        // A standalone thread arrived in v14 (#3443): v13 never sees the field,
+        // so an app that cannot start one is not offered it.
+        assert!(start_schema(13)["function"]["parameters"]["properties"]["standalone"].is_null());
+        assert!(start_schema(14)["function"]["parameters"]["properties"]["standalone"].is_object());
         // Nor is v9 shown files to attach, which its app would drop.
         let message_schema = |version: u8| {
             let policy = ToolSchemaPolicy::root(true).with_orchestration_tools(version);
