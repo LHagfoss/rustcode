@@ -351,8 +351,13 @@ pub fn build_report(observed: Observed, now_secs: u64) -> StatusReport {
             && live.version != cli_version
         {
             let server_binary = state.program.clone().unwrap_or_else(|| cli_program.clone());
-            if let Some(message) =
-                super::path_binary::mismatch(found, &server_binary, &live.version)
+            // The copy on PATH *is* the server's binary, updated on disk
+            // under a server still running the old build: `version-mismatch`
+            // already says to restart, and naming one path twice ("remove X
+            // so a shell finds X") helps nobody.
+            if !same_file(&found.path, &server_binary)
+                && let Some(message) =
+                    super::path_binary::mismatch(found, &server_binary, &live.version)
             {
                 problems.push(problem("path-version-mismatch-server", message));
             }
@@ -820,6 +825,18 @@ pub fn uninstall() -> Result<bool> {
     Ok(installed)
 }
 
+/// Whether two paths name the same binary, directly or through a symlink
+/// (`~/.local/bin/rustcode` pointing into the app bundle).
+fn same_file(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1147,7 +1164,7 @@ mod tests {
         let mut matches_app = observed(installed_state(), Some(live("1.22.0", 10)));
         matches_app.cli_version = "1.28.0".to_owned();
         matches_app.path_rustcode = Some(PathRustcode {
-            path: "/usr/bin/rustcode".into(),
+            path: "/usr/local/bin/rustcode".into(),
             version: Some("1.28.0".into()),
         });
         let report = build_report(matches_app, 0);
@@ -1166,6 +1183,20 @@ mod tests {
             "{}",
             server.message
         );
+    }
+
+    #[test]
+    fn a_server_running_an_older_build_of_the_path_copy_only_needs_a_restart() {
+        // The install updated /usr/bin/rustcode in place; the server still
+        // runs the old build of that same file.
+        let mut stale = observed(installed_state(), Some(live("1.28.0", 10)));
+        stale.cli_version = "1.29.0".to_owned();
+        stale.path_rustcode = Some(PathRustcode {
+            path: "/usr/bin/rustcode".into(),
+            version: Some("1.29.0".into()),
+        });
+        let report = build_report(stale, 0);
+        assert_eq!(codes(&report), ["version-mismatch"], "{report:?}");
     }
 
     #[test]
