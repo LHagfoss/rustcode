@@ -1101,7 +1101,7 @@ mod tests {
         // Windows has no Homebrew, and its one install folder is the app's.
         assert_eq!(
             owner(
-                Path::new("C:\\Users\\ada\\.rustcode\\bin\\rustcode.exe"),
+                &home.join(".rustcode").join("bin").join("rustcode.exe"),
                 Some(home),
                 true,
                 engine
