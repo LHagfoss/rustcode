@@ -6,6 +6,7 @@
 // (state/host.ts). Pure: no store, no engine.
 
 import type { Json, JsonObject } from "../acp/jsonrpc";
+import { plainPath } from "../acp/types";
 import type { ThreadStatus, Worktree } from "../acp/v2";
 import { MAX_ATTACHMENT_FILES } from "./attachments";
 import type { PermissionMode } from "./permissions";
@@ -1103,8 +1104,10 @@ export interface RuleThread {
 }
 
 // macOS links /tmp, /var and /etc into /private, and the engine reports the resolved path: one place.
+// Windows' verbatim prefix goes too (`plainPath`): it is a Win32 detail, not part of the folder, and
+// keeping it made one project two (issue 3425).
 export const cleanProjectPath = (path: string) =>
-  path
+  plainPath(path)
     .replace(/\/+$/, "")
     .replace(/\/\.\//g, "/")
     .replace(/^\/private(?=\/(?:tmp|var|etc)(?:\/|$))/, "");

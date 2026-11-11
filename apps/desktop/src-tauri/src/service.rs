@@ -153,6 +153,26 @@ pub async fn server_service_install() -> Result<ServiceStatus, String> {
     Ok(status)
 }
 
+/// Point the `rustcode` a shell runs at this app's engine (issue #3411): the
+/// CLI's own `server link-path`, run by the bundled engine so the shell then
+/// finds the app's version. Homebrew's copy and a development build are refused
+/// there with the reason, which is shown as it is. Answers the state after it.
+#[tauri::command]
+pub async fn server_link_path() -> Result<ServiceStatus, String> {
+    let output = run(&["server", "link-path"], STATUS_TIMEOUT).await?;
+    if !output.status.success() {
+        let said = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        let why = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        let message = if why.is_empty() { said } else { why };
+        return Err(if message.is_empty() {
+            "`rustcode` on PATH could not be pointed at this app.".to_owned()
+        } else {
+            message
+        });
+    }
+    read_status().await
+}
+
 /// The current state from `rustcode server status --json`. A status that
 /// cannot be read is a status the page says it does not know, never an error
 /// the page cannot show.

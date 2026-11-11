@@ -1484,7 +1484,6 @@ pub const TOOLS: &[Tool] = &[
     misc::LIST_AGENTS,
     misc::INSPECT_AGENT,
     misc::CANCEL_AGENT,
-    #[cfg(unix)]
     misc::MANAGE_SCHEDULED_JOBS,
     search::GREP,
     search::GLOB,

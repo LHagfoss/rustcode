@@ -1,4 +1,4 @@
-import { fileManagerName, primaryModifier } from "../lib/platform";
+import { fileManagerName, primaryModifier, trashName } from "../lib/platform";
 // The sidebar: a toolbar clear of the traffic lights (the sidebar toggle only),
 // the app's brand under it (its mark, name and version), then one list: pinned
 // threads first, then one Threads list (by project when asked) that leads with
@@ -74,7 +74,7 @@ import { liveSubagents, type StackAgent } from "../state/agentStack";
 import { type BranchRow, branchKindOf, branchRows } from "../state/branches";
 import { type ChildInfo, childInfo } from "../state/children";
 import { stateOf } from "../state/host";
-import { stateLabel, useMachines } from "../state/machines";
+import { useMachines } from "../state/machines";
 import { projectLabel } from "../state/projectBook";
 import {
   cachedPulls,
@@ -89,7 +89,6 @@ import { type PendingSetup, pendingSummary } from "../state/setup";
 import {
   crossMachineDelegates,
   hostOf,
-  type MachineHead,
   type ProjectGroup,
   sidebarHost,
   sidebarProjects,
@@ -167,9 +166,11 @@ import { openChain, parentOf as parentOfThread, type SubRow, topLevel } from "..
 import { useWaiting, useWaitingIds, waitingLabel, waitingTitle } from "../state/waiting";
 import { AgentStack } from "./AgentStack";
 import { CustomSnooze } from "./CustomSnooze";
+import { DeviceList, MachineCard } from "./Devices";
 import { HarnessIcon } from "./HarnessIcon";
 import { NeedsYouRow } from "./Inbox";
 import { LinkBadge } from "./Links";
+import { SettingsButton } from "./MainHeader";
 import { ProjectMark } from "./ProjectMark";
 import {
   Cluster,
@@ -434,15 +435,15 @@ function ThreadMenuItems({
             disabled={!canFiles}
             onSelect={() =>
               askConfirm({
-                title: "Move this thread to the Trash?",
-                message: `"${session.title || "New thread"}" and its history move to the Trash, where you can still get them back.`,
-                action: "Move to Trash",
+                title: `Move this thread to the ${trashName()}?`,
+                message: `"${session.title || "New thread"}" and its history move to the ${trashName()}, where you can still get them back.`,
+                action: `Move to ${trashName()}`,
                 destructive: true,
                 run: () => void trashThread(session.id),
               })
             }
           >
-            <Trash2 size={13} /> Move to Trash
+            <Trash2 size={13} /> Move to {trashName()}
           </Item>
         </>
       )}
@@ -1313,63 +1314,6 @@ interface Section {
 }
 
 /**
- * A machine's name above its threads: `● Connected`, `○ Offline`, `⚠ Revoked`, or
- * nothing for this computer. The dot and the words say the same thing twice, so
- * a row read out loud still says where it runs (docs/desktop.md › Several machines).
- */
-function MachineHeader({ machine, onNew }: { machine: MachineHead; onNew?: () => void }) {
-  const local = machine.id === LOCAL_HOST;
-  const glyph = machine.state === "connected" ? "●" : machine.state === "needsPairing" ? "⚠" : "○";
-  return (
-    <Tooltip
-      label={
-        local
-          ? "Threads on this computer"
-          : `${stateLabel({ state: machine.state, retryInSecs: machine.retryInSecs })}. Its threads open read-only while it is away.`
-      }
-    >
-      <div className="group/m relative mt-3 mb-1 flex h-6 items-center gap-1.5 px-2 first:mt-0">
-        <span
-          aria-hidden
-          className={cx(
-            "shrink-0 text-[9px] leading-none",
-            machine.state === "connected"
-              ? "text-success"
-              : machine.state === "needsPairing"
-                ? "text-warn"
-                : "text-fg-faint",
-          )}
-        >
-          {glyph}
-        </span>
-        <span className="min-w-0 flex-1 truncate font-medium text-callout text-fg/90">{machine.name}</span>
-        {!local && (
-          <span
-            className={cx(
-              "shrink-0 text-fg-faint text-sub",
-              onNew && "group-hover/m:invisible group-has-[:focus-visible]/m:invisible",
-            )}
-          >
-            {machine.state === "connected"
-              ? "Connected"
-              : machine.state === "needsPairing"
-                ? "Revoked"
-                : "Offline"}
-          </span>
-        )}
-        {onNew && (
-          <span className="absolute right-1.5 hidden group-hover/m:flex group-has-[:focus-visible]/m:flex">
-            <RowAction label={`New thread on ${machine.name}`} onClick={onNew}>
-              <SquarePen size={12} />
-            </RowAction>
-          </span>
-        )}
-      </div>
-    </Tooltip>
-  );
-}
-
-/**
  * A section's rows, unfolding with a height transition. Folded rows are not
  * rendered at all, so a long Settled section costs nothing until opened.
  */
@@ -1613,10 +1557,16 @@ export function Sidebar() {
   const setDeviceView = setSidebarDevice;
   const host = sidebarHost(deviceView, machines);
   const device = machines.find((m) => m.id === host);
+  // The foot's Devices button: the list, back to the machine being browsed, or back to the
+  // projects it was opened from. Back is the list's own step: a machine returns to the list, and
+  // the list to the projects (docs/desktop.md › Several machines).
+  const backFromDevices = () => setDeviceView(deviceView && deviceView !== "devices" ? "devices" : null);
+  const openDevices = () => setDeviceView(deviceView === "devices" ? null : "devices");
   useEffect(() => {
     if (deviceView === null) return;
     const back = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setDeviceView(null);
+      if (event.key !== "Escape") return;
+      setDeviceView(deviceView === "devices" ? null : "devices");
     };
     window.addEventListener("keydown", back);
     return () => window.removeEventListener("keydown", back);
@@ -2483,18 +2433,21 @@ export function Sidebar() {
           </Cluster>
         </TitlebarRow>
         <NeedsYouRow />
-        {deviceView !== null && (deviceView === "devices" || device) && (
-          <div className="flex items-center gap-1 px-3 py-2">
-            <Pill quiet size="sm" aria-label="Back to this computer" onClick={() => setDeviceView(null)}>
+        {deviceView !== null && (
+          <div className="flex h-9 shrink-0 items-center gap-1 px-3">
+            <Pill
+              quiet
+              size="sm"
+              aria-label={device ? "Back to Devices" : "Back to projects"}
+              title={device ? "Back to Devices" : "Back to projects"}
+              onClick={backFromDevices}
+            >
               <ArrowLeft size={14} />
             </Pill>
-            {device ? (
-              <MachineHeader machine={device} />
-            ) : (
-              <span className="font-medium text-callout">Devices</span>
-            )}
+            {!device && <span className="font-medium text-callout text-fg/90">Devices</span>}
           </div>
         )}
+        {device && <MachineCard machine={device} now={now} />}
         <nav
           ref={list}
           // One tab stop for the whole list (the row the keyboard is on), ↑ ↓ through its rows,
@@ -2504,21 +2457,16 @@ export function Sidebar() {
           onClickCapture={onListClick}
           // A press on a row is a drag if the pointer moves (ui/sidebarDrag.tsx), and a click if not.
           onPointerDown={drag.start}
-          aria-label="Thread list"
+          aria-label={deviceView === "devices" ? "Devices" : "Thread list"}
           className="relative min-h-0 flex-1 overflow-y-auto px-3 pb-2"
           style={{ maskImage: fade, WebkitMaskImage: fade }}
         >
           {deviceView === "devices" ? (
-            machines.map((machine) => (
-              <button
-                key={machine.id}
-                type="button"
-                className="w-full rounded-lg text-left hover:bg-fill-subtle"
-                onClick={() => setDeviceView(machine.id)}
-              >
-                <MachineHeader machine={machine} />
-              </button>
-            ))
+            <DeviceList
+              now={now}
+              onOpenMachine={(id) => setDeviceView(id)}
+              onClose={() => setDeviceView(null)}
+            />
           ) : (
             <>
               {!sessionsLoaded && <ThreadRowsSkeleton />}
@@ -2680,16 +2628,27 @@ export function Sidebar() {
             </Pill>
           </div>
         )}
-        {machines.length > 0 && (
-          <button
-            type="button"
-            aria-label="Devices"
-            className="mx-3 mb-2 flex h-8 shrink-0 items-center gap-2 rounded-lg px-2 text-callout text-fg-muted hover:bg-fill-subtle hover:text-fg"
-            onClick={() => setDeviceView(deviceView === "devices" ? null : "devices")}
-          >
-            <Laptop size={14} /> Devices <ChevronRight size={12} className="ml-auto" />
-          </button>
-        )}
+        {/* The foot's cluster: Devices, and Settings beside it, the two views the toolbar no
+            longer carries (docs/design.md › Sidebar sections). */}
+        <div className="flex shrink-0 items-center px-3 pb-2">
+          <Cluster>
+            <ClusterButton
+              label="Devices"
+              tooltip={
+                deviceView === null
+                  ? "Devices"
+                  : deviceView === "devices"
+                    ? "Back to projects"
+                    : "All devices"
+              }
+              on={deviceView !== null}
+              onClick={openDevices}
+            >
+              <Laptop size={14} />
+            </ClusterButton>
+            <SettingsButton />
+          </Cluster>
+        </div>
         <UpdateRow />
       </div>
       <CustomSnooze />

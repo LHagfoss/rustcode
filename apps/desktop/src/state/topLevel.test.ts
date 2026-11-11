@@ -167,12 +167,12 @@ describe("the open delegated thread's chain", () => {
 describe("what makes a delegated thread the user's own", () => {
   test("a message a person typed is theirs", () => {
     expect(userTypedPrompt({})).toBe(true);
-    expect(userTypedPrompt({ limitResume: false })).toBe(true);
+    expect(userTypedPrompt({ autoResume: false })).toBe(true);
   });
 
-  test("a limit resume, a wake, a link or any automatic turn is not", () => {
-    expect(userTypedPrompt({ automatic: true, limitResume: true })).toBe(false);
-    expect(userTypedPrompt({ limitResume: true })).toBe(false);
+  test("a resume the app sends, a wake, a link or any automatic turn is not", () => {
+    expect(userTypedPrompt({ automatic: true, autoResume: true })).toBe(false);
+    expect(userTypedPrompt({ autoResume: true })).toBe(false);
     expect(userTypedPrompt({ wake: true })).toBe(false);
     expect(userTypedPrompt({ link: "parent/1" })).toBe(false);
     expect(userTypedPrompt({ automatic: true })).toBe(false);
