@@ -259,6 +259,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 access_expires_at: None,
                 wire_names: None,
                 version: Some(CONTRACT_VERSION.to_owned()),
+                platform: Some(CONTRACT_PLATFORM.to_owned()),
                 routes: Vec::new(),
             },
         ),
@@ -280,6 +281,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 access_expires_at: Some("2026-08-22T09:15:00Z".to_owned()),
                 wire_names: None,
                 version: None,
+                platform: None,
                 routes: Vec::new(),
             },
         ),
@@ -299,6 +301,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 rotation_id: None,
                 wire_names: None,
                 version: Some(CONTRACT_VERSION.to_owned()),
+                platform: Some(CONTRACT_PLATFORM.to_owned()),
                 routes: vec![
                     HostRoute {
                         address: "192.168.1.20:17879".to_owned(),
@@ -334,6 +337,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 rotation_id: None,
                 wire_names: Some(WIRE_NAMES_THREAD.to_owned()),
                 version: None,
+                platform: None,
                 routes: Vec::new(),
             },
         ),
@@ -355,6 +359,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 rotation_id: Some("5be1c4a07d2e9f63".to_owned()),
                 wire_names: None,
                 version: None,
+                platform: None,
                 routes: Vec::new(),
             },
         ),
@@ -376,6 +381,7 @@ pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
                 rotation_id: None,
                 wire_names: None,
                 version: None,
+                platform: None,
                 routes: Vec::new(),
             },
         ),
@@ -450,6 +456,8 @@ const SESSION: (&str, u64) = ("5f0c2d9e-7a41-4c1b-9d55-0b6c1f2a3e44", 3);
 const SAVED_SESSION: &str = "20260714-091502-3fa2c1";
 /// The RustCode version the golden `paired` and `authenticated` frames name.
 const CONTRACT_VERSION: &str = "1.28.0";
+/// The platform those frames name: a label the device's machine list shows.
+const CONTRACT_PLATFORM: &str = "macos";
 const GATEWAY: &str = "gw-8e1f4b7a";
 const INSTANCE: &str = "inst-41c07d92";
 const TURN: &str = "turn:48213:12";

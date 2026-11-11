@@ -472,6 +472,7 @@ impl Connector {
             rotation_id,
             wire_names,
             version,
+            platform,
             routes,
             ..
         } = answer
@@ -527,6 +528,7 @@ impl Connector {
                 expires_at,
                 wire_names,
                 version,
+                platform,
                 routes: learned_routes(&routes),
             },
             access,
@@ -861,6 +863,7 @@ impl Approved {
                 access_expires_at,
                 wire_names,
                 version,
+                platform,
                 routes,
                 ..
             } => {
@@ -887,6 +890,7 @@ impl Approved {
                             expires_at,
                             wire_names,
                             version,
+                            platform,
                             routes: learned_routes(&routes),
                         },
                         access: None,
@@ -958,6 +962,9 @@ pub struct Welcome {
     /// The RustCode version that machine reported: the row it appears on says
     /// which machine needs updating. `None` from a gateway that predates it.
     pub version: Option<String>,
+    /// What that machine runs: `macos`, `linux` or `windows`. `None` from a
+    /// gateway that predates it, which keeps the saved `unknown`.
+    pub platform: Option<String>,
     /// The addresses the machine reports it answers on, wrapped as routes.
     /// Empty from a gateway before the handshake carried them, and from a
     /// loopback-only listener no other machine can reach.
@@ -1219,9 +1226,9 @@ pub fn machine_from_pairing(welcome: &Welcome, route: Route, name: Option<String
     let mut machine = Machine::new(
         &welcome.gateway_id,
         name.unwrap_or_else(|| welcome.machine_name()),
-        // The gateway does not report its platform yet; `unknown` is honest,
-        // and a later pairing fills it in.
-        "unknown",
+        // A gateway that predates the field reports nothing: `unknown` is
+        // honest, and a connection to a newer one fills it in.
+        welcome.platform.as_deref().unwrap_or("unknown"),
         &welcome.device_id,
         route,
         chrono::Utc::now(),
@@ -1459,16 +1466,25 @@ mod tests {
             expires_at: None,
             wire_names: None,
             version: None,
+            platform: None,
             routes: vec![
                 Route::with_kind(RouteKind::Vpn, "100.90.16.237:17879"),
                 Route::with_kind(RouteKind::Lan, "192.168.1.20:17879"),
             ],
         };
-        let machine = machine_from_pairing(&welcome, Route::new("192.168.1.20:17879"), None);
+        let mut machine = machine_from_pairing(&welcome, Route::new("192.168.1.20:17879"), None);
         assert_eq!(machine.host_id, "gw-8e1f4b7a");
         assert_eq!(machine.name, "Studio");
+        // A gateway that does not report its platform keeps `unknown`.
         assert_eq!(machine.platform, "unknown");
         assert_eq!(machine.device_id, "device-9");
+        // One that does report it is saved with it (#3418).
+        let reported = Welcome {
+            platform: Some("macos".into()),
+            ..welcome.clone()
+        };
+        machine = machine_from_pairing(&reported, Route::new("192.168.1.20:17879"), None);
+        assert_eq!(machine.platform, "macos");
         // An explicit name wins over the machine's own.
         let named = machine_from_pairing(
             &welcome,
@@ -1489,6 +1505,7 @@ mod tests {
             expires_at: None,
             wire_names: None,
             version: None,
+            platform: None,
             routes: Vec::new(),
         };
         let mut machine = Machine::new(

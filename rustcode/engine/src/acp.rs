@@ -160,9 +160,52 @@ fn session_id_is_active(sessions: &HashMap<String, AcpSession>, session_id: &str
 fn workspace_cwd(
     workspace: Option<rustcode_session::SessionWorkspace>,
 ) -> Option<std::path::PathBuf> {
-    let cwd = workspace?.cwd;
+    // `canonicalize` returns the verbatim form on Windows, and a thread whose
+    // folder is stored that way is a second project with the same name (#3425).
+    let cwd = rustcode_session::strip_verbatim(&workspace?.cwd);
     let canonical = std::fs::canonicalize(cwd).ok()?;
-    canonical.is_dir().then_some(canonical)
+    canonical
+        .is_dir()
+        .then(|| rustcode_session::strip_verbatim(&canonical))
+}
+
+/// The user's home folder, without the verbatim prefix a canonical Windows path
+/// carries; `None` when this computer has none.
+fn home_folder() -> Option<std::path::PathBuf> {
+    crate::service::home_dir()
+        .ok()
+        .map(|home| rustcode_session::strip_verbatim(&home))
+}
+
+/// The folder a thread starts in when a request names none: the user's home
+/// folder. A start with no folder comes from an orchestrator that has no
+/// project on this computer, and the engine's own working directory is `/`
+/// under a service manager or the app's install folder on Windows. Neither is a
+/// project, and a thread that ran there said "Working directory: /" (#3425).
+fn start_folder(
+    requested: &std::path::Path,
+    home: Option<&std::path::Path>,
+) -> Option<std::path::PathBuf> {
+    if requested.as_os_str().is_empty() {
+        return home.map(std::path::Path::to_path_buf);
+    }
+    Some(requested.to_path_buf())
+}
+
+/// The folder a listing shows for a thread: what its workspace recorded, else
+/// the user's home folder, never the engine's own working directory. The bool
+/// says the folder is a stand-in, not the thread's project.
+fn listed_folder(
+    recorded: Option<std::path::PathBuf>,
+    home: Option<&std::path::Path>,
+) -> (std::path::PathBuf, bool) {
+    match recorded {
+        Some(cwd) => (cwd, false),
+        None => (
+            home.map(std::path::Path::to_path_buf).unwrap_or_default(),
+            true,
+        ),
+    }
 }
 
 fn parse_session_cursor(
@@ -188,9 +231,8 @@ fn session_info(
     workspace: Option<rustcode_session::SessionWorkspace>,
 ) -> SessionInfo {
     let session_id = crate::config::session_id_from_path(&meta.path).unwrap_or_default();
-    let (cwd, workspace_unknown) = workspace_cwd(workspace)
-        .map(|cwd| (cwd, false))
-        .unwrap_or_else(|| (std::env::current_dir().unwrap_or_default(), true));
+    let (cwd, workspace_unknown) =
+        listed_folder(workspace_cwd(workspace), home_folder().as_deref());
     let mut info = SessionInfo::new(session_id.clone(), cwd).title(meta.title.clone());
     let mut extra = serde_json::Map::new();
     extra.insert("messageCount".into(), serde_json::json!(meta.message_count));
@@ -559,7 +601,24 @@ fn canonical_acp_cwd(
         return Err(agent_client_protocol::Error::invalid_params()
             .data(format!("{operation} cwd must be a directory")));
     }
-    Ok(canonical)
+    // Stored and reported as people write it: the verbatim prefix `canonicalize`
+    // adds on Windows is a Win32 detail, and a thread that keeps it counts as a
+    // second project with the same name (#3425).
+    Ok(rustcode_session::strip_verbatim(&canonical))
+}
+
+/// `session/new`'s folder: the one the request names, else the user's home
+/// folder, resolved and checked to be a directory.
+fn session_new_cwd(
+    requested: &std::path::Path,
+) -> Result<std::path::PathBuf, agent_client_protocol::Error> {
+    let home = home_folder();
+    match start_folder(requested, home.as_deref()) {
+        Some(folder) => canonical_acp_cwd(&folder, "session/new"),
+        None => Err(agent_client_protocol::Error::invalid_params().data(
+            "session/new has no folder: this computer has no project named and no home folder",
+        )),
+    }
 }
 
 fn session_workspace(
@@ -604,7 +663,7 @@ async fn create_builtin_session(
     peer: &clients::Peer,
     request: NewSessionRequest,
 ) -> Result<NewSessionResponse, agent_client_protocol::Error> {
-    let cwd = canonical_acp_cwd(&request.cwd, "session/new")?;
+    let cwd = session_new_cwd(&request.cwd)?;
     let mut state = new_session_state(&cwd);
     let session_id = state.active_session_id.clone();
     // Who started this thread, from the `_meta.rustcode.parent` its
@@ -1671,6 +1730,9 @@ pub(crate) struct PullWatchStopRequest {
 #[serde(rename_all = "camelCase")]
 #[request(method = "_rustcode/pulls/watches", response = serde_json::Value)]
 pub(crate) struct PullWatchesRequest {
+    /// Claim a linked PR’s pending events and advance its delivered cursor.
+    #[serde(default)]
+    pub take: Option<u64>,
     #[serde(default)]
     pub session_id: Option<String>,
 }
@@ -3540,6 +3602,16 @@ async fn serve_connection(
                 // carry on from here.
                 server.clients.subscribe(client_id, clients::Topic::PullWatches);
                 start_pull_watching(&server.clients);
+                if let (Some(number), Some(session_id)) = (request.take, request.session_id.as_deref()) {
+                    let taken = crate::pull_watch::WatchStore::default_store()
+                        .map(|store| store.take(session_id, number))
+                        .transpose();
+                    return responder.respond(match taken {
+                        Ok(Some(Some((watch, events)))) => serde_json::json!({ "watch": watch, "events": events }),
+                        Ok(_) => serde_json::json!({ "events": [] }),
+                        Err(error) => serde_json::json!({ "error": error.to_string() }),
+                    });
+                }
                 let watches = crate::pull_watch::WatchStore::default_store()
                     .map(|store| store.list(request.session_id.as_deref()))
                     .unwrap_or_default();
@@ -4671,6 +4743,59 @@ mod tests {
         let meta = info.meta.expect("thread meta");
         assert_eq!(meta["workspaceUnknown"], serde_json::json!(true));
         assert!(meta["rustcode"].get("repo").is_none());
+    }
+
+    /// A legacy thread has no folder of its own. Listing the engine's working
+    /// directory gave it `/` under a service manager, or the app's install
+    /// folder on Windows, and that folder then read as a project of the user's
+    /// (#3425): a listing falls back to the home folder instead.
+    #[test]
+    fn a_thread_with_no_workspace_lists_the_home_folder_not_the_engine_folder() {
+        let id = crate::config::create_detached_session();
+        let directory = crate::config::get_active_session_dir(&id).expect("session dir");
+        let meta = crate::config::SessionMeta {
+            path: directory.join("history.json"),
+            title: "Legacy thread".into(),
+            when: "2026-09-24T00:00:00Z".into(),
+            message_count: 1,
+            workspace_cwd: None,
+        };
+        let info = session_info(&meta, None);
+        assert_eq!(home_folder().as_deref(), Some(info.cwd.as_path()));
+        assert_eq!(
+            info.meta.expect("thread meta")["workspaceUnknown"],
+            serde_json::json!(true)
+        );
+    }
+
+    /// The choice a start and a listing make when no folder is named, as a pure
+    /// function: the engine's own folder is never an answer, the home folder is.
+    #[test]
+    fn a_start_with_no_folder_runs_in_the_home_folder() {
+        let home = std::path::Path::new("/Users/me");
+        assert_eq!(
+            start_folder(std::path::Path::new(""), Some(home)),
+            Some(PathBuf::from("/Users/me"))
+        );
+        assert_eq!(
+            start_folder(std::path::Path::new("/Users/me/code/app"), Some(home)),
+            Some(PathBuf::from("/Users/me/code/app")),
+            "a folder the request names is the folder it starts in"
+        );
+        assert_eq!(
+            start_folder(std::path::Path::new(""), None),
+            None,
+            "no folder and no home folder has no answer, never the engine's own"
+        );
+        assert_eq!(
+            listed_folder(None, Some(home)),
+            (PathBuf::from("/Users/me"), true)
+        );
+        assert_eq!(
+            listed_folder(Some(PathBuf::from("/Users/me/code/app")), Some(home)),
+            (PathBuf::from("/Users/me/code/app"), false)
+        );
+        assert_eq!(listed_folder(None, None), (PathBuf::new(), true));
     }
 
     #[test]

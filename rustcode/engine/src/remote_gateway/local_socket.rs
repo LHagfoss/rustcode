@@ -26,9 +26,30 @@ pub type LocalWriteHalf = tokio::net::tcp::OwnedWriteHalf;
 
 /// File name of the control endpoint in the gateway's socket directory.
 #[cfg(unix)]
-pub(crate) const CONTROL_ENDPOINT: &str = "control.sock";
+pub(crate) const CONTROL_ENDPOINT: &str = control_endpoint_name(false);
 #[cfg(not(unix))]
-pub(crate) const CONTROL_ENDPOINT: &str = "control.endpoint";
+pub(crate) const CONTROL_ENDPOINT: &str = control_endpoint_name(true);
+/// Pure platform selection, shared by the gateway and scheduler daemon.
+const fn control_endpoint_name(loopback: bool) -> &'static str {
+    if loopback {
+        "control.endpoint"
+    } else {
+        "control.sock"
+    }
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::*;
+
+    #[test]
+    fn daemon_platform_transport_selects_the_discovery_file() {
+        assert_eq!(control_endpoint_name(false), "control.sock");
+        assert_eq!(control_endpoint_name(true), "control.endpoint");
+        assert_eq!(CONTROL_ENDPOINT, control_endpoint_name(!cfg!(unix)));
+    }
+}
+
 /// File name of the owner endpoint.
 #[cfg(unix)]
 pub(crate) const OWNER_ENDPOINT: &str = "owner.sock";
