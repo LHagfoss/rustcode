@@ -39,6 +39,10 @@ path = "rustcode/engine/src/lib.rs"
 name = "storage_migrations_fresh_profile"
 path = "rustcode/engine/tests/storage_migrations_fresh_profile.rs"
 
+[[test]]
+name = "private_files_windows"
+path = "rustcode/engine/tests/private_files_windows.rs"
+
 [dependencies]
 anyhow = "1.0.97"
 agent-client-protocol = "2.0.0"
@@ -108,6 +112,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
     "Win32_System_RemoteDesktop",
     "Win32_System_Threading",
 ] }

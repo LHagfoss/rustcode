@@ -580,23 +580,10 @@ pub(crate) fn open_private_log(path: &Path) -> std::io::Result<std::fs::File> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut options = std::fs::OpenOptions::new();
-    options.create(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let file = options.open(path)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let permissions = file.metadata()?.permissions();
-        if permissions.mode() & 0o777 != 0o600 {
-            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        }
-    }
-    Ok(file)
+    crate::daemon::private_files::open_private(
+        path,
+        std::fs::OpenOptions::new().create(true).append(true),
+    )
 }
 
 /// The line that opens this process's writes to a session's log, naming the
