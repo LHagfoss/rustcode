@@ -773,6 +773,24 @@ async fn the_threads_skills_note_rides_in_the_developer_instructions() {
     );
 }
 
+/// Codex's Windows sandbox denies WMI (#3526), so a Windows thread says what to read instead. The
+/// note rides in the developer instructions with the rest of the thread's setup.
+#[tokio::test]
+async fn the_windows_sandbox_note_rides_in_the_developer_instructions() {
+    let (_thread, mut seen) = start(Script::Reply, None, StartOptions::default()).await;
+    let started = requests(&mut seen)
+        .into_iter()
+        .find(|(method, _)| method == "thread/start")
+        .expect("thread/start was sent")
+        .1;
+    let instructions = started["developerInstructions"].as_str().unwrap();
+    assert_eq!(
+        instructions.contains(crate::tools::schema::CODEX_WINDOWS_SANDBOX_NOTE.trim()),
+        cfg!(windows),
+        "{instructions}"
+    );
+}
+
 #[tokio::test]
 async fn compact_runs_codex_compaction_and_shows_a_compaction_card() {
     let (mut thread, mut seen) = start(Script::Reply, None, StartOptions::default()).await;

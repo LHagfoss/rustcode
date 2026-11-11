@@ -757,7 +757,8 @@ choices in its own storage instead.
   child. The child inherits the user's environment (without the engine's own
   `RUSTCODE_*` variables) and uses its own sign-in.
 - RustCode's sandbox applies to the built-in harness only. An external
-  harness enforces its own rules, and the client says so.
+  harness enforces its own rules, and the client says so. Codex's own sandbox
+  on Windows is the one with a limit worth knowing (below).
 - Permission requests from a harness go to the client unchanged; nothing is
   auto-approved unless the user picked a mode the harness enforces.
 - Thread metadata (harness id, account, native session id, cwd, title, model,
@@ -773,6 +774,34 @@ choices in its own storage instead.
   recorded as failed. A plan is a `tool` message with `tool_name` `plan`
   and a `- [x] / [~] / [ ]` checklist. The latest usage is kept in
   `harness.json` (`usage`).
+
+### Codex's Windows sandbox
+
+On Windows Codex runs a thread's shell in its own sandbox (the Windows Sandbox
+service or a restricted token; `[windows] sandbox` in the user's Codex config
+picks the backend). That token cannot reach the WMI service, so WMI answers
+`Access denied`, HRESULT `0x80041003`, while registry reads and in-process
+.NET calls work. This is Codex's rule, not a RustCode setting: a thread's
+access level maps to Codex's own policies in
+`rustcode/engine/src/harness/codex.rs` — Ask and Auto-edit to `workspaceWrite`
+(looser than the `read-only` Codex gives a folder it does not trust), Full
+access to `dangerFullAccess`, which leaves the sandbox and lets WMI through.
+
+So a sandboxed shell cannot use `Get-CimInstance`, `Get-WmiObject`, `wmic` or
+`systeminfo`, which are all WMI clients. The same facts come from:
+
+| Fact | Without WMI |
+| --- | --- |
+| CPU | `Get-ItemProperty HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0` |
+| BIOS, board | `Get-ItemProperty HKLM:\HARDWARE\DESCRIPTION\System\BIOS` |
+| Counts, version | `[System.Environment]::ProcessorCount`, `[System.Environment]::OSVersion` |
+| Disks | `[System.IO.DriveInfo]::GetDrives()` |
+| Load, memory | `Get-Counter '\Processor(_Total)\% Processor Time'`, `Get-Counter '\Memory\Available Bytes'` (performance counters, not WMI) |
+
+A Codex thread on Windows is told this in its developer instructions
+(`CODEX_WINDOWS_SANDBOX_NOTE`), so a delegate reads the registry or .NET
+instead of retrying WMI or reporting the machine's details as unavailable
+(#3526).
 
 ## MCP servers and skills
 
