@@ -93,7 +93,7 @@ import { atToken, insertKeyword, insertRef, type MentionScope, rankFiles, SCOPES
 import { controlDisabledReason, defaultEffort, orderHarnesses, unavailableReason } from "../state/harness";
 import { usageOf } from "../state/harnessUsage";
 import { childAccountOn, type SignedOutLogins } from "../state/logins";
-import { type MachineState, useMachines } from "../state/machines";
+import { type MachineState, selfName, useMachines } from "../state/machines";
 import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
 import type { CachedPlan } from "../state/store";
 import {
@@ -1828,7 +1828,7 @@ function RunOnMenu() {
   const host = useApp((s) => s.newThreadHost);
   if (!machines.length) return null;
   const current = machines.find((machine) => machine.id === host);
-  const label = current?.name ?? "This computer";
+  const label = current?.name ?? selfName();
   const row = (id: string, name: string, state: MachineState, selected: boolean) => {
     const online = state === "connected";
     return (
@@ -1873,17 +1873,19 @@ function RunOnMenu() {
           aria-label={`Run on: ${label}`}
           className={cx(
             footerButton,
-            "min-w-0 shrink-0 bg-fill-subtle font-medium text-fg data-[state=open]:bg-fill disabled:hover:bg-transparent",
+            "min-w-0 shrink data-[state=open]:bg-fill disabled:hover:bg-transparent",
           )}
         >
           <Monitor size={14} className="shrink-0" />
-          <span className="min-w-0 max-w-[200px] truncate">Run on {label}</span>
+          <span className="min-w-0 max-w-[200px] truncate @max-lg/composer:max-w-[96px] @max-sm/composer:hidden">
+            {label}
+          </span>
           <ChevronDown size={12} className="shrink-0 text-fg-faint" />
         </button>
       }
     >
       <div role="menu" aria-label="Run on">
-        {row(LOCAL_HOST, "This computer", "connected", !host)}
+        {row(LOCAL_HOST, selfName(), "connected", !host)}
         {machines.map((machine) => row(machine.id, machine.name, machine.state, machine.id === host))}
       </div>
     </CardPopover>
