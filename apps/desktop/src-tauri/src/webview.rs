@@ -132,14 +132,33 @@ pub fn build_main_window(app: &tauri::App) -> tauri::Result<tauri::WebviewWindow
         None => builder,
     };
     let window = builder.build()?;
-    // Closing the window (macOS keeps the app running) is the last chance to remember its size.
+    // Closing the window is the last chance to remember its size. On macOS it only hides the
+    // window: the app stays in the Dock with its turns running, and `show_main_window` brings it
+    // back. Cmd+Q does not pass through here (it ends the app directly), so it still quits.
     let handle = app.handle().clone();
     window.on_window_event(move |event| {
-        if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
             remember_size(&handle);
+            if cfg!(target_os = "macos") {
+                api.prevent_close();
+                if let Some(window) = handle.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
         }
     });
     Ok(window)
+}
+
+/// Shows the main window again (the Dock icon was clicked). Closing only hides it on macOS, so it
+/// always still exists.
+#[cfg(target_os = "macos")]
+pub fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
 }
 
 /// The switches that take WebKitGTK's accelerated compositing away, and with it every
