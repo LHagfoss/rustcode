@@ -629,10 +629,14 @@ mod tests {
     async fn failed_store_initialization_cleans_socket_and_allows_retry() {
         let dir = crate::daemon::test_directory();
         let lifecycle = DaemonLifecycle::new(dir.path());
-        fs::DirBuilder::new()
-            .recursive(true)
-            .create(lifecycle.database_path())
-            .unwrap();
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(lifecycle.database_path()).unwrap();
         assert!(lifecycle.bind().is_err());
         assert!(!lifecycle.socket_path().exists());
         assert!(!lifecycle.registration_path().exists());
