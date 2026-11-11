@@ -49,11 +49,20 @@ fn extensions() -> Vec<String> {
 
 /// The `PATH` a shell resolves against: the login shell's directories first,
 /// then this process's, so a Dock-launched app reports what the user's
-/// terminal runs. Windows has no login shell to ask and keeps its own.
+/// terminal runs, then the well-known install directories (Homebrew's
+/// prefixes, `path_helper`'s files, `~/.local/bin` and friends) the shell
+/// probe may have failed to report. Windows has no login shell to ask and
+/// keeps its own.
 fn search_path() -> std::ffi::OsString {
     let login = login_shell_path();
     let process = std::env::var_os("PATH");
-    chosen_path(login, process, cfg!(windows))
+    let chosen = chosen_path(login, process, cfg!(windows));
+    if cfg!(windows) {
+        return chosen;
+    }
+    let mut directories: Vec<PathBuf> = std::env::split_paths(&chosen).collect();
+    crate::shell_env::add_well_known_path_dirs(&mut directories);
+    std::env::join_paths(directories).unwrap_or_default()
 }
 
 /// [`search_path`] with both halves named, so the order is testable.

@@ -1154,6 +1154,7 @@ const ALLOWED_EVENT_FIELDS: &[(&str, &[&str])] = &[
         &["harness", "native_session_id", "reason", "idle_ms"],
     ),
     ("harness.resumed", &["harness", "native_session_id"]),
+    ("shell_env.probe", &["outcome", "duration_ms", "phase"]),
     (
         "harness.turn_silent",
         &["harness", "native_session_id", "timeout_ms"],
