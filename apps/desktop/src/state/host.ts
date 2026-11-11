@@ -27,6 +27,7 @@ import {
   Method,
   type PermissionOption,
   type PermissionRequest,
+  plainPath,
   projectName,
 } from "../acp/types";
 import {
@@ -154,7 +155,7 @@ import {
   registerProject,
   updateProjectEntry,
 } from "./projectBook";
-import { projectsOn } from "./projects";
+import { isRootFolder, projectsOn } from "./projects";
 import { rememberPullSummaries } from "./pullQueries";
 import { QUEUE_REASON, wakeDelivery } from "./queue";
 import {
@@ -834,8 +835,11 @@ function projectsOnMachine(machine: MachineRef): JsonObject {
   >();
   for (const x of useApp.getState().sessions) {
     if ((x.host ?? LOCAL_HOST) !== machine.host) continue;
-    const path = x.worktree?.repo || x.repo || x.cwd;
-    if (!path) continue;
+    // A thread with no folder of its own is not a project: its machine lists a stand-in, and a root
+    // is never a project either (issue 3425).
+    if (x.workspaceUnknown) continue;
+    const path = plainPath(x.worktree?.repo || x.repo || x.cwd);
+    if (!path || isRootFolder(path)) continue;
     const entry = rows.get(path) ?? {
       path,
       name: projectName(path),
@@ -1781,8 +1785,10 @@ function listWorktrees(all: RuleThread[], caller: RuleThread, allProjects = fals
 function listProjects(s: AppState): JsonObject {
   const byPath = new Map<string, { path: string; threads: number; working: boolean; updatedAt: number }>();
   for (const x of s.sessions) {
+    // A thread whose machine never recorded its folder has no project to count (issue 3425).
+    if (x.workspaceUnknown) continue;
     const path = projectOf({ folder: x.cwd, worktree: x.worktree });
-    if (!path) continue;
+    if (!path || isRootFolder(path)) continue;
     const entry = byPath.get(path) ?? { path, threads: 0, working: false, updatedAt: 0 };
     entry.threads += 1;
     entry.working ||= !!s.threads[x.id]?.running || x.status === "running";

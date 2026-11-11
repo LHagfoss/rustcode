@@ -11,6 +11,7 @@ import {
   parseRemoteStatus,
   parseSessionList,
   parseSessionUpdate,
+  plainPath,
   projectName,
   questionOptionsAnswer,
   questionTextAnswer,
@@ -397,6 +398,16 @@ describe("displayPath", () => {
     expect(displayPath("\\\\?\\F:\\code\\app")).toBe("F:\\code\\app");
     expect(displayPath("\\\\?\\UNC\\server\\share\\app")).toBe("\\\\server\\share\\app");
     expect(displayPath("F:\\code\\app")).toBe("F:\\code\\app");
+  });
+});
+
+describe("plainPath", () => {
+  test("Windows' extended-length prefix dropped, so one folder spells one way", () => {
+    expect(plainPath("\\\\?\\F:\\code\\app")).toBe("F:\\code\\app");
+    expect(plainPath("\\\\?\\UNC\\server\\share\\app")).toBe("\\\\server\\share\\app");
+    expect(plainPath("F:\\code\\app")).toBe("F:\\code\\app");
+    expect(plainPath("/Users/me/code/app")).toBe("/Users/me/code/app");
+    expect(plainPath("")).toBe("");
   });
 });
 
