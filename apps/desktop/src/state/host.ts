@@ -2808,7 +2808,7 @@ async function updateSession(caller: RuleThread, call: UpdateCall): Promise<Json
   });
   if (applied.renameFailed) return failureJson(failure("failed", "the thread could not be renamed"));
   if (call.status) await setThreadStatus(target.id, STATUS_OF_CHOICE[call.status]);
-  if (call.snoozedUntil !== undefined) setSnoozed(target.id, call.snoozedUntil);
+  if (call.snoozedUntil !== undefined) await setSnoozed(target.id, call.snoozedUntil);
   const after = ruleThread(useApp.getState(), target.id);
   const until = useApp.getState().snoozed[target.id];
   return {

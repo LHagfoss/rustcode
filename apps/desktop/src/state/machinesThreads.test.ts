@@ -29,8 +29,10 @@ import {
   openThread,
   resetForTests,
   setPinned,
+  setSnoozed,
   setThreadsStatus,
   startMachineRouting,
+  statusOf,
   threadIsRemote,
   threadOffline,
   useApp,
@@ -309,6 +311,66 @@ describe("a remote thread's operations", () => {
     expect(params("_rustcode/session/status").session_id).toBe("mock-linux-1");
     // A key is this window's name for a thread; the machine only knows its own id.
     expect(JSON.stringify(calls)).not.toContain(LINUX);
+  });
+
+  test("an unsupported remote method cannot leave a local status mark", async () => {
+    let conn!: AcpConnection;
+    conn = new AcpConnection((line) => {
+      const frame = JSON.parse(line) as JsonObject;
+      queueMicrotask(() =>
+        conn.receive(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: frame.id,
+            error: { code: -32601, message: "Method not found" },
+          }),
+        ),
+      );
+    });
+    watchMachineConnection(LINUX, conn);
+    const before = statusOf(useApp.getState(), LINUX_THREAD);
+    expect(await setThreadsStatus([LINUX_THREAD], "done")).toBe(1);
+    expect(statusOf(useApp.getState(), LINUX_THREAD)).toBe(before);
+    expect(useApp.getState().statusMarks[LINUX_THREAD]).toBeUndefined();
+  });
+
+  test("owner broadcasts update unopened remote threads", async () => {
+    const { conn } = recordingConnection();
+    watchMachineConnection(LINUX, conn);
+    for (const status of ["done", "idle", "review"] as const) {
+      conn.receive(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "mock-linux-1",
+            update: {
+              sessionUpdate: "session_info_update",
+              _meta: { rustcode: { status, snoozedUntil: null } },
+            },
+          },
+        }),
+      );
+      await sleep(5);
+      expect(statusOf(useApp.getState(), LINUX_THREAD)).toBe(status);
+    }
+  });
+
+  test("offline status and snooze refuse without hiding the thread", async () => {
+    watchMachineConnection(LINUX, null);
+    const before = statusOf(useApp.getState(), LINUX_THREAD);
+    expect(await setThreadsStatus([LINUX_THREAD], "done")).toBe(1);
+    expect(statusOf(useApp.getState(), LINUX_THREAD)).toBe(before);
+    expect(await setSnoozed(LINUX_THREAD, Date.now() + 60_000)).toBe(false);
+    expect(useApp.getState().snoozed[LINUX_THREAD]).toBeUndefined();
+  });
+
+  test("snooze reaches the owner with the raw id", async () => {
+    const { conn, sent } = recordingConnection();
+    watchMachineConnection(LINUX, conn);
+    expect(await setSnoozed(LINUX_THREAD, 123456)).toBe(true);
+    const call = sent().find((frame) => frame.method === "_rustcode/session/snooze");
+    expect(call?.params).toEqual({ session_id: "mock-linux-1", until: 123456 });
   });
 
   test("a thread on an away machine still opens, read-only", async () => {

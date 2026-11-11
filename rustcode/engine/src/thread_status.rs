@@ -96,8 +96,56 @@ fn store(session_id: &str, status: Status) -> Result<(), String> {
     crate::worktrees::write_atomic(&path, text.to_string().as_bytes()).map_err(|e| e.to_string())
 }
 
+fn watched() -> &'static Mutex<std::collections::HashSet<String>> {
+    static IDS: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    IDS.get_or_init(Default::default)
+}
+
+/// Another engine (the desktop sidecar or the gateway's server), or the CLI,
+/// can write the same thread files. Re-broadcast those changes to this engine's
+/// clients too. Only threads already read by a client are polled.
+pub(crate) fn start_watching() {
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    tokio::spawn(async {
+        let mut previous = HashMap::new();
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            let ids: Vec<_> = watched()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .cloned()
+                .collect();
+            let changes = tokio::task::spawn_blocking(move || {
+                ids.into_iter()
+                    .map(|id| {
+                        let state = (current(&id), snoozed_until(&id));
+                        (id, state)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .await;
+            let Ok(changes) = changes else { continue };
+            for (id, state) in changes {
+                if previous.insert(id.clone(), state) == Some(state) {
+                    continue;
+                }
+                notify(&id);
+                notify_snooze(&id, state.1);
+            }
+        }
+    });
+}
+
 /// The thread's status now.
 pub(crate) fn current(session_id: &str) -> Status {
+    watched()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(session_id.to_owned());
     let live = live()
         .lock()
         .unwrap_or_else(|error| error.into_inner())
@@ -226,6 +274,57 @@ pub(crate) struct SetStatusRequest {
     #[serde(alias = "sessionId")]
     pub session_id: String,
     pub status: String,
+}
+
+/// The owner's persisted snooze deadline, in Unix milliseconds.
+pub(crate) fn snoozed_until(id: &str) -> Option<u64> {
+    let dir = crate::config::get_active_session_dir(id)?;
+    serde_json::from_slice::<Option<u64>>(&std::fs::read(dir.join("snooze.json")).ok()?)
+        .ok()
+        .flatten()
+}
+
+pub(crate) fn set_snoozed(id: &str, until: Option<u64>) -> Result<(), String> {
+    if !rustcode_session::valid_session_id(id) {
+        return Err("invalid session id".into());
+    }
+    let dir = crate::config::get_active_session_dir(id)
+        .filter(|dir| dir.is_dir())
+        .ok_or_else(|| "thread storage is unavailable".to_owned())?;
+    crate::worktrees::write_atomic(
+        &dir.join("snooze.json"),
+        json!(until).to_string().as_bytes(),
+    )
+    .map_err(|e| e.to_string())?;
+    notify_snooze(id, until);
+    Ok(())
+}
+
+fn notify_snooze(id: &str, until: Option<u64>) {
+    if let Some(notify) = notifier()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+    {
+        notify(
+            id.to_owned(),
+            SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().meta(
+                serde_json::Map::from_iter([(
+                    "rustcode".to_owned(),
+                    json!({ "snoozedUntil": until }),
+                )]),
+            )),
+        );
+    }
+}
+
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/session/snooze", response = serde_json::Value)]
+pub(crate) struct SnoozeRequest {
+    pub session_id: String,
+    pub until: Option<u64>,
 }
 
 /// Whether the thread is pinned.
@@ -392,6 +491,17 @@ mod tests {
             crate::config::set_session_status("ffffffff-ffff-7fff-8fff-ffffffffffff", "done")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn snooze_round_trips_on_the_owner() {
+        let id = crate::config::create_detached_session();
+        assert_eq!(snoozed_until(&id), None);
+        set_snoozed(&id, Some(123456)).unwrap();
+        assert_eq!(snoozed_until(&id), Some(123456));
+        set_snoozed(&id, None).unwrap();
+        assert_eq!(snoozed_until(&id), None);
+        assert!(set_snoozed("../escape", Some(1)).is_err());
     }
 
     #[test]

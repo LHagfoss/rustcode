@@ -1192,7 +1192,23 @@ function mergeMachineLists(lists: Record<string, readonly SessionSummary[]>): vo
         return { ...session, id, host, title };
       }),
     );
-    return { sessions: byActivity([...s.sessions.filter((x) => !x.host), ...remote]) };
+    return {
+      sessions: byActivity([...s.sessions.filter((x) => !x.host), ...remote]),
+      snoozed: {
+        ...Object.fromEntries(
+          Object.entries(s.snoozed).filter(
+            ([id]) => !remote.some((x) => x.id === id && x.snoozedUntil !== undefined),
+          ),
+        ),
+        ...Object.fromEntries(
+          remote
+            .filter(
+              (x) => x.snoozedUntil !== undefined && x.snoozedUntil !== null && x.snoozedUntil > Date.now(),
+            )
+            .map((x) => [x.id, x.snoozedUntil as number]),
+        ),
+      },
+    };
   });
 }
 
@@ -1723,6 +1739,11 @@ async function handleInbound(message: Inbound, conn: AcpConnection | null = conn
 function onSessionUpdate(params: JsonObject) {
   const sessionId = str(params.sessionId);
   if (!sessionId) return;
+  const metadata = obj(obj(obj(params.update)?._meta)?.rustcode);
+  if (metadata?.snoozedUntil === null || typeof metadata?.snoozedUntil === "number") {
+    const until = metadata.snoozedUntil as number | null;
+    applySnooze(sessionId, until !== null && until > Date.now() ? until : null);
+  }
   let update = parseSessionUpdate(params);
   // A compaction the app sent for the thread's own good says so, whichever
   // harness produced the card. The card's before → after comes from the usage
@@ -1759,7 +1780,7 @@ function onSessionUpdate(params: JsonObject) {
   const status = statusInUpdate(params);
   if (status) {
     set((s) => ({ sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, status } : x)) }));
-    if (status === "done" || status === "idle") clearStatusMark(sessionId);
+    clearStatusMark(sessionId);
   }
   if (update.kind === "title") {
     set((s) => ({
@@ -1815,6 +1836,9 @@ export async function refreshSessions(): Promise<void> {
     }
     // The engine's list is the newer truth about a status.
     reconcileStatusMarks(all);
+    for (const x of all)
+      if (x.snoozedUntil !== undefined)
+        applySnooze(x.id, x.snoozedUntil !== null && x.snoozedUntil > Date.now() ? x.snoozedUntil : null);
     // Another computer's list is its own read: ask each connected machine again, too.
     void import("./machines").then((m) => m.refreshMachineThreads());
     set((s) => {
@@ -1899,7 +1923,29 @@ export function markMessaged(id: string) {
 }
 
 /** Take a thread out of the list until `at`, or bring it back now with `null`: the write alone. */
-export function setSnoozed(id: string, at: number | null) {
+export async function setSnoozed(id: string, at: number | null): Promise<boolean> {
+  if (!threadIsRemote(id)) applySnooze(id, at);
+  const conn = connectionForThread(id);
+  if (conn || threadIsRemote(id)) {
+    try {
+      if (!conn) throw new Error("That computer is not connected.");
+      await conn.request(
+        "_rustcode/session/snooze",
+        { session_id: splitThreadKey(id).id, until: at },
+        10_000,
+      );
+    } catch (error) {
+      if (threadIsRemote(id) || !(error instanceof RpcError && error.isMethodNotFound)) {
+        toast(`Could not snooze the thread: ${errorText(error)}`, "error");
+        return false;
+      }
+    }
+  }
+  applySnooze(id, at);
+  return true;
+}
+
+function applySnooze(id: string, at: number | null) {
   const { [id]: _, ...rest } = get().snoozed;
   const snoozed = at === null ? rest : { ...rest, [id]: at };
   set({ snoozed });
@@ -1928,8 +1974,8 @@ function wakeOnWrite(id: string) {
  * `update_session`, a wake whose time has come — calls `setSnoozed` instead,
  * which never moves the screen.
  */
-export function snoozeThread(id: string, at: number | null) {
-  setSnoozed(id, at);
+export async function snoozeThread(id: string, at: number | null) {
+  if (!(await setSnoozed(id, at))) return;
   const s = get();
   if (at !== null && s.view.kind === "chat" && s.selectedId === id) startNewThread();
 }
@@ -1965,7 +2011,7 @@ export function snoozeWakeEvent(id: string): NotifyEvent | null {
  */
 export function wakeSnoozed(now = Date.now()) {
   for (const id of dueSnoozes(get().snoozed, now)) {
-    setSnoozed(id, null);
+    applySnooze(id, null);
     const event = snoozeWakeEvent(id);
     if (event) notifyThread(event, get());
   }
@@ -4788,7 +4834,7 @@ export function statusOf(s: AppState, id: string): ThreadStatus {
   if (t?.permissions.length) return "needs_input";
   if (t?.running) return "running";
   const listed = sessionById(s, id)?.status;
-  const mark = s.statusMarks[id];
+  const mark = threadIsRemote(id) ? undefined : s.statusMarks[id];
   if (listed === "done" || listed === "review") return mark ?? listed;
   return mark ?? "idle";
 }
@@ -5186,6 +5232,27 @@ export function setThreadStatus(id: string, status: "review" | "done" | "idle"):
  * Whatever fails is reported in one toast for the selection, not one per thread.
  */
 export async function setThreadsStatus(ids: string[], status: "review" | "done" | "idle"): Promise<number> {
+  const remote = ids.filter(threadIsRemote);
+  let remoteErrors = 0;
+  for (const id of remote) {
+    try {
+      const conn = connectionForThread(id);
+      if (!conn) throw new Error("That computer is not connected.");
+      await conn.request(V2Method.sessionStatus, { session_id: splitThreadKey(id).id, status }, 10_000);
+      clearStatusMark(id);
+      set((s) => ({
+        sessions: s.sessions.map((x) => (x.id === id ? { ...x, status } : x)),
+        ...(status === "done"
+          ? { failed: Object.fromEntries(Object.entries(s.failed).filter(([key]) => key !== id)) }
+          : {}),
+      }));
+    } catch (error) {
+      remoteErrors++;
+      toast(`Could not save the status: ${errorText(error)}`, "error");
+    }
+  }
+  ids = ids.filter((id) => !threadIsRemote(id));
+  if (!ids.length) return remoteErrors;
   const wanted = new Set(ids);
   set((s) => ({
     sessions: s.sessions.map((x) => (wanted.has(x.id) ? { ...x, status } : x)),
@@ -5199,7 +5266,7 @@ export async function setThreadsStatus(ids: string[], status: "review" | "done" 
   if (status === "idle") for (const id of ids) clearStatusMark(id);
   else saveMarks({ ...get().statusMarks, ...Object.fromEntries(ids.map((id) => [id, status])) });
   for (const id of ids) scheduleAutoCompact(id);
-  if (!get().features.status) return 0;
+  if (!get().features.status) return remoteErrors;
   // The status is kept by the computer the thread runs on, one request each on its own connection.
   const groups = new Map<AcpConnection, string[]>();
   const errors: unknown[] = [];
@@ -5229,7 +5296,7 @@ export async function setThreadsStatus(ids: string[], status: "review" | "done" 
       "error",
     );
   }
-  return errors.length;
+  return errors.length + remoteErrors;
 }
 
 /**
@@ -5242,18 +5309,24 @@ export async function setThreadsStatus(ids: string[], status: "review" | "done" 
  * not the user — an agent's `organize`, a fan-out's cleanup, a thread merged on
  * the engine — calls `setThreadStatus` instead, which never moves the screen.
  */
-export function settleThreads(ids: string[]): void {
+export async function settleThreads(ids: string[]): Promise<void> {
   const state = get();
   const before = ids.map((id) => ({ id, status: statusOf(state, id) })).filter((x) => x.status !== "done");
   if (!before.length) {
     toast("Already settled", "info");
     return;
   }
-  void setThreadsStatus(
+  const errors = await setThreadsStatus(
     before.map((x) => x.id),
     "done",
   );
-  if (state.view.kind === "chat" && state.selectedId && before.some((x) => x.id === state.selectedId)) {
+  if (errors) return;
+  if (
+    get().view.kind === "chat" &&
+    get().selectedId === state.selectedId &&
+    state.selectedId &&
+    before.some((x) => x.id === state.selectedId)
+  ) {
     startNewThread();
   }
   const title =
@@ -5274,8 +5347,8 @@ export function settleThreads(ids: string[]): void {
 }
 
 /** Settles one thread, with the same Undo and the same rule about leaving the screen. */
-export function settleThread(id: string): void {
-  settleThreads([id]);
+export function settleThread(id: string): Promise<void> {
+  return settleThreads([id]);
 }
 
 /**

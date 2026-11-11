@@ -13,7 +13,7 @@
 // what runs on it (docs/terminology.md).
 
 import { create } from "zustand";
-import { AcpConnection } from "../acp/jsonrpc";
+import { AcpConnection, obj, str } from "../acp/jsonrpc";
 import { isTauri, MachineTransport } from "../acp/transport";
 import { parseSessionList, type SessionSummary } from "../acp/types";
 import { currentPlatform } from "../lib/platform";
@@ -579,6 +579,29 @@ async function attach(machine: Machine): Promise<void> {
     await transport.start((event) => {
       if (event.type === "open") {
         const connection = new AcpConnection((line) => transport.send(line));
+        // Keep the list cache current too: another machine's list refresh must not
+        // overwrite a status/deadline just broadcast by this owner.
+        connection.onInbound((message) => {
+          if (message.type !== "notification" || message.method !== "session/update") return;
+          const id = str(message.params.sessionId);
+          const meta = obj(obj(obj(message.params.update)?._meta)?.rustcode);
+          if (!id || !meta) return;
+          useMachines.setState((state) => ({
+            sessions: {
+              ...state.sessions,
+              [machine.id]: (state.sessions[machine.id] ?? []).map((session) => {
+                if (session.id !== id) return session;
+                const parsed = parseSessionList({ sessions: [{ sessionId: id, _meta: { rustcode: meta } }] })
+                  .sessions[0];
+                return {
+                  ...session,
+                  ...(parsed?.status ? { status: parsed.status } : {}),
+                  ...(parsed?.snoozedUntil !== undefined ? { snoozedUntil: parsed.snoozedUntil } : {}),
+                };
+              }),
+            },
+          }));
+        });
         link.connection = connection;
         link.ready = false;
         markMachine(machine.id, "connected", null);

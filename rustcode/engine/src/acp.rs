@@ -236,6 +236,11 @@ fn session_info(
     // Orchestrator v2: the thread's status and worktree (`docs/orchestrator.md`).
     let status = crate::thread_status::current(&session_id).as_str();
     extra = crate::worktrees::merge_rustcode_meta(Some(extra), "status", status.into());
+    extra = crate::worktrees::merge_rustcode_meta(
+        Some(extra),
+        "snoozedUntil",
+        serde_json::json!(crate::thread_status::snoozed_until(&session_id)),
+    );
     let pinned = crate::thread_status::pinned(&session_id);
     extra = crate::worktrees::merge_rustcode_meta(Some(extra), "pinned", pinned.into());
     if let Some(worktree) = crate::worktrees::list_meta(&session_id) {
@@ -1501,6 +1506,7 @@ impl AcpServer {
             crate::thread_status::set_notifier(move |session_id, update| {
                 clients.broadcast(SessionNotification::new(session_id, update));
             });
+            crate::thread_status::start_watching();
             self.refresh_presence();
             self.refresh_thread_host();
         }
@@ -3132,6 +3138,15 @@ async fn serve_connection(
                     }
                     Ok(())
                 })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: crate::thread_status::SnoozeRequest, responder, _connection| {
+                match crate::thread_status::set_snoozed(&request.session_id, request.until) {
+                    Ok(()) => responder.respond(serde_json::json!({})),
+                    Err(message) => responder.respond_with_error(agent_client_protocol::Error::invalid_params().data(message)),
+                }
             },
             agent_client_protocol::on_receive_request!(),
         )
