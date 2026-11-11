@@ -208,3 +208,27 @@ describe("answers", () => {
     expect(resolvedLine(edit, option("reject", "Reject", "reject_once"))).toBe("Declined edit src/app.ts");
   });
 });
+
+test("Windows writes outside the folder warn for edits and command outputs", () => {
+  const root = "C:\\Users\\ada\\code";
+  for (const path of [
+    "C:\\Windows\\hosts",
+    "D:\\other\\a",
+    "\\\\server\\share\\a",
+    "..\\..\\a",
+    "%USERPROFILE%\\a",
+    "$env:USERPROFILE\\a",
+    "C:\\Users\\ada\\code-other\\a",
+  ]) {
+    expect(leavesFolder(path, undefined, root)).toBe(true);
+    expect(assessApproval(request({ title: "write_to_file", input: { path } }), root).level).toBe(
+      "destructive",
+    );
+    for (const prefix of ["echo hi > ", "tool --output=", "tool -o "])
+      expect(assessApproval(command(`${prefix}${path}`), root).level).toBe("destructive");
+  }
+  expect(leavesFolder("c:/users/ADA/code/src/a", undefined, root)).toBe(false);
+  expect(leavesFolder("src\\a", undefined, root)).toBe(false);
+  expect(leavesFolder("\\\\HOST\\share\\a", "\\\\host\\share", root)).toBe(false);
+  expect(assessApproval(command('echo hi > "C:\\other folder\\a"'), root).level).toBe("destructive");
+});
