@@ -19,7 +19,7 @@ pub(super) fn to_pascal_case(name: &str) -> String {
 }
 
 pub(super) fn contract_home_path(path: &str, home_path: Option<&str>) -> String {
-    rustcode::home::contract_home(
+    rustcode::controller::contract_home(
         std::path::Path::new(path),
         home_path.map(std::path::Path::new),
     )
