@@ -353,7 +353,7 @@ describe("orchestration rules", () => {
   test("the app advertises the version whose arguments it answers", () => {
     // The engine strips `account` below 5, `attachments` below 10 and `machine` below 12, and
     // refuses a call that carries one: the app speaks the newest, so it is offered all three.
-    expect(CAPABILITY_VERSION).toBe(13);
+    expect(CAPABILITY_VERSION).toBe(14);
   });
 
   test("a machine is read from any call that takes one, and absent when it is not named", () => {
@@ -471,7 +471,7 @@ describe("orchestration rules", () => {
 
   test("same project, a thread's delegate limit, one orchestrator per target", () => {
     const a = thread("a");
-    expect(checkMessage(a, thread("b", "/other"), emptyBook())?.code).toBe("not_allowed");
+    expect(checkMessage(a, thread("b", "/other"), emptyBook())).toBeNull();
     expect(checkMessage(a, a, emptyBook())?.code).toBe("not_allowed");
     expect(checkMessage(a, undefined, emptyBook())?.code).toBe("not_found");
     // A worktree thread belongs to its repository's project.
@@ -622,12 +622,12 @@ describe("orchestration rules", () => {
     expect((scoped.sessions as { project?: string }[])[0]?.project).toBeUndefined();
   });
 
-  test("reading reaches another project only when allowed; writing never does", () => {
+  test("reading needs the setting; messaging uses host approval across projects", () => {
     const a = thread("a");
     const other = thread("b", "/other");
     expect(checkMessage(a, other, emptyBook(), true)?.code).toBe("not_allowed");
     expect(checkMessage(a, other, emptyBook(), true, true)).toBeNull();
-    expect(checkMessage(a, other, emptyBook(), false, true)?.code).toBe("not_allowed");
+    expect(checkMessage(a, other, emptyBook(), false, true)).toBeNull();
     expect(checkMessage(a, a, emptyBook(), true, true)?.code).toBe("not_allowed");
     expect(checkMessage(a, undefined, emptyBook(), true, true)?.code).toBe("not_found");
   });
@@ -977,7 +977,7 @@ describe("projects", () => {
   test("two repositories stay two projects", () => {
     const other = thread("other", "/Users/me/code/other", { repo: "/Users/me/code/other" });
     expect(checkManage(main, other)?.code).toBe("not_allowed");
-    expect(checkMessage(main, other, emptyBook())?.code).toBe("not_allowed");
+    expect(checkMessage(main, other, emptyBook())).toBeNull();
     expect(listSessions([main, other], main, "").sessions).toEqual([]);
   });
 

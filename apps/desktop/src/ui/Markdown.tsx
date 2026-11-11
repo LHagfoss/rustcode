@@ -389,7 +389,7 @@ const plugins = [remarkGfm, remarkMoneySafeMath, remarkMathAsCode];
 
 /** react-markdown's safe URLs, plus `file://` and `data:image/` for pictures (MarkdownMedia.tsx checks them). */
 export function urlTransform(url: string, key: string): string {
-  if (key === "src" && /^(file:\/\/|data:image\/)/i.test(url)) return url;
+  if (key === "src" && /^(file:\/\/|data:image\/|[a-z]:[\\/])/i.test(url)) return url;
   // A thread mention is the app's own link: it opens a thread, never a page.
   if (THREAD_LINK.test(url)) return url;
   return defaultUrlTransform(url);

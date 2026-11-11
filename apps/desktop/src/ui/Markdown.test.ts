@@ -99,11 +99,33 @@ describe("pictures in replies", () => {
     expect(picturePath("docs/shot.png")).toBe("docs/shot.png");
     expect(picturePath("/Users/me/repo/a%20b.png")).toBe("/Users/me/repo/a b.png");
     expect(picturePath("file:///Users/me/repo/a.png")).toBe("/Users/me/repo/a.png");
+    expect(picturePath("C:\\Temp\\shot.png")).toBe("C:\\Temp\\shot.png");
+    expect(picturePath("file:///C:/Temp/shot.png")).toBe("C:/Temp/shot.png");
+    expect(picturePath("shot%broken.png")).toBe("shot%broken.png");
     expect(picturePath("https://example.com/a.png")).toBeNull();
     expect(picturePath("data:image/png;base64,AAAA")).toBeNull();
     expect(picturePath("javascript:alert(1)")).toBeNull();
     expect(urlTransform("file:///a.png", "src")).toBe("file:///a.png");
+    expect(urlTransform("C:/Temp/a.png", "src")).toBe("C:/Temp/a.png");
+    expect(urlTransform("C:/Temp/a.png", "href")).toBe("");
     expect(urlTransform("file:///a.png", "href")).toBe("");
     expect(urlTransform("javascript:alert(1)", "src")).toBe("");
   });
+});
+
+test("a blocked image shows its path, reason and file actions", async () => {
+  const { BlockedImage } = await import("./MarkdownMedia");
+  for (const reason of [
+    "No such picture.",
+    "Pictures must be 20 MB or smaller.",
+    "Outside the allowed folders.",
+  ]) {
+    const out = renderToStaticMarkup(
+      createElement(BlockedImage, { path: "/Users/me/Private/shot.png", reason }),
+    );
+    expect(out).toContain("/Users/me/Private/shot.png");
+    expect(out).toContain(reason);
+    expect(out).toContain(">Open</button>");
+    expect(out).toContain(">Reveal in Finder</button>");
+  }
 });

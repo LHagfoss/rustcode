@@ -283,6 +283,51 @@ describe("list_machines", () => {
   });
 });
 
+describe("a machine's projects", () => {
+  test("list_machines names the projects, never the folder a thread with no project lists", async () => {
+    const { conn } = recordingConnection();
+    watchMachineConnection(LINUX, conn);
+    useMachines.setState({
+      sessions: {
+        [LINUX]: [
+          { id: "remote-1", cwd: LINUX_PROJECT, title: "Run the tests there", updatedAt: Date.now() },
+          // Its engine lists a stand-in for a thread that recorded no folder: the machine's home
+          // folder, and `/` from one started by a service manager (issue 3425).
+          {
+            id: "remote-2",
+            cwd: "/home/lars",
+            title: "Legacy thread",
+            updatedAt: Date.now(),
+            workspaceUnknown: true,
+          },
+          { id: "remote-3", cwd: "/", title: "Older legacy thread", updatedAt: Date.now() },
+        ],
+      },
+    });
+    const answer = await answerOrchestration({ sessionId: CALLER, tool: "list_machines", args: {} });
+    expect(answer.error).toBeUndefined();
+    expect((answer.machines as JsonObject[])[1]!.projects).toEqual(["rustcode"]);
+  });
+
+  test("a start with no project on a machine that has none is refused, never sent to /", async () => {
+    const { conn, sent } = recordingConnection();
+    watchMachineConnection(LINUX, conn);
+    useMachines.setState({
+      sessions: {
+        [LINUX]: [{ id: "remote-1", cwd: "/", title: "Older legacy thread", updatedAt: Date.now() }],
+      },
+    });
+    const answer = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "start_session",
+      args: { prompt: "Run the tests there", machine: LINUX_NAME },
+    });
+    expect(answer.error).toMatchObject({ code: "invalid" });
+    expect(String((answer.error as JsonObject).message)).toContain("pass project");
+    expect(sent().filter((frame) => frame.method === "session/new")).toEqual([]);
+  });
+});
+
 describe("a call on another machine", () => {
   test("starts the thread over that machine's connection and keys it with the machine", async () => {
     const { conn, sent } = recordingConnection();

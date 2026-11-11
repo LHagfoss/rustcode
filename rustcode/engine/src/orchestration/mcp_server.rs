@@ -385,6 +385,17 @@ async fn call(
             ),
         };
     }
+    if version < super::STEER_VERSION
+        && tool == super::MESSAGE_SESSION
+        && args.get("steer").is_some()
+    {
+        return CallAnswer {
+            success: false,
+            content:
+                "error: message_session with steer needs a newer RustCode app. Nothing was sent."
+                    .to_owned(),
+        };
+    }
     // The same for a file an older app would drop, instead of attaching it silently
     // nowhere.
     if version < super::ATTACHMENT_VERSION && super::carries_attachments(tool, &args) {
@@ -890,6 +901,37 @@ mod tests {
                 .unwrap()
                 .contains("newer RustCode app")
         );
+    }
+
+    #[tokio::test]
+    async fn message_steering_needs_v14_and_is_forwarded_intact() {
+        for version in [13, 14] {
+            let (_dir, hub) = hub().await;
+            let token = hub.register("thread-1", Arc::new(EchoApp), version);
+            let args = json!({"session_id": "other-project-thread", "message": "change course", "steer": true});
+            let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {"name": "message_session", "arguments": args}});
+            let answers = exchange_versioned(
+                Identity {
+                    session_id: "thread-1".into(),
+                    token,
+                },
+                hub.path().to_owned(),
+                &[call],
+                version,
+                false,
+            )
+            .await;
+            let result = &answers[0]["result"];
+            assert_eq!(result["isError"], version < 14);
+            let content = result["content"][0]["text"].as_str().unwrap();
+            if version < 14 {
+                assert!(content.contains("newer RustCode app"));
+            } else {
+                let echoed: Value = serde_json::from_str(content).unwrap();
+                assert_eq!(echoed["asked"]["args"], args);
+            }
+        }
     }
 
     #[tokio::test]

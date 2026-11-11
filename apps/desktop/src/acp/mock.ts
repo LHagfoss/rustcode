@@ -1385,6 +1385,25 @@ function seedThreads(): MockThread[] {
         }),
       ],
     },
+    {
+      id: "mock-agent-images",
+      cwd: "/Users/you/code/rustcode",
+      title: "Review agent screenshots",
+      model: "gpt-6-luna",
+      effort: "low",
+      updatedAt: minutes(90),
+      harness: "codex",
+      checkpoints: [],
+      history: [
+        update("mock-agent-images", {
+          sessionUpdate: "agent_message_chunk",
+          content: text(
+            "![Temp screenshot](/tmp/rustcode/mock-agent-images/screenshot.png)\n\n![Blocked screenshot](/Users/you/Private/screenshot.png)",
+          ),
+          ...turn(2000),
+        }),
+      ],
+    },
   ];
 }
 
@@ -2070,6 +2089,7 @@ export class MockEngine {
   private agents = new Map<string, JsonObject[]>();
   /** The inbox seed runs once, after the list the app first reads. */
   private needsYouSeeded = false;
+  private pullEventDelivered = false;
   /** The client's `_meta.rustcode.orchestration` at initialize. */
   private orchestration = 0;
   /** Discord Rich Presence (docs/discord-rich-presence.md), as `discord_rpc_enabled` holds it. */
@@ -3224,6 +3244,20 @@ export class MockEngine {
             resetsAt: Math.floor(Date.now() / 1000) + 3 * 86400,
           },
         };
+      }
+      case "_rustcode/pulls/watches": {
+        const thread = this.threads[0];
+        if (!thread || typeof location === "undefined" || !location.search.includes("pullWatchPreview"))
+          return { watches: [] };
+        const watch = { sessionId: thread.id, number: 3375, link: true };
+        if (obj(params)?.take) {
+          const events = this.pullEventDelivered
+            ? []
+            : [{ message: "CI checks failed", kind: "checks_failed" }];
+          this.pullEventDelivered = true;
+          return { watch, events };
+        }
+        return { watches: [watch] };
       }
       case "_rustcode/pulls":
         return {
@@ -5835,10 +5869,10 @@ export class MockTransport implements Transport {
     )
       return null;
     if (command === "thread_image") {
-      // A drawn stand-in for any picture inside the thread's folder; the shell's rules decide the rest.
+      // Canned fixtures only: the actual filesystem policy lives in native.rs.
       const path = String(args.path);
-      if (path.startsWith("/") && !path.startsWith(String((args.roots as string[])[0] ?? "")))
-        throw new Error("Pictures outside the thread's folder are not shown.");
+      if (path === "/Users/you/Private/screenshot.png")
+        throw new Error("Outside the thread, project, worktree and temporary folders.");
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="200" viewBox="0 0 480 200"><rect width="480" height="200" rx="12" fill="#18181a"/><polyline fill="none" stroke="#93a3e8" stroke-width="3" points="20,180 80,170 140,150 200,110 260,40 320,40 380,40 440,40"/><text x="20" y="28" fill="#a1a1a1" font-family="-apple-system" font-size="14">${path}</text></svg>`;
       return { name: path.split("/").pop(), mimeType: "image/svg+xml", data: btoa(svg) };
     }
@@ -5898,15 +5932,27 @@ const MOCK_SYSTEM_INFO: JsonObject = {
   graphicsEnv: [],
 };
 
+/**
+ * A project's files as the shell lists them (git's own order): more than the `@` drawer shows at
+ * once, so its short list and its `Show all` row can be seen in the mock window.
+ */
 const MOCK_PROJECT_FILES = [
+  "Cargo.lock",
+  "Cargo.toml",
   "README.md",
+  "apps/desktop/package.json",
+  "apps/desktop/src/lib/native.ts",
   "apps/desktop/src/main.tsx",
+  "apps/desktop/src/state/compose.ts",
+  "apps/desktop/src/state/store.ts",
   "apps/desktop/src/ui/Composer.tsx",
   "apps/desktop/src/ui/Sidebar.tsx",
-  "apps/desktop/src/state/store.ts",
   "docs/design.md",
+  "docs/desktop.md",
   "docs/my notes.md",
   "rustcode/engine/src/acp.rs",
+  "rustcode/engine/src/tools/mod.rs",
+  "scripts/release.sh",
 ];
 
 /** Canned `git_changes`, as the shell answers it: the branch since its base adds the login form. */

@@ -117,7 +117,9 @@ pub const V12_TOOL_NAMES: [&str; 1] = [LIST_MACHINES];
 /// Added by version 13: where a thread's work stands, and handing it over.
 pub const V13_TOOL_NAMES: [&str; 2] = [WORKTREE_STATUS, HANDOFF_WORKTREE];
 /// The newest version this engine speaks.
-pub const VERSION: u8 = 13;
+pub const VERSION: u8 = 14;
+/// Version 14 adds mid-turn messaging.
+pub const STEER_VERSION: u8 = 14;
 /// Version 12 adds `machine` to the tools that read or act on a thread: the id
 /// or name `list_machines` returned, omitted for this computer. A client that
 /// advertised less never sees the field and has it refused, so an older app
@@ -253,6 +255,8 @@ pub const PROMPT_HINT_V11: &str = "\n\nRustCode's threads: `list_sessions`, `sea
 pub const PROMPT_HINT_V12: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user, and `answer_request` answers one of those on a thread in your own tree. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, and `message_session` attaches files by path; `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. `thread_status` reports a delegate's worktree, branch, pull request and checks; `merge_when_green` merges it once green; `cleanup_worktree` removes its worktree and branch and settles it. The thread tools take another paired computer's id or name, as `list_machines` lists them, in `machine`: omitted, they act on this computer, and a remote thread's id carries its machine. Name one only when the user did. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`. `update_session`, `organize_threads`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those, answering, merge and cleanup change other threads, so do them only when the user asks; the user approves, and a card for another machine names it. Stay lean: every call resends this thread's context, so leave reading code, diffs, logs and CI to delegates, and check their pull requests with `thread_status`. Wait on all links in one `wait_session` with `link_ids`, or end the turn: the app wakes this thread when a child finishes. Call `list_harnesses` once. Projects: `read_project` reads a folder's git remote, branch and default branch; `create_project` registers a folder (an empty one gets `git init`), `clone_project` clones a URL into a parent folder, `update_project` sets a project's display name or the harness and model new threads in it start on, and `remove_project` unregisters one without deleting any files. Scheduled work: `schedule_task` adds a prompt that runs on a cron expression or once at an ISO time, `list_scheduled_tasks`, `delete_scheduled_task` and `run_scheduled_task_now` manage what the scheduler daemon holds; the daemon is `rustcode daemon start`, and without it nothing runs. Do both only when the user asks; the user approves.";
 pub const PROMPT_HINT_V13: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user, and `answer_request` answers one of those on a thread in your own tree. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, and `message_session` attaches files by path; `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. `thread_status` reports a delegate's worktree, branch, pull request and checks; `merge_when_green` merges it once green; `cleanup_worktree` removes its worktree and branch and settles it; `worktree_status` reports a worktree's branch, its distance from the branch it tracks, changed files, last commit and pull request; `handoff_worktree` moves a delegate's work into the user's checkout, or a thread's checkout work into a worktree of its own, and keeps every commit. The thread tools take another paired computer's id or name, as `list_machines` lists them, in `machine`: omitted, they act on this computer, and a remote thread's id carries its machine. Name one only when the user did. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`. `update_session`, `organize_threads`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those, answering, merge, cleanup and handoff change other threads, so do them only when the user asks; the user approves, and a card for another machine names it. Stay lean: every call resends this thread's context, so leave reading code, diffs, logs and CI to delegates, and check their pull requests with `thread_status`. Wait on all links in one `wait_session` with `link_ids`, or end the turn: the app wakes this thread when a child finishes. Call `list_harnesses` once. Projects: `read_project` reads a folder's git remote, branch and default branch; `create_project` registers a folder (an empty one gets `git init`), `clone_project` clones a URL into a parent folder, `update_project` sets a project's display name or the harness and model new threads in it start on, and `remove_project` unregisters one without deleting any files. Scheduled work: `schedule_task` adds a prompt that runs on a cron expression or once at an ISO time, `list_scheduled_tasks`, `delete_scheduled_task` and `run_scheduled_task_now` manage what the scheduler daemon holds; the daemon is `rustcode daemon start`, and without it nothing runs. Do both only when the user asks; the user approves.";
 
+pub const PROMPT_HINT_V14: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user, and `answer_request` answers one of those on a thread in your own tree. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, and `message_session` reaches any project with user approval, attaches files by path and takes `steer: true` for mid-turn input (otherwise queued); `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. `thread_status` reports a delegate's worktree, branch, pull request and checks; `merge_when_green` merges it once green; `cleanup_worktree` removes its worktree and branch and settles it; `worktree_status` reports a worktree's branch, its distance from the branch it tracks, changed files, last commit and pull request; `handoff_worktree` moves a delegate's work into the user's checkout, or a thread's checkout work into a worktree of its own, and keeps every commit. The thread tools take another paired computer's id or name, as `list_machines` lists them, in `machine`: omitted, they act on this computer, and a remote thread's id carries its machine. Name one only when the user did. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`. `update_session`, `organize_threads`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those, answering, merge, cleanup and handoff change other threads, so do them only when the user asks; the user approves, and a card for another machine names it. Stay lean: every call resends this thread's context, so leave reading code, diffs, logs and CI to delegates, and check their pull requests with `thread_status`. Wait on all links in one `wait_session` with `link_ids`, or end the turn: the app wakes this thread when a child finishes. Call `list_harnesses` once. Projects: `read_project` reads a folder's git remote, branch and default branch; `create_project` registers a folder (an empty one gets `git init`), `clone_project` clones a URL into a parent folder, `update_project` sets a project's display name or the harness and model new threads in it start on, and `remove_project` unregisters one without deleting any files. Scheduled work: `schedule_task` adds a prompt that runs on a cron expression or once at an ISO time, `list_scheduled_tasks`, `delete_scheduled_task` and `run_scheduled_task_now` manage what the scheduler daemon holds; the daemon is `rustcode daemon start`, and without it nothing runs. Do both only when the user asks; the user approves.";
+
 /// The prompt hint a client of `version` gets.
 pub fn prompt_hint(version: u8) -> &'static str {
     match version {
@@ -269,7 +273,8 @@ pub fn prompt_hint(version: u8) -> &'static str {
         10 => PROMPT_HINT_V10,
         11 => PROMPT_HINT_V11,
         12 => PROMPT_HINT_V12,
-        _ => PROMPT_HINT_V13,
+        13 => PROMPT_HINT_V13,
+        _ => PROMPT_HINT_V14,
     }
 }
 
@@ -417,6 +422,11 @@ pub fn client_meta_version(meta: Option<&serde_json::Map<String, Value>>) -> u8 
 /// version 5, so a client that advertised less is never told about `account`;
 /// [`execute_versioned`] refuses one it sends anyway.
 pub fn schema_for(name: &str, version: u8, mut schema: Value) -> Value {
+    if version < STEER_VERSION && name == MESSAGE_SESSION {
+        if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+            properties.remove("steer");
+        }
+    }
     // An older client never sees an argument it would ignore.
     if version < ATTACHMENT_VERSION && name == MESSAGE_SESSION {
         if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
@@ -791,6 +801,9 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             }
             if message.len() > MAX_MESSAGE_BYTES {
                 return Err(format!("message is over {MAX_MESSAGE_BYTES} bytes"));
+            }
+            if args.get("steer").is_some_and(|value| !value.is_boolean()) {
+                return Err("steer must be a boolean".to_owned());
             }
             optional_attachments(args)?;
             optional_request_id(args)
@@ -1195,6 +1208,18 @@ pub async fn execute_versioned(
             false,
         );
     }
+    if client.is_some()
+        && version < STEER_VERSION
+        && name == MESSAGE_SESSION
+        && args.get("steer").is_some()
+    {
+        return ToolExecutionOutput::failure_with_kind(
+            "error: message_session with steer needs a newer RustCode app. Nothing was sent."
+                .to_owned(),
+            ToolErrorKind::UnavailableDependency,
+            false,
+        );
+    }
     // The same for files an older client would drop on the floor.
     if client.is_some() && version < ATTACHMENT_VERSION && carries_attachments(name, args) {
         return ToolExecutionOutput::failure_with_kind(
@@ -1340,6 +1365,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn message_steering_is_boolean_and_versioned() {
+        let args = |steer| json!({"session_id": "b", "message": "do it", "steer": steer});
+        assert!(validate(MESSAGE_SESSION, &args(json!(true))).is_ok());
+        assert!(validate(MESSAGE_SESSION, &args(json!(false))).is_ok());
+        assert!(validate(MESSAGE_SESSION, &args(json!("true"))).is_err());
+        let schema = (tool(MESSAGE_SESSION).schema)();
+        assert!(schema_for(MESSAGE_SESSION, 13, schema.clone())["properties"]["steer"].is_null());
+        assert_eq!(
+            schema_for(MESSAGE_SESSION, 14, schema)["properties"]["steer"]["type"],
+            "boolean"
+        );
+        assert!(prompt_hint(14).contains("steer: true"));
+    }
+
+    #[test]
     fn a_project_on_a_windows_machine_is_absolute_from_any_machine() {
         for path in [
             "/Users/ada/code/app",
@@ -1421,7 +1461,7 @@ mod tests {
 
     #[test]
     fn version_four_adds_the_data_store_tools_only_for_its_clients() {
-        assert_eq!(VERSION, 13);
+        assert_eq!(VERSION, 14);
         let v3 = tool_names(3);
         assert!(v3.iter().all(|name| !is_v4_tool(name)), "{v3:?}");
         let v4 = tool_names(4);
@@ -1570,7 +1610,7 @@ mod tests {
         assert_eq!(prompt_hint(11), PROMPT_HINT_V11);
         assert_eq!(prompt_hint(12), PROMPT_HINT_V12);
         assert_eq!(prompt_hint(13), PROMPT_HINT_V13);
-        assert_eq!(prompt_hint(14), PROMPT_HINT_V13);
+        assert_eq!(prompt_hint(14), PROMPT_HINT_V14);
         assert_eq!(prompt_hint(0), "");
         // Accounts arrived in 5: a v4 hint promises nothing it cannot do.
         assert!(!PROMPT_HINT_V4.contains("account"));
