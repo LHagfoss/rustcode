@@ -357,6 +357,8 @@ export interface AppState {
    * (docs/desktop.md › Several machines).
    */
   newThreadHost: string;
+  /** The sidebar device being browsed; null is local, "devices" is the picker. */
+  sidebarDevice: string | null;
   /**
    * Each paired machine's harnesses, models, accounts and defaults, by host id, read over
    * its own connection. A machine's snapshot is read when the **Run on** picker moves
@@ -849,6 +851,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   newThread: null,
   newThreadAccount: null,
   newThreadHost: LOCAL_HOST,
+  sidebarDevice: null,
   remoteHarnesses: {},
   harnesses: null,
   baseCommands: [],
@@ -1087,6 +1090,9 @@ export async function startMachineRouting(): Promise<void> {
         return {
           machineNames: names,
           remoteHarnesses: snapshots,
+          ...(s.sidebarDevice && s.sidebarDevice !== "devices" && !names[s.sidebarDevice]
+            ? { sidebarDevice: null }
+            : {}),
           ...(named ? { newThreadHost: LOCAL_HOST, projectCwd: "" } : {}),
         };
       });
@@ -2031,12 +2037,16 @@ export function selectThread(id: string | null) {
   if (id) void openThread(id);
 }
 
+export function setSidebarDevice(device: string | null) {
+  set({ sidebarDevice: device });
+}
+
 export function startNewThread(cwd?: string, host?: string) {
   const s = get();
-  // Where it runs: a machine's group in the sidebar, a machine's folder button, or `/new` in one of
-  // its threads names it; everything else starts here. A folder alone is this computer's, because
-  // it was browsed on this disk (docs/desktop.md › Several machines).
-  const target = host ?? LOCAL_HOST;
+  // An explicit machine wins, then the device being browsed for New thread / ⌘N.
+  // A folder picked on this disk still starts here (docs/desktop.md › Several machines).
+  const browsing = s.sidebarDevice && s.machineNames[s.sidebarDevice] ? s.sidebarDevice : LOCAL_HOST;
+  const target = host ?? (cwd === undefined ? browsing : LOCAL_HOST);
   // Where it starts: a folder picked for this one wins, then the default folder (Settings › General,
   // ⌘⇧O), so the sidebar's button, ⌘N and the command palette land where the reader said even while
   // another thread is open; then the folder of the thread they were in, then the last one used.
@@ -6468,6 +6478,7 @@ export function resetForTests() {
     defaultCwd: "",
     newThread: null,
     newThreadHost: LOCAL_HOST,
+    sidebarDevice: null,
     remoteHarnesses: {},
     harnesses: null,
     baseCommands: [],

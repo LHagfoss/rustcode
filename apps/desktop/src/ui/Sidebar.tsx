@@ -142,6 +142,7 @@ import {
   setAutoCompactForThread,
   setPinned,
   setSectionOrder,
+  setSidebarDevice,
   setThreadStatus,
   settleThread,
   settleThreads,
@@ -1590,7 +1591,8 @@ export function Sidebar() {
   const sessions = useApp((s) => s.sessions);
   // Paired computers are browsed through Devices; the local list keeps its project layout.
   const machines = useMachines((s) => s.machines);
-  const [deviceView, setDeviceView] = useState<string | null>(null);
+  const deviceView = useApp((s) => s.sidebarDevice);
+  const setDeviceView = setSidebarDevice;
   const host = sidebarHost(deviceView, machines);
   const device = machines.find((m) => m.id === host);
   useEffect(() => {
@@ -2420,6 +2422,15 @@ export function Sidebar() {
         {/* One row: the traffic lights, then the toggle at its trailing edge (docs/design.md › Title row). */}
         <TitlebarRow className="justify-end pr-3">
           <Cluster className="shrink-0">
+            {device && (
+              <ClusterButton
+                label="New thread"
+                tooltip={`New thread on ${device.name}`}
+                onClick={() => startNewThread()}
+              >
+                <SquarePen size={14} />
+              </ClusterButton>
+            )}
             <ClusterButton
               label="Hide sidebar"
               tooltip={`Hide sidebar (${toggleKey})`}
