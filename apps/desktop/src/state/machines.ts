@@ -13,13 +13,23 @@
 // what runs on it (docs/terminology.md).
 
 import { create } from "zustand";
-import { AcpConnection, obj, str } from "../acp/jsonrpc";
+import { AcpConnection, type JsonObject, obj, str } from "../acp/jsonrpc";
 import { isTauri, MachineTransport } from "../acp/transport";
-import { parseSessionList, type SessionSummary } from "../acp/types";
+import { initializeParams, Method, parseSessionList, type SessionSummary } from "../acp/types";
 import { currentPlatform } from "../lib/platform";
 import { hasShell, shellCall } from "../lib/shell";
 import { appVersion } from "../lib/updater";
-import { askConfirm, toast } from "./store";
+import {
+  APP_VERSION,
+  askConfirm,
+  deferAnnouncement,
+  isTombstoned,
+  keptUnlisted,
+  settleKeptUnlisted,
+  toast,
+  tombstoneThread,
+} from "./store";
+import { splitThreadKey, threadKey } from "./threadKeys";
 import { compareVersions } from "./updates";
 
 /** Where a machine stands, as the shell reports it. */
@@ -802,6 +812,63 @@ export async function refreshMachines(): Promise<void> {
 }
 
 /**
+ * A thread a client just made on a machine (`_rustcode/threads/created`). The machine's server
+ * owns its threads, so its list gains the row before any `session/list`: every window drawing
+ * that machine shows it at once (docs/desktop.md › Several machines). The row itself is kept by
+ * the store's one keep-unlisted set (`state/store.ts`), which a later read merges too.
+ */
+function rememberCreated(machine: string, params: JsonObject): void {
+  const id = str(params.sessionId);
+  const cwd = str(params.cwd);
+  if (!id || !cwd) return;
+  // While this window has a `session/new` out, the creation says which thread is its own.
+  if (deferAnnouncement(threadKey(machine, id), () => rememberCreated(machine, params))) return;
+  // A thread trashed a moment ago is not made again by a late announcement.
+  if (isTombstoned(threadKey(machine, id))) return;
+  useMachines.setState((state) => {
+    const listed = state.sessions[machine] ?? [];
+    // The client that asked for it may have listed it already, through its own `session/new`.
+    if (listed.some((session) => session.id === id)) return {};
+    const summary: SessionSummary = {
+      id,
+      cwd,
+      updatedAt: Date.now(),
+      title: str(params.title) || undefined,
+      harness: str(params.harness) || undefined,
+      model: str(params.model) || undefined,
+    };
+    return {
+      sessions: { ...state.sessions, [machine]: [summary, ...listed] },
+      counts: { ...state.counts, [machine]: listed.length + 1 },
+    };
+  });
+}
+
+/** A thread trashed on a machine (`_rustcode/threads/deleted`): its row leaves this window too. */
+function forgetCreated(machine: string, sessionId: string | undefined): void {
+  if (!sessionId) return;
+  forgetMachineThread(machine, sessionId);
+}
+
+/**
+ * Take a trashed thread out of a machine's list cache, whether the machine said so or this window
+ * trashed it while the link was down, and refuse it to the reads that follow (a `session/list` that
+ * was in flight already names it).
+ */
+export function forgetMachineThread(machine: string, sessionId: string): void {
+  tombstoneThread(threadKey(machine, sessionId));
+  useMachines.setState((state) => {
+    const listed = state.sessions[machine];
+    if (!listed?.some((session) => session.id === sessionId)) return {};
+    const sessions = listed.filter((session) => session.id !== sessionId);
+    return {
+      sessions: { ...state.sessions, [machine]: sessions },
+      counts: { ...state.counts, [machine]: sessions.length },
+    };
+  });
+}
+
+/**
  * Give one machine a channel of its own. The supervisor inside the shell keeps
  * retrying on that channel, so it is made once and kept while the machine is
  * saved, whatever state it is in.
@@ -816,21 +883,36 @@ async function attach(machine: Machine): Promise<void> {
       if (event.type === "open") {
         const connection = new AcpConnection((line) => transport.send(line));
         // Keep the list cache current too: another machine's list refresh must not
-        // overwrite a status/deadline just broadcast by this owner.
+        // overwrite a status/deadline just broadcast by this owner, and a thread
+        // any client starts there must be listed before the next read.
         connection.onInbound((message) => {
-          if (message.type !== "notification" || message.method !== "session/update") return;
+          if (message.type !== "notification") return;
+          if (message.method === Method.threadCreated) {
+            rememberCreated(machine.id, message.params);
+            return;
+          }
+          if (message.method === Method.threadDeleted) {
+            forgetCreated(machine.id, str(message.params.sessionId));
+            return;
+          }
+          if (message.method !== "session/update") return;
           const id = str(message.params.sessionId);
-          const meta = obj(obj(obj(message.params.update)?._meta)?.rustcode);
-          if (!id || !meta) return;
+          const update = obj(message.params.update);
+          // A title carries no `_meta`; a status and a snooze do.
+          const title = str(update?.title);
+          const meta = obj(obj(update?._meta)?.rustcode);
+          if (!id || (!title && !meta)) return;
+          const parsed = meta
+            ? parseSessionList({ sessions: [{ sessionId: id, _meta: { rustcode: meta } }] }).sessions[0]
+            : undefined;
           useMachines.setState((state) => ({
             sessions: {
               ...state.sessions,
               [machine.id]: (state.sessions[machine.id] ?? []).map((session) => {
                 if (session.id !== id) return session;
-                const parsed = parseSessionList({ sessions: [{ sessionId: id, _meta: { rustcode: meta } }] })
-                  .sessions[0];
                 return {
                   ...session,
+                  ...(title ? { title } : {}),
                   ...(parsed?.status ? { status: parsed.status } : {}),
                   ...(parsed?.snoozedUntil !== undefined ? { snoozedUntil: parsed.snoozedUntil } : {}),
                 };
@@ -946,7 +1028,9 @@ function detach(id: string): void {
 async function readThreads(id: string, connection: AcpConnection, link?: Link): Promise<void> {
   try {
     if (!link?.ready) {
-      await connection.request("initialize", { protocolVersion: 1 }, 10_000);
+      // A machine's server announces its threads to the clients that list them
+      // (`_rustcode/threads/created`, docs/desktop.md › Several machines).
+      await connection.request("initialize", initializeParams(APP_VERSION, { threads: 1 }), 10_000);
       if (link) link.ready = true;
     }
     const sessions: SessionSummary[] = [];
@@ -959,6 +1043,17 @@ async function readThreads(id: string, connection: AcpConnection, link?: Link): 
       if (!cursor) break;
     }
     if (connection.isClosed) return;
+    // Rows the app keeps that this read does not name yet stay: a snapshot from before a thread
+    // was announced is not news that it is gone. The ones it names now need no keeping.
+    // A thread trashed while this read was out is not news that it came back.
+    for (let i = sessions.length - 1; i >= 0; i--) {
+      if (isTombstoned(threadKey(id, sessions[i]?.id ?? ""))) sessions.splice(i, 1);
+    }
+    const listed = new Set(sessions.map((session) => session.id));
+    settleKeptUnlisted(id, listed);
+    for (const summary of keptUnlisted(id, listed)) {
+      sessions.push({ ...summary, id: splitThreadKey(summary.id).id, host: undefined });
+    }
     useMachines.setState((state) => ({
       counts: { ...state.counts, [id]: sessions.length },
       sessions: { ...state.sessions, [id]: sessions },

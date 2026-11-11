@@ -658,13 +658,15 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   needs you stays in Pinned and says so in its chip, never drawn twice. A
   section header never folds and is always open, so a `rustcode.sidebar.folded`
   value an older release stored for one (`working`, `threads`) is dropped on
-  mount; only a project's folder (`project:<path>`) is kept. The sidebar has no
+  mount; a project's folder (`project:<path>`) and a machine's group
+  (`machine:<id>`) are kept. A machine's heading is a group of its own above its
+  project folders and thread rows, with its platform's glyph, its name and a
+  connection dot, and a machine that is away starts folded to one muted row
+  (docs/desktop.md › Several machines). The sidebar has no
   search field or filter menu, and none of the buttons it used to carry past
   the toggle in its toolbar: no Add project or New thread row above the list,
-  and no Pull requests or Usage row at its foot. The foot carries one cluster
-  of icon buttons, shaped like the title row's: **Devices** and **Settings**
-  (docs/desktop.md › Several machines), which open in place and keep the
-  project list as it is. Threads are found with
+  and no Pull requests or Usage row at its foot. The foot carries one icon
+  button, shaped like the title row's: **Settings**. Threads are found with
   ⌘K, which also holds the view options (group by project, Working at the top,
   one project), New thread, Add project folder, Open Settings, Open Git, Open
   Usage and Statistics, each with the shortcut it has. A snoozed row shows when
