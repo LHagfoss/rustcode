@@ -304,9 +304,17 @@ pub struct Machine {
     pub added_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_connected_at: Option<DateTime<Utc>>,
+    /// The route that answered last time, tried first after a drop. `None`
+    /// until the machine has been reached once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_route: Option<String>,
     /// The main machine: listed first, and the default **Run on**.
     #[serde(default)]
     pub main: bool,
+    /// New threads are not started here from this app, though its threads
+    /// still open and the connection stays up. A local choice, never sent.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paused: bool,
 }
 
 fn unknown_platform() -> String {
@@ -335,7 +343,9 @@ impl Machine {
             device_id: device_id.into(),
             added_at: now,
             last_connected_at: None,
+            last_route: None,
             main: false,
+            paused: false,
         }
     }
 
@@ -541,14 +551,17 @@ impl MachineRegistry {
         })
     }
 
-    /// Record a successful connection.
-    pub fn mark_connected(&mut self, host_id: &str, now: DateTime<Utc>) -> Result<()> {
+    /// Record a successful connection over `route`, so the row can say when
+    /// the machine was last reached and the next attempt can try the route
+    /// that worked first (#3436).
+    pub fn mark_connected(&mut self, host_id: &str, route: &str, now: DateTime<Utc>) -> Result<()> {
         self.mutate(|machines| {
             if let Some(machine) = machines
                 .iter_mut()
                 .find(|machine| machine.host_id == host_id)
             {
                 machine.last_connected_at = Some(now);
+                machine.last_route = Some(route.to_owned());
             }
             Ok(())
         })
@@ -684,6 +697,21 @@ impl MachineRegistry {
             for machine in machines.iter_mut() {
                 machine.main = machine.host_id == host_id;
             }
+            Ok(())
+        })
+    }
+
+    /// Pause or resume new threads on a machine. Its connection and its
+    /// existing threads are untouched; only **Run on** refuses it.
+    pub fn set_paused(&mut self, host_id: &str, paused: bool) -> Result<()> {
+        self.mutate(|machines| {
+            let Some(machine) = machines
+                .iter_mut()
+                .find(|machine| machine.host_id == host_id)
+            else {
+                bail!("no saved machine has host id {host_id}");
+            };
+            machine.paused = paused;
             Ok(())
         })
     }
@@ -1036,6 +1064,11 @@ mod tests {
         assert_eq!(studio.display(), "Studio desk");
         assert_eq!(studio.icon.as_deref(), Some("studio"));
         assert_eq!(studio.icon_tint.as_deref(), Some("4"));
+        // Old files have no pause flag either, and it round-trips when set.
+        assert!(!studio.paused);
+        store.set_paused("gw-old", true).unwrap();
+        let paused = load(dir.path());
+        assert!(paused.machines()[0].paused);
         // A re-pair keeps the local name and icon: they are this app's, not the
         // machine's, and pairing again only refreshes what the machine reports.
         let mut repaired = machine("gw-old", "Studio (reported)", "10.0.0.3:17879");
@@ -1090,6 +1123,34 @@ mod tests {
         // Reporting the same one again changes nothing.
         assert!(!store.set_platform("gw-a", Some("windows")).unwrap());
         assert!(store.set_platform("gw-missing", Some("linux")).is_err());
+    }
+
+    /// A successful connection records when it happened and over which route,
+    /// so the next attempt can try the route that worked first (#3436).
+    #[test]
+    fn a_successful_connection_remembers_the_route_it_came_up_over() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let mut store = load(dir.path());
+        store
+            .insert(machine("gw-a", "Studio", "192.168.1.20:17879"))
+            .unwrap();
+        store
+            .add_route(
+                "gw-a",
+                Route::with_kind(RouteKind::Vpn, "100.90.16.237:17879"),
+            )
+            .unwrap();
+        assert_eq!(store.machines()[0].last_route, None);
+        let now = Utc::now();
+        store
+            .mark_connected("gw-a", "100.90.16.237:17879", now)
+            .unwrap();
+        let registry = load(dir.path());
+        let studio = &registry.machines()[0];
+        assert_eq!(studio.last_connected_at, Some(now));
+        assert_eq!(studio.last_route.as_deref(), Some("100.90.16.237:17879"));
+        // The saved routes are untouched: the order is the race's.
+        assert_eq!(studio.preferred_route().unwrap().kind, RouteKind::Lan);
     }
 
     /// Routes a handshake reports are saved in the order the race uses, with

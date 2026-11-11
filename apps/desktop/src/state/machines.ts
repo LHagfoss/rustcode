@@ -52,6 +52,8 @@ export interface Machine {
   version: string | null;
   /** The main machine is listed first and is the default **Run on**. */
   main: boolean;
+  /** New threads are not started here from this app; its connection stays. */
+  paused?: boolean;
   routes: MachineRoute[];
   /** The route in use, or the one it will try first. */
   route: MachineRoute | null;
@@ -1247,6 +1249,31 @@ export function removeMachine(machine: Machine): void {
 export async function setMainMachine(machine: Machine): Promise<void> {
   try {
     await shellCall("machines_set_main", { id: machine.id });
+    await refreshMachines();
+  } catch (error) {
+    toast(errorText(error), "error");
+  }
+}
+
+/** Pause new threads on a machine, or let them start there again. */
+export async function setMachinePaused(machine: Pick<Machine, "id">, paused: boolean): Promise<void> {
+  // The row answers at once, and the shell's own read settles the value.
+  useMachines.setState((state) => ({
+    machines: state.machines.map((entry) => (entry.id === machine.id ? { ...entry, paused } : entry)),
+  }));
+  try {
+    await shellCall("machines_set_paused", { id: machine.id, paused });
+    await refreshMachines();
+  } catch (error) {
+    await refreshMachines();
+    toast(errorText(error), "error");
+  }
+}
+
+/** Close a machine's connection without forgetting it; Run on can still use it another time. */
+export async function disconnectMachine(machine: Pick<Machine, "id">): Promise<void> {
+  try {
+    await shellCall("machine_disconnect", { id: machine.id });
     await refreshMachines();
   } catch (error) {
     toast(errorText(error), "error");

@@ -207,6 +207,27 @@ function remember(host: string, values: JsonObject): void {
   });
 }
 
+/** The cached values of every machine, keyed `host\u0000key`; a machine page compares with this. */
+export function useServerValues(): Record<string, Json> {
+  return useSettingValues((state) => state.values);
+}
+
+/** This app's own values, as a server that has not answered would hold them. */
+export function localServerSettingValues(): Record<ServerSettingKey, Json> {
+  return localValues();
+}
+
+/** Whether a machine's cached server value differs from this app's own. */
+export function serverValueDiffers(
+  values: Record<string, Json>,
+  host: string,
+  key: ServerSettingKey,
+  local: Record<ServerSettingKey, Json>,
+): boolean {
+  const remote = values[valueKey(host, key)];
+  return remote !== undefined && JSON.stringify(remote) !== JSON.stringify(local[key]);
+}
+
 /** Read every server setting from one machine, and cache what it answers. */
 export async function loadServerSettings(host: string, force = false): Promise<void> {
   const key = valueKey(host, "*");
@@ -430,6 +451,26 @@ export async function loadMachineHarness(host: string): Promise<void> {
       delete loading[host];
       return { loading };
     });
+  }
+}
+
+/**
+ * A Check on another machine: re-detect that machine's harness installs and
+ * sign-ins, read its snapshot again, and answer where one harness ended.
+ * Nothing is started here; the snapshot is what its own server reports.
+ */
+export async function checkMachineHarness(host: string, id: string): Promise<string> {
+  try {
+    await machineRequest(host, Method.harnessAccountCheck, { redetect: [id] }, 30_000);
+    await loadMachineHarness(host);
+    const snapshot = useMachineHarnesses.getState().byHost[host];
+    const harness = snapshot?.harnesses.find((entry) => entry.id === id);
+    if (!harness) return "That harness is not listed on the machine now.";
+    if (!harness.installed) return "Not installed on that machine.";
+    if (harness.auth === "needs_login") return "Needs sign-in on that machine.";
+    return "Installed and signed in.";
+  } catch (error) {
+    return errorText(error);
   }
 }
 
