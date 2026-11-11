@@ -252,11 +252,23 @@ pub fn refresh_program() {
     let _ = prepare_program();
 }
 
-/// The `rustcode` this app's service commands run, and that `server install`
-/// writes into the unit: its engine, or the AppImage copy a service can keep.
-/// A service definition naming this is one this app manages.
+/// The `rustcode` a service runs from this app, and that `server install`
+/// writes into the unit: its engine, or — inside an AppImage — the copy under
+/// the user's data directory that [`refresh_program`] keeps current. A
+/// definition naming this is one this app manages. Nothing is copied here:
+/// this is the path a definition names, not the copy itself.
 fn service_program() -> PathBuf {
-    prepare_program().unwrap_or_else(|_| resolve_engine())
+    let engine = resolve_engine();
+    let appimage = std::env::var_os("APPIMAGE").map(PathBuf::from);
+    stable_program(
+        &engine,
+        appimage.is_some(),
+        std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .as_deref(),
+        std::env::var_os("HOME").map(PathBuf::from).as_deref(),
+    )
+    .unwrap_or(engine)
 }
 
 /// What `rustcode server update-cli --json` said it found and did.
