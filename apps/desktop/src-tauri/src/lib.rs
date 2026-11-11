@@ -133,6 +133,12 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building the RustCode desktop app");
     app.run(|handle, event| {
+        // A click on the Dock icon with the window hidden (webview.rs hides it on close).
+        #[cfg(target_os = "macos")]
+        if let RunEvent::Reopen { .. } = event {
+            webview::show_main_window(handle);
+            return;
+        }
         if let RunEvent::Exit = event {
             // The window opens where it was last left (webview.rs).
             webview::remember_size_on_exit(handle);
