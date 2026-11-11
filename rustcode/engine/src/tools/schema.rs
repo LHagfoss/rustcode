@@ -111,7 +111,7 @@ fn maybe_pause_native_schema_test_gate(messages: &[Value]) {
 pub(super) const AGENT_TOOL_SPECS: &[(&str, &str, &str)] = &[
     (
         "spawn_agent",
-        "Start an asynchronous subagent and return JSON with its agent_id. It runs on your model with your tools (web, MCP, skills), only without write access unless you grant it. Delegate a self-contained task whose result you need but whose intermediate steps you do not: a broad search, an independent investigation, or one of several tasks that can run in parallel. Do the work yourself when it is a few tool calls, and never delegate the step you are blocked on and then wait for it. Give each child a complete brief: it sees none of this conversation unless context_inheritance says otherwise. Children that write must have disjoint allowed_paths. Keep working after spawning; a finished child reports back on its own, and wait_agent is for when you have nothing else to do. Write access, allowed paths, and verification must be explicit. agent_type picks a role: explorer is read-only investigation, worker presets write_access and still needs allowed_paths, default is read-only unless write_access is passed. Omit model: the child then uses your model, provider and login; name a model profile only when the user asked for one. Working outside the session workspace? Pass that directory as cwd.",
+        "Start an asynchronous subagent and return JSON with its agent_id. It runs on your model with your tools (web, MCP, skills), without write access unless you grant it. Delegate a self-contained task whose result you need but whose intermediate steps you do not: a broad search, an independent investigation, or one of several parallel tasks. Do the work yourself when it is a few tool calls, and never delegate the step you are blocked on and then wait for it. Give each child a complete brief: it sees none of this conversation unless context_inheritance says otherwise; write access, allowed_paths and verification must be explicit, and children that write need disjoint paths. Keep working after spawning: a finished child reports back on its own, and wait_agent is for when you have nothing else to do. agent_type: explorer is read-only investigation, worker presets write_access and still needs allowed_paths; the default is read-only. Omit model: the child then uses your model, provider and login; name a model profile only when the user asked for one. Working outside the session workspace? Pass that directory as cwd.",
         r#"{"task": "task description", "agent_type": "explorer", "write_access": false, "allowed_paths": ["src/"], "verification_command": "cargo test", "workspace_mode": "shared", "base_sha": "origin/main", "cwd": "optional working directory"}"#,
     ),
     (
@@ -963,11 +963,6 @@ fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
         // (`orchestration/mcp_server.rs`); a RustCode turn has no renderer for
         // it, so it never reaches a built-in schema.
         || tool.name == crate::smart_ui::CHECK_TOOL_NAME
-        // Listed and answered by that same MCP server (#3369). The built-in
-        // block is at its byte cap (a v9 client's is already cut), so a tool
-        // an external harness can run without the client is offered there and
-        // not on every built-in request.
-        || tool.name == crate::pull_watch::LINK_TOOL_NAME
         || (crate::orchestration::is_tool(tool.name) && !policy.include_orchestration_tools)
         || (crate::orchestration::is_v2_tool(tool.name) && !policy.include_orchestration_v2_tools)
         || (crate::orchestration::is_v3_tool(tool.name) && !policy.include_orchestration_v3_tools)
@@ -2547,7 +2542,7 @@ pub(super) fn schema_for_agent_tool(name: &str) -> Value {
 fn agent_tool_schema(name: &str) -> Value {
     match name {
         "spawn_agent" => {
-            serde_json::json!({"type":"object","properties":{"task":{"type":"string"},"model":{"type":"string","description":"Omit unless the user asked for a specific model: the child then runs on your model, provider and login. Otherwise an exact model profile name."},"agent_type":{"type":"string","enum":crate::app::subagent_context::AgentRole::NAMES,"default":"default","description":"Role preset for the child's instructions and write_access: explorer is read-only, worker presets write_access (allowed_paths still required), default follows write_access. Every role has your tools; a read-only child just cannot write."},"write_access":{"type":"boolean","default":false},"allowed_paths":{"type":"array","items":{"type":"string"}},"verification_command":{"type":"string"},"workspace_mode":{"type":"string","enum":["shared","isolated"],"default":"shared"},"cwd":{"type":"string","description":"Child working directory; default the session workspace."},"workspace_name":{"type":"string"},"task_id":{"type":"string"},"branch":{"type":"string"},"base_sha":{"type":"string"},"context_inheritance":{"type":"string","enum":["minimal","evidence","recent","fork"],"default":"minimal"},"evidence":{"type":"string","maxLength":8192}},"required":["task"]})
+            serde_json::json!({"type":"object","properties":{"task":{"type":"string"},"model":{"type":"string"},"agent_type":{"type":"string","enum":crate::app::subagent_context::AgentRole::NAMES,"default":"default"},"write_access":{"type":"boolean","default":false},"allowed_paths":{"type":"array","items":{"type":"string"}},"verification_command":{"type":"string"},"workspace_mode":{"type":"string","enum":["shared","isolated"],"default":"shared"},"cwd":{"type":"string","description":"Child working directory; default the session workspace."},"workspace_name":{"type":"string"},"task_id":{"type":"string"},"branch":{"type":"string"},"base_sha":{"type":"string"},"context_inheritance":{"type":"string","enum":["minimal","evidence","recent","fork"],"default":"minimal"},"evidence":{"type":"string","maxLength":8192}},"required":["task"]})
         }
         "send_agent" => {
             serde_json::json!({"type":"object","properties":{"id":{"type":"string"},"message":{"type":"string"},"interrupt":super::misc::interrupt_schema()},"required":["id","message"]})
@@ -3220,6 +3215,10 @@ mod schema_budget_tests {
     /// their cost. Run with `-- --nocapture` for the per-tool table.
     const BUILTIN_SCHEMA_BYTE_BUDGET: usize = 25 * 1024;
 
+    /// Room the plain root block must keep under that budget, so the next tool
+    /// does not use the last free byte.
+    const MIN_BUILTIN_SCHEMA_HEADROOM_BYTES: usize = 256;
+
     /// Serialized bytes of every built-in tool's native schema entry, largest
     /// first, measured the way the request builder serializes it. Covers the
     /// whole registry and the agent-control tools, advertised or not.
@@ -3251,29 +3250,54 @@ mod schema_budget_tests {
         sizes
     }
 
+    /// Room the newest client's block must keep under the hard cap. Without
+    /// it the next tool added here fits the cap by 1 byte and the block still
+    /// shrinks on the request after that; the assertion turns the next
+    /// addition into a build failure with the number to free (#3376).
+    const MIN_ORCHESTRATION_HEADROOM_BYTES: usize = 2 * 1024;
+
     #[test]
     fn the_orchestration_tools_fit_the_hard_cap() {
-        // A client at the newest version gets every orchestration tool in its
-        // built-in schema; the hard cap must not start withholding any of them
-        // (which would drop tools the client can answer).
+        // Every supported client version gets every tool its version
+        // advertises in its built-in schema: the hard cap must never withhold
+        // one the client can answer, since the tool is then silently missing
+        // from the menu. This is the regression test for the 41 KiB cap that
+        // cut `thread_status`, `merge_when_green` and `cleanup_worktree` from a
+        // v9 client (#3376): the names are compared, not only the count, so a
+        // swap cannot pass as a match.
         for version in 1..=crate::orchestration::VERSION {
             let policy = ToolSchemaPolicy::root(true).with_orchestration_tools(version);
-            let advertised = crate::tools::TOOLS
+            let expected = crate::tools::TOOLS
                 .iter()
                 .filter(|tool| builtin_is_advertised(tool, policy))
-                .count();
+                .map(|tool| tool.name)
+                .collect::<Vec<_>>();
             let (tools, withheld) = build_builtin_native_tools_schema(policy);
+            let kept = tools
+                .iter()
+                .filter_map(|tool| tool["function"]["name"].as_str())
+                .collect::<Vec<_>>();
             let bytes = serialized_schema_bytes(&tools);
             println!(
-                "orchestration v{version}: {bytes} bytes, {} of {advertised} tools, withheld {withheld:?}",
-                tools.len()
+                "orchestration v{version}: {bytes} bytes, {} of {} tools, {} bytes free, withheld {withheld:?}",
+                kept.len(),
+                expected.len(),
+                MAX_BUILTIN_NATIVE_SCHEMA_BYTES - bytes
             );
-            assert_eq!(tools.len(), advertised, "v{version} lost a tool to the cap");
+            assert_eq!(kept, expected, "v{version} lost a tool to the cap");
             assert!(withheld.is_empty(), "v{version} withheld: {withheld:?}");
             assert!(
                 bytes < MAX_BUILTIN_NATIVE_SCHEMA_BYTES,
                 "v{version} is {bytes} bytes, over the hard cap"
             );
+            if version == crate::orchestration::VERSION {
+                let free = MAX_BUILTIN_NATIVE_SCHEMA_BYTES - bytes;
+                assert!(
+                    free >= MIN_ORCHESTRATION_HEADROOM_BYTES,
+                    "v{version} has {free} bytes free, under the {MIN_ORCHESTRATION_HEADROOM_BYTES} \
+                     a new tool needs: shorten descriptions in `tools/misc.rs` and `tools/schema.rs` first"
+                );
+            }
         }
         // A client below 5 is not shown an argument its app cannot answer.
         let start_schema = |version: u8| {
@@ -3325,28 +3349,38 @@ mod schema_budget_tests {
     }
 
     #[test]
-    fn the_link_tool_is_listed_only_by_the_mcp_server() {
-        // The `rustcode` MCP server an external harness runs lists it and
-        // answers it itself (`orchestration/mcp_server.rs`, #3369); the
-        // built-in block is at its byte cap, and the tool needs no client.
+    fn the_link_tool_is_built_in_for_every_client() {
+        // The `rustcode` MCP server an external harness runs lists and answers
+        // it (`orchestration/mcp_server.rs`, #3369), and a RustCode turn
+        // answers it in `pull_watch::answer` through its own handler: since
+        // #3376 freed the room, it is advertised to every client instead of
+        // only to an external harness.
         assert!(
             crate::tools::TOOLS
                 .iter()
                 .any(|tool| tool.name == crate::pull_watch::LINK_TOOL_NAME)
         );
         for policy in [
+            ToolSchemaPolicy::root(false),
             ToolSchemaPolicy::root(true),
             ToolSchemaPolicy::root(true).with_orchestration_tools(crate::orchestration::VERSION),
-            ToolSchemaPolicy::read_only_inspection(),
         ] {
-            let (tools, _) = build_builtin_native_tools_schema(policy);
+            let (tools, withheld) = build_builtin_native_tools_schema(policy);
             assert!(
-                !tools
+                tools
                     .iter()
                     .any(|tool| tool["function"]["name"] == crate::pull_watch::LINK_TOOL_NAME),
-                "the link tool is never a built-in tool"
+                "the link tool is missing from the built-in block: {policy:?}, withheld {withheld:?}"
             );
         }
+        // It links a thread, so it is not a read-only inspection tool.
+        let (tools, _) =
+            build_builtin_native_tools_schema(ToolSchemaPolicy::read_only_inspection());
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool["function"]["name"] == crate::pull_watch::LINK_TOOL_NAME)
+        );
     }
 
     #[test]
@@ -3375,6 +3409,16 @@ mod schema_budget_tests {
             bytes <= BUILTIN_SCHEMA_BYTE_BUDGET,
             "built-in tool schemas grew to {bytes} bytes, over the {BUILTIN_SCHEMA_BYTE_BUDGET} budget; \
              shorten a description (largest first: {:?})",
+            &sizes[..5]
+        );
+        // A budget reached to the last byte is a budget that fails the next
+        // tool that arrives, which is how the versioned block lost three tools
+        // under its old cap (#3376). Keep room for one modest addition.
+        let free = BUILTIN_SCHEMA_BYTE_BUDGET - bytes;
+        assert!(
+            free >= MIN_BUILTIN_SCHEMA_HEADROOM_BYTES,
+            "the built-in block has {free} bytes free, under the {MIN_BUILTIN_SCHEMA_HEADROOM_BYTES} \
+             a new tool needs: shorten a description (largest first: {:?})",
             &sizes[..5]
         );
         // The budget only means something while it sits under the hard cap
