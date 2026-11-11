@@ -19,8 +19,8 @@ use anyhow::Error;
 use rustcode_client::machine::{machine_from_pairing, normalize_code, Connector};
 use rustcode_client::tokens::{self as token_store, STORE_TIMEOUT};
 use rustcode_client::{
-    Approved, ClientKind, DiscoveredMachine, Machine, MachineRegistry, OverlayProvider, Route,
-    TokenStore, Unreachable, backoff_delay, browse_async,
+    backoff_delay, browse_async, Approved, ClientKind, DiscoveredMachine, Machine, MachineRegistry,
+    OverlayProvider, Route, TokenStore, Unreachable,
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -1087,7 +1087,11 @@ pub async fn machines_pair(
             "The machine is paired, but could not be saved: {error:#}"
         ));
     }
-    let _ = registry.mark_connected(&machine.host_id, &machine.routes[0].address, chrono::Utc::now());
+    let _ = registry.mark_connected(
+        &machine.host_id,
+        &machine.routes[0].address,
+        chrono::Utc::now(),
+    );
     let connecting = Live {
         state: MachineState::Connecting,
         ..Live::new()
