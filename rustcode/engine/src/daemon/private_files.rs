@@ -565,18 +565,61 @@ mod tests {
         );
         #[cfg(windows)]
         for path in [path.as_path(), temporary.path()] {
-            let literal = path.display().to_string().replace('\'', "''");
-            let output = std::process::Command::new("powershell.exe")
-                .args([
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-Command",
-                    &format!("(Get-Acl -LiteralPath '{literal}').Sddl"),
-                ])
-                .output()
-                .unwrap();
-            assert!(output.status.success(), "{:?}", output);
-            let sddl = String::from_utf8_lossy(&output.stdout);
+            use std::os::windows::ffi::OsStrExt;
+            use windows_sys::Win32::Foundation::LocalFree;
+            use windows_sys::Win32::Security::Authorization::ConvertSecurityDescriptorToStringSecurityDescriptorW;
+            use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, GetFileSecurityW};
+            let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+            let mut needed = 0;
+            // SAFETY: a null buffer queries the descriptor's required size.
+            unsafe {
+                GetFileSecurityW(
+                    path.as_ptr(),
+                    DACL_SECURITY_INFORMATION,
+                    std::ptr::null_mut(),
+                    0,
+                    &mut needed,
+                )
+            };
+            assert!(needed > 0);
+            let mut buffer = vec![0u64; (needed as usize).div_ceil(8)];
+            // SAFETY: buffer is aligned and holds at least needed bytes.
+            assert_ne!(
+                unsafe {
+                    GetFileSecurityW(
+                        path.as_ptr(),
+                        DACL_SECURITY_INFORMATION,
+                        buffer.as_mut_ptr().cast(),
+                        needed,
+                        &mut needed,
+                    )
+                },
+                0
+            );
+            let mut text: *mut u16 = std::ptr::null_mut();
+            // SAFETY: buffer holds a valid descriptor; text receives an allocated string.
+            assert_ne!(
+                unsafe {
+                    ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                        buffer.as_mut_ptr().cast(),
+                        1,
+                        DACL_SECURITY_INFORMATION,
+                        &mut text,
+                        std::ptr::null_mut(),
+                    )
+                },
+                0
+            );
+            let mut length = 0;
+            // SAFETY: the successful conversion returns a NUL-terminated string.
+            let sddl = unsafe {
+                while *text.add(length) != 0 {
+                    length += 1;
+                }
+                String::from_utf16_lossy(std::slice::from_raw_parts(text, length))
+            };
+            // SAFETY: the conversion allocated text with LocalAlloc.
+            unsafe { LocalFree(text.cast()) };
             assert!(sddl.contains("D:P"), "{sddl}");
             assert!(sddl.contains(&current_user_sid().unwrap()), "{sddl}");
             assert!(sddl.contains(";;;SY)"), "{sddl}");
