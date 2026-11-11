@@ -83,10 +83,16 @@ fn open_with_system(target: &str) -> Result<(), String> {
 
 #[tauri::command(async)]
 pub fn reveal_path(path: String) -> Result<(), String> {
-    let path = PathBuf::from(path);
-    if !path.is_absolute() || !path.exists() {
-        return Err("No such file.".into());
+    let requested = expand_home(&path);
+    if !requested.is_absolute() {
+        return Err("Not an absolute path.".into());
     }
+    // A vanished screenshot still has a folder the user can inspect.
+    let path = requested
+        .ancestors()
+        .find(|p| p.exists())
+        .ok_or("No such folder.")?
+        .to_path_buf();
     #[cfg(target_os = "macos")]
     {
         crate::process::command("open")
@@ -565,41 +571,112 @@ fn display_mime(path: &Path) -> Option<&'static str> {
     })
 }
 
-/// A picture a reply's Markdown shows (`![](path)`): an absolute path, or one
-/// relative to the thread's folder, that resolves (symlinks followed) inside
-/// one of `roots` (the thread's folder and its worktree). Anything else is
-/// refused, so a reply cannot read files from elsewhere on the disk.
-#[tauri::command(async)]
-pub fn thread_image(path: String, roots: Vec<String>) -> Result<ImageFile, String> {
-    use base64::Engine as _;
-    let roots: Vec<PathBuf> = roots
-        .iter()
-        .map(PathBuf::from)
-        .filter(|r| r.is_absolute())
-        .filter_map(|r| r.canonicalize().ok())
-        .collect();
-    let first = roots.first().ok_or("This thread has no folder.")?;
-    let raw = expand_home(&path);
+/// Extra screenshot roots shared by every thread. The engine inherits the shell's
+/// environment, including TMPDIR (TEMP on Windows).
+fn image_temp_roots() -> Vec<PathBuf> {
+    let mut roots = vec![std::env::temp_dir()];
+    if cfg!(unix) {
+        roots.extend([PathBuf::from("/tmp"), PathBuf::from("/private/tmp")]);
+    }
+    if cfg!(target_os = "macos") {
+        roots.extend([
+            PathBuf::from("/var/folders"),
+            PathBuf::from("/private/var/folders"),
+        ]);
+    }
+    roots
+}
+
+fn image_signature(mime: &str, bytes: &[u8]) -> bool {
+    match mime {
+        "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "image/jpeg" => bytes.starts_with(&[0xff, 0xd8, 0xff]),
+        "image/gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
+        "image/webp" => bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"),
+        // SVG was already supported. It is displayed only as an img data URL.
+        "image/svg+xml" => std::str::from_utf8(bytes).is_ok_and(|text| {
+            let text = text.trim_start_matches('\u{feff}').trim_start();
+            let text = if text.starts_with("<?xml") {
+                text.split_once("?>")
+                    .map(|(_, rest)| rest.trim_start())
+                    .unwrap_or("")
+            } else {
+                text
+            };
+            text.starts_with("<svg")
+                && text
+                    .as_bytes()
+                    .get(4)
+                    .is_some_and(|c| c.is_ascii_whitespace() || *c == b'>')
+        }),
+        _ => false,
+    }
+}
+
+/// Canonicalize before checking containment, including symlinks in every root.
+fn image_path(path: &str, roots: &[PathBuf], temp_roots: &[PathBuf]) -> Result<PathBuf, String> {
+    let raw = expand_home(path);
     let joined = if raw.is_absolute() {
         raw
     } else {
-        first.join(raw)
+        roots.first().ok_or("This thread has no folder.")?.join(raw)
     };
     let real = joined
         .canonicalize()
         .map_err(|_| "No such picture.".to_string())?;
-    if !roots.iter().any(|root| real.starts_with(root)) {
-        return Err("Pictures outside the thread's folder are not shown.".into());
+    if !roots
+        .iter()
+        .chain(temp_roots)
+        .filter(|r| r.is_absolute())
+        .filter_map(|r| r.canonicalize().ok())
+        .any(|root| real.starts_with(root))
+    {
+        return Err("Outside the thread, project, worktree and temporary folders.".into());
     }
-    let mime = display_mime(&real).ok_or("Not a picture.")?;
-    let meta = std::fs::metadata(&real).map_err(|e| e.to_string())?;
+    Ok(real)
+}
+
+/// A reply picture, inside the thread, project, worktree or OS scratch folders.
+#[tauri::command(async)]
+pub fn thread_image(path: String, roots: Vec<String>) -> Result<ImageFile, String> {
+    let roots: Vec<PathBuf> = roots
+        .into_iter()
+        .map(PathBuf::from)
+        .filter(|r| r.is_absolute())
+        .collect();
+    let real = image_path(&path, &roots, &image_temp_roots())?;
+    checked_picture(&real)
+}
+
+fn checked_picture(real: &Path) -> Result<ImageFile, String> {
+    use base64::Engine as _;
+    use std::io::Read as _;
+    let mime = display_mime(real).ok_or("Not a picture.")?;
+    if !std::fs::metadata(real)
+        .map_err(|e| e.to_string())?
+        .is_file()
+    {
+        return Err("Not a file.".into());
+    }
+    let file = std::fs::File::open(real).map_err(|e| e.to_string())?;
+    let meta = file.metadata().map_err(|e| e.to_string())?;
     if !meta.is_file() {
         return Err("Not a file.".into());
     }
     if meta.len() > MAX_IMAGE_BYTES {
         return Err("Pictures must be 20 MB or smaller.".into());
     }
-    let bytes = std::fs::read(&real).map_err(|e| e.to_string())?;
+    // Bound the read too, in case the file grows after metadata was read.
+    let mut bytes = Vec::new();
+    file.take(MAX_IMAGE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_IMAGE_BYTES {
+        return Err("Pictures must be 20 MB or smaller.".into());
+    }
+    if !image_signature(mime, &bytes) {
+        return Err("Image contents do not match its extension.".into());
+    }
     Ok(ImageFile {
         name: real
             .file_name()
@@ -686,7 +763,7 @@ fn expand_home(path: &str) -> PathBuf {
 /// Text files the app may open for editing: nothing that could run.
 const EDITABLE: &[&str] = &["md", "markdown", "toml", "json", "txt", "yaml", "yml"];
 
-/// What `open_path` would open: an existing folder, or an existing text file.
+/// What `open_path` would open: a folder, text file or signature-checked image.
 fn open_target(path: &str) -> Result<(PathBuf, bool), String> {
     let path = expand_home(path);
     if !path.is_absolute() || !path.exists() {
@@ -695,10 +772,23 @@ fn open_target(path: &str) -> Result<(PathBuf, bool), String> {
     if path.is_dir() {
         return Ok((path, true));
     }
+    if !path.is_file() {
+        return Err("Not a file.".into());
+    }
     let editable = path
         .extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| EDITABLE.contains(&e.to_ascii_lowercase().as_str()));
+    if !editable && display_mime(&path).is_some() {
+        use std::io::Read as _;
+        let mut header = vec![0; 512];
+        let len = std::fs::File::open(&path)
+            .and_then(|mut f| f.read(&mut header))
+            .map_err(|e| e.to_string())?;
+        if image_signature(display_mime(&path).unwrap(), &header[..len]) {
+            return Ok((path, false));
+        }
+    }
     if !editable {
         return Err("Only text files (Markdown, TOML, JSON, YAML) open from here.".into());
     }
@@ -706,7 +796,7 @@ fn open_target(path: &str) -> Result<(PathBuf, bool), String> {
 }
 
 /// Opens a skill's SKILL.md, a config or theme file in its editor, or a folder
-/// in the file manager. Anything else is refused, so nothing here runs a program.
+/// in the file manager, or a recognized image in its viewer.
 #[tauri::command(async)]
 pub fn open_path(path: String) -> Result<(), String> {
     let (path, dir) = open_target(&path)?;
@@ -722,8 +812,8 @@ pub(crate) fn open_checked(path: &Path, dir: bool) -> Result<(), String> {
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"));
         let mut command = crate::process::command("open");
-        // Markdown opens in its own app; other text in the default text editor.
-        if !dir && !markdown {
+        // Markdown and images open in their own apps; other text in the editor.
+        if !dir && !markdown && display_mime(path).is_none() {
             command.arg("-t");
         }
         command
@@ -993,29 +1083,69 @@ mod tests {
     }
 
     #[test]
-    fn shows_only_pictures_inside_the_thread_folder() {
+    fn thread_images_roots_and_safety() {
         let root = std::env::temp_dir().join(format!("rc-thread-image-{}", std::process::id()));
-        let inside = root.join("repo");
-        std::fs::create_dir_all(inside.join("docs")).unwrap();
-        std::fs::write(inside.join("docs/shot.png"), b"png").unwrap();
-        std::fs::write(root.join("secret.png"), b"png").unwrap();
-        std::fs::write(inside.join("notes.txt"), b"text").unwrap();
-        let roots = vec![inside.to_string_lossy().into_owned()];
-        let ok = thread_image("docs/shot.png".into(), roots.clone()).unwrap();
-        assert_eq!(ok.mime_type, "image/png");
-        let abs = inside.join("docs/shot.png").to_string_lossy().into_owned();
-        assert!(thread_image(abs, roots.clone()).is_ok());
-        assert!(thread_image("../secret.png".into(), roots.clone()).is_err());
-        let outside = root.join("secret.png").to_string_lossy().into_owned();
-        assert!(thread_image(outside, roots.clone()).is_err());
-        assert!(thread_image("notes.txt".into(), roots.clone()).is_err());
-        assert!(thread_image("docs/shot.png".into(), vec!["relative".into()]).is_err());
+        let roots: Vec<PathBuf> = ["thread", "project", "worktree", "temp", "outside"]
+            .iter()
+            .map(|n| root.join(n))
+            .collect();
+        for dir in &roots {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join("shot.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+        }
+        let allowed = &roots[..3];
+        let temp = &roots[3..4];
+        for dir in &roots[..4] {
+            let real = image_path(dir.join("shot.png").to_str().unwrap(), allowed, temp).unwrap();
+            assert!(checked_picture(&real).is_ok());
+        }
+        assert!(image_path("../outside/shot.png", allowed, temp).is_err());
+        assert!(image_path("shot.png", &[], &[]).is_err());
+        assert!(image_path("missing.png", allowed, temp).is_err());
         #[cfg(unix)]
         {
-            std::os::unix::fs::symlink(root.join("secret.png"), inside.join("link.png")).unwrap();
-            assert!(thread_image("link.png".into(), roots).is_err());
+            std::os::unix::fs::symlink(roots[4].join("shot.png"), roots[3].join("link.png"))
+                .unwrap();
+            assert!(
+                image_path(roots[3].join("link.png").to_str().unwrap(), allowed, temp).is_err()
+            );
         }
-        std::fs::remove_dir_all(&root).unwrap();
+        let fake = roots[0].join("fake.png");
+        std::fs::write(&fake, b"not an image").unwrap();
+        assert!(checked_picture(&fake).is_err());
+        assert!(open_target(fake.to_str().unwrap()).is_err());
+        assert!(open_target(roots[0].join("shot.png").to_str().unwrap()).is_ok());
+        let wrong_ext = roots[0].join("shot.txt");
+        std::fs::write(&wrong_ext, b"\x89PNG\r\n\x1a\n").unwrap();
+        assert!(checked_picture(&wrong_ext).is_err());
+        let wrong_format = roots[0].join("shot.jpg");
+        std::fs::write(&wrong_format, b"\x89PNG\r\n\x1a\n").unwrap();
+        assert!(checked_picture(&wrong_format).is_err());
+        let big = roots[0].join("big.png");
+        std::fs::File::create(&big)
+            .unwrap()
+            .set_len(MAX_IMAGE_BYTES + 1)
+            .unwrap();
+        assert!(checked_picture(&big).err().unwrap().contains("20 MB"));
+        assert!(thread_image(
+            roots[3].join("shot.png").to_string_lossy().into_owned(),
+            vec![]
+        )
+        .is_ok());
+        for temp_root in image_temp_roots() {
+            if let Ok(real) = temp_root.canonicalize() {
+                assert!(image_path(real.to_str().unwrap(), &[], &[temp_root]).is_ok());
+                assert!(checked_picture(&real).is_err());
+            }
+        }
+        assert!(image_signature("image/jpeg", &[0xff, 0xd8, 0xff]));
+        assert!(image_signature("image/gif", b"GIF89a"));
+        assert!(image_signature("image/webp", b"RIFFxxxxWEBP"));
+        assert!(image_signature(
+            "image/svg+xml",
+            b"<?xml version=\"1.0\"?><svg xmlns=\"x\"></svg>"
+        ));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
