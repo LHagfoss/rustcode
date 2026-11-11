@@ -10,11 +10,7 @@
 
 use serde_json::{Value, json};
 
-// The job types exist on every platform; the client, the command helpers and
-// the lifecycle are the unix socket's, so a Windows build compiles the
-// validation and the "no daemon here" answers without them.
 use crate::daemon::model::{JobRecord, ScheduleSpec};
-#[cfg(unix)]
 use crate::daemon::{
     client::DaemonClient,
     command::create_job,
@@ -167,7 +163,6 @@ pub(crate) fn name_from_prompt(prompt: &str) -> String {
 
 /// The fields of a job an answer carries: enough to name it, delete it and
 /// say when it runs next, never its prompt back.
-#[cfg(unix)]
 fn task(job: &JobRecord) -> Value {
     json!({
         "id": job.id,
@@ -180,7 +175,6 @@ fn task(job: &JobRecord) -> Value {
 }
 
 /// The client every method asks: the socket `rustcode cron` uses.
-#[cfg(unix)]
 fn client() -> Result<DaemonClient, String> {
     let config_dir =
         crate::config::get_config_dir().ok_or("error: config directory unavailable")?;
@@ -189,30 +183,16 @@ fn client() -> Result<DaemonClient, String> {
     ))
 }
 
-#[cfg(unix)]
 async fn ask(client: &DaemonClient, request: DaemonRequest) -> Result<DaemonResponse, String> {
     client.request(request).await.map_err(|error| {
         format!("the scheduler is not running ({error}); run `rustcode daemon start`")
     })
 }
 
-/// Nothing listening: an empty list with the reason is a better answer than a
-/// failure, so `list_scheduled_tasks` can say scheduled work needs the daemon.
-#[cfg(not(unix))]
-const NO_DAEMON: &str = "scheduled tasks need the scheduler daemon, which this build cannot run";
-
 pub(crate) async fn list() -> Result<Value, String> {
-    #[cfg(unix)]
-    {
-        list_with(&client()?).await
-    }
-    #[cfg(not(unix))]
-    {
-        Ok(json!({ "daemon_running": false, "tasks": [] }))
-    }
+    list_with(&client()?).await
 }
 
-#[cfg(unix)]
 async fn list_with(client: &DaemonClient) -> Result<Value, String> {
     let Ok(DaemonResponse::Jobs { jobs }) = ask(client, DaemonRequest::List).await else {
         return Ok(json!({ "daemon_running": false, "tasks": [] }));
@@ -252,33 +232,24 @@ pub(crate) async fn create(request: ScheduledCreateRequest) -> Result<Value, Str
     .to_string();
     let schedule_json =
         serde_json::to_string(&schedule).map_err(|error| format!("schedule: {error}"))?;
-    #[cfg(unix)]
-    {
-        let id = format!(
-            "task-{}-{:04x}",
-            chrono::Utc::now().timestamp_millis(),
-            rand::random::<u16>()
-        );
-        let job = create_job(
-            &id,
-            &name,
-            &request.workspace,
-            &schedule_json,
-            &action,
-            None,
-            None,
-        )
-        .map_err(|error| error.to_string())?;
-        create_with(&client()?, job).await
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (name, action, schedule_json);
-        Err(NO_DAEMON.to_owned())
-    }
+    let id = format!(
+        "task-{}-{:04x}",
+        chrono::Utc::now().timestamp_millis(),
+        rand::random::<u16>()
+    );
+    let job = create_job(
+        &id,
+        &name,
+        &request.workspace,
+        &schedule_json,
+        &action,
+        None,
+        None,
+    )
+    .map_err(|error| error.to_string())?;
+    create_with(&client()?, job).await
 }
 
-#[cfg(unix)]
 async fn create_with(client: &DaemonClient, job: JobRecord) -> Result<Value, String> {
     match ask(client, DaemonRequest::Create { job: job.clone() }).await? {
         DaemonResponse::Job { job } => Ok(json!({ "daemon_running": true, "task": task(&job) })),
@@ -288,18 +259,9 @@ async fn create_with(client: &DaemonClient, job: JobRecord) -> Result<Value, Str
 }
 
 pub(crate) async fn delete(id: String) -> Result<Value, String> {
-    #[cfg(unix)]
-    {
-        delete_with(&client()?, &id).await
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = id;
-        Err(NO_DAEMON.to_owned())
-    }
+    delete_with(&client()?, &id).await
 }
 
-#[cfg(unix)]
 async fn delete_with(client: &DaemonClient, id: &str) -> Result<Value, String> {
     match ask(
         client,
@@ -316,18 +278,9 @@ async fn delete_with(client: &DaemonClient, id: &str) -> Result<Value, String> {
 }
 
 pub(crate) async fn run(id: String) -> Result<Value, String> {
-    #[cfg(unix)]
-    {
-        run_with(&client()?, &id).await
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = id;
-        Err(NO_DAEMON.to_owned())
-    }
+    run_with(&client()?, &id).await
 }
 
-#[cfg(unix)]
 async fn run_with(client: &DaemonClient, id: &str) -> Result<Value, String> {
     match ask(
         client,
@@ -406,7 +359,6 @@ mod tests {
         assert!(name_from_prompt(&long).chars().count() <= MAX_NAME_CHARS);
     }
 
-    #[cfg(unix)]
     mod daemon {
         use super::*;
         use crate::daemon::lifecycle::DaemonLifecycle;
@@ -423,7 +375,7 @@ mod tests {
 
         impl Running {
             fn new() -> Self {
-                let directory = tempfile::tempdir_in("/tmp").unwrap();
+                let directory = crate::daemon::test_directory();
                 let lifecycle = DaemonLifecycle::new(directory.path());
                 let server = lifecycle.bind().unwrap();
                 let shutdown = server.shutdown_handle();
@@ -516,7 +468,7 @@ mod tests {
 
         #[tokio::test]
         async fn a_list_with_nothing_listening_says_so() {
-            let directory = tempfile::tempdir_in("/tmp").unwrap();
+            let directory = crate::daemon::test_directory();
             let client = DaemonClient::new(DaemonLifecycle::new(directory.path()).socket_path());
             let answer = list_with(&client).await.unwrap();
             assert_eq!(answer["daemon_running"], false);
