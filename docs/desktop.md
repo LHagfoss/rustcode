@@ -1625,6 +1625,7 @@ mismatch, so nothing unverified is written or run:
   `ditto`; `codesign --verify --deep --strict` and this app's bundle id are
   required, then a detached shell waits for the app to quit, swaps the bundle,
   re-registers it with Launch Services and opens it.
+  Run `scripts/macos-stable-signature.sh` once so Keychain stops asking after updates; the updater signs ad-hoc bundles with that local certificate before relaunching.
 - **Linux AppImage** (`$APPIMAGE` is set): `RustCode-<ver>-linux-x86_64.AppImage`
   is written next to the running file, made executable and renamed over it
   (atomic, no root); a detached shell then starts it once the app has quit.

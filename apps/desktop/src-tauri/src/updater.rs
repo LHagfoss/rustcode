@@ -42,6 +42,10 @@ use std::time::Duration;
 use tauri::ipc::Channel;
 use tauri::AppHandle;
 
+#[cfg(target_os = "macos")]
+#[path = "../../../../rustcode/engine/src/local_signing.rs"]
+mod local_signing;
+
 const REPO: &str = "LHagfoss/rustcode";
 
 #[derive(Debug, Serialize)]
@@ -1301,7 +1305,91 @@ fn stage(app: &AppHandle, zip: &Path, work: &Path) -> Result<PathBuf, String> {
     if id.trim() != app.config().identifier {
         return Err("The download is not this app.".into());
     }
-    Ok(new_app)
+    Ok(locally_signed_bundle(&new_app, work))
+}
+
+/// Sign a separate copy: a failed sign or verification must leave the original
+/// verified ad-hoc download untouched, including its nested signatures.
+#[cfg(target_os = "macos")]
+fn locally_signed_bundle(original: &Path, work: &Path) -> PathBuf {
+    let attempt = || -> Result<PathBuf, String> {
+        let signature = crate::process::command("/usr/bin/codesign")
+            .args(["-dv", "--verbose=4"])
+            .arg(original)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !signature.status.success() {
+            return Err("could not inspect the downloaded signature".into());
+        }
+        let adhoc = String::from_utf8_lossy(&signature.stderr)
+            .lines()
+            .any(|line| line == "Signature=adhoc");
+        if !adhoc {
+            return Ok(original.to_path_buf());
+        }
+        let identity = crate::process::command("/usr/bin/security")
+            .args(["find-certificate", "-c", local_signing::IDENTITY])
+            .output()
+            .map_err(|e| e.to_string())?;
+        let targets = local_signing_targets(original, adhoc, identity.status.success());
+        if targets.is_empty() {
+            return Err("RustCode Local Signing certificate is unavailable; run scripts/macos-stable-signature.sh once".into());
+        }
+        // Keep the same two-level layout expected by relaunch's cleanup.
+        let copy = work.join("locally-signed/RustCode.app");
+        run("/usr/bin/ditto", &[original.as_os_str(), copy.as_os_str()])?;
+        for (path, identifier) in local_signing_targets(&copy, true, true) {
+            let output = crate::process::command("/usr/bin/codesign")
+                .args(local_signing::sign_args(identifier))
+                .arg(&path)
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !output.status.success() {
+                return Err(format!(
+                    "signing {}: {}",
+                    path.display(),
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+        }
+        run(
+            "/usr/bin/codesign",
+            &[
+                "--verify".as_ref(),
+                "--deep".as_ref(),
+                "--strict".as_ref(),
+                copy.as_os_str(),
+            ],
+        )?;
+        Ok(copy)
+    };
+    match attempt() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("Local update signing skipped; keeping the ad-hoc bundle: {error}");
+            original.to_path_buf()
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn local_signing_targets(
+    bundle: &Path,
+    adhoc: bool,
+    has_identity: bool,
+) -> Vec<(PathBuf, &'static str)> {
+    if !adhoc || !has_identity {
+        return Vec::new();
+    }
+    let desktop = "com.lhagfoss.rustcode.desktop";
+    vec![
+        (
+            bundle.join("Contents/MacOS/rustcode"),
+            local_signing::CLI_IDENTIFIER,
+        ),
+        (bundle.join("Contents/MacOS/rustcode-desktop"), desktop),
+        (bundle.to_path_buf(), desktop),
+    ]
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -2115,5 +2203,38 @@ mod tests {
         let offered = candidates(&feed, ReleaseChannel::Beta, None);
         println!("beta channel offers {offered:?} from {} tags", feed.len());
         assert!(!offered.is_empty(), "the feed names releases");
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod local_signing_tests {
+    use super::*;
+
+    #[test]
+    fn signs_inner_binaries_before_bundle_and_skips_without_identity_or_adhoc() {
+        let bundle = Path::new("/tmp/Rust Code.app");
+        assert!(local_signing_targets(bundle, false, true).is_empty());
+        assert!(local_signing_targets(bundle, true, false).is_empty());
+        assert_eq!(
+            local_signing_targets(bundle, true, true),
+            vec![
+                (bundle.join("Contents/MacOS/rustcode"), "org.rustcode.cli"),
+                (
+                    bundle.join("Contents/MacOS/rustcode-desktop"),
+                    "com.lhagfoss.rustcode.desktop"
+                ),
+                (bundle.to_path_buf(), "com.lhagfoss.rustcode.desktop"),
+            ]
+        );
+        assert_eq!(
+            local_signing::sign_args("com.lhagfoss.rustcode.desktop"),
+            [
+                "--force",
+                "--sign",
+                "RustCode Local Signing",
+                "--identifier",
+                "com.lhagfoss.rustcode.desktop"
+            ]
+        );
     }
 }
