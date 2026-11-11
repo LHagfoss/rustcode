@@ -5032,6 +5032,9 @@ function mockMachine(
   return {
     id: MOCK_MACHINE.id,
     name: MOCK_MACHINE.name,
+    displayName: null,
+    icon: null,
+    iconTint: null,
     platform: MOCK_MACHINE.platform,
     version: extra.version ?? "1.28.0",
     main: false,
@@ -5077,6 +5080,9 @@ function mockStudio(state: "connected" | "offline", addedAt: number): JsonObject
   return {
     id: MOCK_STUDIO.id,
     name: MOCK_STUDIO.name,
+    displayName: null,
+    icon: null,
+    iconTint: null,
     platform: MOCK_STUDIO.platform,
     version: MOCK_STUDIO.version,
     main: false,
@@ -5095,6 +5101,9 @@ function mockWindows(state: "connected" | "offline", addedAt: number): JsonObjec
   return {
     id: MOCK_WINDOWS.id,
     name: MOCK_WINDOWS.name,
+    displayName: null,
+    icon: null,
+    iconTint: null,
     platform: MOCK_WINDOWS.platform,
     version: MOCK_WINDOWS.version,
     main: false,
@@ -5799,6 +5808,21 @@ export class MockTransport implements Transport {
         ...machine,
         main: machine.id === String(args.id),
       }));
+      return null;
+    }
+    if (command === "machines_set_display_name") {
+      const name = typeof args.name === "string" && args.name.trim() ? args.name.trim() : null;
+      this.machineList = this.machineList.map((machine) =>
+        machine.id === String(args.id) ? { ...machine, displayName: name } : machine,
+      );
+      return null;
+    }
+    if (command === "machines_set_icon") {
+      const icon = typeof args.icon === "string" && args.icon ? args.icon : null;
+      const tint = icon && typeof args.tint === "string" && args.tint ? args.tint : null;
+      this.machineList = this.machineList.map((machine) =>
+        machine.id === String(args.id) ? { ...machine, icon, iconTint: tint } : machine,
+      );
       return null;
     }
     // A machine's own channel is opened in process (`MachineTransport` hands it a MockMachine).

@@ -59,7 +59,15 @@ import {
   childAccountFor,
   newThreadAccountOn,
 } from "./logins";
-import { LOCAL_MACHINE_ID, type Machine, offlineSinceLabel, selfName, useMachines } from "./machines";
+import {
+  LOCAL_MACHINE_ID,
+  localIdentity,
+  type Machine,
+  machineName,
+  offlineSinceLabel,
+  selfName,
+  useMachines,
+} from "./machines";
 import {
   type ApprovalChoice,
   activeDescendants,
@@ -628,9 +636,9 @@ export function localMachine(): MachineRef {
   };
 }
 
-/** A paired machine, as a call names it. */
+/** A paired machine, as a call names it: the name this app shows, never the reported one. */
 function machineRef(machine: Machine): MachineRef {
-  return { host: machine.id, id: machine.id, name: machine.name, platform: machine.platform };
+  return { host: machine.id, id: machine.id, name: machineName(machine), platform: machine.platform };
 }
 
 /**
@@ -646,9 +654,15 @@ export function resolveMachine(asked: string | undefined): MachineRef | Failure 
   if (wanted === LOCAL_MACHINE_ID || wanted === local.name.toLowerCase()) return local;
   const machines = useMachines.getState().machines;
   const byId = machines.filter((machine) => machine.id.toLowerCase() === wanted);
-  const found = byId.length ? byId : machines.filter((machine) => machine.name.toLowerCase() === wanted);
+  // The name shown is a local display name; the reported one still names it,
+  // so a pairing saved before a rename answers to either.
+  const found = byId.length
+    ? byId
+    : machines.filter(
+        (machine) => machineName(machine).toLowerCase() === wanted || machine.name.toLowerCase() === wanted,
+      );
   if (!found.length) {
-    const names = [local.name, ...machines.map((machine) => machine.name)];
+    const names = [local.name, ...machines.map(machineName)];
     return failure("not_found", `no machine “${asked}”; list_machines has ${names.join(", ")}`);
   }
   if (found.length > 1) {
@@ -739,7 +753,13 @@ async function machineEntry(machine: MachineRef): Promise<JsonObject> {
   const state = connected ? "connected" : saved?.state === "needsPairing" ? "revoked" : "offline";
   return {
     id: machine.id,
-    name: machine.name,
+    // The reported name stays here, so a client that never heard of the local
+    // one still says what the machine calls itself; display_name is what the
+    // app shows everywhere, and `name` above is that too for a call.
+    name: saved?.name ?? machine.name,
+    display_name: saved?.displayName ?? (machine.host ? null : localIdentity().displayName),
+    icon: saved?.icon ?? (machine.host ? null : localIdentity().icon),
+    icon_tint: saved?.iconTint ?? (machine.host ? null : localIdentity().tint),
     platform: machine.platform,
     ...(machine.host ? {} : { current: true }),
     state,

@@ -36,7 +36,7 @@ function render(value: Machine, counts?: { running: number; total: number }): st
 describe("a device row", () => {
   test("says its platform, name, state, route once, and how many threads run", () => {
     const html = render(machine(), { running: 1, total: 3 });
-    expect(html).toContain("macOS");
+    expect(html).toContain('aria-label="Laptop"');
     expect(html).toContain("Studio");
     expect(html).toContain("Connected");
     // The route's name to the eye, its address on hover, and each once.
