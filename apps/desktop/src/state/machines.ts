@@ -200,6 +200,8 @@ interface MachinesStore {
   server: ServerService | null;
   /** An install is running now. */
   serverInstalling: boolean;
+  /** Pointing the `rustcode` on PATH at this app's engine is running now. */
+  serverLinking: boolean;
 }
 
 export const useMachines = create<MachinesStore>(() => ({
@@ -216,6 +218,7 @@ export const useMachines = create<MachinesStore>(() => ({
   pairingError: null,
   server: null,
   serverInstalling: false,
+  serverLinking: false,
 }));
 
 // ---------------------------------------------------------------- labels
@@ -678,6 +681,7 @@ export function resetMachinesForTests(): void {
     pairingError: null,
     server: null,
     serverInstalling: false,
+    serverLinking: false,
   });
 }
 
@@ -833,6 +837,34 @@ export async function installServer(): Promise<boolean> {
   } catch (error) {
     useMachines.setState({ serverInstalling: false });
     toast(`Could not install the RustCode server: ${errorText(error)}`, "error");
+    return false;
+  }
+}
+
+/**
+ * Point the `rustcode` a shell runs at this app's engine (issue 3411): the
+ * CLI's own `rustcode server link-path`, run by the app's engine so it is the
+ * app's version that the shell then finds. Homebrew's copy is refused with the
+ * `brew` command. Answers whether the page now reads no version mismatch.
+ */
+export async function linkCliToApp(): Promise<boolean> {
+  useMachines.setState({ serverLinking: true });
+  try {
+    const server = await shellCall<ServerService>("server_link_path");
+    useMachines.setState({ server, serverLinking: false });
+    const stale = server.problems.some((problem) => problem.code.startsWith("path-version-mismatch"));
+    if (stale) {
+      toast("The `rustcode` on PATH still is not this app's version. See the warning on this page.", "error");
+    } else {
+      toast(
+        "`rustcode` in a terminal now runs this app's version. Open a new terminal to use it.",
+        "success",
+      );
+    }
+    return !stale;
+  } catch (error) {
+    useMachines.setState({ serverLinking: false });
+    toast(`Could not point \`rustcode\` at this app: ${errorText(error)}`, "error");
     return false;
   }
 }
@@ -1044,6 +1076,39 @@ export async function setMainMachine(machine: Machine): Promise<void> {
   } catch (error) {
     toast(errorText(error), "error");
   }
+}
+
+/**
+ * Ask a machine to try again now. The shell stops its supervisor and starts a new
+ * one, so a backoff that had grown to minutes is a fresh attempt; the app keeps
+ * its channel and reopens it as the machine answers. A machine the shell is not
+ * keeping (it was saved after the last read) is picked up by reading the list.
+ */
+export function reconnectMachine(machine: Pick<Machine, "id">): void {
+  const link = links.get(machine.id);
+  if (!link) {
+    void refreshMachines();
+    return;
+  }
+  // The row says it is trying while it asks, rather than staying offline until an answer.
+  useMachines.setState((state) => ({
+    machines: state.machines.map((entry) =>
+      entry.id === machine.id ? { ...entry, state: "connecting", detail: null, retryInSecs: null } : entry,
+    ),
+  }));
+  link.connection?.close("Reconnecting.");
+  link.connection = null;
+  link.ready = false;
+  void link.transport
+    .restart()
+    .then(() => refreshMachines())
+    .catch((error) => {
+      useMachines.setState((state) => ({
+        machines: state.machines.map((entry) =>
+          entry.id === machine.id ? { ...entry, state: "offline", detail: errorText(error) } : entry,
+        ),
+      }));
+    });
 }
 
 function errorText(error: unknown): string {

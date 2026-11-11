@@ -1,4 +1,5 @@
-import { fileManagerName } from "../lib/platform";
+import { basename, join } from "../lib/paths";
+import { appPlatform, fileManagerName } from "../lib/platform";
 // Settings › Capabilities: skills and MCP servers in one place, through the
 // engine process that runs them (`_rustcode/capabilities*`), so a status
 // is never a guess. Skills by where they come from, each with its file;
@@ -889,7 +890,7 @@ function SkillCopy({
 
 /** A skill's path is its folder or its SKILL.md. */
 function skillFile(path: string): string {
-  return /\.md$/i.test(path) ? path : `${path.replace(/\/$/, "")}/SKILL.md`;
+  return /\.md$/i.test(path) ? path : join(path, "SKILL.md");
 }
 
 function NewSkill({ onDone }: { onDone: () => void }) {
@@ -936,8 +937,10 @@ function NewSkill({ onDone }: { onDone: () => void }) {
             className={scope === v ? "bg-surface-3 text-fg" : undefined}
           >
             {v === "user"
-              ? "~/.config/rustcode/skills"
-              : `${cwd ? cwd.split("/").pop() : "project"}/.rustcode/skills`}
+              ? appPlatform() === "windows"
+                ? "%APPDATA%\\rustcode\\skills"
+                : "~/.config/rustcode/skills"
+              : `${cwd ? basename(cwd) : "project"}/.rustcode/skills`}
           </Action>
         ))}
         <span className="flex-1" />

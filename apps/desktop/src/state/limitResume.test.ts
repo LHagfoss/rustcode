@@ -1,5 +1,20 @@
 import { describe, expect, test } from "bun:test";
-import { LIMIT_GRACE_MS, LIMIT_MAX_ATTEMPTS, limitReset, nextWait, waitDue, waitHolds } from "./limitResume";
+import {
+  LIMIT_GRACE_MS,
+  LIMIT_MAX_ATTEMPTS,
+  limitReset,
+  nextWait,
+  OVERLOAD_FIRST_MS,
+  OVERLOAD_JITTER,
+  OVERLOAD_MAX_ATTEMPTS,
+  OVERLOAD_MAX_MS,
+  OVERLOAD_RESUME_TEXT,
+  overloadDelay,
+  overloadStop,
+  resumeText,
+  waitDue,
+  waitHolds,
+} from "./limitResume";
 
 // 2026-11-05 14:48 in Oslo, which is UTC+1 in November.
 const NOW = Date.UTC(2026, 10, 5, 13, 48);
@@ -79,5 +94,102 @@ describe("the wait", () => {
     for (let i = 1; i < LIMIT_MAX_ATTEMPTS; i++) current = nextWait(current!, { until: 1, account: null });
     expect(current?.attempts).toBe(LIMIT_MAX_ATTEMPTS);
     expect(nextWait(current!, { until: 1, account: null })).toBeNull();
+  });
+});
+
+describe("a turn a provider overload stopped", () => {
+  test("reads the overload each harness says", () => {
+    for (const text of [
+      // Codex wraps its own answer in JSON.
+      'Codex: {"type":"error","error":{"type":"overloaded_error","message":"Our servers are currently overloaded. Please try again later."}}',
+      // Claude Code: a status and a body, in its own words.
+      'Claude Code: API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      // The status on its own, as a proxy or a harness with no body writes it.
+      "Codex: 503 Service Unavailable",
+      "Pi: the model is at capacity",
+      "Claude Code: API Error: 529",
+    ]) {
+      expect(overloadStop(text)).toBe(true);
+    }
+  });
+
+  test("a credit or spend limit is never retried, whatever else it says", () => {
+    for (const text of [
+      'Claude Code: API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the API. Please go to Plans & Billing to upgrade or purchase credits."}}',
+      'Codex: {"error":{"message":"You exceeded your current quota, please check your plan and billing details.","type":"insufficient_quota"}}',
+      "Pi: out of credits",
+      "Claude Code: billing hard limit reached",
+      "Claude Code: spend limit reached for this month",
+    ]) {
+      expect(overloadStop(text)).toBe(false);
+    }
+  });
+
+  test("a limit, a network failure or an answer is not an overload", () => {
+    for (const text of [
+      undefined,
+      "",
+      "You've hit your 5-hour limit · resets 2:50pm (Europe/Oslo)",
+      "Pi: fetch failed",
+      "Claude Code: Can't reach the API server",
+      'Codex: {"detail":"Bad Request"}',
+      'Claude Code: API Error: 429 {"error":{"message":"Rate limited"}}',
+      // A number that is a count, not a status.
+      "Codex: the run used 503 tokens",
+    ]) {
+      expect(overloadStop(text)).toBe(false);
+    }
+  });
+
+  test("the backoff doubles from 30 s, with jitter on top and a 4 m cap", () => {
+    const plain = [1, 2, 3, 4].map((attempts) => overloadDelay(attempts, () => 0));
+    expect(plain).toEqual([30_000, 60_000, 120_000, 240_000]);
+    // The clock never rolls back: the delay is the backoff plus up to a quarter of it.
+    for (const attempt of [1, 2, 3, 4, 9]) {
+      const base = Math.min(OVERLOAD_FIRST_MS * 2 ** (attempt - 1), OVERLOAD_MAX_MS);
+      for (const roll of [0, 0.25, 0.5, 1]) {
+        const delay = overloadDelay(attempt, () => roll);
+        expect(delay).toBeGreaterThanOrEqual(base);
+        expect(delay).toBeLessThanOrEqual(base + base * OVERLOAD_JITTER);
+      }
+    }
+    expect(overloadDelay(9, () => 0)).toBe(OVERLOAD_MAX_MS);
+    expect(overloadDelay(9, () => 1)).toBe(OVERLOAD_MAX_MS * (1 + OVERLOAD_JITTER));
+  });
+
+  test("a real die stays inside the bounds", () => {
+    for (let i = 0; i < 200; i++) {
+      expect(overloadDelay(2)).toBeGreaterThanOrEqual(60_000);
+      expect(overloadDelay(2)).toBeLessThanOrEqual(60_000 * (1 + OVERLOAD_JITTER));
+    }
+  });
+
+  test("is due the moment it ends, with no limit's grace", () => {
+    const wait = { until: NOW, harness: "codex", account: null, attempts: 1, reason: "overload" as const };
+    expect(waitDue(wait, NOW - 1)).toBe(false);
+    expect(waitDue(wait, NOW)).toBe(true);
+  });
+
+  test("gets four attempts, then stops", () => {
+    let current = nextWait(undefined, { until: 1, account: null, reason: "overload" });
+    for (let i = 1; i < OVERLOAD_MAX_ATTEMPTS; i++)
+      current = nextWait(current!, { until: 1, account: null, reason: "overload" });
+    expect(current?.attempts).toBe(OVERLOAD_MAX_ATTEMPTS);
+    expect(nextWait(current!, { until: 1, account: null, reason: "overload" })).toBeNull();
+  });
+
+  test("a stop that changes kind starts its own count", () => {
+    const limit = { until: 1, account: null, attempts: LIMIT_MAX_ATTEMPTS };
+    // A full limit, then an overload: the limit's tries are not the overload's.
+    expect(nextWait(limit, { until: 2, account: null, reason: "overload" })?.attempts).toBe(1);
+    // The same kind again is one try too many.
+    expect(nextWait(limit, { until: 2, account: null })).toBeNull();
+  });
+
+  test("says what stopped it in the words it is resumed with", () => {
+    expect(resumeText({ until: 1, account: null, attempts: 1, reason: "overload" })).toBe(
+      OVERLOAD_RESUME_TEXT,
+    );
+    expect(resumeText({ until: 1, account: null, attempts: 1 })).toContain("usage limit");
   });
 });

@@ -109,7 +109,9 @@ fn directory(path: Option<&str>) -> Result<PathBuf, RemoteError> {
     if !canonical.is_dir() {
         return Err(invalid(format!("{} is not a folder", canonical.display())));
     }
-    Ok(canonical)
+    // The thread's folder is stored and listed as people write it: the verbatim
+    // prefix a canonical Windows path carries is a Win32 detail, not a project (#3425).
+    Ok(rustcode_session::strip_verbatim(&canonical))
 }
 
 /// The `_meta.rustcode` a `session/new` would carry for this choice.

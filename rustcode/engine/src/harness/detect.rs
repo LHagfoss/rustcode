@@ -232,6 +232,14 @@ fn detect_uncached_with(harness: &ResolvedHarness, run: Probe) -> Detection {
     if resolve_program(program).is_none() {
         return Detection::default();
     }
+    // A command that resolves is not always a working install: `pi-acp` runs
+    // under npm's `npx` but spawns `pi` itself, so a machine with `npx` and no
+    // `pi` must read as Not installed here, not fail at the first turn.
+    if let Some(required) = harness.known.and_then(|known| known.requires)
+        && resolve_program(required).is_none()
+    {
+        return Detection::default();
+    }
     let mut detection = Detection {
         installed: true,
         ..Detection::default()
@@ -340,7 +348,17 @@ fn probe_cwd() -> Option<PathBuf> {
 
 /// The `PATH` a harness is looked up on and started with: the engine's own,
 /// then the login shell's, so an app started from the Dock finds the same
-/// commands as the terminal.
+/// commands as the terminal, then the well-known install directories the
+/// shell adds (Homebrew's prefixes, `path_helper`'s files, `~/.local/bin`,
+/// `~/.bun/bin`, `~/.cargo/bin`).
+///
+/// The last group matters on its own: when the shell probe fails or times out
+/// -- likely at app launch, or with several harness checks starting at once --
+/// the login shell's `PATH` is missing entirely, and the dotfile fallback does
+/// not mention `/opt/homebrew/bin`. A `brew`-installed harness is then not
+/// found at all, and one found through `npx` cannot start the binary it
+/// spawns. Well-known directories are appended rather than prepended, so the
+/// process's own order still wins, and Windows is left as it was.
 pub(crate) fn search_path() -> std::ffi::OsString {
     #[cfg_attr(test, allow(unused_mut))]
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
@@ -354,6 +372,7 @@ pub(crate) fn search_path() -> std::ffi::OsString {
             }
         }
     }
+    crate::shell_env::add_well_known_path_dirs(&mut dirs);
     std::env::join_paths(dirs).unwrap_or_default()
 }
 
@@ -518,6 +537,98 @@ mod tests {
         assert!(!detection.installed);
         assert_eq!(detection.auth, "unknown");
         assert!(resolve_program("sh").is_some());
+    }
+
+    /// A harness whose command resolves but whose prerequisite does not, as
+    /// `npx -y pi-acp` is without `pi`.
+    static WITH_PREREQUISITE: KnownHarness = KnownHarness {
+        id: "prerequisite",
+        name: "Prerequisite",
+        kind: HarnessKind::Acp,
+        command: &[],
+        login_command: None,
+        install_hint: None,
+        version: None,
+        auth_probe: None,
+        requires: Some("rustcode-no-such-prerequisite-on-path"),
+    };
+
+    #[test]
+    fn a_harness_whose_prerequisite_is_missing_is_not_installed() {
+        // `npx` starts `pi-acp`, and `pi-acp` cannot start the `pi` it spawns:
+        // the list has to say Not installed instead of every turn failing.
+        let dir = tempfile::tempdir().unwrap();
+        let shim = dir.path().join("rustcode-harness-shim-for-a-prerequisite");
+        write_program(&shim);
+        let harness = ResolvedHarness {
+            id: "prerequisite".into(),
+            name: "Prerequisite".into(),
+            kind: HarnessKind::Acp,
+            command: vec![shim.to_string_lossy().into_owned()],
+            env: Vec::new(),
+            enabled: false,
+            known: None,
+        };
+        assert!(
+            detect_uncached_with(&harness, no_probe_answer).installed,
+            "the command itself resolves"
+        );
+        let required = ResolvedHarness {
+            known: Some(&WITH_PREREQUISITE),
+            ..harness
+        };
+        assert!(!detect_uncached_with(&required, no_probe_answer).installed);
+        // The case the report was about.
+        assert_eq!(crate::harness::known("pi").unwrap().requires, Some("pi"));
+    }
+
+    #[test]
+    fn a_failed_shell_probe_still_reaches_the_well_known_install_dirs() {
+        // The bug: the launch-time login-shell probe lost, the dotfile fallback
+        // has no `/opt/homebrew/bin`, so `codex` read as Not installed and Pi
+        // could not start the `pi` next to it. Composed from a bare PATH and no
+        // probe answer, the well-known directories are what is left.
+        let home = tempfile::tempdir().unwrap();
+        let local_bin = home.path().join(".local/bin");
+        std::fs::create_dir_all(&local_bin).unwrap();
+        let installed = local_bin.join("rustcode-harness-installed-by-hand");
+        write_program(&installed);
+
+        let mut dirs = vec![PathBuf::from("/usr/bin"), PathBuf::from("/bin")];
+        crate::shell_env::extend_with_well_known_dirs(
+            &mut dirs,
+            crate::shell_env::PathFlavour::MacOs,
+            Some(home.path()),
+            Some("/usr/bin\n/bin\n/usr/sbin\n"),
+            &[String::from("# path_helper file\n/opt/homebrew/bin\n")],
+        );
+        assert_eq!(
+            dirs[..2],
+            [PathBuf::from("/usr/bin"), PathBuf::from("/bin")]
+        );
+        for expected in ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin"] {
+            assert!(dirs.contains(&PathBuf::from(expected)), "{expected}");
+        }
+        assert!(dirs.contains(&local_bin));
+        assert_eq!(
+            dirs.iter()
+                .filter(|dir| **dir == PathBuf::from("/usr/bin"))
+                .count(),
+            1,
+            "a directory on PATH already is not added twice"
+        );
+        assert_eq!(
+            resolve_in(
+                dirs,
+                "rustcode-harness-installed-by-hand",
+                &Lookup {
+                    windows: false,
+                    extensions: Vec::new(),
+                }
+            ),
+            Some(installed),
+            "the composed list is what a lookup walks"
+        );
     }
 
     fn windows_lookup(extensions: &[&str]) -> Lookup {
@@ -864,6 +975,7 @@ mod tests {
             install_hint: None,
             version: None,
             auth_probe: Some(AuthProbe::Json(&["claude", "auth", "status", "--json"])),
+            requires: None,
         };
         let harness = ResolvedHarness {
             id: "fixture".into(),

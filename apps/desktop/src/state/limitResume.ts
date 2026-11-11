@@ -1,24 +1,42 @@
 // A thread stopped by its subscription's limit carries on when the limit
-// resets. Pure, so the store and its tests share one answer: whether a turn
-// ended on a limit, when that limit resets, and whether the wait still holds.
-// Claude Code says it in a reply of its own, not as a failed turn:
-// `You've hit your 5-hour limit · resets 2:50pm (Europe/Oslo)`.
+// resets; one stopped by a provider that was out of capacity is tried again
+// after a short backoff. Pure, so the store and its tests share one answer:
+// whether a turn ended on a limit or an overload, when that wait ends, and
+// whether it still holds. Claude Code says the limit in a reply of its own, not
+// as a failed turn: `You've hit your 5-hour limit · resets 2:50pm (Europe/Oslo)`.
 
 import type { UsageWindow } from "../acp/rustcode";
+import { failureStatus } from "./turnError";
+
+/** Why a thread waits before it goes on: a plan limit resetting, or a provider that was full. */
+export type StopReason = "limit" | "overload";
 
 export interface LimitWait {
-  /** When the limit resets (ms). */
+  /** When the wait ends: the limit's reset, or the moment a retry is due (ms). */
   until: number;
-  /** What the thread ran on when it stopped: another harness or login is not this limit. */
+  /** What the thread ran on when it stopped: another harness or login is not this stop. */
   harness?: string;
   account: string | null;
-  /** How many times this stop has waited; a limit that keeps coming back stops being retried. */
+  /** How many times this stop has waited; a stop that keeps coming back stops being retried. */
   attempts: number;
+  /** What stopped the turn; absent is a limit (a wait saved before overloads existed). */
+  reason?: StopReason;
 }
 
 /** What the thread is told when it continues. */
 export const LIMIT_RESUME_TEXT =
   "The usage limit that stopped your last turn has reset. Continue where you left off.";
+/** What it is told after a provider that was out of capacity answers again. */
+export const OVERLOAD_RESUME_TEXT =
+  "The provider was overloaded and stopped your last turn. Continue where you left off.";
+
+/** The words a waiting thread is sent. */
+export function resumeText(wait: LimitWait): string {
+  return reasonOf(wait) === "overload" ? OVERLOAD_RESUME_TEXT : LIMIT_RESUME_TEXT;
+}
+
+/** A wait with no reason is a limit: overloads are newer than the waits already saved. */
+export const reasonOf = (wait: LimitWait): StopReason => wait.reason ?? "limit";
 /** The provider's clock and ours differ, so wait a little past the reset. */
 export const LIMIT_GRACE_MS = 60_000;
 /** A reset time just behind us was a minute that has not rolled over: try again soon. */
@@ -26,6 +44,13 @@ const JUST_PASSED_MS = 3 * 3_600_000;
 const RETRY_SOON_MS = 5 * 60_000;
 /** After this many waits for one stop, the thread stays stopped. */
 export const LIMIT_MAX_ATTEMPTS = 3;
+/** A provider overload is not the thread's fault, so it gets more tries than a limit. */
+export const OVERLOAD_MAX_ATTEMPTS = 4;
+/** Doubling backoff for an overloaded provider: 30 s, 1 m, 2 m, 4 m. */
+export const OVERLOAD_FIRST_MS = 30_000;
+export const OVERLOAD_MAX_MS = 4 * 60_000;
+/** Up to this share of the backoff is added at random, so many threads do not wake together. */
+export const OVERLOAD_JITTER = 0.25;
 const DAY_MS = 86_400_000;
 
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
@@ -127,21 +152,66 @@ export function limitReset(
   return full.length ? Math.max(...full) : null;
 }
 
-/** The next wait for a stop, or null once this stop has waited often enough. */
+/** How many waits a stop of this kind gets before the thread stays stopped. */
+export function waitMaxAttempts(wait: Pick<LimitWait, "reason">): number {
+  return (wait.reason ?? "limit") === "overload" ? OVERLOAD_MAX_ATTEMPTS : LIMIT_MAX_ATTEMPTS;
+}
+
+/**
+ * The next wait for a stop, or null once this stop has waited often enough. A
+ * stop that changes kind (a limit, then an overload) starts its own count.
+ */
 export function nextWait(
   previous: LimitWait | undefined,
   next: Omit<LimitWait, "attempts">,
 ): LimitWait | null {
-  const attempts = (previous?.attempts ?? 0) + 1;
-  return attempts > LIMIT_MAX_ATTEMPTS ? null : { ...next, attempts };
+  const prior = previous && (previous.reason ?? "limit") === (next.reason ?? "limit") ? previous : undefined;
+  const attempts = (prior?.attempts ?? 0) + 1;
+  return attempts > waitMaxAttempts(next) ? null : { ...next, attempts };
 }
 
-/** Whether the thread still runs on what hit the limit; on anything else it is not this limit. */
+/**
+ * How long to wait before attempt number `attempts` (1 is the first): the backoff
+ * doubles from {@link OVERLOAD_FIRST_MS} to {@link OVERLOAD_MAX_MS}, and up to
+ * {@link OVERLOAD_JITTER} of it is added at random so an account's threads spread out.
+ */
+export function overloadDelay(attempts: number, random: () => number = Math.random): number {
+  const doubling = Math.min(OVERLOAD_FIRST_MS * 2 ** Math.max(attempts - 1, 0), OVERLOAD_MAX_MS);
+  const roll = Math.min(Math.max(random(), 0), 1);
+  return doubling + Math.round(doubling * OVERLOAD_JITTER * roll);
+}
+
+// A provider saying it is full right now: the same turn, a little later, is worth it.
+const SAYS_OVERLOADED =
+  /\boverloaded(?:_error)?\b|\bover capacity\b|\b(?:servers?|service|provider|model)\b[^.\n]{0,24}\b(?:at capacity|is busy|are busy)\b/i;
+// A spend or credit limit is not capacity: retrying only spends more, so it never does.
+const SAYS_SPEND_LIMIT =
+  /\b(?:credit balance|credits?|billing|payment|spend(?:ing)? limit|insufficient_quota|insufficient quota|exceeded your current quota|balance is too low|out of credits|quota exceeded)\b/i;
+// `529`/`503` where a status is written, and never a number inside a count.
+const BARE_OVERLOAD_STATUS =
+  /\b(?:http|status|code|error)\b\s*:?\s*(?:529|503)\b|\b(?:529|503)\s+(?:service unavailable|overloaded|over capacity)\b|^\s*(?:529|503)\b/i;
+
+/**
+ * Whether a failed turn is worth the same prompt again because the provider was
+ * overloaded (HTTP 529/503, `overloaded_error`, `over capacity`). A credit or
+ * spend limit never is, whatever else its text says.
+ */
+export function overloadStop(text: string | undefined): boolean {
+  const said = text?.trim();
+  if (!said || said.length > 2_000) return false;
+  if (SAYS_SPEND_LIMIT.test(said)) return false;
+  const status = failureStatus(said);
+  if (status === 529 || status === 503) return true;
+  if (BARE_OVERLOAD_STATUS.test(said)) return true;
+  return SAYS_OVERLOADED.test(said);
+}
+
+/** Whether the thread still runs on what stopped it; on anything else it is not this stop. */
 export function waitHolds(wait: LimitWait, now: { harness?: string; account: string | null }): boolean {
   return wait.harness === now.harness && wait.account === now.account;
 }
 
-/** Whether the wait is over. */
+/** Whether the wait is over: a limit a little past its reset, an overload the moment it is due. */
 export function waitDue(wait: LimitWait, now: number): boolean {
-  return now >= wait.until + LIMIT_GRACE_MS;
+  return now >= wait.until + (reasonOf(wait) === "overload" ? 0 : LIMIT_GRACE_MS);
 }

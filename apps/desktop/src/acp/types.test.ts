@@ -11,6 +11,7 @@ import {
   parseRemoteStatus,
   parseSessionList,
   parseSessionUpdate,
+  plainPath,
   projectName,
   questionOptionsAnswer,
   questionTextAnswer,
@@ -400,6 +401,16 @@ describe("displayPath", () => {
   });
 });
 
+describe("plainPath", () => {
+  test("Windows' extended-length prefix dropped, so one folder spells one way", () => {
+    expect(plainPath("\\\\?\\F:\\code\\app")).toBe("F:\\code\\app");
+    expect(plainPath("\\\\?\\UNC\\server\\share\\app")).toBe("\\\\server\\share\\app");
+    expect(plainPath("F:\\code\\app")).toBe("F:\\code\\app");
+    expect(plainPath("/Users/me/code/app")).toBe("/Users/me/code/app");
+    expect(plainPath("")).toBe("");
+  });
+});
+
 describe("projectName", () => {
   test("the last folder of a POSIX path", () => {
     expect(projectName("/Users/me/code/rustcode")).toBe("rustcode");
@@ -488,5 +499,22 @@ describe("remote access", () => {
     expect(status.pairedDevices).toBe(0);
     expect(status.devices).toEqual([]);
     expect(status.offer).toBeUndefined();
+  });
+});
+
+describe("home path display across platforms", () => {
+  test("shortens Windows and POSIX home folders on segment boundaries", () => {
+    for (const [path, expected] of [
+      ["C:\\Users\\ada\\code", "~\\code"],
+      ["c:/Users/ada/code", "~/code"],
+      ["C:\\Users\\ada", "~"],
+      ["/home/ada/code", "~/code"],
+      ["/Users/ada/code", "~/code"],
+      ["\\\\?\\C:\\Users\\ada\\code", "~\\code"],
+      ["\\\\server\\share\\code", "\\\\server\\share\\code"],
+      ["/home", "/home"],
+      ["C:\\Users", "C:\\Users"],
+    ])
+      expect(displayPath(path!)).toBe(expected!);
   });
 });

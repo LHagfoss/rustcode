@@ -8,5 +8,6 @@
   "token": "ZXhhbXBsZS1kZXZpY2UtdG9rZW4tbm90LXJlYWw",
   "host_name": "studio",
   "expires_at": "2026-08-22T09:15:00Z",
-  "version": "1.28.0"
+  "version": "1.28.0",
+  "platform": "macos"
 }

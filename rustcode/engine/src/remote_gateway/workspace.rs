@@ -564,10 +564,13 @@ fn list_saved_sessions(
             .flatten()
             .flatten()
             .map(saved_session_holder);
-        let workspace = meta
-            .workspace_cwd
-            .as_ref()
-            .map(|cwd| cwd.to_string_lossy().into_owned());
+        // A device shows the folder, not a Windows API detail: the verbatim
+        // prefix a canonical path carries makes one project look like two (#3425).
+        let workspace = meta.workspace_cwd.as_ref().map(|cwd| {
+            rustcode_session::strip_verbatim(cwd)
+                .to_string_lossy()
+                .into_owned()
+        });
         let parent = crate::remote::session_parent(&session_id);
         let session = RemoteSavedSession {
             state,
@@ -634,6 +637,7 @@ fn saved_session_directory(config: &Path, session_id: &str) -> Result<PathBuf> {
         })?;
     std::fs::canonicalize(&cwd)
         .ok()
+        .map(|cwd| rustcode_session::strip_verbatim(&cwd))
         .filter(|cwd| cwd.is_dir())
         .ok_or_else(|| {
             refused(
