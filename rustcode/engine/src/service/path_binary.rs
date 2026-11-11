@@ -213,7 +213,7 @@ enum Direction {
     Older,
     /// The copy on `PATH` is newer: this engine is the one to update.
     Newer,
-    /// Versions that do not parse (`dev`, a build suffix): no direction.
+    /// Versions that do not parse (`dev`, not a `X.Y.Z`): no direction.
     Unknown,
 }
 
@@ -238,18 +238,65 @@ fn from_homebrew(path: &Path) -> bool {
     under_any(path, HOMEBREW_PREFIXES)
 }
 
-fn direction(found: &str, this: &str) -> Direction {
-    fn numbers(value: &str) -> Option<Vec<u64>> {
-        value
-            .split('.')
-            .map(str::parse)
-            .collect::<Result<_, _>>()
-            .ok()
+/// One field of a prerelease suffix: numbers sort before text, as semver has
+/// it, so `1.27.0-beta.2` is older than `1.27.0-beta.b` and `.10` newer than
+/// `.9`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Field {
+    Number(u64),
+    Text(String),
+}
+
+/// A version as its core numbers and its prerelease fields, for semver's
+/// order. `None` for anything that is not `X.Y.Z[-pre]` (`dev`, `unknown`).
+fn order(value: &str) -> Option<((u64, u64, u64), Vec<Field>)> {
+    let value = value.trim().trim_start_matches('v');
+    // Build metadata takes no part in ordering: `1.21.0+build.7` is `1.21.0`.
+    let value = value.split('+').next().unwrap_or(value);
+    let (core, pre) = match value.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (value, None),
+    };
+    let mut parts = core.split('.');
+    let core = (
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    );
+    if parts.next().is_some() {
+        return None;
     }
-    match (numbers(found), numbers(this)) {
-        (Some(found), Some(this)) if found < this => Direction::Older,
-        (Some(found), Some(this)) if found > this => Direction::Newer,
-        _ => Direction::Unknown,
+    let mut fields = Vec::new();
+    for field in pre.into_iter().flat_map(|pre| pre.split('.')) {
+        if field.is_empty() {
+            return None;
+        }
+        fields.push(match field.parse::<u64>() {
+            Ok(number) => Field::Number(number),
+            Err(_) => Field::Text(field.to_owned()),
+        });
+    }
+    Some((core, fields))
+}
+
+fn direction(found: &str, this: &str) -> Direction {
+    let (Some((found_core, found_pre)), Some((this_core, this_pre))) = (order(found), order(this))
+    else {
+        return Direction::Unknown;
+    };
+    // A release is newer than any prerelease of it.
+    let ordering = found_core.cmp(&this_core).then_with(|| {
+        match (found_pre.is_empty(), this_pre.is_empty()) {
+            (true, true) => std::cmp::Ordering::Equal,
+            (true, false) => std::cmp::Ordering::Greater,
+            (false, true) => std::cmp::Ordering::Less,
+            (false, false) => found_pre.cmp(&this_pre),
+        }
+    });
+    match ordering {
+        std::cmp::Ordering::Less => Direction::Older,
+        std::cmp::Ordering::Greater => Direction::Newer,
+        std::cmp::Ordering::Equal => Direction::Unknown,
     }
 }
 
@@ -374,16 +421,90 @@ pub async fn link(engine_version: &str) -> anyhow::Result<Linked> {
     }
 }
 
+/// Where the install script (`install.md`) puts its copy: `~/.rustcode/bin`,
+/// with the extension Windows runs.
+fn installed_copy(home: &Path, windows: bool) -> PathBuf {
+    home.join(".rustcode")
+        .join("bin")
+        .join(if windows { "rustcode.exe" } else { "rustcode" })
+}
+
+/// What [`update_installed_copy`] should do about the copy the install script
+/// left in `~/.rustcode/bin`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpdatePlan {
+    /// Nothing is installed there.
+    Missing,
+    /// This engine's version, a newer one, or one that cannot be read: leave
+    /// it alone.
+    Keep,
+    /// An older copy: replace it with this engine.
+    Replace,
+}
+
+fn update_plan(exists: bool, copy_version: Option<&str>, engine_version: &str) -> UpdatePlan {
+    if !exists {
+        return UpdatePlan::Missing;
+    }
+    // `dev` or a copy that does not answer: no direction, so
+    // nothing is replaced on a guess.
+    match copy_version {
+        Some(copy) if direction(copy, engine_version) == Direction::Older => UpdatePlan::Replace,
+        _ => UpdatePlan::Keep,
+    }
+}
+
+/// What [`update_installed_copy`] did, in the words the CLI prints.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstalledCopy {
+    /// No `rustcode` is installed in `~/.rustcode/bin`.
+    Missing,
+    /// The copy there is this engine's version, a newer one, or unreadable.
+    Current(PathBuf),
+    /// The copy at `path` now is this engine (it was `was`).
+    Replaced { path: PathBuf, was: Option<String> },
+}
+
+/// Replace an older `rustcode` in `~/.rustcode/bin` with this engine (issue
+/// #3487): the app's own updater replaces the app and its engine, and this is
+/// the copy an earlier install left behind, so a shell would keep running the
+/// old one. The copy becomes a real file rather than a link, so it still runs
+/// when the app is moved or removed; the next app update replaces it again. A
+/// Homebrew copy is not there and is never touched, and a development build is
+/// refused. Only a copy read as *older* is replaced, never one that is current,
+/// newer, or does not answer.
+pub async fn update_installed_copy(engine_version: &str) -> anyhow::Result<InstalledCopy> {
+    let Some(home) = home_directory() else {
+        return Ok(InstalledCopy::Missing);
+    };
+    let path = installed_copy(&home, cfg!(windows));
+    let exists = std::fs::metadata(&path).is_ok_and(|metadata| metadata.is_file());
+    if !exists {
+        return Ok(InstalledCopy::Missing);
+    }
+    let version = ask_version(&path).await;
+    if update_plan(exists, version.as_deref(), engine_version) != UpdatePlan::Replace {
+        return Ok(InstalledCopy::Current(path));
+    }
+    let engine = std::env::current_exe()?;
+    super::refuse_dev_binary(&engine, false)?;
+    copy_over(&path, &engine).map_err(|error| {
+        anyhow::Error::new(error).context(format!(
+            "could not replace {} (does your user own its folder?)",
+            path.display()
+        ))
+    })?;
+    Ok(InstalledCopy::Replaced { path, was: version })
+}
+
 /// Make `target` this `engine` without a moment when `target` is missing: a
 /// staged link or copy in the same folder is renamed over it.
 fn replace_with(target: &Path, engine: &Path) -> std::io::Result<()> {
-    let directory = target.parent().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "the path has no folder")
-    })?;
-    let staged = directory.join(format!(".rustcode-link-{}", std::process::id()));
-    let _ = std::fs::remove_file(&staged);
     #[cfg(unix)]
     {
+        let directory = directory_of(target)?;
+        let staged = directory.join(format!(".rustcode-link-{}", std::process::id()));
+        let _ = std::fs::remove_file(&staged);
         std::os::unix::fs::symlink(engine, &staged)?;
         std::fs::rename(&staged, target).inspect_err(|_| {
             let _ = std::fs::remove_file(&staged);
@@ -391,27 +512,44 @@ fn replace_with(target: &Path, engine: &Path) -> std::io::Result<()> {
     }
     #[cfg(not(unix))]
     {
-        // A running executable cannot be overwritten, but it can be renamed.
-        std::fs::copy(engine, &staged)?;
-        let old = directory.join(format!(
-            "{}.old",
-            target
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default()
-        ));
-        let _ = std::fs::remove_file(&old);
-        std::fs::rename(target, &old).inspect_err(|_| {
-            let _ = std::fs::remove_file(&staged);
-        })?;
-        if let Err(error) = std::fs::rename(&staged, target) {
-            let _ = std::fs::rename(&old, target);
-            let _ = std::fs::remove_file(&staged);
-            return Err(error);
-        }
-        let _ = std::fs::remove_file(&old);
-        Ok(())
+        copy_over(target, engine)
     }
+}
+
+/// Make `target` a *copy* of this `engine`, staged and renamed like
+/// [`replace_with`]. The automatic update leaves a file that still runs when
+/// the app it came from is moved or deleted, where a link into the app bundle
+/// would dangle; Windows cannot symlink without privilege and copies anyway.
+fn copy_over(target: &Path, engine: &Path) -> std::io::Result<()> {
+    let directory = directory_of(target)?;
+    let staged = directory.join(format!(".rustcode-copy-{}", std::process::id()));
+    let _ = std::fs::remove_file(&staged);
+    // A running executable cannot be overwritten, but it can be renamed.
+    std::fs::copy(engine, &staged)?;
+    let old = directory.join(format!(
+        "{}.old",
+        target
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    ));
+    let _ = std::fs::remove_file(&old);
+    std::fs::rename(target, &old).inspect_err(|_| {
+        let _ = std::fs::remove_file(&staged);
+    })?;
+    if let Err(error) = std::fs::rename(&staged, target) {
+        let _ = std::fs::rename(&old, target);
+        let _ = std::fs::remove_file(&staged);
+        return Err(error);
+    }
+    let _ = std::fs::remove_file(&old);
+    Ok(())
+}
+
+fn directory_of(target: &Path) -> std::io::Result<&Path> {
+    target.parent().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "the path has no folder")
+    })
 }
 
 #[cfg(test)]
@@ -704,6 +842,92 @@ mod tests {
             link_plan(&itself, engine, "1.28.0", false),
             LinkPlan::Current
         );
+    }
+
+    #[test]
+    fn versions_are_ordered_as_semver_has_them() {
+        assert_eq!(direction("1.27.0", "1.28.0"), Direction::Older);
+        assert_eq!(direction("1.29.0", "1.28.0"), Direction::Newer);
+        assert_eq!(direction("1.28.0", "1.28.0"), Direction::Unknown);
+        // A prerelease is older than its release, and than the next one.
+        assert_eq!(direction("1.27.0-beta.2", "1.28.0"), Direction::Older);
+        assert_eq!(direction("1.28.0-beta.2", "1.28.0"), Direction::Older);
+        assert_eq!(direction("1.28.0", "1.28.0-beta.2"), Direction::Newer);
+        // Fields count as numbers and compare one by one.
+        assert_eq!(
+            direction("1.28.0-beta.9", "1.28.0-beta.10"),
+            Direction::Older
+        );
+        assert_eq!(
+            direction("1.28.0-beta.10", "1.28.0-beta.9"),
+            Direction::Newer
+        );
+        // Anything that is not a version has no direction at all.
+        assert_eq!(direction("dev", "1.28.0"), Direction::Unknown);
+        assert_eq!(direction("1.28", "1.28.0"), Direction::Unknown);
+    }
+
+    #[test]
+    fn the_installed_copy_is_replaced_only_when_it_is_older() {
+        // The install script's copy, left at an older version: replaced.
+        assert_eq!(
+            update_plan(true, Some("1.25.0"), "1.28.0"),
+            UpdatePlan::Replace
+        );
+        // A beta of an older release is older too.
+        assert_eq!(
+            update_plan(true, Some("1.27.0-beta.2"), "1.28.0"),
+            UpdatePlan::Replace
+        );
+        // Nothing there: nothing to replace.
+        assert_eq!(update_plan(false, None, "1.28.0"), UpdatePlan::Missing);
+        assert_eq!(
+            update_plan(false, Some("1.20.0"), "1.28.0"),
+            UpdatePlan::Missing
+        );
+        // Current, newer, or no answer at all: left alone.
+        assert_eq!(
+            update_plan(true, Some("1.28.0"), "1.28.0"),
+            UpdatePlan::Keep
+        );
+        assert_eq!(
+            update_plan(true, Some("1.29.0"), "1.28.0"),
+            UpdatePlan::Keep
+        );
+        assert_eq!(update_plan(true, None, "1.28.0"), UpdatePlan::Keep);
+        assert_eq!(update_plan(true, Some("dev"), "1.28.0"), UpdatePlan::Keep);
+    }
+
+    #[test]
+    fn the_installed_copy_is_the_install_scripts_own_file() {
+        assert_eq!(
+            installed_copy(Path::new("/Users/ada"), false),
+            PathBuf::from("/Users/ada/.rustcode/bin/rustcode")
+        );
+        // Windows runs the .exe, as `%USERPROFILE%\.rustcode\bin\rustcode.exe`.
+        assert!(
+            installed_copy(Path::new("C:\\Users\\ada"), true).ends_with(Path::new("rustcode.exe"))
+        );
+    }
+
+    #[test]
+    fn the_automatic_update_leaves_a_copy_not_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = dir.path().join("engine");
+        std::fs::write(&engine, "new engine").unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let target = bin.join("rustcode");
+        std::fs::write(&target, "old engine").unwrap();
+        copy_over(&target, &engine).unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new engine");
+        // A file, not a link into an app that can be moved: it runs by itself.
+        assert!(std::fs::symlink_metadata(&target).unwrap().is_file());
+        let left: Vec<_> = std::fs::read_dir(&bin)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(left, vec![std::ffi::OsString::from("rustcode")]);
     }
 
     #[test]

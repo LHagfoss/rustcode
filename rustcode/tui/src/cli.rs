@@ -401,6 +401,9 @@ pub enum ServerCommands {
     /// Point the `rustcode` a shell runs at this one, when it is another
     /// version
     LinkPath,
+    /// Update a `rustcode` an earlier install left in `~/.rustcode/bin`, when
+    /// it is older than this one
+    UpdateCli,
     /// Remove the background service (threads, settings and pairings stay)
     Uninstall {
         /// Stop a server with turns running without asking
@@ -1466,6 +1469,7 @@ mod tests {
             }
         ));
         assert!(matches!(server(&["link-path"]), ServerCommands::LinkPath));
+        assert!(matches!(server(&["update-cli"]), ServerCommands::UpdateCli));
         assert!(matches!(
             server(&["uninstall"]),
             ServerCommands::Uninstall { yes: false }

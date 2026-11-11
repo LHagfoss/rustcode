@@ -34,6 +34,7 @@ async fn execute(command: &ServerCommands) -> anyhow::Result<i32> {
         }
         ServerCommands::Restart { when_idle, yes } => restart(*when_idle, *yes).await,
         ServerCommands::LinkPath => link_path().await,
+        ServerCommands::UpdateCli => update_cli().await,
         ServerCommands::Uninstall { yes } => uninstall(*yes).await,
         ServerCommands::Logs { follow, lines } => show_logs(*follow, *lines).await,
         ServerCommands::Run { .. } | ServerCommands::Connect => {
@@ -137,6 +138,35 @@ async fn link_path() -> anyhow::Result<i32> {
                 "{} now runs this version ({}){}.",
                 path.display(),
                 env!("CARGO_PKG_VERSION"),
+                was.map(|was| format!(", it was {was}")).unwrap_or_default()
+            );
+            Ok(0)
+        }
+    }
+}
+
+/// Bring a `rustcode` an earlier install left in `~/.rustcode/bin` up to this
+/// engine's version (issue #3487). The app runs this after an update, when its
+/// own engine is the new version; a copy that is current, newer or unreadable
+/// is left alone, and a development build is refused.
+async fn update_cli() -> anyhow::Result<i32> {
+    use rustcode::service::path_binary::{InstalledCopy, update_installed_copy};
+    let version = env!("CARGO_PKG_VERSION");
+    match update_installed_copy(version).await? {
+        InstalledCopy::Missing => {
+            println!(
+                "No `rustcode` is installed in `~/.rustcode/bin`, so there is nothing to update."
+            );
+            Ok(0)
+        }
+        InstalledCopy::Current(path) => {
+            println!("{} is already current ({version}).", path.display());
+            Ok(0)
+        }
+        InstalledCopy::Replaced { path, was } => {
+            println!(
+                "{} now runs this version ({version}){}.",
+                path.display(),
                 was.map(|was| format!(", it was {was}")).unwrap_or_default()
             );
             Ok(0)

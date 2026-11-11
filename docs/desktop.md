@@ -59,12 +59,14 @@ computer’s project list, and its foot carries a cluster of two icon buttons,
 the list in place: this computer first, named as people say it (“This Mac”),
 then each paired machine with its platform's glyph (a laptop for macOS, a
 monitor for Windows, a terminal for Linux, a question mark when it has not
-said), its name, the state as a chip (Connected / Connecting / Offline /
-Needs pairing), the route once, and how many of its threads run now out of all
-of them (“1 of 3 threads running”). A machine that is away shows when it last
+said), its name, the state as a chip (Connected / Connecting / Reconnecting… /
+Offline / Needs pairing), the route once, and how many of its threads run now out of all
+of them (“1 of 3 threads running”). A machine that is away and already on the
+app's own retry clock reads **Reconnecting…** rather than Offline, because it
+is coming back without anyone pressing anything; under it is when it last
 answered, the last error in words (“No answer on port 17879, a firewall may
-block it.”), and the one action that tries again (Reconnect, or Pair again for
-a pairing the machine ended). Choosing a machine replaces the list with a card
+block it.”), and the one action that jumps that queue (Reconnect, or Pair again
+for a pairing the machine ended). Choosing a machine replaces the list with a card
 and its threads: the card says the platform, the RustCode version it runs and
 whether that differs from this app's (“Studio runs 1.27.0, this Mac 1.28.0”),
 the state and the route, and offers New thread, Reconnect and Machine settings
@@ -1717,6 +1719,17 @@ An install that fails leaves the running app as it was and shows the reason
 with a **Release page** button. The channel is the app's own: Homebrew and the
 CLI updater stay on stable (`scripts/release.sh --beta` publishes a GitHub
 prerelease both skip).
+
+**After an update, the copies outside the app catch up.** The updater replaces
+the app and its engine; the next start of the new app brings the rest to the
+same version (`src-tauri/src/service.rs` `catch_up_after_update`, issue #3487):
+a `rustcode` an earlier install left in `~/.rustcode/bin` is replaced when it
+is older (`rustcode server update-cli`), a service installed from an AppImage
+gets the new engine copied to it, and a background server still running the
+engine from before the update is restarted (`rustcode server restart
+--when-idle`, so a running turn finishes first). Paired machines that lose this
+computer while its server restarts reconnect on their own, as they do after any
+drop.
 
 It does not use `tauri-plugin-updater`: that plugin requires its own
 signing key pair, and a release without the private key in CI would fail.

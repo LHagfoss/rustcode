@@ -36,6 +36,11 @@ pub const STATUS_TIMEOUT: Duration = Duration::from_secs(20);
 /// the engine bounds at 30 seconds (`server_service`); this is longer than that.
 pub const INSTALL_TIMEOUT: Duration = Duration::from_secs(90);
 
+/// How long the catch-up after an update waits for running turns before it
+/// leaves the old server for the next start: a turn can run for hours, and
+/// this is a courtesy, not a promise.
+const RESTART_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
 /// The server as a background service, as the page shows it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -203,6 +208,12 @@ async fn read_status() -> Result<ServiceStatus, String> {
 /// Run `rustcode <args>` and answer what it printed, killing it once `timeout`
 /// passes: a command that never answers must not hold a settings page.
 pub async fn run(args: &[&str], timeout: Duration) -> Result<std::process::Output, String> {
+    run_sync(args, timeout)
+}
+
+/// [`run`] on a plain thread, for the catches that run at app start before any
+/// page asks (`catch_up_after_update`).
+fn run_sync(args: &[&str], timeout: Duration) -> Result<std::process::Output, String> {
     run_program(&prepare_program()?, args, timeout)
 }
 
@@ -212,6 +223,75 @@ pub async fn run(args: &[&str], timeout: Duration) -> Result<std::process::Outpu
 /// when it asks for the status or installs.
 pub fn refresh_program() {
     let _ = prepare_program();
+}
+
+/// What this app does about a background server that runs another engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ServerCatchUp {
+    /// Nothing: no service, nothing running, or the server is this engine's
+    /// version or a newer one.
+    Leave,
+    /// The running server is an older engine: restart it from the service.
+    Restart,
+}
+
+/// Whether the running server is an engine from before this app's, which a
+/// restart brings up to date. Only a server the service started is restarted,
+/// and only when this engine is *newer*: a Homebrew or beta server that is
+/// ahead of the app is left alone rather than downgraded.
+fn server_catch_up(
+    installed: bool,
+    running: bool,
+    server: Option<&str>,
+    engine: Option<&str>,
+) -> ServerCatchUp {
+    match (installed, running, server, engine) {
+        (true, true, Some(server), Some(engine)) if crate::updater::newer(engine, server) => {
+            ServerCatchUp::Restart
+        }
+        _ => ServerCatchUp::Leave,
+    }
+}
+
+/// The copies outside the app catch up with the engine this build ships, at
+/// every start, because an update is installed between two of them: the
+/// AppImage's copy a service runs ([`refresh_program`]), a `rustcode` an
+/// earlier install left in `~/.rustcode/bin` (issue #3487), and a background
+/// server still running the engine from before the update. Each step is best
+/// effort: the app runs even when one cannot finish, and the page that asks
+/// for the status names what is left over.
+pub fn catch_up_after_update() {
+    refresh_program();
+    // The engine decides: it knows the version it was built as, refuses a
+    // development build, and replaces only a copy it reads as older.
+    let _ = run_sync(&["server", "update-cli"], STATUS_TIMEOUT);
+    // A development build's engine is not the released one a service runs:
+    // restarting there would interrupt turns and change nothing.
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let Ok(output) = run_sync(&["server", "status", "--json"], STATUS_TIMEOUT) else {
+        return;
+    };
+    if !output.status.success() {
+        return;
+    }
+    let Ok(report) = serde_json::from_slice::<Report>(&output.stdout) else {
+        return;
+    };
+    if server_catch_up(
+        report.installed,
+        report.running,
+        report.version.as_deref(),
+        report.cli_version.as_deref(),
+    ) != ServerCatchUp::Restart
+    {
+        return;
+    }
+    // `--when-idle` waits for running turns, so a turn that is in the middle of
+    // its work is not cut off; a wait longer than this leaves the old server to
+    // the next start (`status` says `restart-pending` until then).
+    let _ = run_sync(&["server", "restart", "--when-idle"], RESTART_IDLE_TIMEOUT);
 }
 
 /// The `rustcode` the service commands run and that `server install` writes
@@ -694,6 +774,49 @@ mod tests {
         );
         assert!(error.contains("could not be copied"), "{error}");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The server is restarted only when it is an older engine the service
+    /// starts: the app has just been updated and its bundled engine is the new
+    /// one (issue #3487).
+    #[test]
+    fn only_an_older_installed_server_is_restarted() {
+        assert_eq!(
+            server_catch_up(true, true, Some("1.25.0"), Some("1.30.0")),
+            ServerCatchUp::Restart
+        );
+        // A beta of the release this app is: still behind it.
+        assert_eq!(
+            server_catch_up(true, true, Some("1.30.0-beta.2"), Some("1.30.0")),
+            ServerCatchUp::Restart
+        );
+        // The same engine, and one ahead of the app (a Homebrew or beta
+        // server): nothing to do, and never a downgrade.
+        assert_eq!(
+            server_catch_up(true, true, Some("1.30.0"), Some("1.30.0")),
+            ServerCatchUp::Leave
+        );
+        assert_eq!(
+            server_catch_up(true, true, Some("1.31.0"), Some("1.30.0")),
+            ServerCatchUp::Leave
+        );
+        // No service, nothing running, or a version that cannot be read.
+        assert_eq!(
+            server_catch_up(false, true, Some("1.25.0"), Some("1.30.0")),
+            ServerCatchUp::Leave
+        );
+        assert_eq!(
+            server_catch_up(true, false, Some("1.25.0"), Some("1.30.0")),
+            ServerCatchUp::Leave
+        );
+        assert_eq!(
+            server_catch_up(true, true, None, Some("1.30.0")),
+            ServerCatchUp::Leave
+        );
+        assert_eq!(
+            server_catch_up(true, true, Some("dev"), Some("1.30.0")),
+            ServerCatchUp::Leave
+        );
     }
 
     /// What the command printed comes back with its exit status.
