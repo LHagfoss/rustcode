@@ -55,3 +55,28 @@ test("session_info_update applies review live without session/list", () => {
   expect(useApp.getState().sessions[0]?.status).toBe("review");
   conn.close("test finished");
 });
+
+test("watch notifications route to the linked thread on their own machine", async () => {
+  resetForTests();
+  const id = "machine/pr-thread";
+  let conn: AcpConnection;
+  let claimed = false;
+  conn = new AcpConnection((line) => {
+    const frame = JSON.parse(line) as JsonObject;
+    const taking = (frame.params as JsonObject).take === 7;
+    const result = taking ? { events: claimed ? [] : [{ message: "Checks failed" }] } : { watches: [] };
+    if (taking) claimed = true;
+    queueMicrotask(() => conn.receive(JSON.stringify({ jsonrpc: "2.0", id: frame.id, result })));
+  });
+  watchMachineConnection("machine", conn);
+  useApp.setState({ threads: { [id]: { ...emptyThread(id, "/tmp"), loaded: true, running: true } } });
+  const notification = JSON.stringify({ jsonrpc: "2.0", method: "_rustcode/pulls/watch", params: { watch } });
+  conn.receive(notification);
+  conn.receive(notification);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(useApp.getState().threads[id]?.queue.map((row) => row.text)).toEqual([
+    "Pull request #7: Checks failed",
+  ]);
+  expect(useApp.getState().threads[watch.sessionId]).toBeUndefined();
+  conn.close("test finished");
+});
