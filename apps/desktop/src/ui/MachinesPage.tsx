@@ -62,7 +62,7 @@ import {
   useMachines,
   versionSkew,
 } from "../state/machines";
-import { toast, useApp } from "../state/store";
+import { openMachineSettings, toast, useApp } from "../state/store";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachineIdentityEditor } from "./MachineProfile";
 import { cx, noTextHelpers, Spinner, Switch } from "./primitives";
@@ -292,6 +292,9 @@ export function MachineRow({
           </Action>
         }
       />
+      <Action size="sm" onClick={() => openMachineSettings(machine.id)}>
+        Machine settings
+      </Action>
       <span className="flex items-center gap-2">
         <span className="text-caption text-fg-muted">Main machine</span>
         <Switch

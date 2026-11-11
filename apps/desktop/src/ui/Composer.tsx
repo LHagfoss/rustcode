@@ -2010,8 +2010,9 @@ function RunOnMenu() {
     selected: boolean,
     glyph: ReturnType<typeof machineGlyph>,
     tint: ReturnType<typeof machineTint>,
+    paused = false,
   ) => {
-    const online = state === "connected";
+    const online = state === "connected" && !paused;
     return (
       <CardMenuItem
         key={id || "local"}
@@ -2034,7 +2035,7 @@ function RunOnMenu() {
         <span className="min-w-0 flex-1 truncate text-body text-fg">{name}</span>
         {!online && (
           <span className="shrink-0 text-caption text-fg-faint">
-            {state === "needsPairing" ? "Revoked" : "Offline"}
+            {paused ? "Paused" : state === "needsPairing" ? "Revoked" : "Offline"}
           </span>
         )}
         {selected && <Check size={13} className="shrink-0 text-fg-muted" />}
@@ -2091,6 +2092,7 @@ function RunOnMenu() {
             machine.id === host,
             machineGlyph(machine),
             machineTint(machine),
+            machine.paused === true,
           ),
         )}
       </div>

@@ -32,6 +32,9 @@ chrono = { version = "0.4.39", default-features = false, features = ["clock", "s
 # The machine client: saved machines, pairing, and the WebSocket to another
 # machine's gateway (src/machines.rs).
 rustcode-client = { path = "../../../rustcode/client" }
+# This computer's own interface addresses, so a machine that went offline is
+# retried the moment the network changes (src/machines.rs).
+if-addrs = "0.15"
 # Checks a downloaded update against the release SHA256SUMS (src/updater.rs); the version tauri already uses.
 sha2 = "0.10"
 # Link previews: fetched here, never by the webview (src/links.rs).
