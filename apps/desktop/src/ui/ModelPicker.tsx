@@ -9,7 +9,7 @@
 // glides between the two, anchored to the pill.
 
 import { Check, ChevronLeft, ChevronRight, ChevronUp, Lock, RotateCcw, UserRound, Zap } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   type ConfigOption,
   effortLabel,
@@ -161,6 +161,23 @@ export interface AccountChip {
 /** A harness's logins, only when there is a choice to make between them. */
 export function shownAccounts(chips: AccountChip[]): AccountChip[] {
   return chips.length > 1 ? chips : [];
+}
+
+/** Whether a chip can be pressed: not while a turn runs, not a login that is gone or signed out. */
+function chipPressable(chip: AccountChip, disabled: boolean): boolean {
+  return !disabled && !chip.gone && !chip.signedOut;
+}
+
+/**
+ * The chip ← (`-1`) or → (`1`) lands on from chip `from`, skipping those that cannot be pressed;
+ * `-1` when there is none that way (the row does not wrap).
+ */
+export function moveChip(chips: AccountChip[], from: number, dir: 1 | -1, disabled: boolean): number {
+  for (let at = from + dir; at >= 0 && at < chips.length; at += dir) {
+    const chip = chips[at];
+    if (chip && chipPressable(chip, disabled)) return at;
+  }
+  return -1;
 }
 
 /**
@@ -341,6 +358,24 @@ function EffortPanel({
 }) {
   const showLevels = !effortReason && levels.length > 0;
   const panel = useRef<HTMLDivElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  // Whether the list runs on under its foot, so the card says it scrolls instead of cutting a row.
+  const [more, setMore] = useState(false);
+  const measureMore = useCallback(() => {
+    const list = scroller.current;
+    if (list) setMore(list.scrollHeight - list.scrollTop - list.clientHeight > 1);
+  }, []);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-measures when the rows change
+  useEffect(() => {
+    const list = scroller.current;
+    measureMore();
+    return list ? observeSize(list, measureMore) : undefined;
+  }, [measureMore, levels.length, accounts.length, fast]);
+  // The one chip the ↑↓ rows stop at: the selected login, else the first that can be pressed.
+  const stop = (() => {
+    const chosen = accounts.findIndex((chip) => chip.selected && chipPressable(chip, accountsDisabled));
+    return chosen >= 0 ? chosen : accounts.findIndex((chip) => chipPressable(chip, accountsDisabled));
+  })();
   // The card opens on this step's checked row (or its first), so ↑↓ and ⏎ act at once; a model just
   // picked settles its level a render later, and focus follows it there.
   // biome-ignore lint/correctness/useExhaustiveDependencies: refocus when the checked level changes
@@ -355,101 +390,135 @@ function EffortPanel({
     <div
       ref={panel}
       onKeyDown={(event) => {
-        if (event.key === "ArrowLeft" || event.key === "Backspace") {
+        // ← → walk the account chips; ← on the first one (or Backspace anywhere) goes back.
+        const onChip = (event.target as HTMLElement).closest<HTMLElement>("[data-chip]");
+        if (onChip && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+          event.preventDefault();
+          const chips = [...(panel.current?.querySelectorAll<HTMLElement>("[data-chip]") ?? [])];
+          const next = moveChip(
+            accounts,
+            chips.indexOf(onChip),
+            event.key === "ArrowRight" ? 1 : -1,
+            accountsDisabled,
+          );
+          if (next >= 0) chips[next]?.focus();
+          else if (event.key === "ArrowLeft") onBack();
+        } else if (event.key === "ArrowLeft" || event.key === "Backspace") {
           event.preventDefault();
           onBack();
         } else menuKeys(event);
       }}
       style={{ maxHeight: CARD_MAX }}
-      className="flex w-[240px] flex-col overflow-y-auto p-1"
+      className="flex w-[240px] flex-col overflow-hidden p-1"
     >
       <button
         type="button"
         onClick={onBack}
-        className="flex h-7 w-full min-w-0 items-center gap-1 rounded-xl px-2 text-body text-fg-muted hover:bg-fill hover:text-fg focus-visible:bg-fill"
+        className="flex h-7 w-full min-w-0 shrink-0 items-center gap-1 rounded-xl px-2 text-body text-fg-muted hover:bg-fill hover:text-fg focus-visible:bg-fill"
       >
         <ChevronLeft size={13} strokeWidth={2.5} className="shrink-0" />
         <span className="min-w-0 truncate">{model}</span>
       </button>
       <div className={menuSeparator} />
-      {(showLevels || effortReason) && <div className={menuLabel}>Effort</div>}
-      {effortReason && (
-        <p data-menu-static className="flex items-start gap-1.5 px-2 pb-1 text-caption text-fg-faint">
-          <Lock size={10} className="mt-[2px] shrink-0" />
-          <span>{effortReason}</span>
-        </p>
-      )}
-      {showLevels && (
-        <>
-          {levels.map((level) => (
+      <div
+        ref={scroller}
+        onScroll={measureMore}
+        style={more ? ({ "--rc-fade": "24px" } as CSSProperties) : undefined}
+        className={cx("flex min-h-0 flex-1 flex-col overflow-y-auto", more && "fade-bottom")}
+      >
+        {(showLevels || effortReason) && <div className={menuLabel}>Effort</div>}
+        {effortReason && (
+          <p data-menu-static className="flex items-start gap-1.5 px-2 pb-1 text-caption text-fg-faint">
+            <Lock size={10} className="mt-[2px] shrink-0" />
+            <span>{effortReason}</span>
+          </p>
+        )}
+        {showLevels && (
+          <>
+            {levels.map((level) => (
+              <CardMenuItem
+                key={level}
+                role="menuitemradio"
+                aria-checked={level === effort}
+                onSelect={() => onEffort(level)}
+              >
+                <span className="min-w-0 flex-1 truncate">{effortLabel(level)}</span>
+                {level === defaultLevel && (
+                  <span className="shrink-0 text-caption text-fg-faint">Default</span>
+                )}
+                <Check
+                  size={13}
+                  strokeWidth={2.5}
+                  className={cx("shrink-0 text-accent", level !== effort && "invisible")}
+                />
+              </CardMenuItem>
+            ))}
             <CardMenuItem
-              key={level}
-              role="menuitemradio"
-              aria-checked={level === effort}
-              onSelect={() => onEffort(level)}
+              disabled={!defaultLevel || defaultLevel === effort}
+              onSelect={() => defaultLevel && onEffort(defaultLevel)}
+              className="text-fg-muted disabled:cursor-default disabled:opacity-40"
             >
-              <span className="min-w-0 flex-1 truncate">{effortLabel(level)}</span>
-              {level === defaultLevel && <span className="shrink-0 text-caption text-fg-faint">Default</span>}
-              <Check
-                size={13}
-                strokeWidth={2.5}
-                className={cx("shrink-0 text-accent", level !== effort && "invisible")}
-              />
+              <RotateCcw size={12} className="shrink-0" />
+              Reset to default
             </CardMenuItem>
-          ))}
-          <CardMenuItem
-            disabled={!defaultLevel || defaultLevel === effort}
-            onSelect={() => defaultLevel && onEffort(defaultLevel)}
-            className="text-fg-muted disabled:cursor-default disabled:opacity-40"
-          >
-            <RotateCcw size={12} className="shrink-0" />
-            Reset to default
-          </CardMenuItem>
-        </>
-      )}
-      {fast && (
-        <div data-menu-static className="flex min-h-7 items-center gap-2 px-2 py-1 text-body">
-          <Zap size={13} className="shrink-0 text-fg-muted" />
-          <span className="min-w-0 flex-1 truncate">Fast mode</span>
-          <Switch checked={fastOn} onChange={onFast} label="Fast mode" />
-        </div>
-      )}
-      {accounts.length > 0 && (
-        <>
-          {(showLevels || effortReason || fast) && <div className={menuSeparator} />}
-          <div className={cx(menuLabel, "flex items-baseline gap-1.5")}>
-            <span>Account</span>
-            {accountsDisabled && <span className="ms-auto">Stop the turn to switch</span>}
+          </>
+        )}
+        {fast && (
+          <div data-menu-static className="flex min-h-7 items-center gap-2 px-2 py-1 text-body">
+            <Zap size={13} className="shrink-0 text-fg-muted" />
+            <span className="min-w-0 flex-1 truncate">Fast mode</span>
+            <Switch checked={fastOn} onChange={onFast} label="Fast mode" />
           </div>
-          {accounts.map((chip) => (
-            <CardMenuItem
-              key={chip.id ?? chip.name}
-              role="menuitemradio"
-              aria-checked={chip.selected}
-              disabled={accountsDisabled || chip.gone || chip.signedOut}
-              title={chip.signedOut ? "This account is not signed in" : undefined}
-              aria-label={chip.signedOut ? `${chip.name} (not signed in)` : undefined}
-              onSelect={() => {
-                if (chip.id !== undefined) onPickAccount(chip.id);
-              }}
-              className={cx(
-                "disabled:cursor-default disabled:opacity-40",
-                chip.signedOut && !chip.selected && "text-fg-faint",
-                chip.gone && "italic",
-              )}
+        )}
+        {accounts.length > 0 && (
+          <>
+            {(showLevels || effortReason || fast) && <div className={menuSeparator} />}
+            <div className={cx(menuLabel, "flex items-baseline gap-1.5")}>
+              <span>Account</span>
+              {accountsDisabled && <span className="ms-auto">Stop the turn to switch</span>}
+            </div>
+            <div
+              role="radiogroup"
+              aria-label="Account"
+              data-menu-group=""
+              className="mx-1 mb-1 flex flex-wrap gap-0.5 rounded-2xl bg-fill p-0.5"
             >
-              <UserRound size={13} strokeWidth={1.75} className="shrink-0 text-fg-muted" />
-              <span className="min-w-0 flex-1 truncate">{chip.name}</span>
-              {chip.signedOut && <span className="shrink-0 text-caption text-fg-faint">Signed out</span>}
-              <Check
-                size={13}
-                strokeWidth={2.5}
-                className={cx("shrink-0 text-accent", !chip.selected && "invisible")}
-              />
-            </CardMenuItem>
-          ))}
-        </>
-      )}
+              {accounts.map((chip, index) => {
+                const pressable = chipPressable(chip, accountsDisabled);
+                return (
+                  <Tooltip
+                    key={chip.id ?? chip.name}
+                    label={chip.signedOut ? "This account is not signed in" : undefined}
+                  >
+                    <button
+                      type="button"
+                      role="radio"
+                      data-chip=""
+                      data-menu-row={index === stop ? "" : undefined}
+                      aria-checked={chip.selected}
+                      aria-label={chip.signedOut ? `${chip.name} (not signed in)` : undefined}
+                      disabled={!pressable}
+                      onClick={() => {
+                        if (chip.id !== undefined) onPickAccount(chip.id);
+                      }}
+                      className={cx(
+                        "flex h-6 min-w-0 max-w-full items-center gap-1 rounded-xl px-2 text-callout outline-none disabled:cursor-default focus-visible:bg-fill-strong",
+                        chip.selected ? "bg-knob text-knob-fg shadow-knob" : "text-fg-muted hover:text-fg",
+                        !pressable && !chip.selected && "opacity-40",
+                        chip.signedOut && "text-fg-faint",
+                        chip.gone && "italic",
+                      )}
+                    >
+                      <UserRound size={12} strokeWidth={1.75} className="shrink-0" />
+                      <span className="min-w-0 truncate">{chip.name}</span>
+                    </button>
+                  </Tooltip>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
