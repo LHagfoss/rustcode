@@ -5759,6 +5759,7 @@ export class MockTransport implements Transport {
       this.serverInstalled = true;
       return mockServerService(true);
     }
+    if (command === "server_link_path") return mockServerService(this.serverInstalled);
     if (command === "machines_set_main") {
       this.machineList = this.machineList.map((machine) => ({
         ...machine,

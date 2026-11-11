@@ -299,6 +299,115 @@ fn advice(
     )
 }
 
+/// What [`link`] should do about the copy on `PATH`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LinkPlan {
+    /// A shell already runs this engine, or the same version of it.
+    Current,
+    /// Homebrew owns the copy: `brew upgrade` is its update, and replacing its
+    /// link would be undone by the next `brew` run.
+    Homebrew,
+    /// Replace the copy on `PATH` with this engine.
+    Replace,
+}
+
+fn link_plan(found: &PathRustcode, engine: &Path, engine_version: &str, windows: bool) -> LinkPlan {
+    let same_file = found.path == engine
+        || matches!(
+            (found.path.canonicalize(), engine.canonicalize()),
+            (Ok(a), Ok(b)) if a == b
+        );
+    if same_file || found.version.as_deref() == Some(engine_version) {
+        LinkPlan::Current
+    } else if !windows && from_homebrew(&found.path) {
+        LinkPlan::Homebrew
+    } else {
+        LinkPlan::Replace
+    }
+}
+
+/// What [`link`] did, in the words the CLI prints.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Linked {
+    /// No `PATH` has a `rustcode`: there is nothing to point.
+    NotOnPath,
+    /// A shell already finds this engine's version at the path.
+    Current(PathBuf),
+    /// Homebrew's copy: upgrade it with `brew`.
+    Homebrew(PathBuf),
+    /// The copy at `path` now is this engine (it was `was`).
+    Replaced { path: PathBuf, was: Option<String> },
+}
+
+/// Point the `rustcode` a shell runs at this engine (issue #3411): the one
+/// action behind "the app's version is not the one on PATH". On macOS and Linux
+/// the copy becomes a symlink to this engine, so the next app update reaches
+/// it too; Windows cannot symlink without privilege and gets a copy. Homebrew's
+/// copy is left to `brew upgrade`, and a development build is refused.
+pub async fn link(engine_version: &str) -> anyhow::Result<Linked> {
+    let engine = std::env::current_exe()?;
+    super::refuse_dev_binary(&engine, false)?;
+    let Some(found) = observe().await else {
+        return Ok(Linked::NotOnPath);
+    };
+    match link_plan(&found, &engine, engine_version, cfg!(windows)) {
+        LinkPlan::Current => Ok(Linked::Current(found.path)),
+        LinkPlan::Homebrew => Ok(Linked::Homebrew(found.path)),
+        LinkPlan::Replace => {
+            replace_with(&found.path, &engine).map_err(|error| {
+                anyhow::Error::new(error).context(format!(
+                    "could not replace {} (does your user own its folder?)",
+                    found.path.display()
+                ))
+            })?;
+            Ok(Linked::Replaced {
+                path: found.path,
+                was: found.version,
+            })
+        }
+    }
+}
+
+/// Make `target` this `engine` without a moment when `target` is missing: a
+/// staged link or copy in the same folder is renamed over it.
+fn replace_with(target: &Path, engine: &Path) -> std::io::Result<()> {
+    let directory = target.parent().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "the path has no folder")
+    })?;
+    let staged = directory.join(format!(".rustcode-link-{}", std::process::id()));
+    let _ = std::fs::remove_file(&staged);
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(engine, &staged)?;
+        std::fs::rename(&staged, target).inspect_err(|_| {
+            let _ = std::fs::remove_file(&staged);
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        // A running executable cannot be overwritten, but it can be renamed.
+        std::fs::copy(engine, &staged)?;
+        let old = directory.join(format!(
+            "{}.old",
+            target
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        ));
+        let _ = std::fs::remove_file(&old);
+        std::fs::rename(target, &old).inspect_err(|_| {
+            let _ = std::fs::remove_file(&staged);
+        })?;
+        if let Err(error) = std::fs::rename(&staged, target) {
+            let _ = std::fs::rename(&old, target);
+            let _ = std::fs::remove_file(&staged);
+            return Err(error);
+        }
+        let _ = std::fs::remove_file(&old);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -558,5 +667,57 @@ mod tests {
             mismatch(&unknown, Path::new("/usr/local/bin/rustcode"), "1.28.0"),
             None
         );
+    }
+
+    #[test]
+    fn the_link_plan_leaves_current_and_homebrew_copies_alone() {
+        let engine = Path::new("/Applications/RustCode.app/Contents/MacOS/rustcode");
+        let same_version = found("/Users/ada/.rustcode/bin/rustcode", "1.28.0");
+        assert_eq!(
+            link_plan(&same_version, engine, "1.28.0", false),
+            LinkPlan::Current
+        );
+        let brew = found("/opt/homebrew/bin/rustcode", "0.96.0");
+        assert_eq!(
+            link_plan(&brew, engine, "1.28.0", false),
+            LinkPlan::Homebrew
+        );
+        // Windows has no Homebrew.
+        assert_eq!(link_plan(&brew, engine, "1.28.0", true), LinkPlan::Replace);
+        let script = found("/Users/ada/.rustcode/bin/rustcode", "1.25.0");
+        assert_eq!(
+            link_plan(&script, engine, "1.28.0", false),
+            LinkPlan::Replace
+        );
+        // The engine itself is current whatever its version reads as.
+        let itself = PathRustcode {
+            path: engine.to_path_buf(),
+            version: None,
+        };
+        assert_eq!(
+            link_plan(&itself, engine, "1.28.0", false),
+            LinkPlan::Current
+        );
+    }
+
+    #[test]
+    fn replacing_a_stale_copy_makes_the_path_run_this_engine() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = dir.path().join("engine");
+        std::fs::write(&engine, "new engine").unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let target = bin.join("rustcode");
+        std::fs::write(&target, "old engine").unwrap();
+        replace_with(&target, &engine).unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new engine");
+        // No staged file or old copy is left in the folder.
+        let left: Vec<_> = std::fs::read_dir(&bin)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(left, vec![std::ffi::OsString::from("rustcode")]);
+        #[cfg(unix)]
+        assert!(std::fs::symlink_metadata(&target).unwrap().is_symlink());
     }
 }
