@@ -751,12 +751,13 @@ composer's keys stay outside the table.
   coming back to a new one shows that choice rather than the default again.
 - **New thread banner.** Settings › Appearance: a wide picture over new
   threads, drawn in coloured text (ASCII, inverted on a light background)
-  or as is, covering the top half of the chat and fading toward the
-  composer, under a frosted title bar. The picture is copied into the app's
-  data folder (`src-tauri/src/banner.rs`; the setting keeps the copy's
-  name), decoded once, and the text drawn once per size on an offscreen
-  canvas (`src/lib/banner.ts`), so a resize scales the last drawing until
-  the new one is ready. It fades in, and does not move under Reduce motion.
+  or as is, filling the whole pane from the title bar down, behind the field
+  and the cards so their glass has a picture to frost, under a frosted title
+  bar. The picture is copied into the app's data folder
+  (`src-tauri/src/banner.rs`; the setting keeps the copy's name), decoded
+  once, and the text drawn once per size on an offscreen canvas
+  (`src/lib/banner.ts`), so a resize scales the last drawing until the new
+  one is ready. It fades in, and does not move under Reduce motion.
   Under the picture, *Darken* (0–80%, black over it), *Blur* (0–40px) and
   *Show in threads* (off by default): on, open threads draw the same picture,
   darkened and blurred the same, behind the transcript, under a heavier wash of
