@@ -341,17 +341,17 @@ function GeneralPage() {
           </ScopedValue>
         </Row>
         <Row
-          title="Continue threads when a usage limit resets"
+          title="Continue threads on their own"
           reset={
             afterLimit.mixed || !afterLimitValue
               ? () => void afterLimit.set(SETTINGS_DEFAULTS.continueAfterLimit)
               : undefined
           }
-          subtitle="A thread stopped by its plan's limit is sent “Continue where you left off” when the limit resets, unless you have moved it to another harness or account, or sent it something else."
+          subtitle="A thread stopped by its plan's limit, by a provider that was overloaded, or by the network dropping is told to carry on once it can go on again, unless you have moved it to another harness or account, or sent it something else."
         >
           <ScopedValue mixed={afterLimit.mixed} breakdown={afterLimit.breakdown}>
             <Switch
-              label="Continue threads when a usage limit resets"
+              label="Continue threads on their own"
               checked={afterLimitValue}
               onChange={(value) => void afterLimit.set(value)}
             />

@@ -130,14 +130,14 @@ export function openChain(
 /**
  * Whether a prompt is the user's own message, which makes a delegated thread
  * theirs and keeps it a row of its own (state/store.ts `runPrompt`). A resume
- * after a usage limit, a wake the app sends, a message from another thread or
- * any other automatic turn is not the user typing.
+ * after a usage limit, an overload or lost network, a wake the app sends, a
+ * message from another thread or any other automatic turn is not the user typing.
  */
 export function userTypedPrompt(options: {
   link?: string;
   wake?: boolean;
   automatic?: boolean;
-  limitResume?: boolean;
+  autoResume?: boolean;
 }): boolean {
-  return !options.link && !options.wake && !options.automatic && !options.limitResume;
+  return !options.link && !options.wake && !options.automatic && !options.autoResume;
 }

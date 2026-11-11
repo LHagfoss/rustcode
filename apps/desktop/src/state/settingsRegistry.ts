@@ -42,7 +42,7 @@ const ROW_KINDS: { section: SettingsSection; title: string; kind: SettingKind }[
   { section: "general", title: "Harness, model and effort", kind: "server" },
   { section: "general", title: "Default access", kind: "server" },
   { section: "general", title: "Continue threads after a restart", kind: "server" },
-  { section: "general", title: "Continue threads when a usage limit resets", kind: "server" },
+  { section: "general", title: "Continue threads on their own", kind: "server" },
   { section: "general", title: "Auto-compact", kind: "server" },
   { section: "general", title: "Auto-compact threshold", kind: "server" },
   { section: "general", title: "System notifications", kind: "app" },
@@ -131,7 +131,7 @@ export const SERVER_SETTINGS: readonly ServerSettingSpec[] = [
   { key: "resume-after-restart", label: "Continue threads after a restart", type: "boolean", default: true },
   {
     key: "continue-after-limit",
-    label: "Continue threads when a usage limit resets",
+    label: "Continue threads on their own",
     type: "boolean",
     default: true,
   },
