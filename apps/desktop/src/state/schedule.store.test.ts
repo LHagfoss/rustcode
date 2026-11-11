@@ -134,6 +134,23 @@ describe("send later", () => {
     });
   });
 
+  test("a queue held by a stopped turn stays held when the time comes", async () => {
+    await withStorage(null, async () => {
+      await openMockThread("mock-thread-1");
+      // The user stopped a turn: its queue waits for Resume, and a due message joins it, not starts it.
+      updateThread("mock-thread-1", (t) => ({ ...t, running: false, queueHeld: true }));
+      scheduleMessage("mock-thread-1", "wait for resume", emptyExtras, Date.now() + 5);
+      await sleep(10);
+      await continueDueScheduled();
+      await until(() =>
+        useApp.getState().threads["mock-thread-1"]!.queue.some((row) => row.text === "wait for resume"),
+      );
+      await sleep(20);
+      expect(useApp.getState().threads["mock-thread-1"]!.queueHeld).toBe(true);
+      expect(said("mock-thread-1", "wait for resume")).toBe(false);
+    });
+  });
+
   test("Send now sends it at once, before its time", async () => {
     await withStorage(null, async () => {
       await openMockThread("mock-thread-1");

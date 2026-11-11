@@ -3279,7 +3279,7 @@ async function deliverScheduled(threadId: string, item: ScheduledMessage): Promi
       ],
     }));
     // Held for Resume: nothing starts until the user presses it. A queue with no turn starts its head.
-    if (!thread.running) void resumeQueue(threadId);
+    if (!thread.running && !thread.queueHeld) void resumeQueue(threadId);
     return "sent";
   }
   void runPrompt(threadId, item.text, extras ?? emptyExtras);
