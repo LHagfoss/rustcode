@@ -176,6 +176,17 @@ pub(crate) fn read(request: GetSettingsRequest) -> Result<Value, agent_client_pr
     Ok(json!({ "values": values, "stored": stored_keys }))
 }
 
+/// One setting's current value, for engine code that has to apply a
+/// client-hosted setting itself (#3422). The registry default applies where
+/// the machine has not set it.
+pub(crate) fn value(key: &str) -> Option<Value> {
+    let answer = read(GetSettingsRequest {
+        keys: Some(vec![key.to_owned()]),
+    })
+    .ok()?;
+    answer.get("values")?.get(key).cloned()
+}
+
 /// Answer `_rustcode/settings/set`: merge the values, then read them back.
 pub(crate) fn write(request: SetSettingsRequest) -> Result<Value, agent_client_protocol::Error> {
     let path = settings_path()
