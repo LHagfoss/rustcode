@@ -1086,8 +1086,7 @@ const KEEP_TRANSCRIPT_MS = 2_000;
 function keepRemoteTranscript(key: string): void {
   transcriptTimers.delete(key);
   const thread = get().threads[key];
-  if (!thread || !thread.loaded || thread.loading || !machineConnections.has(splitThreadKey(key).host))
-    return;
+  if (!thread?.loaded || thread.loading || !machineConnections.has(splitThreadKey(key).host)) return;
   saveTranscript(thread, key);
 }
 
