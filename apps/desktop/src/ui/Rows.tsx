@@ -64,7 +64,7 @@ import {
   wakeLine,
 } from "../state/thread";
 import { displayTool, orchestrationTool, sessionIdOf, usefulSummary } from "../state/toolNames";
-import { type Waiting, waitingLabel, waitingTitle } from "../state/waiting";
+import { type Waiting, waitingLabel, waitingNext, waitingTitle } from "../state/waiting";
 import { harnessId, wakeNotice } from "../state/wakeNotice";
 import { DiffView } from "./DiffView";
 import { HarnessIcon } from "./HarnessIcon";
@@ -1087,7 +1087,10 @@ export function WaitingRow({ wait }: { wait: Waiting }) {
           <span className="absolute size-2 rounded-full bg-accent/40 rc-breathe" />
           <span className="size-1.5 rounded-full bg-accent" />
         </span>
-        {waitingLabel(wait)}
+        <span>
+          {waitingLabel(wait)}
+          <span className="text-fg-faint"> · {waitingNext(wait)}</span>
+        </span>
       </div>
     </Tooltip>
   );

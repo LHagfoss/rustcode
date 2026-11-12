@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Link, LinkState } from "./orchestration";
-import { type Waiting, waitingIds, waitingLabel, waitingOn, waitingTitle } from "./waiting";
+import { type Waiting, waitingIds, waitingLabel, waitingNext, waitingOn, waitingTitle } from "./waiting";
 
 const link = (id: string, orchestrator: string, target: string, state: LinkState): Link => ({
   id,
@@ -149,5 +149,12 @@ describe("the threads the list draws with the ones that work", () => {
     expect(wait([], { parked: { r: 2 } })).toEqual(["r"]);
     expect(wait([], { parked: { p: 0 } })).toEqual([]);
     expect(wait([link("p/1", "p", "a", "done")])).toEqual([]);
+  });
+});
+
+describe("waitingNext", () => {
+  test("says the thread picks up by itself, for one thing or several", () => {
+    expect(waitingNext({ links: [], commands: 1 })).toBe("continues on its own when it finishes");
+    expect(waitingNext({ links: [], commands: 2 })).toBe("continues on its own when they finish");
   });
 });
