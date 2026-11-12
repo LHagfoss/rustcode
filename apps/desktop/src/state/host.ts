@@ -4922,6 +4922,8 @@ const steerText = (thread: string, fallback: string) =>
  */
 export function linkSteered(thread: string, link: string | undefined, text: string): void {
   if (!link) return;
+  // The clock starts at the steer: a steered link has no turn of its own to start it, and without a
+  // start time `reconcileLinks` would count it from when it was made.
   linkStarted(link);
   const said = steerText(thread, text);
   const current = useApp.getState().threads[thread];
@@ -5244,6 +5246,9 @@ export async function stopLink(id: string): Promise<boolean> {
 /** How long a working link may sit beside an idle thread before it is read as lost, not just starting. */
 export const STALE_LINK_MS = 20_000;
 
+/** How long a working link with no start time may sit beside an idle thread: a worktree or a cold harness can take minutes. */
+export const UNSTARTED_LINK_MS = 10 * 60_000;
+
 /**
  * Settles the working links whose thread, by its real status, runs nothing: a turn that ended
  * without settling its link (a steer, a window that missed the end) must not read Working for
@@ -5257,11 +5262,14 @@ export function reconcileLinks(now = Date.now()): void {
   if (!state.sessionsLoaded) return;
   const stale = book().links.filter((link) => {
     if (link.state !== "working" && link.state !== "needs_user") return false;
-    // Only a turn that has begun can have ended unseen: a link with no start time is still waiting
-    // for its turn (a worktree being made, a cold harness), and the thread beside it is idle for now.
-    if (isRemoteThread(link.target) || link.startedAt === undefined || now - link.startedAt < STALE_LINK_MS) {
-      return false;
-    }
+    // A link that is only starting (a worktree being made, a cold harness) has an idle thread beside
+    // it for a moment. One with a start time gets `STALE_LINK_MS` from it; one that never recorded a
+    // start (a steered link saved before `linkSteered` set it, a turn that never began) counts from
+    // when it was made and gets the longer `UNSTARTED_LINK_MS`, so a slow start is not read as lost
+    // while a forgotten link still does not read Working for hours.
+    if (isRemoteThread(link.target)) return false;
+    const idleFor = link.startedAt === undefined ? now - link.createdAt : now - link.startedAt;
+    if (idleFor < (link.startedAt === undefined ? UNSTARTED_LINK_MS : STALE_LINK_MS)) return false;
     const thread = state.threads[link.target];
     if (thread?.loading || thread?.queue.some((q) => q.link === link.id)) return false;
     if (!thread && !sessionById(state, link.target)) return false;
