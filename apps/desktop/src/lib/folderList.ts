@@ -7,6 +7,8 @@
 // are drawn middle-ellipsised, because their ends (the folder's own name, and how deep it sits)
 // say more than their middle.
 
+import { plainPath } from "../acp/types";
+import { isDataFolder } from "../state/projects";
 import { clip } from "./clip";
 import { basename, dirname, isInside, normalize } from "./paths";
 
@@ -130,6 +132,16 @@ export function folderScore(
  * path and a worktree also stays under a repo whose name matches, so searching for the repo still
  * shows every branch it has.
  */
+/** A source with Windows' extended-length prefix taken off each of its paths. */
+function plainSource(source: FolderSource): FolderSource {
+  const worktree = source.worktree && {
+    ...source.worktree,
+    path: source.worktree.path && plainPath(source.worktree.path),
+    repo: source.worktree.repo && plainPath(source.worktree.repo),
+  };
+  return { ...source, cwd: source.cwd && plainPath(source.cwd), worktree };
+}
+
 export function folderRows(
   sources: readonly FolderSource[],
   { filter = "", limit = 30, now = Date.now() }: { filter?: string; limit?: number; now?: number } = {},
@@ -141,9 +153,14 @@ export function folderRows(
   const newest = new Map<string, number>();
   const projects: string[] = [];
   const worktrees: { path: string; repo: string; branch: string }[] = [];
-  for (const source of sources) {
+  for (const raw of sources) {
+    // One folder is one row, however Windows spelled it (`\\?\C:\…` is `C:\…`, issue 3425), and
+    // RustCode's own data or install folder is never a project, only its worktrees (issue 3524).
+    const source = plainSource(raw);
     const path = source.cwd;
     if (!path) continue;
+    // Worktrees live inside the data folder too, and are rows; anything else there is not.
+    if (isDataFolder(path) && source.worktree?.path !== path && !cutFrom(path)) continue;
     threads.set(path, (threads.get(path) ?? 0) + 1);
     if (source.updatedAt !== undefined) {
       newest.set(path, Math.max(newest.get(path) ?? 0, source.updatedAt));

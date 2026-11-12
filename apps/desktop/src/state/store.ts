@@ -2325,6 +2325,13 @@ export function selectThread(id: string | null) {
   if (id) void openThread(id);
 }
 
+/**
+ * The folder a new thread starts in when none was chosen: the home folder of the machine it runs
+ * on. `session/new` is sent no folder for it, which every engine resolves to its own home
+ * (`session_new_cwd`), so it works on a machine whose home this app cannot know.
+ */
+export const HOME_FOLDER = "~";
+
 export function startNewThread(cwd?: string, host?: string) {
   const s = get();
   // An explicit machine wins, and a folder picked on this disk still starts here.
@@ -2350,7 +2357,8 @@ export function startNewThread(cwd?: string, host?: string) {
   // only trustworthy half. Without it, a machine's worktree folder starts a thread here.
   const remembered =
     s.newThreadHost === target && hostOfProject(s, s.projectCwd) === target ? s.projectCwd : "";
-  const projectCwd = cwd ?? preferred ?? remembered;
+  // Nothing chosen and nothing to go on: the machine's home folder, so a new thread can always start.
+  const projectCwd = cwd ?? (preferred || remembered || HOME_FOLDER);
   dismissOverlays();
   set({
     selectedId: null,
@@ -2950,7 +2958,7 @@ function newWorktreeFor(
   const wt = s.newWorktree;
   // A worktree is cut on the machine the thread runs on, by that machine's own `session/new`; the
   // toggle is this computer's, so it is only offered for threads that start here.
-  if (s.newThreadHost || !wt.on || !s.features.worktrees) return undefined;
+  if (s.newThreadHost || !wt.on || !s.features.worktrees || cwd === HOME_FOLDER) return undefined;
   return { repo: cwd, branch: wt.branch.trim() || undefined, title: titleFrom(firstMessage, 80) };
 }
 
@@ -2979,7 +2987,7 @@ async function startSetup(setup: PendingSetup): Promise<string | null> {
   let id: string;
   try {
     id = await createSession({
-      cwd: setup.cwd,
+      cwd: setup.cwd === HOME_FOLDER ? "" : setup.cwd,
       host,
       harness: choice?.harness,
       // The account shown for the new thread: with named accounts, always one of them.

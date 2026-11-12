@@ -127,6 +127,7 @@ import {
   commandsFor,
   endQueuedEdit,
   featureMissing,
+  HOME_FOLDER,
   harnessesOn,
   limitTime,
   newThreadChoice,
@@ -2128,7 +2129,8 @@ function FolderMenu({ thread, cwd, host }: { thread?: ThreadState; cwd: string; 
   const sources = useMemo(
     () =>
       sessions
-        .filter((s) => (s.host ?? LOCAL_HOST) === host)
+        // A thread with no folder of its own lists a stand-in (its home), not a project (issue 3425).
+        .filter((s) => (s.host ?? LOCAL_HOST) === host && !s.workspaceUnknown)
         .map((s) => ({ cwd: s.cwd, worktree: s.worktree, updatedAt: s.updatedAt })),
     [sessions, host],
   );
@@ -2163,7 +2165,7 @@ function FolderMenu({ thread, cwd, host }: { thread?: ThreadState; cwd: string; 
         >
           <Folder size={14} className="shrink-0" />
           <span className="min-w-0 max-w-[220px] truncate @max-lg/composer:max-w-[96px] @max-sm/composer:hidden">
-            {cwd ? projectName(cwd) : "Choose a folder"}
+            {cwd === HOME_FOLDER ? "Home folder" : cwd ? projectName(cwd) : "Choose a folder"}
           </span>
           <ChevronDown size={12} className="shrink-0 text-fg-faint" />
         </button>
