@@ -10,6 +10,7 @@ import {
   stopLink,
   takeSteeredLinks,
   threadTurnEnded,
+  UNSTARTED_LINK_MS,
 } from "./host";
 import { emptyBook, type Link, liveState } from "./orchestration";
 import { resetForTests, statusOf, updateThread, useApp } from "./store";
@@ -224,6 +225,12 @@ describe("a link whose thread stopped (issue 3541)", () => {
     // Made a moment ago: its turn may still be starting.
     reconcileLinks(10_000_000);
     expect(state("own")?.state).toBe("working");
+    // A minute old: a worktree or a cold harness can still be starting.
+    reconcileLinks(9_999_999 + 60_000);
+    expect(state("own")?.state).toBe("working");
+    // Past the longer limit it is read as lost.
+    reconcileLinks(9_999_999 + UNSTARTED_LINK_MS);
+    expect(state("own")?.state).toBe("done");
   });
 
   test("a steered link saved with no start time settles once its thread is idle", () => {
