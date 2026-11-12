@@ -209,8 +209,9 @@ export function sidebarActions(now = Date.now()): PaletteAction[] {
         // The shelf unfolds with the list's motion: scroll to it once it is drawn.
         setTimeout(
           () =>
+            // `?.()` too: a test may have swapped in a document without one by the time it fires.
             globalThis.document
-              ?.querySelector('[data-shelf="settled"]')
+              ?.querySelector?.('[data-shelf="settled"]')
               ?.scrollIntoView({ block: "start", behavior: "smooth" }),
           220,
         );
