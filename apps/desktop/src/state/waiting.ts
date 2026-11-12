@@ -81,6 +81,15 @@ export function waitingLabel(wait: Waiting): string {
   return `Waiting on ${parts.join(" and ")}`;
 }
 
+/**
+ * What happens next, after the line: the thread picks up by itself, so a turn that ended on a short
+ * "waiting on the tests" does not read as stopped. One thing finishes, or several do.
+ */
+export function waitingNext(wait: Waiting): string {
+  const n = new Set(wait.links.map((link) => link.target)).size + wait.commands;
+  return `continues on its own when ${n === 1 ? "it finishes" : "they finish"}`;
+}
+
 /** The threads it waits on, by title: the line's tooltip. */
 export const waitingTitle = (wait: Waiting) =>
   [...new Map(wait.links.map((link) => [link.target, link.targetTitle])).values()].join(", ");
