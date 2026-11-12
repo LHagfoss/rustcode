@@ -2568,7 +2568,7 @@ export function openThread(id: string): Promise<string | null> {
   let pending: Promise<string | null>;
   pending = Promise.resolve().then(async () => {
     try {
-      let result: unknown;
+      let result: Json;
       try {
         result = await conn.request(Method.sessionLoad, { sessionId, cwd, mcpServers: [] }, 60_000);
       } catch (first) {
