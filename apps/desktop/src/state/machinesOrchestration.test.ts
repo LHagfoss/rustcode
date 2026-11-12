@@ -12,7 +12,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { AcpConnection, type JsonObject } from "../acp/jsonrpc";
 import type { Transport } from "../acp/transport";
 import { setShellTransport } from "../lib/shell";
-import { answerOrchestration, resolveMachine } from "./host";
+import { answerOrchestration, forgetMachineProjectsForTests, resolveMachine } from "./host";
 import { type Machine, refreshMachines, resetMachinesForTests, useMachines } from "./machines";
 import { connectionFor, resetForTests, startMachineRouting, useApp, watchMachineConnection } from "./store";
 import { LOCAL_HOST } from "./threadKeys";
@@ -90,7 +90,10 @@ const snapshot = {
  * A machine's connection whose writes the test can read: the machine answers
  * a harness listing and `session/new`, and every other request as a no-op.
  */
-function recordingConnection(sessionId: string | (() => string) = "remote-1"): {
+function recordingConnection(
+  sessionId: string | (() => string) = "remote-1",
+  answers: Record<string, (params: JsonObject) => unknown> = {},
+): {
   conn: AcpConnection;
   sent: () => JsonObject[];
 } {
@@ -101,8 +104,10 @@ function recordingConnection(sessionId: string | (() => string) = "remote-1"): {
     writes.push(line);
     const frame = JSON.parse(line) as JsonObject;
     if (typeof frame.id !== "number" || typeof frame.method !== "string") return;
-    const result =
-      frame.method === "_rustcode/harnesses"
+    const own = answers[frame.method];
+    const result = own
+      ? own((frame.params ?? {}) as JsonObject)
+      : frame.method === "_rustcode/harnesses"
         ? snapshot
         : frame.method === "session/new"
           ? {
@@ -229,6 +234,7 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  forgetMachineProjectsForTests();
   listed();
   useMachines.setState({
     sessions: {
@@ -276,9 +282,34 @@ describe("list_machines", () => {
     // No local engine runs in this file: this computer is listed, and says it is away.
     expect(machines[0]).toMatchObject({ id: "local", current: true });
     expect(machines[1]).toMatchObject({ id: LINUX, name: LINUX_NAME, platform: "linux", state: "connected" });
-    // What the machine says it can run and where it has worked, not this app's own answer.
-    expect(machines[1]!.harnesses).toEqual([{ id: "claude-code", name: "Claude Code", available: true }]);
-    expect(machines[1]!.projects).toEqual(["rustcode"]);
+    // What the machine says it can run and where it has worked, not this app's own answer:
+    // its models and logins, and each project with the repository it is a checkout of.
+    expect(machines[1]).toMatchObject({ version: "1.28.0", running_threads: 0, pending_requests: 0 });
+    expect(machines[1]!.harnesses).toEqual([
+      { id: "claude-code", name: "Claude Code", available: true, default: true, models: ["sonnet-5.5"] },
+    ]);
+    expect(machines[1]!.projects).toEqual([{ path: LINUX_PROJECT, name: "rustcode", remote: null }]);
+  });
+
+  test("a machine that is not connected says why and when it tries again", async () => {
+    watchMachineConnection(LINUX, null);
+    const saved = useMachines.getState().machines;
+    useMachines.setState({
+      machines: saved.map((m) =>
+        m.id === LINUX ? { ...m, state: "offline", detail: "No route answered.", retryInSecs: 30 } : m,
+      ),
+    });
+    try {
+      const answer = await answerOrchestration({ sessionId: CALLER, tool: "list_machines", args: {} });
+      expect((answer.machines as JsonObject[])[1]).toMatchObject({
+        // On its retry clock: the app brings it back on its own.
+        state: "reconnecting",
+        reason: "No route answered.",
+        retry_in_secs: 30,
+      });
+    } finally {
+      useMachines.setState({ machines: saved });
+    }
   });
 });
 
@@ -338,8 +369,8 @@ describe("list_machines says why a machine is not connected", () => {
     expect((answer.machines as JsonObject[])[1]).toMatchObject({
       id: LINUX,
       state: "unavailable",
-      reason: "server_not_running",
-      detail,
+      cause: "server_not_running",
+      reason: detail,
       retry_in_secs: 8,
       route: { kind: "vpn", address: "100.90.27.158:17879", encrypted: true },
     });
@@ -362,7 +393,7 @@ describe("list_machines says why a machine is not connected", () => {
     let answer = await answerOrchestration({ sessionId: CALLER, tool: "list_machines", args: {} });
     expect((answer.machines as JsonObject[])[1]).toMatchObject({
       state: "reconnecting",
-      reason: "unreachable",
+      cause: "unreachable",
     });
     const { conn } = recordingConnection();
     watchMachineConnection(LINUX, conn);
@@ -370,6 +401,7 @@ describe("list_machines says why a machine is not connected", () => {
     const listed = (answer.machines as JsonObject[])[1]!;
     expect(listed.state).toBe("connected");
     expect(listed.reason).toBeUndefined();
+    expect(listed.cause).toBeUndefined();
     expect(listed.retry_in_secs).toBeUndefined();
   });
 });
@@ -397,7 +429,9 @@ describe("a machine's projects", () => {
     });
     const answer = await answerOrchestration({ sessionId: CALLER, tool: "list_machines", args: {} });
     expect(answer.error).toBeUndefined();
-    expect((answer.machines as JsonObject[])[1]!.projects).toEqual(["rustcode"]);
+    expect(((answer.machines as JsonObject[])[1]!.projects as JsonObject[]).map((p) => p.name)).toEqual([
+      "rustcode",
+    ]);
   });
 
   test("a start with no project on a machine that has none is refused, never sent to /", async () => {
@@ -669,6 +703,208 @@ describe("a call on another machine", () => {
     expect(listed.error).toMatchObject({ code: "offline" });
     expect(useApp.getState().threads[`${LINUX}/remote-1`]).toBeUndefined();
     expect(connectionFor(LINUX)).toBeNull();
+  });
+});
+
+describe("the rest of the thread tools on another machine (orchestration 16)", () => {
+  const WEBSITE = "/home/lars/code/website";
+  /** A machine whose engine reads each folder's `origin` from `remotes`. */
+  function withRemotes(
+    remotes: Record<string, string | null>,
+    more: Record<string, (p: JsonObject) => unknown> = {},
+  ) {
+    const recorded = recordingConnection("remote-1", {
+      "_rustcode/project/read": (params) => ({
+        path: params.path,
+        git: true,
+        remote: remotes[String(params.path)] ?? null,
+      }),
+      ...more,
+    });
+    watchMachineConnection(LINUX, recorded.conn);
+    return recorded;
+  }
+
+  test("a start never lands in an unrelated project: it lists each one and its repository (B6)", async () => {
+    // Every project there is another repository, the one named like the caller's included; the
+    // newest is the website. (Threads earlier tests started there stay listed, as the app keeps a
+    // thread it started until the machine lists it.)
+    const { sent } = withRemotes({
+      [WEBSITE]: "git@github.com:LHagfoss/website.git",
+      [LINUX_PROJECT]: "https://github.com/someone-else/rustcode",
+      "/home/lars/other": "https://github.com/LHagfoss/other",
+    });
+    useMachines.setState({
+      sessions: { [LINUX]: [{ id: "remote-9", cwd: WEBSITE, title: "Site", updatedAt: Date.now() }] },
+    });
+    const answer = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "start_session",
+      args: { prompt: "Run the tests there", machine: LINUX_NAME },
+    });
+    expect(answer.error).toMatchObject({ code: "invalid" });
+    const message = String((answer.error as JsonObject).message);
+    expect(message).toContain(`${WEBSITE} (github.com/lhagfoss/website)`);
+    expect(message).toContain("clone_project");
+    expect(sent().filter((frame) => frame.method === "session/new")).toEqual([]);
+  });
+
+  test("list_projects and read_project read each folder's repository there", async () => {
+    const { sent } = withRemotes({ [LINUX_PROJECT]: "https://github.com/LHagfoss/rustcode.git" });
+    const listed = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "list_projects",
+      args: { machine: LINUX_NAME },
+    });
+    expect(listed.projects).toContainEqual(
+      expect.objectContaining({ path: LINUX_PROJECT, remote: "github.com/lhagfoss/rustcode" }),
+    );
+    const read = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "read_project",
+      args: { path: LINUX_PROJECT, machine: LINUX },
+    });
+    expect(read.error).toBeUndefined();
+    expect(read).toMatchObject({
+      machine: LINUX_NAME,
+      project: { path: LINUX_PROJECT, remote: "https://github.com/LHagfoss/rustcode.git" },
+    });
+    const reads = sent().filter((frame) => frame.method === "_rustcode/project/read");
+    expect(reads.length).toBeGreaterThan(0);
+  });
+
+  test("clone_project clones there, and the clone is one of its projects", async () => {
+    const url = "https://github.com/LHagfoss/notes.git";
+    const { sent } = withRemotes(
+      {},
+      {
+        "_rustcode/project/clone": (params) => ({
+          path: `${params.parent}/notes`,
+          git: true,
+          remote: url,
+        }),
+      },
+    );
+    useApp.setState((s) => ({
+      links: { ...s.links, grants: { [CALLER]: [`project:clone@${LINUX}:${url}`] } },
+    }));
+    const cloned = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "clone_project",
+      args: { url, parent: "/home/lars/code", machine: LINUX_NAME },
+    });
+    expect(cloned.error).toBeUndefined();
+    expect(cloned).toMatchObject({ machine: LINUX_NAME, project: { path: "/home/lars/code/notes" } });
+    const call = sent().find((frame) => frame.method === "_rustcode/project/clone")?.params;
+    expect(call).toMatchObject({ url, parent: "/home/lars/code" });
+    const listed = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "list_projects",
+      args: { machine: LINUX_NAME },
+    });
+    expect((listed.projects as JsonObject[]).map((p) => p.path)).toContain("/home/lars/code/notes");
+  });
+
+  test("answer_request answers a delegate's approval on its machine's connection", async () => {
+    const { sent } = withRemotes({});
+    withRemoteThread();
+    useApp.setState((s) => ({
+      threads: {
+        ...s.threads,
+        [REMOTE]: {
+          ...s.threads[REMOTE]!,
+          toolIndex: {},
+          permissions: [
+            {
+              rpcId: 7,
+              sessionId: REMOTE,
+              toolCallId: "t1",
+              title: "Run the test suite",
+              options: [
+                { id: "allow", name: "Allow once", kind: "allow_once" },
+                { id: "deny", name: "Decline", kind: "reject_once" },
+              ],
+              diffs: [],
+            },
+          ],
+        },
+      } as never,
+      links: {
+        ...s.links,
+        links: [link("1", REMOTE)],
+        grants: { [CALLER]: [`answer:${REMOTE}:approval:Run the test suite`] },
+      },
+    }));
+    const pending = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "list_pending_requests",
+      args: { machine: LINUX_NAME },
+    });
+    expect(pending.requests).toMatchObject([{ session_id: REMOTE, request_id: "7" }]);
+    const answer = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "answer_request",
+      args: { session_id: "remote-1", request_id: "7", choice: "allow_once", machine: LINUX_NAME },
+    });
+    expect(answer.error).toBeUndefined();
+    expect(answer).toMatchObject({ session_id: REMOTE, machine: LINUX_NAME, choice: "allow_once" });
+    const response = sent().find((frame) => frame.id === 7 && "result" in frame);
+    expect(response?.result).toMatchObject({ outcome: { optionId: "allow" } });
+  });
+
+  test("search_sessions asks that machine's index, and read_activity its store", async () => {
+    const { sent } = withRemotes(
+      {},
+      {
+        "_rustcode/threads/search": () => ({
+          results: [{ session_id: "remote-1", snippet: "a flaky test" }],
+        }),
+        "_rustcode/data/activity": () => ({ items: [] }),
+      },
+    );
+    withRemoteThread();
+    const found = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "search_sessions",
+      args: { query: "flaky", machine: LINUX_NAME },
+    });
+    expect(found.error).toBeUndefined();
+    expect(found.sessions).toMatchObject([{ session_id: REMOTE, snippet: "a flaky test" }]);
+    const activity = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "read_activity",
+      args: { session_id: "remote-1", machine: LINUX },
+    });
+    expect(activity.error).toBeUndefined();
+    expect(activity.machine).toBe(LINUX_NAME);
+    const asked = sent().find((frame) => frame.method === "_rustcode/data/activity")?.params;
+    expect(asked).toMatchObject({ sessionId: "remote-1" });
+  });
+
+  test("manage_queue and update_session reach a keyed thread; a rename stays with its machine", async () => {
+    withRemotes({});
+    withRemoteThread();
+    const queue = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "manage_queue",
+      args: { session_id: REMOTE, action: "list" },
+    });
+    expect(queue.error).toBeUndefined();
+    expect(queue).toMatchObject({ session_id: REMOTE, machine: LINUX_NAME, queued: [] });
+    const renamed = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "update_session",
+      args: { session_id: REMOTE, title: "New name" },
+    });
+    expect(renamed.error).toMatchObject({ code: "not_allowed" });
+    expect(String((renamed.error as JsonObject).message)).toContain("renamed there");
+    // Without a thread, a named machine has no "this thread" to change.
+    const none = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "configure_session",
+      args: { machine: LINUX_NAME },
+    });
+    expect(none.error).toMatchObject({ code: "invalid" });
   });
 });
 

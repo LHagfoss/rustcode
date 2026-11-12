@@ -418,7 +418,7 @@ async fn call(
     }
     // The same for a machine: a server that never listed `machine` must not
     // quietly act on this computer when another one was named.
-    if version < super::MACHINE_VERSION && super::names_a_machine(tool, &args) {
+    if !super::takes_machine(tool, version) && super::names_a_machine(tool, &args) {
         return CallAnswer {
             success: false,
             content: format!(

@@ -110,6 +110,14 @@ const EXACT_METHODS: &[&str] = &[
     "_rustcode/settings/set",
     "_rustcode/skills/add",
     "_rustcode/skills/get",
+    // What an agent on a paired computer reads and does here (orchestration
+    // version 16): search, one thread's recorded activity, a project's git
+    // facts and a clone, and the worktrees' git state.
+    "_rustcode/threads/search",
+    "_rustcode/data/activity",
+    "_rustcode/project/read",
+    "_rustcode/project/clone",
+    "_rustcode/worktrees/state",
 ];
 const METHOD_PREFIXES: &[&str] = &["session/", "_rustcode/pulls", "_rustcode/capabilities"];
 
@@ -326,6 +334,11 @@ mod tests {
                 "_rustcode/settings/set",
                 "_rustcode/skills/add",
                 "_rustcode/skills/get",
+                "_rustcode/threads/search",
+                "_rustcode/data/activity",
+                "_rustcode/project/read",
+                "_rustcode/project/clone",
+                "_rustcode/worktrees/state",
             ]
         );
         assert_eq!(
@@ -357,6 +370,11 @@ mod tests {
             "_rustcode/capabilities/mcp/add",
             "_rustcode/capabilities/mcp/remove",
             "_rustcode/capabilities/mcp/restart",
+            "_rustcode/threads/search",
+            "_rustcode/data/activity",
+            "_rustcode/project/read",
+            "_rustcode/project/clone",
+            "_rustcode/worktrees/state",
         ] {
             assert!(allowed(method), "{method}");
         }
@@ -387,6 +405,9 @@ mod tests {
             "_rustcode/server/stop",
             "_rustcode/mcp/set",
             "_rustcode/data/query",
+            "_rustcode/data/usage",
+            "_rustcode/project/create",
+            "_rustcode/worktrees/handoff",
             "_rustcode/unknown",
             "unknown",
         ] {

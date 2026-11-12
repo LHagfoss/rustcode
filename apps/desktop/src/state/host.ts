@@ -29,7 +29,6 @@ import {
   type PermissionRequest,
   plainPath,
   projectName,
-  type SessionSummary,
 } from "../acp/types";
 import {
   type HandoffRefusal,
@@ -63,6 +62,7 @@ import {
 } from "./logins";
 import {
   LOCAL_MACHINE_ID,
+  localAppVersion,
   localIdentity,
   type Machine,
   machineName,
@@ -170,7 +170,14 @@ import {
   registerProject,
   updateProjectEntry,
 } from "./projectBook";
-import { isDataFolder, isRootFolder, type Project, projectsOn } from "./projects";
+import {
+  isDataFolder,
+  isRootFolder,
+  type Project,
+  projectByRepository,
+  projectsOn,
+  remoteRepository,
+} from "./projects";
 import { rememberPullSummaries } from "./pullQueries";
 import { QUEUE_REASON, wakeDelivery } from "./queue";
 import {
@@ -767,7 +774,7 @@ export function machineUnavailable(machine: MachineRef): Failure | null {
 /**
  * Where a machine stands, as `list_machines` says it: `connected`, `connecting`, `reconnecting`
  * (no route answered; the app is on its retry clock), `unavailable` (a route answered and the
- * machine would not serve: `reason` says why), `revoked` (it refused this computer's pairing), or
+ * machine would not serve: `cause` says why), `revoked` (it refused this computer's pairing), or
  * `offline` (not connected and not trying).
  */
 function machineState(saved: Machine | undefined, connected: boolean): string {
@@ -836,11 +843,131 @@ function checkedMachine(asked: string | undefined): MachineRef | Failure {
   return machineUnavailable(machine) ?? machine;
 }
 
-/** A machine as `list_machines` describes it: what it is, where it stands, what it has. */
+/**
+ * The machine and thread key a call on one thread acts on: the machine the
+ * call names, else the one the id carries. A connected machine only, so a
+ * call never lands on this computer when another was meant.
+ */
+function machineThread(
+  asked: string | undefined,
+  target: string,
+): { machine: MachineRef; target: string } | Failure {
+  // An id that carries its machine names it already: connected is all it needs to be.
+  const carried = machineOfThread(target);
+  const machine = asked?.trim() ? checkedMachine(asked) : (machineUnavailable(carried) ?? carried);
+  if (isFailure(machine)) return machine;
+  const key = scopedTarget(machine, target);
+  if (isFailure(key)) return key;
+  return { machine, target: key };
+}
+
+/**
+ * The same for a call that only touches this app's own record of the thread
+ * (its queue): the machine may be away, and the thread is still named by it.
+ */
+function threadNamedOn(
+  asked: string | undefined,
+  target: string,
+): { machine: MachineRef; target: string } | Failure {
+  const named = asked?.trim() ? resolveMachine(asked) : machineOfThread(target);
+  if (isFailure(named)) return named;
+  const key = scopedTarget(named, target);
+  if (isFailure(key)) return key;
+  return { machine: named, target: key };
+}
+
+/**
+ * The thread a management call acts on, on the machine the call names or its
+ * id carries: `undefined` is the caller itself, which only this computer has.
+ */
+function managedOn(
+  asked: string | undefined,
+  target: string | undefined,
+): { machine: MachineRef; target: string | undefined } | Failure {
+  if (!target) {
+    const machine = checkedMachine(asked);
+    if (isFailure(machine)) return machine;
+    if (machine.host) return failure("invalid", `session_id is required for a thread on ${machine.name}`);
+    return { machine, target };
+  }
+  return machineThread(asked, target);
+}
+
+/** One request to the engine of `host`: this computer's, or a paired machine's over its connection. */
+async function requestOn<T = Json>(
+  host: string,
+  method: string,
+  params: JsonObject,
+  timeoutMs: number,
+): Promise<T> {
+  const conn = connectionFor(host);
+  if (!conn) throw new Error(host ? "that machine is not connected" : "the engine is not connected");
+  return conn.request<T>(method, params, timeoutMs);
+}
+
+/**
+ * Each folder's repository (`remoteRepository` of its `origin`), per machine:
+ * `null` for a folder with none. Only an answer is kept, so a read that failed
+ * is tried again by the next call.
+ */
+const repositories = new Map<string, string | null>();
+/** How long one folder's git read may take while a call matches projects. */
+const REPOSITORY_READ_MS = 10_000;
+
+/** The repository a folder on `host` is a checkout of, or `null`; `undefined` when it could not be read. */
+async function repositoryOf(host: string, path: string): Promise<string | null | undefined> {
+  const key = `${host}\n${path}`;
+  if (repositories.has(key)) return repositories.get(key);
+  try {
+    const facts = await requestOn<JsonObject>(host, Method.projectRead, { path }, REPOSITORY_READ_MS);
+    const repository = remoteRepository(str(facts?.remote));
+    repositories.set(key, repository);
+    return repository;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Folders cloned on a paired machine by `clone_project` here: its thread list
+ * names a project only once a thread runs there, and a clone is where the
+ * next thread starts.
+ */
+const clonedOn = new Map<string, string[]>();
+
+/** For tests: forget every folder's repository and every clone made on a machine. */
+export function forgetMachineProjectsForTests(): void {
+  repositories.clear();
+  clonedOn.clear();
+}
+
+/** A machine's projects: what its threads name, newest first, then what was cloned there from here. */
+function machineProjects(host: string): Project[] {
+  const listed = projectsOn(useApp.getState().sessions, host);
+  const cloned = (clonedOn.get(host) ?? [])
+    .filter((path) => !listed.some((project) => project.path === path))
+    .map((path) => ({ path, name: projectName(path) }));
+  return [...listed, ...cloned];
+}
+
+/** Models `list_machines` names per harness: enough to choose a machine by, not the catalogue. */
+const MACHINE_LISTED_MODELS = 8;
+
+/**
+ * A machine as `list_machines` describes it: what it is, where it stands and
+ * why, how busy it is, and what it has to run a thread with and in. An agent
+ * choosing where to delegate reads this once instead of calling
+ * `list_harnesses` and `list_projects` on every machine.
+ */
 async function machineEntry(machine: MachineRef): Promise<JsonObject> {
   const saved = useMachines.getState().machines.find((m) => m.id === machine.id);
   const connected = !!connectionFor(machine.host);
   const state = machineState(saved, connected);
+  const version = machine.host ? (saved?.version ?? null) : await localAppVersion();
+  const st = useApp.getState();
+  const threads = st.sessions.filter((x) => (x.host ?? LOCAL_HOST) === machine.host);
+  const running = threads.filter((x) => !!st.threads[x.id]?.running || x.status === "running").length;
+  const waiting = threads.reduce((n, x) => n + (st.threads[x.id]?.permissions.length ?? 0), 0);
   return {
     id: machine.id,
     // The reported name stays here, so a client that never heard of the local
@@ -852,12 +979,20 @@ async function machineEntry(machine: MachineRef): Promise<JsonObject> {
     icon_tint: saved?.iconTint ?? (machine.host ? null : localIdentity().tint),
     ...(saved?.paused ? { paused: true } : {}),
     platform: machine.platform,
+    ...(version ? { version } : {}),
     ...(machine.host ? {} : { current: true }),
     state,
-    // Why it is not connected: a word to branch on, the shell's own words, and when it tries again.
-    ...(!connected && saved?.reason ? { reason: saved.reason } : {}),
-    ...(!connected && saved?.detail ? { detail: saved.detail } : {}),
-    ...(!connected && saved?.retryInSecs ? { retry_in_secs: saved.retryInSecs } : {}),
+    // Why it is not connected, in the words Settings › Machines shows, as a word to branch on
+    // (`cause`), and when it tries again.
+    ...(!connected && machine.host
+      ? {
+          reason:
+            [saved?.detail, saved?.hint].filter(Boolean).join(" ") ||
+            (saved?.paused ? "paused" : "not connected"),
+          ...(saved?.reason ? { cause: saved.reason } : {}),
+          ...(saved?.retryInSecs != null ? { retry_in_secs: saved.retryInSecs } : {}),
+        }
+      : {}),
     ...(saved?.route
       ? { route: { kind: saved.route.kind, address: saved.route.address, encrypted: saved.route.encrypted } }
       : {}),
@@ -879,8 +1014,10 @@ async function machineEntry(machine: MachineRef): Promise<JsonObject> {
           })),
         }
       : {}),
+    running_threads: running,
+    pending_requests: waiting,
     harnesses: await machineHarnesses(machine),
-    projects: projectsOn(useApp.getState().sessions, machine.host).map((project) => project.name),
+    projects: await machineProjectRows(machine, connected),
   };
 }
 
@@ -925,6 +1062,33 @@ async function reconnectMachines(): Promise<void> {
 }
 
 /**
+ * A machine's projects for `list_machines`: path, name and the repository each
+ * is a checkout of. A machine that is not connected says what was read last.
+ */
+async function machineProjectRows(machine: MachineRef, connected: boolean): Promise<JsonObject[]> {
+  const local = machine.host ? [] : listProjects(useApp.getState()).projects;
+  const projects = machine.host
+    ? machineProjects(machine.host)
+    : (Array.isArray(local) ? local : []).flatMap((row) => {
+        const project = obj(row);
+        return project ? [{ path: String(project.path ?? ""), name: String(project.name ?? "") }] : [];
+      });
+  const listed = projects.slice(0, MAX_PROJECTS);
+  const remotes = await Promise.all(
+    listed.map((project) =>
+      connected
+        ? repositoryOf(machine.host, project.path)
+        : repositories.get(`${machine.host}\n${project.path}`),
+    ),
+  );
+  return listed.map((project, index) => ({
+    path: project.path,
+    name: project.name,
+    ...(remotes[index] === undefined ? {} : { remote: remotes[index] }),
+  }));
+}
+
+/**
  * `list_machines`: this computer and each paired machine, one call. With `probe`
  * every route of every paired machine is tested first, so the answer carries
  * what each found now rather than the last test, and every machine that is not
@@ -943,17 +1107,41 @@ async function listMachines(probe = false): Promise<JsonObject> {
   };
 }
 
-/** The harnesses one machine can run: this app's own snapshot, or that machine's. */
+/**
+ * The harnesses one machine can run, as `list_machines` lists them: this app's
+ * own snapshot, or that machine's. Each says whether it can run a thread and
+ * why not, its first models and its named logins; `list_harnesses` with
+ * `machine` has the rest.
+ */
 async function machineHarnesses(machine: MachineRef): Promise<JsonObject[] | null> {
   const snapshot = machine.host
     ? await loadMachineHarnesses(machine.host)
     : harnessesOn(useApp.getState(), LOCAL_HOST);
   if (!snapshot) return null;
-  return snapshot.harnesses.map((h) => ({
-    id: h.id,
-    name: h.name,
-    available: !unavailableReason(h),
-  }));
+  return snapshot.harnesses.map((h): JsonObject => {
+    const reason = unavailableReason(h);
+    if (reason) return { id: h.id, name: h.name, available: false, reason };
+    const models = h.models.slice(0, MACHINE_LISTED_MODELS).map((m) => m.id);
+    return {
+      id: h.id,
+      name: h.name,
+      available: true,
+      ...(h.id === snapshot.default.harness ? { default: true } : {}),
+      models,
+      ...(models.length < h.models.length ? { omitted_models: h.models.length - models.length } : {}),
+      ...(h.accounts?.length
+        ? {
+            accounts: h.accounts.map((a) => ({
+              id: a.id,
+              name: a.name,
+              ...(accountSignedOut(h.id, a.id, useApp.getState().signedOutLogins)
+                ? { signed_out: true }
+                : {}),
+            })),
+          }
+        : {}),
+    };
+  });
 }
 
 /** Another machine's harnesses, read over its own connection (kept per machine). */
@@ -1008,9 +1196,12 @@ function harnessOn(
 /**
  * `list_projects` on a machine: the projects it has threads in. This
  * computer's answer also counts a project's unopened threads; another
- * machine's is what its listed threads say, which is what it knows here.
+ * machine's is what its listed threads say, which is what it knows here, plus
+ * what `clone_project` cloned there, each with the repository it is a
+ * checkout of (`remote`, `host/owner/repo`), which is how `start_session`
+ * finds the caller's project there.
  */
-function projectsOnMachine(machine: MachineRef): JsonObject {
+async function projectsOnMachine(machine: MachineRef): Promise<JsonObject> {
   if (!machine.host) return { ...machineFields(machine), ...listProjects(useApp.getState()) };
   const rows = new Map<
     string,
@@ -1035,10 +1226,20 @@ function projectsOnMachine(machine: MachineRef): JsonObject {
     entry.updatedAt = Math.max(entry.updatedAt, x.updatedAt ?? 0);
     rows.set(path, entry);
   }
-  const projects = [...rows.values()]
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, MAX_PROJECTS)
-    .map((p) => ({ path: p.path, name: p.name, threads: p.threads, working: p.working }));
+  for (const path of clonedOn.get(machine.host) ?? []) {
+    if (!rows.has(path))
+      rows.set(path, { path, name: projectName(path), threads: 0, working: false, updatedAt: 0 });
+  }
+  const listed = [...rows.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_PROJECTS);
+  const remotes = await Promise.all(listed.map((p) => repositoryOf(machine.host, p.path)));
+  const projects = listed.map((p, index) => ({
+    path: p.path,
+    name: p.name,
+    // null: no `origin`; absent: the folder could not be read there.
+    ...(remotes[index] === undefined ? {} : { remote: remotes[index] }),
+    threads: p.threads,
+    working: p.working,
+  }));
   return { ...machineFields(machine), projects };
 }
 
@@ -1123,65 +1324,47 @@ function sessionsOnMachine(
 
 /**
  * The project a thread starts in on a machine: the agent's own path, else the
- * caller's when that machine has it, else a folder with the caller's project
- * name, else its only project, else its most recently used one. A machine with
- * several projects and no clear most recent one is a question, not a guess: it
- * refuses with the list. The app's own data folder is never a project, however
- * a machine's thread list names it (issue 3524).
+ * caller's path when that machine has it, else the project there that is a
+ * checkout of the caller's repository (its `origin`, however each URL is
+ * spelled), else, for a caller with no repository, a folder of the same name.
+ * Nothing is guessed: a machine whose projects match none of those refuses
+ * with each one's path and repository, and never starts in whichever it used
+ * last (B6). The app's own data folder is never a project, however a
+ * machine's thread list names it (issue 3524).
  */
-function projectOnMachine(
+async function projectOnMachine(
   machine: MachineRef,
   caller: RuleThread,
   asked: string | undefined,
-): string | Failure {
+): Promise<string | Failure> {
   // A path the agent names is its own choice, and the machine's engine refuses
   // one that is not a folder there: this app only knows what it has listed.
   if (asked?.trim()) return asked.trim().replace(/\/+$/, "");
-  const sessions = useApp.getState().sessions;
-  const projects = projectsOn(sessions, machine.host);
-  if (!projects.length) {
-    return failure(
-      "invalid",
-      `${machine.name} has no project listed yet; pass project with its absolute path there`,
-    );
-  }
+  const projects = machineProjects(machine.host);
   const own = projectOf(caller);
   const there = projects.find((project) => sameProject(project.path, own));
   if (there) return there.path;
-  const name = projectName(own);
-  const byName = projects.filter((project) => project.name === name);
-  if (byName.length === 1) return byName[0]!.path;
-  if (projects.length === 1) return projects[0]!.path;
-  const recent = mostRecentProject(sessions, machine.host, projects);
-  if (recent) return recent;
+  const ours = own ? await repositoryOf(LOCAL_HOST, own) : null;
+  const theirs = await Promise.all(projects.map((project) => repositoryOf(machine.host, project.path)));
+  const found = projectByRepository(
+    { name: own ? projectName(own) : "", repository: ours },
+    projects.map((project, index) => ({ ...project, repository: theirs[index] })),
+  );
+  if (found) return found.path;
+  const wanted = ours ?? (own ? projectName(own) : "this thread's project");
+  if (!projects.length) {
+    return failure(
+      "invalid",
+      `${machine.name} has no project listed yet, so none is ${wanted}; pass project with its absolute path there, or clone_project with machine`,
+    );
+  }
+  const listed = projects
+    .slice(0, MAX_PROJECTS)
+    .map((project, index) => `${project.path}${theirs[index] ? ` (${theirs[index]})` : ""}`);
   return failure(
     "invalid",
-    `${machine.name} has no project at ${own}; pass project as one of: ${projects.map((project) => project.path).join(", ")}`,
+    `${machine.name} has no project that is ${wanted}; pass project as one of: ${listed.join(", ")}, or clone_project with machine`,
   );
-}
-
-/**
- * A machine's most recently used project, when its list says which one that is:
- * strictly newer than every other, not a tie an older machine's thread list
- * cannot break.
- */
-function mostRecentProject(
-  sessions: readonly SessionSummary[],
-  host: string,
-  projects: readonly Project[],
-): string | undefined {
-  const last = new Map<string, number>();
-  for (const session of sessions) {
-    if ((session.host ?? LOCAL_HOST) !== host || session.workspaceUnknown) continue;
-    const path = plainPath(session.worktree?.repo || session.repo || session.cwd);
-    if (!path) continue;
-    last.set(path, Math.max(last.get(path) ?? 0, session.updatedAt ?? 0));
-  }
-  const at = (path: string) => last.get(path) ?? 0;
-  const [first, second] = [...projects].sort((a, b) => at(b.path) - at(a.path));
-  if (!first) return undefined;
-  if (second && at(first.path) <= at(second.path)) return undefined;
-  return first.path;
 }
 
 /** `session/new` on a machine, with the worktree fallback a folder outside git needs. */
@@ -1228,7 +1411,7 @@ async function startOnMachine(machine: MachineRef, caller: RuleThread, call: Sta
     const refused = checkStart(caller, book(), 1, delegateLimits());
     if (refused) return failureJson(refused);
   }
-  const project = projectOnMachine(machine, caller, call.project);
+  const project = await projectOnMachine(machine, caller, call.project);
   if (isFailure(project)) return failureJson(project);
   const snapshot = await remoteSnapshot(machine);
   if (isFailure(snapshot)) return failureJson(snapshot);
@@ -1325,7 +1508,7 @@ async function fanOutOnMachine(
   }
   const snapshot = await remoteSnapshot(machine);
   if (isFailure(snapshot)) return failureJson(snapshot);
-  const project = projectOnMachine(machine, caller, call.project);
+  const project = await projectOnMachine(machine, caller, call.project);
   if (isFailure(project)) return failureJson(project);
   const chosen: { harness: Harness; model?: string; effort?: string; account?: string | null }[] = [];
   const targets = new Set<string>();
@@ -1636,8 +1819,13 @@ async function perform(
       const answer = await message(caller, target, call.text, call.attachments, call.steer);
       return answer.error ? answer : { ...answer, ...machineFields(machineOfThread(target)) };
     }
-    case "manage_queue":
-      return manageQueue(caller, call);
+    case "manage_queue": {
+      // The queue is this app's own record, so a machine that is away still has it.
+      const on = threadNamedOn(call.machine, call.target);
+      if (isFailure(on)) return failureJson(on);
+      const answer = await manageQueue(caller, { ...call, target: on.target });
+      return answer.error ? answer : { ...answer, ...machineFields(on.machine) };
+    }
     case "wait_session": {
       // A named machine checks where each link runs, not whether it can be reached: a wait on
       // a machine that just went away still reports what its links last said, and settles if
@@ -1684,23 +1872,39 @@ async function perform(
     }
     case "list_machines":
       return listMachines(call.probe);
-    case "search_sessions":
+    case "search_sessions": {
+      const machine = checkedMachine(call.machine);
+      if (isFailure(machine)) return failureJson(machine);
+      if (machine.host) return searchSessions(threads(), caller, call.query, true, machine);
       if (call.allProjects && !acrossProjects()) return reachRefused();
       return searchSessions(threads(), caller, call.query, call.allProjects);
-    case "list_worktrees":
+    }
+    case "list_worktrees": {
+      const machine = checkedMachine(call.machine);
+      if (isFailure(machine)) return failureJson(machine);
+      if (machine.host) return listWorktrees(threads(), caller, true, machine);
       if (call.allProjects && !acrossProjects()) return reachRefused();
       return listWorktrees(threads(), caller, call.allProjects);
+    }
     case "list_projects": {
       const machine = checkedMachine(call.machine);
       if (isFailure(machine)) return failureJson(machine);
-      return projectsOnMachine(machine);
+      return await projectsOnMachine(machine);
     }
-    case "read_project":
+    case "read_project": {
+      const machine = checkedMachine(call.machine);
+      if (isFailure(machine)) return failureJson(machine);
+      if (machine.host) return readProjectOn(machine, call.path);
       return readProject(caller, call.path);
+    }
     case "create_project":
       return createProject(caller, call);
-    case "clone_project":
+    case "clone_project": {
+      const machine = checkedMachine(call.machine);
+      if (isFailure(machine)) return failureJson(machine);
+      if (machine.host) return cloneProjectOn(machine, caller, call);
       return cloneProject(caller, call);
+    }
     case "update_project":
       return updateProject(caller, call);
     case "remove_project":
@@ -1713,10 +1917,17 @@ async function perform(
       return deleteScheduledTask(caller, call.id);
     case "run_scheduled_task_now":
       return runScheduledTaskNow(caller, call.id);
-    case "list_pull_requests":
-      return listPullRequests(caller, call.state);
-    case "update_session":
-      return updateSession(caller, call);
+    case "list_pull_requests": {
+      const machine = checkedMachine(call.machine);
+      if (isFailure(machine)) return failureJson(machine);
+      return listPullRequests(caller, call.state, machine);
+    }
+    case "update_session": {
+      const on = managedOn(call.machine, call.target);
+      if (isFailure(on)) return failureJson(on);
+      const answer = await updateSession(caller, { ...call, target: on.target }, !!on.machine.host);
+      return answer.error ? answer : { ...answer, ...machineFields(on.machine) };
+    }
     case "interrupt_session": {
       const machine = checkedMachine(call.machine ?? (splitThreadKey(call.target).host || undefined));
       if (isFailure(machine)) return failureJson(machine);
@@ -1725,8 +1936,12 @@ async function perform(
       const answer = await interruptSession(caller, target);
       return answer.error ? answer : { ...answer, ...machineFields(machineOfThread(target)) };
     }
-    case "configure_session":
-      return configureSession(caller, call);
+    case "configure_session": {
+      const on = managedOn(call.machine, call.target);
+      if (isFailure(on)) return failureJson(on);
+      const answer = await configureSession(caller, { ...call, target: on.target }, !!on.machine.host);
+      return answer.error ? answer : { ...answer, ...machineFields(on.machine) };
+    }
     case "transfer_session":
       return transferSession(caller, call.target, call.harness);
     case "list_pending_requests": {
@@ -1734,12 +1949,24 @@ async function perform(
       if (isFailure(machine)) return failureJson(machine);
       return listPendingRequests(caller, call.machine ? machine : undefined);
     }
-    case "answer_request":
-      return answerRequest(caller, call);
+    case "answer_request": {
+      const on = machineThread(call.machine, call.target);
+      if (isFailure(on)) return failureJson(on);
+      const answer = await answerRequest(caller, { ...call, target: on.target });
+      return answer.error ? answer : { ...answer, ...machineFields(on.machine) };
+    }
     case "organize_threads":
       return organizeThreads(caller, call);
-    case "worktree_status":
-      return worktreeStatus(caller, call);
+    case "worktree_status": {
+      const machine = checkedMachine(
+        call.machine ?? (call.target ? splitThreadKey(call.target).host || undefined : undefined),
+      );
+      if (isFailure(machine)) return failureJson(machine);
+      const target = call.target ? scopedTarget(machine, call.target) : undefined;
+      if (isFailure(target)) return failureJson(target);
+      const answer = await worktreeStatus(caller, { ...call, target }, machine);
+      return answer.error ? answer : { ...answer, ...machineFields(machine) };
+    }
     case "handoff_worktree":
       return handoffWorktree(caller, call);
     case "thread_status": {
@@ -1791,8 +2018,17 @@ async function perform(
       // store read is the one on the computer the thread runs on, so a
       // delegate on a paired machine is read there and not here as an empty
       // list (issue 3525).
-      const target = ruleThread(useApp.getState(), call.target);
-      const refused = checkMessage(caller, target, book(), true, acrossProjects());
+      const on = machineThread(call.machine, call.target);
+      if (isFailure(on)) return failureJson(on);
+      const target = ruleThread(useApp.getState(), on.target);
+      // Another machine's thread is that machine's to allow, as `read_session` reads it.
+      const refused = checkMessage(
+        caller,
+        target,
+        book(),
+        true,
+        acrossProjects() || isRemoteThread(on.target),
+      );
       if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
       const { answer, error } = await activityFrom(target.id, {
         ...(call.after ? { after: call.after } : {}),
@@ -1989,20 +2225,51 @@ async function listHarnesses(
   };
 }
 
+/**
+ * What a paired machine's own index finds for `query`, keyed as this app
+ * keys its threads; empty for a short query or an engine without the index.
+ */
+async function searchThreadsOn(host: string, query: string): Promise<Record<string, string>> {
+  if (query.trim().length < 3) return {};
+  try {
+    const result = await requestOn<{ results?: { session_id?: string; snippet?: string }[] } | null>(
+      host,
+      "_rustcode/threads/search",
+      { query, limit: 30 },
+      30_000,
+    );
+    const hits: Record<string, string> = {};
+    for (const hit of result?.results ?? []) {
+      if (hit.session_id) hits[threadKey(host, hit.session_id)] = hit.snippet ?? "";
+    }
+    return hits;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * `search_sessions`: titles and what was said, from the index of the computer
+ * the threads run on. A named machine's threads are all of its threads, as
+ * `list_sessions` lists them, each with its project there.
+ */
 async function searchSessions(
   all: RuleThread[],
   caller: RuleThread,
   query: string,
   allProjects = false,
+  machine?: MachineRef,
 ): Promise<JsonObject> {
-  const said = await searchThreads(query);
+  const host = machine?.host ?? "";
+  const said = host ? await searchThreadsOn(host, query) : await searchThreads(query);
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   const matches = all
-    .filter((t) => allProjects || reachesThread(caller, t))
+    .filter((t) => (host ? splitThreadKey(t.id).host === host : allProjects || reachesThread(caller, t)))
     .filter((t) => t.id in said || words.every((w) => t.title.toLowerCase().includes(w)))
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     .slice(0, 30);
   return {
+    ...(machine ? machineFields(machine) : {}),
     sessions: matches.map((t) => ({
       session_id: t.id,
       title: t.title,
@@ -2013,10 +2280,20 @@ async function searchSessions(
   };
 }
 
-function listWorktrees(all: RuleThread[], caller: RuleThread, allProjects = false): JsonObject {
+/** `list_worktrees`: this project's worktree threads, every project's, or every one a named machine has. */
+function listWorktrees(
+  all: RuleThread[],
+  caller: RuleThread,
+  allProjects = false,
+  machine?: MachineRef,
+): JsonObject {
+  const host = machine?.host ?? "";
+  const reached = (t: RuleThread) =>
+    host ? splitThreadKey(t.id).host === host : allProjects || reachesThread(caller, t);
   return {
+    ...(machine ? machineFields(machine) : {}),
     worktrees: all.flatMap((t) =>
-      t.worktree && (allProjects || reachesThread(caller, t))
+      t.worktree && reached(t)
         ? [
             {
               session_id: t.id,
@@ -2138,6 +2415,101 @@ async function readProject(caller: RuleThread, path: string): Promise<JsonObject
   const facts = await askProject(Method.projectRead, { path: asked }, 15_000);
   if (isFailure(facts)) return failureJson(facts);
   return projectAnswer(facts, projectPath(String(facts.path ?? asked)));
+}
+
+/**
+ * `read_project` on a paired machine: that folder's git facts, read by the
+ * engine there, and how many of its threads this app lists. The user named the
+ * machine, so the cross-project setting (this computer's) does not apply.
+ */
+async function readProjectOn(machine: MachineRef, path: string): Promise<JsonObject> {
+  const asked = projectPath(path);
+  let facts: JsonObject;
+  try {
+    facts = await requestOn<JsonObject>(machine.host, Method.projectRead, { path: asked }, 15_000);
+  } catch (error) {
+    const code = error instanceof RpcError && error.code === -32602 ? "not_found" : "target_unavailable";
+    return failureJson(failure(code, `${machine.name} could not read ${asked}: ${errorText(error)}`));
+  }
+  const at = projectPath(String(facts.path ?? asked));
+  repositories.set(`${machine.host}\n${at}`, remoteRepository(str(facts.remote)));
+  const threads = useApp
+    .getState()
+    .sessions.filter(
+      (x) =>
+        (x.host ?? LOCAL_HOST) === machine.host &&
+        sameProject(projectOf({ folder: x.cwd, worktree: x.worktree }), at),
+    );
+  return {
+    ...machineFields(machine),
+    project: {
+      ...facts,
+      path: at,
+      name: projectName(at),
+      threads: threads.length,
+      working: threads.some((x) => !!useApp.getState().threads[x.id]?.running || x.status === "running"),
+    },
+  };
+}
+
+/** A folder's parent, on whichever platform wrote it. */
+const parentFolder = (path: string) => path.replace(/[\\/]+$/, "").replace(/[\\/][^\\/]*$/, "");
+
+/**
+ * `clone_project` on a paired machine: `git clone` by the engine there. The
+ * parent is the call's, else the one folder that machine's projects share;
+ * with several it asks for one rather than pick. The clone is remembered as
+ * one of that machine's projects, so the next `start_session` finds it by
+ * its repository.
+ */
+async function cloneProjectOn(
+  machine: MachineRef,
+  caller: RuleThread,
+  call: { url: string; parent?: string; name?: string },
+): Promise<JsonObject> {
+  const parents = [
+    ...new Set(machineProjects(machine.host).map((project) => parentFolder(project.path))),
+  ].filter(Boolean);
+  const parent = call.parent ? projectPath(call.parent) : parents.length === 1 ? parents[0]! : "";
+  if (!parent) {
+    return failureJson(
+      failure(
+        "invalid",
+        parents.length
+          ? `pass parent: the folder on ${machine.name} to clone into, such as ${parents.slice(0, 10).join(", ")}`
+          : `pass parent: the absolute folder on ${machine.name} to clone into`,
+      ),
+    );
+  }
+  const no = await permitted(caller, `project:clone@${machine.id}:${call.url}`, {
+    kind: "project",
+    caller: caller.id,
+    callerTitle: caller.title,
+    target: call.name ? `${parent}/${call.name}` : parent,
+    detail: `It would run git clone on ${call.url} in ${parent} on ${machine.name}. A large repository over a slow link can take minutes.`,
+    machine: machine.name,
+  });
+  if (no) return failureJson(no);
+  let facts: JsonObject;
+  try {
+    facts = await requestOn<JsonObject>(
+      machine.host,
+      Method.projectClone,
+      { url: call.url, parent, ...(call.name ? { name: call.name } : {}) },
+      620_000,
+    );
+  } catch (error) {
+    const code = error instanceof RpcError && error.code === -32602 ? "not_found" : "target_unavailable";
+    return failureJson(failure(code, `the clone on ${machine.name} failed: ${errorText(error)}`));
+  }
+  const at = projectPath(String(facts.path ?? parent));
+  const cloned = clonedOn.get(machine.host) ?? [];
+  if (!cloned.includes(at)) clonedOn.set(machine.host, [...cloned, at]);
+  repositories.set(`${machine.host}\n${at}`, remoteRepository(str(facts.remote) ?? call.url));
+  return {
+    ...machineFields(machine),
+    project: { ...facts, path: at, name: projectName(at), threads: 0, created: true },
+  };
 }
 
 /** `create_project`: register an existing folder, or make a new one a repository. */
@@ -2381,12 +2753,22 @@ function pullFailure(error: { code: string; message: string }): Failure {
 }
 
 /** `list_pull_requests`: the caller's project's pull requests, through the panel's own call. */
-async function listPullRequests(caller: RuleThread, state: PullStateChoice): Promise<JsonObject> {
-  const cwd = projectOf(caller);
+/**
+ * `list_pull_requests`: this project's, read by `gh` on this computer, or on a
+ * named machine in its checkout of this project's repository (found as
+ * `start_session` finds it), with that machine's own `gh` login.
+ */
+async function listPullRequests(
+  caller: RuleThread,
+  state: PullStateChoice,
+  machine: MachineRef = localMachine(),
+): Promise<JsonObject> {
+  const cwd = machine.host ? await projectOnMachine(machine, caller, undefined) : projectOf(caller);
+  if (isFailure(cwd)) return failureJson(cwd);
   if (!cwd) return failureJson(failure("failed", "this thread has no project folder"));
   let result: Json;
   try {
-    result = await request(Method.pulls, { cwd, state, limit: MAX_PULL_REQUESTS }, 60_000);
+    result = await requestOn(machine.host, Method.pulls, { cwd, state, limit: MAX_PULL_REQUESTS }, 60_000);
   } catch (error) {
     return failureJson(failure("target_unavailable", `pull requests could not be read: ${errorText(error)}`));
   }
@@ -2395,8 +2777,9 @@ async function listPullRequests(caller: RuleThread, state: PullStateChoice): Pro
   const pulls = parsePullList(result).pulls;
   // The answer also seeds the panel's header: a pull opened after the agent's
   // read draws its title, state and checks before its own detail is read.
-  rememberPullSummaries(cwd, pulls);
+  if (!machine.host) rememberPullSummaries(cwd, pulls);
   return {
+    ...(machine.host ? { ...machineFields(machine), project: cwd } : {}),
     pull_requests: pulls.map((p) => ({
       number: p.number,
       title: p.title,
@@ -2412,6 +2795,7 @@ const NO_PROVIDER_NOTE = "no pull request provider for this remote";
 /** A thread's pull request and checks, read through the engine's `gh` call. */
 async function delegatePull(
   target: RuleThread,
+  host = splitThreadKey(target.id).host,
 ): Promise<{ branch?: string; pull?: DelegatePull; error?: Failure; note?: string }> {
   const cwd = projectOf(target);
   if (!cwd) return { error: failure("failed", "this thread has no project folder") };
@@ -2421,13 +2805,18 @@ async function delegatePull(
     // delegate may have renamed it, and the engine echoes the branch it was
     // asked for, so naming the recorded one would hide the rename (and its
     // pull request) from status, merge and cleanup.
-    let answer = parsePullState(await request(Method.pullState, { cwd: worktree?.path ?? cwd }, 60_000));
+    // A thread on another machine is read by `gh` there, in its own folders.
+    let answer = parsePullState(
+      await requestOn(host, Method.pullState, { cwd: worktree?.path ?? cwd }, 60_000),
+    );
     // A remote on another forge has no pull requests to read: that is an answer, not a failure.
     if (answer.error?.code === "no_provider") return { note: NO_PROVIDER_NOTE };
     // A detached HEAD has no branch to look up, so fall back to the recorded
     // one rather than reporting no pull request at all.
     if (answer.error && worktree?.branch) {
-      answer = parsePullState(await request(Method.pullState, { cwd, branch: worktree.branch }, 60_000));
+      answer = parsePullState(
+        await requestOn(host, Method.pullState, { cwd, branch: worktree.branch }, 60_000),
+      );
     }
     if (answer.error?.code === "no_provider") return { note: NO_PROVIDER_NOTE };
     if (answer.error) return { error: pullFailure(answer.error) };
@@ -2480,25 +2869,10 @@ async function threadStatus(
   }
   const settled = await Promise.allSettled(
     entries.map(async (entry) => {
-      // Another machine's branch and pull request are not this app's to read
-      // (they live in that machine's engine and folders): its status is what
-      // its thread list and this machine's reports say. Its recorded activity
-      // is asked of that machine, which is what carries the provider error a
-      // failed remote turn left (issue 3525).
-      if (isRemoteThread(entry.id)) {
-        return {
-          entry,
-          state: { branch: entry.worktree?.branch } as {
-            branch?: string;
-            pull?: DelegatePull;
-            error?: Failure;
-            note?: string;
-          },
-          activity: entry.running
-            ? ((await activityFrom(entry.id, { order: "newest", limit: 1 })).answer ?? null)
-            : null,
-        };
-      }
+      // Another machine's branch and pull request are read by `gh` in its own
+      // folders, over its connection, and its recorded activity is asked of
+      // it too: that carries the provider error a failed remote turn left
+      // (issue 3525).
       const [state, activity] = await Promise.all([
         delegatePull(entry),
         entry.running
@@ -2780,24 +3154,29 @@ function localWorktrees(): RuleThread[] {
 async function worktreeStatus(
   caller: RuleThread,
   call: Extract<ReturnType<typeof parseCall>, { tool: "worktree_status" }>,
+  machine: MachineRef = localMachine(),
 ): Promise<JsonObject> {
+  const host = machine.host;
   const where = useApp.getState().readAcrossProjects;
-  if (call.allProjects && !where) return reachRefused();
+  if (call.allProjects && !where && !host) return reachRefused();
   const entries: RuleThread[] = [];
+  // A named machine's worktrees are read by the engine there, every one it has:
+  // its folders are in no project of this computer's.
+  const all = host
+    ? allThreads().filter((t) => t.worktree && splitThreadKey(t.id).host === host)
+    : localWorktrees();
   if (call.target) {
-    const target = manageTarget(caller, call.target);
+    const target = manageTarget(caller, call.target, !!host);
     if (isFailure(target)) return failureJson(target);
     if (!target.worktree) {
       return { worktrees: [], note: `“${target.title}” does not run in a worktree` };
     }
     entries.push(target);
   } else {
-    // This computer's folders only: a remote thread's worktree is read by the
-    // engine on that machine, which this call does not reach.
-    const rows = localWorktrees().filter((t) => call.allProjects || reachesThread(caller, t));
+    const rows = all.filter((t) => host || call.allProjects || reachesThread(caller, t));
     entries.push(...rows.slice(0, MAX_WORKTREES));
   }
-  const omitted = call.target ? 0 : Math.max(0, localWorktrees().length - entries.length);
+  const omitted = call.target ? 0 : Math.max(0, all.length - entries.length);
   if (!entries.length) {
     return {
       worktrees: [],
@@ -2810,13 +3189,13 @@ async function worktreeStatus(
   let states: WorktreeState[] = [];
   let stateError: string | undefined;
   try {
-    states = parseWorktreeStates(await request(V2Method.worktreeState, { paths }, 60_000));
+    states = parseWorktreeStates(await requestOn(host, V2Method.worktreeState, { paths }, 60_000));
   } catch (error) {
     stateError = errorText(error);
   }
   // A pull request is one `gh` read, run together and capped like `thread_status`.
   const asking = entries.slice(0, MAX_WORKTREE_PULLS);
-  const pulls = await Promise.allSettled(asking.map((entry) => delegatePull(entry)));
+  const pulls = await Promise.allSettled(asking.map((entry) => delegatePull(entry, host)));
   const worktrees = entries.map((entry, index) => {
     const state = states.find((row) => row.path === entry.worktree?.path);
     const read = index < pulls.length ? pulls[index] : undefined;
@@ -2824,7 +3203,7 @@ async function worktreeStatus(
     return {
       session_id: entry.id,
       title: entry.title,
-      ...(call.allProjects ? { project: projectOf(entry) } : {}),
+      ...(call.allProjects || host ? { project: projectOf(entry) } : {}),
       status: entry.status ?? (entry.running ? "running" : "idle"),
       branch: state?.branch ?? entry.worktree?.branch ?? "",
       path: state?.path ?? entry.worktree?.path ?? "",
@@ -3051,9 +3430,18 @@ async function applyManagedChange(
   return { applied, renameFailed: false };
 }
 
-async function updateSession(caller: RuleThread, call: UpdateCall): Promise<JsonObject> {
-  const target = manageTarget(caller, call.target);
+async function updateSession(caller: RuleThread, call: UpdateCall, machine = false): Promise<JsonObject> {
+  const target = manageTarget(caller, call.target, machine);
   if (isFailure(target)) return failureJson(target);
+  // A thread's name lives on the computer that owns it (`renameThread`).
+  if (call.title && isRemoteThread(target.id)) {
+    return failureJson(
+      failure(
+        "not_allowed",
+        `a thread on ${targetMachine(target.id) ?? "another computer"} is renamed there`,
+      ),
+    );
+  }
   if (target.id !== caller.id) {
     const changes = [
       call.title && `rename it to “${call.title}”`,
@@ -3068,6 +3456,7 @@ async function updateSession(caller: RuleThread, call: UpdateCall): Promise<Json
       callerTitle: caller.title,
       target: target.title,
       detail: `It would ${changes.join(", ")}.`,
+      machine: targetMachine(target.id),
     });
     if (no) return failureJson(no);
   }
@@ -3178,7 +3567,9 @@ function answeringFor(request: PermissionRequest, call: AnswerCall): Answering |
  */
 async function answerRequest(caller: RuleThread, call: AnswerCall): Promise<JsonObject> {
   const target = ruleThread(useApp.getState(), call.target);
-  const refused = checkManage(caller, target);
+  // Another machine's thread is in no project of this computer's: the tree rule below
+  // (a thread this one delegated to) is what lets it be answered from here.
+  const refused = target && isRemoteThread(target.id) ? null : checkManage(caller, target);
   if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
   if (target.id === caller.id) {
     return failureJson(failure("not_allowed", "a thread cannot answer its own request"));
@@ -3219,6 +3610,7 @@ async function answerRequest(caller: RuleThread, call: AnswerCall): Promise<Json
     callerTitle: caller.title,
     target: target.title,
     detail,
+    machine: targetMachine(target.id),
   });
   if (no) return failureJson(no);
   // The user took their time: the card may have been answered in its own chat meanwhile.
@@ -3355,8 +3747,12 @@ async function interruptSession(caller: RuleThread, id: string): Promise<JsonObj
   return { session_id: target.id, interrupted: true, stopped };
 }
 
-async function configureSession(caller: RuleThread, call: ConfigureCall): Promise<JsonObject> {
-  const target = manageTarget(caller, call.target);
+async function configureSession(
+  caller: RuleThread,
+  call: ConfigureCall,
+  machine = false,
+): Promise<JsonObject> {
+  const target = manageTarget(caller, call.target, machine);
   if (isFailure(target)) return failureJson(target);
   await openThread(target.id);
   const options = () => useApp.getState().threads[target.id]?.configOptions ?? [];
@@ -3380,6 +3776,7 @@ async function configureSession(caller: RuleThread, call: ConfigureCall): Promis
       callerTitle: caller.title,
       target: target.title,
       detail: `Its next turn would run on ${changes.map(([, value]) => value).join(" · ")}.`,
+      machine: targetMachine(target.id),
     });
     if (no) return failureJson(no);
   }

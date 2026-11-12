@@ -1037,11 +1037,20 @@ running, or none of the described ones answers, the connection is closed with
 Client requests and notifications are restricted to these exact methods:
 
 - `initialize`
-- `_rustcode/harnesses`
+- `_rustcode/session/status`, `_rustcode/session/snooze`, `_rustcode/session/repair`
+- `_rustcode/harnesses`, `_rustcode/harnesses/default`, `_rustcode/harnesses/set`
+- `_rustcode/settings/get`, `_rustcode/settings/set`
+- `_rustcode/skills/add`, `_rustcode/skills/get`
+- `_rustcode/threads/search`, `_rustcode/data/activity`, `_rustcode/project/read`,
+  `_rustcode/project/clone` and `_rustcode/worktrees/state`: what an agent on the
+  paired computer reads and does here (`docs/orchestrator.md` › Machines)
 
-The only allowed prefixes are `session/` and `_rustcode/pulls`. Everything else is denied, including
-provider credentials and login, pairing and remote management, `_rustcode/server/*`,
-MCP server configuration and data-store SQL. Denied requests receive a JSON-RPC
+The only allowed prefixes are `session/`, `_rustcode/pulls` and
+`_rustcode/capabilities` (which includes adding an MCP server, that is, running
+a command on this machine: consistent with "can see and run all threads").
+Everything else is denied, including provider credentials and login, pairing
+and remote management, `_rustcode/server/*`, data-store SQL and usage, project
+creation and worktree handoff. Denied requests receive a JSON-RPC
 error with the same `id`, numeric code `-32601` and
 `data: {"code":"unauthorized_access"}`. Denied notifications are dropped.
 JSON-RPC responses pass through only for an outstanding server request ID,

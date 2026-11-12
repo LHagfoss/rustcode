@@ -21,8 +21,12 @@ import { formatDuration, type QueuedPrompt, withWakeMark } from "./thread";
  * `start_session` and `fan_out` (issue 3443): a thread of the user's own at the
  * top level, rather than a delegate the caller waits on. A v14 app is never
  * offered `standalone`, and the engine refuses a call that carries one.
+ * Version 16 gives `machine` to the rest of the thread tools and the project
+ * reads (`answer_request`, `manage_queue`, `search_sessions`, `read_activity`,
+ * `configure_session`, `update_session`, `worktree_status`, `list_worktrees`,
+ * `list_pull_requests`, `read_project`, `clone_project`).
  */
-export const CAPABILITY_VERSION = 15;
+export const CAPABILITY_VERSION = 16;
 /** The most of a child's answer `wait_session` carries; beyond it, `read_session` pages the rest. */
 export const MAX_BYTES = 8 * 1024;
 /** The longest prompt or message a thread may hand another one (32 KiB). */
@@ -536,8 +540,8 @@ export type Call =
     }
   /** `harness` narrows to one harness, `model` to the models whose id or name matches. */
   | { tool: "list_harnesses"; harness?: string; model?: string; machine?: string }
-  | { tool: "search_sessions"; query: string; allProjects: boolean }
-  | { tool: "list_worktrees"; allProjects: boolean }
+  | { tool: "search_sessions"; query: string; allProjects: boolean; machine?: string }
+  | { tool: "list_worktrees"; allProjects: boolean; machine?: string }
   | {
       tool: "update_session";
       target?: string;
@@ -547,9 +551,10 @@ export type Call =
       status?: SessionStatusChoice;
       /** When it comes back, in ms; `null` brings it back now. */
       snoozedUntil?: number | null;
+      machine?: string;
     }
   | { tool: "interrupt_session"; target: string; machine?: string }
-  | { tool: "configure_session"; target?: string; model?: string; effort?: string }
+  | { tool: "configure_session"; target?: string; model?: string; effort?: string; machine?: string }
   | { tool: "transfer_session"; target: string; harness: string }
   | { tool: "list_pending_requests"; machine?: string }
   | {
@@ -560,6 +565,7 @@ export type Call =
       choice?: ApprovalChoice;
       /** For a question: free text, or the id of one of its options. */
       answer?: string;
+      machine?: string;
     }
   | {
       tool: "organize_threads";
@@ -571,10 +577,17 @@ export type Call =
       archived?: boolean;
     }
   | { tool: "list_projects"; machine?: string }
-  | { tool: "list_pull_requests"; state: PullStateChoice }
+  | { tool: "list_pull_requests"; state: PullStateChoice; machine?: string }
   | { tool: "thread_usage"; since?: string; groupBy: UsageGroup; project?: string }
   | { tool: "query_data"; sql: string; limit: number }
-  | { tool: "read_activity"; target: string; after?: string; limit: number; order?: "newest" }
+  | {
+      tool: "read_activity";
+      target: string;
+      after?: string;
+      limit: number;
+      order?: "newest";
+      machine?: string;
+    }
   | {
       tool: "manage_queue";
       target: string;
@@ -583,19 +596,20 @@ export type Call =
       queueId?: string;
       /** What it says instead, for `edit`. */
       text?: string;
+      machine?: string;
     }
   | { tool: "thread_status"; target?: string; machine?: string }
   | { tool: "merge_when_green"; target: string; timeoutMs: number; callId?: string }
   | { tool: "cleanup_worktree"; target: string; settle: boolean }
   /** Where worktrees stand: one thread's, or every worktree this thread reaches. */
-  | { tool: "worktree_status"; target?: string; allProjects: boolean }
+  | { tool: "worktree_status"; target?: string; allProjects: boolean; machine?: string }
   /** Move a thread's work between the user's checkout and a worktree of its own. */
   | { tool: "handoff_worktree"; target: string; to: HandoffTarget }
   /** The computers this RustCode is paired with (orchestration version 12). */
   | { tool: "list_machines"; probe: boolean }
-  | { tool: "read_project"; path: string }
+  | { tool: "read_project"; path: string; machine?: string }
   | { tool: "create_project"; path: string; init?: boolean }
-  | { tool: "clone_project"; url: string; parent?: string; name?: string }
+  | { tool: "clone_project"; url: string; parent?: string; name?: string; machine?: string }
   | {
       tool: "update_project";
       path: string;
@@ -715,13 +729,14 @@ export function parseCall(params: JsonObject): Call | Failure {
       };
     }
     case "list_worktrees":
-      return { tool: "list_worktrees", allProjects: allProjects(args) };
+      return { tool: "list_worktrees", allProjects: allProjects(args), ...machineField(args) };
     case "worktree_status": {
       const target = s(args.session_id)?.trim() || undefined;
       return {
         tool: "worktree_status",
         ...(target ? { target } : {}),
         allProjects: allProjects(args),
+        ...machineField(args),
       };
     }
     case "handoff_worktree": {
@@ -744,12 +759,12 @@ export function parseCall(params: JsonObject): Call | Failure {
       if (!PULL_STATES.includes(state)) {
         return failure("invalid", `state must be one of ${PULL_STATES.join(", ")}`);
       }
-      return { tool: "list_pull_requests", state: state as PullStateChoice };
+      return { tool: "list_pull_requests", state: state as PullStateChoice, ...machineField(args) };
     }
     case "search_sessions": {
       const query = (s(args.query) ?? "").trim();
       if (!query) return failure("invalid", "query is required");
-      return { tool: "search_sessions", query, allProjects: allProjects(args) };
+      return { tool: "search_sessions", query, allProjects: allProjects(args), ...machineField(args) };
     }
     case "interrupt_session": {
       const target = s(args.session_id) ?? "";
@@ -792,6 +807,7 @@ export function parseCall(params: JsonObject): Call | Failure {
         requestId,
         ...(choice ? { choice: choice as ApprovalChoice } : {}),
         ...(answer ? { answer: answer.trim() } : {}),
+        ...machineField(args),
       };
     }
     case "organize_threads": {
@@ -877,6 +893,7 @@ export function parseCall(params: JsonObject): Call | Failure {
         after,
         ...(args.order === "newest" ? { order: "newest" as const } : {}),
         limit: Math.min(Math.max(asked, 1), MAX_ACTIVITY_ITEMS),
+        ...machineField(args),
       };
     }
     case "manage_queue": {
@@ -886,16 +903,25 @@ export function parseCall(params: JsonObject): Call | Failure {
       if (!QUEUE_ACTIONS.includes(action)) {
         return failure("invalid", `action must be one of ${QUEUE_ACTIONS.join(", ")}`);
       }
-      if (action === "list") return { tool: "manage_queue", target, action: action as QueueAction };
+      if (action === "list") {
+        return { tool: "manage_queue", target, action: action as QueueAction, ...machineField(args) };
+      }
       const queueId = (s(args.queue_id) ?? "").trim();
       if (!queueId) return failure("invalid", `queue_id is required to ${action}`);
       const text = s(args.text) ?? "";
       if (action === "edit") {
         if (!text.trim()) return failure("invalid", "text is required to edit");
         if (bytes(text) > MAX_MESSAGE_BYTES) return failure("invalid", "the message is over 32 KiB");
-        return { tool: "manage_queue", target, action: action as QueueAction, queueId, text };
+        return {
+          tool: "manage_queue",
+          target,
+          action: action as QueueAction,
+          queueId,
+          text,
+          ...machineField(args),
+        };
       }
-      return { tool: "manage_queue", target, action: action as QueueAction, queueId };
+      return { tool: "manage_queue", target, action: action as QueueAction, queueId, ...machineField(args) };
     }
     case "configure_session":
       return {
@@ -903,6 +929,7 @@ export function parseCall(params: JsonObject): Call | Failure {
         target: s(args.session_id),
         model: s(args.model),
         effort: s(args.effort),
+        ...machineField(args),
       };
     case "update_session": {
       const status = s(args.status);
@@ -933,6 +960,7 @@ export function parseCall(params: JsonObject): Call | Failure {
         unread,
         status: status as SessionStatusChoice | undefined,
         snoozedUntil,
+        ...machineField(args),
       };
     }
     case "read_session": {
@@ -1036,7 +1064,9 @@ export function parseCall(params: JsonObject): Call | Failure {
     case "remove_project": {
       const path = (s(args.path) ?? "").trim();
       if (!path) return failure("invalid", "path is required");
-      return tool === "read_project" ? { tool: "read_project", path } : { tool: "remove_project", path };
+      return tool === "read_project"
+        ? { tool: "read_project", path, ...machineField(args) }
+        : { tool: "remove_project", path };
     }
     case "create_project": {
       const path = (s(args.path) ?? "").trim();
@@ -1055,6 +1085,7 @@ export function parseCall(params: JsonObject): Call | Failure {
         url,
         parent: s(args.parent)?.trim() || undefined,
         name: s(args.name)?.trim() || undefined,
+        ...machineField(args),
       };
     }
     case "update_project": {

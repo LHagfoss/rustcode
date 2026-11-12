@@ -306,7 +306,7 @@ pub const LIST_SESSIONS: Tool = Tool {
             "properties": {
                 "query": {"type": "string"},
                 "all_projects": {"type": "boolean", "description": "Every project's threads, with each thread's project path"},
-                "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"}
+                "machine": {"type": "string"}
             },
             "additionalProperties": false
         })
@@ -328,7 +328,7 @@ pub const MESSAGE_SESSION: Tool = Tool {
                 "session_id": {"type": "string", "minLength": 1},
                 "message": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_MESSAGE_BYTES},
                 "steer": {"type": "boolean"},
-                "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"},
+                "machine": {"type": "string"},
                 "attachments": {
                     "type": "array",
                     "maxItems": crate::orchestration::MAX_ATTACHMENTS,
@@ -357,7 +357,7 @@ pub const WAIT_SESSION: Tool = Tool {
             "properties": {
                 "link_id": {"type": "string"},
                 "link_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
-                "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"},
+                "machine": {"type": "string"},
                 "timeout_ms": {"type": "integer", "minimum": 1, "maximum": crate::orchestration::MAX_WAIT_MS, "default": crate::orchestration::DEFAULT_WAIT_MS}
             },
             "additionalProperties": false
@@ -381,7 +381,7 @@ pub const READ_SESSION: Tool = Tool {
             "properties": {
                 "session_id": {"type": "string", "minLength": 1},
                 "last_turns": {"type": "integer", "minimum": 1, "maximum": crate::orchestration::MAX_LAST_TURNS, "default": crate::orchestration::DEFAULT_LAST_TURNS},
-                "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"},
+                "machine": {"type": "string"},
                 "offset": {"type": "integer", "minimum": 0, "description": "Bytes into the rendered answer to start from; pass the previous page's next_offset"}
             },
             "required": ["session_id"],
@@ -411,7 +411,7 @@ pub const START_SESSION: Tool = Tool {
                 "worktree": {"type": "boolean"},
                 "standalone": {"type": "boolean", "description": "A thread of the user's own at the top level, not a delegate: nothing comes back"},
                 "project": {"type": "string", "description": "absolute path of another project"},
-                "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"},
+                "machine": {"type": "string"},
                 "client_request_id": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_CLIENT_REQUEST_ID_CHARS, "description": "Retry key: a repeat returns the first result"}
             },
             "required": ["prompt"],
@@ -452,7 +452,7 @@ pub const FAN_OUT: Tool = Tool {
                 },
                 "standalone": {"type": "boolean", "description": "Threads of the user's own at the top level, not delegates: nothing comes back"},
                 "project": {"type": "string", "description": "absolute path of the project on that machine"},
-                "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"},
+                "machine": {"type": "string"},
                 "client_request_id": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_CLIENT_REQUEST_ID_CHARS, "description": "Retry key: a repeat returns the first result"}
             },
             "required": ["prompt", "harnesses"],
@@ -477,7 +477,7 @@ pub const LIST_HARNESSES: Tool = Tool {
             "properties": {
                 "harness": {"type": "string", "description": "Only this harness"},
                 "model": {"type": "string", "description": "Part of a model id or name, any case"},
-                "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"}
+                "machine": {"type": "string"}
             },
             "required": [],
             "additionalProperties": false
@@ -498,7 +498,8 @@ pub const SEARCH_SESSIONS: Tool = Tool {
             "type": "object",
             "properties": {
                 "query": {"type": "string", "minLength": 1},
-                "all_projects": {"type": "boolean", "description": "Search every project's threads, with each match's project path"}
+                "all_projects": {"type": "boolean", "description": "Search every project's threads, with each match's project path"},
+                "machine": {"type": "string"}
             },
             "required": ["query"],
             "additionalProperties": false
@@ -518,7 +519,8 @@ pub const LIST_WORKTREES: Tool = Tool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "all_projects": {"type": "boolean", "description": "Every project's worktree threads, with each one's project path"}
+                "all_projects": {"type": "boolean", "description": "Every project's worktree threads, with each one's project path"},
+                "machine": {"type": "string"}
             },
             "required": [],
             "additionalProperties": false
@@ -543,7 +545,8 @@ pub const UPDATE_SESSION: Tool = Tool {
                 "pinned": {"type": "boolean"},
                 "unread": {"type": "boolean"},
                 "status": {"type": "string", "enum": crate::orchestration::SESSION_STATUSES},
-                "snoozed_until": {"type": ["string", "null"], "description": "1h, evening, tomorrow, next_week, an ISO 8601 time, or null"}
+                "snoozed_until": {"type": ["string", "null"], "description": "1h, evening, tomorrow, next_week, an ISO 8601 time, or null"},
+                "machine": {"type": "string"}
             },
             "required": [],
             "additionalProperties": false
@@ -564,7 +567,7 @@ pub const INTERRUPT_SESSION: Tool = Tool {
             "type": "object",
             "properties": {
                 "session_id": {"type": "string", "minLength": 1},
-                "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"}
+                "machine": {"type": "string"}
             },
             "required": ["session_id"],
             "additionalProperties": false
@@ -586,7 +589,8 @@ pub const CONFIGURE_SESSION: Tool = Tool {
             "properties": {
                 "session_id": {"type": "string", "minLength": 1},
                 "model": {"type": "string", "minLength": 1},
-                "effort": {"type": "string", "minLength": 1}
+                "effort": {"type": "string", "minLength": 1},
+                "machine": {"type": "string"}
             },
             "required": [],
             "additionalProperties": false
@@ -627,7 +631,7 @@ pub const LIST_PENDING_REQUESTS: Tool = Tool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"}
+                "machine": {"type": "string"}
             },
             "required": [],
             "additionalProperties": false
@@ -650,7 +654,8 @@ pub const ANSWER_REQUEST: Tool = Tool {
                 "session_id": {"type": "string", "minLength": 1},
                 "request_id": {"type": "string", "minLength": 1},
                 "choice": {"type": "string", "enum": crate::orchestration::APPROVAL_ANSWERS},
-                "answer": {"type": "string", "minLength": 1}
+                "answer": {"type": "string", "minLength": 1},
+                "machine": {"type": "string"}
             },
             "required": ["session_id", "request_id"],
             "additionalProperties": false
@@ -691,7 +696,7 @@ pub const ORGANIZE_THREADS: Tool = Tool {
 
 pub const LIST_PROJECTS: Tool = Tool {
     name: crate::orchestration::LIST_PROJECTS,
-    description: "List the projects the user has threads in, newest first, at most 50: path, name, how many threads each has and whether any is working. Ask it when the user asks what they have been working on or where a thread lives. Use a path as start_session's project and all_projects on list_sessions and search_sessions. Pass `machine` for another paired computer's projects.",
+    description: "List the projects the user has threads in, newest first, at most 50: path, name, how many threads each has and whether any is working. Ask it when the user asks what they have been working on or where a thread lives. Use a path as start_session's project and all_projects on list_sessions and search_sessions. Pass `machine` for another paired computer's projects, each with its git remote.",
     arguments: r#"{}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -699,7 +704,7 @@ pub const LIST_PROJECTS: Tool = Tool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"}
+                "machine": {"type": "string"}
             },
             "required": [],
             "additionalProperties": false
@@ -713,7 +718,7 @@ pub const LIST_PROJECTS: Tool = Tool {
 /// paired, which `start_session` and the other machine-aware tools take.
 pub const LIST_MACHINES: Tool = Tool {
     name: crate::orchestration::LIST_MACHINES,
-    description: "List the computers this RustCode is paired with: this one (current: true) and each machine with id, name, display_name, icon, icon_tint, platform, state (connected, connecting, reconnecting, unavailable, revoked or offline; reason and detail say why it is not connected), paused, route, routes with each one's last test, harnesses and project names. Every tool whose schema has a `machine` argument takes an id or name from here; omit it to act on this computer. A remote thread's id carries its machine, so later calls need no `machine`. Acting on another machine asks the user first; an offline one is refused by name. `probe: true` tests every route and retries machines not connected (up to 10 s).",
+    description: "List the computers this RustCode is paired with: this one (current: true) and each machine with id, name, platform, version, state (connected, connecting, reconnecting, unavailable, offline or revoked), why not connected and its cause, routes with the last test of each, running and waiting threads, harnesses with models and accounts, and projects with path and git remote. Every tool's `machine` argument takes an id or name from here; omit it to act on this computer. Threads on another machine answer with an id that carries that machine, so later calls need no `machine`. Acting on another machine asks the user first, and an offline one is refused by name. `probe: true` tests every route and retries machines not connected (up to 10 s).",
     arguments: r#"{}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -741,7 +746,8 @@ pub const LIST_PULL_REQUESTS: Tool = Tool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "state": {"type": "string", "enum": crate::orchestration::PR_STATES}
+                "state": {"type": "string", "enum": crate::orchestration::PR_STATES},
+                "machine": {"type": "string"}
             },
             "required": [],
             "additionalProperties": false
@@ -764,7 +770,7 @@ pub const THREAD_STATUS: Tool = Tool {
             "type": "object",
             "properties": {
                 "session_id": {"type": "string", "minLength": 1, "description": "One delegate; omit to report every delegate of this thread"},
-                "machine": {"type": "string", "maxLength": 200, "description": "Id or name from list_machines"}
+                "machine": {"type": "string"}
             },
             "required": [],
             "additionalProperties": false
@@ -828,7 +834,8 @@ pub const READ_PROJECT: Tool = Tool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string", "minLength": 1, "description": "absolute path of the project, as list_projects prints it"}
+                "path": {"type": "string", "minLength": 1, "description": "absolute path of the project, as list_projects prints it"},
+                "machine": {"type": "string"}
             },
             "required": ["path"],
             "additionalProperties": false
@@ -871,7 +878,8 @@ pub const CLONE_PROJECT: Tool = Tool {
             "properties": {
                 "url": {"type": "string", "minLength": 1},
                 "parent": {"type": "string", "minLength": 1, "description": "absolute folder the clone goes in; the default is the folder new threads start in"},
-                "name": {"type": "string", "minLength": 1, "description": "the new folder's name; the url's last part by default"}
+                "name": {"type": "string", "minLength": 1, "description": "the new folder's name; the url's last part by default"},
+                "machine": {"type": "string"}
             },
             "required": ["url"],
             "additionalProperties": false
@@ -1024,7 +1032,8 @@ pub const WORKTREE_STATUS: Tool = Tool {
             "type": "object",
             "properties": {
                 "session_id": {"type": "string", "minLength": 1, "description": "One thread, its own included; omit for every worktree this thread can reach"},
-                "all_projects": {"type": "boolean", "description": "Every project's worktree threads, with each one's project path"}
+                "all_projects": {"type": "boolean", "description": "Every project's worktree threads, with each one's project path"},
+                "machine": {"type": "string"}
             },
             "required": [],
             "additionalProperties": false
@@ -1163,7 +1172,8 @@ pub const READ_ACTIVITY: Tool = Tool {
                 "session_id": {"type": "string", "minLength": 1},
                 "after": {"type": "string", "description": "Opaque `next` token from an earlier page; omit for the first page"},
                 "order": {"type": "string", "enum": ["oldest", "newest"], "default": "oldest"},
-                "limit": {"type": "integer", "minimum": 1, "maximum": crate::data_store::MAX_ACTIVITY_ITEMS, "default": crate::data_store::DEFAULT_ACTIVITY_ITEMS}
+                "limit": {"type": "integer", "minimum": 1, "maximum": crate::data_store::MAX_ACTIVITY_ITEMS, "default": crate::data_store::DEFAULT_ACTIVITY_ITEMS},
+                "machine": {"type": "string"}
             },
             "required": ["session_id"],
             "additionalProperties": false
@@ -1188,7 +1198,8 @@ pub const MANAGE_QUEUE: Tool = Tool {
                 "session_id": {"type": "string", "minLength": 1},
                 "action": {"type": "string", "enum": crate::orchestration::QUEUE_ACTIONS},
                 "queue_id": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_QUEUE_ID_CHARS, "description": "A queued message's id, from list"},
-                "text": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_MESSAGE_BYTES, "description": "What the message says instead, for edit"}
+                "text": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_MESSAGE_BYTES, "description": "What the message says instead, for edit"},
+                "machine": {"type": "string"}
             },
             "required": ["session_id", "action"],
             "additionalProperties": false
