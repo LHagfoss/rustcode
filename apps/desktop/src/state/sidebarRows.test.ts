@@ -1,18 +1,22 @@
 import { describe, expect, test } from "bun:test";
 import type { FileDiff } from "../acp/types";
+import { moveBy } from "./sidebarOrder";
 import {
   cleanFolds,
   contextRow,
   hiddenKind,
+  isNestedKey,
   isShelf,
   keepListed,
   listedPicks,
+  nestedKey,
   nextRow,
   type OrderKey,
   opensRowMenu,
   type Placement,
   placeThread,
   rangeRows,
+  rowIdOf,
   rowKeyAction,
   rowMeta,
   rowStatus,
@@ -31,6 +35,66 @@ import type { TranscriptItem } from "./thread";
 const ROWS = ["a", "b", "c", "d", "e"];
 
 describe("the rows the list draws", () => {
+  // A local parent with its open remote delegate under it, other rows between that and the
+  // delegate's own row in its machine's group.
+  const twice = [
+    {
+      id: "threads",
+      groups: [
+        { key: "local", rows: [{ id: "parent" }, { id: nestedKey("host/1") }, { id: "other" }] },
+        { key: "host", rows: [{ id: "host/0" }, { id: "host/1" }, { id: "host/2" }] },
+      ],
+    },
+  ];
+
+  test("a delegate drawn twice has a key per place, so every row is a stop", () => {
+    const rows = visibleRows(twice);
+    expect(rows).toEqual(["parent", "nested:host/1", "other", "host/0", "host/1", "host/2"]);
+    expect(new Set(rows).size).toBe(rows.length);
+    expect(rows.map(rowIdOf)).toEqual(["parent", "host/1", "other", "host/0", "host/1", "host/2"]);
+    expect(rows.filter(isNestedKey)).toEqual(["nested:host/1"]);
+  });
+
+  test("the keyboard moves from the row that has it, not from the delegate's other copy", () => {
+    const rows = visibleRows(twice);
+    // On the group row: ↓ is the next row of the group, ↑ the one above it.
+    expect(nextRow(rows, "host/1", 1)).toBe("host/2");
+    expect(nextRow(rows, "host/1", -1)).toBe("host/0");
+    // On the copy under the parent: the rows around it there.
+    expect(nextRow(rows, nestedKey("host/1"), 1)).toBe("other");
+    expect(nextRow(rows, nestedKey("host/1"), -1)).toBe("parent");
+    expect(rangeRows(rows, "parent", "host/1")).toEqual(rows.slice(0, 5));
+  });
+
+  test("one row holds the tab stop however many places draw the thread", () => {
+    const rows = visibleRows(twice);
+    for (const current of ["host/1", nestedKey("host/1")]) {
+      expect(rows.filter((key) => key === current)).toHaveLength(1);
+      // The thread's two rows never both match the row the keyboard is on.
+      expect(rows.filter((key) => key === current && rowIdOf(key) === "host/1")).toHaveLength(1);
+    }
+  });
+
+  test("the open delegate's context is the copy it was opened from, else its own row, else its parent", () => {
+    const parentOf = new Map([["host/1", "parent"]]);
+    expect(contextRow("host/1", visibleRows(twice), parentOf)).toBe("nested:host/1");
+    const folded = [{ id: "threads", groups: [twice[0]!.groups[1]!] }];
+    expect(contextRow("host/1", visibleRows(folded), parentOf)).toBe("host/1");
+    const parentOnly = [{ id: "threads", rows: [{ id: "parent" }] }];
+    expect(contextRow("host/1", visibleRows(parentOnly), parentOf)).toBe("parent");
+  });
+
+  test("only the thread's own row has a place to drag or arrange in", () => {
+    // The sidebar's homes are built from the plain ids of each list's items (ui/Sidebar.tsx).
+    const group = ["host/0", "host/1", "host/2"];
+    const homes = new Map(group.map((id) => [id, { key: "host", ids: group }] as const));
+    expect(homes.get("host/1")).toBeDefined();
+    expect(homes.get(nestedKey("host/1"))).toBeUndefined();
+    // Arranging from the group row moves it there and leaves the copy under the parent out of it.
+    expect(moveBy([], group, "host/1", 1)).toEqual(["host/0", "host/2", "host/1"]);
+    expect(moveBy([], group, nestedKey("host/1"), 1)).toBeNull();
+  });
+
   test("sections keep their order, and a shut one draws none of its rows", () => {
     expect(
       visibleRows([
