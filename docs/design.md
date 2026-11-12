@@ -560,6 +560,7 @@ horizontal padding, never a circle): the composer's footer buttons, chips,
 segmented items, header actions, Settings' "New…" and "Edit config".
 Circles only for icon-only round buttons (send, stop, close in a panel
 header, toolbar clusters). Icon buttons in dense rows are `rounded-md`.
+Buttons inside a callout's actions are `rounded-md`, one step below its `rounded-lg`, and centred on its message.
 Rows are `rounded-md` (sidebar thread rows `rounded-xl` in the default comfortable
 layout, `rounded-lg` in the opt-in compact one), menu items and cards `rounded-lg`,
 menus, popovers and panels `rounded-xl`.

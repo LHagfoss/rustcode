@@ -630,7 +630,13 @@ export function Callout({
     >
       <Icon size={14} className={cx("mt-px shrink-0", tone === "danger" ? "text-danger" : "text-warning")} />
       <div className="selectable line-clamp-6 min-w-0 flex-1 text-callout text-fg-muted">{children}</div>
-      {action && <div className="-my-1 flex shrink-0 items-center gap-1.5">{action}</div>}
+      {/* Centred on the message, however many lines it takes; the buttons take the step below the
+          callout's `rounded-lg` (docs/design.md › Radius), not pills against its corners. */}
+      {action && (
+        <div className="-my-1 flex shrink-0 items-center gap-1.5 self-center [&>button]:rounded-md">
+          {action}
+        </div>
+      )}
     </div>
   );
 }

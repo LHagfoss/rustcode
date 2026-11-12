@@ -2649,7 +2649,16 @@ export function openThread(id: string): Promise<string | null> {
   let pending: Promise<string | null>;
   pending = Promise.resolve().then(async () => {
     try {
-      const result = await conn.request(Method.sessionLoad, { sessionId, cwd, mcpServers: [] }, 60_000);
+      let result: Json;
+      try {
+        result = await conn.request(Method.sessionLoad, { sessionId, cwd, mcpServers: [] }, 60_000);
+      } catch (first) {
+        // A record naming another folder is put right once, quietly; only a repair that finds
+        // problems, or a second failure, reaches the banner.
+        const fixedCwd = await repairBeforeRetry(id, conn, first);
+        if (fixedCwd === null) throw first;
+        result = await conn.request(Method.sessionLoad, { sessionId, cwd: fixedCwd, mcpServers: [] }, 60_000);
+      }
       updateThread(id, (t) => ({
         ...finishLoad(t),
         configOptions: parseConfigOptions((result as JsonObject | null)?.configOptions),
@@ -2682,6 +2691,37 @@ export function openThread(id: string): Promise<string | null> {
     threads: { ...s.threads, [id]: { ...emptyThread(id, cwd, summary?.title), loading: true } },
   }));
   return pending;
+}
+
+/** Threads whose open was repaired automatically in this app session: once each, never a loop. */
+const autoRepaired = new Set<string>();
+
+/** An open the engine refuses because the thread's record names another folder (Repair Thread fixes it). */
+export function isRepairableOpenError(error: unknown): boolean {
+  return /session\/load cwd does not match the recorded workspace/i.test(errorText(error));
+}
+
+/**
+ * A failed open that Repair Thread can fix is repaired here, once per thread: answers the folder to
+ * open again in, or null when it is not repairable, was tried already, or the repair found problems.
+ */
+async function repairBeforeRetry(id: string, conn: AcpConnection, error: unknown): Promise<string | null> {
+  if (!isRepairableOpenError(error) || autoRepaired.has(id) || !get().agent?.sessionRepair) return null;
+  autoRepaired.add(id);
+  try {
+    const answer = ((await conn.request(
+      Method.sessionRepair,
+      { sessionId: splitThreadKey(id).id },
+      10_000,
+    )) ?? {}) as JsonObject;
+    const problems = Array.isArray(answer.problems) ? answer.problems : [];
+    const cwd = typeof answer.cwd === "string" ? answer.cwd : null;
+    if (problems.length || !cwd) return null;
+    set((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? { ...x, cwd } : x)) }));
+    return cwd;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -7390,6 +7430,7 @@ export function resetForTests() {
   setShellTransport(null);
   loading.clear();
   opening.clear();
+  autoRepaired.clear();
   set({
     status: "connecting",
     remote: null,
