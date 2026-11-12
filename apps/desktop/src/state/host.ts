@@ -3510,7 +3510,7 @@ async function messageNow(
     (await steer(target.id, delivered(text, caller.title), extras))
   ) {
     delivery = "steered";
-    linkSteered(target.id, id);
+    linkSteered(target.id, id, delivered(text, caller.title));
   } else {
     deliver(target.id, delivered(text, caller.title), id, caller.id, extras);
     delivery = useApp.getState().threads[target.id]?.queue.some((q) => q.link === id) ? "queued" : "started";
@@ -4858,26 +4858,83 @@ export function linkStarted(id: string) {
   setBook((b) => updateLink(b, id, { state: "working", startedAt: Date.now() }));
 }
 
-/** The links whose message went into a running turn of a thread (`steer`), by thread: that turn settles them. */
-const steeredIntoTurn = new Map<string, Set<string>>();
+/**
+ * The links whose message went into a running turn of a thread (`steer`), by thread, with the text
+ * the engine was given: that turn settles them, and the text finds the ones it never read.
+ */
+const steeredIntoTurn = new Map<string, Map<string, string>>();
+
+/** What a steer says as the thread recorded it (`appendSteer`), else the text it was asked with. */
+const steerText = (thread: string, fallback: string) =>
+  useApp.getState().threads[thread]?.steers.at(-1)?.text ?? fallback;
 
 /**
- * A link's message was steered into the running turn of `thread`. No turn of its own carries the
- * link (`runPrompt` `options.link`), so the running turn is the one that answers it: the link works
- * from here and is settled when that turn ends (`threadTurnEnded`), however many steers went in and
- * whether or not the thread is open. A turn that ended while the steer was in flight has nobody
- * left to settle it, so it is settled at once.
+ * A link's message `text` was steered into the running turn of `thread`. No turn of its own carries
+ * the link (`runPrompt` `options.link`), so the running turn is the one that answers it: the link
+ * works from here and is settled when that turn ends (`threadTurnEnded`), however many steers went
+ * in and whether or not the thread is open. A turn that ended while the steer was in flight cannot
+ * answer it: the message goes as a turn of its own that carries the link — the copy the engine
+ * handed back, if the queue holds one — so the link never settles with an older reply.
  */
-export function linkSteered(thread: string, link: string | undefined): void {
+export function linkSteered(thread: string, link: string | undefined, text: string): void {
   if (!link) return;
   linkStarted(link);
-  if (!useApp.getState().threads[thread]?.running) {
-    linksFinished([link], thread, "completed", undefined, []);
+  const said = steerText(thread, text);
+  const current = useApp.getState().threads[thread];
+  if (!current?.running) {
+    const queued = current?.queue.find((q) => !q.link && q.text.trim() === said.trim());
+    if (queued) {
+      updateThread(thread, (t) => ({
+        ...t,
+        queue: t.queue.map((q) => (q.id === queued.id ? { ...q, link } : q)),
+      }));
+    } else {
+      void runPrompt(thread, said, undefined, { link });
+    }
     return;
   }
-  const links = steeredIntoTurn.get(thread) ?? new Set<string>();
-  links.add(link);
+  const links = steeredIntoTurn.get(thread) ?? new Map<string, string>();
+  links.set(link, said);
   steeredIntoTurn.set(thread, links);
+}
+
+/**
+ * The turn of `thread` ended and the engine handed back steers it never read (`unusedSteers`); they
+ * wait in the queue as turns of their own. The links they came from are still owed an answer, so
+ * those turns carry them, and the ending turn does not settle them (`threadTurnEnded`).
+ */
+export function requeueUnreadSteers(thread: string, unused: readonly string[]): void {
+  const steered = steeredIntoTurn.get(thread);
+  if (!steered?.size || !unused.length) return;
+  const carried = new Map<string, string>();
+  for (const said of unused) {
+    const found = [...steered].find(([link, text]) => !carried.has(link) && text.trim() === said.trim());
+    if (!found) continue;
+    carried.set(found[0], found[1]);
+    steered.delete(found[0]);
+  }
+  if (!steered.size) steeredIntoTurn.delete(thread);
+  if (!carried.size) return;
+  updateThread(thread, (t) => {
+    const waiting = new Map(carried);
+    return {
+      ...t,
+      queue: t.queue.map((q) => {
+        if (q.link) return q;
+        const found = [...waiting].find(([, text]) => text.trim() === q.text.trim());
+        if (!found) return q;
+        waiting.delete(found[0]);
+        return { ...q, link: found[0] };
+      }),
+    };
+  });
+}
+
+/** The links steered into `thread`'s turn, taken from it: a turn that is lost carries them on (`lostTurn`). */
+export function takeSteeredLinks(thread: string): string[] {
+  const links = [...(steeredIntoTurn.get(thread)?.keys() ?? [])];
+  steeredIntoTurn.delete(thread);
+  return links;
 }
 
 /**
@@ -5043,11 +5100,8 @@ export function threadTurnEnded(
   items: TranscriptItem[],
 ) {
   // The links whose messages were steered into this turn end with it: no prompt carries them.
-  const steered = steeredIntoTurn.get(thread);
-  if (steered) {
-    steeredIntoTurn.delete(thread);
-    linksFinished([...steered], thread, outcome, failed, items);
-  }
+  const steered = takeSteeredLinks(thread);
+  if (steered.length) linksFinished(steered, thread, outcome, failed, items);
   // A stopped turn is not an answer: the link turns record their own, and nothing else does. Its
   // end still matters to a parent: this thread no longer runs, so what it owes may be due now.
   if (outcome !== "cancelled") {

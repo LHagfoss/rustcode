@@ -3,10 +3,10 @@
 // sidebar and the parent's delegate row stop saying "working" without the thread being opened.
 
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { linkSteered, threadTurnEnded } from "./host";
+import { linkSteered, requeueUnreadSteers, takeSteeredLinks, threadTurnEnded } from "./host";
 import { emptyBook, type Link, liveState } from "./orchestration";
-import { resetForTests, statusOf, useApp } from "./store";
-import { emptyThread } from "./thread";
+import { resetForTests, statusOf, updateThread, useApp } from "./store";
+import { emptyThread, requeueSteers } from "./thread";
 
 const PARENT = "parent";
 const TARGET = "delegate";
@@ -61,8 +61,8 @@ const turnEnds = (outcome: "completed" | "cancelled" | "failed", failed?: string
 
 describe("a delegate steered mid-turn", () => {
   test("steer, steer, end: both links stop working with the delegate closed", () => {
-    linkSteered(TARGET, "steer-1");
-    linkSteered(TARGET, "steer-2");
+    linkSteered(TARGET, "steer-1", "first change");
+    linkSteered(TARGET, "steer-2", "second change");
     expect([shown("steer-1"), shown("steer-2")]).toEqual(["working", "working"]);
     turnEnds("completed");
     expect([state("steer-1")?.state, state("steer-2")?.state]).toEqual(["done", "done"]);
@@ -73,32 +73,64 @@ describe("a delegate steered mid-turn", () => {
   });
 
   test("a stopped turn cancels the links steered into it, a failed one fails them", () => {
-    linkSteered(TARGET, "steer-1");
+    linkSteered(TARGET, "steer-1", "first change");
     turnEnds("cancelled");
     expect(state("steer-1")?.state).toBe("cancelled");
     useApp.setState((s) => ({
       threads: { ...s.threads, [TARGET]: { ...s.threads[TARGET]!, running: true } },
     }));
-    linkSteered(TARGET, "steer-2");
+    linkSteered(TARGET, "steer-2", "second change");
     turnEnds("failed", "the provider refused");
     expect(state("steer-2")?.state).toBe("failed");
   });
 
-  test("a steer that lands after the turn already ended settles at once", () => {
+  test("a steer the turn never read keeps its link working and rides the requeued turn", () => {
+    linkSteered(TARGET, "steer-1", "wrap up now");
+    linkSteered(TARGET, "steer-2", "also this");
+    // The engine read the second one; the first came back with the turn's answer (`unusedSteers`).
+    updateThread(TARGET, (t) => requeueSteers(t, ["wrap up now"]));
+    requeueUnreadSteers(TARGET, ["wrap up now"]);
+    turnEnds("completed");
+    expect(state("steer-2")?.state).toBe("done");
+    // Not settled with the reply of a turn that never read it, and not woken for.
+    expect(state("steer-1")?.state).toBe("working");
+    expect(state("steer-1")?.answer).toBeUndefined();
+    expect(useApp.getState().threads[TARGET]?.queue.map((q) => [q.text, q.link])).toEqual([
+      ["wrap up now", "steer-1"],
+    ]);
+  });
+
+  test("a lost remote turn carries the steered links on, and a later turn does not settle them", () => {
+    linkSteered(TARGET, "steer-1", "first change");
+    linkSteered(TARGET, "steer-2", "second change");
+    expect(takeSteeredLinks(TARGET)).toEqual(["steer-1", "steer-2"]);
+    expect(takeSteeredLinks(TARGET)).toEqual([]);
+    turnEnds("completed");
+    expect([state("steer-1")?.state, state("steer-2")?.state]).toEqual(["working", "working"]);
+  });
+
+  test("a steer that lands after the turn ended goes as a turn of its own, never with an older reply", () => {
     useApp.setState((s) => ({
       threads: { ...s.threads, [TARGET]: { ...s.threads[TARGET]!, running: false } },
     }));
-    linkSteered(TARGET, "steer-1");
-    expect(state("steer-1")?.state).toBe("done");
+    // The engine handed it back already: the queued copy carries the link.
+    updateThread(TARGET, (t) => ({ ...t, queue: [{ id: "q1", text: "wrap up now" }] }));
+    linkSteered(TARGET, "steer-1", "wrap up now");
+    expect(useApp.getState().threads[TARGET]?.queue.map((q) => q.link)).toEqual(["steer-1"]);
+    expect(state("steer-1")?.state).toBe("working");
+    // Nothing queued: it is sent now (no engine here, so it only stays unanswered).
+    linkSteered(TARGET, "steer-2", "second change");
+    expect(state("steer-2")?.state).toBe("working");
+    expect(state("steer-2")?.answer).toBeUndefined();
   });
 
   test("a link steered into one turn is not settled by the next", () => {
-    linkSteered(TARGET, "steer-1");
+    linkSteered(TARGET, "steer-1", "first change");
     turnEnds("completed");
     useApp.setState((s) => ({
       threads: { ...s.threads, [TARGET]: { ...s.threads[TARGET]!, running: true } },
     }));
-    linkSteered(TARGET, "steer-2");
+    linkSteered(TARGET, "steer-2", "second change");
     expect(state("steer-2")?.state).toBe("working");
     turnEnds("completed");
     expect(state("steer-2")?.state).toBe("done");

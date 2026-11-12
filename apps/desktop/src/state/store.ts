@@ -163,10 +163,12 @@ import {
   loadBook,
   orchestrationCallDropped,
   queuedLinkDropped,
+  requeueUnreadSteers,
   resetWaits,
   restoreQueuedThreads,
   stopLinksFrom,
   syncLinkBook,
+  takeSteeredLinks,
   threadTurnEnded,
   wakeDelivered,
   wakeTick,
@@ -3991,7 +3993,7 @@ export async function sendQueuedNow(id: string, queuedId: string): Promise<boole
     removeQueued(id, queuedId);
     glideAway(id, item);
     // A delegate's message that was waiting: the turn it went into answers its link.
-    linkSteered(id, item.link);
+    linkSteered(id, item.link, item.text);
     return true;
   }
   toast(QUEUE_REASON.refused);
@@ -4510,7 +4512,7 @@ export async function runPrompt(
       // closed channel is what refused the request, this is what ends it.
       if (get().threads[id]?.running)
         updateThread(id, (t) => finishTurn(t, "failed", Date.now(), MACHINE_LOST_TURN));
-      lostTurn(id, [options.link, ...(options.resumeLinks ?? [])]);
+      lostTurn(id, [options.link, ...(options.resumeLinks ?? []), ...takeSteeredLinks(id)]);
       return "skipped";
     }
     outcome = "failed";
@@ -4524,6 +4526,8 @@ export async function runPrompt(
     ...requeueSteers(finishTurn(t, outcome, Date.now(), failure, options.autoCompact), unused),
     ...(rawFailure !== failure ? { errorDetail: rawFailure } : {}),
   }));
+  // Steers the turn never read wait as turns of their own, and carry the links they came from.
+  if (!options.autoCompact) requeueUnreadSteers(id, unused);
   // The stop is settled first: a turn it stopped is reported as the stop, not twice.
   // An automatic compaction must leave a pending wait alone, not settle it.
   const waiting = options.autoCompact
