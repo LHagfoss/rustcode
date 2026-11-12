@@ -681,24 +681,26 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   `fg-muted`, with 14px folder icons: the label,
   a dot for what a folded group hides, a count only while it is folded, then
   the chevron.
-- **Sidebar rows:** every thread row is one fixed grid, three lines by two
-  columns, 68px tall whatever it holds, with `rounded-xl`, so a column of rows
-  reads as a table and each thing has one place (`ui/Sidebar.tsx` `ROW_GRID`).
-  The left column takes the row's width; the right is a fixed 76px, room for
-  the three 24px hover actions, so every row's right edge lines up.
+- **Sidebar rows:** every thread row is one fixed grid of three lines, 68px
+  tall whatever it holds, with `rounded-xl`, so a column of rows reads as a
+  table and each thing has one place (`ui/Sidebar.tsx` `ROW_GRID`). Each line
+  is a left part that truncates and a right part against the row's edge that
+  takes what it needs (at least 76px on line 1, room for the three 24px hover
+  actions), so the right side is never cut and every right edge lines up.
   Line 1: the pin, fork or side-chat glyph and the title (`text-body`); at the
   right, one state by `rowStatus` as an icon and a word in its tone (`Working`
   with its clock in `accent`, `Needs you` in `warning`, `Waiting` muted,
   `Failed` in `danger`, `Done` in `success` until the thread is opened,
   `Review` in `accent`), else the hour a snoozed thread wakes, else its age
   (`5m`, `3h`, with a check before it when settled).
-  Line 2 (`text-sub`, `fg-muted`): the project's 12px mark and name (under a
+  Line 2 (`text-sub`, `fg-muted`): the project's 14px mark and name (under a
   project heading, the harness instead) and the computer it runs on — another
   computer always, this one too once a machine is paired; at the right, the
   diff (`+N −N` in `success`/`danger`) and the pull request's mark.
-  Line 3: the branch in `font-mono`, or what the thread asks of you in
+  Line 3: the branch, or what the thread asks of you in
   `warning` in its place (`in <parent title>` for a delegated row drawn on its
-  own); at the right, the stack of delegates or the harness mark. A line with
+  own); at the right, the model and harness mark, or the stack of delegates;
+  renaming edits the title in place at the row's height. A line with
   nothing to say stays empty rather than collapsing, so the height never
   changes. Counts are shown only for a thread the app has already read.
   What wants you — a request, a failure, a turn that ended while you were
