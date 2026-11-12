@@ -4922,6 +4922,8 @@ const steerText = (thread: string, fallback: string) =>
  */
 export function linkSteered(thread: string, link: string | undefined, text: string): void {
   if (!link) return;
+  // The clock starts at the steer: a steered link has no turn of its own to start it, and without a
+  // start time `reconcileLinks` would count it from when it was made.
   linkStarted(link);
   const said = steerText(thread, text);
   const current = useApp.getState().threads[thread];
@@ -5257,9 +5259,11 @@ export function reconcileLinks(now = Date.now()): void {
   if (!state.sessionsLoaded) return;
   const stale = book().links.filter((link) => {
     if (link.state !== "working" && link.state !== "needs_user") return false;
-    // Only a turn that has begun can have ended unseen: a link with no start time is still waiting
-    // for its turn (a worktree being made, a cold harness), and the thread beside it is idle for now.
-    if (isRemoteThread(link.target) || link.startedAt === undefined || now - link.startedAt < STALE_LINK_MS) {
+    // A link that is only starting (a worktree being made, a cold harness) has an idle thread beside
+    // it for a moment, so it gets `STALE_LINK_MS` from its start. One that never recorded a start
+    // (a steered link saved before `linkSteered` set it, a turn that never began) counts from when
+    // it was made, so it cannot read Working for hours.
+    if (isRemoteThread(link.target) || now - (link.startedAt ?? link.createdAt) < STALE_LINK_MS) {
       return false;
     }
     const thread = state.threads[link.target];

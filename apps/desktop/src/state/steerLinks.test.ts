@@ -211,16 +211,73 @@ describe("a link whose thread stopped (issue 3541)", () => {
     expect(state("steer-2")?.state).toBe("done");
   });
 
-  test("a link whose turn has not begun is left working", () => {
+  test("a link with no start time is left working until it is old enough to be read as lost", () => {
     idle();
     useApp.setState((s) => ({
       links: {
         ...s.links,
-        links: s.links.links.map((l) => (l.id === "own" ? { ...l, startedAt: undefined } : l)),
+        links: s.links.links.map((l) =>
+          l.id === "own" ? { ...l, startedAt: undefined, createdAt: 9_999_999 } : l,
+        ),
+      },
+    }));
+    // Made a moment ago: its turn may still be starting.
+    reconcileLinks(10_000_000);
+    expect(state("own")?.state).toBe("working");
+  });
+
+  test("a steered link saved with no start time settles once its thread is idle (issue 3548)", () => {
+    idle();
+    useApp.setState((s) => ({
+      links: {
+        ...s.links,
+        links: s.links.links.map((l) => (l.id === "steer-1" ? { ...l, startedAt: undefined } : l)),
       },
     }));
     reconcileLinks(10_000_000);
+    expect(state("steer-1")?.state).toBe("done");
+  });
+
+  test("a link with no start time still waits for a queued copy and a limit wait", () => {
+    idle();
+    useApp.setState((s) => ({
+      links: {
+        ...s.links,
+        links: s.links.links.map((l) => ({ ...l, startedAt: undefined })),
+      },
+    }));
+    updateThread(TARGET, (t) => ({ ...t, queue: [{ id: "q1", text: "next", link: "steer-1" }] }));
+    reconcileLinks(10_000_000);
+    expect(state("steer-1")?.state).toBe("working");
+    useApp.setState({
+      limitWaits: { [TARGET]: { until: 1, reason: "limit", harness: "claude-code", account: null } as never },
+    });
+    reconcileLinks(10_000_000);
     expect(state("own")?.state).toBe("working");
+  });
+
+  test("Stop settles a steered link with no start time on an idle thread", async () => {
+    idle();
+    useApp.setState((s) => ({
+      links: {
+        ...s.links,
+        links: s.links.links.map((l) => (l.id === "steer-1" ? { ...l, startedAt: undefined } : l)),
+      },
+    }));
+    expect(await stopLink("steer-1")).toBe(true);
+    expect(state("steer-1")?.state).toBe("cancelled");
+  });
+
+  test("steering a link into a running turn records when it was steered", () => {
+    useApp.setState((s) => ({
+      links: {
+        ...s.links,
+        links: s.links.links.map((l) => (l.id === "steer-2" ? { ...l, startedAt: undefined } : l)),
+      },
+    }));
+    linkSteered(TARGET, "steer-2", "also check the docs");
+    expect(state("steer-2")?.startedAt).toBeGreaterThan(0);
+    expect(state("steer-2")?.state).toBe("working");
   });
 
   test("a thread this window never opened, which the engine still runs, keeps its links working", () => {
