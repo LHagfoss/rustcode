@@ -283,6 +283,39 @@ describe("list_machines", () => {
   });
 });
 
+describe("list_machines routes", () => {
+  test("each route carries the result of its last test", async () => {
+    const { conn } = recordingConnection();
+    watchMachineConnection(LINUX, conn);
+    useMachines.setState((state) => ({
+      machines: state.machines.map((machine) =>
+        machine.id === LINUX
+          ? {
+              ...machine,
+              routes: [
+                {
+                  kind: "lan",
+                  address: "192.168.1.44:17879",
+                  encrypted: false,
+                  probe: { outcome: "reachable", latencyMs: 4, detail: null, at: "2026-11-12T10:00:00Z" },
+                },
+                { kind: "vpn", address: "100.90.16.237:17879", encrypted: true, probe: null },
+              ],
+            }
+          : machine,
+      ),
+    }));
+    const answer = await answerOrchestration({ sessionId: CALLER, tool: "list_machines", args: {} });
+    expect(answer.probed).toBeUndefined();
+    const routes = (answer.machines as JsonObject[])[1]!.routes as JsonObject[];
+    expect(routes[0]).toMatchObject({
+      address: "192.168.1.44:17879",
+      probe: { result: "reachable", latency_ms: 4 },
+    });
+    expect(routes[1]).toMatchObject({ address: "100.90.16.237:17879", probe: null });
+  });
+});
+
 describe("a machine's projects", () => {
   test("list_machines names the projects, never the folder a thread with no project lists", async () => {
     const { conn } = recordingConnection();

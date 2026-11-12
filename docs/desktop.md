@@ -113,7 +113,11 @@ the skew warning), the state, the route and when it was last seen. The controls 
 Disconnect (keeps the machine saved), Forget, **Make default for new threads**
 (the main machine) and **Pause new threads here**: a paused machine keeps its
 connection and its existing threads, and **Run on** refuses it until it is
-resumed. Below them are that machine's harnesses with their install and
+resumed. Below them are its **Routes**: each saved address (the VPN route is
+saved with its port like the others) with the last test of it, reachable,
+refused, timed out or unreachable, with the latency, and a **Test routes**
+button that connects to every address now (a plain connect with no sign-in; the
+shell's `machines_probe`), then that machine's harnesses with their install and
 sign-in state and one **Check** (re-detect there, read its snapshot again), and
 **What syncs**: one row per Settings row, generated from the same registry the
 **Applying to** bar reads, in three columns — Shared, This machine only, This

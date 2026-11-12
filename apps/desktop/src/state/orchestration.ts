@@ -586,7 +586,7 @@ export type Call =
   /** Move a thread's work between the user's checkout and a worktree of its own. */
   | { tool: "handoff_worktree"; target: string; to: HandoffTarget }
   /** The computers this RustCode is paired with (orchestration version 12). */
-  | { tool: "list_machines" }
+  | { tool: "list_machines"; probe: boolean }
   | { tool: "read_project"; path: string }
   | { tool: "create_project"; path: string; init?: boolean }
   | { tool: "clone_project"; url: string; parent?: string; name?: string }
@@ -732,7 +732,7 @@ export function parseCall(params: JsonObject): Call | Failure {
     case "list_projects":
       return { tool: "list_projects", ...machineField(args) };
     case "list_machines":
-      return { tool: "list_machines" };
+      return { tool: "list_machines", probe: args.probe === true };
     case "list_pull_requests": {
       const state = s(args.state) ?? "open";
       if (!PULL_STATES.includes(state)) {
