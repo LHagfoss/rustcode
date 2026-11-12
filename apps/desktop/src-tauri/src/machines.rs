@@ -20,7 +20,7 @@ use rustcode_client::machine::{machine_from_pairing, normalize_code, Connector};
 use rustcode_client::tokens::{self as token_store, STORE_TIMEOUT};
 use rustcode_client::{
     backoff_delay, browse_async, Approved, ClientKind, DiscoveredMachine, Machine, MachineRegistry,
-    OverlayProvider, Route, TokenStore, Unreachable,
+    OverlayProvider, Route, RouteProbe, TokenStore, Unreachable,
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -72,15 +72,42 @@ pub struct RouteView {
     /// The network itself encrypts the traffic (Tailscale, a VPN); a plain LAN
     /// route does not.
     encrypted: bool,
+    /// What the last test of this route found, or none if it was never tested.
+    probe: Option<ProbeView>,
 }
 
 impl RouteView {
-    fn of(route: &Route) -> Self {
+    fn of(route: &Route, machine: &Machine) -> Self {
         Self {
             kind: route.kind.as_str(),
             address: route.address.clone(),
             provider: route.provider.map(OverlayProvider::as_str),
             encrypted: route.kind.is_encrypted(),
+            probe: machine.probe_for(&route.address).map(ProbeView::of),
+        }
+    }
+}
+
+/// The last test of one route, as the page shows it.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeView {
+    /// `reachable`, `refused`, `timeout` or `unreachable`.
+    outcome: &'static str,
+    /// Milliseconds to connect, or to be turned away; none for a timeout.
+    latency_ms: Option<u64>,
+    detail: Option<String>,
+    /// RFC 3339.
+    at: String,
+}
+
+impl ProbeView {
+    fn of(probe: &RouteProbe) -> Self {
+        Self {
+            outcome: probe.outcome.as_str(),
+            latency_ms: probe.latency_ms,
+            detail: probe.detail.clone(),
+            at: probe.at.to_rfc3339(),
         }
     }
 }
@@ -337,11 +364,15 @@ fn view(machine: &Machine, live: Option<&Live>) -> MachineView {
         icon_tint: machine.icon_tint.clone(),
         platform: machine.platform.clone(),
         version: machine.version.clone(),
-        routes: machine.routes.iter().map(RouteView::of).collect(),
+        routes: machine
+            .routes
+            .iter()
+            .map(|route| RouteView::of(route, machine))
+            .collect(),
         route: live
             .and_then(|live| live.route.as_ref())
-            .map(RouteView::of)
-            .or_else(|| machine.preferred_route().map(RouteView::of)),
+            .or_else(|| machine.preferred_route())
+            .map(|route| RouteView::of(route, machine)),
         state: live.map_or(MachineState::Stopped, |live| live.state),
         detail: live.and_then(|live| live.detail.clone()),
         hint: live.and_then(|live| live.hint.clone()),
@@ -909,7 +940,10 @@ fn overlay_peers(saved: &[MachineView], found: &[DiscoveredView]) -> Vec<Discove
 /// named it (`netbird`), else `lan`, `tailscale`, `vpn` or `public`.
 fn route_kind_name(route: Option<&Route>) -> String {
     match route {
-        Some(route) => route_route_kind_name(&RouteView::of(route)),
+        Some(route) => route
+            .provider
+            .map_or(route.kind.as_str(), OverlayProvider::as_str)
+            .to_owned(),
         None => "lan".to_owned(),
     }
 }
@@ -1213,6 +1247,46 @@ pub fn machines_set_paused(id: String, paused: bool) -> Result<(), String> {
     registry.set_paused(&id, paused).map_err(chain)
 }
 
+/// Test every route of one machine (all of them when `id` is none) with a plain
+/// connect, save what each found, and answer the refreshed machines. The
+/// connect carries no token, so a route that is down costs only its timeout.
+#[tauri::command(async)]
+pub async fn machines_probe(
+    machines: tauri::State<'_, Arc<Machines>>,
+    id: Option<String>,
+) -> Result<Vec<MachineView>, String> {
+    let config_dir = config_dir()?;
+    let registry = MachineRegistry::load(&config_dir).map_err(chain)?;
+    let targets: Vec<Machine> = match &id {
+        Some(id) => vec![registry
+            .get(id)
+            .ok_or("That machine is no longer saved.")?
+            .clone()],
+        None => registry.machines().to_vec(),
+    };
+    // One task per machine, so a machine that is down costs its timeout once,
+    // not once per machine.
+    let tasks: Vec<_> = targets
+        .iter()
+        .map(|machine| {
+            let machine = machine.clone();
+            let config_dir = config_dir.clone();
+            tauri::async_runtime::spawn(async move {
+                let connector = Machines::connector(&config_dir)?;
+                Ok::<_, String>(connector.probe_routes(&machine).await)
+            })
+        })
+        .collect();
+    let mut registry = registry;
+    for (machine, task) in targets.iter().zip(tasks) {
+        let probes = task.await.map_err(|error| error.to_string())??;
+        registry
+            .set_probes(&machine.host_id, probes)
+            .map_err(chain)?;
+    }
+    machines.list()
+}
+
 /// Connect to one machine and relay its ACP to this page.
 #[tauri::command(async)]
 pub fn machine_connect(
@@ -1346,6 +1420,28 @@ mod tests {
         assert_eq!(json["routes"][0]["encrypted"], false);
         // Offline, the row still says which route it will try.
         assert_eq!(json["route"]["address"], "192.168.1.20:17879");
+    }
+
+    /// A route carries what its last test found, and none before a test.
+    #[test]
+    fn a_machine_view_shows_each_routes_last_test() {
+        let mut saved = machine();
+        saved
+            .routes
+            .push(Route::with_kind(RouteKind::Vpn, "100.90.16.237"));
+        saved.probes.push(rustcode_client::RouteProbe {
+            address: "192.168.1.20:17879".to_owned(),
+            outcome: rustcode_client::ProbeOutcome::Reachable,
+            latency_ms: Some(4),
+            detail: None,
+            at: chrono::Utc::now(),
+        });
+        let json = serde_json::to_value(view(&saved, None)).unwrap();
+        assert_eq!(json["routes"][0]["probe"]["outcome"], "reachable");
+        assert_eq!(json["routes"][0]["probe"]["latencyMs"], 4);
+        assert!(json["routes"][1]["probe"].is_null());
+        // The route it will try carries the same result.
+        assert_eq!(json["route"]["probe"]["outcome"], "reachable");
     }
 
     /// A machine that is connected over an overlay says so, and the page

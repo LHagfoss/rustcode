@@ -30,7 +30,8 @@ use crate::protocol::{
     HandshakeRequest, HandshakeResponse, HostRoute, PairingMethod, Secret,
 };
 use crate::registry::{
-    Machine, Route, RouteKind, may_send_secrets, plain_ws_refusal, write_private_json,
+    Machine, ProbeOutcome, Route, RouteKind, RouteProbe, may_send_secrets, plain_ws_refusal,
+    write_private_json,
 };
 use crate::routes::{DialFailure, Race, RaceSettings, RouteFailure, race};
 use crate::tokens::{Access, TokenStore};
@@ -649,6 +650,56 @@ impl Connector {
         }
     }
 
+    /// Connect to one route's address and drop the connection: no token and no
+    /// handshake, so it answers only whether something is listening there and
+    /// how long that took.
+    pub async fn probe_route(&self, route: &Route) -> RouteProbe {
+        let at = Utc::now();
+        let mut probe = RouteProbe {
+            address: route.address.clone(),
+            outcome: ProbeOutcome::Unreachable,
+            latency_ms: None,
+            detail: None,
+            at,
+        };
+        let Ok(target) = crate::transport::dial_target(&route.address) else {
+            probe.detail = Some("not an address this client can dial".to_owned());
+            return probe;
+        };
+        let started = std::time::Instant::now();
+        let elapsed = || u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        match tokio::time::timeout(self.route_timeout, tokio::net::TcpStream::connect(&target))
+            .await
+        {
+            Ok(Ok(_)) => {
+                probe.outcome = ProbeOutcome::Reachable;
+                probe.latency_ms = Some(elapsed());
+            }
+            Ok(Err(error)) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+                probe.outcome = ProbeOutcome::Refused;
+                probe.latency_ms = Some(elapsed());
+                probe.detail = Some(format!("{error}"));
+            }
+            Ok(Err(error)) if error.kind() == std::io::ErrorKind::TimedOut => {
+                probe.outcome = ProbeOutcome::Timeout;
+            }
+            Ok(Err(error)) => probe.detail = Some(format!("{error}")),
+            Err(_) => probe.outcome = ProbeOutcome::Timeout,
+        }
+        probe
+    }
+
+    /// Probe every route the machine has, at once, in the order they are saved.
+    /// A public route is left out: this client never dials one (#2651).
+    pub async fn probe_routes(&self, machine: &Machine) -> Vec<RouteProbe> {
+        let attempts = machine
+            .routes
+            .iter()
+            .filter(|route| may_send_secrets(&route.address))
+            .map(|route| self.probe_route(route));
+        futures_util::future::join_all(attempts).await
+    }
+
     /// Try the machine's overlay routes without using them, after a LAN route
     /// answered. The race stops once the LAN wins, so an overlay that accepts
     /// no inbound connections is only visible by asking: a plain TCP connect
@@ -669,26 +720,12 @@ impl Connector {
                 && crate::routes::on_local_overlay(route, &local)
         });
         let attempts = probes.map(|route| async move {
-            let Ok(target) = crate::transport::dial_target(&route.address) else {
-                return Some(RouteFailure {
-                    route: route.clone(),
-                    reason: "not an address this client can dial".to_owned(),
-                    refusal: None,
-                });
-            };
-            let reason = match tokio::time::timeout(
-                self.route_timeout,
-                tokio::net::TcpStream::connect(&target),
-            )
-            .await
-            {
-                Ok(Ok(_)) => return None,
-                Ok(Err(error)) => format!("{error}"),
-                Err(_) => "the address did not answer".to_owned(),
-            };
-            Some(RouteFailure {
+            let probe = self.probe_route(route).await;
+            (probe.outcome != ProbeOutcome::Reachable).then(|| RouteFailure {
                 route: route.clone(),
-                reason,
+                reason: probe
+                    .detail
+                    .unwrap_or_else(|| "the address did not answer".to_owned()),
                 refusal: None,
             })
         });
@@ -1304,6 +1341,41 @@ mod tests {
 
     fn config_dir() -> tempfile::TempDir {
         tempfile::tempdir_in("/tmp").unwrap()
+    }
+
+    /// A route is tested by a plain connect: a listener is reachable with its
+    /// latency, a closed port is refused, and a public route is never dialled.
+    #[tokio::test]
+    async fn probing_routes_tells_reachable_from_refused() {
+        let dir = config_dir();
+        let connector = Connector::new(dir.path(), ClientKind::Cli).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let open = listener.local_addr().unwrap().to_string();
+        let closed = {
+            let spare = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            spare.local_addr().unwrap().to_string()
+        };
+        let mut machine = Machine::new(
+            "gw-a",
+            "A",
+            "macos",
+            "device-1",
+            Route::with_kind(RouteKind::Lan, open.clone()),
+            chrono::Utc::now(),
+        );
+        machine
+            .routes
+            .push(Route::with_kind(RouteKind::Lan, closed.clone()));
+        machine
+            .routes
+            .push(Route::with_kind(RouteKind::Public, "203.0.113.9:17879"));
+        let probes = connector.probe_routes(&machine).await;
+        assert_eq!(probes.len(), 2, "the public route is not dialled");
+        assert_eq!(probes[0].address, open);
+        assert_eq!(probes[0].outcome, ProbeOutcome::Reachable);
+        assert!(probes[0].latency_ms.is_some());
+        assert_eq!(probes[1].address, closed);
+        assert_eq!(probes[1].outcome, ProbeOutcome::Refused);
     }
 
     /// A public address never receives the code or the token: the guard runs

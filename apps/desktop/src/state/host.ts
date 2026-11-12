@@ -67,6 +67,7 @@ import {
   type Machine,
   machineName,
   offlineSinceLabel,
+  probeMachineRoutes,
   selfName,
   useMachines,
 } from "./machines";
@@ -202,6 +203,7 @@ import {
   permissionModeOf,
   planCacheStale,
   refreshReadPlanLogins,
+  releaseLimitWaitLink,
   removeQueued,
   renameThread,
   request,
@@ -823,16 +825,42 @@ async function machineEntry(machine: MachineRef): Promise<JsonObject> {
       ? { route: { kind: saved.route.kind, address: saved.route.address, encrypted: saved.route.encrypted } }
       : {}),
     ...(saved?.lastConnectedAt ? { last_connected: saved.lastConnectedAt } : {}),
+    // Each route with what its last test found: reachable, refused or timeout, with the latency.
+    ...(saved?.routes.length
+      ? {
+          routes: saved.routes.map((route) => ({
+            kind: route.kind,
+            address: route.address,
+            encrypted: route.encrypted,
+            probe: route.probe
+              ? {
+                  result: route.probe.outcome,
+                  ...(route.probe.latencyMs === null ? {} : { latency_ms: route.probe.latencyMs }),
+                  tested_at: route.probe.at,
+                }
+              : null,
+          })),
+        }
+      : {}),
     harnesses: await machineHarnesses(machine),
     projects: projectsOn(useApp.getState().sessions, machine.host).map((project) => project.name),
   };
 }
 
-/** `list_machines`: this computer and each paired machine, one call. */
-async function listMachines(): Promise<JsonObject> {
+/**
+ * `list_machines`: this computer and each paired machine, one call. With `probe`
+ * every route of every paired machine is tested first, so the answer carries
+ * what each found now rather than the last test.
+ */
+async function listMachines(probe = false): Promise<JsonObject> {
+  const probed = probe ? await probeMachineRoutes() : undefined;
   const local = localMachine();
   const machines = [local, ...useMachines.getState().machines.map(machineRef)];
-  return { current: local.id, machines: await Promise.all(machines.map(machineEntry)) };
+  return {
+    current: local.id,
+    machines: await Promise.all(machines.map(machineEntry)),
+    ...(probed === undefined ? {} : { probed }),
+  };
 }
 
 /** The harnesses one machine can run: this app's own snapshot, or that machine's. */
@@ -1575,7 +1603,7 @@ async function perform(
       return answer.error ? answer : { ...answer, ...machineFields(machine) };
     }
     case "list_machines":
-      return listMachines();
+      return listMachines(call.probe);
     case "search_sessions":
       if (call.allProjects && !acrossProjects()) return reachRefused();
       return searchSessions(threads(), caller, call.query, call.allProjects);
@@ -5054,7 +5082,9 @@ export function linksResumed(ids: readonly string[]): void {
  */
 export function linksReopened(thread: string, ids: readonly string[]): void {
   if (!ids.length) return;
-  const next = reopenLinks(book(), thread, ids, Date.now());
+  // A parent the user archived is not woken by a delegate that carries on without it.
+  const archived = useApp.getState().archived;
+  const next = reopenLinks(book(), thread, ids, Date.now(), (orchestrator) => !!archived[orchestrator]);
   if (next === book()) return;
   setBook(() => next);
 }
@@ -5108,6 +5138,11 @@ export function linksFinished(
   outcome: "completed" | "cancelled" | "failed",
   failed: string | undefined,
   items: TranscriptItem[],
+  /**
+   * The thread waits to carry on again (a usage limit, an overload): a link the parent already
+   * heard the stop of stays heard, so it is woken once when the thread settles for good.
+   */
+  holding = false,
 ) {
   if (!ids.length) return;
   const now = Date.now();
@@ -5134,6 +5169,7 @@ export function linksFinished(
           truncated: says.truncated,
           filesChanged: says.filesChanged,
           settledAt: now,
+          ...(holding || state === "cancelled" ? {} : { notifiedAt: undefined }),
           ...harness,
           ...(workedMs ? { workedMs } : {}),
         },
@@ -5308,10 +5344,38 @@ export async function stopLinksFrom(orchestrator: string): Promise<number> {
       if (link.orchestrator !== orchestrator || !isActive(link.state)) continue;
       if (await stopLink(link.id)) stopped += 1;
     }
+    stopped += releaseLimitWaitsFrom(orchestrator);
     return stopped;
   } finally {
     stopping.delete(orchestrator);
   }
+}
+
+/**
+ * The delegates of `orchestrator` that are waiting out a usage limit stop with it: their failed
+ * links are cancelled and their wait is let go (or only the link, when another parent's link
+ * shares it), so the reset never wakes a parent the user stopped or archived. Returns how many
+ * links it cancelled.
+ */
+export function releaseLimitWaitsFrom(orchestrator: string): number {
+  const waits = useApp.getState().limitWaits;
+  const held = book().links.filter(
+    (l) =>
+      l.orchestrator === orchestrator &&
+      (l.state === "failed" || l.state === "done") &&
+      waits[l.target]?.links?.includes(l.id),
+  );
+  if (!held.length) return 0;
+  const now = Date.now();
+  const ids = new Set(held.map((l) => l.id));
+  setBook((b) => ({
+    ...b,
+    links: b.links.map((l) =>
+      ids.has(l.id) ? advanceLink(l, { state: "cancelled", settledAt: now }, now) : l,
+    ),
+  }));
+  for (const link of held) releaseLimitWaitLink(link.target, link.id);
+  return held.length;
 }
 
 /** Forget a finished link's chip. */

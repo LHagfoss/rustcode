@@ -43,6 +43,17 @@ export interface MachineRoute {
   provider?: string | null;
   /** The network encrypts the traffic (Tailscale, a VPN); a LAN route does not. */
   encrypted: boolean;
+  /** What the last test of this route found, or null if it was never tested. */
+  probe?: RouteProbe | null;
+}
+
+/** The last plain connect to one route: whether it answered and how fast. */
+export interface RouteProbe {
+  outcome: "reachable" | "refused" | "timeout" | "unreachable";
+  /** Milliseconds to connect, or to be turned away; null for a timeout. */
+  latencyMs: number | null;
+  detail: string | null;
+  at: string;
 }
 
 /** A saved machine, as `machines_list` reports it. */
@@ -221,6 +232,8 @@ interface MachinesStore {
   serverInstalling: boolean;
   /** Pointing the `rustcode` on PATH at this app's engine is running now. */
   serverLinking: boolean;
+  /** A route test is running now. */
+  probing: boolean;
 }
 
 export const useMachines = create<MachinesStore>(() => ({
@@ -238,6 +251,7 @@ export const useMachines = create<MachinesStore>(() => ({
   server: null,
   serverInstalling: false,
   serverLinking: false,
+  probing: false,
   local: readLocalIdentity(),
 }));
 
@@ -997,6 +1011,7 @@ export function resetMachinesForTests(): void {
     server: null,
     serverInstalling: false,
     serverLinking: false,
+    probing: false,
   });
 }
 
@@ -1409,6 +1424,45 @@ export function removeMachine(machine: Machine): void {
       );
     },
   });
+}
+
+/** A probe in words: `Reachable · 4 ms`, `Refused · 2 ms`, `Timed out`, `Not tested`. */
+export function probeLabel(probe: RouteProbe | null | undefined): string {
+  if (!probe) return "Not tested";
+  const ms = probe.latencyMs === null ? "" : ` · ${probe.latencyMs} ms`;
+  switch (probe.outcome) {
+    case "reachable":
+      return `Reachable${ms}`;
+    case "refused":
+      return `Refused${ms}`;
+    case "timeout":
+      return "Timed out";
+    default:
+      return "Unreachable";
+  }
+}
+
+/** The chip tone of a probe: green when it answered, red when it did not, none before a test. */
+export function probeTone(probe: RouteProbe | null | undefined): "ok" | "bad" | "idle" {
+  if (!probe) return "idle";
+  return probe.outcome === "reachable" ? "ok" : "bad";
+}
+
+/**
+ * Test every route of one machine (every machine when none is named) with a
+ * plain connect, and show what each found. Answers whether the test ran.
+ */
+export async function probeMachineRoutes(machine?: Pick<Machine, "id">): Promise<boolean> {
+  useMachines.setState({ probing: true });
+  try {
+    const machines = await shellCall<Machine[]>("machines_probe", machine ? { id: machine.id } : {});
+    useMachines.setState({ machines, probing: false });
+    return true;
+  } catch (error) {
+    useMachines.setState({ probing: false });
+    toast(`Could not test the routes: ${errorText(error)}`, "error");
+    return false;
+  }
 }
 
 /** Pause new threads on a machine, or let them start there again. */

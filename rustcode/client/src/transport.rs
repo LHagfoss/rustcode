@@ -342,6 +342,30 @@ pub fn websocket_url(address: &str) -> Result<String> {
     }
 }
 
+/// `address` with its port spelled out, `host:port` or `[v6]:port`, the way the
+/// gateway reports its own routes. An address that already names a port, or
+/// carries a scheme or a path, is returned as it was.
+pub fn with_explicit_port(address: &str) -> String {
+    let trimmed = address.trim();
+    let names_port = if let Some(rest) = trimmed.strip_prefix('[') {
+        rest.contains("]:")
+    } else {
+        trimmed.rsplit_once(':').is_some_and(|(host, port)| {
+            !host.contains(':') && !port.is_empty() && port.chars().all(|c| c.is_ascii_digit())
+        })
+    };
+    let host = host_part(trimmed);
+    if names_port || trimmed.contains("://") || trimmed.contains('/') || host.is_empty() {
+        return address.to_owned();
+    }
+    let port = port_or_default(trimmed);
+    if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
 /// What `TcpStream::connect` is given: the address with the default gateway
 /// port filled in, and no scheme or path.
 pub fn dial_target(address: &str) -> Result<String> {
@@ -602,5 +626,22 @@ mod tests {
         // A port that is not a number is not a port; the default is used.
         assert_eq!(port_or_default("studio:http"), DEFAULT_PORT);
         assert_eq!(port_or_default("studio:0"), DEFAULT_PORT);
+    }
+
+    #[test]
+    fn a_route_without_a_port_gets_the_default_one() {
+        assert_eq!(with_explicit_port("100.90.16.237"), "100.90.16.237:17879");
+        assert_eq!(
+            with_explicit_port("100.90.16.237:9000"),
+            "100.90.16.237:9000"
+        );
+        assert_eq!(with_explicit_port("studio.local"), "studio.local:17879");
+        assert_eq!(with_explicit_port("fdfd::2"), "[fdfd::2]:17879");
+        assert_eq!(with_explicit_port("[fdfd::2]"), "[fdfd::2]:17879");
+        assert_eq!(with_explicit_port("[fdfd::2]:17879"), "[fdfd::2]:17879");
+        assert_eq!(
+            with_explicit_port("ws://studio.local/"),
+            "ws://studio.local/"
+        );
     }
 }

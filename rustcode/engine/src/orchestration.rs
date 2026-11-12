@@ -759,7 +759,8 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             optional_name(args, "harness")?;
             optional_name(args, "model")
         }
-        LIST_PROJECTS | LIST_PENDING_REQUESTS | LIST_MACHINES => Ok(()),
+        LIST_MACHINES => optional_flag(args, "probe"),
+        LIST_PROJECTS | LIST_PENDING_REQUESTS => Ok(()),
         TRANSFER_SESSION => {
             required_name(args, "session_id")?;
             required_name(args, "harness")

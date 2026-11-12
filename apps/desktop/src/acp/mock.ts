@@ -5874,6 +5874,22 @@ export class MockTransport implements Transport {
       this.machineList = [...this.machineList.filter((machine) => machine.id !== paired.id), paired];
       return { ...paired, state: "connecting" };
     }
+    if (command === "machines_probe") {
+      // The LAN answers; an overlay that accepts no inbound connections times out.
+      const at = new Date().toISOString();
+      this.machineList = this.machineList.map((machine) => {
+        if (args.id && machine.id !== String(args.id)) return machine;
+        const routes = (machine.routes as JsonObject[]).map((route) => ({
+          ...route,
+          probe:
+            route.kind === "lan"
+              ? { outcome: "reachable", latencyMs: 3, detail: null, at }
+              : { outcome: "timeout", latencyMs: null, detail: null, at },
+        }));
+        return { ...machine, routes };
+      });
+      return this.machineList;
+    }
     if (command === "machines_remove") {
       this.machineList = this.machineList.filter((machine) => machine.id !== String(args.id));
       return null;

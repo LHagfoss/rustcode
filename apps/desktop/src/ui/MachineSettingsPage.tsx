@@ -22,8 +22,12 @@ import {
   machineGlyph,
   machineName,
   machineTint,
+  probeLabel,
+  probeMachineRoutes,
+  probeTone,
   reconnectMachine,
   removeMachine,
+  routeLabel,
   selfName,
   setMachineDisplayName,
   setMachineIcon,
@@ -156,9 +160,50 @@ function MachineSettings({ machine }: { machine: Machine }) {
         </Row>
       </Group>
 
+      <Routes machine={machine} />
       <Harnesses machine={machine} />
       <WhatSyncs machine={machine} online={online} />
     </>
+  );
+}
+
+/** Every route saved for the machine with what the last test of it found, and one button that tests them all now. */
+function Routes({ machine }: { machine: Machine }) {
+  const probing = useMachines((state) => state.probing);
+  return (
+    <Group
+      title="Routes"
+      action={
+        <Action quiet size="sm" disabled={probing} onClick={() => void probeMachineRoutes(machine)}>
+          <RefreshCw size={12} />
+          {probing ? "Testing…" : "Test routes"}
+        </Action>
+      }
+      footer="Test routes opens a plain connection to each address, with no sign-in, and shows whether it answers and how fast. The app tries the LAN first and the VPN when the LAN does not answer."
+    >
+      {machine.routes.length === 0 && (
+        <Row title="No route saved" subtitle="Pair the machine again to add one." />
+      )}
+      {machine.routes.map((route) => (
+        <Row
+          key={route.address}
+          title={routeLabel(route)}
+          subtitle={
+            route.probe?.detail ??
+            (route.kind === "public" && !route.probe
+              ? "Not tested: this app never sends a sign-in to a public address, so it never connects to one."
+              : undefined)
+          }
+          status={
+            <span className="tabular">
+              {route.address}
+              {route.probe && ` · tested ${lastSeen(route.probe.at)}`}
+            </span>
+          }
+          badge={<Chip tone={probeTone(route.probe)}>{probeLabel(route.probe)}</Chip>}
+        />
+      ))}
+    </Group>
   );
 }
 

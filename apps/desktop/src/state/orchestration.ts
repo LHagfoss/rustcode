@@ -592,7 +592,7 @@ export type Call =
   /** Move a thread's work between the user's checkout and a worktree of its own. */
   | { tool: "handoff_worktree"; target: string; to: HandoffTarget }
   /** The computers this RustCode is paired with (orchestration version 12). */
-  | { tool: "list_machines" }
+  | { tool: "list_machines"; probe: boolean }
   | { tool: "read_project"; path: string }
   | { tool: "create_project"; path: string; init?: boolean }
   | { tool: "clone_project"; url: string; parent?: string; name?: string }
@@ -738,7 +738,7 @@ export function parseCall(params: JsonObject): Call | Failure {
     case "list_projects":
       return { tool: "list_projects", ...machineField(args) };
     case "list_machines":
-      return { tool: "list_machines" };
+      return { tool: "list_machines", probe: args.probe === true };
     case "list_pull_requests": {
       const state = s(args.state) ?? "open";
       if (!PULL_STATES.includes(state)) {
@@ -2240,17 +2240,28 @@ export function restateLinks(
  * The book after a thread carried on from a stop the app waited out (a usage limit, an
  * overload): the links that stop settled as `failed` or `done` work again, with the clock
  * set to now, and settle with the answer the new turn gives. The parent that was told the
- * stop is told once more. A link the user stopped, a newer link to the same thread, or one
- * that is not the thread's own is left alone.
+ * stop is told again only when the thread settles for good, not at each retry. A link the user
+ * stopped, a newer link to the same thread, one that is not the thread's own, and one whose
+ * parent is gone (`parentGone`) are left alone.
  */
-export function reopenLinks(book: LinkBook, thread: string, ids: readonly string[], now: number): LinkBook {
+export function reopenLinks(
+  book: LinkBook,
+  thread: string,
+  ids: readonly string[],
+  now: number,
+  /** Whether the thread above a link is gone (archived, trashed): its link stays as it settled. */
+  parentGone: (orchestrator: string) => boolean = () => false,
+): LinkBook {
   if (!ids.length) return book;
   let changed = false;
   const links = book.links.map((link) => {
     if (!ids.includes(link.id) || link.target !== thread) return link;
     if (link.state !== "failed" && link.state !== "done") return link;
+    if (parentGone(link.orchestrator)) return link;
     if (book.links.some((other) => other.target === thread && other.createdAt > link.createdAt)) return link;
     changed = true;
+    // `notifiedAt` stays: the parent already heard the stop, and it is not told again if the thread
+    // stops on the limit once more. The turn that settles for good clears it (`linksFinished`).
     return advanceLink(
       {
         ...link,
@@ -2258,7 +2269,6 @@ export function reopenLinks(book: LinkBook, thread: string, ids: readonly string
         error: undefined,
         truncated: undefined,
         settledAt: undefined,
-        notifiedAt: undefined,
         answerChangedAt: undefined,
         workedMs: undefined,
         waitingSince: undefined,

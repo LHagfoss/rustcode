@@ -117,7 +117,11 @@ Disconnect (keeps the machine saved), Forget and **Pause new threads here**:
 there is no main machine, every computer is a peer and **Run on** starts on this
 one unless it names another. A paused machine keeps its
 connection and its existing threads, and **Run on** refuses it until it is
-resumed. Below them are that machine's harnesses with their install and
+resumed. Below them are its **Routes**: each saved address (the VPN route is
+saved with its port like the others) with the last test of it, reachable,
+refused, timed out or unreachable, with the latency, and a **Test routes**
+button that connects to every address now (a plain connect with no sign-in; the
+shell's `machines_probe`), then that machine's harnesses with their install and
 sign-in state and one **Check** (re-detect there, read its snapshot again), and
 **What syncs**: one row per Settings row, generated from the same registry the
 **Applying to** bar reads, in three columns — Shared, This machine only, This
@@ -1013,7 +1017,13 @@ composer's keys stay outside the table.
   uses the plan's latest full window, and with neither there is no wait. The wait
   is saved with the links the stop settled as failed: the turn that continues
   reopens them and settles them with its answer, and the check also runs when
-  the window gets focus after a sleep.
+  the window gets focus after a sleep. The parent is woken once for a wait, not
+  at each retry: a link that fails on the limit again stays heard until the
+  thread settles for good or gives up. Stopping or archiving the parent cancels
+  those links and lets go of the delegate's wait. Codex's `try again at 3:47 PM`
+  / `try again in 3 days 2 hours` and Gemini's `quota will reset after 3h42m18s`
+  are read as well. A thread the restart cut short is sent its resume, never
+  that and a due wait.
   A provider that was overloaded (HTTP 529/503, `overloaded_error`) is tried
   again after 30 s, 1 m, 2 m and 4 m, each with up to a quarter of it added at
   random so an account's threads do not wake together, and no fifth time. A turn

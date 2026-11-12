@@ -34,6 +34,8 @@ import {
   pairMachine,
   platformIcon,
   platformName,
+  probeLabel,
+  probeTone,
   readUntilAnswering,
   refreshMachines,
   refreshServerService,
@@ -803,5 +805,24 @@ describe("a machine's local name and icon", () => {
       else Reflect.deleteProperty(scope, "localStorage");
       setLocalIdentity({ displayName: null, icon: null, tint: null });
     }
+  });
+});
+
+describe("a route's last test", () => {
+  const at = "2026-11-12T10:00:00Z";
+  test("reads as reachable, refused or timed out, with the latency when there is one", () => {
+    expect(probeLabel(null)).toBe("Not tested");
+    expect(probeLabel({ outcome: "reachable", latencyMs: 4, detail: null, at })).toBe("Reachable · 4 ms");
+    expect(probeLabel({ outcome: "refused", latencyMs: 2, detail: null, at })).toBe("Refused · 2 ms");
+    expect(probeLabel({ outcome: "timeout", latencyMs: null, detail: null, at })).toBe("Timed out");
+    expect(probeLabel({ outcome: "unreachable", latencyMs: null, detail: "no route", at })).toBe(
+      "Unreachable",
+    );
+  });
+
+  test("is green only when the address answered", () => {
+    expect(probeTone(null)).toBe("idle");
+    expect(probeTone({ outcome: "reachable", latencyMs: 1, detail: null, at })).toBe("ok");
+    expect(probeTone({ outcome: "refused", latencyMs: 1, detail: null, at })).toBe("bad");
   });
 });
