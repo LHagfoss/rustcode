@@ -65,6 +65,7 @@ import {
 import type { PullRequest, SubagentInfo } from "../acp/rustcode";
 import { displayPath, modelName, projectName, type SessionSummary } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
+import { rowBranch } from "../lib/gitRef";
 import { formatBinding, listCommandFor } from "../lib/keys";
 import { openTerminalAt, openThreadLog, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
@@ -983,7 +984,7 @@ const ThreadRow = memo(function ThreadRow({
                     <>
                       <GitBranch size={11} className="shrink-0" />
                       <span className="min-w-0 truncate" title={gitBranch}>
-                        {gitBranch}
+                        {rowBranch(gitBranch)}
                       </span>
                     </>
                   ) : (

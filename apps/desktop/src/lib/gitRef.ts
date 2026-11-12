@@ -37,3 +37,15 @@ export function comparisonBase(
   const ref = worktree?.baseRef?.trim() || worktree?.base?.trim();
   return ref || undefined;
 }
+
+/** The Conventional Commits types a branch name starts with (`feat/`, `fix/`, …). */
+const BRANCH_TYPE = /^(?:feat|fix|perf|refactor|docs|test|chore|ci|build|style|revert)\/(.+)$/i;
+
+/**
+ * A branch as a narrow row names it: `feat/desktop-row-icons` reads `desktop-row-icons`. The type
+ * says little once the rest is legible; the full name stays for the tooltip. Any other branch
+ * (`main`, `lars/spike`, `release/1.2`) keeps its whole name.
+ */
+export function rowBranch(branch: string): string {
+  return BRANCH_TYPE.exec(branch.trim())?.[1] ?? branch.trim();
+}
