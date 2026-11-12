@@ -820,7 +820,9 @@ function machineThread(
   asked: string | undefined,
   target: string,
 ): { machine: MachineRef; target: string } | Failure {
-  const machine = checkedMachine(asked ?? (splitThreadKey(target).host || undefined));
+  // An id that carries its machine names it already: connected is all it needs to be.
+  const carried = machineOfThread(target);
+  const machine = asked?.trim() ? checkedMachine(asked) : (machineUnavailable(carried) ?? carried);
   if (isFailure(machine)) return machine;
   const key = scopedTarget(machine, target);
   if (isFailure(key)) return key;

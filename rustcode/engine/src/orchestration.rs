@@ -1660,7 +1660,7 @@ mod tests {
         );
         assert_eq!(prompt_hint(VERSION), PROMPT_HINT_V16);
         // v16 teaches `machine` on the project tools and matching by remote.
-        for said in ["`clone_project` take", "git remote", "offline"] {
+        for said in ["`clone_project` take", "this one's git remote", "offline"] {
             assert!(PROMPT_HINT_V16.contains(said), "{said} in the v16 hint");
             assert!(!PROMPT_HINT_V15.contains(said), "{said} is v16 only");
         }
