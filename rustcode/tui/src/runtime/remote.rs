@@ -1759,7 +1759,7 @@ mod tests {
         if started == 1 {
             assert!(matches!(
                 published.first(),
-                Some((_, RemoteEvent::TurnStarted { turn_id: Some(_), prompt, timing: Some(_), })) if prompt.text == "from the phone"
+                Some((_, RemoteEvent::TurnStarted { turn_id: Some(_), prompt, timing: Some(_), .. })) if prompt.text == "from the phone"
             ));
         } else {
             assert!(started == 0 && announced_by_snapshot, "{published:?}");

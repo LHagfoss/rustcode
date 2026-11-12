@@ -1106,6 +1106,61 @@ Snooze is not in this list: it lives in the desktop app's own local storage,
 not in the engine or the host's session store, so a paired device cannot set
 it and no capability advertises it.
 
+### Who sent a message
+
+Not every `user` message is something the user typed. A thread also holds the
+task or message another thread's agent sent it (`start_session`, `fan_out`,
+`message_session`), the wake the host sends when the thread's delegates
+finish, fail, ask or stall, and the prompt the host continues with after it
+compacted the thread. A `user` message says which it is in `origin`, in a
+snapshot's `transcript` and in a `history` page alike, and the `turn_started`
+event says the same for the prompt its turn starts with:
+
+```json
+{
+  "message_id": "m62",
+  "role": "user",
+  "content": { "text": "Delegate finished: Review the parser tests\n\nFinished:\n\n- link_id …", "truncated": false, "offset": 0, "total_bytes": 247, "content_id": "message:h2:62" },
+  "origin": {
+    "kind": "delegate",
+    "threads": [
+      { "session_id": "20261009-184105-c41d", "title": "Review the parser tests", "status": "done", "link_id": "20261009-183000-9f2a/1" }
+    ]
+  }
+}
+```
+
+| `origin.kind` | The message | `threads` |
+| --- | --- | --- |
+| `user` | The user wrote it, on the host or on a device. | Absent. |
+| `agent` | Another thread's agent sent it: a delegated task, or a message. Its text starts with `From thread “<title>” (agent):`. | One entry, with the sender's `title` at the time. |
+| `delegate` | The host woke the thread for its delegates. Its text ends with `<!-- rustcode:wake -->`. | One entry per delegate the wake reports. |
+| `system` | The host's own prompt, such as the one that continues after a compaction. | Absent. |
+
+Each entry of `threads` holds what the message says about that thread, and
+every field is optional: `session_id`, `title`, `status` (a delegate's state:
+`done`, `failed`, `needs_user` for one that waits on the user, `stalled` for
+one that made no progress; open-ended) and `link_id` (the link the delegate
+answers on). A delegate reported as stalled is named by `title` alone, and an
+`agent` message carries no `session_id`: the message names its sender by
+title only. When the thread is a delegate, the snapshot's `session.parent` is
+the thread that started it, which is the usual sender. A `session_id` names a
+thread on the host and is openable when the session list has it.
+
+Render anything but `user` as a notice, not as the user's own bubble, and
+treat a `kind` this list does not name the same way. `content` is unchanged:
+it is the text the model was given, heading and marker included, so a client
+may show a shorter line of its own (the first line of a wake is its summary,
+`Delegate finished: <title>`).
+
+`origin` is additive. It is absent on `assistant` and `tool` messages, on a
+tool result or attachment stored in the `user` role, and from a host that
+predates it; for such a host a client falls back to the `<!-- rustcode:wake -->`
+marker in the text. The host reads the origin from the message text, which is
+what every harness keeps, so it is the same for a thread on the built-in
+harness and on an external one, live and after a restart, and for messages
+written before the field existed.
+
 ### Image attachments
 
 Owners advertising `upload_image` accept authenticated, session-scoped JPEG/PNG
