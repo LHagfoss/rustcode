@@ -1374,6 +1374,12 @@ function releaseAnnouncements(own: string | undefined): void {
   for (const { apply } of deferredAnnouncements.splice(0)) apply();
 }
 
+// Pending changes cover stale machine lists until the owner answers.
+const remoteStatusPending = new Map<
+  string,
+  { status: "review" | "done" | "idle"; confirmed: ThreadStatus; tail: Promise<void>; version: number }
+>();
+
 /** Replaces the sessions of every machine with the list it last gave (this computer's are kept). */
 function mergeMachineLists(lists: Record<string, readonly SessionSummary[]>): void {
   set((s) => {
@@ -1387,7 +1393,13 @@ function mergeMachineLists(lists: Record<string, readonly SessionSummary[]>): vo
         .map((session) => {
           const id = threadKey(host, session.id);
           const title = session.title || known.get(id)?.title;
-          return { ...session, id, host, title };
+          return {
+            ...session,
+            id,
+            host,
+            title,
+            status: remoteStatusPending.get(id)?.status ?? session.status,
+          };
         });
       // A thread the app was told about, here or by another client, that this list has not got to
       // yet stays: a read that started before it is not news that it is gone.
@@ -5563,6 +5575,8 @@ export function statusOf(s: AppState, id: string): ThreadStatus {
   if (t?.permissions.length) return "needs_input";
   if (t?.running) return "running";
   const listed = sessionById(s, id)?.status;
+  const pending = remoteStatusPending.get(id);
+  if (pending) return pending.status;
   const mark = threadIsRemote(id) ? undefined : s.statusMarks[id];
   if (listed === "done" || listed === "review") return mark ?? listed;
   return mark ?? "idle";
@@ -5967,29 +5981,52 @@ export function setThreadStatus(id: string, status: "review" | "done" | "idle"):
  */
 export async function setThreadsStatus(ids: string[], status: "review" | "done" | "idle"): Promise<number> {
   const remote = ids.filter(threadIsRemote);
-  let remoteErrors = 0;
-  for (const id of remote) {
-    try {
-      const conn = connectionForThread(id);
-      if (!conn) throw new Error("That computer is not connected.");
-      await conn.request(V2Method.sessionStatus, { session_id: splitThreadKey(id).id, status }, 10_000);
-      clearStatusMark(id);
-      set((s) => ({
-        sessions: s.sessions.map((x) => (x.id === id ? { ...x, status } : x)),
-        ...(status === "done"
-          ? {
-              failed: Object.fromEntries(Object.entries(s.failed).filter(([key]) => key !== id)),
-              finished: without(s.finished, id),
-            }
-          : {}),
-      }));
-    } catch (error) {
-      remoteErrors++;
-      toast(`Could not save the status: ${errorText(error)}`, "error");
+  const remoteRequests = remote.map(async (id) => {
+    const conn = connectionForThread(id);
+    if (!conn) {
+      toast("Could not save the status: That computer is not connected.", "error");
+      return 1;
     }
-  }
+    let pending = remoteStatusPending.get(id);
+    if (!pending) {
+      pending = { status, confirmed: statusOf(get(), id), tail: Promise.resolve(), version: 0 };
+      remoteStatusPending.set(id, pending);
+    }
+    pending.status = status;
+    const version = ++pending.version;
+    const entry = pending;
+    set((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? { ...x, status } : x)) }));
+    let failed = false;
+    const request = entry.tail.then(async () => {
+      try {
+        await conn.request(V2Method.sessionStatus, { session_id: splitThreadKey(id).id, status }, 10_000);
+        entry.confirmed = status;
+        clearStatusMark(id);
+        if (status === "done") {
+          set((s) => ({
+            failed: Object.fromEntries(Object.entries(s.failed).filter(([key]) => key !== id)),
+            finished: without(s.finished, id),
+          }));
+        }
+      } catch (error) {
+        failed = true;
+        toast(`Could not save the status: ${errorText(error)}`, "error");
+      }
+      if (entry.version === version) {
+        remoteStatusPending.delete(id);
+        set((s) => ({
+          sessions: s.sessions.map((x) => (x.id === id ? { ...x, status: entry.confirmed } : x)),
+        }));
+      }
+    });
+    entry.tail = request;
+    await request;
+    return failed ? 1 : 0;
+  });
+  const remoteErrors = () =>
+    Promise.all(remoteRequests).then((results) => results.reduce<number>((a, b) => a + b, 0));
   ids = ids.filter((id) => !threadIsRemote(id));
-  if (!ids.length) return remoteErrors;
+  if (!ids.length) return remoteErrors();
   const wanted = new Set(ids);
   set((s) => ({
     sessions: s.sessions.map((x) => (wanted.has(x.id) ? { ...x, status } : x)),
@@ -6007,7 +6044,7 @@ export async function setThreadsStatus(ids: string[], status: "review" | "done" 
   if (status === "idle") for (const id of ids) clearStatusMark(id);
   else saveMarks({ ...get().statusMarks, ...Object.fromEntries(ids.map((id) => [id, status])) });
   for (const id of ids) scheduleAutoCompact(id);
-  if (!get().features.status) return remoteErrors;
+  if (!get().features.status) return remoteErrors();
   // The status is kept by the computer the thread runs on, one request each on its own connection.
   const groups = new Map<AcpConnection, string[]>();
   const errors: unknown[] = [];
@@ -6037,7 +6074,7 @@ export async function setThreadsStatus(ids: string[], status: "review" | "done" 
       "error",
     );
   }
-  return errors.length + remoteErrors;
+  return errors.length + (await remoteErrors());
 }
 
 /**
