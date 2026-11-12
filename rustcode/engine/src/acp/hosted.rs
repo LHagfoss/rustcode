@@ -161,16 +161,13 @@ pub(crate) async fn start(
         .ok_or_else(|| internal(format!("the new thread {session_id} is not shared")))?;
     // The app lists its threads from the store, which has no row for a thread
     // before its first turn: this is what puts it in the sidebar now.
-    server.clients.broadcast_to(
-        Capability::Threads,
-        super::ThreadCreatedNotification {
-            session_id: info.session_id.clone(),
-            cwd: cwd.clone(),
-            title: (!info.title.trim().is_empty()).then(|| info.title.clone()),
-            harness: info.harness.clone(),
-            model: (!info.model.trim().is_empty()).then(|| info.model.clone()),
-        },
-    );
+    server.announce_thread_created(super::ThreadCreatedNotification {
+        session_id: info.session_id.clone(),
+        cwd: cwd.clone(),
+        title: (!info.title.trim().is_empty()).then(|| info.title.clone()),
+        harness: info.harness.clone(),
+        model: (!info.model.trim().is_empty()).then(|| info.model.clone()),
+    });
     Ok(info)
 }
 

@@ -326,6 +326,50 @@ describe("a machine's projects", () => {
     expect(String((answer.error as JsonObject).message)).toContain("pass project");
     expect(sent().filter((frame) => frame.method === "session/new")).toEqual([]);
   });
+
+  test("the app's own data folder is never the project a start picks", async () => {
+    const { conn, sent } = recordingConnection();
+    watchMachineConnection(LINUX, conn);
+    // The machine lists a thread it once started in its own data folder, and the newest one at
+    // that: it is not a project, however recent it is (issue 3524).
+    useMachines.setState({
+      sessions: {
+        [LINUX]: [
+          { id: "remote-1", cwd: "/home/lars/.config/rustcode", title: "From thread", updatedAt: Date.now() },
+          {
+            id: "remote-2",
+            cwd: LINUX_PROJECT,
+            title: "Run the tests there",
+            updatedAt: Date.now() - 60_000,
+          },
+        ],
+      },
+    });
+    const answer = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "start_session",
+      args: { prompt: "Run the tests there", machine: LINUX_NAME },
+    });
+    expect(answer.error).toBeUndefined();
+    const created = sent().find((frame) => frame.method === "session/new")?.params as JsonObject;
+    expect(created).toMatchObject({ cwd: LINUX_PROJECT });
+
+    // Nothing else there: it refuses, rather than starting a thread outside any project.
+    useMachines.setState({
+      sessions: {
+        [LINUX]: [
+          { id: "remote-1", cwd: "/home/lars/.config/rustcode", title: "From thread", updatedAt: Date.now() },
+        ],
+      },
+    });
+    const refused = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "start_session",
+      args: { prompt: "Run the tests there", machine: LINUX_NAME },
+    });
+    expect(refused.error).toMatchObject({ code: "invalid" });
+    expect(String((refused.error as JsonObject).message)).toContain("pass project");
+  });
 });
 
 describe("a call on another machine", () => {
@@ -349,6 +393,21 @@ describe("a call on another machine", () => {
     // The turn goes to the machine's own session id, never the key.
     const prompted = calls.find((frame) => frame.method === "session/prompt");
     expect(prompted?.params).toMatchObject({ sessionId: "remote-1" });
+  });
+
+  test("names the thread it was asked for, on the machine that runs it", async () => {
+    const { conn, sent } = recordingConnection();
+    watchMachineConnection(LINUX, conn);
+    const answer = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "start_session",
+      args: { prompt: "Run the tests there", title: "Windows PC specs", machine: LINUX_NAME },
+    });
+    expect(answer.error).toBeUndefined();
+    expect(answer.title).toBe("Windows PC specs");
+    // The machine names its own thread from this: `thread_rename` is this computer's shell.
+    const created = sent().find((frame) => frame.method === "session/new")?.params as JsonObject;
+    expect(created._meta).toMatchObject({ rustcode: { title: "Windows PC specs" } });
   });
 
   test("its threads are listed with keys that carry the machine", async () => {

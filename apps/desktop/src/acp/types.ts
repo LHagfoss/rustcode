@@ -21,6 +21,9 @@ export const Method = {
   sessionActivity: "_rustcode/session/activity",
   /** A thread the engine started because a paired device asked for one. */
   threadCreated: "_rustcode/threads/created",
+  /** A thread trashed here: every client that lists threads drops the row. */
+  threadDelete: "_rustcode/threads/delete",
+  threadDeleted: "_rustcode/threads/deleted",
   sessionPrompt: "session/prompt",
   sessionCancel: "session/cancel",
   sessionSetConfigOption: "session/set_config_option",

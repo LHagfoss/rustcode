@@ -212,7 +212,7 @@ fn parse_version(version: &str) -> Option<Version> {
 }
 
 /// Whether `latest` is newer than `current`; a beta is older than its release.
-fn newer(latest: &str, current: &str) -> bool {
+pub(crate) fn newer(latest: &str, current: &str) -> bool {
     match (parse_version(latest), parse_version(current)) {
         (Some(latest), Some(current)) => latest > current,
         _ => false,

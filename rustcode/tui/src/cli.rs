@@ -401,6 +401,13 @@ pub enum ServerCommands {
     /// Point the `rustcode` a shell runs at this one, when it is another
     /// version
     LinkPath,
+    /// Update the `rustcode` a shell runs when it is an older copy an install
+    /// left behind
+    UpdateCli {
+        /// Print what was found and done as JSON, for the app
+        #[arg(long)]
+        json: bool,
+    },
     /// Remove the background service (threads, settings and pairings stay)
     Uninstall {
         /// Stop a server with turns running without asking
@@ -1466,6 +1473,14 @@ mod tests {
             }
         ));
         assert!(matches!(server(&["link-path"]), ServerCommands::LinkPath));
+        assert!(matches!(
+            server(&["update-cli"]),
+            ServerCommands::UpdateCli { json: false }
+        ));
+        assert!(matches!(
+            server(&["update-cli", "--json"]),
+            ServerCommands::UpdateCli { json: true }
+        ));
         assert!(matches!(
             server(&["uninstall"]),
             ServerCommands::Uninstall { yes: false }

@@ -29,6 +29,7 @@ import {
   type PermissionRequest,
   plainPath,
   projectName,
+  type SessionSummary,
 } from "../acp/types";
 import {
   type HandoffRefusal,
@@ -164,7 +165,7 @@ import {
   registerProject,
   updateProjectEntry,
 } from "./projectBook";
-import { isRootFolder, projectsOn } from "./projects";
+import { isDataFolder, isRootFolder, type Project, projectsOn } from "./projects";
 import { rememberPullSummaries } from "./pullQueries";
 import { QUEUE_REASON, wakeDelivery } from "./queue";
 import {
@@ -189,6 +190,7 @@ import {
   ensureHarnessModels,
   errorText,
   harnessesOn,
+  isKeptUnlisted,
   lastAccountFor,
   loadMachineHarnesses,
   localChoices,
@@ -860,10 +862,10 @@ function projectsOnMachine(machine: MachineRef): JsonObject {
   for (const x of useApp.getState().sessions) {
     if ((x.host ?? LOCAL_HOST) !== machine.host) continue;
     // A thread with no folder of its own is not a project: its machine lists a stand-in, and a root
-    // is never a project either (issue 3425).
+    // is never a project either (issue 3425). Neither is the app's own data folder (issue 3524).
     if (x.workspaceUnknown) continue;
     const path = plainPath(x.worktree?.repo || x.repo || x.cwd);
-    if (!path || isRootFolder(path)) continue;
+    if (!path || isRootFolder(path) || isDataFolder(path)) continue;
     const entry = rows.get(path) ?? {
       path,
       name: projectName(path),
@@ -965,8 +967,10 @@ function sessionsOnMachine(
 /**
  * The project a thread starts in on a machine: the agent's own path, else the
  * caller's when that machine has it, else a folder with the caller's project
- * name, else its only project. A machine that has listed nothing yet needs
- * the path.
+ * name, else its only project, else its most recently used one. A machine with
+ * several projects and no clear most recent one is a question, not a guess: it
+ * refuses with the list. The app's own data folder is never a project, however
+ * a machine's thread list names it (issue 3524).
  */
 function projectOnMachine(
   machine: MachineRef,
@@ -976,23 +980,51 @@ function projectOnMachine(
   // A path the agent names is its own choice, and the machine's engine refuses
   // one that is not a folder there: this app only knows what it has listed.
   if (asked?.trim()) return asked.trim().replace(/\/+$/, "");
-  const paths = projectsOn(useApp.getState().sessions, machine.host).map((project) => project.path);
-  if (!paths.length) {
+  const sessions = useApp.getState().sessions;
+  const projects = projectsOn(sessions, machine.host);
+  if (!projects.length) {
     return failure(
       "invalid",
       `${machine.name} has no project listed yet; pass project with its absolute path there`,
     );
   }
   const own = projectOf(caller);
-  if (paths.some((path) => sameProject(path, own))) return own;
+  const there = projects.find((project) => sameProject(project.path, own));
+  if (there) return there.path;
   const name = projectName(own);
-  const byName = paths.filter((path) => projectName(path) === name);
-  if (byName.length === 1) return byName[0]!;
-  if (paths.length === 1) return paths[0]!;
+  const byName = projects.filter((project) => project.name === name);
+  if (byName.length === 1) return byName[0]!.path;
+  if (projects.length === 1) return projects[0]!.path;
+  const recent = mostRecentProject(sessions, machine.host, projects);
+  if (recent) return recent;
   return failure(
     "invalid",
-    `${machine.name} has no project at ${own}; pass project as one of: ${paths.join(", ")}`,
+    `${machine.name} has no project at ${own}; pass project as one of: ${projects.map((project) => project.path).join(", ")}`,
   );
+}
+
+/**
+ * A machine's most recently used project, when its list says which one that is:
+ * strictly newer than every other, not a tie an older machine's thread list
+ * cannot break.
+ */
+function mostRecentProject(
+  sessions: readonly SessionSummary[],
+  host: string,
+  projects: readonly Project[],
+): string | undefined {
+  const last = new Map<string, number>();
+  for (const session of sessions) {
+    if ((session.host ?? LOCAL_HOST) !== host || session.workspaceUnknown) continue;
+    const path = plainPath(session.worktree?.repo || session.repo || session.cwd);
+    if (!path) continue;
+    last.set(path, Math.max(last.get(path) ?? 0, session.updatedAt ?? 0));
+  }
+  const at = (path: string) => last.get(path) ?? 0;
+  const [first, second] = [...projects].sort((a, b) => at(b.path) - at(a.path));
+  if (!first) return undefined;
+  if (second && at(first.path) <= at(second.path)) return undefined;
+  return first.path;
 }
 
 /** `session/new` on a machine, with the worktree fallback a folder outside git needs. */
@@ -1598,24 +1630,30 @@ async function perform(
     }
     case "read_activity": {
       // A read of the store, like thread_usage: the project rule applies (any
-      // project while the setting allows it), and no approval is asked.
+      // project while the setting allows it), and no approval is asked. The
+      // store read is the one on the computer the thread runs on, so a
+      // delegate on a paired machine is read there and not here as an empty
+      // list (issue 3525).
       const target = ruleThread(useApp.getState(), call.target);
       const refused = checkMessage(caller, target, book(), true, acrossProjects());
       if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
-      try {
-        return await request<JsonObject>(
-          Method.dataActivity,
-          {
-            sessionId: target.id,
-            ...(call.after ? { after: call.after } : {}),
-            ...(call.order ? { order: call.order } : {}),
-            limit: call.limit,
-          },
-          20_000,
+      const { answer, error } = await activityFrom(target.id, {
+        ...(call.after ? { after: call.after } : {}),
+        ...(call.order ? { order: call.order } : {}),
+        limit: call.limit,
+      });
+      if (!answer) {
+        const remote = isRemoteThread(target.id);
+        return failureJson(
+          failure(
+            remote ? "unavailable" : "failed",
+            remote
+              ? `activity is not available from ${machineOfThread(target.id).name} (${error}). Read the thread itself with read_session.`
+              : `the data store did not answer: ${error}`,
+          ),
         );
-      } catch (error) {
-        return failureJson(failure("failed", `the data store did not answer: ${errorText(error)}`));
       }
+      return { ...answer, ...machineFields(machineOfThread(target.id)) };
     }
   }
 }
@@ -1847,7 +1885,7 @@ function listProjects(s: AppState): JsonObject {
     // A thread whose machine never recorded its folder has no project to count (issue 3425).
     if (x.workspaceUnknown) continue;
     const path = projectOf({ folder: x.cwd, worktree: x.worktree });
-    if (!path || isRootFolder(path)) continue;
+    if (!path || isRootFolder(path) || isDataFolder(path)) continue;
     const entry = byPath.get(path) ?? { path, threads: 0, working: false, updatedAt: 0 };
     entry.threads += 1;
     entry.working ||= !!s.threads[x.id]?.running || x.status === "running";
@@ -2281,7 +2319,9 @@ async function threadStatus(
     entries.map(async (entry) => {
       // Another machine's branch and pull request are not this app's to read
       // (they live in that machine's engine and folders): its status is what
-      // its thread list and this machine's reports say.
+      // its thread list and this machine's reports say. Its recorded activity
+      // is asked of that machine, which is what carries the provider error a
+      // failed remote turn left (issue 3525).
       if (isRemoteThread(entry.id)) {
         return {
           entry,
@@ -2290,17 +2330,15 @@ async function threadStatus(
             pull?: DelegatePull;
             error?: Failure;
           },
-          activity: null,
+          activity: entry.running
+            ? ((await activityFrom(entry.id, { order: "newest", limit: 1 })).answer ?? null)
+            : null,
         };
       }
       const [state, activity] = await Promise.all([
         delegatePull(entry),
         entry.running
-          ? request<JsonObject>(
-              Method.dataActivity,
-              { sessionId: entry.id, order: "newest", limit: 1 },
-              20_000,
-            ).catch(() => null)
+          ? activityFrom(entry.id, { order: "newest", limit: 1 }).then((read) => read.answer ?? null)
           : null,
       ]);
       return { entry, state, activity };
@@ -2880,7 +2918,11 @@ async function updateSession(caller: RuleThread, call: UpdateCall): Promise<Json
     session_id: target.id,
     title: after?.title ?? target.title,
     pinned: useApp.getState().pinned.includes(target.id),
-    status: after?.status ?? "idle",
+    // The status this call set, not the live one: a thread settled in the middle of its turn still
+    // runs, and answering "running" read as if the settle had been refused (issue 3529). It is
+    // settled now and leaves the active list when its turn ends; `running` says it still works.
+    status: call.status ? STATUS_OF_CHOICE[call.status] : (after?.status ?? "idle"),
+    running: !!useApp.getState().threads[target.id]?.running,
     snoozed_until: until ? new Date(until).toISOString() : null,
   };
 }
@@ -4132,6 +4174,46 @@ function activityOfThread(s: AppState, id: string): ThreadStatus | undefined {
 }
 
 /**
+ * One thread's activity from the data store of the computer it runs on: this
+ * computer's, or the paired machine's own, over that machine's connection. No
+ * answer (an older engine, a channel that went away) is said by its callers,
+ * never passed on as an empty list that reads as a thread that did nothing
+ * (issue 3525).
+ */
+async function activityFrom(
+  thread: string,
+  params: JsonObject,
+  timeoutMs = 20_000,
+): Promise<{ answer?: JsonObject; error?: string }> {
+  const conn = connectionFor(splitThreadKey(thread).host);
+  if (!conn) return { error: "it is not connected" };
+  try {
+    const answer = await conn.request<JsonObject>(
+      Method.dataActivity,
+      { sessionId: splitThreadKey(thread).id, ...params },
+      timeoutMs,
+    );
+    return { answer };
+  } catch (error) {
+    return { error: errorText(error) };
+  }
+}
+
+/** Why a link to a thread the app can no longer find failed: its row and its tip say the same. */
+const REASON_THREAD_GONE = "That thread is gone.";
+
+/**
+ * Whether a link's thread has gone: no list names it and the app keeps no row for it. A thread
+ * this window made there, or another client announced, is listed only once a `session/list`
+ * catches up, which on a first turn is after the message that started it: the keep-unlisted set
+ * (`state/store.ts` `isKeptUnlisted`) says which unlisted rows are still due. A thread with a
+ * `threads` copy is no exception — every link target made in this window has one — so the copy
+ * is not what tells an unlisted thread from a gone one (issue 3523).
+ */
+const vanished = (s: AppState, target: string) =>
+  !s.sessions.some((x) => x.id === target) && !isKeptUnlisted(target);
+
+/**
  * `wait_session`: blocks until one of the links settles or asks the user, or
  * the timeout passes. Each answer carries what the app already knows about the
  * child (idle time, last tool, turns), so a timeout says whether it is
@@ -4252,8 +4334,14 @@ async function wait(
       for (const id of mine) {
         const link = book().links.find((l) => l.id === id);
         if (!link) continue;
-        if (isActive(link.state) && !s.sessions.some((x) => x.id === link.target)) {
-          setBook((b) => updateLink(b, id, { state: "failed", answer: "That thread is gone." }));
+        if (isActive(link.state) && vanished(s, link.target)) {
+          setBook((b) =>
+            updateLink(b, id, {
+              state: "failed",
+              answer: REASON_THREAD_GONE,
+              error: REASON_THREAD_GONE,
+            }),
+          );
           continue;
         }
         const now = stateOf(s, link);
