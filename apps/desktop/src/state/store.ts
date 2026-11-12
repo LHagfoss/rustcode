@@ -2628,8 +2628,11 @@ async function repairBeforeRetry(id: string, conn: AcpConnection, error: unknown
   if (!isRepairableOpenError(error) || autoRepaired.has(id) || !get().agent?.sessionRepair) return null;
   autoRepaired.add(id);
   try {
-    const answer = ((await conn.request(Method.sessionRepair, { sessionId: splitThreadKey(id).id }, 10_000)) ??
-      {}) as JsonObject;
+    const answer = ((await conn.request(
+      Method.sessionRepair,
+      { sessionId: splitThreadKey(id).id },
+      10_000,
+    )) ?? {}) as JsonObject;
     const problems = Array.isArray(answer.problems) ? answer.problems : [];
     const cwd = typeof answer.cwd === "string" ? answer.cwd : null;
     if (problems.length || !cwd) return null;

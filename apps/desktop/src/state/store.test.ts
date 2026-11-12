@@ -5824,8 +5824,9 @@ class MismatchedRecordTransport implements Transport {
   }
 
   count(method: string): number {
-    return this.requests.filter((r) => r.method === method && (r.params as JsonObject)?.sessionId === this.target)
-      .length;
+    return this.requests.filter(
+      (r) => r.method === method && (r.params as JsonObject)?.sessionId === this.target,
+    ).length;
   }
 
   async restart(): Promise<void> {
