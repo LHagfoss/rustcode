@@ -113,6 +113,7 @@ import {
   installProgress,
   loadChannels,
   offersUpdate,
+  setAutoInstall,
   setUpdateChannel,
   showWhatsNew,
   useUpdates,
@@ -1512,6 +1513,7 @@ function AboutPage() {
     >
       <AppVersion />
       <UpdateChannelRow />
+      <AutoInstallRow />
     </Group>
   );
 }
@@ -1548,6 +1550,24 @@ function UpdateChannelRow() {
           { value: "beta", label: "Beta" },
         ]}
       />
+    </Row>
+  );
+}
+
+/**
+ * Settings › About › Install updates automatically: a newer release on the
+ * selected channel installs and reopens RustCode by itself once no thread is
+ * working. A running turn, an approval or a question is never interrupted.
+ */
+function AutoInstallRow() {
+  const enabled = useUpdates((s) => s.autoInstall);
+  if (!canUpdate()) return null;
+  return (
+    <Row
+      title="Install updates automatically"
+      subtitle="Installs a newer release and reopens RustCode once no thread is working. A running turn is never interrupted."
+    >
+      <Switch label="Install updates automatically" checked={enabled} onChange={setAutoInstall} />
     </Row>
   );
 }

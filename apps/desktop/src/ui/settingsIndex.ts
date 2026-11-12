@@ -417,6 +417,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     title: "Update channel",
     keywords: "beta stable prerelease channel release updates early",
   },
+  {
+    section: "about",
+    title: "Install updates automatically",
+    keywords: "auto update upgrade install background restart relaunch idle",
+  },
 ];
 
 /** How many results the nav shows at once. */
