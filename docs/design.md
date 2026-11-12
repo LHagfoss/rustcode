@@ -681,54 +681,35 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   `fg-muted`, with 14px folder icons: the label,
   a dot for what a folded group hides, a count only while it is folded, then
   the chevron.
-- **Sidebar rows:** the default is the roomy two-line row, `py-2` with
-  `rounded-xl`: a 14px `ProjectMark`, the title, and one trailing slot on the
-  right, as wide as what it says and no wider, so the title takes every pixel
-  the row does not need; the line under it holds the branch and the counts. The
-  project's name is not repeated on a row: the mark carries it, and the hover
-  card and the project's heading spell it out. A row under a project's heading
-  drops the mark, so its title lines up under the folder's name. The slot holds
-  one thing, by `rowStatus` — what it needs of you, the running turn's spinner
-  and clock, that it waits on work it handed out, a failure, a completion you
-  have not opened, a review, the time a snoozed thread wakes, else its age
-  (`5m`, `3h`) — never two, and never a second spinner. A row is two lines at
-  most, three on the card. A thread with a worktree branch or a pull request
-  puts them on the quiet last line (`text-sub`, 48px row): the branch in
-  `font-mono`, `+N −N` in `success`/`danger`, the pull request's mark, and the
-  stack or the harness mark at its end. A thread that asks something of you
-  puts the question on that line instead, and the branch waits in the hover
-  card. Neither a diff, a stack of delegates nor the harness mark alone is worth a
-  line: they ride in the trailing slot beside the state (on the card, at the
-  end of the title line), the stack in the harness mark's place, so spawning a
-  delegate never makes a row taller, and the slot never wraps —
-  a 12px glyph dropped onto a second line reads as the state's own icon
-  wrapping (`state/sidebarRows.ts` `rowMeta`). Counts are shown only for a
-  thread the app has already read; one it has not opened shows neither, rather
-  than a made-up zero. The opt-in compact row keeps everything on one 32px
-  line, with a second only for a branch, a pull request or a stack. What a thread
-  asks of you, and `in <parent title>` for a delegated row drawn on its own, go
-  under the title at full strength.
+- **Sidebar rows:** every thread row is one fixed grid, three lines by two
+  columns, 68px tall whatever it holds, with `rounded-xl`, so a column of rows
+  reads as a table and each thing has one place (`ui/Sidebar.tsx` `ROW_GRID`).
+  The left column takes the row's width; the right is a fixed 76px, room for
+  the three 24px hover actions, so every row's right edge lines up.
+  Line 1: the pin, fork or side-chat glyph and the title (`text-body`); at the
+  right, one state by `rowStatus` as an icon and a word in its tone (`Working`
+  with its clock in `accent`, `Needs you` in `warning`, `Waiting` muted,
+  `Failed` in `danger`, `Done` in `success` until the thread is opened,
+  `Review` in `accent`), else the hour a snoozed thread wakes, else its age
+  (`5m`, `3h`, with a check before it when settled).
+  Line 2 (`text-sub`, `fg-muted`): the project's 12px mark and name (under a
+  project heading, the harness instead) and the computer it runs on — another
+  computer always, this one too once a machine is paired; at the right, the
+  diff (`+N −N` in `success`/`danger`) and the pull request's mark.
+  Line 3: the branch in `font-mono`, or what the thread asks of you in
+  `warning` in its place (`in <parent title>` for a delegated row drawn on its
+  own); at the right, the stack of delegates or the harness mark. A line with
+  nothing to say stays empty rather than collapsing, so the height never
+  changes. Counts are shown only for a thread the app has already read.
   What wants you — a request, a failure, a turn that ended while you were
   elsewhere, the open thread, a picked row — is weight 500 in full `fg`; what
   works, waits or is settled recedes to weight 400 at 75%, back to full on
   hover, with its mark at 60% so a column of marks never competes with the
-  titles. Hovering swaps the slot for Pin, Settle (or Unsettle) and the menu,
-  three 24px targets that take the slot's place: the slot widens to their 72px
-  and its state fades out as they fade in, so the line's text truncates before
-  them and nothing is ever drawn over it. On the card they sit on the first
-  line, beside the project's name, and the title below is untouched. The hover
-  card is the rest. The row layout preference
-  (`rustcode.sidebar.rowLayout`) is `comfortable` unless the user chose
-  `compact`: a card of up to three lines. The first is the project's mark and
-  name in `text-sub` `fg-muted` (the harness under a project heading), ending
-  with the state as an icon and a word in its tone (`Working` with its clock in
-  `accent`, `Needs you` in `warning`, `Waiting` muted, `Failed` in `danger`,
-  `Done` in `success` until the thread is opened, `Review` in `accent`) or else
-  the age, where the hover actions are drawn. The second is the title, ending
-  with the diff and the harness mark when there is no third line. The third,
-  drawn only for a branch, a pull request or a stack, carries those and the diff (the retired `current` and `title-first`
-  values migrate to it). Logic: `state/sidebarRows.ts` `rowStatus` and `rowMeta`,
-  `state/sidebarPrefs.ts` `rowLayoutOf`.
+  titles. Hovering swaps line 1's state for Pin, Settle (or Unsettle) and the
+  menu in the same 76px, so nothing shifts. Dragging a row slides the rows it
+  passes aside to open the place it would land in, and near the list's top or
+  bottom edge the list scrolls (`ui/sidebarDrag.tsx`). Logic:
+  `state/sidebarRows.ts` `rowStatus`.
 - **Delegated threads:** a thread an agent started has no row of its own while
   its parent exists, and it is nested from its first frame: the parent
   is recorded on the thread when it is created (`_meta.rustcode.parent`, carried

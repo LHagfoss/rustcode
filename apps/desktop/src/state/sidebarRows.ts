@@ -3,7 +3,6 @@
 // (ui/Sidebar.tsx).
 
 import type { SessionSummary } from "../acp/types";
-import type { RowLayout } from "./sidebarPrefs";
 import { diffCounts, type TranscriptItem } from "./thread";
 
 /** A row the list draws: a top-level thread, or the open delegate's indented row. */
@@ -487,32 +486,3 @@ function compare(section: SectionId, a: OrderKey, b: OrderKey): number {
 }
 
 /** What a row has besides its title, for {@link rowMeta}: the caller resolves each flag. */
-export interface RowMetaRead {
-  /** It works in a worktree, so it has a branch to name. */
-  branch?: boolean;
-  /** Its branch carries a pull request. */
-  pull?: boolean;
-  /** A stack of the threads it started: circles with a state badge, worth a line. */
-  stack?: boolean;
-  /** The mark of the harness it runs on: one 12px glyph, which the trailing slot holds. */
-  harness?: boolean;
-  /** What its calls changed, when the app has read them ({@link threadDiff}). */
-  diff?: { added: number; removed: number } | null;
-  /** The row's layout; both treat a diff alone the same way. */
-  layout: RowLayout;
-}
-
-/**
- * Where a row puts what it has besides its title: `line` draws the quiet second line that holds it,
- * `trailing` keeps the row on one line and lets the diff and the harness mark ride in its trailing
- * slot (the card's title line), and `none` draws no line at all. A line is never opened for a diff
- * alone, in either layout, where it would be a line of its own for `+1` and make one card in a column
- * a line taller than the rest, nor for the harness mark alone, where one 12px glyph would sit at the right edge of an otherwise empty line and
- * read as the state's own icon wrapping onto a second line. A stack of delegates alone takes the
- * harness mark's place in that slot, so spawning one never makes the row a line taller. Only a branch
- * or a pull request is worth a line.
- */
-export function rowMeta(read: RowMetaRead): "line" | "trailing" | "none" {
-  if (read.branch || read.pull) return "line";
-  return read.diff || read.harness || read.stack ? "trailing" : "none";
-}

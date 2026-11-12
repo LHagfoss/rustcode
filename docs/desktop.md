@@ -890,30 +890,17 @@ composer's keys stay outside the table.
   unread, counts in *Needs you*, badges the Dock or notifies the system. It
   comes back when its snooze ends, or when you write in it, with the state it
   reached then and one notification at most (`snoozed` in the store;
-  `state/store.ts` `wakeSnoozed`, `state/sidebarRows.ts` `placeThread`). The
-  default row is the roomy two-line one,
-  `py-2` with `rounded-xl` and 2px between rows: the 14px mark of where it
-  runs, its title, and one slot at the right, as wide as what it says — the
-  age (`5m`, `3h`), the running turn's spinner and clock, *Waiting*, *Needs
-  you* (with the request under the title), *Failed* (red), *Completed* (green,
-  until you open the thread) or *Review* (accent), the hour a snoozed thread
-  wakes; a turn that ended while you looked elsewhere keeps its row at full
-  strength until you open the thread (`finished`/`failed` in the store; *Mark
-  Unread* in the menu brings it back). The project's name is not repeated on
-  the rows: the mark carries it, and the hover card and the project's heading
-  spell it out. The line under the title holds a branch, a pull request or a
-  stack of delegates, with what the branch changed (48px); a diff on its own
-  rides in the slot rather than opening a line for one number. What wants you
-  reads in medium weight; what works, waits or is settled recedes. Section and
-  project headers are one 32px line of 14px `text-body`, with 14px folder
-  icons.
-  Hovering swaps the slot for Pin, Settle (or Unsettle) and the menu, drawn
-  over the row's right end on the row's own fill while the line fades out under
-  them, so nothing shifts and the title keeps its width, each on a 24px target.
-  Settings › Appearance › Thread row layout offers *Comfortable* (the default
-  roomy two-line row) and *Compact* (one 32px line, with a second only for a
-  branch, a diff or a pull request); a value stored by an earlier release
-  migrates to *Comfortable*.
+  `state/store.ts` `wakeSnoozed`, `state/sidebarRows.ts` `placeThread`). Every
+  thread row is the same 68px grid of three lines and two columns
+  (`docs/design.md` › Sidebar rows): the title and its state or age, then the
+  project and the computer it runs on with the diff and pull request, then the
+  branch (or what the thread asks of you) with the stack of delegates or the
+  harness mark. A turn that ended while you looked elsewhere keeps its row at
+  full strength until you open the thread (`finished`/`failed` in the store;
+  *Mark Unread* in the menu brings it back). Hovering swaps the state for Pin,
+  Settle (or Unsettle) and the menu, in the same place, on a 24px target each.
+  Dragging a row slides the others aside to show where it lands, and the list
+  scrolls near its edges.
   ↑ ↓ move through the rows without opening them, ⏎ opens the
   one the keyboard is on, and P pins (or unpins) it while D settles (or
   unsettles) it — the picked rows when there are several — with the same

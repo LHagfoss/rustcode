@@ -1,4 +1,4 @@
-import { fileManagerName, primaryModifier, trashName } from "../lib/platform";
+import { appPlatform, fileManagerName, primaryModifier, trashName } from "../lib/platform";
 // The sidebar: a toolbar clear of the traffic lights (the sidebar toggle only),
 // the app's brand under it (its mark, name and version), then one list: pinned
 // threads first, then one Threads list (by project when asked) that leads with
@@ -6,13 +6,13 @@ import { fileManagerName, primaryModifier, trashName } from "../lib/platform";
 // folding on its own header. Threads are searched from ⌘K, which also holds the
 // buttons that used to sit here (new thread, add project, settings, pull
 // requests, usage). A section header never folds.
-// The default row is the roomy two-line one, `py-2` with `rounded-xl`: the mark
-// of where it runs, its title, and one trailing slot — `Needs you`, `Working 2m`,
-// `Waiting`, `Failed`, `Review`, the time it wakes, or its age
-// (state/sidebarRows.ts `rowStatus`), with the harness mark and a lone diff
-// beside it; the branch and the counts go on the quiet line under it (48px). The
-// row layout preference (Settings › Appearance) keeps the opt-in compact row as
-// a compact title line and a quiet line for its branch and other details.
+// Every thread row is one fixed grid, 3 lines by 2 columns, so each row is the
+// same height and each thing has one place (`ROW_GRID`). The left column (3/4)
+// holds the title, then the project and computer, then the branch or what the
+// thread asks; the right one (1/4) holds the state (`Needs you`, `Working 2m`,
+// `Waiting`, `Failed`, `Done`, `Review`, the time it wakes, or its age —
+// state/sidebarRows.ts `rowStatus`), then the diff and pull request, then the
+// agent stack or harness mark. Hovering swaps the state for the row's actions.
 
 import {
   Check,
@@ -73,7 +73,15 @@ import { type BranchRow, branchKindOf, branchRows } from "../state/branches";
 import { useCheckoutBranch } from "../state/checkoutBranch";
 import { type ChildInfo, childInfo } from "../state/children";
 import { stateOf } from "../state/host";
-import { machineGlyph, machineName, machineTint, useMachines } from "../state/machines";
+import {
+  machineGlyph,
+  machineName,
+  machineTint,
+  platformIcon,
+  selfName,
+  useLocalIdentity,
+  useMachines,
+} from "../state/machines";
 import { projectLabel } from "../state/projectBook";
 import {
   cachedPulls,
@@ -87,7 +95,7 @@ import {
 import { type PendingSetup, pendingSummary } from "../state/setup";
 import { type ProjectGroup, sidebarProjects } from "../state/sidebarGroups";
 import { applyOrder, moveBy, reorder, sectionOrderKey } from "../state/sidebarOrder";
-import { PREF, usePref, useRowLayout } from "../state/sidebarPrefs";
+import { PREF, usePref } from "../state/sidebarPrefs";
 import {
   cleanFolds,
   contextRow,
@@ -108,7 +116,6 @@ import {
   rangeRows,
   rowIdOf,
   rowKeyAction,
-  rowMeta,
   rowStatus,
   type SectionId,
   type ShelfId,
@@ -553,29 +560,33 @@ function RowAction({
 }
 
 /**
- * The room a row gives its trailing state: the mark of the harness it runs on and the diff when
- * they have nowhere else to go, and the state itself — the age, a chip, or the running turn's
- * clock. It is as wide as what it says, so the title takes every pixel the row does not need, and
- * it keeps that width on hover (invisible) while the actions are drawn over it, so nothing reflows.
- * It never wraps: its parts sit side by side on the row's one line, so a second glyph never drops
- * under the state and reads as a line of its own.
- */
-const TRAILING_SLOT =
-  "flex shrink-0 flex-nowrap items-center justify-end gap-1.5 whitespace-nowrap text-sub text-fg-muted tabular";
-
-/**
  * Hovering swaps the row's trailing state for its actions: Pin, Settle (or Unsettle) and the menu,
- * three 24px buttons in the slot the state held. The slot takes their width while they show, so
- * the title truncates before them instead of running under them, and nothing is drawn over text.
+ * three 24px buttons in the slot the state held. The right column is never narrower than they are,
+ * so nothing reflows and nothing is drawn over text.
  * The actions themselves sit beside the row's button (a button cannot hold buttons), placed on the
  * slot's line and fading in as the state fades out.
  */
-/** The trailing slot while the actions show: their width, its own state hidden under them. */
+/** The state's slot while the actions show: its own state hidden under them. */
 const SWAPPED_ON_HOVER = cx(
-  "group-hover:w-[72px] group-hover:*:invisible",
-  "group-has-[:focus-visible]:w-[72px] group-has-[:focus-visible]:*:invisible",
-  "group-has-[[data-state=open]]:w-[72px] group-has-[[data-state=open]]:*:invisible",
+  "group-hover:*:invisible",
+  "group-has-[:focus-visible]:*:invisible",
+  "group-has-[[data-state=open]]:*:invisible",
 );
+
+/**
+ * A thread row's grid: three lines by two columns, at one height whatever the row holds, so a
+ * column of rows reads as a table. The right column is one fixed width (about a quarter of the
+ * default sidebar, and room for the three 24px hover actions), so the title takes the rest and
+ * every row's right edge lines up.
+ */
+const ROW_HEIGHT = 68;
+const ROW_GRID =
+  "grid h-[68px] grid-cols-[minmax(0,1fr)_76px] grid-rows-[20px_16px_16px] content-center gap-x-2 gap-y-0.5 rounded-xl px-2";
+/** A cell of the left column: one line, truncated. */
+const ROW_LEFT = "relative flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap";
+/** A cell of the right column: one line, against the row's right edge. */
+const ROW_RIGHT =
+  "relative flex min-w-0 items-center justify-end gap-1 overflow-hidden whitespace-nowrap tabular";
 
 /** What a thread's calls changed, small enough for the row's second line or its trailing slot. */
 function DiffStat({ diff }: { diff: { added: number; removed: number } }) {
@@ -692,11 +703,14 @@ const ThreadRow = memo(function ThreadRow({
   settleKey?: string;
   onClearSelection?: () => void;
 }) {
-  const [rowLayout] = useRowLayout();
   // The computer a thread runs on, when that is not this one: its row carries the glyph and name,
   // and the hover card says so. A thread from this computer carries nothing.
   const host = useMachines((s) => s.machines.find((m) => m.id === session.host));
   const machine = host ? machineName(host) : undefined;
+  // With machines paired, this computer's own threads name it too.
+  const paired = useMachines((s) => s.machines.length > 0);
+  const local = useLocalIdentity();
+  const platform = appPlatform();
   const request = useApp((s) => s.threads[session.id]?.permissions[0]);
   const running = useApp((s) => s.threads[session.id]?.running ?? false);
   const startedAt = useApp((s) => s.threads[session.id]?.turnStartedAt);
@@ -784,17 +798,6 @@ const ThreadRow = memo(function ThreadRow({
   const branch = session.parent ? branchKindOf(session.parent) : undefined;
   // The open thread is a delegated one with no row of its own: its parent stands in as the context.
   const lit = selected || !!context;
-  // Both layouts reserve a branch line, including for threads outside git.
-  const compact = rowLayout === "compact";
-  const asks = !!(request || hint);
-  const meta = rowMeta({
-    branch: true,
-    pull: !!pull,
-    stack: !!stack?.length,
-    harness: external,
-    diff,
-    layout: rowLayout,
-  });
   // What wants you reads strong; what works, waits or has been read recedes until hovered.
   const wantsYou = !!request || fresh || failed || lit || picked;
   const recedes = !wantsYou && (running || !!wait || done);
@@ -812,64 +815,27 @@ const ThreadRow = memo(function ThreadRow({
         ? "font-normal text-fg/75 group-hover:text-fg"
         : "font-medium text-fg",
   );
-  // A fork or a side chat, and a thread that works for another one: the glyphs before the title.
-  const glyphs = (
-    <>
-      {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
-      {branch && (
-        <span title={branch === "fork" ? "A fork" : "A side chat"} className="shrink-0 text-fg-faint">
-          {branch === "fork" ? <GitFork size={11} /> : <MessageSquareQuote size={11} />}
-        </span>
-      )}
-      <LinkBadge threadId={session.id} />
-    </>
-  );
-  // The one thing a row says at its end: what its branch changed when it has no line of its own for
-  // it, and what the thread is doing, else the hour a snoozed one wakes, else its age. The two-line
-  // row draws a chip as a pill and a settled check bare; the compact row keeps one icon and word,
-  // so a column of rows reads as one line of glyphs.
+  // What the third line says in place of the branch: the request it waits on, else the thread it
+  // belongs under (a search result whose parent row is not drawn).
+  const ask = request ? (request.question ? request.question.text : request.title) : hint;
+  // Where it runs: another computer always says so, and once machines are paired this one does too,
+  // so every row in a mixed list names its computer.
+  const place =
+    host && machine
+      ? { glyph: machineGlyph(host), tint: machineTint(host), name: machine }
+      : paired
+        ? {
+            glyph: local.icon ?? platformIcon(platform === "mac" ? "macos" : platform),
+            tint: local.tint,
+            name: local.displayName ?? selfName(),
+          }
+        : undefined;
+  // The one thing a row says at the end of its first line: what the thread is doing, else the hour
+  // a snoozed one wakes, else its age, with a settled thread's check before it.
   const age = (
     <span className="min-w-0 truncate">{wake ? wakeLabel(wake, now) : shortAge(session.updatedAt, now)}</span>
   );
-  const compactState = chip ? (
-    chip.kind === "needs" ? (
-      request?.question ? (
-        <MessageCircleQuestion size={13} />
-      ) : (
-        <ShieldQuestion size={13} />
-      )
-    ) : chip.kind === "working" ? (
-      <span className="flex items-center gap-1">
-        <Spinner size={9} />
-        {startedAt !== undefined && <Elapsed since={startedAt} />}
-      </span>
-    ) : chip.kind === "waiting" ? (
-      <span className="flex items-center gap-1">
-        <Clock size={11} className="shrink-0" />
-        {chip.label}
-      </span>
-    ) : (
-      <span
-        className={cx(
-          "flex items-center gap-1",
-          chip.kind === "failed" ? "text-danger" : chip.kind === "completed" ? "text-success" : "text-accent",
-        )}
-      >
-        {chip.kind === "failed" ? (
-          <CircleAlert size={11} />
-        ) : chip.kind === "completed" ? (
-          <Check size={11} />
-        ) : (
-          <Eye size={11} />
-        )}
-        {chip.label}
-      </span>
-    )
-  ) : (
-    age
-  );
-  // The roomy row: the state in words, else the age, with a settled thread's check before it.
-  const cardState = chip ? (
+  const state = chip ? (
     <RowStatusLabel status={chip} startedAt={startedAt} />
   ) : done ? (
     <span className="flex min-w-0 items-center gap-1">
@@ -878,20 +844,6 @@ const ThreadRow = memo(function ThreadRow({
     </span>
   ) : (
     age
-  );
-  const stateSlot = (pill: boolean) => (
-    <span title={chip?.title} className={cx(TRAILING_SLOT, SWAPPED_ON_HOVER)}>
-      {/* What the row has no line for: its delegates (else the harness it runs on), then the diff. */}
-      {!pill && meta === "trailing" && stack?.length ? (
-        <AgentStack agents={stack} />
-      ) : (
-        !pill &&
-        meta === "trailing" &&
-        external && <HarnessIcon id={session.harness!} name={harness?.name} size={12} className="shrink-0" />
-      )}
-      {!pill && meta === "trailing" && diff && <DiffStat diff={diff} />}
-      {pill ? cardState : compactState}
-    </span>
   );
   return (
     <ContextMenu.Root
@@ -947,161 +899,86 @@ const ThreadRow = memo(function ThreadRow({
               }}
               aria-current={selected ? "page" : undefined}
               aria-pressed={picked || undefined}
-              className={cx(
-                "relative flex w-full flex-col justify-center gap-0.5 text-left",
-                compact ? "rounded-lg px-2" : "rounded-xl py-2 pr-2 pl-2",
-                compact && (meta === "line" || request || hint)
-                  ? "min-h-12"
-                  : compact
-                    ? "min-h-8"
-                    : undefined,
-              )}
+              className={cx(ROW_GRID, "relative w-full text-left")}
             >
-              <RowFill selected={lit} picked={picked} radius={compact ? "rounded-lg" : "rounded-xl"} />
-              {compact ? (
-                <>
-                  {/* One line: the mark of where it runs, its title, and the one thing it says at
-                      the end. The project's name is not repeated here, since the mark carries it
-                      and the hover card and the folder's heading spell it out. */}
-                  <span className="relative flex w-full min-w-0 items-center gap-2">
-                    {!grouped && <ProjectMark name={project} size={14} className={markTint} />}
-                    {glyphs}
-                    <span className={titleTint}>{session.title || "New thread"}</span>
-                    {host && machine && (
-                      <span
-                        className="flex shrink-0 items-center gap-1 text-fg-faint"
-                        title={`Runs on ${machine}`}
-                      >
-                        <DeviceGlyphIcon glyph={machineGlyph(host)} tint={machineTint(host)} size={11} />
-                        <span className="max-w-[84px] truncate">{machine}</span>
-                      </span>
-                    )}
-                    {stateSlot(false)}
+              <RowFill selected={lit} picked={picked} radius="rounded-xl" />
+              {/* Line 1: the title, and what the thread is doing (the hover actions take its place). */}
+              <span className={ROW_LEFT}>
+                {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
+                {branch && (
+                  <span
+                    title={branch === "fork" ? "A fork" : "A side chat"}
+                    className="shrink-0 text-fg-faint"
+                  >
+                    {branch === "fork" ? <GitFork size={11} /> : <MessageSquareQuote size={11} />}
                   </span>
-                  {/* Branch, request and other details share the reserved second line. */}
-                  {meta === "line" && (
-                    <span className="relative flex min-h-4 w-full min-w-0 items-center gap-2 text-sub text-fg-muted">
-                      {gitBranch && (
-                        <span className="flex min-w-0 items-center gap-1">
-                          <GitBranch size={10} className="shrink-0" />
-                          <span className="min-w-0 truncate font-mono text-[10px]" title={gitBranch}>
-                            {gitBranch}
-                          </span>
-                        </span>
-                      )}
-                      {asks && (
-                        <span className="min-w-0 truncate">
-                          {request ? (request.question ? request.question.text : request.title) : hint}
-                        </span>
-                      )}
-                      {diff && <DiffStat diff={diff} />}
-                      {pull && <PullMark pull={pull} />}
-                      <span className="ml-auto flex shrink-0 items-center gap-1">
-                        {stack?.length ? (
-                          <AgentStack agents={stack} />
-                        ) : (
-                          external && (
-                            <HarnessIcon
-                              id={session.harness!}
-                              name={harness?.name}
-                              size={12}
-                              className="shrink-0"
-                            />
-                          )
-                        )}
-                      </span>
-                    </span>
-                  )}
-                </>
-              ) : (
-                <span className="title-first-row relative flex w-full min-w-0 flex-col gap-0.5">
-                  {/* A card of two lines, three with a branch or a pull request. The first says where it runs and what it is doing:
-                      the project's mark and name (under a project heading, the harness instead),
-                      and the state or age at its end, where the hover actions are drawn. */}
-                  <span className="flex h-5 min-w-0 items-center gap-1.5 text-sub text-fg-muted">
-                    {grouped ? (
-                      external && (
-                        <HarnessIcon
-                          id={session.harness!}
-                          name={harness?.name}
-                          size={13}
-                          className="shrink-0"
-                        />
-                      )
-                    ) : (
-                      <ProjectMark name={project} size={14} className={markTint} />
-                    )}
-                    <span className="min-w-0 flex-1 truncate">{grouped ? (harnessName ?? "") : project}</span>
-                    {host && machine && (
-                      <span
-                        className="flex shrink-0 items-center gap-1 text-fg-faint"
-                        title={`Runs on ${machine}`}
-                      >
-                        <DeviceGlyphIcon glyph={machineGlyph(host)} tint={machineTint(host)} size={11} />
-                        <span className="max-w-[84px] truncate">{machine}</span>
-                      </span>
-                    )}
-                    {stateSlot(true)}
-                  </span>
-                  {/* The title, in the weight of what the thread wants. */}
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    {glyphs}
-                    <span className={titleTint}>{session.title || "New thread"}</span>
-                    {meta === "trailing" && diff && <DiffStat diff={diff} />}
-                    {meta !== "line" && stack?.length ? (
-                      <AgentStack agents={stack} />
-                    ) : (
-                      !grouped &&
-                      meta !== "line" &&
-                      external && (
-                        <HarnessIcon
-                          id={session.harness!}
-                          name={harness?.name}
-                          size={13}
-                          className="shrink-0"
-                        />
-                      )
-                    )}
-                  </span>
-                  {/* Branch, request and other details share the reserved third line. */}
-                  {meta === "line" && (
-                    <span className="flex min-h-4 min-w-0 items-center gap-1.5 text-sub text-fg-muted">
-                      {gitBranch ? (
-                        <span className="title-first-branch flex min-w-0 flex-1 items-center gap-1">
-                          <GitBranch size={10} className="shrink-0" />
-                          <span className="min-w-0 truncate font-mono text-[10px]" title={gitBranch}>
-                            {gitBranch}
-                          </span>
-                        </span>
-                      ) : (
-                        <span className="flex-1" />
-                      )}
-                      {asks && (
-                        <span className="min-w-0 truncate">
-                          {request ? (request.question ? request.question.text : request.title) : hint}
-                        </span>
-                      )}
-                      <span className="title-first-badges ml-auto flex shrink-0 items-center gap-1.5">
-                        {diff && <DiffStat diff={diff} />}
-                        {pull && <PullMark pull={pull} />}
-                        {stack?.length ? (
-                          <AgentStack agents={stack} />
-                        ) : (
-                          !grouped &&
-                          external && (
-                            <HarnessIcon
-                              id={session.harness!}
-                              name={harness?.name}
-                              size={13}
-                              className="shrink-0"
-                            />
-                          )
-                        )}
-                      </span>
-                    </span>
-                  )}
+                )}
+                <LinkBadge threadId={session.id} />
+                <span className={titleTint}>{session.title || "New thread"}</span>
+              </span>
+              <span title={chip?.title} className={cx(ROW_RIGHT, "text-sub text-fg-muted", SWAPPED_ON_HOVER)}>
+                <span className="flex min-w-0 items-center justify-end">{state}</span>
+              </span>
+              {/* Line 2: where it runs — the project (under its heading, the harness) and the computer. */}
+              <span className={cx(ROW_LEFT, "text-sub text-fg-muted")}>
+                {grouped ? (
+                  external && (
+                    <HarnessIcon id={session.harness!} name={harness?.name} size={12} className="shrink-0" />
+                  )
+                ) : (
+                  <ProjectMark name={project} size={12} className={markTint} />
+                )}
+                <span className="min-w-0 max-w-[65%] shrink-0 truncate">
+                  {grouped ? (harnessName ?? "") : project}
                 </span>
-              )}
+                {place && (
+                  <span
+                    className="flex min-w-0 shrink items-center gap-1 text-fg-faint"
+                    title={`Runs on ${place.name}`}
+                  >
+                    <span aria-hidden>·</span>
+                    <DeviceGlyphIcon glyph={place.glyph} tint={place.tint} size={11} />
+                    <span className="min-w-0 truncate">{place.name}</span>
+                  </span>
+                )}
+              </span>
+              <span className={cx(ROW_RIGHT, "gap-1.5")}>
+                {diff && <DiffStat diff={diff} />}
+                {pull && <PullMark pull={pull} />}
+              </span>
+              {/* Line 3: the branch, or what the thread asks for in its place. */}
+              <span
+                className={cx(
+                  ROW_LEFT,
+                  "gap-1 text-sub",
+                  ask ? (request ? "text-warning" : "text-fg-muted") : "text-fg-muted",
+                )}
+              >
+                {ask ? (
+                  <span className="min-w-0 truncate" title={ask}>
+                    {ask}
+                  </span>
+                ) : (
+                  gitBranch && (
+                    <>
+                      <GitBranch size={10} className="shrink-0" />
+                      <span className="min-w-0 truncate font-mono text-[10px]" title={gitBranch}>
+                        {gitBranch}
+                      </span>
+                    </>
+                  )
+                )}
+              </span>
+              <span className={ROW_RIGHT}>
+                {stack?.length ? (
+                  <AgentStack agents={stack} />
+                ) : (
+                  !grouped &&
+                  external && (
+                    <HarnessIcon id={session.harness!} name={harness?.name} size={12} className="shrink-0" />
+                  )
+                )}
+              </span>
             </button>
           </ThreadHoverCard>
           <div
@@ -1109,7 +986,7 @@ const ThreadRow = memo(function ThreadRow({
             // Hidden while the row is dragged: the actions sit beside the row, not on it.
             className={cx(
               "invisible absolute right-2 flex items-center opacity-0 transition-[opacity,visibility] duration-150 ease-snappy",
-              compact ? "top-1" : "top-1.5",
+              "top-1.5",
               !dragging &&
                 "group-hover:visible group-hover:opacity-100 group-has-[:focus-visible]:visible group-has-[:focus-visible]:opacity-100 group-has-[[data-state=open]]:visible group-has-[[data-state=open]]:opacity-100",
             )}
@@ -1185,8 +1062,6 @@ const PendingRow = memo(function PendingRow({
   selected: boolean;
   navActive?: boolean;
 }) {
-  const [rowLayout] = useRowLayout();
-  const compact = rowLayout === "compact";
   const project = projectName(pending.worktree?.repo || pending.cwd);
   const branch = pending.worktree?.branch;
   const failure = pending.failure;
@@ -1199,49 +1074,52 @@ const PendingRow = memo(function PendingRow({
         onClick={() => selectThread(pending.id)}
         aria-current={selected ? "page" : undefined}
         title={failure ? `${pending.title} · ${failure.text}` : pending.title}
-        className={cx(
-          "relative flex w-full flex-col justify-center gap-0.5 text-left",
-          compact ? "min-h-12 rounded-lg px-2" : "rounded-xl py-2 pr-2 pl-2",
-        )}
+        className={cx(ROW_GRID, "relative w-full text-left")}
       >
-        <RowFill selected={selected} radius={compact ? "rounded-lg" : "rounded-xl"} />
-        <span className="relative flex w-full min-w-0 items-center gap-2">
-          <ProjectMark name={project} size={14} className="opacity-60 group-hover:opacity-100" />
+        <RowFill selected={selected} radius="rounded-xl" />
+        {/* The thread row's grid, so a thread being set up is the height and shape it will have. */}
+        <span className={ROW_LEFT}>
           <span className="min-w-0 flex-1 truncate text-body font-medium text-fg">{pending.title}</span>
-          {/* The same trailing slot a thread's row has, as wide as what it says, so the state
-              lands on the same edge and the title keeps the rest. Dismiss sits over the slot's end
-              when the setup failed, so the words keep its room. */}
-          <span className={cx(TRAILING_SLOT, failure && "pr-6")}>
-            {failure ? (
-              <>
-                <CircleAlert size={11} className="text-danger" />
-                <span className="font-medium text-danger">Failed</span>
-              </>
-            ) : (
-              <>
-                <Spinner size={9} />
-                <Elapsed since={pending.startedAt} />
-              </>
-            )}
-          </span>
         </span>
-        <span className="relative flex w-full min-w-0 items-center gap-2 text-sub text-fg-muted">
+        {/* Dismiss sits over the slot's end when the setup failed, so the words keep its room. */}
+        <span className={cx(ROW_RIGHT, "text-sub text-fg-muted", failure && "pr-6")}>
+          {failure ? (
+            <>
+              <CircleAlert size={11} className="text-danger" />
+              <span className="font-medium text-danger">Failed</span>
+            </>
+          ) : (
+            <>
+              <Spinner size={9} />
+              <Elapsed since={pending.startedAt} />
+            </>
+          )}
+        </span>
+        <span className={cx(ROW_LEFT, "text-sub text-fg-muted")}>
+          <ProjectMark name={project} size={12} className="opacity-60 group-hover:opacity-100" />
+          <span className="min-w-0 truncate">{project}</span>
+        </span>
+        <span />
+        <span className={cx(ROW_LEFT, "gap-1 text-sub text-fg-muted")}>
           {failure ? (
             <span className="min-w-0 truncate text-danger" title={failure.text}>
               {failure.text}
             </span>
           ) : (
-            <span className="shrink-0 text-accent">{pending.worktree ? "Setting up" : "Starting"}</span>
-          )}
-          {branch && (
-            <span className="flex min-w-0 items-center gap-1">
-              <GitBranch size={10} className="shrink-0" />
-              <span className="min-w-0 truncate font-mono text-[10px]">{branch}</span>
-            </span>
+            <>
+              <span className="shrink-0 text-accent">{pending.worktree ? "Setting up" : "Starting"}</span>
+              {branch && (
+                <>
+                  <GitBranch size={10} className="ml-1 shrink-0" />
+                  <span className="min-w-0 truncate font-mono text-[10px]">{branch}</span>
+                </>
+              )}
+            </>
           )}
         </span>
+        <span />
       </button>
-      <div className="absolute top-1 right-2 flex items-center">
+      <div className="absolute top-1.5 right-2 flex items-center">
         {failure && (
           <RowAction label="Dismiss" onClick={dismissPendingSetup}>
             <X size={12} />
@@ -2444,14 +2322,6 @@ export function Sidebar() {
               );
             })}
           </div>
-          {/* Where a dragged row would land: one rule, over the rows, never in the layout. */}
-          {drag.line && (
-            <div
-              aria-hidden
-              className="pointer-events-none absolute z-30 h-0.5 rounded-full bg-accent"
-              style={{ top: drag.line.top - 1, left: drag.line.left, width: drag.line.width }}
-            />
-          )}
         </nav>
         {pickedSessions.length > 1 && (
           <div className="flex shrink-0 items-center gap-1 px-2 pb-1">
@@ -2524,26 +2394,19 @@ export function Sidebar() {
   );
 }
 
-/** Where the thread list will be: a section's label, then rows at the chosen density. */
+/** Where the thread list will be: a section's label, then rows at a thread row's height. */
 const SKELETON_ROWS = [72, 56, 84, 64, 48, 76, 60];
 function ThreadRowsSkeleton() {
-  const [rowLayout] = useRowLayout();
-  const compact = rowLayout === "compact";
   return (
     <div className="flex flex-col pt-1" role="status" aria-label="Loading threads">
       <Skeleton className="mx-2 mt-2 mb-3 h-2.5 w-16" />
-      {SKELETON_ROWS.map((w, i) =>
-        compact ? (
-          <div key={i} className="flex h-8 items-center px-2">
-            <Skeleton className="h-3" style={{ width: `${w}%` }} />
-          </div>
-        ) : (
-          <div key={i} className="flex flex-col gap-1.5 px-2 py-[7px]">
-            <Skeleton className="h-3" style={{ width: `${w}%` }} />
-            <Skeleton className="h-2" style={{ width: `${Math.round(w * 0.55)}%` }} />
-          </div>
-        ),
-      )}
+      {SKELETON_ROWS.map((w, i) => (
+        <div key={i} className="flex flex-col justify-center gap-2 px-2" style={{ height: ROW_HEIGHT }}>
+          <Skeleton className="h-3" style={{ width: `${w}%` }} />
+          <Skeleton className="h-2" style={{ width: `${Math.round(w * 0.45)}%` }} />
+          <Skeleton className="h-2" style={{ width: `${Math.round(w * 0.6)}%` }} />
+        </div>
+      ))}
     </div>
   );
 }
