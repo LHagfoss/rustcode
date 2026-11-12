@@ -458,6 +458,34 @@ move_to_trash() {
     mkdir -p "${HOME}/.Trash" && mv "$path" "$trashed"
 }
 
+# Sign a copy of the downloaded app with the local "RustCode Local Signing"
+# certificate (scripts/macos-stable-signature.sh), the way the app's own updater
+# does (apps/desktop/src-tauri/src/updater.rs `locally_signed_bundle`). An
+# ad-hoc bundle's identity is the hash of that build, so Keychain asks for the
+# login password again for every stored item after each install. Prints the
+# bundle to install: the signed copy, or the original when there is no
+# certificate or signing fails.
+locally_signed_app() {
+    local original="$1" copy desktop="com.lhagfoss.rustcode.desktop"
+    if ! security find-certificate -c "RustCode Local Signing" >/dev/null 2>&1; then
+        printf '%s\n' "$original"
+        return 0
+    fi
+    copy="${TMP_DIR}/signed/RustCode.app"
+    mkdir -p "${TMP_DIR}/signed"
+    if ditto "$original" "$copy" \
+        && codesign --force --sign "RustCode Local Signing" --identifier org.rustcode.cli "${copy}/Contents/MacOS/rustcode" >/dev/null 2>&1 \
+        && codesign --force --sign "RustCode Local Signing" --identifier "$desktop" "${copy}/Contents/MacOS/rustcode-desktop" >/dev/null 2>&1 \
+        && codesign --force --sign "RustCode Local Signing" --identifier "$desktop" "$copy" >/dev/null 2>&1 \
+        && codesign --verify --deep --strict "$copy" >/dev/null 2>&1; then
+        success "Signed RustCode.app with the local \"RustCode Local Signing\" certificate." >&2
+        printf '%s\n' "$copy"
+    else
+        warn "Could not sign RustCode.app with the local certificate; installing it as downloaded." >&2
+        printf '%s\n' "$original"
+    fi
+}
+
 install_app_macos() {
     local name zip app id dest_dir dest
     if ! name="$(manifest_asset '^RustCode-[0-9][^ ]*-macos-aarch64\.app\.zip$')"; then
@@ -474,6 +502,7 @@ install_app_macos() {
     id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${app}/Contents/Info.plist" 2>/dev/null || true)"
     [ "$id" = "$APP_BUNDLE_ID" ] || error "${name} is not the RustCode app (bundle id ${id:-missing})."
     codesign --verify --deep --strict "$app" >/dev/null 2>&1 || error "RustCode.app in ${name} has an invalid code signature."
+    app="$(locally_signed_app "$app")"
 
     if [ -w /Applications ]; then
         dest_dir="/Applications"
