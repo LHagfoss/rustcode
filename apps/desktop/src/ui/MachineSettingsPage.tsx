@@ -49,7 +49,7 @@ import { LOCAL_HOST } from "../state/threadKeys";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachineIdentityEditor } from "./MachineProfile";
 import { cx, Switch } from "./primitives";
-import { Action, Chip, Group, Row, SectionTitle } from "./settingsKit";
+import { Action, Chip, ErrorDetails, Group, Row, SectionTitle } from "./settingsKit";
 import { SYNC_COLUMNS, syncRows } from "./syncRows";
 
 /** One machine's name, state and controls. */
@@ -250,7 +250,12 @@ function Harnesses({ machine }: { machine: Machine }) {
       {harness.error && harnesses.length === 0 && (
         <Row
           title="Could not read the harnesses"
-          subtitle={harness.error}
+          subtitle={
+            <ErrorDetails
+              summary="That machine did not answer the request for its harnesses."
+              detail={harness.error}
+            />
+          }
           badge={
             <Action quiet size="sm" disabled={harness.loading} onClick={harness.reload}>
               {harness.loading ? "Retrying…" : "Retry"}

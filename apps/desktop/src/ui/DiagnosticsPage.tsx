@@ -49,7 +49,7 @@ import {
 import { hasShell } from "../lib/shell";
 import { errorText, request, restartEngine, SERVER_LOG_LINES, toast, useApp } from "../state/store";
 import { cx, noTextHelpers, rowInset } from "./primitives";
-import { Action, fieldClass, Group, Row, Select } from "./settingsKit";
+import { Action, ErrorDetails, fieldClass, Group, Literal, PathText, Row, Select } from "./settingsKit";
 
 const TRANSPORT_LABEL: Record<string, string> = {
   tauri: "Run by the app",
@@ -102,14 +102,14 @@ function readPageInfo(): PageInfo {
   };
 }
 
-/** A label and its value, as many as a card needs: the value selectable, a path free to wrap. */
+/** A label and its value, as many as a card needs: the value selectable and in the normal font; a path or a binary is a `PathText`. */
 function Facts({ rows }: { rows: [string, ReactNode][] }) {
   return (
     <dl className={cx("m-0 grid grid-cols-[10rem_1fr] gap-x-6 gap-y-1.5", rowInset)}>
       {rows.map(([label, value]) => (
         <Fragment key={label}>
           <dt className="text-callout text-fg-muted">{label}</dt>
-          <dd className="selectable m-0 min-w-0 break-all font-mono text-callout text-fg">
+          <dd className="selectable m-0 min-w-0 break-words text-callout text-fg">
             {value === null || value === undefined || value === "" ? (
               <span className="text-fg-faint">—</span>
             ) : (
@@ -298,9 +298,9 @@ export function DiagnosticsPage() {
               ["Version", server.version],
               ["Process ID", server.pid],
               ["Uptime", server.startedAtMs ? <Uptime key="uptime" since={server.startedAtMs} /> : null],
-              ["Binary", server.path],
-              ["Config folder", server.configDir],
-              ["Log file", server.logFile],
+              ["Binary", server.path ? <PathText key="binary" path={server.path} /> : null],
+              ["Config folder", server.configDir ? <PathText key="config" path={server.configDir} /> : null],
+              ["Log file", server.logFile ? <PathText key="log" path={server.logFile} /> : null],
               ["Restarts after a crash", String(server.crashRestarts)],
               [
                 "Last exit",
@@ -362,7 +362,14 @@ export function DiagnosticsPage() {
               </div>
               <Facts
                 rows={[
-                  ["Binary", h.path ?? h.command[0]],
+                  [
+                    "Binary",
+                    h.path ? (
+                      <PathText key="binary" path={h.path} />
+                    ) : h.command[0] ? (
+                      <Literal key="command">{h.command[0]}</Literal>
+                    ) : null,
+                  ],
                   ["Version", h.version],
                   [
                     "Sign-in",
@@ -371,9 +378,12 @@ export function DiagnosticsPage() {
                   [
                     "Last error",
                     h.error ? (
-                      <span key="error" className="text-danger">
-                        {h.error}
-                      </span>
+                      <ErrorDetails
+                        key="error"
+                        className="text-danger"
+                        summary={`${h.name} could not be checked.`}
+                        detail={h.error}
+                      />
                     ) : null,
                   ],
                 ]}

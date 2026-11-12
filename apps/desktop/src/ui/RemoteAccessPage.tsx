@@ -211,8 +211,8 @@ export function RemoteAccessPage() {
           subtitle="The address a phone on this network dials. The terminal's `/remote status` shows the same one."
           status={
             gateway?.advertisedAddress ? (
-              <span className="font-mono">
-                {gateway.advertisedAddress}
+              <span>
+                <span className="font-mono">{gateway.advertisedAddress}</span>
                 {gateway.connected && gateway.connectedDevices.length > 0
                   ? ` · ${gateway.connectedDevices.length} device${gateway.connectedDevices.length === 1 ? "" : "s"} connected`
                   : ""}
