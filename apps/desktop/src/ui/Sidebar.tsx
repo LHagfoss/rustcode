@@ -998,17 +998,12 @@ const ThreadRow = memo(function ThreadRow({
                     )
                   )}
                 </span>
-                {/* The model the thread runs, and its harness unless the section heading names it. */}
+                {/* The harness's icon unless the section heading names it, then the model it runs. */}
                 <span className={cx(ROW_RIGHT, "text-sub text-fg-faint")}>
                   {stack?.length ? (
                     <AgentStack agents={stack} />
                   ) : (
                     <>
-                      {model && (
-                        <span className="min-w-0 max-w-[96px] truncate" title={model}>
-                          {model}
-                        </span>
-                      )}
                       {!grouped && external && (
                         <HarnessIcon
                           id={session.harness!}
@@ -1016,6 +1011,11 @@ const ThreadRow = memo(function ThreadRow({
                           size={12}
                           className="shrink-0"
                         />
+                      )}
+                      {model && (
+                        <span className="min-w-0 max-w-[96px] truncate" title={model}>
+                          {model}
+                        </span>
                       )}
                     </>
                   )}
