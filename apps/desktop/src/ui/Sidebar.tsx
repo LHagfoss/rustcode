@@ -36,7 +36,6 @@ import {
   GitPullRequestArrow,
   GitPullRequestClosed,
   GitPullRequestDraft,
-  Laptop,
   MessageCircleQuestion,
   MessageSquareQuote,
   PanelLeft,
@@ -68,21 +67,12 @@ import { modelName, projectName, type SessionSummary } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
 import { formatBinding, listCommandFor } from "../lib/keys";
 import { openTerminalAt, openThreadLog, revealPath } from "../lib/native";
-import { appPlatform } from "../lib/platform";
 import { hasShell } from "../lib/shell";
 import { liveSubagents, type StackAgent } from "../state/agentStack";
 import { type BranchRow, branchKindOf, branchRows } from "../state/branches";
 import { type ChildInfo, childInfo } from "../state/children";
 import { stateOf } from "../state/host";
-import {
-  machineGlyph,
-  machineName,
-  machineTint,
-  platformIcon,
-  selfName,
-  useLocalIdentity,
-  useMachines,
-} from "../state/machines";
+import { machineGlyph, machineName, machineTint, useMachines } from "../state/machines";
 import { projectLabel } from "../state/projectBook";
 import {
   cachedPulls,
@@ -94,14 +84,7 @@ import {
   subscribePulls,
 } from "../state/pulls";
 import { type PendingSetup, pendingSummary } from "../state/setup";
-import {
-  crossMachineDelegates,
-  hostOf,
-  type MachineHead,
-  machineGroups,
-  type ProjectGroup,
-  sidebarProjects,
-} from "../state/sidebarGroups";
+import { type ProjectGroup, sidebarProjects } from "../state/sidebarGroups";
 import { applyOrder, moveBy, reorder, sectionOrderKey } from "../state/sidebarOrder";
 import { PREF, usePref, useRowLayout } from "../state/sidebarPrefs";
 import {
@@ -113,7 +96,6 @@ import {
   isShelf,
   keepListed,
   listedPicks,
-  nestedKey,
   nextRow,
   type OrderKey,
   type OrderRow,
@@ -172,7 +154,6 @@ import {
   worktreeOf,
 } from "../state/store";
 import { formatClock, idleSettled, shortAge } from "../state/thread";
-import { LOCAL_HOST } from "../state/threadKeys";
 import { openChain, parentOf as parentOfThread, type SubRow, topLevel } from "../state/topLevel";
 import { useWaiting, useWaitingIds, waitingLabel, waitingTitle } from "../state/waiting";
 import { AgentStack } from "./AgentStack";
@@ -673,11 +654,8 @@ const ThreadRow = memo(function ThreadRow({
   selected,
   context,
   grouped,
-  nested,
-  machine,
   now,
   hint,
-  onHint,
   pull,
   agents,
   navActive,
@@ -696,15 +674,9 @@ const ThreadRow = memo(function ThreadRow({
   dragging?: boolean;
   /** Under its project's heading: the row leaves out the mark and the name it would repeat. */
   grouped: boolean;
-  /** Drawn indented under the thread that started it: a delegate on another machine says where it runs. */
-  nested?: boolean;
-  /** The computer the thread runs on, when that is not this one: the hover card says so. */
-  machine?: string;
   now: number;
   /** No parent row above it (a search result, or a filtered-out parent): the thread it belongs under. */
   hint?: string;
-  /** Opens the thread the hint names (a delegate from another machine: its parent). */
-  onHint?: () => void;
   /** The thread's branch's pull request, from the project's read (state/pulls.ts). */
   pull?: PullRequest;
   /** Threads this one started and still runs: the stack on its second line, in place of child rows. */
@@ -721,6 +693,10 @@ const ThreadRow = memo(function ThreadRow({
   onClearSelection?: () => void;
 }) {
   const [rowLayout] = useRowLayout();
+  // The computer a thread runs on, when that is not this one: its row carries the glyph and name,
+  // and the hover card says so. A thread from this computer carries nothing.
+  const host = useMachines((s) => s.machines.find((m) => m.id === session.host));
+  const machine = host ? machineName(host) : undefined;
   const request = useApp((s) => s.threads[session.id]?.permissions[0]);
   const running = useApp((s) => s.threads[session.id]?.running ?? false);
   const startedAt = useApp((s) => s.threads[session.id]?.turnStartedAt);
@@ -948,7 +924,7 @@ const ThreadRow = memo(function ThreadRow({
           >
             <button
               type="button"
-              data-row-id={nested ? nestedKey(session.id) : session.id}
+              data-row-id={session.id}
               tabIndex={navActive ? 0 : -1}
               onClick={() => selectThread(session.id)}
               onDoubleClick={startRename}
@@ -995,12 +971,12 @@ const ThreadRow = memo(function ThreadRow({
                     {!grouped && <ProjectMark name={project} size={14} className={markTint} />}
                     {glyphs}
                     <span className={titleTint}>{session.title || "New thread"}</span>
-                    {machine && (!grouped || nested) && (
+                    {host && machine && (
                       <span
-                        className="flex shrink-0 items-center gap-0.5 text-fg-faint"
+                        className="flex shrink-0 items-center gap-1 text-fg-faint"
                         title={`Runs on ${machine}`}
                       >
-                        <Laptop size={10} />
+                        <DeviceGlyphIcon glyph={machineGlyph(host)} tint={machineTint(host)} size={11} />
                         <span className="max-w-[84px] truncate">{machine}</span>
                       </span>
                     )}
@@ -1058,12 +1034,12 @@ const ThreadRow = memo(function ThreadRow({
                       <ProjectMark name={project} size={14} className={markTint} />
                     )}
                     <span className="min-w-0 flex-1 truncate">{grouped ? (harnessName ?? "") : project}</span>
-                    {machine && (!grouped || nested) && (
+                    {host && machine && (
                       <span
-                        className="flex shrink-0 items-center gap-0.5 text-fg-faint"
+                        className="flex shrink-0 items-center gap-1 text-fg-faint"
                         title={`Runs on ${machine}`}
                       >
-                        <Laptop size={10} />
+                        <DeviceGlyphIcon glyph={machineGlyph(host)} tint={machineTint(host)} size={11} />
                         <span className="max-w-[84px] truncate">{machine}</span>
                       </span>
                     )}
@@ -1127,21 +1103,7 @@ const ThreadRow = memo(function ThreadRow({
               {/* What it asks of you, or which thread a delegated one without a parent row above it
                 belongs under. */}
               {(request || hint) && (
-                <span
-                  className={cx(
-                    "relative truncate text-fg-muted text-sub",
-                    !request && onHint && "hover:text-fg hover:underline",
-                  )}
-                  {...(!request && onHint
-                    ? {
-                        role: "link",
-                        onClick: (e: React.MouseEvent) => {
-                          e.stopPropagation();
-                          onHint();
-                        },
-                      }
-                    : {})}
-                >
+                <span className="relative truncate text-fg-muted text-sub">
                   {request ? (request.question ? request.question.text : request.title) : hint}
                 </span>
               )}
@@ -1500,89 +1462,6 @@ function SectionLabel({ section }: { section: Section }) {
   );
 }
 
-/** The glyph this computer draws when its own icon is not chosen: its platform's. */
-function localGlyph() {
-  const platform = appPlatform();
-  return platformIcon(platform === "mac" ? "macos" : platform);
-}
-
-/**
- * A machine's name above its projects and threads: its platform's glyph, the name and a small dot
- * for its connection, folding the group as a project's folder does. An offline machine is one
- * muted row until someone opens it, and its threads then read as the copy this window kept
- * (docs/desktop.md › Several machines).
- */
-function MachineHeader({
-  machine,
-  open,
-  onToggle,
-  onNew,
-}: {
-  machine: MachineHead;
-  open: boolean;
-  onToggle: () => void;
-  onNew?: () => void;
-}) {
-  const saved = useMachines((s) => s.machines.find((m) => m.id === machine.id));
-  const identity = useLocalIdentity();
-  const local = machine.id === LOCAL_HOST;
-  const glyph = saved ? machineGlyph(saved) : (identity.icon ?? localGlyph());
-  const tint = saved ? machineTint(saved) : identity.tint;
-  const away = machine.state !== "connected";
-  const status = away
-    ? machine.state === "needsPairing"
-      ? "Needs pairing"
-      : machine.state === "connecting"
-        ? "Connecting"
-        : "Offline"
-    : "Connected";
-  return (
-    <div className="group/m relative mt-3 mb-1 flex h-8 items-center first:mt-0">
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        aria-label={`${machine.name}, ${status}`}
-        title={local ? "Threads on this computer" : `${status}. Its threads open read-only while it is away.`}
-        className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left hover:bg-fill-subtle"
-      >
-        <DeviceGlyphIcon glyph={glyph} tint={tint} size={14} />
-        <span
-          className={cx(
-            "min-w-0 flex-1 truncate font-medium text-body",
-            away ? "text-fg-muted" : "text-fg/90",
-          )}
-        >
-          {machine.name}
-        </span>
-        <span
-          aria-hidden
-          className={cx(
-            "size-1.5 shrink-0 rounded-full",
-            !away ? "bg-success" : machine.state === "needsPairing" ? "bg-warning" : "bg-fg-faint",
-            onNew && "group-hover/m:invisible group-has-[:focus-visible]/m:invisible",
-          )}
-        />
-        <ChevronDown
-          size={12}
-          className={cx(
-            "shrink-0 text-fg-faint transition-transform duration-200 ease-snappy",
-            !open && "-rotate-90",
-            onNew && "group-hover/m:invisible group-has-[:focus-visible]/m:invisible",
-          )}
-        />
-      </button>
-      {onNew && (
-        <span className="absolute right-1.5 hidden group-hover/m:flex group-has-[:focus-visible]/m:flex">
-          <RowAction label={`New thread on ${machine.name}`} onClick={onNew}>
-            <SquarePen size={12} />
-          </RowAction>
-        </span>
-      )}
-    </div>
-  );
-}
-
 /**
  * A project's folder: the folder and its name, a dot for
  * what it hides and its count only while folded, the chevron at the end, and
@@ -1648,22 +1527,8 @@ const NO_AGENTS: SubagentInfo[] = [];
 
 export function Sidebar() {
   const sessions = useApp((s) => s.sessions);
-  // Paired computers are groups in the one list, this one first (state/sidebarGroups.ts).
+  // Paired computers' threads are rows of the one list, each tagged with where it runs.
   const machines = useMachines((s) => s.machines);
-  // What people call this computer, as Settings › Machines names it.
-  const localIdentity = useLocalIdentity();
-  const localName = localIdentity.displayName ?? selfName();
-  // The machines a group heading can name: their local names, never the names they report.
-  const heads = useMemo(
-    () =>
-      machines.map((machine) => ({
-        id: machine.id,
-        name: machineName(machine),
-        state: machine.state,
-        retryInSecs: machine.retryInSecs,
-      })),
-    [machines],
-  );
   const pending = useApp((s) => s.pendingSetup);
   const sessionsLoaded = useApp((s) => s.sessionsLoaded);
   const selectedId = useApp((s) => s.selectedId);
@@ -1813,9 +1678,6 @@ export function Sidebar() {
     return parentOf;
   }, [sessions, links, pinned, messaged]);
   const byId = useMemo(() => new Map(sessions.map((s) => [s.id, s] as const)), [sessions]);
-  // A delegate that runs on another machine than its parent has no parent row in this machine's
-  // list: it keeps a row of its own here, saying where it came from.
-  const remoteDelegates = useMemo(() => crossMachineDelegates(sessions, parentOf), [sessions, parentOf]);
   // The threads with a row of their own, before the open delegate's chain is drawn under its parent.
   const topRows = useMemo(
     () => new Set(filtered.filter((s) => !parentOf.has(s.id)).map((s) => s.id)),
@@ -1909,8 +1771,8 @@ export function Sidebar() {
         : null;
     for (const s of filtered) {
       // A delegated thread has no row of its own, unless the filter left the open one with no row
-      // to hang under (`orphanOpen`), or it runs on another machine than its parent.
-      if (parentOf.has(s.id) && s.id !== orphanOpen && !remoteDelegates.has(s.id)) continue;
+      // to hang under (`orphanOpen`).
+      if (parentOf.has(s.id) && s.id !== orphanOpen) continue;
       const listed = s.status === "done" || s.status === "review" ? s.status : "idle";
       // Settled: threads settled (by the user, or the engine for a merged branch), and
       // threads untouched for three days unless they wait for review.
@@ -1948,25 +1810,10 @@ export function Sidebar() {
     // their section gives them (state/sidebarRows.ts `sortSection`).
     const arranged = (id: SectionId, items: SessionSummary[], project?: string) =>
       applyOrder(sortSection(id, items, keyOf), layout[sectionOrderKey(id, project)]);
-    // One group per machine once a computer is paired: this one first, then each machine, and the
-    // threads by project inside. Working and Pinned are grouped too, so a running thread on
-    // another computer is never drawn beside a local one as if it were here
-    // (state/sidebarGroups.ts `machineGroups`).
-    const groupsFor = (id: SectionId, rows: SessionSummary[]): ProjectGroup[] | undefined => {
-      if (!machines.length) return undefined;
-      const groups = machineGroups(id, rows, heads);
-      for (const group of groups) {
-        if (group.machine?.id === LOCAL_HOST) group.machine.name = localName;
-        if (group.project) group.label = projectLabel(group.project);
-        group.items = arranged(id, group.items, group.key);
-      }
-      return groups;
-    };
-    // This computer's threads by project, when no other machine is paired.
-    const grouped = sidebarProjects(active, LOCAL_HOST);
+    // The threads by project, when the pref is on and there is more than one project.
+    const grouped = sidebarProjects(active);
     let projects: ProjectGroup[] | undefined;
-    if (machines.length) projects = groupsFor("threads", active);
-    else if (byProject && grouped.length > 1) {
+    if (byProject && grouped.length > 1) {
       projects = grouped;
       for (const project of projects) {
         if (project.project) project.label = projectLabel(project.project);
@@ -1979,12 +1826,7 @@ export function Sidebar() {
       id,
       label: LABELS[id],
       items: arranged(id, placed[id]),
-      projects:
-        id === "threads"
-          ? projects
-          : id === "working" || id === "pinned"
-            ? groupsFor(id, placed[id])
-            : undefined,
+      projects: id === "threads" ? projects : undefined,
     }));
     for (const g of all) {
       // A Snoozed shelf advertises nothing: what its rows did while asleep is not news
@@ -2009,7 +1851,6 @@ export function Sidebar() {
     failed,
     pinned,
     parentOf,
-    remoteDelegates,
     byProject,
     now,
     snoozed,
@@ -2019,9 +1860,6 @@ export function Sidebar() {
     projectCwd,
     orphanOpen,
     layout,
-    machines,
-    heads,
-    localName,
   ]);
 
   const settledSection = sections.find((g) => g.id === "settled");
@@ -2040,47 +1878,25 @@ export function Sidebar() {
     : -1;
   const settledForChain = settledAt >= 0;
   // Every shelf folds on its own header, and the choice is kept per shelf. The sections above them
-  // are the list itself and never fold; a project's folder and a machine's group fold with `folded`.
+  // are the list itself and never fold; a project's folder folds with `folded`.
   const shelfIsOpen: Record<ShelfId, boolean> = {
     working: shelfOpen("working", workingStored),
     snoozed: shelfOpen("snoozed", snoozedStored),
     settled: shelfOpen("settled", settledStored, { forced: settledForChain }),
   };
-  // A machine whose connection is away starts folded: one muted row says it is there, and opening
-  // it lists the copy this window kept. The open ones are this render's, not a stored preference.
-  const [openedAway, setOpenedAway] = useState<ReadonlySet<string>>(NO_PICKS);
-  const machineOpen = (id: string) => {
-    const head = heads.find((machine) => machine.id === id);
-    // This computer is not in `heads`: its row is always up.
-    if (head && head.state !== "connected") return openedAway.has(id);
-    return !folded.includes(`machine:${id}`);
-  };
-  // Only a shelf, a project's folder and a machine's group fold. A section header never does,
+  // Only a shelf and a project's folder fold. A section header never does,
   // whatever `folded` holds, so an id an older release stored can never shut a list with no control
   // to open it.
   const isOpen = (id: string) => {
     if (isShelf(id, layoutMode)) return shelfIsOpen[id];
     if (id.startsWith("project:")) return !folded.includes(id);
-    if (id.startsWith("machine:")) return machineOpen(id.slice("machine:".length));
     return true;
   };
   const toggle = (id: string) => {
     if (id === "working") setWorkingStored(!isOpen(id));
     else if (id === "snoozed") setSnoozedStored(!isOpen(id));
     else if (id === "settled") setSettledStored(!isOpen(id));
-    else if (id.startsWith("machine:")) {
-      const host = id.slice("machine:".length);
-      const head = heads.find((machine) => machine.id === host);
-      if (head && head.state !== "connected") {
-        setOpenedAway((open) => {
-          const next = new Set(open);
-          if (!next.delete(host)) next.add(host);
-          return next;
-        });
-        return;
-      }
-      setFolded(folded.includes(id) ? folded.filter((x) => x !== id) : [...folded, id]);
-    } else setFolded(folded.includes(id) ? folded.filter((x) => x !== id) : [...folded, id]);
+    else setFolded(folded.includes(id) ? folded.filter((x) => x !== id) : [...folded, id]);
   };
   const settledLimit = Math.max(settledShown, settledAt + 1);
 
@@ -2214,13 +2030,11 @@ export function Sidebar() {
     // sub-rows, because the list draws them.
     const toOrder = (items: SessionSummary[]): OrderRow[] => {
       const rows: OrderRow[] = [];
-      const add = (s: SessionSummary, depth: number, nested = false) => {
-        // A delegate on another machine is drawn here and in its machine's group: this copy has a
-        // key of its own, so the keyboard and the tab stop know which of the two they are on.
-        rows.push({ id: nested && remoteDelegates.has(s.id) ? nestedKey(s.id) : s.id });
+      const add = (s: SessionSummary, depth: number) => {
+        rows.push({ id: s.id });
         const sub = subOf.get(s.id);
         const child = sub && depth < 8 ? byId.get(sub.id) : undefined;
-        if (child) add(child, depth + 1, true);
+        if (child) add(child, depth + 1);
         if (depth === 0) for (const kid of branchesUnder(s.id).rows) rows.push({ id: kid.session.id });
       };
       for (const s of items) add(s, 0);
@@ -2253,7 +2067,6 @@ export function Sidebar() {
     snoozedOpen,
     settledShelfOpen,
     subOf,
-    remoteDelegates,
     layoutMode,
   ]);
   const orderIds = useMemo(() => visibleRows(order), [order]);
@@ -2264,17 +2077,6 @@ export function Sidebar() {
   const contextSelected = contextRow(selectedId, orderIds, parentOf);
   const currentId =
     activeId && orderIds.includes(activeId) ? activeId : (contextSelected ?? orderIds[0] ?? null);
-
-  // Opening a delegate that runs on another machine brings its row under the parent into view, the
-  // place it is drawn as part of the thread that started it (the machine's group lists it too).
-  const openRemote = selectedId && remoteDelegates.has(selectedId) ? selectedId : null;
-  useEffect(() => {
-    if (!openRemote) return;
-    const frame = requestAnimationFrame(() => {
-      (rowElement(nestedKey(openRemote)) ?? rowElement(openRemote))?.scrollIntoView({ block: "nearest" });
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [openRemote]);
 
   useEffect(() => {
     setPicked((prev) => (prev.size ? keepListed(prev, orderIds.map(rowIdOf)) : prev));
@@ -2467,28 +2269,11 @@ export function Sidebar() {
     const above = parentOf.get(s.id);
     if (!above) return undefined;
     const title = byId.get(above)?.title || "another thread";
-    if (!remoteDelegates.has(s.id)) return `in ${title}`;
-    // Started from another computer: the parent's row is in that machine's list.
-    const parentHost = byId.get(above) ? hostOf(byId.get(above)!) : LOCAL_HOST;
-    const where =
-      parentHost === LOCAL_HOST
-        ? "This computer"
-        : (machines.find((m) => m.id === parentHost)?.name ?? "another computer");
-    return `from ${title} on ${where}`;
+    return `in ${title}`;
   };
-  // A click on that hint goes to the parent, wherever it runs: the one list holds every machine.
-  const openParent = (s: SessionSummary): (() => void) | undefined => {
-    const above = parentOf.get(s.id);
-    const parent = above ? byId.get(above) : undefined;
-    if (!parent || !remoteDelegates.has(s.id)) return undefined;
-    return () => selectThread(parent.id);
-  };
-  const rowFor = (s: SessionSummary, grouped: boolean, hint = true, nested = false) => (
+  const rowFor = (s: SessionSummary, grouped: boolean, hint = true) => (
     <ThreadRow
       session={s}
-      // Under its parent, a delegate that runs on another machine names the machine on its row.
-      nested={nested && remoteDelegates.has(s.id)}
-      machine={s.host ? machines.find((m) => m.id === s.host)?.name : undefined}
       selected={s.id === selectedId}
       context={s.id === contextSelected && s.id !== selectedId}
       // A row being dragged shows no hover card and takes no pointer.
@@ -2497,9 +2282,8 @@ export function Sidebar() {
       pull={pullOf(s)}
       now={now}
       hint={hint ? hintFor(s) : undefined}
-      onHint={hint ? openParent(s) : undefined}
       agents={stacks.get(s.id)}
-      navActive={(nested && remoteDelegates.has(s.id) ? nestedKey(s.id) : s.id) === currentId}
+      navActive={s.id === currentId}
       picked={picked.has(s.id)}
       bulk={picked.size > 1 && picked.has(s.id) ? pickedSessions : undefined}
       pinKey={pinKey}
@@ -2517,7 +2301,7 @@ export function Sidebar() {
     if (!child || depth > 8) return null;
     return (
       <OpenChild
-        row={current ? rowFor(current, grouped, false, true) : null}
+        row={current ? rowFor(current, grouped, false) : null}
         deeper={openBelow(child.id, grouped, depth + 1)}
       />
     );
@@ -2558,8 +2342,9 @@ export function Sidebar() {
         )}
         style={{ width, minWidth: width }}
       >
-        {/* One row: the traffic lights, then the toggle at its trailing edge (docs/design.md › Title row). */}
-        <TitlebarRow className="justify-end pr-3">
+        {/* One row: the traffic lights, then the toggle and Settings where they stand with the sidebar
+            hidden (docs/design.md › Title row). */}
+        <TitlebarRow className="pr-3">
           <Cluster className="shrink-0">
             <ClusterButton
               label="Hide sidebar"
@@ -2568,6 +2353,7 @@ export function Sidebar() {
             >
               <PanelLeft size={14} />
             </ClusterButton>
+            <SettingsButton />
           </Cluster>
         </TitlebarRow>
         <NeedsYouRow />
@@ -2615,70 +2401,31 @@ export function Sidebar() {
                     <Fold open={open}>
                       {section.projects
                         ? section.projects.map((p) => {
-                            const machine = p.machine;
-                            const machineKey = machine ? `machine:${machine.id}` : undefined;
-                            // A machine that is away starts folded: one muted row, opened for the
-                            // copy this window kept.
-                            const machineOpen = machineKey ? isOpen(machineKey) : true;
                             const projectOpen = isOpen(`project:${p.key}`);
-                            // A machine that is away cannot start a thread, and one with no
-                            // project yet has no folder to start in: its heading offers none.
-                            const canStart =
-                              !!p.project &&
-                              (!machine || machine.id === LOCAL_HOST || machine.state === "connected");
-                            const onNew =
-                              canStart && p.project
-                                ? () =>
-                                    startNewThread(
-                                      p.project,
-                                      machine && machine.id !== LOCAL_HOST ? machine.id : undefined,
-                                    )
-                                : undefined;
-                            const head =
-                              p.first && machine ? (
-                                <MachineHeader
-                                  key={`machine:${machine.id}`}
-                                  machine={machine}
-                                  open={machineOpen}
-                                  onToggle={() => machineKey && toggle(machineKey)}
-                                  onNew={onNew}
-                                />
-                              ) : null;
-                            if (p.only)
-                              return (
-                                <Fragment key={p.key}>
-                                  {head}
-                                  {machineOpen && <div className="mb-1">{rows(p.items, true)}</div>}
-                                </Fragment>
-                              );
+                            const onNew = p.project ? () => startNewThread(p.project) : undefined;
                             return (
                               <div key={p.key} className="mb-1">
-                                {head}
-                                {machineOpen && (
-                                  <>
-                                    <ProjectHeader
-                                      label={p.label}
-                                      count={p.items.length}
-                                      hidden={
-                                        p.items.some((x) => flags.includes(`${x.id}:n`))
-                                          ? "needs"
-                                          : p.items.some((x) => flags.includes(`${x.id}:w`))
-                                            ? "working"
-                                            : p.items.some((x) => !!finished[x.id])
-                                              ? "finished"
-                                              : undefined
-                                      }
-                                      open={projectOpen}
-                                      onToggle={() => toggle(`project:${p.key}`)}
-                                      onNew={onNew}
-                                    />
-                                    {/* Under its project's heading the row drops the mark: its title
+                                <ProjectHeader
+                                  label={p.label}
+                                  count={p.items.length}
+                                  hidden={
+                                    p.items.some((x) => flags.includes(`${x.id}:n`))
+                                      ? "needs"
+                                      : p.items.some((x) => flags.includes(`${x.id}:w`))
+                                        ? "working"
+                                        : p.items.some((x) => !!finished[x.id])
+                                          ? "finished"
+                                          : undefined
+                                  }
+                                  open={projectOpen}
+                                  onToggle={() => toggle(`project:${p.key}`)}
+                                  onNew={onNew}
+                                />
+                                {/* Under its project's heading the row drops the mark: its title
                                     then lines up under the folder's name. */}
-                                    <Fold open={projectOpen}>
-                                      <div className="pl-5">{rows(p.items, true)}</div>
-                                    </Fold>
-                                  </>
-                                )}
+                                <Fold open={projectOpen}>
+                                  <div className="pl-5">{rows(p.items, true)}</div>
+                                </Fold>
                               </div>
                             );
                           })
@@ -2762,13 +2509,6 @@ export function Sidebar() {
             </Pill>
           </div>
         )}
-        {/* The foot's cluster: Settings, the view the toolbar does not carry (docs/design.md ›
-            Sidebar sections). */}
-        <div className="flex shrink-0 items-center px-3 pb-2">
-          <Cluster>
-            <SettingsButton />
-          </Cluster>
-        </div>
         <UpdateRow />
       </div>
       <CustomSnooze />

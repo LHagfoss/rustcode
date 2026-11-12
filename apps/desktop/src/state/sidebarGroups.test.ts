@@ -1,25 +1,13 @@
-// The sidebar's machine groups without a window: one heading per paired computer, the threads by
-// project inside, and the rule that only the Threads list keeps a heading for a machine with no
-// threads yet (Working and Pinned would otherwise draw a heading with nothing under it).
+// The sidebar's project folders without a window: one flat list of every computer's threads, and
+// with "Group by project" on, a folder per project and computer.
 
-import { describe, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import type { SessionSummary } from "../acp/types";
-import {
-  crossMachineDelegates,
-  type GroupedMachine,
-  machineGroups,
-  sidebarHost,
-  sidebarProjects,
-} from "./sidebarGroups";
+import { hostOf, sidebarProjects } from "./sidebarGroups";
 import { LOCAL_HOST } from "./threadKeys";
-import { openChain } from "./topLevel";
 
 const LINUX = "gw-7c1d9e4f2a8b6d30";
 const STUDIO = "gw-8e1f4b7a5c2d4e6f";
-
-function mac(id: string, name: string, state: GroupedMachine["state"] = "connected"): GroupedMachine {
-  return { id, name, state, retryInSecs: null };
-}
 
 function thread(id: string, cwd: string, host?: string): SessionSummary {
   return { id: host ? `${host}/${id}` : id, host, cwd, title: id };
@@ -30,176 +18,26 @@ const linux = thread("mock-linux-1", "/home/lars/code/rustcode", LINUX);
 const linuxOther = thread("mock-linux-2", "/home/lars/code/site", LINUX);
 const studio = thread("mock-studio-1", "/Users/lars/code/notes", STUDIO);
 
-describe("the sidebar's machine groups", () => {
-  test("Working keeps no heading for a machine with no rows", () => {
-    const groups = machineGroups("working", [local], [mac(LINUX, "Lars's Linux box"), mac(STUDIO, "Studio")]);
-    expect(groups).toHaveLength(1);
-    expect(groups[0]?.machine?.id).toBe(LOCAL_HOST);
-    expect(groups[0]?.machine?.name).toBe("This computer");
-    expect(groups[0]?.items).toEqual([local]);
-    // No empty "Lars's Linux box" or "Studio" heading above nothing.
-    expect(groups.some((group) => group.machine?.id === LINUX || group.machine?.id === STUDIO)).toBe(false);
-  });
-
-  test("Pinned keeps no heading for a machine with no rows either", () => {
-    const groups = machineGroups(
-      "pinned",
-      [local, linux],
-      [mac(LINUX, "Lars's Linux box"), mac(STUDIO, "Studio")],
-    );
-    expect(groups.map((group) => group.machine?.id)).toEqual([LOCAL_HOST, LINUX]);
-  });
-
-  test("Threads keeps a heading for a machine that has listed no thread yet", () => {
-    const groups = machineGroups(
-      "threads",
-      [local],
-      [mac(LINUX, "Lars's Linux box", "offline"), mac(STUDIO, "Studio")],
-    );
-    expect(groups.map((group) => group.machine?.id)).toEqual([LOCAL_HOST, LINUX, STUDIO]);
-    const idle = groups[1]!;
-    expect(idle.items).toEqual([]);
-    expect(idle.only).toBe(true);
-    expect(idle.first).toBe(true);
-    expect(idle.machine?.state).toBe("offline");
-    // No project yet: no folder to start in, so its heading offers no New thread (ui/Sidebar.tsx).
-    expect(idle.project).toBeUndefined();
-  });
-
-  test("this computer comes first, then the saved machines, each with its projects inside", () => {
-    const groups = machineGroups(
-      "threads",
-      [linux, local, linuxOther, studio],
-      [mac(LINUX, "Lars's Linux box"), mac(STUDIO, "Studio")],
-    );
-    expect(groups.map((group) => group.machine?.id)).toEqual([LOCAL_HOST, LINUX, LINUX, STUDIO]);
-    expect(groups.map((group) => group.label)).toEqual(["notes", "rustcode", "site", "notes"]);
-    // The first project of a machine draws its heading, and only it.
-    expect(groups.map((group) => group.first)).toEqual([true, true, false, true]);
-    expect(groups.map((group) => group.only)).toEqual([true, false, false, true]);
-    expect(groups[1]?.items).toEqual([linux]);
-    expect(groups[2]?.items).toEqual([linuxOther]);
-  });
-
-  test("each group's key names its machine and project, so two machines' folders never share one", () => {
-    const groups = machineGroups(
-      "threads",
-      [linux, studio],
-      [mac(LINUX, "Lars's Linux box"), mac(STUDIO, "Studio")],
-    );
-    expect(groups.map((group) => group.key)).toEqual([
-      `${LINUX}\u0000/home/lars/code/rustcode`,
-      `${STUDIO}\u0000/Users/lars/code/notes`,
-    ]);
-    // Each group carries its folder as well, so **New thread** under it starts there on that machine.
-    expect(groups.map((group) => group.project)).toEqual([
-      "/home/lars/code/rustcode",
-      "/Users/lars/code/notes",
-    ]);
-  });
-
-  test("a machine's worktree thread belongs to its repository, not the worktree folder", () => {
-    const inWorktree: SessionSummary = {
-      ...linux,
-      id: `${LINUX}/mock-linux-3`,
-      cwd: "/home/lars/code/.worktrees/threads",
-      worktree: {
-        path: "/home/lars/code/.worktrees/threads",
-        branch: "feat/x",
-        repo: "/home/lars/code/rustcode",
-      },
-    };
-    const groups = machineGroups("threads", [linux, inWorktree], [mac(LINUX, "Lars's Linux box")]);
-    expect(groups).toHaveLength(1);
-    expect(groups[0]?.items).toEqual([linux, inWorktree]);
-  });
-
-  test("without a paired machine there are no machine groups at all", () => {
-    expect(machineGroups("threads", [local], [])).toEqual([
-      {
-        key: `${LOCAL_HOST}\u0000/Users/you/code/notes`,
-        label: "notes",
-        // What **New thread** under the group starts on (`ui/Sidebar.tsx`).
-        project: "/Users/you/code/notes",
-        items: [local],
-        machine: { id: LOCAL_HOST, name: "This computer", state: "connected", retryInSecs: null },
-        first: true,
-        only: true,
-      },
-    ]);
-  });
-
-  test("a thread whose machine was just removed keeps a group of its own", () => {
-    const orphan = thread("mock-gone-1", "/tmp/gone", "gw-gone");
-    const groups = machineGroups("threads", [local, orphan], []);
-    expect(groups.map((group) => group.machine?.id)).toEqual([LOCAL_HOST, "gw-gone"]);
-    // It is not drawn as this computer's thread, and it does not vanish from the list.
-    expect(groups[1]?.machine?.name).toBe("Another computer");
-    expect(groups[1]?.items).toEqual([orphan]);
-  });
+test("a thread without a host runs on this computer", () => {
+  expect(hostOf(local)).toBe(LOCAL_HOST);
+  expect(hostOf(linux)).toBe(LINUX);
 });
 
-describe("sidebar device selection", () => {
-  const machines = [mac(LINUX, "Linux"), mac(STUDIO, "Studio", "offline")];
-  test("local and device picker show no remote threads", () => {
-    expect(sidebarHost(null, machines)).toBe(LOCAL_HOST);
-    expect(sidebarHost("devices", machines)).toBe(LOCAL_HOST);
-  });
-  test("connected and offline devices can both be browsed", () => {
-    expect(sidebarHost(LINUX, machines)).toBe(LINUX);
-    expect(sidebarHost(STUDIO, machines)).toBe(STUDIO);
-  });
-  test("removing the selected device returns to this computer", () => {
-    expect(sidebarHost(STUDIO, [])).toBe(LOCAL_HOST);
-  });
-});
-
-test("selected machine projects exclude other hosts and keep repository groups", () => {
+test("projects keep each computer's threads apart and group a worktree under its repository", () => {
   const worktree = { ...linuxOther, worktree: { repo: linux.cwd, path: "/tmp/tree", branch: "task" } };
-  const groups = sidebarProjects([local, linux, worktree, studio], LINUX);
-  expect(groups).toHaveLength(1);
-  expect(groups[0]?.items).toEqual([linux, worktree]);
-  expect(groups[0]?.project).toBe(linux.cwd);
-  expect(groups[0]?.key).not.toBe(sidebarProjects([{ ...local, cwd: linux.cwd }], LOCAL_HOST)[0]?.key);
-  expect(sidebarProjects([local], LOCAL_HOST)[0]?.key).toBe(local.cwd);
-  expect(sidebarProjects([], STUDIO)).toEqual([]);
+  const groups = sidebarProjects([local, linux, worktree, studio]);
+  expect(groups).toHaveLength(3);
+  expect(groups[0]?.items).toEqual([local]);
+  expect(groups[1]?.items).toEqual([linux, worktree]);
+  expect(groups[2]?.items).toEqual([studio]);
+  // Same folder name on two computers: two folders, with distinct keys.
+  expect(groups[2]?.key).not.toBe(groups[0]?.key);
+  expect(groups[0]?.key).toBe(local.cwd);
 });
 
-describe("delegates that run on another machine than their parent", () => {
-  const delegate = thread("delegate-1", "/home/lars/code/rustcode", LINUX);
-  const sameHost = thread("delegate-2", "/home/lars/code/rustcode", LINUX);
-
-  test("a remote delegate of a local parent keeps a row in its own machine's group", () => {
-    const parentOf = new Map([[delegate.id, local.id]]);
-    const own = crossMachineDelegates([local, delegate], parentOf);
-    expect([...own]).toEqual([delegate.id]);
-    // The rows the sidebar draws: every thread without a parent row above it, plus these.
-    const drawn = [local, delegate].filter((s) => !parentOf.has(s.id) || own.has(s.id));
-    const groups = machineGroups("threads", drawn, [mac(LINUX, "Lars's Linux box")]);
-    const linuxGroup = groups.find((g) => g.machine?.id === LINUX);
-    expect(linuxGroup?.items.map((s) => s.id)).toEqual([delegate.id]);
-  });
-
-  test("the open remote delegate is drawn under its local parent and in its machine's group", () => {
-    const parentOf = new Map([[delegate.id, local.id]]);
-    const own = crossMachineDelegates([local, delegate], parentOf);
-    const topRows = new Set([local.id]);
-    // Under the parent: the chain the list draws for the open thread.
-    expect(openChain(delegate.id, parentOf, topRows)).toEqual([
-      { id: delegate.id, parent: local.id, depth: 1 },
-    ]);
-    // In the group: one row, so no duplicate inside it.
-    const groups = machineGroups("threads", [local, delegate], [mac(LINUX, "Lars's Linux box")]);
-    expect(groups.find((g) => g.machine?.id === LINUX)?.items.map((s) => s.id)).toEqual([delegate.id]);
-    expect(own.has(delegate.id)).toBe(true);
-  });
-
-  test("a delegate on its parent's machine stays nested under it", () => {
-    const parentOf = new Map([[sameHost.id, linux.id]]);
-    expect(crossMachineDelegates([linux, sameHost], parentOf).size).toBe(0);
-  });
-
-  test("a delegate whose parent is not listed is left to the rule for a missing parent", () => {
-    expect(crossMachineDelegates([delegate], new Map([[delegate.id, "gone"]])).size).toBe(0);
-  });
+test("only a folder on this computer can start a thread", () => {
+  const groups = sidebarProjects([local, linux]);
+  expect(groups[0]?.project).toBe(local.cwd);
+  expect(groups[1]?.project).toBeUndefined();
+  expect(sidebarProjects([])).toEqual([]);
 });

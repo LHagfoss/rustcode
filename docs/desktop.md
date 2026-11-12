@@ -53,19 +53,17 @@ Next, in rough order:
 
 Several machines (#3202): Settings › **Machines** pairs the app with another
 computer's RustCode server and keeps the connection, so one app reaches its
-own threads here and other machines' threads there. The sidebar is one list:
-this computer's group first, named as people say it (“This Mac”), then each
-paired machine's, every heading the platform's glyph (a laptop for macOS, a
-monitor for Windows, a terminal for Linux, a question mark when it has not
-said), the name, and a small dot for the connection (green while it answers,
-grey while it is away or connecting, amber when the pairing ended). A machine's
-projects and threads sit under its heading, drawn as this computer's are — the
-same project folders and thread rows — and a machine with one project draws its
-rows straight under its own heading. A heading folds its group, and a machine
-that is away starts folded to one muted row: opening it lists the copy this
-window kept, read-only, and its chat says “Not connected. Last updated HH:MM”.
-New thread and ⌘N still start here; a heading's New thread starts on that
-machine, named in the draft’s Run on pill, and Settings › Machines keeps the
+own threads here and other machines' threads there. The sidebar is one flat
+list: every machine's threads sit in the same sections, in the order this
+computer's own use, with no machine heading and no folder unless Group by
+project is on. A thread that runs on another machine carries that machine's
+glyph (a laptop for macOS, a monitor for Windows, a terminal for Linux, a
+question mark when it has not said) and its name in muted text on its row
+(hover: `Runs on ‹name›`); a thread on this computer carries nothing. A delegate
+stays under its parent whichever machine it runs on. A machine that is away
+lists the copy this window kept, read-only, and its chat says “Not connected.
+Last updated HH:MM”; the Settings gear shows an amber dot while any paired
+machine is not connected. New thread and ⌘N still start here; the draft's Run on pill picks another machine, and Settings › Machines keeps the
 pairing, Reconnect and each machine's own page. A machine that is away while
 the app retries it on its own reads **Reconnecting…** rather than Offline (in
 Settings › Machines and in the notice of its open thread), because it is coming
@@ -105,7 +103,7 @@ that name again, and pairing the same machine again keeps the local name. The
 glyph is one of a small fixed set (laptop, desktop, Mac Studio/mini, server,
 Windows tower, Linux, cloud, phone), defaulting to the platform's own, with an
 optional tint from the chart palette. Everywhere a machine is named uses both:
-a machine's heading, a thread's `Runs on ‹name›` header, the composer's
+a thread row's machine tag, a thread's `Runs on ‹name›` header, the composer's
 **Run on** control and its menu, and `list_machines`, which keeps the reported
 `name` and adds `display_name`, `icon` and `icon_tint`.
 
@@ -147,9 +145,8 @@ it reads that machine's `_rustcode/harnesses` — its harnesses, models, logins
 and default — over the machine's own connection and keeps the answer per
 machine (`remoteHarnesses` in `src/state/store.ts`), so the model picker, the
 `@` agents and the harness defaults are the machine's; this computer's list is
-untouched. `New thread` inside a machine's group in the sidebar starts there
-with that group's folder (`startNewThread(folder, host)`), and any other new
-thread starts here. A folder picked on this disk — "Choose Folder…", "New
+untouched. The composer's Run on pill starts a thread there
+(`startNewThread(folder, host)`), and any other new thread starts here. A folder picked on this disk — "Choose Folder…", "New
 Thread in Folder…", the palette's Add project folder — always starts here: a
 path alone never names a machine, so two Macs that share a checkout path cannot
 mistake each other; ⌘O with no thread open starts here in the folder it picks. "New Thread Here" in a thread's folder menu and `/new` in
@@ -200,7 +197,7 @@ its thread list ("Choose Folder…" stays this computer's, since no code here ca
 browse a machine's disk). An engine that does not report a remote falls back to
 the folder name; the mock's Studio reports one. `session/new` is sent over the
 machine's connection with its folder and harness, and the thread is keyed with
-its host, so it appears under the machine's group at once; a thread created
+its host, so it appears in the list at once; a thread created
 there is named by the title it is made with (`session/new`'s
 `_meta.rustcode.title`), since `thread_rename` is this shell's. Until that
 machine's own `session/list` lists the thread, the app keeps listing it rather
@@ -947,11 +944,11 @@ composer's keys stay outside the table.
   parent's, folded away when the user moves on, and a search result that is a
   delegate says `in <parent title>`. The chat's agent and thread group cards
   show the same stack.
-  The title row carries Hide sidebar, clear of the traffic lights
-  (docs/design.md › Title row); it used to sit over Add project and New
+  The title row carries Hide sidebar and Settings beside it, clear of the traffic lights
+  and in the same place with the sidebar hidden (docs/design.md › Title row); it used to sit over Add project and New
   thread buttons and above a foot row of Settings, Pull requests and Usage, all
   gone so the thread list takes the rest of the column; the header's cluster
-  holds Show sidebar and Settings while the sidebar is hidden. There is no search or
+  holds Show sidebar and Settings while the sidebar is hidden, where the title row's pair stood. There is no search or
   filter in the sidebar: ⌘K finds threads (by title, project, branch, pull
   request and what was said) and holds those five as New thread, Add project
   folder, Open Settings, Open Git and Open Usage, with their shortcuts, and

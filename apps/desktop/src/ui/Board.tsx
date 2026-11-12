@@ -22,7 +22,7 @@ import {
 } from "../state/store";
 import { relativeAge } from "../state/thread";
 import { DelegateTree, useDelegateCosts } from "./DelegateTree";
-import { HEADER_HEIGHT } from "./MainHeader";
+import { HEADER_HEIGHT, SettingsButton } from "./MainHeader";
 import { Cluster, ClusterButton, cx, Pill, Tooltip } from "./primitives";
 import { StatusIcon } from "./Status";
 import { useLightsInset } from "./Titlebar";
@@ -59,6 +59,7 @@ export function ViewHeader({ title, children }: { title: React.ReactNode; childr
           <ClusterButton label="Show sidebar" tooltip={`Show sidebar (${toggleKey})`} onClick={toggleSidebar}>
             <PanelLeft size={14} />
           </ClusterButton>
+          <SettingsButton />
           <ClusterButton
             label="New thread"
             tooltip={`New thread (${newKey})`}
