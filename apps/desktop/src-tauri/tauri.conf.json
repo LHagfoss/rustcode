@@ -21,7 +21,7 @@
         "minHeight": 480,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "trafficLightPosition": { "x": 16, "y": 34 },
+        "trafficLightPosition": { "x": 15, "y": 24 },
         "transparent": true,
         "windowEffects": { "effects": ["sidebar"], "state": "followsWindowActiveState" }
       }
