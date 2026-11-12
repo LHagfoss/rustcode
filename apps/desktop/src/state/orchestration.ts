@@ -2057,6 +2057,15 @@ function stallNotice(link: Link, ctx: WakeContext): StallNotice | undefined {
  */
 export function quietTree(book: LinkBook, ctx: WakeContext, id: string): boolean {
   if (ctx.threads[id]?.running) return false;
+  return quietBelow(book, ctx, id);
+}
+
+/**
+ * Nothing `id` handed out still works or owes it an answer, whatever its own turn does: what a
+ * link that already answered still waits on. A turn the target runs after it answered is not that
+ * link's (the user writing to it, say), only the work the target handed out is (state/waiting.ts).
+ */
+export function quietBelow(book: LinkBook, ctx: WakeContext, id: string): boolean {
   if (book.links.some((l) => l.orchestrator === id && isActive(stateOfLink(l, ctx)))) return false;
   return !pendingWakeUnder(book, ctx, id);
 }
