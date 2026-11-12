@@ -53,32 +53,28 @@ Next, in rough order:
 
 Several machines (#3202): Settings › **Machines** pairs the app with another
 computer's RustCode server and keeps the connection, so one app reaches its
-own threads here and other machines' threads there. The sidebar keeps this
-computer’s project list, and its foot carries a cluster of two icon buttons,
-**Devices** and **Settings**, shaped like the title row's toggle. Devices opens
-the list in place: this computer first, named as people say it (“This Mac”),
-then each paired machine with its platform's glyph (a laptop for macOS, a
+own threads here and other machines' threads there. The sidebar is one list:
+this computer's group first, named as people say it (“This Mac”), then each
+paired machine's, every heading the platform's glyph (a laptop for macOS, a
 monitor for Windows, a terminal for Linux, a question mark when it has not
-said), its name, the state as a chip (Connected / Connecting / Offline /
-Needs pairing), the route once, and how many of its threads run now out of all
-of them (“1 of 3 threads running”). A machine that is away shows when it last
-answered, the last error in words (“No answer on port 17879, a firewall may
-block it.”), and the one action that tries again (Reconnect, or Pair again for
-a pairing the machine ended). Choosing a machine replaces the list with a card
-and its threads: the card says the platform, the RustCode version it runs and
-whether that differs from this app's (“Studio runs 1.27.0, this Mac 1.28.0”),
-the state and the route, and offers New thread, Reconnect and Machine settings
-(the latter opens Settings › Machines until the machine's own page lands),
-with the machine's threads grouped by project under it. Back goes one step:
-a machine returns to the Devices list, and the list to the projects; Escape
-does the same. The row and the card both reconnect, because a machine's own
-view is where someone looks when its threads stop answering. New thread and ⌘N use that machine, named in the draft’s Run on pill.
+said), the name, and a small dot for the connection (green while it answers,
+grey while it is away or connecting, amber when the pairing ended). A machine's
+projects and threads sit under its heading, drawn as this computer's are — the
+same project folders and thread rows — and a machine with one project draws its
+rows straight under its own heading. A heading folds its group, and a machine
+that is away starts folded to one muted row: opening it lists the copy this
+window kept, read-only, and its chat says “Not connected. Last updated HH:MM”.
+New thread and ⌘N still start here; a heading's New thread starts on that
+machine, named in the draft’s Run on pill, and Settings › Machines keeps the
+pairing, Reconnect and each machine's own page. Every client that lists threads
+hears of one another makes there (`_rustcode/threads/created`), a just-made
+thread stays listed until that machine's own list names it, and one trashed in
+any app leaves the others' lists (`_rustcode/threads/deleted`).
 Needs you counts
 threads across every machine. A delegate that runs on another machine than its
 parent is nested under the parent as usual and also keeps a row in its own
 machine's list, saying `from <thread> on <machine>`; the hint opens the parent
-(`crossMachineDelegates`, `src/state/sidebarGroups.ts`). A machine with no
-threads says so and offers New thread there.
+(`crossMachineDelegates`, `src/state/sidebarGroups.ts`).
 A thread key carries its machine (`local` keeps its bare id, another one reads
 `‹host›/‹id›`, `src/state/threadKeys.ts`), and every operation on it goes over
 that machine's own connection: `connectionFor` in `src/state/store.ts` returns
@@ -95,8 +91,8 @@ channel (`MachineTransport` in `src/acp/transport.ts`, `src/state/machines.ts`),
 because a web view cannot dial a gateway and the pairing token belongs in the
 credential store. `?machines=paired|connect|offline|revoked` in the mock walks
 the page without a second computer; `paired` is a Mac, a Windows PC with
-threads, and an offline Linux box, so the Devices list shows a glyph, a chip,
-a count, an older version and a machine to reconnect.
+threads, and an offline Linux box, so the sidebar shows three headings, the
+Linux box folded to a muted row.
 
 A machine's name and glyph are this app's own: Settings › Machines (and the
 same row for this computer) gives each one a **Name and icon** popover. A name
@@ -106,16 +102,14 @@ that name again, and pairing the same machine again keeps the local name. The
 glyph is one of a small fixed set (laptop, desktop, Mac Studio/mini, server,
 Windows tower, Linux, cloud, phone), defaulting to the platform's own, with an
 optional tint from the chart palette. Everywhere a machine is named uses both:
-the Devices list, the machine view's header, a thread's `Runs on ‹name›`
-header, the composer's **Run on** control and its menu, and `list_machines`,
-which keeps the reported `name` and adds `display_name`, `icon` and
-`icon_tint`.
+a machine's heading, a thread's `Runs on ‹name›` header, the composer's
+**Run on** control and its menu, and `list_machines`, which keeps the reported
+`name` and adds `display_name`, `icon` and `icon_tint`.
 
 A machine's own **Machine settings** page (`src/ui/MachineSettingsPage.tsx`) is
-one screen per computer, reached from the machine view's **Machine settings**
-button and from a Machines row in Settings. Its header says the local name and
-glyph, the platform, the RustCode version it runs (with the skew warning), the
-state, the route and when it was last seen. The controls are Reconnect,
+one screen per computer, reached from a Machines row in Settings. Its header
+says the local name and glyph, the platform, the RustCode version it runs (with
+the skew warning), the state, the route and when it was last seen. The controls are Reconnect,
 Disconnect (keeps the machine saved), Forget, **Make default for new threads**
 (the main machine) and **Pause new threads here**: a paused machine keeps its
 connection and its existing threads, and **Run on** refuses it until it is

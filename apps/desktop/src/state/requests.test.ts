@@ -15,11 +15,13 @@ import { answerOrchestration, resolveGrant } from "./host";
 import { emptyBook, type Link } from "./orchestration";
 import {
   connect,
+  markFinished,
   markUnread,
   openThread,
   resetForTests,
   selectThread,
   setOrchestration,
+  statusOf,
   updateThread,
   useApp,
 } from "./store";
@@ -355,6 +357,44 @@ describe("answer_request", () => {
       { id: "allow_always", name: "Always allow" },
       { id: "reject", name: "Decline" },
     ]);
+  });
+});
+
+describe("update_session settles a thread (issue 3529)", () => {
+  test("a thread settled in the middle of its turn reports settled, and is settled once the turn ends", async () => {
+    const { parent } = await staged();
+    updateThread(parent, (t) => ({ ...t, running: true }));
+    const answer = await answerOrchestration({
+      sessionId: parent,
+      tool: "update_session",
+      args: { status: "settled" },
+    });
+    expect(errorOf(answer)).toEqual({});
+    // It says what it set, not the "running" the turn still reads; `running` says the turn goes on.
+    expect(answer.status).toBe("done");
+    expect(answer.running).toBe(true);
+    expect(useApp.getState().sessions.find((x) => x.id === parent)?.status).toBe("done");
+    // The turn ends unseen (the user is elsewhere): the thread is settled, not "just finished".
+    updateThread(parent, (t) => ({ ...t, running: false }));
+    markFinished(parent);
+    expect(statusOf(useApp.getState(), parent)).toBe("done");
+    // Settling an unread thread reads it: no unseen finish keeps it in the active list.
+    const again = await answerOrchestration({
+      sessionId: parent,
+      tool: "update_session",
+      args: { status: "active" },
+    });
+    expect(again.status).toBe("idle");
+    markFinished(parent);
+    expect(parent in useApp.getState().finished).toBe(true);
+    const settled = await answerOrchestration({
+      sessionId: parent,
+      tool: "update_session",
+      args: { status: "settled" },
+    });
+    expect(settled.status).toBe("done");
+    expect(parent in useApp.getState().finished).toBe(false);
+    expect(statusOf(useApp.getState(), parent)).toBe("done");
   });
 });
 

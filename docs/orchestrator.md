@@ -314,8 +314,8 @@ same `session/new` and `session/prompt` the app sends
 (`rustcode/engine/src/orchestration/local_threads.rs`), so the new thread is an
 ordinary engine thread on any harness: it is saved in the store, listed by
 `session/list`, announced to every connected client that lists threads
-(`_rustcode/threads/created`, `announce_thread_created` in
-`rustcode/engine/src/acp/hosted.rs`) and opens in the app later like any other.
+(`_rustcode/threads/created`: the engine announces every `session/new`, whoever
+asked for it) and opens in the app later like any other.
 The link is written to the same link book the app saves, and the turn that
 ends it runs in the engine, so `wait_session` settles it (`done` with the
 reply, `cancelled`, or `failed`) with no app to update it. Slots follow the

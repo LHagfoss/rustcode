@@ -308,8 +308,6 @@ async fn start_one(caller: &str, ask: &Ask<'_>) -> Result<Value, Value> {
     let mut meta = Map::new();
     meta.insert("harness".to_owned(), json!(harness.id));
     meta.insert("title".to_owned(), json!(title));
-    // The engine tells the clients that list threads, since this one cannot.
-    meta.insert("announce".to_owned(), json!(true));
     if let Some(model) = model.as_ref() {
         meta.insert("model".to_owned(), json!(model));
     }

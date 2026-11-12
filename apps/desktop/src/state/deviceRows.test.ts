@@ -1,6 +1,6 @@
-// What the Devices view says, without a window: the glyph a platform gets, the
-// chip and the line under a machine's name, the last error in words, and the
-// version sentence when the two ends differ.
+// What the app says about a machine, without a window: the glyph a platform
+// gets, the state and the line under a machine's name, the last error in words,
+// and the version sentence when the two ends differ.
 
 import { describe, expect, test } from "bun:test";
 import type { SessionSummary } from "../acp/types";
