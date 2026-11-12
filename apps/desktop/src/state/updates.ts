@@ -31,6 +31,10 @@ const UPDATED_FROM_KEY = "rustcode.updatedFrom";
 const CHANNEL_KEY = "rustcode.updateChannel";
 /** The one beta the user skipped; the next beta is offered as usual. */
 const SKIPPED_KEY = "rustcode.skippedBeta";
+/** "Install updates automatically" (Settings › About): "0" is off, anything else (or nothing) is on. */
+const AUTO_KEY = "rustcode.autoInstallUpdates";
+/** How often a found update asks again whether the app is idle yet. */
+export const AUTO_INSTALL_RETRY_MS = 10_000;
 
 interface UpdatesState {
   /** This app's version from the shell, known before any check answers. */
@@ -42,6 +46,8 @@ interface UpdatesState {
   channels: UpdateChannel[];
   /** The beta hidden from the row and from Settings, when one was skipped. */
   skipped: string | null;
+  /** Install a newer release on this channel by itself once no thread is working. */
+  autoInstall: boolean;
   /** Why the last check failed, for Settings › Advanced; null after a good check. */
   error: string | null;
   checkedAt: number | null;
@@ -68,6 +74,7 @@ export const useUpdates = create<UpdatesState>(() => ({
   channel: readChannel(read(CHANNEL_KEY)),
   channels: ["stable"],
   skipped: read(SKIPPED_KEY),
+  autoInstall: readAutoInstall(read(AUTO_KEY)),
   error: null,
   checkedAt: null,
   installing: false,
@@ -78,6 +85,11 @@ export const useUpdates = create<UpdatesState>(() => ({
 /** `channel` as stored, with anything unknown read as Stable: never a surprise beta. */
 export function readChannel(value: string | null): UpdateChannel {
   return value === "beta" ? "beta" : "stable";
+}
+
+/** `autoInstall` as stored: on unless the user turned it off. */
+export function readAutoInstall(value: string | null): boolean {
+  return value !== "0";
 }
 
 /** Whether a version is a prerelease: a beta, as `1.21.0-beta.2`. */
@@ -254,7 +266,99 @@ async function runCheck(): Promise<void> {
       checkedAt: Date.now(),
       channels: info.channels,
     });
+    maybeAutoInstall();
     return;
+  }
+}
+
+/** What the app knows when it decides whether to install an update by itself. */
+export interface AutoInstallFacts {
+  /** "Install updates automatically" (Settings › About). */
+  enabled: boolean;
+  /** A `tauri dev` build: it never replaces itself. */
+  development: boolean;
+  info: UpdateInfo | null;
+  channel: UpdateChannel;
+  /** The beta the user skipped. */
+  skipped: string | null;
+  /** An install is already running. */
+  installing: boolean;
+  /** A thread has a running turn, or waits on an approval or a question. */
+  busy: boolean;
+}
+
+/**
+ * `install` now, `wait` for the threads to be idle (ask again soon), or `none`.
+ * An offer needs the selected channel, an app that can replace itself and a
+ * version that is not the skipped beta; a running turn is never interrupted.
+ */
+export function autoInstallDecision(facts: AutoInstallFacts): "install" | "wait" | "none" {
+  const { info } = facts;
+  if (!facts.enabled || facts.development || facts.installing) return "none";
+  if (!info || info.development || !info.canInstall || !offersUpdate(info, facts.channel)) return "none";
+  if (info.latest === facts.skipped) return "none";
+  return facts.busy ? "wait" : "install";
+}
+
+/** Whether any thread is working: a running turn, background commands it waits on, an approval or a question. */
+export function anyThreadBusy(
+  threads: Record<string, { running: boolean; waiting?: number; permissions: unknown[] }>,
+): boolean {
+  return Object.values(threads).some((t) => t.running || (t.waiting ?? 0) > 0 || t.permissions.length > 0);
+}
+
+let autoTimer: ReturnType<typeof setTimeout> | undefined;
+/** The version an automatic install failed for: left to the sidebar row, not retried in a loop. */
+let autoFailed: string | null = null;
+
+/**
+ * Install the offered update by itself when the setting is on and no thread is
+ * working (`autoInstallDecision`). Called after every check and when the setting
+ * turns on; while a thread works it asks again every few seconds.
+ */
+export function maybeAutoInstall() {
+  clearTimeout(autoTimer);
+  void (async () => {
+    // The store imports this module through the machines list, so it loads on demand.
+    const { useApp, toast } = await import("./store");
+    const { info, channel, skipped, installing, autoInstall } = useUpdates.getState();
+    if (info?.latest && info.latest === autoFailed) return;
+    const decision = autoInstallDecision({
+      enabled: autoInstall,
+      development: isDevBuild(),
+      info,
+      channel,
+      skipped,
+      installing,
+      busy: anyThreadBusy(useApp.getState().threads),
+    });
+    if (decision === "wait") {
+      autoTimer = setTimeout(maybeAutoInstall, AUTO_INSTALL_RETRY_MS);
+      return;
+    }
+    if (decision !== "install" || !info?.latest) return;
+    const version = info.latest;
+    toast(`Updating to ${version}…`);
+    const failed = await applyUpdate();
+    if (failed) {
+      autoFailed = version;
+      toast(`The update did not install: ${failed}`, "error", {
+        action: { label: "Release page", run: () => info.page && openExternal(info.page) },
+      });
+    }
+  })();
+}
+
+/** Turn "Install updates automatically" on or off (Settings › About). Turning it on installs a waiting update. */
+export function setAutoInstall(enabled: boolean) {
+  if (enabled === useUpdates.getState().autoInstall) return;
+  write(AUTO_KEY, enabled ? null : "0");
+  useUpdates.setState({ autoInstall: enabled });
+  if (enabled) {
+    autoFailed = null;
+    maybeAutoInstall();
+  } else {
+    clearTimeout(autoTimer);
   }
 }
 
