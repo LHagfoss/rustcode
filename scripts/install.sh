@@ -16,13 +16,16 @@ INSTALL_CLI=1
 INSTALL_APP=1
 USE_DEB=0
 BIN_DIR=""
+# A release to install instead of the latest one ("1.31.4" or "v1.31.4").
+VERSION="${RUSTCODE_VERSION:-}"
 # A directory with release assets and their SHA256SUMS, used instead of
 # GitHub, to test the installer without a release (docs/install.md).
 ARTIFACTS="${RUSTCODE_INSTALL_ARTIFACTS:-}"
 
 usage() {
     cat <<'USAGE'
-Install the RustCode CLI and desktop app from the latest GitHub release.
+Install the RustCode CLI and desktop app from the latest GitHub release, or
+from the release --version names.
 
 Options:
   --no-app        Install only the CLI.
@@ -31,9 +34,11 @@ Options:
                   sudo) instead of the AppImage.
   --bin-dir DIR   Install the CLI to DIR (default /usr/local/bin when
                   writable, else ~/.local/bin).
+  --version X.Y.Z Install that release instead of the latest one.
   -h, --help      Show this help.
 
 Environment:
+  RUSTCODE_VERSION=X.Y.Z           The same as --version.
   RUSTCODE_INSTALL_ARTIFACTS=DIR   Install from DIR (release asset names and a
                                    SHA256SUMS) instead of downloading.
 USAGE
@@ -50,6 +55,12 @@ while [ $# -gt 0 ]; do
             shift
             ;;
         --bin-dir=*) BIN_DIR="${1#--bin-dir=}" ;;
+        --version)
+            [ $# -ge 2 ] || { echo "--version needs a release, like 1.31.4" >&2; exit 2; }
+            VERSION="$2"
+            shift
+            ;;
+        --version=*) VERSION="${1#--version=}" ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown option: $1 (see --help)" >&2; exit 2 ;;
     esac
@@ -58,6 +69,14 @@ done
 if [ "$INSTALL_CLI" = 0 ] && [ "$INSTALL_APP" = 0 ]; then
     echo "Nothing to install: --no-app and --no-cli together." >&2
     exit 2
+fi
+if [ -n "$VERSION" ]; then
+    VERSION="${VERSION#v}"
+    # Digits and dots, with an optional prerelease suffix (1.32.0-beta.2).
+    if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+        echo "--version must look like 1.31.4, not ${VERSION}" >&2
+        exit 2
+    fi
 fi
 COLOR_RESET="\033[0m"
 COLOR_BOLD="\033[1m"
@@ -265,6 +284,11 @@ if [ -n "$ARTIFACTS" ]; then
     ARTIFACTS="$(cd "$ARTIFACTS" && pwd)"
     LATEST_TAG="(local artifacts in ${ARTIFACTS})"
     info "Installing from ${ARTIFACTS} instead of GitHub."
+elif [ -n "$VERSION" ]; then
+    # A named release needs no lookup; a tag that does not exist fails at
+    # SHA256SUMS below with the tag in the message.
+    LATEST_TAG="v${VERSION}"
+    info "Installing release ${LATEST_TAG} for ${TARGET_OS}-${TARGET_ARCH}..."
 else
     info "Detecting latest release for ${TARGET_OS}-${TARGET_ARCH}..."
 
@@ -298,6 +322,11 @@ MANIFEST_PATH="${TMP_DIR}/${MANIFEST_NAME}"
 HAVE_MANIFEST=1
 if ! run_with_spinner "Fetching ${MANIFEST_NAME} for ${LATEST_TAG}..." fetch_asset "$MANIFEST_NAME" "$MANIFEST_PATH"; then
     HAVE_MANIFEST=0
+    # Every release a version can name publishes SHA256SUMS: without it the
+    # release itself is missing.
+    if [ -n "$VERSION" ] && [ -z "$ARTIFACTS" ] && ! legacy_checksum "$LATEST_TAG" "$ASSET_NAME" >/dev/null; then
+        error "RustCode ${LATEST_TAG} was not found: https://github.com/${REPO}/releases/tag/${LATEST_TAG}"
+    fi
 fi
 
 # Fetch an asset into TMP_DIR and check it against SHA256SUMS, setting

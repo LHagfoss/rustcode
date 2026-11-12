@@ -5834,6 +5834,8 @@ export class MockTransport implements Transport {
   private onEvent: ((event: TransportEvent) => void) | null = null;
   /** The machines this app is paired with, as `machines_list` reports them. */
   private machineList: JsonObject[];
+  private sshRunning = false;
+  private sshSteps: JsonObject[] = [];
 
   /** Whether the RustCode server is installed as a service (`?machines=connect` starts without it). */
   private serverInstalled: boolean;
@@ -5930,6 +5932,66 @@ export class MockTransport implements Transport {
       const paired = mockMachine("connected", Date.now());
       this.machineList = [...this.machineList.filter((machine) => machine.id !== paired.id), paired];
       return { ...paired, state: "connecting" };
+    }
+    if (command === "machines_ssh_progress") return { running: this.sshRunning, steps: this.sshSteps };
+    if (command === "machines_connect_ssh") {
+      // Steps tick off over a few seconds. A host with "denied" in it fails to sign in, one with
+      // "novpn" is reached over SSH but not on RustCode's port.
+      const target = String(args.target ?? "").trim();
+      const host = target.includes("@") ? target.slice(target.lastIndexOf("@") + 1) : target;
+      const labels: Record<string, string> = {
+        sign_in: `Signing in to ${host}`,
+        check: `Checking RustCode on ${host}`,
+        install: `Installing RustCode 1.31.4 on ${host}`,
+        start: `Starting the server on ${host}`,
+        pair: `Pairing with ${host}`,
+      };
+      this.sshRunning = true;
+      this.sshSteps = [];
+      const set = (step: string, state: string, detail: string | null = null) => {
+        this.sshSteps = [
+          ...this.sshSteps.filter((seen) => seen.step !== step),
+          { step, state, label: labels[step] ?? step, detail },
+        ];
+      };
+      const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 700));
+      try {
+        set("sign_in", "running");
+        await tick();
+        if (target.includes("denied")) {
+          const message = `SSH could not sign in to ${host} without asking for a password or passphrase. Add your key to the agent (\`ssh-add\`), or connect once in a terminal, then try again.`;
+          set("sign_in", "failed", message);
+          throw new Error(message);
+        }
+        set("sign_in", "done");
+        set("check", "running");
+        await tick();
+        set("check", "done", "RustCode is not installed");
+        if (args.allowInstall === false) {
+          const message = `RustCode is not installed on ${host}. Install it there, or allow installing.`;
+          set("install", "failed", message);
+          throw new Error(message);
+        }
+        set("install", "running");
+        await tick();
+        set("install", "done", "/home/lars/.rustcode/bin/rustcode");
+        set("start", "running");
+        await tick();
+        set("start", "done");
+        set("pair", "running");
+        await tick();
+        if (target.includes("novpn")) {
+          const message = `${host} is reachable over SSH, but not on RustCode's port (203.0.113.7:17879). Put both computers on the same network or a VPN such as NetBird or Tailscale, then try again.`;
+          set("pair", "failed", message);
+          throw new Error(message);
+        }
+        set("pair", "done", "100.92.13.44:17879");
+        const paired = mockMachine("connected", Date.now());
+        this.machineList = [...this.machineList.filter((machine) => machine.id !== paired.id), paired];
+        return { ...paired, state: "connecting" };
+      } finally {
+        this.sshRunning = false;
+      }
     }
     if (command === "machines_probe") {
       // The LAN answers; an overlay that accepts no inbound connections times out.

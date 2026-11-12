@@ -266,7 +266,7 @@ pub fn log_path() -> io::Result<PathBuf> {
 /// Start `program server run` detached from this process: its own process
 /// group, no terminal, nothing inherited but the environment, so it lives
 /// on when the client that started it ends.
-pub(crate) fn start_in_background(program: &std::path::Path) -> io::Result<()> {
+pub fn start_in_background(program: &std::path::Path) -> io::Result<()> {
     let dir = run_dir()?;
     lock::ensure_private_dir(&dir)?;
     let log_path = log_path()?;

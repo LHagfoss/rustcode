@@ -8,12 +8,15 @@
 #
 #   -NoApp   install only the CLI      (or $env:RUSTCODE_NO_APP = "1")
 #   -NoCli   install only the app      (or $env:RUSTCODE_NO_CLI = "1")
+#   -Version 1.31.4  install that release instead of the latest one
+#                    (or $env:RUSTCODE_VERSION = "1.31.4")
 #   $env:RUSTCODE_INSTALL_ARTIFACTS = "<dir>" installs from a directory of
 #   release assets and their SHA256SUMS instead of GitHub (docs/install.md).
 
 param(
     [switch]$NoApp,
-    [switch]$NoCli
+    [switch]$NoCli,
+    [string]$Version = $env:RUSTCODE_VERSION
 )
 
 $ErrorActionPreference = 'Stop'
@@ -48,6 +51,13 @@ function Write-Err ($Message) {
 if (-not $InstallCli -and -not $InstallApp) {
     Write-Err "Nothing to install: -NoApp and -NoCli together."
 }
+if ($Version) {
+    $Version = $Version -replace '^v', ''
+    # Digits and dots, with an optional prerelease suffix (1.32.0-beta.2).
+    if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$') {
+        Write-Err "-Version must look like 1.31.4, not $Version"
+    }
+}
 
 Write-Info "Checking system architecture..."
 $Arch = $env:PROCESSOR_ARCHITECTURE
@@ -65,6 +75,11 @@ if ($Artifacts) {
     $Artifacts = (Resolve-Path $Artifacts).Path
     $LatestTag = "(local artifacts in $Artifacts)"
     Write-Info "Installing from $Artifacts instead of GitHub."
+} elseif ($Version) {
+    # A named release needs no lookup; a tag that does not exist fails at
+    # SHA256SUMS below with the tag in the message.
+    $LatestTag = "v$Version"
+    Write-Info "Installing release $LatestTag..."
 } else {
     Write-Info "Fetching latest release information from GitHub..."
     try {

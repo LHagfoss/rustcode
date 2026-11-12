@@ -69,6 +69,8 @@ pub fn run() {
             machines::machines_ask,
             machines::machines_pair,
             machines::machines_connect_code,
+            machines::machines_connect_ssh,
+            machines::machines_ssh_progress,
             machines::machines_cancel,
             machines::machines_remove,
             machines::machines_probe,

@@ -89,6 +89,31 @@ pub async fn run(command: &MachineCommands) -> Result<()> {
             address,
             name,
         } => connect_code(&config_dir, code, address.as_deref(), name.clone()).await,
+        MachineCommands::AddSsh {
+            target,
+            port,
+            identity,
+            name,
+            yes,
+            no_install,
+            json,
+        } => {
+            let target = rustcode_client::ssh::SshTarget::parse(target, *port, identity.clone())?;
+            add_ssh(
+                &config_dir,
+                &target,
+                name.clone(),
+                if *yes {
+                    InstallChoice::Yes
+                } else if *no_install {
+                    InstallChoice::No
+                } else {
+                    InstallChoice::Ask
+                },
+                *json,
+            )
+            .await
+        }
         MachineCommands::Remove { machine } => remove(&config_dir, machine),
         MachineCommands::Discover { secs, json } => {
             discover(Duration::from_secs(*secs), *json).await
@@ -530,11 +555,30 @@ async fn connect_code(
             .await?,
     );
     let (paired, route) = connector.pair_with_code(&code, address).await?;
+    let machine = save_code_pairing(config_dir, &tokens, &paired, route, name).await?;
+    println!(
+        "Paired with {} ({}). Saved as \"{}\"; `rustcode machines list` shows it.",
+        paired.session.welcome().machine_name(),
+        machine.host_id,
+        machine.name
+    );
+    Ok(())
+}
+
+/// Keep what a connect code handed out: the token, then the machine.
+async fn save_code_pairing(
+    config_dir: &std::path::Path,
+    tokens: &std::sync::Arc<TokenStore>,
+    paired: &rustcode_client::Paired,
+    route: Route,
+    name: Option<String>,
+) -> Result<Machine> {
     let welcome = paired.session.welcome().clone();
     let mut machine = rustcode_client::machine_from_pairing(&welcome, route, name);
+    // It answered `describe` before the code went out.
     machine.describes = true;
     rustcode_client::tokens::set_bounded(
-        std::sync::Arc::clone(&tokens),
+        std::sync::Arc::clone(tokens),
         machine.host_id.clone(),
         paired.secret.clone(),
         rustcode_client::tokens::STORE_TIMEOUT,
@@ -551,11 +595,146 @@ async fn connect_code(
         &machine.routes[0].address,
         chrono::Utc::now(),
     )?;
+    Ok(machine)
+}
+
+/// Whether `add-ssh` may install RustCode on the other computer.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InstallChoice {
+    Yes,
+    No,
+    /// Ask at a terminal; refuse without one.
+    Ask,
+}
+
+/// Connect over SSH (`rustcode_client::ssh`): sign in, check, install when
+/// needed, `rustcode up` there, then pair and save here.
+async fn add_ssh(
+    config_dir: &std::path::Path,
+    target: &rustcode_client::ssh::SshTarget,
+    name: Option<String>,
+    install: InstallChoice,
+    json: bool,
+) -> Result<()> {
+    use rustcode_client::ssh::{self, StepState};
+    use std::io::IsTerminal;
+    let connector = Connector::new(config_dir, ClientKind::Desktop)?;
+    // The credential store first, as for a connect code (#3325).
+    let tokens = std::sync::Arc::new(
+        rustcode_client::tokens::open_bounded(config_dir, rustcode_client::tokens::STORE_TIMEOUT)
+            .await?,
+    );
+    let host = target.host().to_owned();
+    let mut approve = |probe: &ssh::Probe| match install {
+        InstallChoice::Yes => true,
+        InstallChoice::No => false,
+        InstallChoice::Ask => {
+            if json || !std::io::stdin().is_terminal() {
+                return false;
+            }
+            let question = match &probe.installed {
+                Some(installed) => format!(
+                    "{host} has RustCode {}. Update it to {} (in ~/.rustcode/bin, with a background service)? [y/N] ",
+                    installed.version,
+                    ssh::VERSION
+                ),
+                None => format!(
+                    "Install RustCode {} on {host}? It goes to ~/.rustcode/bin and runs in the background. [y/N] ",
+                    ssh::VERSION
+                ),
+            };
+            eprint!("{question}");
+            let _ = std::io::stderr().flush();
+            let mut answer = String::new();
+            let read = std::io::stdin()
+                .lock()
+                .take(16)
+                .read_line(&mut answer)
+                .is_ok();
+            read && matches!(answer.trim(), "y" | "Y" | "yes" | "Yes")
+        }
+    };
+    let mut progress = |progress: ssh::Progress| {
+        if json {
+            if let Ok(line) = serde_json::to_string(&serde_json::json!({ "progress": progress })) {
+                println!("{line}");
+            }
+            return;
+        }
+        match progress.state {
+            StepState::Running => eprintln!("==> {}...", progress.label),
+            StepState::Done => match progress.detail {
+                Some(detail) => eprintln!("    done: {detail}"),
+                None => eprintln!("    done"),
+            },
+            StepState::Skipped => {}
+            StepState::Failed => eprintln!("    failed"),
+        }
+    };
+    let result = ssh::connect(
+        &connector,
+        target,
+        ssh::Options {
+            approve_install: &mut approve,
+            progress: &mut progress,
+        },
+    )
+    .await;
+    let connected = match result {
+        Ok(connected) => connected,
+        Err(error) => {
+            if json && let Some(failed) = error.downcast_ref::<ssh::SshFailure>() {
+                println!("{}", serde_json::json!({ "error": failed }));
+                std::process::exit(1);
+            }
+            return Err(error);
+        }
+    };
+    let machine = save_code_pairing(
+        config_dir,
+        &tokens,
+        &connected.paired,
+        connected.route,
+        name,
+    )
+    .await?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "connected": {
+                    "host_id": machine.host_id,
+                    "name": machine.name,
+                    "route": machine.routes.first().map(|route| route.address.clone()),
+                    "version": connected.report.version,
+                    "server": connected.report.server.mode,
+                    "problems": connected.report.problems,
+                }
+            })
+        );
+        return Ok(());
+    }
     println!(
-        "Paired with {} ({}). Saved as \"{}\"; `rustcode machines list` shows it.",
-        welcome.machine_name(),
+        "Paired with {} over {} ({}). Saved as \"{}\"; `rustcode machines list` shows it.",
+        connected.paired.session.welcome().machine_name(),
+        machine
+            .routes
+            .first()
+            .map_or("its gateway", |route| route.address.as_str()),
         machine.host_id,
         machine.name
+    );
+    if connected.report.server.mode != "service" {
+        println!(
+            "Its server runs until {host} restarts; `rustcode up` there makes it start at login."
+        );
+    }
+    for problem in &connected.report.problems {
+        println!("{host}: {}", problem.message);
+    }
+    println!(
+        "To remove RustCode's service there later: ssh {} rustcode server uninstall",
+        target.destination
     );
     Ok(())
 }

@@ -4,7 +4,9 @@
 // other computer the app is paired with, each with the route it is reached
 // over, how long ago it answered and how many threads it has. "Connect with a
 // code" pairs two computers by carrying one string: "Create connect code" on
-// one, paste it on the other, with no accept step. "Add machine" asks one to
+// one, paste it on the other, with no accept step. "Connect over SSH" does
+// both ends from here for a computer this one reaches with `ssh`: it installs
+// RustCode there if needed, starts its server and pairs. "Add machine" asks one to
 // let this app in instead: the request appears on that machine, its owner
 // accepts, and the eight-digit code it then shows is typed here.
 //
@@ -19,7 +21,7 @@
 // A row of another machine says which RustCode version it runs, so an old one
 // is a sentence with a command, not a silent connection failure.
 
-import { Copy, KeyRound, RefreshCw, Search, Server, SquareTerminal } from "lucide-react";
+import { Check, Copy, KeyRound, Minus, RefreshCw, Search, Server, SquareTerminal, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { currentPlatform } from "../lib/platform";
 import { hasShell } from "../lib/shell";
@@ -32,11 +34,13 @@ import {
   codeCheckOverdue,
   codeComplete,
   codeDigits,
+  connectOverSsh,
   connectWithCode,
   createConnectCode,
   type DiscoveredMachine,
   defaultSelfName,
   discoverMachines,
+  dismissSsh,
   followConnectCode,
   gatewayLine,
   lastSeen,
@@ -55,6 +59,7 @@ import {
   refreshServerService,
   removeMachine,
   routeName,
+  type SshStep,
   selfName,
   serverLine,
   setLocalIdentity,
@@ -133,6 +138,8 @@ export function MachinesPage() {
       </Group>
 
       <ConnectCodeGroup now={now} />
+
+      <SshGroup />
 
       {pairing ? <PairingGroup pairing={pairing} /> : <AddMachine error={pairingError} local={local} />}
     </>
@@ -225,6 +232,134 @@ function ConnectCodeGroup({ now }: { now: number }) {
       {error && <p className="m-0 px-4 pb-4 text-callout text-warning leading-normal">{error}</p>}
     </Group>
   );
+}
+
+// ---------------------------------------------------------------- connect over SSH
+
+/** The order the steps run in, so a step not reached yet is still listed. */
+const SSH_STEPS: SshStep["step"][] = ["sign_in", "check", "install", "start", "pair"];
+
+/**
+ * Connect over SSH: one field for `user@host` or an alias from `~/.ssh/config`. The native side
+ * signs in without prompting (the key must be in the agent), installs RustCode there at this
+ * version when allowed and needed, runs `rustcode up` there and pairs with the code it printed,
+ * which never leaves SSH.
+ */
+function SshGroup() {
+  const run = useMachines((s) => s.ssh);
+  const error = useMachines((s) => s.sshError);
+  const [target, setTarget] = useState("");
+  const [allowInstall, setAllowInstall] = useState(true);
+  const running = run?.running === true;
+  const connect = () => {
+    if (running) return;
+    void connectOverSsh(target, allowInstall).then((paired) => {
+      if (paired) setTarget("");
+    });
+  };
+  return (
+    <Group
+      title="Connect over SSH"
+      footer="For a computer you already reach with ssh: a Linux box, a VPS, a Mac or a Windows PC with OpenSSH. Your own ssh, its config and its agent sign in, without asking for a password: a key with a passphrase must be in the agent (ssh-add), and a new host key must be accepted once in a terminal. The pairing secret travels inside SSH only. The two computers still need a network between them for RustCode itself (the same LAN, or NetBird or Tailscale)."
+    >
+      <Row
+        stacked
+        title="Connect to a computer over SSH"
+        subtitle="Installs RustCode there if it is missing or older than this app, runs its server in the background and pairs the two."
+      >
+        <div className="flex w-full flex-wrap items-center gap-2">
+          <input
+            value={target}
+            onChange={(event) => setTarget(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") connect();
+            }}
+            placeholder="lars@box or an alias from ~/.ssh/config"
+            aria-label="SSH host"
+            disabled={running}
+            {...noTextHelpers}
+            className={cx(fieldClass, "min-w-0 flex-[2] font-mono")}
+          />
+          <Action prominent disabled={running || !target.trim()} onClick={connect}>
+            {running ? <Spinner /> : null}
+            Connect
+          </Action>
+        </div>
+        <label className="flex items-center gap-2 pt-2 text-callout text-fg-muted">
+          <input
+            type="checkbox"
+            checked={allowInstall}
+            disabled={running}
+            onChange={(event) => setAllowInstall(event.target.checked)}
+          />
+          Install or update RustCode there when needed (in ~/.rustcode/bin, with a background service)
+        </label>
+      </Row>
+      {run && <SshSteps steps={run.steps} running={running} />}
+      {error && !running && (
+        <div className="flex flex-wrap items-start gap-3 px-4 pb-4">
+          <p className="m-0 min-w-0 flex-1 text-callout text-warning leading-normal">{error}</p>
+          <Action quiet size="sm" onClick={dismissSsh}>
+            Close
+          </Action>
+        </div>
+      )}
+    </Group>
+  );
+}
+
+/** The steps of a connection over SSH: done, running, failed or not reached. */
+function SshSteps({ steps, running }: { steps: SshStep[]; running: boolean }) {
+  const failed = steps.some((step) => step.state === "failed");
+  return (
+    <ol className="m-0 flex list-none flex-col gap-1.5 px-4 pb-4" aria-label="Connect over SSH progress">
+      {SSH_STEPS.map((name) => {
+        const step = steps.find((seen) => seen.step === name);
+        if (!step && !running) return null;
+        const state = step?.state ?? "todo";
+        if (failed && state === "todo") return null;
+        return (
+          <li key={name} className="flex items-start gap-2 text-callout" data-state={state}>
+            <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center">
+              {state === "running" ? (
+                <Spinner />
+              ) : state === "done" ? (
+                <Check size={13} className="text-success" />
+              ) : state === "failed" ? (
+                <X size={13} className="text-warning" />
+              ) : (
+                <Minus size={13} className="text-fg-muted" />
+              )}
+            </span>
+            <span className="min-w-0">
+              <span className={state === "todo" || state === "skipped" ? "text-fg-muted" : "text-fg"}>
+                {step?.label ?? sshStepName(name)}
+                {state === "skipped" ? " · not needed" : ""}
+              </span>
+              {step?.detail && state !== "failed" ? (
+                <span className="block text-fg-muted leading-normal">{step.detail}</span>
+              ) : null}
+            </span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function sshStepName(step: SshStep["step"]): string {
+  switch (step) {
+    case "sign_in":
+      return "Sign in";
+    case "check":
+      return "Check RustCode there";
+    case "install":
+      return "Install RustCode";
+    case "start":
+      return "Start its server";
+    default:
+      return "Pair";
+  }
 }
 
 /** The code this computer shows: copy it, see how long it lasts, and who used it. */

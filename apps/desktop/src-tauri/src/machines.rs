@@ -269,6 +269,17 @@ pub struct Machines {
     /// The token store, opened once: reaching the credential store on every
     /// retry would prompt for it again and again.
     tokens: Mutex<Option<Arc<TokenStore>>>,
+    /// The steps of the connection over SSH in progress, or of the last one,
+    /// for the page to poll (`machines_ssh_progress`).
+    ssh: Mutex<SshRun>,
+}
+
+/// One connection over SSH, as the page shows it.
+#[derive(Default, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshRun {
+    pub running: bool,
+    pub steps: Vec<rustcode_client::ssh::Progress>,
 }
 
 /// The configuration directory the engine and `rustcode machines` use, so the
@@ -1131,6 +1142,74 @@ pub async fn machines_connect_code(
     // It answered `describe` before the code went out.
     machine.describes = true;
     save_pairing(&machines, machine, &paired).await
+}
+
+/// Connect over SSH (`Settings › Machines › Connect over SSH`): sign in to
+/// `target`, install RustCode there at this version when `allow_install` and
+/// it is missing or older, start its server with `rustcode up` and pair with
+/// the code it printed. The page polls `machines_ssh_progress` for the steps;
+/// a failure's message names its step.
+#[tauri::command]
+pub async fn machines_connect_ssh(
+    machines: tauri::State<'_, Arc<Machines>>,
+    target: String,
+    port: Option<u16>,
+    identity: Option<String>,
+    allow_install: bool,
+    name: Option<String>,
+) -> Result<MachineView, String> {
+    let identity = identity
+        .map(|path| path.trim().to_owned())
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from);
+    let target = rustcode_client::ssh::SshTarget::parse(&target, port, identity).map_err(chain)?;
+    {
+        let mut run = machines.ssh.lock().unwrap();
+        if run.running {
+            return Err("A connection over SSH is already running.".to_owned());
+        }
+        *run = SshRun {
+            running: true,
+            steps: Vec::new(),
+        };
+    }
+    let result = async {
+        let config_dir = config_dir()?;
+        let connector = Machines::connector(&config_dir)?;
+        // The store before the code is spent, as for a connect code (#3325).
+        machines.tokens(&config_dir).await?;
+        let shared = Arc::clone(&machines);
+        let mut progress = move |step: rustcode_client::ssh::Progress| {
+            let mut run = shared.ssh.lock().unwrap();
+            // One line per step: its latest state.
+            run.steps.retain(|seen| seen.step != step.step);
+            run.steps.push(step);
+        };
+        let mut approve = move |_: &rustcode_client::ssh::Probe| allow_install;
+        let connected = rustcode_client::ssh::connect(
+            &connector,
+            &target,
+            rustcode_client::ssh::Options {
+                approve_install: &mut approve,
+                progress: &mut progress,
+            },
+        )
+        .await
+        .map_err(chain)?;
+        let welcome = connected.paired.session.welcome().clone();
+        let mut machine = machine_from_pairing(&welcome, connected.route, name);
+        machine.describes = true;
+        save_pairing(&machines, machine, &connected.paired).await
+    }
+    .await;
+    machines.ssh.lock().unwrap().running = false;
+    result
+}
+
+/// The steps of the connection over SSH in progress, or of the last one.
+#[tauri::command]
+pub fn machines_ssh_progress(machines: tauri::State<'_, Arc<Machines>>) -> SshRun {
+    machines.ssh.lock().unwrap().clone()
 }
 
 /// Keep what a pairing handed out: the token, then the machine.

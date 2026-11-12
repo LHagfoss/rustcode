@@ -234,6 +234,9 @@ interface MachinesStore {
   /** Creating, withdrawing or redeeming a connect code is running now. */
   connectBusy: boolean;
   connectError: string | null;
+  /** The connection over SSH in progress, or the last one: its steps as they go. */
+  ssh: SshRun | null;
+  sshError: string | null;
   /** This computer's RustCode server as a background service, once asked. */
   server: ServerService | null;
   /** This computer's own name and icon, kept here because it is not paired. */
@@ -261,6 +264,8 @@ export const useMachines = create<MachinesStore>(() => ({
   connectOffer: null,
   connectBusy: false,
   connectError: null,
+  ssh: null,
+  sshError: null,
   server: null,
   serverInstalling: false,
   serverLinking: false,
@@ -1595,6 +1600,75 @@ export async function connectWithCode(code: string, address?: string): Promise<b
   } finally {
     useMachines.setState({ connectBusy: false });
   }
+}
+
+/** One step of a connection over SSH (`rustcode_client::ssh::Progress`). */
+export interface SshStep {
+  step: "sign_in" | "check" | "install" | "start" | "pair";
+  state: "running" | "done" | "skipped" | "failed";
+  label: string;
+  detail?: string | null;
+}
+
+export interface SshRun {
+  running: boolean;
+  steps: SshStep[];
+}
+
+/**
+ * How long the page waits for a connection over SSH: an install downloads a release on the other
+ * computer, which the native side bounds at ten minutes, plus sign-in, start and pairing.
+ */
+export const SSH_DEADLINE_MS = 15 * 60_000;
+
+/**
+ * Connect over SSH: install RustCode on `target` at this version when allowed and needed, start
+ * its server and pair with it. The steps are polled while it runs.
+ */
+export async function connectOverSsh(target: string, allowInstall: boolean): Promise<boolean> {
+  const typed = target.trim();
+  if (!typed) {
+    useMachines.setState({ sshError: "Type the host first, like lars@box or an alias from ~/.ssh/config." });
+    return false;
+  }
+  useMachines.setState({ ssh: { running: true, steps: [] }, sshError: null });
+  const poll = setInterval(() => {
+    void shellCall<SshRun>("machines_ssh_progress").then(
+      (run) => {
+        if (useMachines.getState().ssh?.running) useMachines.setState({ ssh: { ...run, running: true } });
+      },
+      () => {},
+    );
+  }, 400);
+  try {
+    const machine = await shellCallWithin<Machine>(SSH_DEADLINE_MS, "machines_connect_ssh", {
+      target: typed,
+      port: null,
+      identity: null,
+      allowInstall,
+      name: null,
+    });
+    useMachines.setState((state) => ({
+      machines: [...state.machines.filter((saved) => saved.id !== machine.id), machine],
+    }));
+    toast(`Connected to ${machine.name}.`, "success");
+    await refreshMachines();
+    return true;
+  } catch (error) {
+    useMachines.setState({ sshError: errorText(error) });
+    return false;
+  } finally {
+    clearInterval(poll);
+    const last = await shellCall<SshRun>("machines_ssh_progress").catch(() => null);
+    useMachines.setState((state) => ({
+      ssh: { running: false, steps: last?.steps ?? state.ssh?.steps ?? [] },
+    }));
+  }
+}
+
+/** Clear the steps of a finished connection over SSH. */
+export function dismissSsh(): void {
+  useMachines.setState({ ssh: null, sshError: null });
 }
 
 /** Forget a machine, after asking: its token and its routes go with it. */

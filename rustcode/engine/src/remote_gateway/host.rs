@@ -115,7 +115,8 @@ fn step(remote_enabled: bool, running_version: Option<&str>, handover: bool) -> 
 /// One look: start the gateway when it should be running and is not. Answers
 /// how long to wait before looking again.
 async fn poll(watch: &mut Watch, config_directory: &Path) -> Duration {
-    if !super::service::enabled(config_directory) {
+    let requested = start_requested(config_directory);
+    if !super::service::enabled(config_directory) && !requested {
         return POLL;
     }
     #[cfg(target_os = "macos")]
@@ -158,6 +159,9 @@ async fn poll(watch: &mut Watch, config_directory: &Path) -> Duration {
             }
             match start(config_directory).await {
                 Ok(status) => {
+                    if requested {
+                        clear_start_request(config_directory);
+                    }
                     crate::logger::operational_event(
                         "remote.hosted",
                         serde_json::json!({
@@ -182,6 +186,38 @@ async fn poll(watch: &mut Watch, config_directory: &Path) -> Duration {
             }
         }
     }
+}
+
+/// The file `rustcode up` leaves for the server: start the gateway even
+/// though this machine never ran one (no identity yet), in the server's own
+/// session. On Windows a command run over SSH is in the SSH logon session; a
+/// gateway it started there would be out of reach of the desktop and leave
+/// files only an administrator can open, so it asks the server instead.
+fn start_request_path(config_directory: &Path) -> PathBuf {
+    config_directory.join("remote/start-requested")
+}
+
+/// A request counts only while remote access was not switched off since:
+/// `remote stop` writes `disabled`, and that wins.
+fn start_requested(config_directory: &Path) -> bool {
+    start_request_path(config_directory).exists()
+        && !config_directory.join("remote/disabled").exists()
+}
+
+/// Withdraw the request once the gateway answers.
+pub fn clear_start_request(config_directory: &Path) {
+    let _ = std::fs::remove_file(start_request_path(config_directory));
+}
+
+/// Ask the running server to start the gateway at its next look (within
+/// [`POLL`]), and switch remote access on.
+pub fn request_start(config_directory: &Path) -> Result<()> {
+    let remote = config_directory.join("remote");
+    // The gateway refuses a `remote` directory others can read.
+    crate::daemon::private_files::ensure_private_directory(&remote, "remote gateway")?;
+    let _ = std::fs::remove_file(remote.join("disabled"));
+    std::fs::write(start_request_path(config_directory), "rustcode up")?;
+    Ok(())
 }
 
 /// Start this machine's gateway as the server's, and answer its status.
@@ -243,6 +279,31 @@ mod tests {
             prefer_interface: Some("netbird".into()),
             ..crate::config::RemoteConfig::default()
         }
+    }
+
+    #[test]
+    fn a_start_request_from_up_yields_to_remote_stop() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = directory.path();
+        assert!(!start_requested(config));
+        request_start(config).unwrap();
+        assert!(start_requested(config));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(config.join("remote"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+        std::fs::write(config.join("remote/disabled"), "explicitly stopped").unwrap();
+        assert!(!start_requested(config));
+        // `up` again switches it back on.
+        request_start(config).unwrap();
+        assert!(start_requested(config));
+        clear_start_request(config);
+        assert!(!start_requested(config));
     }
 
     #[test]
