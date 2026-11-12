@@ -362,8 +362,11 @@ async fn a_machine_without_a_token_asks_for_a_new_pairing() {
     let host = Host::start().await;
     let config = tempfile::tempdir_in("/tmp").unwrap();
     let connector = Connector::new(config.path(), ClientKind::Cli).unwrap();
+    // The gateway's own id: a route that answers as another machine is
+    // dropped before the token is even looked for.
+    let gateway_id = host.lifecycle.status().await.unwrap().unwrap().gateway_id;
     let machine = rustcode_client::Machine::new(
-        "gw-0123456789abcdef",
+        gateway_id,
         "Studio",
         "macos",
         "0011223344556677",
@@ -377,6 +380,10 @@ async fn a_machine_without_a_token_asks_for_a_new_pairing() {
     assert!(
         format!("{error:#}").contains("pair with it again"),
         "{error:#}"
+    );
+    assert!(
+        rustcode_client::needs_new_pairing(&error),
+        "a missing token is typed as a lost pairing: {error:#}"
     );
     host.stop().await;
 }
