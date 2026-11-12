@@ -1051,13 +1051,28 @@ async function readThreads(id: string, connection: AcpConnection, link?: Link): 
     }
     const listed = new Set(sessions.map((session) => session.id));
     settleKeptUnlisted(id, listed);
-    for (const summary of keptUnlisted(id, listed)) {
-      sessions.push({ ...summary, id: splitThreadKey(summary.id).id, host: undefined });
-    }
-    useMachines.setState((state) => ({
-      counts: { ...state.counts, [id]: sessions.length },
-      sessions: { ...state.sessions, [id]: sessions },
+    const kept = keptUnlisted(id, listed).map((summary) => ({
+      ...summary,
+      id: splitThreadKey(summary.id).id,
+      host: undefined,
     }));
+    useMachines.setState((state) => {
+      // The kept summary was stored with no status. The cache row has the one a status broadcast
+      // wrote (a thread another client announced is running), so keep that, or the row reads idle
+      // and its keep expires while the thread still runs.
+      const cached = state.sessions[id] ?? [];
+      const rows = [
+        ...sessions,
+        ...kept.map((summary) => {
+          const status = cached.find((row) => row.id === summary.id)?.status;
+          return status ? { ...summary, status } : summary;
+        }),
+      ];
+      return {
+        counts: { ...state.counts, [id]: rows.length },
+        sessions: { ...state.sessions, [id]: rows },
+      };
+    });
   } catch {
     // An older machine, or one whose ACP is not allowed yet: no count.
   }
