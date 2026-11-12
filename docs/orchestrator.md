@@ -593,6 +593,33 @@ the first session list, from the first message's `From thread “…” (agent):
 heading, with a surviving `thread_links` row for the parent's id when there is
 one (`rustcode/engine/src/thread_parent.rs`).
 
+### Who sent a message
+
+A message another thread delivers and the wake a parent gets are `user`
+messages in the receiving thread's transcript, told apart by their text alone:
+`delivered` starts one with `From thread “<title>” (agent):`, `wakeMessage`
+ends one with `<!-- rustcode:wake -->`, and the continue prompt after a
+compaction ends with `<!-- rustcode:continued -->`. The text is what every
+harness keeps, so it is the record. The engine reads it back in one place
+(`rustcode/engine/src/message_origin.rs`) for clients that did not write it:
+
+- The remote protocol sends `origin` on each `user` message of a snapshot or a
+  history page and on `turn_started` (`docs/remote-protocol/README.md` › "Who
+  sent a message"), so the phone draws a delegate's report as a notice.
+- ACP carries the same in `_meta.rustcode.origin` on a `user_message_chunk`
+  the engine builds from a whole message: the built-in harness's history
+  replay, the prompt a client that loads mid-turn is sent, and the echo of one
+  client's prompt to the session's other clients.
+  `{"kind": "delegate", "threads": [{"sessionId": "…", "title": "…", "status": "done", "linkId": "…"}]}`,
+  with `kind` one of `user`, `agent`, `delegate` or `system`. A chunk an
+  external harness replays itself has no `_meta`, and the app reads the text
+  there, as it does today (`isWakeMessage` in `state/thread.ts`).
+
+The wake's lines are the contract the engine parses: one
+`- link_id <id> · <state> · “<title>” · … · session <thread id>` per delegate
+(`linkLine` in `state/orchestration.ts`), with a delegate's answer indented
+under it. Change them together with `message_origin.rs` and its tests.
+
 ### A link's events
 
 Each link keeps a short list of what happened to it (`LinkEvent` in

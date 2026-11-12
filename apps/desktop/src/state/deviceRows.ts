@@ -11,6 +11,7 @@ import {
   lastSeen,
   type Machine,
   type MachineIcon,
+  machineReconnecting,
   platformIcon,
   platformName,
   routeName,
@@ -31,15 +32,19 @@ export interface DeviceStatus {
   tone: "ok" | "warn" | "bad" | "idle";
 }
 
-/** The state as the row's chip: `Connected`, `Connecting`, `Offline`, `Needs pairing`. */
-export function deviceStatus(machine: Pick<Machine, "state">): DeviceStatus {
+/** The state as the row's chip: `Connected`, `Connecting`, `Reconnecting…`, `Offline`, `Needs pairing`. */
+export function deviceStatus(machine: Pick<Machine, "state" | "retryInSecs">): DeviceStatus {
   switch (machine.state) {
     case "connected":
       return { label: "Connected", tone: "ok" };
     case "connecting":
       return { label: "Connecting", tone: "idle" };
     case "offline":
-      return { label: "Offline", tone: "warn" };
+      // On its own retry clock the machine is coming back by itself, which is
+      // not the failure a plain `Offline` chip reads as (issue 3487).
+      return machineReconnecting(machine)
+        ? { label: "Reconnecting…", tone: "idle" }
+        : { label: "Offline", tone: "warn" };
     case "needsPairing":
       return { label: "Needs pairing", tone: "bad" };
     case "stopped":

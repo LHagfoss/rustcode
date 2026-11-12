@@ -816,7 +816,7 @@ where
                     Some(Err(error))
                         if matches!(
                             error.code,
-                            "not_a_repository" | "not_connected" | "gh_missing"
+                            "not_a_repository" | "no_provider" | "not_connected" | "gh_missing"
                         ) =>
                     {
                         watch.stop_unreadable(error.message.clone(), chrono::Utc::now().timestamp())
@@ -847,7 +847,9 @@ async fn read(group: &[Watch]) -> Result<Value, crate::pull_requests::PullError>
         match crate::pull_requests::watch_view_on(&folder, repo, number).await {
             Ok(value) => return Ok(value),
             // Not this folder's repository: another one of the group's may be.
-            Err(failed) if failed.code == "not_a_repository" => error = Some(failed),
+            Err(failed) if matches!(failed.code, "not_a_repository" | "no_provider") => {
+                error = Some(failed)
+            }
             Err(failed) => return Err(failed),
         }
     }

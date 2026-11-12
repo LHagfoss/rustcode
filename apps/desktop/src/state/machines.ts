@@ -434,6 +434,24 @@ export function offlineSinceLabel(at: number | undefined): string | undefined {
   return new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
+/**
+ * Whether a machine that is away is already on its supervisor's retry clock.
+ * The app reconnects on its own with backoff (PR 3506), so its state is
+ * "reconnecting", not a failure the user has to act on (issue 3487).
+ */
+export function machineReconnecting(
+  machine: Pick<Machine, "state" | "retryInSecs"> | null | undefined,
+): boolean {
+  return machine?.state === "offline" && !!machine.retryInSecs;
+}
+
+/** The same, for the machine a thread runs on, as its key's host (`state/threadKeys.ts`). */
+export function useMachineReconnecting(host: string | null | undefined): boolean {
+  return useMachines((state) =>
+    machineReconnecting(host ? state.machines.find((entry) => entry.id === host) : undefined),
+  );
+}
+
 /** The words a row's state chip uses. */
 export function stateLabel(machine: Pick<Machine, "state" | "retryInSecs">): string {
   switch (machine.state) {
@@ -444,21 +462,21 @@ export function stateLabel(machine: Pick<Machine, "state" | "retryInSecs">): str
     case "needsPairing":
       return "Needs pairing";
     case "offline":
-      return machine.retryInSecs ? `Offline · retrying in ${machine.retryInSecs} s` : "Offline";
+      return machineReconnecting(machine) ? "Reconnecting…" : "Offline";
     case "stopped":
       return "Not connected";
   }
 }
 
-/** The chip's tone for a state: green while connected, amber while it is not. */
-export function stateTone(machine: Pick<Machine, "state">): "ok" | "warn" | "bad" | "idle" {
+/** The chip's tone for a state: `ok` while connected, `warn` once it has given up retrying by itself. */
+export function stateTone(machine: Pick<Machine, "state" | "retryInSecs">): "ok" | "warn" | "bad" | "idle" {
   switch (machine.state) {
     case "connected":
       return "ok";
     case "connecting":
       return "idle";
     case "offline":
-      return "warn";
+      return machineReconnecting(machine) ? "idle" : "warn";
     case "needsPairing":
       return "bad";
     case "stopped":
@@ -511,7 +529,10 @@ export function machineLine(machine: Machine): string {
     case "needsPairing":
       return machine.detail ?? "This machine no longer accepts this computer's pairing. Pair it again.";
     case "offline":
-      return machine.detail ?? "Not connected. The app keeps trying.";
+      return (
+        machine.detail ??
+        (machineReconnecting(machine) ? "Trying again. The app keeps reconnecting." : "Not connected.")
+      );
     case "stopped":
       return "Not connected.";
   }
@@ -710,14 +731,51 @@ export function newAskId(): string {
 }
 
 /**
+ * The waits between first-read attempts at app start: 1, 2, 4, 8, 16 and 30
+ * seconds, then the app stops trying and the Machines page reads again when it
+ * is opened. The same doubling idea the supervisors use, bounded to a start.
+ */
+export const START_RETRY_WAITS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
+
+/** The app's own wait; a test passes one that does not sleep. */
+async function waitMs(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Read until the shell answers: `read` says whether it did, and is called once,
+ * then again after each of `START_RETRY_WAITS_MS`. Answers at the first truthy
+ * read, so a shell that is up at once costs no wait.
+ */
+export async function readUntilAnswering(
+  read: () => Promise<boolean>,
+  wait: (ms: number) => Promise<void> = waitMs,
+): Promise<void> {
+  if (await read()) return;
+  for (const ms of START_RETRY_WAITS_MS) {
+    await wait(ms);
+    if (await read()) return;
+  }
+}
+
+/**
  * Read the saved machines once, then let each one's supervisor reach the app.
  * Called when the app starts; a machine saved later is picked up by
  * `refreshMachines`.
+ *
+ * The first read can fail while the shell is still coming up (the registry
+ * being written, a config folder that is not there yet). Giving up there would
+ * leave every paired machine without a supervisor until a page asked, which is
+ * how a machine stayed away after an app update: try again instead, and stop as
+ * soon as one read answers.
  */
 export async function startMachines(): Promise<void> {
   if (started || !hasShell()) return;
   started = true;
-  await refreshMachines();
+  await readUntilAnswering(async () => {
+    await refreshMachines();
+    return !useMachines.getState().error;
+  });
 }
 
 /** Read the machines and their live state from the shell. */
@@ -993,13 +1051,28 @@ async function readThreads(id: string, connection: AcpConnection, link?: Link): 
     }
     const listed = new Set(sessions.map((session) => session.id));
     settleKeptUnlisted(id, listed);
-    for (const summary of keptUnlisted(id, listed)) {
-      sessions.push({ ...summary, id: splitThreadKey(summary.id).id, host: undefined });
-    }
-    useMachines.setState((state) => ({
-      counts: { ...state.counts, [id]: sessions.length },
-      sessions: { ...state.sessions, [id]: sessions },
+    const kept = keptUnlisted(id, listed).map((summary) => ({
+      ...summary,
+      id: splitThreadKey(summary.id).id,
+      host: undefined,
     }));
+    useMachines.setState((state) => {
+      // The kept summary was stored with no status. The cache row has the one a status broadcast
+      // wrote (a thread another client announced is running), so keep that, or the row reads idle
+      // and its keep expires while the thread still runs.
+      const cached = state.sessions[id] ?? [];
+      const rows = [
+        ...sessions,
+        ...kept.map((summary) => {
+          const status = cached.find((row) => row.id === summary.id)?.status;
+          return status ? { ...summary, status } : summary;
+        }),
+      ];
+      return {
+        counts: { ...state.counts, [id]: rows.length },
+        sessions: { ...state.sessions, [id]: rows },
+      };
+    });
   } catch {
     // An older machine, or one whose ACP is not allowed yet: no count.
   }
