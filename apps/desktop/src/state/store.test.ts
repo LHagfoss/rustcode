@@ -59,6 +59,7 @@ import {
   fetchHarnessModels,
   forgetPlans,
   forkThread,
+  isRepairableOpenError,
   loadTotalLimit,
   localChoices,
   MAX_PANELS,
@@ -156,7 +157,7 @@ import {
   wakeSnoozed,
   windowNow,
 } from "./store";
-import { turnCompletion } from "./thread";
+import { emptyThread, turnCompletion } from "./thread";
 import { type DelegatedThread, topLevel } from "./topLevel";
 
 const until = async (check: () => boolean, ms = 2000) => {
@@ -3804,6 +3805,94 @@ describe("toasts", () => {
   });
 });
 
+describe("which thread endings are announced", () => {
+  const live = (id: string, over: Partial<ReturnType<typeof emptyThread>> = {}) => ({
+    ...emptyThread(id, "/p", id),
+    loaded: true,
+    ...over,
+  });
+  const delegate = (parent: string, target: string) => ({
+    id: `${parent}/1`,
+    orchestrator: parent,
+    target,
+    orchestratorTitle: "Parent",
+    targetTitle: "Child",
+    message: "do it",
+    state: "working" as const,
+    createdAt: Date.now(),
+  });
+  const stage = async (
+    threads: Record<string, ReturnType<typeof live>>,
+    links: ReturnType<typeof delegate>[] = [],
+  ) => {
+    const { clearToasts } = await import("./store");
+    clearToasts();
+    useApp.setState({
+      selectedId: "other",
+      snoozed: {},
+      messaged: {},
+      sessions: [],
+      threads,
+      links: { ...emptyBook(), links },
+    });
+  };
+  const said = () => useApp.getState().toasts.map((t) => t.text);
+
+  test("a turn that ends with a background command parked says nothing; the woken turn's end does", async () => {
+    const { finishToast, announceFinished } = await import("./store");
+    await stage({ a: live("a", { waiting: 2 }) });
+    finishToast("a", "completed");
+    expect(said()).toEqual([]);
+    // The commands finish, the thread wakes itself, and that later turn ends with nothing left.
+    useApp.setState({ threads: { a: live("a", { waiting: undefined }) } });
+    announceFinished("a");
+    expect(said()).toEqual(["“A thread” finished"]);
+  });
+
+  test("a turn that ends while a delegate still works says nothing", async () => {
+    const { finishToast } = await import("./store");
+    await stage({ a: live("a"), c: live("c", { running: true }) }, [delegate("a", "c")]);
+    finishToast("a", "completed");
+    expect(said()).toEqual([]);
+  });
+
+  test("a delegate finishing says nothing, its failure does", async () => {
+    const { finishToast } = await import("./store");
+    await stage({ a: live("a"), c: live("c") }, [delegate("a", "c")]);
+    finishToast("c", "completed");
+    expect(said()).toEqual([]);
+    finishToast("c", "failed");
+    expect(said()).toEqual(["“A thread” failed"]);
+  });
+
+  test("a thread that is truly finished says so, and so does a failure", async () => {
+    const { finishToast } = await import("./store");
+    await stage({ a: live("a") });
+    finishToast("a", "completed");
+    expect(said()).toEqual(["“A thread” finished"]);
+    finishToast("a", "failed");
+    expect(said()).toContain("“A thread” failed");
+  });
+
+  test("a turn that ends into a queued message is between turns and says nothing", async () => {
+    const { finishToast } = await import("./store");
+    const queued = live("a", {
+      queue: [{ id: "q1", text: "next", queuedAt: Date.now() }],
+    });
+    await stage({ a: queued });
+    finishToast("a", "completed");
+    expect(said()).toEqual([]);
+  });
+
+  test("a hit limit is a problem and always says so", async () => {
+    const { finishToast } = await import("./store");
+    await stage({ a: live("a", { waiting: 1 }) });
+    finishToast("a", "failed", { waiting: { until: Date.now() + 60_000 } });
+    expect(said()).toHaveLength(1);
+    expect(said()[0]).toContain("hit its limit");
+  });
+});
+
 describe("finished threads", () => {
   test("a turn that completes elsewhere is flagged until the thread is seen", async () => {
     const { markFinished, clearFinished } = await import("./store");
@@ -5773,5 +5862,131 @@ describe("projects and scheduled work", () => {
     expect(useApp.getState().grant?.detail).toContain("Morning build check");
     resolveGrant("once");
     expect(await running).toMatchObject({ id: "task-morning", state: "claimed" });
+  });
+});
+
+/**
+ * A mock engine whose `session/load` refuses with the cwd mismatch the first `loadFailures` times,
+ * and whose repair answers what the test sets (`repairProblems` empty: the record is put right).
+ */
+class MismatchedRecordTransport implements Transport {
+  readonly name = "mock" as const;
+  private readonly mock = new MockTransport({ delayMs: 0 });
+  private onEvent: ((event: TransportEvent) => void) | null = null;
+  readonly requests: JsonObject[] = [];
+  loadFailures = 0;
+  repairProblems: string[] = [];
+  repairFails = false;
+  target: string | undefined;
+
+  async start(onEvent: (event: TransportEvent) => void): Promise<void> {
+    this.onEvent = onEvent;
+    await this.mock.start(onEvent);
+  }
+
+  send(line: string): void {
+    const request = JSON.parse(line) as JsonObject;
+    this.requests.push(request);
+    const params = request.params as JsonObject | undefined;
+    const reply = (body: JsonObject) =>
+      queueMicrotask(() =>
+        this.onEvent?.({ type: "line", line: JSON.stringify({ jsonrpc: "2.0", id: request.id, ...body }) }),
+      );
+    if (request.method === Method.sessionLoad && params?.sessionId === this.target && this.loadFailures > 0) {
+      this.loadFailures -= 1;
+      reply({
+        error: {
+          code: -32602,
+          message: "Invalid params",
+          data: "session/load cwd does not match the recorded workspace",
+        },
+      });
+      return;
+    }
+    if (request.method === Method.sessionRepair && params?.sessionId === this.target) {
+      if (this.repairFails) reply({ error: { code: -32603, message: "repair broke" } });
+      else reply({ result: { cwd: "/Users/you/code/rustcode", fixed: [], problems: this.repairProblems } });
+      return;
+    }
+    this.mock.send(line);
+  }
+
+  count(method: string): number {
+    return this.requests.filter(
+      (r) => r.method === method && (r.params as JsonObject)?.sessionId === this.target,
+    ).length;
+  }
+
+  async restart(): Promise<void> {
+    await this.mock.restart();
+  }
+
+  async stop(): Promise<void> {
+    await this.mock.stop();
+  }
+}
+
+describe("a thread whose record names another folder", () => {
+  async function ready(configure: (transport: MismatchedRecordTransport) => void) {
+    const transport = new MismatchedRecordTransport();
+    configure(transport);
+    await connect(transport);
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    const target = useApp.getState().sessions.find((x) => x.id !== useApp.getState().selectedId)!.id;
+    transport.target = target;
+    return { transport, target };
+  }
+
+  test("is repaired and opened again, with no banner", async () => {
+    const { transport, target } = await ready((t) => (t.loadFailures = 1));
+    expect(await openThread(target)).toBeNull();
+    const thread = useApp.getState().threads[target];
+    expect(thread?.loaded).toBe(true);
+    expect(thread?.openFailed).toBeUndefined();
+    expect(thread?.error).toBeUndefined();
+    expect(transport.count(Method.sessionRepair)).toBe(1);
+    expect(transport.count(Method.sessionLoad)).toBe(2);
+  });
+
+  test("shows the banner when the repair reports problems", async () => {
+    const { transport, target } = await ready((t) => {
+      t.loadFailures = 1;
+      t.repairProblems = ["The folder /gone no longer exists. Move the thread to another folder."];
+    });
+    const message = await openThread(target);
+    expect(message).toContain("Could not open this thread");
+    expect(useApp.getState().threads[target]?.openFailed).toBe(true);
+    expect(transport.count(Method.sessionLoad)).toBe(1);
+  });
+
+  test("shows the banner when the repair itself fails", async () => {
+    const { transport, target } = await ready((t) => {
+      t.loadFailures = 1;
+      t.repairFails = true;
+    });
+    expect(await openThread(target)).toContain("Could not open this thread");
+    expect(transport.count(Method.sessionRepair)).toBe(1);
+  });
+
+  test("shows the banner when the open fails again after the repair, and tries no second repair", async () => {
+    const { transport, target } = await ready((t) => (t.loadFailures = 3));
+    expect(await openThread(target)).toContain("Could not open this thread");
+    expect(useApp.getState().threads[target]?.openFailed).toBe(true);
+    expect(transport.count(Method.sessionRepair)).toBe(1);
+    expect(transport.count(Method.sessionLoad)).toBe(2);
+    // Opening it again (the user picks the thread once more) fails without another automatic repair.
+    expect(await openThread(target)).toContain("Could not open this thread");
+    expect(transport.count(Method.sessionRepair)).toBe(1);
+    expect(transport.count(Method.sessionLoad)).toBe(3);
+  });
+
+  test("an unrelated failure is not repaired", async () => {
+    const { transport, target } = await ready(() => {});
+    expect(isRepairableOpenError(new Error("engine restarting"))).toBe(false);
+    expect(isRepairableOpenError(new Error("session/load cwd does not match the recorded workspace"))).toBe(
+      true,
+    );
+    expect(await openThread(target)).toBeNull();
+    expect(transport.count(Method.sessionRepair)).toBe(0);
   });
 });

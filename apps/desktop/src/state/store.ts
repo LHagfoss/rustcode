@@ -169,7 +169,10 @@ import {
   requeueUnreadSteers,
   resetWaits,
   restoreQueuedThreads,
+  stateOf,
   stopLinksFrom,
+  subtreeQuiet,
+  subtreeQuietBelow,
   syncLinkBook,
   takeSteeredLinks,
   threadTurnEnded,
@@ -199,7 +202,7 @@ import {
   waitHolds,
 } from "./limitResume";
 import { newThreadAccountOn, type SignedOutLogins, signedOutFrom } from "./logins";
-import { type NotifyEvent, notifyThread, startNotifications, wakeEvent } from "./notify";
+import { finishIsNews, type NotifyEvent, notifyThread, startNotifications, wakeEvent } from "./notify";
 import {
   CAPABILITY_VERSION,
   DEFAULT_DELEGATES_PER_THREAD,
@@ -291,6 +294,7 @@ import {
 } from "./toasts";
 import { userTypedPrompt } from "./topLevel";
 import { readableTurnError } from "./turnError";
+import { waitingOn as backgroundWork } from "./waiting";
 
 export type { Toast, ToastTone } from "./toasts";
 
@@ -1846,12 +1850,17 @@ function onSessionActivity(params: unknown) {
   const state = str(p?.state);
   if (!id || !get().threads[id]) return;
   const background = typeof p?.background === "number" ? p.background : 0;
+  const before = get().threads[id];
+  const wokenEnd = state !== "running" && !!before?.running && !!before.woken;
   updateThread(id, (t) => {
     if (state === "running") return wakeTurn(t);
     const ended = t.running && t.woken ? finishTurn(t, "completed") : t;
     if (state === "waiting") return { ...ended, waiting: background || undefined };
     return { ...ended, waiting: undefined };
   });
+  // The turn a thread woke itself for ended: the one finish worth announcing, when nothing it
+  // started is still going (a turn that ended on "waiting on the tests" said nothing).
+  if (wokenEnd) announceFinished(id);
   if (state !== "running") scheduleAutoCompact(id);
 }
 
@@ -2131,16 +2140,88 @@ export function markFinished(id: string, now = Date.now(), failed = false) {
   );
   // A limit or a lost network already said what stopped it, in the composer's own row.
   if (!failed || (!get().limitWaits[id] && !get().internetWaits[id])) {
-    // A delegate finishing is not news for the system either: the wake message reaches its parent
-    // and the strip above that parent's composer already says it. A failure still is.
-    const delegated = linksOf(get().links, id).drivenBy !== undefined && get().messaged[id] === undefined;
-    if (!delegated) {
+    // A failure always is. A finish is only when the thread is done for good (`endedForGood`): not
+    // a delegate (the wake message reaches its parent and the strip above that parent's composer
+    // already says it), not a turn that left background work or a queued message to go on.
+    if (failed || endedForGood(id)) {
       notifyThread(
         { threadId: id, kind: failed ? "failed" : "finished", key: String(now), title: notifyTitle(id) },
         get(),
       );
     }
   }
+}
+
+/** A thread another one runs, where the user has not written themselves. */
+function isDelegated(id: string): boolean {
+  return linksOf(get().links, id).drivenBy !== undefined && get().messaged[id] === undefined;
+}
+
+/**
+ * Whether a thread still waits on something it started: commands its last turn parked on, or
+ * delegates it handed work to (state/waiting.ts `waitingOn`). It picks up by itself, so its turn
+ * ending is not its end.
+ */
+function stillWaiting(id: string): boolean {
+  const s = get();
+  const thread = s.threads[id];
+  return !!backgroundWork({
+    id,
+    running: thread?.running ?? false,
+    commands: thread?.waiting,
+    links: s.links.links,
+    state: (link) => stateOf(s, link),
+    quiet: subtreeQuiet,
+    quietBelow: subtreeQuietBelow,
+  });
+}
+
+/** Whether a turn that just ended leaves the thread truly finished: the only finish worth announcing. */
+function endedForGood(id: string): boolean {
+  const thread = get().threads[id];
+  return finishIsNews({
+    waiting: stillWaiting(id),
+    delegated: isDelegated(id),
+    queued: !!thread && !!nextQueued(thread.queue, thread),
+  });
+}
+
+/**
+ * The in-app toast for a thread whose turn ended off screen. A failure, or a wait that stopped it,
+ * is always news; a finish only when the thread is done for good (`endedForGood`), and never for a
+ * thread that answers a link (`link`). A thread the user snoozed says nothing: its finish waits for
+ * the snooze to end, which then says it once (`wakeSnoozed`).
+ */
+export function finishToast(
+  id: string,
+  outcome: "completed" | "failed",
+  stop: { waiting?: { reason?: string; until: number } | null; offline?: unknown; link?: unknown } = {},
+): void {
+  if (id === get().selectedId || id in get().snoozed) return;
+  const { waiting, offline, link } = stop;
+  const stopped = !!waiting || !!offline;
+  if (!stopped && outcome === "completed" && (link !== undefined || !endedForGood(id))) return;
+  const name = get().sessions.find((s) => s.id === id)?.title || "A thread";
+  toast(
+    waiting
+      ? waiting.reason === "overload"
+        ? `“${name}” was overloaded and tries again at ${limitTime(waiting.until)}`
+        : `“${name}” hit its limit and continues at ${limitTime(waiting.until)}`
+      : offline
+        ? `“${name}” is waiting for the internet`
+        : outcome === "failed"
+          ? `“${name}” failed`
+          : `“${name}” finished`,
+    stopped ? "info" : outcome === "failed" ? "error" : "success",
+    { action: { label: "Open", run: () => selectThread(id) } },
+  );
+}
+
+/** A turn the thread woke itself for ended: the toast and the notification, once, when it is done for good. */
+export function announceFinished(id: string): void {
+  if (!endedForGood(id)) return;
+  finishToast(id, "completed");
+  notifyThread({ threadId: id, kind: "finished", key: String(Date.now()), title: notifyTitle(id) }, get());
 }
 
 /** A thread's title, for what the system shows of it. */
@@ -2568,7 +2649,16 @@ export function openThread(id: string): Promise<string | null> {
   let pending: Promise<string | null>;
   pending = Promise.resolve().then(async () => {
     try {
-      const result = await conn.request(Method.sessionLoad, { sessionId, cwd, mcpServers: [] }, 60_000);
+      let result: Json;
+      try {
+        result = await conn.request(Method.sessionLoad, { sessionId, cwd, mcpServers: [] }, 60_000);
+      } catch (first) {
+        // A record naming another folder is put right once, quietly; only a repair that finds
+        // problems, or a second failure, reaches the banner.
+        const fixedCwd = await repairBeforeRetry(id, conn, first);
+        if (fixedCwd === null) throw first;
+        result = await conn.request(Method.sessionLoad, { sessionId, cwd: fixedCwd, mcpServers: [] }, 60_000);
+      }
       updateThread(id, (t) => ({
         ...finishLoad(t),
         configOptions: parseConfigOptions((result as JsonObject | null)?.configOptions),
@@ -2601,6 +2691,37 @@ export function openThread(id: string): Promise<string | null> {
     threads: { ...s.threads, [id]: { ...emptyThread(id, cwd, summary?.title), loading: true } },
   }));
   return pending;
+}
+
+/** Threads whose open was repaired automatically in this app session: once each, never a loop. */
+const autoRepaired = new Set<string>();
+
+/** An open the engine refuses because the thread's record names another folder (Repair Thread fixes it). */
+export function isRepairableOpenError(error: unknown): boolean {
+  return /session\/load cwd does not match the recorded workspace/i.test(errorText(error));
+}
+
+/**
+ * A failed open that Repair Thread can fix is repaired here, once per thread: answers the folder to
+ * open again in, or null when it is not repairable, was tried already, or the repair found problems.
+ */
+async function repairBeforeRetry(id: string, conn: AcpConnection, error: unknown): Promise<string | null> {
+  if (!isRepairableOpenError(error) || autoRepaired.has(id) || !get().agent?.sessionRepair) return null;
+  autoRepaired.add(id);
+  try {
+    const answer = ((await conn.request(
+      Method.sessionRepair,
+      { sessionId: splitThreadKey(id).id },
+      10_000,
+    )) ?? {}) as JsonObject;
+    const problems = Array.isArray(answer.problems) ? answer.problems : [];
+    const cwd = typeof answer.cwd === "string" ? answer.cwd : null;
+    if (problems.length || !cwd) return null;
+    set((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? { ...x, cwd } : x)) }));
+    return cwd;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -4606,34 +4727,8 @@ export async function runPrompt(
   if (id === get().selectedId) void refreshPlanCache();
   void refreshAgents(id);
   void refreshCheckpoints(id);
-  if (
-    !options.autoCompact &&
-    !options.continued &&
-    (outcome === "completed" || outcome === "failed") &&
-    id !== get().selectedId &&
-    // A thread the user snoozed says nothing: its finish waits for the snooze to end, which then
-    // says it once (state/store.ts `wakeSnoozed`).
-    !(id in get().snoozed)
-  ) {
-    const name = get().sessions.find((s) => s.id === id)?.title || "A thread";
-    // A delegate finishing is already said twice: the wake message into its parent's transcript and
-    // the strip above that composer. Only a failure, or the wait that stopped it, is news here.
-    const delegated = options.link !== undefined && outcome === "completed" && !waiting && !offline;
-    if (!delegated) {
-      toast(
-        waiting
-          ? waiting.reason === "overload"
-            ? `“${name}” was overloaded and tries again at ${limitTime(waiting.until)}`
-            : `“${name}” hit its limit and continues at ${limitTime(waiting.until)}`
-          : offline
-            ? `“${name}” is waiting for the internet`
-            : outcome === "failed"
-              ? `“${name}” failed`
-              : `“${name}” finished`,
-        waiting || offline ? "info" : outcome === "failed" ? "error" : "success",
-        { action: { label: "Open", run: () => selectThread(id) } },
-      );
-    }
+  if (!options.autoCompact && !options.continued && (outcome === "completed" || outcome === "failed")) {
+    finishToast(id, outcome, { waiting, offline, link: options.link });
   }
   // A queued message starts at once, so "working" stays up across the hand-off. A turn that was
   // stopped or failed leaves the queue held instead (thread.ts `holdsQueue`): the rows read Held and
@@ -7335,6 +7430,7 @@ export function resetForTests() {
   setShellTransport(null);
   loading.clear();
   opening.clear();
+  autoRepaired.clear();
   set({
     status: "connecting",
     remote: null,
