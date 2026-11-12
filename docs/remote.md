@@ -537,7 +537,16 @@ holds until encrypted transport (#2651) lands.
   Credential Manager, Secret Service) under `rustcode-machines`, one entry per
   machine *and profile*: the account names this configuration directory's
   install id and the machine's `host_id`, so two `RUSTCODE_CONFIG_DIR`
-  profiles never overwrite each other's token. They are never written to
+  profiles never overwrite each other's token. On macOS the service is
+  `rustcode-machine-tokens`, and Apple's `/usr/bin/security` writes and reads
+  the entries: a keychain item trusts the program that created it, pinned to
+  that build's hash when the signer has no Developer ID team, so items RustCode
+  created itself asked for the login keychain password after every update, in
+  every development build, and once each for the app and the CLI. An item
+  `security` created trusts `security`, which stays the same across RustCode
+  updates and binaries. An entry an earlier release wrote under
+  `rustcode-machines` is read once in-process (the last prompt; "Allow" is
+  enough), written again through `security`, and the old item deleted. They are never written to
   `credentials.json` or `provider-accounts.json`. On a machine without a credential store, set
   `RUSTCODE_MACHINE_TOKEN_STORE=file` to keep them in
   `machines/tokens.json` (`0600` in a `0700` directory) instead; without it,
