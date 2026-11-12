@@ -466,6 +466,17 @@ describe("which section a thread is drawn under", () => {
     expect(place({ pinned: true, settled: true, fresh: true })).toBe("settled");
   });
 
+  test("a settled thread stays settled while a thread it messaged works", () => {
+    // Waiting on a thread it handed work to is drawn with the working ones…
+    expect(place({ waiting: true })).toBe("threads");
+    expect(place({ waiting: true, layout: "shelf" })).toBe("working");
+    expect(place({ waiting: true, aged: true })).toBe("threads");
+    // …but once settled, only its own turn or a request brings it back.
+    expect(place({ settled: true, waiting: true })).toBe("settled");
+    expect(place({ settled: true, waiting: true, layout: "shelf" })).toBe("settled");
+    expect(place({ settled: true, waiting: true, working: true })).toBe("threads");
+  });
+
   test("a thread untouched for days is Settled, a freshly finished one is not", () => {
     expect(place({ aged: true })).toBe("settled");
     expect(place({ aged: true, fresh: true })).toBe("threads");

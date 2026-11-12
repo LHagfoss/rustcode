@@ -350,7 +350,13 @@ export interface Placement {
   snoozed: boolean;
   /** A permission or question waits on the user. */
   needs: boolean;
+  /** A turn of its own runs. */
   working: boolean;
+  /**
+   * It waits on work it handed out (a thread it messaged or started). Drawn with the working ones,
+   * but never enough to pull a settled thread out of Settled: settling is the user's word.
+   */
+  waiting?: boolean;
   /** Just finished, not seen yet. */
   fresh: boolean;
   /** The layout the list is drawn in: the default leads with the threads that work. */
@@ -406,14 +412,16 @@ export function placeThread(p: Placement): SectionId {
   const busy = p.needs || p.working;
   // Settling is the user's (or the engine's) word that the thread is done: the turn it was settled
   // in the middle of ends as "just finished", and that must not hold it in Threads (issue 3529).
-  // Only work that is still going, or a request that waits, keeps a settled thread out of Settled.
+  // Only its own turn, or a request that waits, keeps a settled thread out of Settled: a thread it
+  // messaged that is still working does not, or a settled thread would come back each time the
+  // user works in the thread it once messaged.
   if (p.settled && !busy) return "settled";
   if (p.pinned) return "pinned";
   // Asleep: nothing it does moves it out of the shelf the user put it in.
   if (p.snoozed) return "snoozed";
   if (p.needs) return "threads";
-  if (p.working) return p.layout === "shelf" ? "working" : "threads";
-  if (p.aged && !busy && !p.fresh) return "settled";
+  if (p.working || p.waiting) return p.layout === "shelf" ? "working" : "threads";
+  if (p.aged && !busy && !p.waiting && !p.fresh) return "settled";
   return "threads";
 }
 

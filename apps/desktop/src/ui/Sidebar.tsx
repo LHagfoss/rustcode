@@ -744,7 +744,9 @@ const ThreadRow = memo(function ThreadRow({
   const chip = rowStatus({
     request,
     running,
-    waiting: wait && { label: waitingLabel(wait), title: waitingTitle(wait) },
+    // A settled thread is done by the user's word: what it handed out may still run, but the row
+    // does not say it waits (it would read as work the user has to come back to).
+    waiting: status !== "done" && wait ? { label: waitingLabel(wait), title: waitingTitle(wait) } : undefined,
     failed,
     fresh,
     review: status === "review",
@@ -1697,7 +1699,8 @@ export function Sidebar() {
           aged: status !== "review" && idleSettled(s.updatedAt, now),
           snoozed: !!snoozed[s.id],
           needs: flagged.has(`${s.id}:n`),
-          working: works(s.id),
+          working: flagged.has(`${s.id}:w`),
+          waiting: works(s.id),
           fresh: isFresh(s.id),
           layout: layoutMode,
         })
