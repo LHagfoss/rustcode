@@ -891,11 +891,11 @@ composer's keys stay outside the table.
   comes back when its snooze ends, or when you write in it, with the state it
   reached then and one notification at most (`snoozed` in the store;
   `state/store.ts` `wakeSnoozed`, `state/sidebarRows.ts` `placeThread`). Every
-  thread row is the same 68px grid of three lines and two columns
+  thread row is the same 68px grid of three lines, each a left and a right part
   (`docs/design.md` › Sidebar rows): the title and its state or age, then the
   project and the computer it runs on with the diff and pull request, then the
-  branch (or what the thread asks of you) with the stack of delegates or the
-  harness mark. A turn that ended while you looked elsewhere keeps its row at
+  branch (or what the thread asks of you) with the model and harness mark or
+  the stack of delegates. Renaming edits the title in place, at the row's height. A turn that ended while you looked elsewhere keeps its row at
   full strength until you open the thread (`finished`/`failed` in the store;
   *Mark Unread* in the menu brings it back). Hovering swaps the state for Pin,
   Settle (or Unsettle) and the menu, in the same place, on a 24px target each.

@@ -6,13 +6,13 @@ import { appPlatform, fileManagerName, primaryModifier, trashName } from "../lib
 // folding on its own header. Threads are searched from ⌘K, which also holds the
 // buttons that used to sit here (new thread, add project, settings, pull
 // requests, usage). A section header never folds.
-// Every thread row is one fixed grid, 3 lines by 2 columns, so each row is the
-// same height and each thing has one place (`ROW_GRID`). The left column (3/4)
-// holds the title, then the project and computer, then the branch or what the
-// thread asks; the right one (1/4) holds the state (`Needs you`, `Working 2m`,
+// Every thread row is one fixed grid of 3 lines, each a left and a right part, so
+// each row is the same height and each thing has one place (`ROW_GRID`). The left
+// parts hold the title, then the project and computer, then the branch or what the
+// thread asks; the right ones hold the state (`Needs you`, `Working 2m`,
 // `Waiting`, `Failed`, `Done`, `Review`, the time it wakes, or its age —
 // state/sidebarRows.ts `rowStatus`), then the diff and pull request, then the
-// agent stack or harness mark. Hovering swaps the state for the row's actions.
+// model and harness mark, or the agent stack. Hovering swaps the state for the row's actions.
 
 import {
   Check,
@@ -574,19 +574,20 @@ const SWAPPED_ON_HOVER = cx(
 );
 
 /**
- * A thread row's grid: three lines by two columns, at one height whatever the row holds, so a
- * column of rows reads as a table. The right column is one fixed width (about a quarter of the
- * default sidebar, and room for the three 24px hover actions), so the title takes the rest and
- * every row's right edge lines up.
+ * A thread row's grid: three lines at one height whatever the row holds, so a column of rows reads
+ * as a table. Each line is a left part that truncates and a right part against the row's edge that
+ * takes what it needs (a running turn's "Working 12:07", the model), so the right side is never
+ * cut and one line's right part never narrows another line's left one.
  */
 const ROW_HEIGHT = 68;
-const ROW_GRID =
-  "grid h-[68px] grid-cols-[minmax(0,1fr)_76px] grid-rows-[20px_16px_16px] content-center gap-x-2 gap-y-0.5 rounded-xl px-2";
-/** A cell of the left column: one line, truncated. */
-const ROW_LEFT = "relative flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap";
-/** A cell of the right column: one line, against the row's right edge. */
+const ROW_GRID = "grid h-[68px] grid-rows-[20px_16px_16px] content-center gap-y-0.5 rounded-xl px-2";
+/** One line of the row: its left part and its right part. */
+const ROW_LINE = "flex min-w-0 items-center gap-2";
+/** A line's left part: truncated. */
+const ROW_LEFT = "relative flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden whitespace-nowrap";
+/** A line's right part: against the row's right edge. */
 const ROW_RIGHT =
-  "relative flex min-w-0 items-center justify-end gap-1 overflow-hidden whitespace-nowrap tabular";
+  "relative flex flex-none items-center justify-end gap-1 overflow-hidden whitespace-nowrap tabular";
 
 /** What a thread's calls changed, small enough for the row's second line or its trailing slot. */
 function DiffStat({ diff }: { diff: { added: number; removed: number } }) {
@@ -758,6 +759,7 @@ const ThreadRow = memo(function ThreadRow({
   const project = projectName(worktree?.repo || session.cwd || "");
   // What the row cannot spell out, on its hover card (ui/ThreadHoverCard.tsx).
   const harnessName = harness?.name ?? (external ? session.harness : undefined);
+  const model = modelName(session.model);
   const startRename = () => {
     // A machine's thread is renamed on that machine (`thread_rename` is the shell's): the row
     // says so instead of opening an editor whose save would only be refused (store.ts).
@@ -773,26 +775,26 @@ const ThreadRow = memo(function ThreadRow({
     setRenaming(false);
     if (title.trim() && title.trim() !== session.title) void renameThread(session.id, title);
   };
-  if (renaming) {
-    return (
-      <div className="rounded-md bg-fill px-1.5 py-[5px]">
-        <input
-          autoFocus
-          value={title}
-          onFocus={(e) => e.currentTarget.select()}
-          onChange={(e) => setTitle(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") commit();
-            if (e.key === "Escape") setRenaming(false);
-          }}
-          aria-label="Thread title"
-          {...noTextHelpers}
-          className="w-full rounded-sm bg-surface-2 px-1.5 py-0.5 text-body shadow-1"
-        />
-      </div>
-    );
-  }
+  // Renaming edits the title in place, over the row's first line: the row keeps its height and
+  // its other lines, so the list does not jump while you type.
+  const renameBox = renaming && (
+    <div className="absolute inset-x-1 top-[5px] z-10">
+      <input
+        autoFocus
+        value={title}
+        onFocus={(e) => e.currentTarget.select()}
+        onChange={(e) => setTitle(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          if (e.key === "Escape") setRenaming(false);
+        }}
+        aria-label="Thread title"
+        {...noTextHelpers}
+        className="h-6 w-full rounded-md bg-surface-2 px-1.5 text-body shadow-1"
+      />
+    </div>
+  );
   const done = status === "done";
   // A fork or a side chat says so with a small glyph, whether it is nested or a row of its own.
   const branch = session.parent ? branchKindOf(session.parent) : undefined;
@@ -864,11 +866,11 @@ const ThreadRow = memo(function ThreadRow({
             project={project}
             machine={machine}
             harness={harnessName}
-            model={modelName(session.model)}
+            model={model}
             status={chip?.label ?? (done ? "Settled" : "Idle")}
             now={now}
             items={items}
-            disabled={dragging}
+            disabled={dragging || renaming}
           >
             <button
               type="button"
@@ -903,84 +905,113 @@ const ThreadRow = memo(function ThreadRow({
             >
               <RowFill selected={lit} picked={picked} radius="rounded-xl" />
               {/* Line 1: the title, and what the thread is doing (the hover actions take its place). */}
-              <span className={ROW_LEFT}>
-                {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
-                {branch && (
-                  <span
-                    title={branch === "fork" ? "A fork" : "A side chat"}
-                    className="shrink-0 text-fg-faint"
-                  >
-                    {branch === "fork" ? <GitFork size={11} /> : <MessageSquareQuote size={11} />}
+              <span className={ROW_LINE}>
+                <span className={ROW_LEFT}>
+                  {pinned && <Pin size={11} className="shrink-0 rotate-45 text-fg-faint" />}
+                  {branch && (
+                    <span
+                      title={branch === "fork" ? "A fork" : "A side chat"}
+                      className="shrink-0 text-fg-faint"
+                    >
+                      {branch === "fork" ? <GitFork size={11} /> : <MessageSquareQuote size={11} />}
+                    </span>
+                  )}
+                  <LinkBadge threadId={session.id} />
+                  <span className={cx(titleTint, renaming && "invisible")}>
+                    {session.title || "New thread"}
                   </span>
-                )}
-                <LinkBadge threadId={session.id} />
-                <span className={titleTint}>{session.title || "New thread"}</span>
-              </span>
-              <span title={chip?.title} className={cx(ROW_RIGHT, "text-sub text-fg-muted", SWAPPED_ON_HOVER)}>
-                <span className="flex min-w-0 items-center justify-end">{state}</span>
+                </span>
+                <span
+                  title={chip?.title}
+                  className={cx(ROW_RIGHT, "min-w-[76px] text-sub text-fg-muted", SWAPPED_ON_HOVER)}
+                >
+                  <span className="flex min-w-0 items-center justify-end">{state}</span>
+                </span>
               </span>
               {/* Line 2: where it runs — the project (under its heading, the harness) and the computer. */}
-              <span className={cx(ROW_LEFT, "text-sub text-fg-muted")}>
-                {grouped ? (
-                  external && (
-                    <HarnessIcon id={session.harness!} name={harness?.name} size={12} className="shrink-0" />
-                  )
-                ) : (
-                  <ProjectMark name={project} size={12} className={markTint} />
-                )}
-                <span className="min-w-0 max-w-[65%] shrink-0 truncate">
-                  {grouped ? (harnessName ?? "") : project}
-                </span>
-                {place && (
-                  <span
-                    className="flex min-w-0 shrink items-center gap-1 text-fg-faint"
-                    title={`Runs on ${place.name}`}
-                  >
-                    <span aria-hidden>·</span>
-                    <DeviceGlyphIcon glyph={place.glyph} tint={place.tint} size={11} />
-                    <span className="min-w-0 truncate">{place.name}</span>
+              <span className={ROW_LINE}>
+                <span className={cx(ROW_LEFT, "text-sub text-fg-muted")}>
+                  {grouped ? (
+                    external && (
+                      <HarnessIcon
+                        id={session.harness!}
+                        name={harness?.name}
+                        size={12}
+                        className="shrink-0"
+                      />
+                    )
+                  ) : (
+                    <ProjectMark name={project} size={14} className={markTint} />
+                  )}
+                  <span className="min-w-0 max-w-[60%] shrink-0 truncate">
+                    {grouped ? (harnessName ?? "") : project}
                   </span>
-                )}
-              </span>
-              <span className={cx(ROW_RIGHT, "gap-1.5")}>
-                {diff && <DiffStat diff={diff} />}
-                {pull && <PullMark pull={pull} />}
+                  {place && (
+                    <span
+                      className="flex min-w-0 shrink items-center gap-1 text-fg-faint"
+                      title={`Runs on ${place.name}`}
+                    >
+                      <span aria-hidden>·</span>
+                      <DeviceGlyphIcon glyph={place.glyph} tint={place.tint} size={11} />
+                      <span className="min-w-0 truncate">{place.name}</span>
+                    </span>
+                  )}
+                </span>
+                <span className={cx(ROW_RIGHT, "gap-1.5")}>
+                  {diff && <DiffStat diff={diff} />}
+                  {pull && <PullMark pull={pull} />}
+                </span>
               </span>
               {/* Line 3: the branch, or what the thread asks for in its place. */}
-              <span
-                className={cx(
-                  ROW_LEFT,
-                  "gap-1 text-sub",
-                  ask ? (request ? "text-warning" : "text-fg-muted") : "text-fg-muted",
-                )}
-              >
-                {ask ? (
-                  <span className="min-w-0 truncate" title={ask}>
-                    {ask}
-                  </span>
-                ) : (
-                  gitBranch && (
+              <span className={ROW_LINE}>
+                <span
+                  className={cx(
+                    ROW_LEFT,
+                    "gap-1 text-sub",
+                    ask ? (request ? "text-warning" : "text-fg-muted") : "text-fg-muted",
+                  )}
+                >
+                  {ask ? (
+                    <span className="min-w-0 truncate" title={ask}>
+                      {ask}
+                    </span>
+                  ) : (
+                    gitBranch && (
+                      <>
+                        <GitBranch size={11} className="shrink-0" />
+                        <span className="min-w-0 truncate" title={gitBranch}>
+                          {gitBranch}
+                        </span>
+                      </>
+                    )
+                  )}
+                </span>
+                {/* The model the thread runs, and its harness unless the section heading names it. */}
+                <span className={cx(ROW_RIGHT, "text-sub text-fg-faint")}>
+                  {stack?.length ? (
+                    <AgentStack agents={stack} />
+                  ) : (
                     <>
-                      <GitBranch size={10} className="shrink-0" />
-                      <span className="min-w-0 truncate font-mono text-[10px]" title={gitBranch}>
-                        {gitBranch}
-                      </span>
+                      {model && (
+                        <span className="min-w-0 max-w-[96px] truncate" title={model}>
+                          {model}
+                        </span>
+                      )}
+                      {!grouped && external && (
+                        <HarnessIcon
+                          id={session.harness!}
+                          name={harness?.name}
+                          size={12}
+                          className="shrink-0"
+                        />
+                      )}
                     </>
-                  )
-                )}
-              </span>
-              <span className={ROW_RIGHT}>
-                {stack?.length ? (
-                  <AgentStack agents={stack} />
-                ) : (
-                  !grouped &&
-                  external && (
-                    <HarnessIcon id={session.harness!} name={harness?.name} size={12} className="shrink-0" />
-                  )
-                )}
+                  )}
+                </span>
               </span>
             </button>
           </ThreadHoverCard>
+          {renameBox}
           <div
             data-row-actions
             // Hidden while the row is dragged: the actions sit beside the row, not on it.
@@ -988,6 +1019,7 @@ const ThreadRow = memo(function ThreadRow({
               "invisible absolute right-2 flex items-center opacity-0 transition-[opacity,visibility] duration-150 ease-snappy",
               "top-1.5",
               !dragging &&
+                !renaming &&
                 "group-hover:visible group-hover:opacity-100 group-has-[:focus-visible]:visible group-has-[:focus-visible]:opacity-100 group-has-[[data-state=open]]:visible group-has-[[data-state=open]]:opacity-100",
             )}
           >
@@ -1078,28 +1110,29 @@ const PendingRow = memo(function PendingRow({
       >
         <RowFill selected={selected} radius="rounded-xl" />
         {/* The thread row's grid, so a thread being set up is the height and shape it will have. */}
-        <span className={ROW_LEFT}>
-          <span className="min-w-0 flex-1 truncate text-body font-medium text-fg">{pending.title}</span>
-        </span>
-        {/* Dismiss sits over the slot's end when the setup failed, so the words keep its room. */}
-        <span className={cx(ROW_RIGHT, "text-sub text-fg-muted", failure && "pr-6")}>
-          {failure ? (
-            <>
-              <CircleAlert size={11} className="text-danger" />
-              <span className="font-medium text-danger">Failed</span>
-            </>
-          ) : (
-            <>
-              <Spinner size={9} />
-              <Elapsed since={pending.startedAt} />
-            </>
-          )}
+        <span className={ROW_LINE}>
+          <span className={ROW_LEFT}>
+            <span className="min-w-0 flex-1 truncate text-body font-medium text-fg">{pending.title}</span>
+          </span>
+          {/* Dismiss sits over the slot's end when the setup failed, so the words keep its room. */}
+          <span className={cx(ROW_RIGHT, "text-sub text-fg-muted", failure && "pr-6")}>
+            {failure ? (
+              <>
+                <CircleAlert size={11} className="text-danger" />
+                <span className="font-medium text-danger">Failed</span>
+              </>
+            ) : (
+              <>
+                <Spinner size={9} />
+                <Elapsed since={pending.startedAt} />
+              </>
+            )}
+          </span>
         </span>
         <span className={cx(ROW_LEFT, "text-sub text-fg-muted")}>
-          <ProjectMark name={project} size={12} className="opacity-60 group-hover:opacity-100" />
+          <ProjectMark name={project} size={14} className="opacity-60 group-hover:opacity-100" />
           <span className="min-w-0 truncate">{project}</span>
         </span>
-        <span />
         <span className={cx(ROW_LEFT, "gap-1 text-sub text-fg-muted")}>
           {failure ? (
             <span className="min-w-0 truncate text-danger" title={failure.text}>
@@ -1110,14 +1143,13 @@ const PendingRow = memo(function PendingRow({
               <span className="shrink-0 text-accent">{pending.worktree ? "Setting up" : "Starting"}</span>
               {branch && (
                 <>
-                  <GitBranch size={10} className="ml-1 shrink-0" />
-                  <span className="min-w-0 truncate font-mono text-[10px]">{branch}</span>
+                  <GitBranch size={11} className="ml-1 shrink-0" />
+                  <span className="min-w-0 truncate">{branch}</span>
                 </>
               )}
             </>
           )}
         </span>
-        <span />
       </button>
       <div className="absolute top-1.5 right-2 flex items-center">
         {failure && (
@@ -1169,12 +1201,19 @@ interface Section {
 function Fold({ open, children }: { open: boolean; children: React.ReactNode }) {
   const [mounted, setMounted] = useState(open);
   const [shown, setShown] = useState(open);
+  // Open and done unfolding.
+  const [still, setStill] = useState(open);
   useEffect(() => {
     if (open) {
       setMounted(true);
       const frame = requestAnimationFrame(() => setShown(true));
-      return () => cancelAnimationFrame(frame);
+      const t = setTimeout(() => setStill(true), 220);
+      return () => {
+        cancelAnimationFrame(frame);
+        clearTimeout(t);
+      };
     }
+    setStill(false);
     setShown(false);
     const t = setTimeout(() => setMounted(false), 200);
     return () => clearTimeout(t);
@@ -1185,7 +1224,8 @@ function Fold({ open, children }: { open: boolean; children: React.ReactNode }) 
       className="grid transition-[grid-template-rows,opacity] duration-200 ease-snappy"
       style={{ gridTemplateRows: shown ? "1fr" : "0fr", opacity: shown ? 1 : 0 }}
     >
-      <div className="min-h-0 overflow-hidden">{children}</div>
+      {/* Clipped only while it folds: an open section lets a dragged row travel past its last row. */}
+      <div className={cx("min-h-0", !still && "overflow-hidden")}>{children}</div>
     </div>
   );
 }
