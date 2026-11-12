@@ -63,7 +63,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import type { PullRequest, SubagentInfo } from "../acp/rustcode";
-import { modelName, projectName, type SessionSummary } from "../acp/types";
+import { displayPath, modelName, projectName, type SessionSummary } from "../acp/types";
 import type { ThreadStatus } from "../acp/v2";
 import { formatBinding, listCommandFor } from "../lib/keys";
 import { openTerminalAt, openThreadLog, revealPath } from "../lib/native";
@@ -762,6 +762,8 @@ const ThreadRow = memo(function ThreadRow({
   // What the row cannot spell out, on its hover card (ui/ThreadHoverCard.tsx).
   const harnessName = harness?.name ?? (external ? session.harness : undefined);
   const model = modelName(session.model);
+  // The folder it runs in, as people read it (`~/code/app`, `C:\code\app`).
+  const folder = session.cwd ? displayPath(session.cwd) : undefined;
   const startRename = () => {
     // A machine's thread is renamed on that machine (`thread_rename` is the shell's): the row
     // says so instead of opening an editor whose save would only be refused (store.ts).
@@ -977,12 +979,20 @@ const ThreadRow = memo(function ThreadRow({
                     <span className="min-w-0 truncate" title={ask}>
                       {ask}
                     </span>
+                  ) : gitBranch ? (
+                    <>
+                      <GitBranch size={11} className="shrink-0" />
+                      <span className="min-w-0 truncate" title={gitBranch}>
+                        {gitBranch}
+                      </span>
+                    </>
                   ) : (
-                    gitBranch && (
+                    // A folder outside git has no branch: the line names the folder instead.
+                    folder && (
                       <>
-                        <GitBranch size={11} className="shrink-0" />
-                        <span className="min-w-0 truncate" title={gitBranch}>
-                          {gitBranch}
+                        <Folder size={11} className="shrink-0" />
+                        <span className="min-w-0 truncate" title={folder}>
+                          {folder}
                         </span>
                       </>
                     )
