@@ -71,8 +71,6 @@ export interface Machine {
   platform: string;
   /** The RustCode version it reported when it last answered, or null. */
   version: string | null;
-  /** The main machine is listed first and is the default **Run on**. */
-  main: boolean;
   /** New threads are not started here from this app; its connection stays. */
   paused?: boolean;
   routes: MachineRoute[];
@@ -1464,16 +1462,6 @@ export async function probeMachineRoutes(machine?: Pick<Machine, "id">): Promise
     useMachines.setState({ probing: false });
     toast(`Could not test the routes: ${errorText(error)}`, "error");
     return false;
-  }
-}
-
-/** Make this machine the main one: listed first, the default **Run on**. */
-export async function setMainMachine(machine: Machine): Promise<void> {
-  try {
-    await shellCall("machines_set_main", { id: machine.id });
-    await refreshMachines();
-  } catch (error) {
-    toast(errorText(error), "error");
   }
 }
 

@@ -32,7 +32,6 @@ import {
   setMachineDisplayName,
   setMachineIcon,
   setMachinePaused,
-  setMainMachine,
   useMachines,
 } from "../state/machines";
 import { SERVER_SETTINGS } from "../state/settingsRegistry";
@@ -108,7 +107,6 @@ function MachineSettings({ machine }: { machine: Machine }) {
               <div className="pt-0.5 text-callout text-fg-muted">
                 {devicePlatform(machine.platform)}
                 {machine.version && <span className="tabular"> · RustCode {machine.version}</span>}
-                {machine.main && " · Main machine"}
                 {machine.paused && " · Paused for new threads"}
               </div>
               <div className="pt-0.5 text-callout text-fg-muted" title={deviceRoute(machine)}>
@@ -150,16 +148,6 @@ function MachineSettings({ machine }: { machine: Machine }) {
       </Group>
 
       <Group title="Controls">
-        <Row
-          title="Make default for new threads"
-          subtitle={`A new thread starts here unless Run on names another computer. ${machine.main ? "This machine is the default." : "This computer is the default now."}`}
-        >
-          <Switch
-            label={`Make ${name} the default for new threads`}
-            checked={machine.main}
-            onChange={(next) => next && void setMainMachine(machine)}
-          />
-        </Row>
         <Row
           title="Pause new threads here"
           subtitle="The connection and the threads already on it stay as they are; Run on refuses this machine until it is resumed."

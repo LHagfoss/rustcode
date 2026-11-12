@@ -229,7 +229,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     section: "machines",
     title: "Machines",
     keywords:
-      "this computer this mac this pc local server runs here install background service main machine route lan netbird tailscale vpn unencrypted encrypted connected offline retrying pairing expired revoked last seen threads remove forget pair again version update",
+      "this computer this mac this pc local server runs here install background service route lan netbird tailscale vpn unencrypted encrypted connected offline retrying pairing expired revoked last seen threads remove forget pair again version update",
   },
   {
     section: "machines",

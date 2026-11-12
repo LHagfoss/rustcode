@@ -5081,7 +5081,6 @@ function mockMachine(
     paused: false,
     platform: MOCK_MACHINE.platform,
     version: extra.version ?? "1.28.0",
-    main: false,
     routes,
     route,
     state,
@@ -5130,7 +5129,6 @@ function mockStudio(state: "connected" | "offline", addedAt: number): JsonObject
     paused: false,
     platform: MOCK_STUDIO.platform,
     version: MOCK_STUDIO.version,
-    main: false,
     routes: [{ kind: "lan", address: MOCK_STUDIO.route, encrypted: false }],
     route: { kind: "lan", address: MOCK_STUDIO.route, encrypted: false },
     state,
@@ -5152,7 +5150,6 @@ function mockWindows(state: "connected" | "offline", addedAt: number): JsonObjec
     paused: false,
     platform: MOCK_WINDOWS.platform,
     version: MOCK_WINDOWS.version,
-    main: false,
     routes: [{ kind: "lan", address: MOCK_WINDOWS.route, encrypted: false }],
     route: { kind: "lan", address: MOCK_WINDOWS.route, encrypted: false },
     state,
@@ -5904,13 +5901,6 @@ export class MockTransport implements Transport {
       return mockServerService(true);
     }
     if (command === "server_link_path") return mockServerService(this.serverInstalled);
-    if (command === "machines_set_main") {
-      this.machineList = this.machineList.map((machine) => ({
-        ...machine,
-        main: machine.id === String(args.id),
-      }));
-      return null;
-    }
     if (command === "machines_set_paused") {
       this.machineList = this.machineList.map((machine) =>
         machine.id === String(args.id) ? { ...machine, paused: args.paused === true } : machine,

@@ -29,7 +29,6 @@ function machine(id: string, name: string, state: Machine["state"] = "connected"
     id,
     name,
     platform: "linux",
-    main: false,
     routes: [{ kind: "lan", address: "192.168.1.31:17879", encrypted: false }],
     route: { kind: "lan", address: "192.168.1.31:17879", encrypted: false },
     state,

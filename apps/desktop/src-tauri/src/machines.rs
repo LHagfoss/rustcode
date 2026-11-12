@@ -131,7 +131,6 @@ pub struct MachineView {
     /// `macos`, `windows`, `linux`, or `unknown` for a machine that does not
     /// report one yet.
     platform: String,
-    main: bool,
     /// The RustCode version it reported when it last answered, or none from a
     /// machine that has not said. The row compares it with this app's version.
     version: Option<String>,
@@ -305,7 +304,7 @@ impl Machines {
         Connector::new(config_dir, ClientKind::Desktop).map_err(chain)
     }
 
-    /// The saved machines, main first, each with its live state.
+    /// The saved machines, oldest first, each with its live state.
     fn list(&self) -> Result<Vec<MachineView>, String> {
         let config_dir = config_dir()?;
         let registry = MachineRegistry::load(&config_dir).map_err(chain)?;
@@ -364,7 +363,6 @@ fn view(machine: &Machine, live: Option<&Live>) -> MachineView {
         icon: machine.icon.clone(),
         icon_tint: machine.icon_tint.clone(),
         platform: machine.platform.clone(),
-        main: machine.main,
         version: machine.version.clone(),
         routes: machine
             .routes
@@ -1289,14 +1287,6 @@ pub async fn machines_probe(
     machines.list()
 }
 
-/// Make `id` the main machine: listed first, and the default **Run on**.
-#[tauri::command(async)]
-pub fn machines_set_main(id: String) -> Result<(), String> {
-    let config_dir = config_dir()?;
-    let mut registry = MachineRegistry::load(&config_dir).map_err(chain)?;
-    registry.set_main(&id).map_err(chain)
-}
-
 /// Connect to one machine and relay its ACP to this page.
 #[tauri::command(async)]
 pub fn machine_connect(
@@ -1411,7 +1401,6 @@ mod tests {
     fn a_machine_view_is_what_the_page_reads() {
         let mut saved = machine();
         saved.platform = "unknown".into();
-        saved.main = true;
         let live = Live {
             state: MachineState::Offline,
             detail: Some("Not connected. Retrying in 4 s.".into()),
@@ -1425,10 +1414,7 @@ mod tests {
         assert_eq!(json["state"], "offline");
         assert_eq!(json["retryInSecs"], 4);
         assert_eq!(json["detail"], "Not connected. Retrying in 4 s.");
-        assert_eq!(
-            json["main"], true,
-            "the first machine saved is the main one"
-        );
+        assert!(json.get("main").is_none(), "every machine is a peer");
         assert_eq!(json["routes"][0]["kind"], "lan");
         assert_eq!(json["routes"][0]["address"], "192.168.1.20:17879");
         assert_eq!(json["routes"][0]["encrypted"], false);
