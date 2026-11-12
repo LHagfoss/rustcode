@@ -481,7 +481,7 @@ function EffortPanel({
               role="radiogroup"
               aria-label="Account"
               data-menu-group=""
-              className="mb-1 grid grid-cols-[repeat(auto-fit,minmax(88px,1fr))] gap-0.5 rounded-2xl bg-fill p-0.5"
+              className="mb-1 grid grid-cols-2 gap-0.5 rounded-2xl bg-fill p-0.5"
             >
               {accounts.map((chip, index) => {
                 const pressable = chipPressable(chip, accountsDisabled);
@@ -507,6 +507,8 @@ function EffortPanel({
                         !pressable && !chip.selected && "opacity-40",
                         chip.signedOut && "text-fg-faint",
                         chip.gone && "italic",
+                        // An odd one out takes the last row whole instead of sitting in half of it.
+                        index === accounts.length - 1 && index % 2 === 0 && "col-span-2",
                       )}
                     >
                       <UserRound size={12} strokeWidth={1.75} className="shrink-0" />

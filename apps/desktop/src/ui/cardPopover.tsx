@@ -28,6 +28,7 @@ import {
   useState,
 } from "react";
 import { cx, menuItem, surfaceCollisionPadding, Tooltip } from "./primitives";
+import { TITLEBAR_HEIGHT } from "./Titlebar";
 
 /** Anything floating-ui can position against: here, the control that opens a panel. */
 interface Measurable {
@@ -37,9 +38,6 @@ interface Measurable {
 /** The gap between a control and its panel, and between the card and what hangs off it
  * (docs/design.md › Composer). */
 const CARD_GAP = 8;
-
-/** The title row along the window's top: a panel's ceiling sits under it, never behind it. */
-const TITLE_ROW = 40;
 
 /** The room under the composer's strip a menu needs before it opens downward instead of up. */
 const FOOTER_ROOM = 280;
@@ -197,7 +195,7 @@ export function CardPopover({
           align={align ?? aligned}
           sideOffset={CARD_GAP}
           collisionPadding={{
-            top: TITLE_ROW + surfaceCollisionPadding,
+            top: TITLEBAR_HEIGHT + surfaceCollisionPadding,
             right: surfaceCollisionPadding,
             bottom: surfaceCollisionPadding,
             left: surfaceCollisionPadding,
