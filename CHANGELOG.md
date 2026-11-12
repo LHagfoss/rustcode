@@ -1,3 +1,11 @@
+## [v1.31.2](https://github.com/LHagfoss/rustcode/releases/tag/v1.31.2) - 2026-11-12
+
+### Fixes
+- The sidebar shows a thread's harness icon to the left of its model. (#3570)
+- Sidebar rows show a thread's state as an icon, so titles get more room. (#3571)
+- Sidebar rows leave the `feat/` or `fix/` prefix off a branch name, so more of it fits. (#3572)
+- Smart UI views respond instantly to hover, tabs and folds, keep sources in a folded list inside the view, and links in a view open in the browser. (#3573)
+- `rustcode data query` and `query_data` see a thread's harness messages within a second instead of after 128 more arrive. (#3574)
 ## [v1.31.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.31.1) - 2026-11-12
 
 ### Fixes
