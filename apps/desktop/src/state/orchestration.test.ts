@@ -388,7 +388,7 @@ describe("orchestration rules", () => {
     // The engine strips `account` below 5, `attachments` below 10, `machine` below 12,
     // `steer` below 14 and `standalone` below 15, and refuses a call that carries one:
     // the app speaks the newest, so it is offered all five.
-    expect(CAPABILITY_VERSION).toBe(15);
+    expect(CAPABILITY_VERSION).toBe(16);
   });
 
   test("a machine is read from any call that takes one, and absent when it is not named", () => {

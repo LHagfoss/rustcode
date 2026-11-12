@@ -86,7 +86,7 @@ pub(crate) async fn answer_json(
         super::LIST_SESSIONS => list_sessions(session_id, args),
         super::READ_SESSION => read_session(session_id, args),
         super::LIST_HARNESSES => list_harnesses(args).await,
-        super::LIST_MACHINES => list_machines(args),
+        super::LIST_MACHINES => list_machines(args).await,
         super::THREAD_STATUS => thread_status(session_id, args),
         super::WAIT_SESSION => wait_session(session_id, cancel, args).await,
         super::START_SESSION => super::local_threads::start(session_id, args).await,
@@ -576,8 +576,6 @@ struct SavedMachine {
     last_connected_at: Option<String>,
     #[serde(default)]
     routes: Vec<SavedRoute>,
-    #[serde(default)]
-    probes: Vec<SavedProbe>,
 }
 
 /// One saved route; its kind is `lan`, `vpn`, `tailscale` or `public`.
@@ -589,29 +587,8 @@ struct SavedRoute {
     address: String,
 }
 
-/// What the last test of one route found, as the app saved it.
-#[derive(Debug, Default, serde::Deserialize)]
-struct SavedProbe {
-    #[serde(default)]
-    address: String,
-    #[serde(default)]
-    outcome: String,
-    #[serde(default)]
-    latency_ms: Option<u64>,
-    #[serde(default)]
-    at: Option<String>,
-}
-
 /// The gateway's port, which an address without one means.
 const GATEWAY_PORT: u16 = 17879;
-
-/// Whether two spellings name one endpoint: `studio.local:17879` and
-/// `studio.local`, `[fd00::1]:17879` and `fd00::1`. The engine does not link
-/// the client, so this is `rustcode-client`'s `registry::same_address`, which
-/// matches probes to routes in the app.
-fn same_address(left: &str, right: &str) -> bool {
-    left.eq_ignore_ascii_case(right) || endpoint(left) == endpoint(right)
-}
 
 /// An address's lowercase host and port, with the scheme and path dropped.
 fn endpoint(address: &str) -> (String, u16) {
@@ -638,26 +615,52 @@ fn endpoint(address: &str) -> (String, u16) {
     (host.to_ascii_lowercase(), port)
 }
 
+/// How long one route's TCP test may take without the app (B13): a route on
+/// the same network answers in milliseconds, and every route is tested at once.
+const ROUTE_PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
+
+/// Test one route the way the app's probe does, without a token: whether its
+/// gateway port takes a TCP connection. `reachable`, `refused` or `timeout`,
+/// with the latency of a reachable one.
+async fn probe_route(address: &str) -> (&'static str, Option<u64>) {
+    let (host, port) = endpoint(address);
+    let started = std::time::Instant::now();
+    match tokio::time::timeout(
+        ROUTE_PROBE_TIMEOUT,
+        tokio::net::TcpStream::connect((host.as_str(), port)),
+    )
+    .await
+    {
+        Ok(Ok(_)) => (
+            "reachable",
+            Some(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)),
+        ),
+        Ok(Err(_)) => ("refused", None),
+        Err(_) => ("timeout", None),
+    }
+}
+
 impl SavedMachine {
-    /// Each route with the last test of it, or `null` for one never tested.
-    fn route_rows(&self) -> Vec<Value> {
-        self.routes
+    /// Each route with a test of it now, and whether any of them answered.
+    async fn probed_routes(&self) -> (Vec<Value>, bool) {
+        let tested_at = chrono::Utc::now().to_rfc3339();
+        let probes =
+            futures_util::future::join_all(self.routes.iter().map(|r| probe_route(&r.address)))
+                .await;
+        let reachable = probes.iter().any(|(result, _)| *result == "reachable");
+        let rows = self
+            .routes
             .iter()
-            .map(|route| {
-                let probe = self
-                    .probes
-                    .iter()
-                    .find(|probe| same_address(&probe.address, &route.address))
-                    .map(|probe| {
-                        let mut row = json!({"result": probe.outcome, "tested_at": probe.at});
-                        if let Some(latency) = probe.latency_ms {
-                            row["latency_ms"] = json!(latency);
-                        }
-                        row
-                    });
+            .zip(probes)
+            .map(|(route, (result, latency))| {
+                let mut probe = json!({"result": result, "tested_at": tested_at});
+                if let Some(latency) = latency {
+                    probe["latency_ms"] = json!(latency);
+                }
                 json!({"kind": route.kind, "address": route.address, "probe": probe})
             })
-            .collect()
+            .collect();
+        (rows, reachable)
     }
 }
 
@@ -672,9 +675,11 @@ fn unknown_platform() -> String {
 }
 
 /// `list_machines`: this computer and every machine paired on disk. The app
-/// owns the live connections, so a saved machine's state is `unknown` here, and
-/// the routes are not tested: each shows the last test the app saved.
-fn list_machines(args: &Value) -> Value {
+/// owns the live connections, so each route is tested here with a TCP connect
+/// (no token is sent): a machine with a route that answers is `reachable`,
+/// else `offline`. Reachable is not connected: pairing is only checked by the
+/// app.
+async fn list_machines(_args: &Value) -> Value {
     let mut machines = vec![json!({
         "id": LOCAL_MACHINE_ID,
         "name": local_name(),
@@ -689,7 +694,11 @@ fn list_machines(args: &Value) -> Value {
         .and_then(|dir| std::fs::read_to_string(dir.join("machines.json")).ok())
         .and_then(|text| serde_json::from_str::<MachineRegistry>(&text).ok())
         .unwrap_or_default();
-    for machine in saved.machines {
+    let probed = futures_util::future::join_all(
+        saved.machines.iter().map(|machine| machine.probed_routes()),
+    )
+    .await;
+    for (machine, (routes, reachable)) in saved.machines.into_iter().zip(probed) {
         let mut row = json!({
             "id": machine.host_id,
             "name": machine.name,
@@ -697,12 +706,18 @@ fn list_machines(args: &Value) -> Value {
             "icon": machine.icon,
             "icon_tint": machine.icon_tint,
             "platform": machine.platform,
-            "state": "unknown",
+            "state": if reachable { "reachable" } else { "offline" },
         });
+        if !reachable {
+            row["reason"] = json!(if routes.is_empty() {
+                "it has no saved route"
+            } else {
+                "no saved route answered a TCP connect"
+            });
+        }
         if machine.paused {
             row["paused"] = json!(true);
         }
-        let routes = machine.route_rows();
         if !routes.is_empty() {
             row["routes"] = json!(routes);
         }
@@ -711,18 +726,12 @@ fn list_machines(args: &Value) -> Value {
         }
         machines.push(row);
     }
-    let mut answer = json!({
+    json!({
         "current": LOCAL_MACHINE_ID,
         "machines": machines,
-        "note": "The RustCode app is not attached, so paired machines come from machines.json and whether each one answers was not checked.",
-    });
-    if args.get("probe").and_then(Value::as_bool) == Some(true) {
-        answer["probed"] = json!(false);
-        answer["note"] = json!(
-            "The RustCode app is not attached, so the routes were not tested: each shows the last test the app saved, or null if it never ran one."
-        );
-    }
-    answer
+        "probed": true,
+        "note": "The RustCode app is not attached: paired machines come from machines.json, and each route was tested now with a TCP connect. reachable means its gateway answers, not that this computer can act there; that needs the app open.",
+    })
 }
 
 /// `thread_status`: where this thread's delegates stand, from the link book and
@@ -1131,27 +1140,35 @@ fn replay(mut answer: Value) -> Value {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_saved_machine_lists_each_route_with_its_last_test() {
+    /// Without the app each route is tested now (B13): a port that takes a
+    /// connection is reachable, a closed one is refused, and the machine is
+    /// reachable when any of its routes is.
+    #[tokio::test]
+    async fn a_saved_machine_tests_each_route_without_the_app() {
+        let open = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let open_port = open.local_addr().unwrap().port();
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let closed_port = closed.local_addr().unwrap().port();
+        drop(closed);
         let saved: SavedMachine = serde_json::from_value(json!({
             "host_id": "gw-a",
             "routes": [
-                {"kind": "lan", "address": "192.168.1.20:17879"},
-                {"kind": "vpn", "address": "100.90.16.237:17879"}
-            ],
-            "probes": [
-                {"address": "192.168.1.20", "outcome": "reachable", "latency_ms": 4, "at": "2026-11-12T10:00:00Z"}
+                {"kind": "lan", "address": format!("127.0.0.1:{open_port}")},
+                {"kind": "vpn", "address": format!("127.0.0.1:{closed_port}")}
             ]
         }))
         .unwrap();
-        let rows = saved.route_rows();
+        let (rows, reachable) = saved.probed_routes().await;
+        assert!(reachable);
         assert_eq!(rows[0]["probe"]["result"], "reachable");
-        assert_eq!(rows[0]["probe"]["latency_ms"], 4);
-        // A probe saved under one spelling of the address still matches the route.
-        assert!(rows[1]["probe"].is_null(), "an untested route says so");
-        assert!(same_address("[fd00::1]:17879", "FD00::1"));
-        assert!(!same_address("studio.local:9000", "studio.local"));
-        assert_eq!(rows[1]["address"], "100.90.16.237:17879");
+        assert!(rows[0]["probe"]["latency_ms"].is_u64());
+        assert_eq!(rows[1]["probe"]["result"], "refused");
+        assert_eq!(rows[1]["address"], format!("127.0.0.1:{closed_port}"));
+        let none: SavedMachine = serde_json::from_value(json!({"host_id": "gw-b"})).unwrap();
+        assert_eq!(none.probed_routes().await, (Vec::new(), false));
+        // An address without a port means the gateway's.
+        assert_eq!(endpoint("[FD00::1]"), ("fd00::1".to_owned(), GATEWAY_PORT));
+        assert_eq!(endpoint("studio.local:9000").1, 9000);
     }
 
     /// A caller thread with Full access, so a read does not need the app's card.
