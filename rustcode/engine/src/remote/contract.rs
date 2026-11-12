@@ -910,6 +910,7 @@ fn golden_messages() -> Vec<RemoteMessage> {
             thought_tokens_estimated: Some(true),
             completed_at: Some("2026-10-09T18:40:32+02:00".to_owned()),
             turn: Some(golden_previous_timing()),
+            origin: None,
         },
         RemoteMessage {
             message_id: "m60".to_owned(),
@@ -923,6 +924,10 @@ fn golden_messages() -> Vec<RemoteMessage> {
             thought_tokens_estimated: None,
             completed_at: None,
             turn: None,
+            origin: Some(RemoteMessageOrigin {
+                kind: "user".to_owned(),
+                threads: Vec::new(),
+            }),
         },
         RemoteMessage {
             message_id: "m61".to_owned(),
@@ -948,9 +953,36 @@ fn golden_messages() -> Vec<RemoteMessage> {
             thought_tokens_estimated: None,
             completed_at: None,
             turn: None,
+            origin: None,
+        },
+        // A wake: the host's message, never one the user typed.
+        RemoteMessage {
+            message_id: "m62".to_owned(),
+            role: "user".to_owned(),
+            content: whole(GOLDEN_WAKE, Some("message:h2:62")),
+            tool: None,
+            timestamp: Some("2026-10-09T18:41:40+02:00".to_owned()),
+            response_time_ms: None,
+            thought_time_ms: None,
+            thought_tokens: None,
+            thought_tokens_estimated: None,
+            completed_at: None,
+            turn: None,
+            origin: Some(RemoteMessageOrigin {
+                kind: "delegate".to_owned(),
+                threads: vec![RemoteOriginThread {
+                    session_id: Some("20261009-184105-c41d".to_owned()),
+                    title: Some("Review the parser tests".to_owned()),
+                    status: Some("done".to_owned()),
+                    link_id: Some("20261009-183000-9f2a/1".to_owned()),
+                }],
+            }),
         },
     ]
 }
+
+/// The text of the golden wake message, as the app writes one.
+const GOLDEN_WAKE: &str = "Delegate finished: Review the parser tests\n\nFinished:\n\n- link_id 20261009-183000-9f2a/1 · done · “Review the parser tests” · Pi · worked 31s · session 20261009-184105-c41d\n  answer: Two tests cover the empty input.\n\n<!-- rustcode:wake -->";
 
 fn golden_timing(outcome: Option<RemoteTurnOutcome>) -> RemoteTurnTiming {
     RemoteTurnTiming {
@@ -1533,6 +1565,10 @@ pub fn golden_frames() -> Vec<(String, RemoteFrame)> {
                 turn_id: Some(TURN.to_owned()),
                 prompt: whole("Run the test suite and fix what fails", None),
                 timing: Some(golden_timing(None)),
+                origin: Some(RemoteMessageOrigin {
+                    kind: "user".to_owned(),
+                    threads: Vec::new(),
+                }),
             },
         ),
         event(
@@ -1767,6 +1803,35 @@ mod tests {
         }
     }
 
+    // #3516: the committed example is what a host sends for that text, and a
+    // client that knows only some of an origin still decodes it.
+    #[test]
+    fn the_golden_origins_are_what_the_host_derives_from_the_text() {
+        let messages = golden_messages();
+        for message in &messages {
+            let derived = super::super::projection::project_origin(&crate::app::ChatMessage::new(
+                message.role.clone(),
+                message.content.text.clone(),
+            ));
+            assert_eq!(message.origin, derived, "{}", message.message_id);
+        }
+        let kinds = messages
+            .iter()
+            .filter_map(|message| message.origin.as_ref())
+            .map(|origin| origin.kind.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(kinds, vec!["user", "delegate"]);
+        let later: RemoteMessageOrigin = serde_json::from_value(serde_json::json!({
+            "kind": "scheduled",
+            "threads": [{ "session_id": "s1", "machine": "another computer" }],
+            "task": "nightly"
+        }))
+        .expect("a later host's origin decodes");
+        assert_eq!(later.kind, "scheduled");
+        assert_eq!(later.threads[0].session_id.as_deref(), Some("s1"));
+        assert_eq!(later.threads[0].title, None);
+    }
+
     #[test]
     fn old_v1_frames_decode_with_timing_absent() {
         let old: RemoteEvent =
@@ -1799,6 +1864,7 @@ mod tests {
             "response_time_ms",
             "thought_time_ms",
             "completed_at",
+            "origin",
         ] {
             assert!(value.get(key).is_none());
         }

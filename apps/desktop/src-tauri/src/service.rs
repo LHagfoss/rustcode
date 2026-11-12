@@ -36,6 +36,11 @@ pub const STATUS_TIMEOUT: Duration = Duration::from_secs(20);
 /// the engine bounds at 30 seconds (`server_service`); this is longer than that.
 pub const INSTALL_TIMEOUT: Duration = Duration::from_secs(90);
 
+/// How long the catch-up after an update waits for running turns before it
+/// leaves the old server for the next start: a turn can run for hours, and
+/// this is a courtesy, not a promise.
+const RESTART_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
 /// The server as a background service, as the page shows it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -109,6 +114,9 @@ struct Report {
     version: Option<String>,
     #[serde(default)]
     cli_version: Option<String>,
+    /// The program the service definition names: what a restart runs.
+    #[serde(default)]
+    binary: Option<String>,
     #[serde(default)]
     gateway: Gateway,
     #[serde(default)]
@@ -142,6 +150,10 @@ pub async fn server_service_install() -> Result<ServiceStatus, String> {
             message
         });
     }
+    // The app installed it, so the definition is this app's to rewrite when a
+    // later update needs the service to run the new engine — and only while it
+    // still names what this line wrote.
+    remember_installed_by_app(&service_program());
     let mut status = read_status().await?;
     if !status.installed {
         status.error = Some(if said.is_empty() {
@@ -181,6 +193,19 @@ async fn read_status() -> Result<ServiceStatus, String> {
         Ok(output) if output.status.success() => {
             let report: Report = serde_json::from_slice(&output.stdout)
                 .map_err(|error| format!("Could not read the server's status: {error}"))?;
+            // A restart that would bring the same old copy back is named for
+            // what it is, instead of the engine's "restart brings it up to
+            // date" advice, which cannot work there (issue #3487).
+            let mut problems = report.problems.clone();
+            if let Some(message) =
+                foreign_server(&report, &service_program(), &remembered_managed())
+            {
+                problems.retain(|problem| problem.code != "version-mismatch");
+                problems.push(ServiceProblem {
+                    code: "server-other-rustcode".to_owned(),
+                    message,
+                });
+            }
             Ok(ServiceStatus {
                 installed: report.installed,
                 running: report.running,
@@ -188,7 +213,7 @@ async fn read_status() -> Result<ServiceStatus, String> {
                 cli_version: report.cli_version,
                 gateway: report.gateway,
                 path_rustcode: report.path_rustcode,
-                problems: report.problems,
+                problems,
                 error: None,
             })
         }
@@ -200,9 +225,25 @@ async fn read_status() -> Result<ServiceStatus, String> {
     }
 }
 
+/// `rustcode server status --json` on a plain thread, for the catch-up at app
+/// start: no settings page is waiting for it.
+fn read_report() -> Option<Report> {
+    let output = run_sync(&["server", "status", "--json"], STATUS_TIMEOUT).ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    serde_json::from_slice(&output.stdout).ok()
+}
+
 /// Run `rustcode <args>` and answer what it printed, killing it once `timeout`
 /// passes: a command that never answers must not hold a settings page.
 pub async fn run(args: &[&str], timeout: Duration) -> Result<std::process::Output, String> {
+    run_sync(args, timeout)
+}
+
+/// [`run`] on a plain thread, for the catches that run at app start before any
+/// page asks (`catch_up_after_update`).
+fn run_sync(args: &[&str], timeout: Duration) -> Result<std::process::Output, String> {
     run_program(&prepare_program()?, args, timeout)
 }
 
@@ -212,6 +253,458 @@ pub async fn run(args: &[&str], timeout: Duration) -> Result<std::process::Outpu
 /// when it asks for the status or installs.
 pub fn refresh_program() {
     let _ = prepare_program();
+}
+
+/// The `rustcode` a service runs from this app, and that `server install`
+/// writes into the unit: its engine, or — inside an AppImage — the copy under
+/// the user's data directory that [`refresh_program`] keeps current. A
+/// definition naming this is one this app manages. Nothing is copied here:
+/// this is the path a definition names, not the copy itself.
+fn service_program() -> PathBuf {
+    let engine = resolve_engine();
+    let appimage = std::env::var_os("APPIMAGE").map(PathBuf::from);
+    stable_program(
+        &engine,
+        appimage.is_some(),
+        std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .as_deref(),
+        std::env::var_os("HOME").map(PathBuf::from).as_deref(),
+    )
+    .unwrap_or(engine)
+}
+
+/// What `rustcode server update-cli --json` said it found and did: one entry
+/// per copy it looked at.
+#[derive(Debug, Deserialize)]
+struct UpdatedCli {
+    #[serde(default)]
+    copies: Vec<UpdatedCopy>,
+}
+
+/// One copy `update-cli` looked at.
+#[derive(Debug, Deserialize)]
+struct UpdatedCopy {
+    /// `missing`, `current`, `updated`, `homebrew`, `cargo`, `development`,
+    /// `foreign` or `failed`.
+    outcome: String,
+    #[serde(default)]
+    path: Option<String>,
+    /// The version the copy answers now, for a copy the app may restart from.
+    #[serde(default)]
+    now: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+/// A copy the app manages (the install script's or its own) and the version it
+/// runs now: a server whose unit names it is brought up to date by a restart,
+/// whether this start replaced it or an earlier one did.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+struct ManagedCopy {
+    path: String,
+    version: String,
+}
+
+/// Whether the service's `binary` is a managed copy that runs a newer version
+/// than the server, so a restart starts that version.
+fn managed_and_newer(binary: &Path, managed: &[ManagedCopy], server: &str) -> bool {
+    managed.iter().any(|copy| {
+        same_path(binary, Path::new(&copy.path)) && crate::updater::newer(&copy.version, server)
+    })
+}
+
+/// What this app does about a background server that runs another engine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ServerCatchUp {
+    /// Nothing: no service, nothing running, or the server is this engine's
+    /// version or a newer one.
+    Leave,
+    /// The service runs a binary this app manages: restart it from the
+    /// installed definition, which brings it up to date.
+    Restart,
+    /// The service runs another `rustcode` and the app installed the service:
+    /// rewrite the definition to this app's engine (`server install`), then
+    /// restart from it.
+    Repoint,
+    /// The service runs a `rustcode` this app does not install (Homebrew's,
+    /// `cargo install`'s): say which, once, rather than restarting into the
+    /// same old copy at every launch.
+    Foreign { path: String },
+}
+
+/// The facts the catch-up decides on.
+#[derive(Debug, Clone, Copy)]
+struct CatchUp<'a> {
+    installed: bool,
+    running: bool,
+    /// The running server's version.
+    server: Option<&'a str>,
+    /// This app's engine version (the `rustcode` that answered the status).
+    engine: Option<&'a str>,
+    /// The program the service definition names.
+    binary: Option<&'a str>,
+    /// This app's engine, as a path.
+    engine_binary: &'a Path,
+    /// The copies `update-cli` manages, replaced now or earlier.
+    managed: &'a [ManagedCopy],
+    /// The program the app installed the service with, when it did: the one
+    /// definition this app may rewrite.
+    app_program: Option<&'a Path>,
+}
+
+/// Whether two paths name the same file, a link and its target included.
+fn same_path(a: &Path, b: &Path) -> bool {
+    a == b
+        || matches!(
+            (a.canonicalize(), b.canonicalize()),
+            (Ok(a), Ok(b)) if a == b
+        )
+}
+
+fn server_catch_up(catch_up: &CatchUp<'_>) -> ServerCatchUp {
+    let CatchUp {
+        installed,
+        running,
+        server,
+        engine,
+        binary,
+        engine_binary,
+        managed,
+        app_program,
+    } = *catch_up;
+    let (true, true, Some(server), Some(engine), Some(binary)) =
+        (installed, running, server, engine, binary)
+    else {
+        return ServerCatchUp::Leave;
+    };
+    // A server on this engine or a newer one is not behind: never restart it
+    // into an older copy (a Homebrew or beta server, an app that was lowered).
+    if !crate::updater::newer(engine, server) {
+        return ServerCatchUp::Leave;
+    }
+    let binary = Path::new(binary);
+    // The unit runs this app's engine, or a copy `update-cli` manages that
+    // runs a newer version than the server (replaced by this start or an
+    // earlier one whose restart was cut short): a restart converges.
+    if same_path(binary, engine_binary) || managed_and_newer(binary, managed, server) {
+        return ServerCatchUp::Restart;
+    }
+    // The app installed this definition, and it still names what the app put
+    // there (the app moved, or an AppImage's copy did): rewriting it is the
+    // app's own repair.
+    if app_program.is_some_and(|program| same_path(binary, program)) {
+        return ServerCatchUp::Repoint;
+    }
+    ServerCatchUp::Foreign {
+        path: binary.display().to_string(),
+    }
+}
+
+/// Why a restart would not bring the server up to this app's engine, in the
+/// words the page shows: the service runs another `rustcode`, older than this
+/// one, that this app does not install. `None` when there is nothing to say.
+fn foreign_server(
+    report: &Report,
+    engine_binary: &Path,
+    managed: &[ManagedCopy],
+) -> Option<String> {
+    let server = report.version.as_deref()?;
+    let engine = report.cli_version.as_deref()?;
+    let binary = Path::new(report.binary.as_deref()?);
+    if !report.installed || !report.running || !crate::updater::newer(engine, server) {
+        return None;
+    }
+    if same_path(binary, engine_binary) || managed_and_newer(binary, managed, server) {
+        return None;
+    }
+    Some(format!(
+        "Server runs an older rustcode at {} (it runs {server}, this app ships {engine}). Update that copy, or install the server from this app.",
+        binary.display()
+    ))
+}
+
+/// A file under the config folder's `service` directory, which the app keeps
+/// for the service it installed.
+fn service_state(name: &str) -> Option<PathBuf> {
+    let dir = rustcode_client::config::config_dir().ok()?;
+    Some(dir.join("service").join(name))
+}
+
+fn write_service_state(name: &str, text: &str) {
+    let Some(path) = service_state(name) else {
+        return;
+    };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(path, text);
+}
+
+/// Record that this app installed the server, and with which program, so the
+/// catch-up may re-point the definition at its engine — and only while the
+/// definition still names what the app installed. A service a terminal
+/// installed, or reinstalled, is never rewritten.
+pub fn remember_installed_by_app(program: &Path) {
+    write_service_state("installed-by-app", &format!("{}\n", program.display()));
+}
+
+/// The program the app installed the service with, if it installed it. A
+/// definition naming another binary is a terminal's, whatever this says.
+fn installed_by_app_program() -> Option<PathBuf> {
+    let text = std::fs::read_to_string(service_state("installed-by-app")?).ok()?;
+    let program = text.trim();
+    (!program.is_empty()).then(|| PathBuf::from(program))
+}
+
+/// One catch-up attempt, so a pair that cannot converge is not tried again at
+/// every launch: the server's version, this engine's, and the binary the
+/// service names. Any of them changing makes it a fresh decision.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+struct Attempt {
+    server: String,
+    engine: String,
+    binary: Option<String>,
+}
+
+fn remembered_attempt() -> Option<Attempt> {
+    let path = service_state("catch-up.json")?;
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+fn remember_attempt(attempt: Option<&Attempt>) {
+    match attempt {
+        Some(attempt) => {
+            if let Ok(text) = serde_json::to_string(attempt) {
+                write_service_state("catch-up.json", &text);
+            }
+        }
+        None => {
+            if let Some(path) = service_state("catch-up.json") {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+}
+
+/// The managed copies the last `update-cli` found, kept so the Machines page
+/// (which does not run it) can tell a server on a managed copy from one on a
+/// copy the app leaves alone.
+fn remembered_managed() -> Vec<ManagedCopy> {
+    service_state("managed-copies.json")
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+fn remember_managed(managed: &[ManagedCopy]) {
+    if let Ok(text) = serde_json::to_string(managed) {
+        write_service_state("managed-copies.json", &text);
+    }
+}
+
+/// The copies outside the app catch up with the engine this build ships, at
+/// every start, because an update is installed between two of them: the
+/// AppImage's copy a service runs ([`refresh_program`]), the `rustcode` a shell
+/// runs (issue #3487), and a background server still running the engine from
+/// before the update. Each step is best effort: the app runs even when one
+/// cannot finish, and the page that asks for the status names what is left.
+pub fn catch_up_after_update() {
+    refresh_program();
+    // A development build's engine is not the released one a service or a
+    // terminal should run: neither catch applies to it.
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let managed = refresh_installed_cli();
+    restart_outdated_server(&managed);
+}
+
+/// Bring the `rustcode` copies the app manages up to this app's version, and
+/// answer which of them now run a version the app can restart a server from.
+/// The engine decides: it knows the version it was built as, refuses a
+/// development build, leaves Homebrew's and `cargo install`'s copies to their
+/// tools and a copy it did not install alone, each with a line saying so.
+fn refresh_installed_cli() -> Vec<ManagedCopy> {
+    let output = match run_sync(&["server", "update-cli", "--json"], INSTALL_TIMEOUT) {
+        Ok(output) => output,
+        Err(error) => {
+            eprintln!("[service] could not update the rustcode a terminal runs: {error}");
+            return remembered_managed();
+        }
+    };
+    // A copy left alone makes the command exit non-zero, and the others were
+    // still brought up to date: the answer is read either way.
+    let Ok(report) = serde_json::from_slice::<UpdatedCli>(&output.stdout) else {
+        eprintln!(
+            "[service] update-cli did not answer as JSON: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+        return remembered_managed();
+    };
+    let mut managed = Vec::new();
+    for copy in report.copies {
+        match (copy.outcome.as_str(), copy.path, copy.now) {
+            ("updated", Some(path), now) => {
+                eprintln!("[service] {path} now runs this app's version.");
+                managed.extend(now.map(|version| ManagedCopy { path, version }));
+            }
+            ("current", Some(path), Some(version)) => {
+                managed.push(ManagedCopy { path, version });
+            }
+            ("current" | "missing", ..) => {}
+            _ => eprintln!(
+                "[service] {}",
+                copy.message
+                    .unwrap_or_else(|| "a terminal's rustcode was left as it was.".to_owned())
+            ),
+        }
+    }
+    remember_managed(&managed);
+    managed
+}
+
+/// Restart a background server that still runs an older engine, once per
+/// version pair: `server install` first when the service definition names
+/// another copy the app installed it with.
+fn restart_outdated_server(managed: &[ManagedCopy]) {
+    let Some(report) = read_report() else {
+        return;
+    };
+    let app_program = installed_by_app_program();
+    let catch_up = server_catch_up(&CatchUp {
+        installed: report.installed,
+        running: report.running,
+        server: report.version.as_deref(),
+        engine: report.cli_version.as_deref(),
+        binary: report.binary.as_deref(),
+        engine_binary: &service_program(),
+        managed,
+        app_program: app_program.as_deref(),
+    });
+    if catch_up == ServerCatchUp::Leave {
+        // The engine and the server agree: a new update gets a fresh attempt.
+        remember_attempt(None);
+        return;
+    }
+    let attempt = Attempt {
+        server: report.version.clone().unwrap_or_default(),
+        engine: report.cli_version.clone().unwrap_or_default(),
+        binary: report.binary.clone(),
+    };
+    if remembered_attempt().as_ref() == Some(&attempt) {
+        return;
+    }
+    match &catch_up {
+        ServerCatchUp::Leave => return,
+        ServerCatchUp::Foreign { path } => {
+            eprintln!(
+                "[service] the RustCode server runs an older rustcode at {path}: this app does not install that copy, so it is left alone."
+            );
+            remember_attempt(Some(&attempt));
+            return;
+        }
+        ServerCatchUp::Repoint => {
+            // `server install` rewrites the definition and leaves a running
+            // server alone (it says the restart applies it), so the restart
+            // below is still the one that ends turns, and it waits for idle.
+            match run_sync(&["server", "install"], INSTALL_TIMEOUT) {
+                Ok(output) if output.status.success() => {}
+                Ok(output) => {
+                    eprintln!(
+                        "[service] the server could not be pointed at this app: {}",
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    );
+                    remember_attempt(Some(&attempt));
+                    return;
+                }
+                Err(error) => {
+                    eprintln!("[service] the server could not be pointed at this app: {error}");
+                    remember_attempt(Some(&attempt));
+                    return;
+                }
+            }
+        }
+        ServerCatchUp::Restart => {}
+    }
+    // `--when-idle` waits for running turns, so a turn in the middle of its
+    // work is not cut off. This thread's own deadline can end that wait, which
+    // is not a failure: nothing is remembered, and the next start asks again.
+    let busy = restart_when_idle();
+    let after = read_report();
+    let outcome = after_restart(
+        busy,
+        after.as_ref().and_then(|report| report.version.as_deref()),
+        after
+            .as_ref()
+            .and_then(|report| report.cli_version.as_deref()),
+    );
+    match outcome {
+        // Server and engine are one version now: a new update gets a fresh try.
+        AfterRestart::Converged => remember_attempt(None),
+        // A turn outlasted this start's patience: remembered nothing.
+        AfterRestart::StillBusy => {}
+        // A refusal, or a server that came back on the old engine: remembered,
+        // so the same pair is not attempted at every launch.
+        AfterRestart::Failed => remember_attempt(Some(&attempt)),
+    }
+}
+
+/// What a restart left behind, which decides whether it is remembered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AfterRestart {
+    /// The server runs this engine's version (or a newer one) now.
+    Converged,
+    /// This thread's deadline ended the `--when-idle` wait: a turn was still
+    /// running, so the next start tries again instead of remembering a failure
+    /// that never happened.
+    StillBusy,
+    /// The CLI refused, or the server came back on the old engine.
+    Failed,
+}
+
+fn after_restart(busy: bool, server: Option<&str>, engine: Option<&str>) -> AfterRestart {
+    if busy {
+        return AfterRestart::StillBusy;
+    }
+    match (server, engine) {
+        (Some(server), Some(engine)) if !crate::updater::newer(engine, server) => {
+            AfterRestart::Converged
+        }
+        _ => AfterRestart::Failed,
+    }
+}
+
+/// Run `server restart --when-idle`, and answer whether this thread's deadline
+/// ended the wait (running turns) rather than the CLI answering.
+fn restart_when_idle() -> bool {
+    match run_sync(&["server", "restart", "--when-idle"], RESTART_IDLE_TIMEOUT) {
+        Ok(output) if output.status.success() => false,
+        Ok(output) => {
+            eprintln!(
+                "[service] the server did not restart: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            false
+        }
+        Err(error) => {
+            if cut_short(&error) {
+                eprintln!(
+                    "[service] the server restart is still waiting for running turns; the next start tries again."
+                );
+                true
+            } else {
+                eprintln!("[service] the server did not restart: {error}");
+                false
+            }
+        }
+    }
+}
+
+/// Whether a command error is this thread's own deadline rather than a failure:
+/// `run_program`'s timeout wording.
+fn cut_short(error: &str) -> bool {
+    error.contains("did not answer within")
 }
 
 /// The `rustcode` the service commands run and that `server install` writes
@@ -694,6 +1187,273 @@ mod tests {
         );
         assert!(error.contains("could not be copied"), "{error}");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    const ENGINE: &str = "/Applications/RustCode.app/Contents/MacOS/rustcode";
+
+    /// The catch-up's decision for one reading of `server status`.
+    fn catch_up(
+        server: Option<&str>,
+        engine: &str,
+        binary: Option<&str>,
+        managed: &[(&str, &str)],
+        app_program: Option<&str>,
+    ) -> ServerCatchUp {
+        let managed: Vec<ManagedCopy> = managed
+            .iter()
+            .map(|(path, version)| ManagedCopy {
+                path: (*path).to_owned(),
+                version: (*version).to_owned(),
+            })
+            .collect();
+        server_catch_up(&CatchUp {
+            installed: true,
+            running: true,
+            server,
+            engine: Some(engine),
+            binary,
+            engine_binary: Path::new(ENGINE),
+            managed: &managed,
+            app_program: app_program.map(Path::new),
+        })
+    }
+
+    /// Only a server the service starts is restarted, only when it is older,
+    /// and only into a binary this app manages (issue #3487).
+    #[test]
+    fn only_an_older_installed_server_is_restarted() {
+        // The service runs this app's engine: a restart brings the new one.
+        assert_eq!(
+            catch_up(Some("1.25.0"), "1.30.0", Some(ENGINE), &[], None),
+            ServerCatchUp::Restart
+        );
+        // Or a copy `update-cli` just replaced with this engine's bytes.
+        let copy = "/Users/ada/.local/bin/rustcode";
+        assert_eq!(
+            catch_up(
+                Some("1.25.0"),
+                "1.30.0",
+                Some(copy),
+                &[(copy, "1.30.0")],
+                None
+            ),
+            ServerCatchUp::Restart
+        );
+        // A beta of the release this app is: still behind it.
+        assert_eq!(
+            catch_up(Some("1.30.0-beta.2"), "1.30.0", Some(ENGINE), &[], None),
+            ServerCatchUp::Restart
+        );
+        // The same engine, and one ahead of the app: nothing to do, and never
+        // a downgrade.
+        assert_eq!(
+            catch_up(Some("1.30.0"), "1.30.0", Some(ENGINE), &[], None),
+            ServerCatchUp::Leave
+        );
+        assert_eq!(
+            catch_up(Some("1.31.0"), "1.30.0", Some(ENGINE), &[], None),
+            ServerCatchUp::Leave
+        );
+        // A version that cannot be read is not a reason to restart.
+        assert_eq!(
+            catch_up(Some("dev"), "1.30.0", Some(ENGINE), &[], None),
+            ServerCatchUp::Leave
+        );
+        // No service, nothing running, or a definition with no binary.
+        let off = |installed: bool, running: bool| {
+            server_catch_up(&CatchUp {
+                installed,
+                running,
+                server: Some("1.25.0"),
+                engine: Some("1.30.0"),
+                binary: Some(ENGINE),
+                engine_binary: Path::new(ENGINE),
+                managed: &[],
+                app_program: None,
+            })
+        };
+        assert_eq!(off(false, true), ServerCatchUp::Leave);
+        assert_eq!(off(true, false), ServerCatchUp::Leave);
+        assert_eq!(
+            catch_up(Some("1.25.0"), "1.30.0", None, &[], None),
+            ServerCatchUp::Leave
+        );
+    }
+
+    /// The unit runs another `rustcode`: the app rewrites it only while the
+    /// definition still names the program it installed, and otherwise names the
+    /// copy once instead of restarting into it at every launch.
+    #[test]
+    fn another_rustcode_in_the_unit_is_repointed_or_named() {
+        let copy = "/Users/ada/.local/bin/rustcode";
+        // Installed by the app, and still naming what it installed.
+        assert_eq!(
+            catch_up(Some("1.29.0"), "1.30.0", Some(copy), &[], Some(copy)),
+            ServerCatchUp::Repoint
+        );
+        // Installed by a terminal, or reinstalled since: never rewritten.
+        assert_eq!(
+            catch_up(Some("1.29.0"), "1.30.0", Some(copy), &[], None),
+            ServerCatchUp::Foreign {
+                path: copy.to_owned()
+            }
+        );
+        assert_eq!(
+            catch_up(
+                Some("1.29.0"),
+                "1.30.0",
+                Some(copy),
+                &[],
+                Some("/Applications/RustCode.app/Contents/MacOS/rustcode")
+            ),
+            ServerCatchUp::Foreign {
+                path: copy.to_owned()
+            }
+        );
+        // A copy update-cli updated is the app's, wherever the unit found it.
+        assert_eq!(
+            catch_up(
+                Some("1.29.0"),
+                "1.30.0",
+                Some(copy),
+                &[(copy, "1.30.0")],
+                None
+            ),
+            ServerCatchUp::Restart
+        );
+    }
+
+    /// Start 1 updated the copy and its `--when-idle` restart ran out of
+    /// patience; start 2 finds the copy `current`. It is still the app's, and
+    /// the server on it still needs the restart (issue #3487).
+    #[test]
+    fn a_current_managed_copy_under_an_old_server_is_restarted() {
+        let copy = "/Users/ada/.rustcode/bin/rustcode";
+        let managed = [(copy, "1.30.0")];
+        assert_eq!(
+            catch_up(Some("1.29.0"), "1.30.0", Some(copy), &managed, None),
+            ServerCatchUp::Restart
+        );
+        // A copy that is itself no newer than the server would bring the same
+        // version back: named, not restarted.
+        assert_eq!(
+            catch_up(
+                Some("1.29.0"),
+                "1.30.0",
+                Some(copy),
+                &[(copy, "1.29.0")],
+                None
+            ),
+            ServerCatchUp::Foreign {
+                path: copy.to_owned()
+            }
+        );
+        // Another copy being managed says nothing about this one.
+        assert_eq!(
+            catch_up(
+                Some("1.29.0"),
+                "1.30.0",
+                Some(copy),
+                &[("/usr/local/bin/rustcode", "1.30.0")],
+                None
+            ),
+            ServerCatchUp::Foreign {
+                path: copy.to_owned()
+            }
+        );
+        // The page does not call it "older rustcode, update that copy".
+        let report = Report {
+            installed: true,
+            running: true,
+            version: Some("1.29.0".to_owned()),
+            cli_version: Some("1.30.0".to_owned()),
+            binary: Some(copy.to_owned()),
+            gateway: Gateway::default(),
+            path_rustcode: None,
+            problems: Vec::new(),
+        };
+        let managed = [ManagedCopy {
+            path: copy.to_owned(),
+            version: "1.30.0".to_owned(),
+        }];
+        assert_eq!(foreign_server(&report, Path::new(ENGINE), &managed), None);
+        assert!(foreign_server(&report, Path::new(ENGINE), &[]).is_some());
+    }
+
+    /// A `--when-idle` restart this start cut short waits for a turn, which is
+    /// not a failure: it is not remembered, and the next start asks again
+    /// (issue #3487).
+    #[test]
+    fn a_long_turn_is_not_remembered_as_a_failure() {
+        assert_eq!(
+            after_restart(true, Some("1.29.0"), Some("1.30.0")),
+            AfterRestart::StillBusy
+        );
+        // A restart that answered but did not take is remembered.
+        assert_eq!(
+            after_restart(false, Some("1.29.0"), Some("1.30.0")),
+            AfterRestart::Failed
+        );
+        // Nothing answered after the restart: remembered too.
+        assert_eq!(after_restart(false, None, None), AfterRestart::Failed);
+        // Converged, including a server that came back newer than the app.
+        assert_eq!(
+            after_restart(false, Some("1.30.0"), Some("1.30.0")),
+            AfterRestart::Converged
+        );
+        assert_eq!(
+            after_restart(false, Some("1.31.0"), Some("1.30.0")),
+            AfterRestart::Converged
+        );
+    }
+
+    /// The page says which copy the server runs when a restart would bring the
+    /// same one back, instead of "restart brings it up to date".
+    #[test]
+    fn a_server_on_another_copy_is_named() {
+        let report = |server: &str, engine: &str, binary: &str| Report {
+            installed: true,
+            running: true,
+            version: Some(server.to_owned()),
+            cli_version: Some(engine.to_owned()),
+            binary: Some(binary.to_owned()),
+            gateway: Gateway::default(),
+            path_rustcode: None,
+            problems: Vec::new(),
+        };
+        let message = foreign_server(
+            &report("1.29.0", "1.30.0", "/Users/ada/.local/bin/rustcode"),
+            Path::new(ENGINE),
+            &[],
+        )
+        .expect("an older copy the app does not manage");
+        assert!(
+            message.contains("Server runs an older rustcode at /Users/ada/.local/bin/rustcode"),
+            "{message}"
+        );
+        assert!(message.contains("it runs 1.29.0"), "{message}");
+        // The app's own engine, a newer server, and an equal version say
+        // nothing.
+        assert_eq!(
+            foreign_server(&report("1.29.0", "1.30.0", ENGINE), Path::new(ENGINE), &[]),
+            None
+        );
+        assert_eq!(
+            foreign_server(
+                &report("1.31.0", "1.30.0", "/Users/ada/.local/bin/rustcode"),
+                Path::new(ENGINE),
+                &[]
+            ),
+            None
+        );
+        assert_eq!(
+            foreign_server(
+                &report("1.30.0", "1.30.0", "/Users/ada/.local/bin/rustcode"),
+                Path::new(ENGINE),
+                &[]
+            ),
+            None
+        );
     }
 
     /// What the command printed comes back with its exit status.

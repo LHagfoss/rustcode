@@ -36,11 +36,13 @@ import {
   platformName,
   probeLabel,
   probeTone,
+  readUntilAnswering,
   refreshMachines,
   refreshServerService,
   resetMachinesForTests,
   routeLabel,
   routeName,
+  START_RETRY_WAITS_MS,
   selfName,
   serverLine,
   setLocalIdentity,
@@ -369,17 +371,64 @@ describe("machines page state", () => {
   });
 });
 
+describe("machines at app start", () => {
+  test("a first read that failed is tried again, and stops at the first answer", async () => {
+    const waits: number[] = [];
+    let reads = 0;
+    await readUntilAnswering(
+      async () => ++reads >= 3,
+      async (ms) => {
+        waits.push(ms);
+      },
+    );
+    expect(reads).toBe(3);
+    // The two failures waited the first two waits, in order.
+    expect(waits).toEqual(START_RETRY_WAITS_MS.slice(0, 2));
+
+    // A shell that answers at once costs no wait at all.
+    const immediate: number[] = [];
+    await readUntilAnswering(
+      async () => true,
+      async (ms) => {
+        immediate.push(ms);
+      },
+    );
+    expect(immediate).toEqual([]);
+  });
+
+  test("a read that never answers stops after the last wait", async () => {
+    const waits: number[] = [];
+    let reads = 0;
+    await readUntilAnswering(
+      async () => {
+        reads += 1;
+        return false;
+      },
+      async (ms) => {
+        waits.push(ms);
+      },
+    );
+    expect(waits).toEqual(START_RETRY_WAITS_MS);
+    // One read before the first wait, and one after each of them.
+    expect(reads).toBe(START_RETRY_WAITS_MS.length + 1);
+    // 1 + 2 + 4 + 8 + 16 + 30 s, then the page is left to read when it opens.
+    expect(START_RETRY_WAITS_MS.reduce((sum, ms) => sum + ms, 0)).toBe(61_000);
+  });
+});
+
 describe("machines rows", () => {
   test("a state says where the machine stands, in the words the row uses", () => {
     expect(stateLabel({ state: "connected", retryInSecs: null })).toBe("Connected");
     expect(stateLabel({ state: "connecting", retryInSecs: null })).toBe("Connecting");
-    expect(stateLabel({ state: "offline", retryInSecs: 4 })).toBe("Offline · retrying in 4 s");
+    expect(stateLabel({ state: "offline", retryInSecs: 4 })).toBe("Reconnecting…");
     expect(stateLabel({ state: "offline", retryInSecs: null })).toBe("Offline");
     expect(stateLabel({ state: "needsPairing", retryInSecs: null })).toBe("Needs pairing");
     expect(stateLabel({ state: "stopped", retryInSecs: null })).toBe("Not connected");
-    expect(stateTone({ state: "connected" })).toBe("ok");
-    expect(stateTone({ state: "needsPairing" })).toBe("bad");
-    expect(stateTone({ state: "offline" })).toBe("warn");
+    expect(stateTone({ state: "connected", retryInSecs: null })).toBe("ok");
+    expect(stateTone({ state: "needsPairing", retryInSecs: null })).toBe("bad");
+    expect(stateTone({ state: "offline", retryInSecs: null })).toBe("warn");
+    // Between attempts the app is working on it: the calm tone, as `Connecting` has.
+    expect(stateTone({ state: "offline", retryInSecs: 4 })).toBe("idle");
   });
 
   test("a route says whether the network encrypts it", () => {

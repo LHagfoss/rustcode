@@ -126,9 +126,10 @@ pub fn run() {
         .setup(|app| {
             // The engine starts with the app, in parallel with the webview loading the UI.
             app.state::<EngineState>().prestart();
-            // An AppImage's bundled binary lives in a mount that goes away with the app: the
-            // copy a service runs is refreshed here, so an updated AppImage reaches it.
-            std::thread::spawn(service::refresh_program);
+            // An AppImage's bundled binary lives in a mount that goes away with the app, so the
+            // copy a service runs is refreshed here; the copies outside the app catch up with the
+            // engine this build ships, which is what makes an update reach them (#3487).
+            std::thread::spawn(service::catch_up_after_update);
             // Built here, not from the config, so it renders at 120 Hz where the display does.
             webview::build_main_window(app)?;
             // A click on a notification is only reported while something listens for it.

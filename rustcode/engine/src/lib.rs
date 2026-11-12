@@ -31,6 +31,7 @@ mod install_hints;
 mod keep_awake;
 pub mod mcp;
 mod memory;
+mod message_origin;
 pub mod model_defaults;
 pub mod network;
 mod notifications;

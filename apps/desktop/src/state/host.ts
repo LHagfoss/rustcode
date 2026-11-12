@@ -2276,10 +2276,13 @@ async function listPullRequests(caller: RuleThread, state: PullStateChoice): Pro
     })),
   };
 }
+/** What a read says when the project's remote is not on GitHub: no pull requests exist to read. */
+const NO_PROVIDER_NOTE = "no pull request provider for this remote";
+
 /** A thread's pull request and checks, read through the engine's `gh` call. */
 async function delegatePull(
   target: RuleThread,
-): Promise<{ branch?: string; pull?: DelegatePull; error?: Failure }> {
+): Promise<{ branch?: string; pull?: DelegatePull; error?: Failure; note?: string }> {
   const cwd = projectOf(target);
   if (!cwd) return { error: failure("failed", "this thread has no project folder") };
   const worktree = target.worktree;
@@ -2289,11 +2292,14 @@ async function delegatePull(
     // asked for, so naming the recorded one would hide the rename (and its
     // pull request) from status, merge and cleanup.
     let answer = parsePullState(await request(Method.pullState, { cwd: worktree?.path ?? cwd }, 60_000));
+    // A remote on another forge has no pull requests to read: that is an answer, not a failure.
+    if (answer.error?.code === "no_provider") return { note: NO_PROVIDER_NOTE };
     // A detached HEAD has no branch to look up, so fall back to the recorded
     // one rather than reporting no pull request at all.
     if (answer.error && worktree?.branch) {
       answer = parsePullState(await request(Method.pullState, { cwd, branch: worktree.branch }, 60_000));
     }
+    if (answer.error?.code === "no_provider") return { note: NO_PROVIDER_NOTE };
     if (answer.error) return { error: pullFailure(answer.error) };
     return { branch: answer.branch, pull: answer.pull };
   } catch (error) {
@@ -2356,6 +2362,7 @@ async function threadStatus(
             branch?: string;
             pull?: DelegatePull;
             error?: Failure;
+            note?: string;
           },
           activity: entry.running
             ? ((await activityFrom(entry.id, { order: "newest", limit: 1 })).answer ?? null)
@@ -2421,6 +2428,7 @@ async function threadStatus(
             ...(state.pull.url ? { url: state.pull.url } : {}),
           }
         : null,
+      ...(state.note ? { pull_note: state.note } : {}),
       ...(state.error ? { error: { code: state.error.code, message: state.error.message } } : {}),
     });
   }
@@ -2461,6 +2469,7 @@ async function mergeTracked(
   const state = await delegatePull(target);
   if (tracked?.dropped) return failureJson(droppedFailure());
   if (state.error) return failureJson(state.error);
+  if (state.note) return failureJson(failure("not_found", state.note));
   const pull = state.pull;
   if (!pull) {
     return failureJson(
@@ -2703,6 +2712,7 @@ async function worktreeStatus(
         ? { pull_error: { code: pull.error.code, message: pull.error.message } }
         : pull
           ? {
+              ...(pull.note ? { pull_note: pull.note } : {}),
               pull: pull.pull
                 ? {
                     number: pull.pull.number,

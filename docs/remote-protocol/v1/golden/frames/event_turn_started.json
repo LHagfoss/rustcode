@@ -18,6 +18,9 @@
       "truncated": false,
       "offset": 0,
       "total_bytes": 37
+    },
+    "origin": {
+      "kind": "user"
     }
   }
 }

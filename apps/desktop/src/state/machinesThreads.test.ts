@@ -263,6 +263,29 @@ describe("a machine's threads", () => {
     useMachines.setState((state) => ({ sessions: { ...state.sessions, [LINUX]: rest } }));
   });
 
+  test("a read keeps the running status a broadcast wrote on an announced, unlisted thread", async () => {
+    const conn = machineConnection(LINUX);
+    const answer = (await conn?.request("session/new", { cwd: "/home/lars/code/site" })) as JsonObject;
+    const id = str(obj(answer)?.sessionId);
+    if (!id) throw new Error("the machine named no thread");
+    await sleep(5);
+    // A status broadcast from the owner marks the announced row running.
+    useMachines.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [LINUX]: (state.sessions[LINUX] ?? []).map((s) => (s.id === id ? { ...s, status: "running" } : s)),
+      },
+    }));
+    // The machine does not list it yet: the read re-pushes the kept summary, which has no status.
+    refreshMachineThreads();
+    await sleep(20);
+    const row = useMachines.getState().sessions[LINUX]?.find((s) => s.id === id);
+    expect(row?.status).toBe("running");
+    // Put the machine's list back for the tests after this one.
+    const rest = (useMachines.getState().sessions[LINUX] ?? []).filter((s) => s.id !== id);
+    useMachines.setState((state) => ({ sessions: { ...state.sessions, [LINUX]: rest } }));
+  });
+
   test("a thread trashed on a machine leaves both lists", async () => {
     const conn = machineConnection(LINUX);
     const answer = (await conn?.request("session/new", { cwd: "/home/lars/code/site" })) as JsonObject;

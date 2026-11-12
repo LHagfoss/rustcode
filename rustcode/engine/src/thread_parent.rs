@@ -18,10 +18,8 @@ use rustcode_session::SessionRelationship;
 use serde_json::Value;
 
 use crate::app::ChatMessage;
-
-/// The heading every agent-delivered task starts with (`delivered` in the app).
-const HEADING: &str = "From thread “";
-const AFTER_TITLE: &str = "” (agent):";
+// The heading every agent-delivered task starts with, and the title in it.
+use crate::message_origin::{AGENT_HEADING as HEADING, delivered_title};
 
 /// `store_meta` key and version of the one-time pass for threads that predate
 /// the record. A later release that can read more bumps the version.
@@ -70,14 +68,6 @@ pub(crate) fn record(child: &str, parent: &str, relationship: SessionRelationshi
         relationship: Some(relationship),
     };
     crate::config::save_session_parent(child, &parent);
-}
-
-/// The title in a delivered task's heading, when `message` is one.
-fn delivered_title(message: &str) -> Option<&str> {
-    let rest = message.trim_start().strip_prefix(HEADING)?;
-    let (title, _) = rest.split_once(AFTER_TITLE)?;
-    let title = title.trim();
-    (!title.is_empty()).then_some(title)
 }
 
 /// The first user message of `history`, with a delivered task's heading
