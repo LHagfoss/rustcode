@@ -19,6 +19,19 @@
 //! Two `RUSTCODE_CONFIG_DIR` profiles therefore never share or overwrite each
 //! other's entries.
 //!
+//! On macOS the entries are written and read by Apple's own `/usr/bin/security`
+//! tool rather than in this process. A login-keychain item trusts the program
+//! that created it, and for a binary without a Developer ID team that trust is
+//! pinned to the hash of that exact build: every update, every development
+//! build, and the app and the CLI each, asked for the login keychain password
+//! again, once per machine and again on each reconnect that rotated a token.
+//! An item `security` created trusts `security`, which is the same for every
+//! RustCode binary on the Mac and does not change with RustCode updates, so the
+//! keychain never asks. Entries a release before this one wrote under
+//! [`LEGACY_MACOS_SERVICE`] are moved on first read: read once in this process
+//! (the last prompt, which "Allow" answers), written again through `security`,
+//! and the old item deleted.
+//!
 //! When the credential store is not available — a headless Linux box without
 //! a Secret Service, a CI container — the client does not silently fall back
 //! to a plain file. It says what would let it continue:
@@ -51,7 +64,19 @@ use std::time::Duration;
 
 /// Keychain service name, shared by every machine and profile. The account
 /// names the machine; see [`keychain_account`].
+///
+/// macOS has a name of its own because its entries are written by
+/// `/usr/bin/security` (see the module documentation): an entry under the old
+/// name trusts only the build that wrote it, and reading it through `security`
+/// would prompt again.
+#[cfg(target_os = "macos")]
+pub const KEYCHAIN_SERVICE: &str = "rustcode-machine-tokens";
+#[cfg(not(target_os = "macos"))]
 pub const KEYCHAIN_SERVICE: &str = "rustcode-machines";
+
+/// Where earlier releases kept machine tokens in the macOS keychain, read
+/// once to move each entry to [`KEYCHAIN_SERVICE`].
+pub const LEGACY_MACOS_SERVICE: &str = "rustcode-machines";
 
 /// The file the explicit fallback writes.
 pub const TOKENS_FILE: &str = "tokens.json";
@@ -294,18 +319,9 @@ impl TokenStore {
     /// rotates its tokens, or the static token of a pairing that does not.
     pub fn get(&self, host_id: &str) -> Result<Option<Secret>> {
         match &self.backend {
-            Backend::Keychain { profile } => {
-                let account = keychain_account(profile, host_id);
-                on_a_thread(move || {
-                    match keyring::Entry::new(KEYCHAIN_SERVICE, &account)
-                        .and_then(|entry| entry.get_password())
-                    {
-                        Ok(token) => Ok(Some(Secret::new(token))),
-                        Err(keyring::Error::NoEntry) => Ok(None),
-                        Err(error) => Err(keyring_error("read", host_id, error)),
-                    }
-                })
-            }
+            Backend::Keychain { profile } => os_read(&keychain_account(profile, host_id))
+                .map(|token| token.map(Secret::new))
+                .map_err(|error| keyring_error("read", host_id, error)),
             Backend::File { tokens, .. } => Ok(tokens
                 .lock()
                 .expect("token map is not poisoned")
@@ -323,13 +339,8 @@ impl TokenStore {
     pub fn set(&self, host_id: &str, token: &Secret) -> Result<()> {
         match &self.backend {
             Backend::Keychain { profile } => {
-                let account = keychain_account(profile, host_id);
-                let token = token.expose().to_owned();
-                on_a_thread(move || {
-                    keyring::Entry::new(KEYCHAIN_SERVICE, &account)
-                        .and_then(|entry| entry.set_password(&token))
-                        .map_err(|error| keyring_error("store", host_id, error))
-                })?;
+                os_write(&keychain_account(profile, host_id), token.expose())
+                    .map_err(|error| keyring_error("store", host_id, error))?;
             }
             Backend::File { path, tokens } => {
                 let mut tokens = tokens.lock().expect("token map is not poisoned");
@@ -350,17 +361,8 @@ impl TokenStore {
     pub fn remove(&self, host_id: &str) -> Result<()> {
         self.forget_access(host_id);
         match &self.backend {
-            Backend::Keychain { profile } => {
-                let account = keychain_account(profile, host_id);
-                on_a_thread(move || {
-                    match keyring::Entry::new(KEYCHAIN_SERVICE, &account)
-                        .and_then(|entry| entry.delete_credential())
-                    {
-                        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-                        Err(error) => Err(keyring_error("remove", host_id, error)),
-                    }
-                })
-            }
+            Backend::Keychain { profile } => os_delete(&keychain_account(profile, host_id))
+                .map_err(|error| keyring_error("remove", host_id, error)),
             Backend::File { path, tokens } => {
                 let mut tokens = tokens.lock().expect("token map is not poisoned");
                 if !tokens.contains_key(host_id) {
@@ -403,9 +405,9 @@ impl TokenStore {
     }
 }
 
-fn keyring_error(action: &str, host_id: &str, error: keyring::Error) -> anyhow::Error {
+fn keyring_error(action: &str, host_id: &str, error: anyhow::Error) -> anyhow::Error {
     anyhow::anyhow!(
-        "could not {action} the pairing token for machine {host_id} in the operating system credential store ({error}); \
+        "could not {action} the pairing token for machine {host_id} in the operating system credential store ({error:#}); \
          set RUSTCODE_MACHINE_TOKEN_STORE=file to keep machine tokens in machines/tokens.json instead"
     )
 }
@@ -414,15 +416,278 @@ fn keyring_error(action: &str, host_id: &str, error: keyring::Error) -> anyhow::
 /// behind. A keychain that needs an interactive unlock fails here, which is
 /// what makes [`TokenStore::open`] report it before pairing rather than after.
 fn keyring_probe() -> Result<()> {
-    on_a_thread(
-        || match keyring::Entry::new(KEYCHAIN_SERVICE, "__probe__") {
-            Err(error) => Err(anyhow::anyhow!("credential store unavailable: {error}")),
-            Ok(entry) => match entry.get_password() {
-                Ok(_) | Err(keyring::Error::NoEntry) => Ok(()),
-                Err(error) => Err(anyhow::anyhow!("credential store unavailable: {error}")),
-            },
-        },
-    )
+    #[cfg(target_os = "macos")]
+    let store = SecurityTool::login(KEYCHAIN_SERVICE);
+    #[cfg(not(target_os = "macos"))]
+    let store = Keyring(KEYCHAIN_SERVICE);
+    store
+        .read("__probe__")
+        .map(drop)
+        .map_err(|error| anyhow::anyhow!("credential store unavailable: {error:#}"))
+}
+
+/// One place in the operating system's store that keeps a token per account.
+trait Slot {
+    fn read(&self, account: &str) -> Result<Option<String>>;
+    fn write(&self, account: &str, token: &str) -> Result<()>;
+    /// Removing what is not there is not an error.
+    fn delete(&self, account: &str) -> Result<()>;
+}
+
+/// The `keyring` crate: Credential Manager, Secret Service, and on macOS only
+/// the read of an entry an earlier release wrote.
+struct Keyring(&'static str);
+
+impl Slot for Keyring {
+    fn read(&self, account: &str) -> Result<Option<String>> {
+        on_a_thread(|| {
+            match keyring::Entry::new(self.0, account).and_then(|entry| entry.get_password()) {
+                Ok(token) => Ok(Some(token)),
+                Err(keyring::Error::NoEntry) => Ok(None),
+                Err(error) => Err(error.into()),
+            }
+        })
+    }
+
+    fn write(&self, account: &str, token: &str) -> Result<()> {
+        on_a_thread(|| {
+            keyring::Entry::new(self.0, account)
+                .and_then(|entry| entry.set_password(token))
+                .map_err(Into::into)
+        })
+    }
+
+    fn delete(&self, account: &str) -> Result<()> {
+        on_a_thread(|| {
+            match keyring::Entry::new(self.0, account).and_then(|entry| entry.delete_credential()) {
+                Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+                Err(error) => Err(error.into()),
+            }
+        })
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn os_read(account: &str) -> Result<Option<String>> {
+    Keyring(KEYCHAIN_SERVICE).read(account)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn os_write(account: &str, token: &str) -> Result<()> {
+    Keyring(KEYCHAIN_SERVICE).write(account, token)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn os_delete(account: &str) -> Result<()> {
+    Keyring(KEYCHAIN_SERVICE).delete(account)
+}
+
+/// The token of `account`, moving it from `legacy` to `current` the first time
+/// it is only in `legacy`. A move that fails still answers with the token, so
+/// the connection it is for goes ahead; the move is tried again next time, and
+/// the old entry is deleted only once the new one holds the token.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn read_migrating(current: &dyn Slot, legacy: &dyn Slot, account: &str) -> Result<Option<String>> {
+    if let Some(token) = current.read(account)? {
+        return Ok(Some(token));
+    }
+    let Some(token) = legacy.read(account)? else {
+        return Ok(None);
+    };
+    if current.write(account, &token).is_ok() {
+        let _ = legacy.delete(account);
+    }
+    Ok(Some(token))
+}
+
+/// An entry an earlier release wrote in the macOS keychain: read in this
+/// process, because reading it through `security` would ask for the password
+/// on behalf of a tool the user does not know, and deleted through `security`,
+/// because keyring reads an entry before it deletes it, which would ask again.
+#[cfg(target_os = "macos")]
+struct MacLegacy;
+
+#[cfg(target_os = "macos")]
+impl Slot for MacLegacy {
+    fn read(&self, account: &str) -> Result<Option<String>> {
+        Keyring(LEGACY_MACOS_SERVICE).read(account)
+    }
+
+    fn write(&self, _account: &str, _token: &str) -> Result<()> {
+        bail!("nothing is written under {LEGACY_MACOS_SERVICE} any more")
+    }
+
+    fn delete(&self, account: &str) -> Result<()> {
+        SecurityTool::login(LEGACY_MACOS_SERVICE).delete(account)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn os_read(account: &str) -> Result<Option<String>> {
+    read_migrating(&SecurityTool::login(KEYCHAIN_SERVICE), &MacLegacy, account)
+}
+
+#[cfg(target_os = "macos")]
+fn os_write(account: &str, token: &str) -> Result<()> {
+    SecurityTool::login(KEYCHAIN_SERVICE).write(account, token)?;
+    // A re-pairing over an entry that was never moved leaves nothing behind.
+    let _ = MacLegacy.delete(account);
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn os_delete(account: &str) -> Result<()> {
+    SecurityTool::login(KEYCHAIN_SERVICE).delete(account)?;
+    MacLegacy.delete(account)
+}
+
+/// Apple's keychain tool, by absolute path so `PATH` cannot stand in for it.
+#[cfg(target_os = "macos")]
+const SECURITY: &str = "/usr/bin/security";
+
+/// `security`'s exit status for `errSecItemNotFound`.
+#[cfg(target_os = "macos")]
+const SECURITY_NOT_FOUND: i32 = 44;
+
+/// Keychain items written and read by `/usr/bin/security`, so the item trusts
+/// that tool rather than whichever RustCode build created it.
+#[cfg(target_os = "macos")]
+struct SecurityTool {
+    service: &'static str,
+    /// A keychain file, for tests; `None` is the user's default keychain.
+    keychain: Option<PathBuf>,
+}
+
+#[cfg(target_os = "macos")]
+impl SecurityTool {
+    fn login(service: &'static str) -> Self {
+        Self {
+            service,
+            keychain: None,
+        }
+    }
+
+    fn command(&self, verb: &str, account: &str) -> std::process::Command {
+        let mut command = std::process::Command::new(SECURITY);
+        command
+            .args([verb, "-s", self.service, "-a", account])
+            .stdin(std::process::Stdio::null());
+        command
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Slot for SecurityTool {
+    fn read(&self, account: &str) -> Result<Option<String>> {
+        let mut command = self.command("find-generic-password", account);
+        command.arg("-w");
+        command.args(&self.keychain);
+        let output = command
+            .output()
+            .with_context(|| format!("could not run {SECURITY}"))?;
+        match output.status.code() {
+            Some(0) => {
+                let mut token =
+                    String::from_utf8(output.stdout).context("the keychain entry is not text")?;
+                if token.ends_with('\n') {
+                    token.pop();
+                }
+                Ok(Some(token))
+            }
+            Some(SECURITY_NOT_FOUND) => Ok(None),
+            _ => bail!(
+                "security find-generic-password failed ({}): {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        }
+    }
+
+    /// Written through `security -i` on standard input, so the token is never
+    /// in an argument list another process can read, then read back: `-U`
+    /// replaces an entry in place, and only a token that reads back as written
+    /// counts as stored.
+    fn write(&self, account: &str, token: &str) -> Result<()> {
+        use std::io::Write;
+        let line = add_command(self.service, account, token, self.keychain.as_deref())?;
+        let mut child = std::process::Command::new(SECURITY)
+            .arg("-i")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .with_context(|| format!("could not run {SECURITY}"))?;
+        let written = child
+            .stdin
+            .take()
+            .context("no standard input for security")?
+            .write_all(line.as_bytes());
+        // Its error output can echo the command, which carries the token.
+        let status = child.wait().context("security did not finish")?;
+        written.context("could not hand the entry to security")?;
+        ensure!(
+            status.success(),
+            "security add-generic-password failed ({status})"
+        );
+        ensure!(
+            self.read(account)?.as_deref() == Some(token),
+            "the keychain did not keep the token it was given"
+        );
+        Ok(())
+    }
+
+    fn delete(&self, account: &str) -> Result<()> {
+        let mut command = self.command("delete-generic-password", account);
+        command.args(&self.keychain);
+        let output = command
+            .stdout(std::process::Stdio::null())
+            .output()
+            .with_context(|| format!("could not run {SECURITY}"))?;
+        match output.status.code() {
+            Some(0 | SECURITY_NOT_FOUND) => Ok(()),
+            _ => bail!(
+                "security delete-generic-password failed ({}): {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        }
+    }
+}
+
+/// The `security -i` line that adds or replaces one entry. The token goes as
+/// hex (`-X`), so it needs no quoting; every other value is quoted, and one
+/// that quoting cannot carry (a quote, a backslash, a control character such as
+/// the newline that would start a second command) is refused.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn add_command(
+    service: &str,
+    account: &str,
+    token: &str,
+    keychain: Option<&Path>,
+) -> Result<String> {
+    fn quoted(value: &str) -> Result<String> {
+        ensure!(
+            !value.is_empty()
+                && value
+                    .chars()
+                    .all(|c| (c.is_ascii_graphic() || c == ' ') && c != '"' && c != '\\'),
+            "{value:?} cannot be named in the keychain"
+        );
+        Ok(format!("\"{value}\""))
+    }
+    let mut line = format!(
+        "add-generic-password -U -s {} -a {} -X {}",
+        quoted(service)?,
+        quoted(account)?,
+        hex::encode(token)
+    );
+    if let Some(keychain) = keychain {
+        let keychain = keychain.to_str().context("the keychain path is not text")?;
+        line.push(' ');
+        line.push_str(&quoted(keychain)?);
+    }
+    line.push('\n');
+    Ok(line)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -639,6 +904,180 @@ mod tests {
             one,
             "kept for the next run"
         );
+    }
+
+    /// A slot in memory, with a switch that makes writes fail.
+    #[derive(Default)]
+    struct MemorySlot {
+        tokens: std::sync::Mutex<BTreeMap<String, String>>,
+        reads: std::sync::atomic::AtomicUsize,
+        refuse_writes: bool,
+    }
+
+    impl Slot for MemorySlot {
+        fn read(&self, account: &str) -> Result<Option<String>> {
+            self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(self.tokens.lock().unwrap().get(account).cloned())
+        }
+        fn write(&self, account: &str, token: &str) -> Result<()> {
+            ensure!(!self.refuse_writes, "refused");
+            self.tokens
+                .lock()
+                .unwrap()
+                .insert(account.to_owned(), token.to_owned());
+            Ok(())
+        }
+        fn delete(&self, account: &str) -> Result<()> {
+            self.tokens.lock().unwrap().remove(account);
+            Ok(())
+        }
+    }
+
+    fn reads(slot: &MemorySlot) -> usize {
+        slot.reads.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// An entry an earlier release wrote is read from the old place once, moved,
+    /// and never read from there again: on macOS that read is the one prompt
+    /// left, and every later read goes where nothing prompts.
+    #[test]
+    fn a_legacy_entry_is_moved_on_first_read_and_not_read_again() {
+        let current = MemorySlot::default();
+        let legacy = MemorySlot::default();
+        legacy.write("p/gw-a", "refresh-1").unwrap();
+
+        let token = read_migrating(&current, &legacy, "p/gw-a").unwrap();
+        assert_eq!(token.as_deref(), Some("refresh-1"));
+        assert_eq!(
+            current
+                .tokens
+                .lock()
+                .unwrap()
+                .get("p/gw-a")
+                .map(String::as_str),
+            Some("refresh-1")
+        );
+        assert!(
+            legacy.tokens.lock().unwrap().is_empty(),
+            "the old entry goes"
+        );
+
+        let legacy_reads = reads(&legacy);
+        for _ in 0..3 {
+            let token = read_migrating(&current, &legacy, "p/gw-a").unwrap();
+            assert_eq!(token.as_deref(), Some("refresh-1"));
+        }
+        assert_eq!(
+            reads(&legacy),
+            legacy_reads,
+            "reconnects never read it again"
+        );
+
+        // A machine stored nowhere is simply not paired.
+        assert_eq!(read_migrating(&current, &legacy, "p/gw-b").unwrap(), None);
+    }
+
+    /// A move that cannot be written keeps the old entry and still answers, so
+    /// the connection goes ahead and nothing is lost.
+    #[test]
+    fn a_failed_move_keeps_the_legacy_entry() {
+        let current = MemorySlot {
+            refuse_writes: true,
+            ..MemorySlot::default()
+        };
+        let legacy = MemorySlot::default();
+        legacy.write("p/gw-a", "refresh-1").unwrap();
+        let token = read_migrating(&current, &legacy, "p/gw-a").unwrap();
+        assert_eq!(token.as_deref(), Some("refresh-1"));
+        assert_eq!(
+            legacy
+                .tokens
+                .lock()
+                .unwrap()
+                .get("p/gw-a")
+                .map(String::as_str),
+            Some("refresh-1")
+        );
+    }
+
+    /// The `security -i` line carries the token as hex only, and refuses a
+    /// name that could end the quoted value or start a second command.
+    #[test]
+    fn the_security_command_never_carries_a_raw_token_or_a_second_command() {
+        let line = add_command("svc", "profile/gw-a", "tok\"en;\n", None).unwrap();
+        assert_eq!(
+            line,
+            format!(
+                "add-generic-password -U -s \"svc\" -a \"profile/gw-a\" -X {}\n",
+                hex::encode("tok\"en;\n")
+            )
+        );
+        assert!(!line.contains("tok\""), "{line}");
+        let with_keychain =
+            add_command("svc", "a", "t", Some(Path::new("/tmp/x y.keychain-db"))).unwrap();
+        assert!(
+            with_keychain.ends_with(" \"/tmp/x y.keychain-db\"\n"),
+            "{with_keychain}"
+        );
+        for account in [
+            "gw\"; delete-keychain login",
+            "gw\nlist-keychains",
+            "gw\\a",
+            "",
+        ] {
+            assert!(
+                add_command("svc", account, "t", None).is_err(),
+                "{account:?}"
+            );
+        }
+    }
+
+    /// The macOS path end to end, in a keychain file of its own: an entry
+    /// `security` wrote is read back by it, replaced in place, and deleted, and
+    /// a missing one is `None`. Ignored by default because it creates (and
+    /// deletes) a keychain; run it with `--ignored` on a Mac.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "creates a temporary keychain; run with --ignored on macOS"]
+    fn the_security_tool_round_trips_in_a_keychain_of_its_own() {
+        struct Scratch(PathBuf);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = std::process::Command::new(SECURITY)
+                    .arg("delete-keychain")
+                    .arg(&self.0)
+                    .status();
+            }
+        }
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let scratch = Scratch(dir.path().join("tokens-test.keychain-db"));
+        for args in [
+            vec!["create-keychain", "-p", "pw"],
+            vec!["unlock-keychain", "-p", "pw"],
+        ] {
+            let status = std::process::Command::new(SECURITY)
+                .args(args)
+                .arg(&scratch.0)
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
+        let store = SecurityTool {
+            service: "rustcode-tokens-test",
+            keychain: Some(scratch.0.clone()),
+        };
+        let account = "profile id/gw-a";
+        assert_eq!(store.read(account).unwrap(), None);
+        store.write(account, "refresh-1").unwrap();
+        assert_eq!(store.read(account).unwrap().as_deref(), Some("refresh-1"));
+        store.write(account, "refresh-2 \"quoted\"").unwrap();
+        assert_eq!(
+            store.read(account).unwrap().as_deref(),
+            Some("refresh-2 \"quoted\"")
+        );
+        store.delete(account).unwrap();
+        assert_eq!(store.read(account).unwrap(), None);
+        store.delete(account).unwrap();
     }
 
     /// The path the fallback writes is inside the configuration directory and
