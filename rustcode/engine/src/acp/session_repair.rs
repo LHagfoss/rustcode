@@ -138,3 +138,27 @@ mod tests {
         assert!(repair_session("acp-repair-missing").is_err());
     }
 }
+
+#[cfg(test)]
+mod opens_in_tests {
+    #[test]
+    fn a_recorded_folder_opens_in_the_same_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = rustcode_session::strip_verbatim(&std::fs::canonicalize(dir.path()).unwrap());
+        assert!(crate::acp::opens_in(dir.path(), &cwd));
+        assert!(!crate::acp::opens_in(&dir.path().join("missing"), &cwd));
+    }
+
+    /// A thread recorded with the verbatim prefix opens in the plain folder
+    /// the app asks for (a Windows thread that would not open).
+    #[cfg(windows)]
+    #[test]
+    fn a_verbatim_record_opens_in_the_plain_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let verbatim = std::fs::canonicalize(dir.path()).unwrap();
+        assert!(verbatim.to_string_lossy().starts_with(r"\\?\"));
+        let plain = rustcode_session::strip_verbatim(&verbatim);
+        assert!(crate::acp::opens_in(&verbatim, &plain));
+        assert!(crate::acp::opens_in(&plain, &plain));
+    }
+}

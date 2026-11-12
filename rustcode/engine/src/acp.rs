@@ -615,6 +615,16 @@ fn canonical_acp_cwd(
     Ok(rustcode_session::strip_verbatim(&canonical))
 }
 
+/// Whether a thread recorded in `recorded` opens in `cwd`, a folder
+/// `canonical_acp_cwd` resolved. The record may carry Windows' verbatim
+/// prefix (`\\?\C:\...`), which `canonicalize` keeps and `cwd` does not, so
+/// both are compared without it.
+pub(crate) fn opens_in(recorded: &std::path::Path, cwd: &std::path::Path) -> bool {
+    std::fs::canonicalize(recorded)
+        .ok()
+        .is_some_and(|path| rustcode_session::strip_verbatim(&path) == cwd)
+}
+
 /// `session/new`'s folder: the one the request names, else the user's home
 /// folder, resolved and checked to be a directory.
 fn session_new_cwd(
@@ -816,7 +826,7 @@ async fn acp_load_session(
             .data("session history escaped the session store"));
     }
     if let Some(workspace) = crate::config::load_session_workspace(&session_id)
-        && std::fs::canonicalize(workspace.cwd).ok().as_ref() != Some(&cwd)
+        && !opens_in(&workspace.cwd, &cwd)
     {
         return Err(agent_client_protocol::Error::invalid_params()
             .data("session/load cwd does not match the recorded workspace"));
