@@ -4307,7 +4307,11 @@ describe("what an agent may do with the messages it queued", () => {
   });
 
   test("steers into a turn end with it: the delegate's links stop working with the thread closed", async () => {
-    const caller = await ready(200);
+    // A turn that lasts long enough for two steers to land in it and for the poll to see it run.
+    await connect(new MockTransport({ delayMs: 15 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 0, 10_000);
+    const caller = useApp.getState().sessions[0]!.id;
+    setPermissionMode(caller, "full");
     const target = useApp.getState().sessions.find((x) => x.cwd === "/Users/you/code/website")!.id;
     await openThread(target);
     selectThread(target);
