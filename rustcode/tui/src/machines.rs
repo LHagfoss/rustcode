@@ -238,11 +238,7 @@ fn print_rows(rows: &[Row]) {
     ]];
     for row in rows {
         table.push(vec![
-            if row.machine.main {
-                format!("{} (main)", row.machine.name)
-            } else {
-                row.machine.name.clone()
-            },
+            row.machine.name.clone(),
             row.machine.platform.clone(),
             if row.route.is_empty() {
                 "—".to_owned()
@@ -280,7 +276,6 @@ fn print_json(rows: &[Row]) {
                 "host_id": row.machine.host_id,
                 "platform": row.machine.platform,
                 "device_id": row.machine.device_id,
-                "main": row.machine.main,
                 "route": row.route,
                 "routes": row.machine.routes.iter().map(|route| serde_json::json!({
                     "kind": route.kind.as_str(),
