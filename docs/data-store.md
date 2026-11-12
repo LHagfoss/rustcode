@@ -132,9 +132,17 @@ and no agent could read it. It is here instead:
   (`prune` in `apps/desktop/src/state/orchestration.ts`): every active link,
   the 50 newest finished ones, and the fan-outs whose links survived (at most
   20). A book over 4 MiB is refused rather than stored.
-- Reading answers `{ "stored": bool, "book": {...} }`. `stored` is false when
-  nothing was ever saved, so the app moves its local copy in once instead of
-  replacing it with an empty book.
+- Reading answers `{ "stored": bool, "book": {...}, "engineLive": [link ids] }`.
+  `stored` is false when nothing was ever saved, so the app moves its local copy
+  in once instead of replacing it with an empty book. `engineLive` lists the
+  links whose turn this engine is running itself (no app was attached when they
+  started); the app does not interrupt those when it connects.
+- The save is a merge, not a blind replace, for what the engine writes itself:
+  a link with `engine: true` that is live keeps the engine's record (and is
+  kept when the app's copy lacks it), a settled one is not taken back to a state
+  that is not final, a counter only goes up, and a fan-out of a live link is
+  kept. The engine opens and settles those links with writes of one link each
+  (`open_link`, `change_link`), in transactions of their own.
 
 The app asks through `_rustcode/data/links/load` and
 `_rustcode/data/links/save` (`engine/src/acp/data.rs`); an engine without them

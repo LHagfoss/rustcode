@@ -381,6 +381,12 @@ export interface Link {
   state: LinkState;
   /** Started the target thread (`start_session`, `fan_out`) rather than messaging an existing one. */
   started?: boolean;
+  /**
+   * The engine opened this link and runs its turn itself, with no app attached
+   * (`rustcode/engine/src/orchestration/local_threads.rs`). It settles it in the
+   * store; the app does not interrupt it while the engine still lists it live.
+   */
+  engine?: boolean;
   harness?: string;
   /** The harness's display name, as the notice writes it (Pi, Codex, Claude Code). */
   harnessName?: string;
@@ -1485,10 +1491,18 @@ export function noteLinkEvent(
 }
 
 /** After a restart: work that was queued or running did not finish here, and nothing restarts by itself. */
-export function interruptActive(book: LinkBook, at = Date.now()): LinkBook {
+export function interruptActive(
+  book: LinkBook,
+  at = Date.now(),
+  engineLive: ReadonlySet<string> = new Set(),
+): LinkBook {
   return {
     ...book,
-    links: book.links.map((l) => (isActive(l.state) ? advanceLink(l, { state: "interrupted" }, at) : l)),
+    // A link the engine runs the turn of (no app was attached when it started)
+    // is not severed: its turn goes on, and the engine settles it in the store.
+    links: book.links.map((l) =>
+      isActive(l.state) && !engineLive.has(l.id) ? advanceLink(l, { state: "interrupted" }, at) : l,
+    ),
   };
 }
 

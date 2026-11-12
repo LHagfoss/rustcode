@@ -333,14 +333,60 @@ export async function syncLinkBook(): Promise<void> {
     if (mine.links.length || Object.keys(mine.grants).length || mine.fanOuts.length) await flushSave();
     return;
   }
-  // Both copies are from before this connect: nothing left active resumes.
+  // Both copies are from before this connect: nothing left active resumes,
+  // except a link the engine itself is running the turn of. It started with no
+  // app attached and its turn goes on; the engine settles it in the store.
+  const engineLive = new Set(
+    Array.isArray(answer.engineLive)
+      ? answer.engineLive.filter((id): id is string => typeof id === "string")
+      : [],
+  );
   const now = Date.now();
-  const merged = interruptActive(mergeBooks(interruptActive(shared, now), book()), now);
+  const merged = interruptActive(
+    mergeBooks(interruptActive(shared, now, engineLive), book()),
+    now,
+    engineLive,
+  );
   useApp.setState({ links: prune(merged) });
   keepLocally(prune(merged));
-  savedText = text(interruptActive(shared, now));
+  savedText = text(interruptActive(shared, now, engineLive));
   // A link this window started while the store was answering is new to it.
-  if (text(prune(merged)) !== text(prune(interruptActive(shared, now)))) scheduleSave();
+  if (text(prune(merged)) !== text(prune(interruptActive(shared, now, engineLive)))) scheduleSave();
+  if (engineLive.size) watchEngineLinks();
+}
+
+/** How often the store is read for a link the engine runs, until it settles. */
+const ENGINE_LINK_CHECK_MS = 3000;
+let engineWatch: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * A link the engine runs the turn of settles in the store, not here: read the
+ * store while one is active, and take what settled (a settled record beats one
+ * that did not, as `mergeBooks` decides).
+ */
+function watchEngineLinks() {
+  if (engineWatch !== undefined) return;
+  const check = async () => {
+    engineWatch = undefined;
+    if (!book().links.some((l) => l.engine === true && isActive(l.state))) return;
+    try {
+      const answer = await request<JsonObject>(Method.dataLinksLoad, {}, 10_000);
+      const shared = parseBook(answer.book);
+      if (shared) {
+        const next = prune(mergeBooks(shared, book()));
+        if (text(next) !== text(book())) {
+          useApp.setState({ links: next });
+          keepLocally(next);
+        }
+      }
+    } catch (error) {
+      console.error("the link book was not read from the data store", error);
+    }
+    if (book().links.some((l) => l.engine === true && isActive(l.state))) {
+      engineWatch = setTimeout(check, ENGINE_LINK_CHECK_MS);
+    }
+  };
+  engineWatch = setTimeout(check, ENGINE_LINK_CHECK_MS);
 }
 
 function setBook(fn: (book: LinkBook) => LinkBook) {
@@ -4922,6 +4968,8 @@ const steerText = (thread: string, fallback: string) =>
  */
 export function linkSteered(thread: string, link: string | undefined, text: string): void {
   if (!link) return;
+  // The clock starts at the steer: a steered link has no turn of its own to start it, and without a
+  // start time `reconcileLinks` would count it from when it was made.
   linkStarted(link);
   const said = steerText(thread, text);
   const current = useApp.getState().threads[thread];
@@ -5244,6 +5292,9 @@ export async function stopLink(id: string): Promise<boolean> {
 /** How long a working link may sit beside an idle thread before it is read as lost, not just starting. */
 export const STALE_LINK_MS = 20_000;
 
+/** How long a working link with no start time may sit beside an idle thread: a worktree or a cold harness can take minutes. */
+export const UNSTARTED_LINK_MS = 10 * 60_000;
+
 /**
  * Settles the working links whose thread, by its real status, runs nothing: a turn that ended
  * without settling its link (a steer, a window that missed the end) must not read Working for
@@ -5257,11 +5308,14 @@ export function reconcileLinks(now = Date.now()): void {
   if (!state.sessionsLoaded) return;
   const stale = book().links.filter((link) => {
     if (link.state !== "working" && link.state !== "needs_user") return false;
-    // Only a turn that has begun can have ended unseen: a link with no start time is still waiting
-    // for its turn (a worktree being made, a cold harness), and the thread beside it is idle for now.
-    if (isRemoteThread(link.target) || link.startedAt === undefined || now - link.startedAt < STALE_LINK_MS) {
-      return false;
-    }
+    // A link that is only starting (a worktree being made, a cold harness) has an idle thread beside
+    // it for a moment. One with a start time gets `STALE_LINK_MS` from it; one that never recorded a
+    // start (a steered link saved before `linkSteered` set it, a turn that never began) counts from
+    // when it was made and gets the longer `UNSTARTED_LINK_MS`, so a slow start is not read as lost
+    // while a forgotten link still does not read Working for hours.
+    if (isRemoteThread(link.target)) return false;
+    const idleFor = link.startedAt === undefined ? now - link.createdAt : now - link.startedAt;
+    if (idleFor < (link.startedAt === undefined ? UNSTARTED_LINK_MS : STALE_LINK_MS)) return false;
     const thread = state.threads[link.target];
     if (thread?.loading || thread?.queue.some((q) => q.link === link.id)) return false;
     if (!thread && !sessionById(state, link.target)) return false;

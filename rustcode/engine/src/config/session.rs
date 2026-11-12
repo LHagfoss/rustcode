@@ -796,6 +796,40 @@ pub fn save_session_yolo(session_id: &str, enabled: bool) {
     }
 }
 
+/// The access a client last ran a thread at (`ask`, `edits` or `full`), kept
+/// beside the thread so the engine can read it with no app attached: the app
+/// narrows a thread to Ask under a Full default in its own store, and the only
+/// place the engine hears of it is the `_meta.rustcode.access` of each prompt.
+const ACCESS_FILE: &str = "access";
+
+pub(crate) fn save_session_access(session_id: &str, access: &str) {
+    if !rustcode_session::valid_session_id(session_id)
+        || !matches!(access, "ask" | "edits" | "full")
+    {
+        return;
+    }
+    let Some(dir) = get_active_session_dir(session_id).filter(|dir| dir.is_dir()) else {
+        return;
+    };
+    let path = dir.join(ACCESS_FILE);
+    if std::fs::read_to_string(&path).is_ok_and(|text| text.trim() == access) {
+        return;
+    }
+    if let Err(error) = std::fs::write(&path, access) {
+        crate::dbg_log!("failed to record access for session {session_id}: {error}");
+    }
+}
+
+pub(crate) fn load_session_access(session_id: &str) -> Option<String> {
+    if !rustcode_session::valid_session_id(session_id) {
+        return None;
+    }
+    let text =
+        std::fs::read_to_string(get_active_session_dir(session_id)?.join(ACCESS_FILE)).ok()?;
+    let access = text.trim();
+    matches!(access, "ask" | "edits" | "full").then(|| access.to_owned())
+}
+
 /// Record a session's model profile and reasoning effort. Sessions without a
 /// valid ID are skipped.
 pub fn save_session_model(session_id: &str, model: rustcode_session::SessionModel) {

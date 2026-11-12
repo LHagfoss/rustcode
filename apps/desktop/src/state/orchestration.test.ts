@@ -697,6 +697,9 @@ describe("orchestration rules", () => {
     expect(truncated).toBe(true);
     const b = interruptActive(book([link("a", "b"), link("a", "c", "done")]));
     expect(b.links.map((l) => l.state)).toEqual(["interrupted", "done"]);
+    // A link the engine runs the turn of is not severed by the app attaching.
+    const engineRun = interruptActive(book([link("a", "b"), link("a", "c")]), Date.now(), new Set(["a/b"]));
+    expect(engineRun.links.map((l) => l.state)).toEqual(["working", "interrupted"]);
     const f = forget(book([link("a", "b"), link("c", "a")]), "a");
     expect(f.links.map((l) => [l.target, l.state])).toEqual([["a", "failed"]]);
   });
