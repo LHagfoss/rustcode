@@ -12,18 +12,15 @@ import { cx } from "./primitives";
 
 /**
  * Room the traffic lights take, plus the SwiftUI app's gap after them. With
- * `trafficLightPosition` x 20 the zoom button ends at x 80 (measured in the
- * window); the SwiftUI app's lights end near x 66 with its first cluster at
- * 80 (SidebarMetrics.barLeading), a 14 pt gap, so the row starts at 94.
+ * The sidebar keeps the native controls clear of its content; the inset also
+ * leaves room for the show-sidebar control when the sidebar is hidden.
  */
 export const LIGHTS_INSET = 94;
 
 /**
- * The title row's height: the window's drag strip, the traffic lights and the
- * main column's header all sit on this one line. macOS gets 44 so the controls
- * clear the window's top edge; Windows and Linux keep 36. The lights' centre
- * is (close button height 14 + `trafficLightPosition.y`) / 2 (tao sizes their
- * bar to that and centres them in it), so y 30 puts it on 22, the row's centre.
+ * The title row's height: the window's drag strip and the main column's header
+ * share this line. macOS gets 44 so controls clear the window's top edge;
+ * Windows and Linux keep 36. The native lights use the Tauri config's inset.
  * Read from the user agent: it is needed at import, before `data-platform` is set.
  */
 export const TITLEBAR_HEIGHT = currentPlatform() === "mac" ? 44 : 36;

@@ -2337,10 +2337,9 @@ export function Sidebar() {
         )}
         style={{ width, minWidth: width }}
       >
-        {/* One row: the traffic lights, then the toggle and Settings where they stand with the sidebar
-            hidden (docs/design.md › Title row). */}
+        {/* Keep the toggle and Settings at the right edge, clear of the window controls. */}
         <TitlebarRow className="pr-3">
-          <Cluster className="shrink-0">
+          <Cluster className="ml-auto shrink-0">
             <ClusterButton
               label="Hide sidebar"
               tooltip={`Hide sidebar (${toggleKey})`}
