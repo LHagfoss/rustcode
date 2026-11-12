@@ -19,6 +19,7 @@ import { initializeParams, Method, parseSessionList, type SessionSummary } from 
 import { currentPlatform } from "../lib/platform";
 import { hasShell, shellCall } from "../lib/shell";
 import { appVersion } from "../lib/updater";
+import { forgetMachineCache, forgetTranscript, loadThreadList, saveThreadList } from "./machineCache";
 import {
   APP_VERSION,
   askConfirm,
@@ -254,6 +255,16 @@ export const useMachines = create<MachinesStore>(() => ({
   probing: false,
   local: readLocalIdentity(),
 }));
+
+// What a machine last listed is kept on this computer, so its rows survive the machine going
+// away and the app restarting (`state/machineCache.ts`). A live read replaces the rows in memory,
+// and this keeps the newest of them.
+useMachines.subscribe((state, prev) => {
+  if (state.sessions === prev.sessions) return;
+  for (const [host, rows] of Object.entries(state.sessions)) {
+    if (rows !== prev.sessions[host]) saveThreadList(host, rows);
+  }
+});
 
 // ---------------------------------------------------------------- labels
 
@@ -813,7 +824,22 @@ export async function refreshMachines(): Promise<void> {
         since[machine.id] = Number.isNaN(last) ? now : last;
       }
     }
-    useMachines.setState({ machines, offlineSince: since, ready: true, error: null });
+    // A machine this run has not listed yet draws the threads this computer last read from it, so
+    // an offline one keeps its rows (and a reconnect replaces them: `readThreads`).
+    const state = useMachines.getState();
+    const cached: Record<string, SessionSummary[]> = {};
+    for (const machine of machines) {
+      if (state.sessions[machine.id]) continue;
+      const rows = loadThreadList(machine.id);
+      if (rows.length) cached[machine.id] = rows;
+    }
+    useMachines.setState({
+      machines,
+      offlineSince: since,
+      ready: true,
+      error: null,
+      ...(Object.keys(cached).length ? { sessions: { ...state.sessions, ...cached } } : {}),
+    });
     for (const machine of machines) void attach(machine);
     for (const id of [...links.keys()]) {
       if (!machines.some((machine) => machine.id === id)) detach(id);
@@ -869,6 +895,7 @@ function forgetCreated(machine: string, sessionId: string | undefined): void {
  */
 export function forgetMachineThread(machine: string, sessionId: string): void {
   tombstoneThread(threadKey(machine, sessionId));
+  forgetTranscript(threadKey(machine, sessionId));
   useMachines.setState((state) => {
     const listed = state.sessions[machine];
     if (!listed?.some((session) => session.id === sessionId)) return {};
@@ -1017,6 +1044,8 @@ export function resetMachinesForTests(): void {
 
 /** Stop a machine's channel: the shell stops its supervisor with it. */
 function detach(id: string): void {
+  // A machine that is removed leaves nothing of its threads on this computer.
+  forgetMachineCache(id);
   const link = links.get(id);
   links.delete(id);
   if (!link) return;
