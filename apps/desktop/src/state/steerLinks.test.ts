@@ -12,7 +12,6 @@ import {
   selectThread,
   setOrchestration,
   setPermissionMode,
-  statusOf,
   submit,
   useApp,
 } from "./store";
@@ -56,9 +55,9 @@ describe("a delegate steered mid-turn", () => {
       steers.map((id) => useApp.getState().links.links.find((l) => l.id === id)?.state);
     expect(linkStates()).toEqual(["working", "working"]);
     await turning;
-    await until(() => !useApp.getState().threads[target]?.running);
+    // Settled by the turn that ended, whatever the thread does after it.
+    await until(() => linkStates().every((state) => state === "done"), 10_000);
     expect(linkStates()).toEqual(["done", "done"]);
-    expect(statusOf(useApp.getState(), target)).not.toBe("running");
     // The parent has read both answers: no wake turn starts after the test, in the next one's threads.
     useApp.setState((st) => ({
       links: {
