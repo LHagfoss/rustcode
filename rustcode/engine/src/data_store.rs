@@ -879,6 +879,8 @@ fn now_ms() -> i64 {
 /// process (or this one after a restart) can tell a running engine's link from
 /// one whose engine died with the turn still `working`.
 pub fn beat_engine_links() {
+    // Notes a sleep before any sweep does (`clock_recently_jumped`).
+    clock_recently_jumped();
     let at = now_ms();
     for id in engine_live_links() {
         let _ = change_link(&id, |mut link| {
@@ -888,21 +890,118 @@ pub fn beat_engine_links() {
     }
 }
 
-/// An engine's link still `working` that no live engine stamps any more: the
-/// engine died mid-turn. This process's own live links never count.
-fn orphaned_link(link: &Value, live: &HashSet<String>, at: i64) -> bool {
+/// Names this process among the engines that run links: a link carries the
+/// owner that opened it (`engineOwner`), so a reader can tell its own links
+/// from another process's (the app's engine and the background server share
+/// one store).
+pub fn engine_owner() -> &'static str {
+    static OWNER: LazyLock<String> = LazyLock::new(|| {
+        format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or(0)
+        )
+    });
+    &OWNER
+}
+
+/// When the engine last stamped `link` (or opened it).
+fn link_stamp(link: &Value) -> i64 {
+    link.get("engineBeat")
+        .and_then(Value::as_i64)
+        .or_else(|| link.get("createdAt").and_then(Value::as_i64))
+        .unwrap_or(0)
+}
+
+/// Whether an engine runs this link's turn right now: this process does and it
+/// is in its live set, or whichever process does has stamped it within
+/// [`ENGINE_BEAT_STALE_MS`]. Only an active `engine: true` link can be live.
+fn link_running(link: &Value, live: &HashSet<String>, at: i64) -> bool {
     if link.get("engine").and_then(Value::as_bool) != Some(true)
         || !is_active_link(link.get("state").and_then(Value::as_str))
-        || link_id(link).is_some_and(|id| live.contains(id))
     {
         return false;
     }
-    let stamped = link
-        .get("engineBeat")
-        .and_then(Value::as_i64)
-        .or_else(|| link.get("createdAt").and_then(Value::as_i64))
-        .unwrap_or(0);
-    at - stamped > ENGINE_BEAT_STALE_MS
+    if link_id(link).is_some_and(|id| live.contains(id)) {
+        return true;
+    }
+    // Another process's stamp counts; so does a stamp of this one, whose live
+    // set no longer has the link only when its turn just ended.
+    at - link_stamp(link) <= ENGINE_BEAT_STALE_MS
+}
+
+/// An engine's link still `working` that no engine stamps any more: the engine
+/// died mid-turn. A link this process runs, or any process stamped lately, never
+/// counts.
+fn orphaned_link(link: &Value, live: &HashSet<String>, at: i64) -> bool {
+    link.get("engine").and_then(Value::as_bool) == Some(true)
+        && is_active_link(link.get("state").and_then(Value::as_str))
+        && !link_running(link, live, at)
+}
+
+/// What the clock did between two looks, kept to tell a laptop's sleep from
+/// time passing. The monotonic clock (`Instant`) stops while the machine
+/// sleeps and the wall clock does not, so a wall interval much longer than
+/// the monotonic one is a sleep or a clock jump: for a while after it, the
+/// other engines have not had the chance to stamp their links, and nothing is
+/// swept.
+struct ClockWatch {
+    looked: Instant,
+    wall: i64,
+    quiet_until: Option<Instant>,
+}
+
+/// A wall interval this much longer than the monotonic one is a jump.
+const CLOCK_JUMP_MS: i64 = 5_000;
+/// How long after a jump the sweep waits: two beats and some, so every live
+/// engine has stamped again.
+const AFTER_JUMP_QUIET: Duration = Duration::from_secs(25);
+
+impl ClockWatch {
+    fn new() -> Self {
+        Self {
+            looked: Instant::now(),
+            wall: now_ms(),
+            quiet_until: None,
+        }
+    }
+
+    /// Look at the clocks and say whether a sweep should wait. `since_monotonic`
+    /// and `since_wall` are the intervals since the last look.
+    fn observe(&mut self, since_monotonic: Duration, since_wall_ms: i64, now: Instant) -> bool {
+        let gap = since_wall_ms - since_monotonic.as_millis() as i64;
+        if gap.abs() >= CLOCK_JUMP_MS {
+            self.quiet_until = Some(now + AFTER_JUMP_QUIET);
+        }
+        self.quiet_until.is_some_and(|until| now < until)
+    }
+
+    fn look(&mut self) -> bool {
+        let now = Instant::now();
+        let wall = now_ms();
+        let quiet = self.observe(now - self.looked, wall - self.wall, now);
+        self.looked = now;
+        self.wall = wall;
+        quiet
+    }
+}
+
+fn clock_watch() -> &'static Mutex<ClockWatch> {
+    static WATCH: LazyLock<Mutex<ClockWatch>> = LazyLock::new(|| Mutex::new(ClockWatch::new()));
+    &WATCH
+}
+
+/// Whether the clocks say the machine just woke or jumped, which also counts
+/// as a look for the next call. The beat loop looks too, so a long gap shows up
+/// in whichever of them runs first after waking.
+pub fn clock_recently_jumped() -> bool {
+    clock_watch()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .look()
 }
 
 /// The link as the app would leave it after a restart.
@@ -929,9 +1028,20 @@ pub fn interrupt_orphaned_links() -> usize {
 
 /// [`interrupt_orphaned_links`] against one store file.
 pub fn interrupt_orphaned_links_at(path: &Path) -> Result<usize, String> {
+    // Nothing is swept right after a sleep or a clock jump, until every engine
+    // has had the chance to stamp again; this process stamps its own links
+    // first, so a reader in another process finds them fresh. Its own live
+    // links are never swept in any case.
+    if clock_recently_jumped() {
+        beat_engine_links();
+        return Ok(0);
+    }
+    sweep_orphaned_links(path, now_ms())
+}
+
+fn sweep_orphaned_links(path: &Path, at: i64) -> Result<usize, String> {
     let connection = open(path)?;
     let live = engine_live().clone();
-    let at = now_ms();
     // Look first without the write lock: almost every call finds nothing.
     let stored = read_links(&connection)?;
     if !stored.iter().any(|link| orphaned_link(link, &live, at)) {
@@ -967,6 +1077,7 @@ fn protect_engine_links(
     mut incoming: Vec<Value>,
     stored: &[Value],
     live: &HashSet<String>,
+    at_ms: i64,
 ) -> Vec<Value> {
     for kept in stored {
         let Some(id) = link_id(kept) else {
@@ -981,7 +1092,7 @@ fn protect_engine_links(
             Some(at) => {
                 let theirs = incoming[at].get("state").and_then(Value::as_str);
                 let settled_here = is_final_link(state) && !is_final_link(theirs);
-                if live.contains(id) || settled_here {
+                if link_running(kept, live, at_ms) || settled_here {
                     incoming[at] = kept.clone();
                 }
             }
@@ -1195,7 +1306,7 @@ pub fn save_link_book_at(path: &Path, book: &Value) -> Result<(), String> {
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let protected = protect_engine_links(incoming, &stored_links, &live);
+    let protected = protect_engine_links(incoming, &stored_links, &live, now_ms());
     let links = kept_links(&protected);
     let mut book_state = object.clone();
     // A fan-out of a link the engine runs is kept with it.
@@ -1316,7 +1427,21 @@ pub fn load_link_book_at(path: &Path) -> Result<Value, String> {
     }
     // The links this process runs a turn for: the app that loads the book must
     // not take them for severed ones and interrupt them.
-    Ok(json!({ "stored": stored, "book": book, "engineLive": engine_live_links() }))
+    // The links an engine runs the turn of, whichever process it is: this
+    // one's live set, and any other's stamped lately.
+    let live = engine_live().clone();
+    let at = now_ms();
+    let running: Vec<&str> = book["links"]
+        .as_array()
+        .map(|links| {
+            links
+                .iter()
+                .filter(|link| link_running(link, &live, at))
+                .filter_map(link_id)
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(json!({ "stored": stored, "book": book, "engineLive": running }))
 }
 
 // ------------------------------------------------------------- command receipts
@@ -4290,6 +4415,138 @@ mod tests {
         assert_eq!(state(live["id"].as_str().unwrap()), Some(json!("working")));
         assert_eq!(state(fresh["id"].as_str().unwrap()), Some(json!("working")));
         engine_link_ended(live["id"].as_str().unwrap());
+    }
+
+    /// A link opened by another engine process, stamped `age_ms` ago.
+    fn other_engine_link(path: &Path, caller: &str, age_ms: i64) -> String {
+        let opened = open_link_at(path, caller, |n| {
+            let mut link = engine_link(&format!("{caller}/{n}"), caller, "working");
+            link["engineOwner"] = json!("another-process");
+            link["engineBeat"] = json!(now_ms() - age_ms);
+            link
+        })
+        .unwrap();
+        opened["id"].as_str().unwrap().to_owned()
+    }
+
+    fn state_of(book: &Value, id: &str) -> Value {
+        book["book"]["links"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|link| link["id"] == json!(id))
+            .map(|link| link["state"].clone())
+            .unwrap_or(Value::Null)
+    }
+
+    #[test]
+    fn a_link_another_process_is_stamping_is_not_this_ones_to_interrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        // The background server runs this link and stamped it 5 s ago; this
+        // process (the app's engine) has nothing of it in its live set.
+        let running = other_engine_link(&path, "caller-server-live", 5_000);
+        let dead = other_engine_link(&path, "caller-server-dead", 120_000);
+
+        // Its sweep leaves the stamped link alone and settles the dead one.
+        assert_eq!(sweep_orphaned_links(&path, now_ms()).unwrap(), 1);
+        let loaded = load_link_book_at(&path).unwrap();
+        assert_eq!(state_of(&loaded, &running), json!("working"));
+        assert_eq!(state_of(&loaded, &dead), json!("interrupted"));
+        // The app is told it runs, so `syncLinkBook` does not interrupt it.
+        let live: Vec<&str> = loaded["engineLive"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(live.contains(&running.as_str()), "{live:?}");
+        assert!(!live.contains(&dead.as_str()), "{live:?}");
+
+        // The app saves its copy, where it had interrupted the link: the
+        // other engine's link stays as that engine has it.
+        let mut mine = engine_link(&running, "caller-server-live", "interrupted");
+        mine["engineOwner"] = json!("another-process");
+        save_link_book_at(
+            &path,
+            &json!({ "links": [mine], "grants": {}, "counters": {}, "fanOuts": [] }),
+        )
+        .unwrap();
+        assert_eq!(
+            state_of(&load_link_book_at(&path).unwrap(), &running),
+            json!("working")
+        );
+    }
+
+    #[test]
+    fn a_wake_from_sleep_holds_the_sweep_until_engines_have_stamped_again() {
+        let mut clock = ClockWatch::new();
+        let start = Instant::now();
+        // Steady: a second of either clock is no jump.
+        assert!(!clock.observe(Duration::from_secs(1), 1_000, start));
+        // A laptop slept for two minutes: the wall clock moved, the monotonic one did not.
+        assert!(clock.observe(Duration::from_secs(1), 121_000, start));
+        // Still quiet a beat later, and quiet ends once every engine had its turn.
+        assert!(clock.observe(
+            Duration::from_secs(10),
+            10_000,
+            start + Duration::from_secs(10)
+        ));
+        assert!(!clock.observe(
+            Duration::from_secs(10),
+            10_000,
+            start + AFTER_JUMP_QUIET + Duration::from_secs(1)
+        ));
+        // A clock set back counts as a jump too.
+        assert!(clock.observe(
+            Duration::from_secs(1),
+            -60_000,
+            start + AFTER_JUMP_QUIET + Duration::from_secs(2)
+        ));
+    }
+
+    #[test]
+    fn a_sleep_does_not_get_a_running_link_interrupted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        // Stamped 90 s ago by an engine that slept with the machine: stale by
+        // the clock, running in fact.
+        let sleepy = other_engine_link(&path, "caller-slept", 90_000);
+        // A sweep that finds the clocks jumped changes nothing...
+        let mut clock = ClockWatch::new();
+        let now = Instant::now();
+        assert!(clock.observe(Duration::from_secs(1), 120_000, now));
+        // ...so the engine's next stamp lands before anyone takes the link.
+        change_link_at(&path, &sleepy, |mut link| {
+            link["engineBeat"] = json!(now_ms());
+            link
+        })
+        .unwrap();
+        assert_eq!(sweep_orphaned_links(&path, now_ms()).unwrap(), 0);
+        assert_eq!(
+            state_of(&load_link_book_at(&path).unwrap(), &sleepy),
+            json!("working")
+        );
+    }
+
+    /// This process's own live links are never swept, however old the stamp.
+    #[test]
+    fn a_link_this_process_runs_is_never_swept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let caller = "caller-own-live";
+        let opened = open_link_at(&path, caller, |n| {
+            let mut link = engine_link(&format!("{caller}/{n}"), caller, "working");
+            link["engineOwner"] = json!(engine_owner());
+            link["engineBeat"] = json!(now_ms() - 600_000);
+            link
+        })
+        .unwrap();
+        let id = opened["id"].as_str().unwrap();
+        engine_link_started(id);
+        assert_eq!(sweep_orphaned_links(&path, now_ms()).unwrap(), 0);
+        engine_link_ended(id);
+        assert_eq!(sweep_orphaned_links(&path, now_ms()).unwrap(), 1);
     }
 
     #[test]

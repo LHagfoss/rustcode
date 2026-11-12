@@ -961,6 +961,7 @@ fn record_link(
             "state": "working",
             "started": started,
             "engine": true,
+            "engineOwner": crate::data_store::engine_owner(),
             "engineBeat": at,
             "harness": harness,
             "harnessName": harness_name,

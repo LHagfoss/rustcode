@@ -367,13 +367,17 @@ What it does not do, and says so by name:
   (`_rustcode/data/links/load` answers `engineLive`, and `syncLinkBook` skips
   those), and the app's whole-book save cannot replace it or move a counter
   back (`docs/data-store.md`). The app reads the store every few seconds while
-  one is active and takes what settled. The engine stamps its live links
-  (`engineBeat`) every 10 seconds. If it dies mid-turn, a link nobody stamps for
-  45 seconds is interrupted by the next reader — the engine at start, any read
-  of the book (so `wait_session` and the slot count never see it as working), or
-  the app — rather than left `working` for good. A laptop asleep for longer than
-  that can have a live link interrupted by another process; when its turn ends
-  the engine still settles it. A settled engine link stays in the book even when
+  one is active and takes what settled. Each link names the process that opened it (`engineOwner`),
+  and that engine stamps it (`engineBeat`) every 10 seconds. A link is running
+  if the process holds it in its live set, or if anyone stamped it in the last
+  45 seconds — so the app's engine and the background server, which share one
+  store, never interrupt each other's links, and `engineLive` lists the links
+  running in either. Only a link no engine has stamped for 45 seconds is
+  interrupted, by the next reader (the engine at start, any read of the book,
+  so `wait_session` and the slot count never see it as working, or the app).
+  After a sleep or a clock jump (the wall clock moves further than the
+  monotonic one) nothing is swept for 25 seconds, until every engine has
+  stamped again. A settled engine link stays in the book even when
   a stale app copy never saw it.
 
 Management and merge tools (`update_session`, `configure_session`,
