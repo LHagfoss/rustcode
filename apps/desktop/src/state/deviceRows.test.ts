@@ -1,6 +1,6 @@
-// What the Devices view says, without a window: the glyph a platform gets, the
-// chip and the line under a machine's name, the last error in words, and the
-// version sentence when the two ends differ.
+// What the app says about a machine, without a window: the glyph a platform
+// gets, the state and the line under a machine's name, the last error in words,
+// and the version sentence when the two ends differ.
 
 import { describe, expect, test } from "bun:test";
 import type { SessionSummary } from "../acp/types";
@@ -49,11 +49,31 @@ describe("a device's glyph", () => {
 
 describe("a device's chip", () => {
   test("says the state, and the tone follows it", () => {
-    expect(deviceStatus({ state: "connected" })).toEqual({ label: "Connected", tone: "ok" });
-    expect(deviceStatus({ state: "connecting" })).toEqual({ label: "Connecting", tone: "idle" });
-    expect(deviceStatus({ state: "offline" })).toEqual({ label: "Offline", tone: "warn" });
-    expect(deviceStatus({ state: "needsPairing" })).toEqual({ label: "Needs pairing", tone: "bad" });
-    expect(deviceStatus({ state: "stopped" })).toEqual({ label: "Not connected", tone: "idle" });
+    expect(deviceStatus({ state: "connected", retryInSecs: null })).toEqual({
+      label: "Connected",
+      tone: "ok",
+    });
+    expect(deviceStatus({ state: "connecting", retryInSecs: null })).toEqual({
+      label: "Connecting",
+      tone: "idle",
+    });
+    expect(deviceStatus({ state: "offline", retryInSecs: null })).toEqual({
+      label: "Offline",
+      tone: "warn",
+    });
+    // The shell retries it on its own: reconnecting, not a failure to act on.
+    expect(deviceStatus({ state: "offline", retryInSecs: 4 })).toEqual({
+      label: "Reconnecting…",
+      tone: "idle",
+    });
+    expect(deviceStatus({ state: "needsPairing", retryInSecs: null })).toEqual({
+      label: "Needs pairing",
+      tone: "bad",
+    });
+    expect(deviceStatus({ state: "stopped", retryInSecs: null })).toEqual({
+      label: "Not connected",
+      tone: "idle",
+    });
   });
 
   test("this computer's follows the app's own engine", () => {

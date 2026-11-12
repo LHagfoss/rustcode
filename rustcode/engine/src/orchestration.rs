@@ -23,6 +23,7 @@ use crate::preview::PreviewClient;
 use crate::tools::{ToolErrorKind, ToolExecutionOutput};
 
 pub mod hub;
+pub mod local;
 pub mod mcp_server;
 
 pub const METHOD: &str = "_rustcode/orchestration";
@@ -1201,13 +1202,21 @@ pub async fn execute(
     name: &str,
     args: &Value,
 ) -> ToolExecutionOutput {
-    let (client, version) = {
+    let (client, version, local, session_id) = {
         let state = state.lock().await;
         (
             state.orchestration_client.clone(),
             state.orchestration_version,
+            state.local_orchestration,
+            state.active_session_id.clone(),
         )
     };
+    // No client hosts the tools: the engine answers what it can itself and
+    // names the app for the rest (#3422), instead of saying the tool does not
+    // exist.
+    if client.is_none() && local {
+        return local::answer(&session_id, cancel, name, args).await;
+    }
     execute_versioned(client, version, cancel, name, args).await
 }
 
@@ -1354,6 +1363,7 @@ fn output(name: &str, value: Value) -> ToolExecutionOutput {
         let message = error.get("message").and_then(Value::as_str).unwrap_or("");
         let kind = match code {
             "denied" => ToolErrorKind::PermissionDenied,
+            "unavailable" => ToolErrorKind::UnavailableDependency,
             "not_found" | "target_unavailable" | "not_allowed" | "conflict" => {
                 ToolErrorKind::Validation
             }

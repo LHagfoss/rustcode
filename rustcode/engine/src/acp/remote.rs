@@ -546,6 +546,18 @@ impl RemoteManager {
         manager
     }
 
+    /// Give a manager that already serves threads a link factory of its own (tests of the
+    /// engine's request path, which cannot reach a gateway).
+    #[cfg(test)]
+    pub(crate) fn use_connector(
+        &self,
+        make: impl Fn() -> Box<dyn OwnerConnector> + Send + Sync + 'static,
+    ) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.connector = Some(Arc::new(make));
+        }
+    }
+
     fn get(&self, session_id: &str) -> Option<Arc<Share>> {
         self.inner
             .lock()

@@ -223,9 +223,19 @@ pub(crate) fn root_schema_policy(
     } else {
         policy
     };
-    // Only where delegation is on, as for subagents.
-    if s.orchestration_client.is_some() && s.delegation_active && !compact_tool_prompt {
-        policy.with_orchestration_tools(s.orchestration_version)
+    // Only where delegation is on, as for subagents. A thread with no app
+    // still gets the tools: the engine answers the reads and names the app for
+    // the rest (#3422).
+    if (s.orchestration_client.is_some() || s.local_orchestration)
+        && s.delegation_active
+        && !compact_tool_prompt
+    {
+        let version = if s.orchestration_client.is_some() {
+            s.orchestration_version
+        } else {
+            crate::orchestration::VERSION
+        };
+        policy.with_orchestration_tools(version)
     } else {
         policy
     }

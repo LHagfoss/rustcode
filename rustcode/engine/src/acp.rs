@@ -22,7 +22,7 @@ mod server_status;
 mod session;
 pub(crate) mod session_move;
 mod session_repair;
-mod settings;
+pub(crate) mod settings;
 mod steer;
 mod streaming;
 mod telemetry;
@@ -656,6 +656,9 @@ fn apply_client_info(
     state.desktop_client = preview::desktop_client_for(info.desktop, clients);
     (state.orchestration_client, state.orchestration_version) =
         preview::orchestration_for(info.orchestration, clients);
+    // No app hosting the tools: this engine serves the reads and names the app
+    // for the rest (#3422). An app that turned them off keeps them off.
+    state.local_orchestration = info.orchestration == 0 && !clients.app_attached();
     state.smart_ui_client = preview::smart_ui_client_for(
         info.smart_ui == crate::app::SmartUi::On && info.smart_ui_preview,
         clients,
@@ -674,6 +677,8 @@ async fn create_builtin_session(
     let cwd = session_new_cwd(&request.cwd)?;
     let mut state = new_session_state(&cwd);
     let session_id = state.active_session_id.clone();
+    // The name the thread was made with, from the app that made it (issue 3524).
+    crate::config::save_requested_title(&session_id, request.meta.as_ref());
     // Who started this thread, from the `_meta.rustcode.parent` its
     // caller gave: kept in the thread's own metadata, not only in
     // the link book the app prunes (`thread_parent.rs`).
@@ -1597,6 +1602,21 @@ impl AcpServer {
         }
     }
 
+    /// Tell every client that lists threads about a thread just made: the
+    /// machine's server owns its threads, so the app on it and every other
+    /// connected app list the new row at once, whichever client asked for
+    /// `session/new` (docs/desktop.md › Several machines).
+    fn announce_thread_created(&self, notification: ThreadCreatedNotification) {
+        self.clients
+            .broadcast_to(clients::Capability::Threads, notification);
+    }
+
+    /// Tell every client that lists threads about a thread just trashed.
+    fn announce_thread_deleted(&self, notification: ThreadDeletedNotification) {
+        self.clients
+            .broadcast_to(clients::Capability::Threads, notification);
+    }
+
     /// Advertise thread creation only while a connected client can list the
     /// thread the engine starts for a paired device.
     fn refresh_thread_host(&self) {
@@ -1766,6 +1786,28 @@ pub(crate) struct ThreadCreatedNotification {
     pub harness: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+}
+
+/// A thread a client trashed (`_rustcode/threads/delete`): every client that lists threads drops
+/// the row, so a machine's app and the app driving it from another computer agree on what is there.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcNotification,
+)]
+#[notification(method = "_rustcode/threads/deleted")]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ThreadDeletedNotification {
+    pub session_id: String,
+}
+
+/// The app trashed a thread's folder (its shell moves it to the trash): this is what tells every
+/// other client, since no one else can see that folder go.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcRequest,
+)]
+#[request(method = "_rustcode/threads/delete", response = serde_json::Value)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ThreadDeleteRequest {
+    pub session_id: String,
 }
 
 #[derive(
@@ -2247,25 +2289,48 @@ async fn serve_connection(
                         Ok(prepared) => prepared,
                         Err(error) => return responder.respond_with_error(error),
                     };
+                    // The row every other client is told about: the folder the thread runs in,
+                    // which is the worktree's when it starts in one, not the checkout the caller
+                    // named (it would otherwise be listed under the wrong project).
+                    let cwd = request.cwd.clone();
                     // An external harness starts a process, which can take a
                     // while; it does not hold the dispatch loop.
                     let peer = server.clients.peer(client_id, &_connection);
                     if let Some(asked) = harnesses::external_request(&request) {
                         let external = server.external.clone();
                         let remote = server.remote.clone();
+                        let harness = asked.harness.clone();
+                        let announced = server.clone();
                         return _connection.spawn(async move {
                             match harnesses::new_session(&external, request, asked, &peer, &remote)
                                 .await
                             {
-                                Ok(response) => responder.respond(
-                                    crate::worktrees::finish_new(response, worktree.as_ref()),
-                                )?,
+                                Ok(response) => {
+                                    announced.announce_thread_created(ThreadCreatedNotification {
+                                        session_id: response.session_id.to_string(),
+                                        cwd: cwd.clone(),
+                                        title: None,
+                                        harness,
+                                        model: None,
+                                    });
+                                    responder.respond(crate::worktrees::finish_new(
+                                        response,
+                                        worktree.as_ref(),
+                                    ))?;
+                                }
                                 Err(error) => responder.respond_with_error(error)?,
                             }
                             Ok(())
                         });
                     }
                     let response = create_builtin_session(&server, &peer, request).await?;
+                    server.announce_thread_created(ThreadCreatedNotification {
+                        session_id: response.session_id.to_string(),
+                        cwd,
+                        title: None,
+                        harness: Some(crate::harness::BUILTIN_ID.to_owned()),
+                        model: None,
+                    });
                     responder.respond(crate::worktrees::finish_new(response, worktree.as_ref()))?;
                     Ok(())
                 }
@@ -2275,6 +2340,19 @@ async fn serve_connection(
         .on_receive_request(
             async move |request: ListSessionsRequest, responder, _connection| {
                 responder.respond(acp_list_sessions(request)?)
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: ThreadDeleteRequest, responder, _connection| {
+                    server.announce_thread_deleted(ThreadDeletedNotification {
+                        session_id: request.session_id,
+                    });
+                    responder.respond(serde_json::json!({}))?;
+                    Ok(())
+                }
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -6352,6 +6430,7 @@ mod tests {
                 assert_eq!(state.visualization_level, 2);
                 assert_eq!(state.smart_ui, crate::app::SmartUi::On);
                 assert!(state.orchestration_client.is_some());
+                assert!(!state.local_orchestration);
                 state
                     .preview_client
                     .clone()
@@ -6363,6 +6442,9 @@ mod tests {
                 assert_eq!(state.visualization_level, 0);
                 assert_eq!(state.smart_ui, crate::app::SmartUi::Unsupported);
                 assert!(state.orchestration_client.is_none());
+                // No app has this session, so the engine serves its reads
+                // itself (#3422), even though the other client is an app.
+                assert!(state.local_orchestration);
                 assert!(state.preview_client.is_none());
             }
             // And its client answers for it.
@@ -6917,6 +6999,325 @@ mod tests {
                 .expect("connection")
                 .expect("connection ends cleanly");
         }
+        server.shutdown().await;
+    }
+
+    /// A thread one client makes is the machine's, not its own: every client
+    /// that lists threads is told about it, so no sidebar waits for a refresh.
+    #[test]
+    fn every_client_that_lists_threads_hears_about_a_new_one() {
+        on_a_large_stack(thread_created_reaches_every_listing_client());
+    }
+
+    async fn thread_created_reaches_every_listing_client() {
+        let server = AcpServer::new(false).expect("server");
+        let cwd = tempfile::tempdir().expect("cwd");
+        let cwd_path = std::fs::canonicalize(cwd.path()).expect("cwd");
+
+        // B lists threads and keeps every creation it is told about.
+        let (b_engine, b_transport) = agent_client_protocol::Channel::duplex();
+        let (created_tx, mut created) = tokio::sync::mpsc::unbounded_channel();
+        let (title_tx, mut titles) = tokio::sync::mpsc::unbounded_channel();
+        let (deleted_tx, mut deleted) = tokio::sync::mpsc::unbounded_channel();
+        let (b_ready_tx, b_ready) = tokio::sync::oneshot::channel();
+        let (close_b, b_closed) = tokio::sync::oneshot::channel();
+        let b_serving = serve_on_thread(&server, b_engine);
+        let b_client = tokio::spawn(async move {
+            agent_client_protocol::Client
+                .builder()
+                .on_receive_notification(
+                    async move |notification: ThreadCreatedNotification, _connection| {
+                        let _ = created_tx.send(notification);
+                        Ok(())
+                    },
+                    agent_client_protocol::on_receive_notification!(),
+                )
+                .on_receive_notification(
+                    async move |notification: SessionNotification, _connection| {
+                        let _ = title_tx.send(notification);
+                        Ok(())
+                    },
+                    agent_client_protocol::on_receive_notification!(),
+                )
+                .on_receive_notification(
+                    async move |notification: ThreadDeletedNotification, _connection| {
+                        let _ = deleted_tx.send(notification);
+                        Ok(())
+                    },
+                    agent_client_protocol::on_receive_notification!(),
+                )
+                .connect_with(b_transport, async move |connection| {
+                    let _ = b_ready_tx.send(connection);
+                    let _ = b_closed.await;
+                    Ok(())
+                })
+                .await
+        });
+        let b = b_ready.await.expect("b connects");
+        b.send_request(initialize_with(
+            serde_json::json!({ "rustcode": { "threads": 1 } }),
+        ))
+        .block_task()
+        .await
+        .expect("b initializes");
+
+        // A makes a thread, without listing threads itself.
+        let (a_engine, a_transport) = agent_client_protocol::Channel::duplex();
+        let (a_ready_tx, a_ready) = tokio::sync::oneshot::channel();
+        let (close_a, a_closed) = tokio::sync::oneshot::channel();
+        let a_serving = serve_on_thread(&server, a_engine);
+        let a_client = tokio::spawn(async move {
+            agent_client_protocol::Client
+                .builder()
+                .on_receive_notification(
+                    async move |_notification: SessionNotification, _connection| Ok(()),
+                    agent_client_protocol::on_receive_notification!(),
+                )
+                .connect_with(a_transport, async move |connection| {
+                    let _ = a_ready_tx.send(connection);
+                    let _ = a_closed.await;
+                    Ok(())
+                })
+                .await
+        });
+        let a = a_ready.await.expect("a connects");
+        a.send_request(initialize_with(serde_json::json!({})))
+            .block_task()
+            .await
+            .expect("a initializes");
+        let session_id = a
+            .send_request(NewSessionRequest::new(cwd_path.clone()))
+            .block_task()
+            .await
+            .expect("a creates a session")
+            .session_id
+            .to_string();
+
+        let announced = tokio::time::timeout(std::time::Duration::from_secs(10), created.recv())
+            .await
+            .expect("b is told about the new thread")
+            .expect("a row");
+        assert_eq!(announced.session_id, session_id);
+        assert_eq!(announced.cwd, cwd_path);
+        assert_eq!(
+            announced.harness.as_deref(),
+            Some(crate::harness::BUILTIN_ID)
+        );
+
+        // A name the thread takes is in the list too: B does not have the session, and still hears.
+        server
+            .clients
+            .session(&session_id)
+            .update(SessionUpdate::SessionInfoUpdate(
+                SessionInfoUpdate::new().title("Named elsewhere"),
+            ))
+            .expect("a title");
+        let titled = tokio::time::timeout(std::time::Duration::from_secs(10), titles.recv())
+            .await
+            .expect("b is told the title")
+            .expect("a title");
+        assert_eq!(titled.session_id.to_string(), session_id);
+        assert!(matches!(
+            &titled.update,
+            SessionUpdate::SessionInfoUpdate(info)
+                if info.title.value().map(String::as_str) == Some("Named elsewhere")
+        ));
+
+        // Trashing the thread takes the row out of B's list too.
+        a.send_request(ThreadDeleteRequest {
+            session_id: session_id.clone(),
+        })
+        .block_task()
+        .await
+        .expect("the delete request");
+        let gone = tokio::time::timeout(std::time::Duration::from_secs(10), deleted.recv())
+            .await
+            .expect("b is told the thread is gone")
+            .expect("a deletion");
+        assert_eq!(gone.session_id, session_id);
+
+        for (close, client, serving) in [
+            (close_a, a_client, a_serving),
+            (close_b, b_client, b_serving),
+        ] {
+            let _ = close.send(());
+            client.await.expect("client").expect("client ends cleanly");
+            serving
+                .await
+                .expect("connection")
+                .expect("connection ends cleanly");
+        }
+        server.shutdown().await;
+    }
+
+    /// A thread a paired computer asks this one to start (`create_session`, a remote
+    /// `start_session`) is made by the machine's server, not by any client: the app on this
+    /// machine, which never asked, still hears about it and lists it at once (issue 3530).
+    #[test]
+    fn a_thread_started_for_a_paired_computer_reaches_this_machines_app() {
+        on_a_large_stack(remote_thread_reaches_the_local_app());
+    }
+
+    async fn remote_thread_reaches_the_local_app() {
+        let server = AcpServer::new(false).expect("server");
+        // The share the new thread gets connects to a gateway this test holds.
+        let gateways = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let kept = std::sync::Arc::clone(&gateways);
+        struct Held(std::sync::Arc<std::sync::Mutex<Vec<crate::remote::owner::GatewayLink>>>);
+        impl crate::remote::owner::OwnerConnector for Held {
+            fn connect(
+                &mut self,
+                _registration: &crate::remote::SessionRegistration,
+            ) -> Result<crate::remote::owner::OwnerLink, crate::remote::owner::OwnerLinkError>
+            {
+                let (owner, gateway) = crate::remote::owner::owner_link_pair(16, 16);
+                if let Ok(mut held) = self.0.lock() {
+                    held.push(gateway);
+                }
+                Ok(owner)
+            }
+        }
+        server
+            .remote
+            .use_connector(move || Box::new(Held(std::sync::Arc::clone(&kept))));
+
+        // This machine's own app lists threads and keeps every creation it is told about.
+        let (engine, transport) = agent_client_protocol::Channel::duplex();
+        let (created_tx, mut created) = tokio::sync::mpsc::unbounded_channel();
+        let (ready_tx, ready) = tokio::sync::oneshot::channel();
+        let (close, closed) = tokio::sync::oneshot::channel();
+        let serving = serve_on_thread(&server, engine);
+        let app = tokio::spawn(async move {
+            agent_client_protocol::Client
+                .builder()
+                .on_receive_notification(
+                    async move |notification: ThreadCreatedNotification, _connection| {
+                        let _ = created_tx.send(notification);
+                        Ok(())
+                    },
+                    agent_client_protocol::on_receive_notification!(),
+                )
+                .connect_with(transport, async move |connection| {
+                    let _ = ready_tx.send(connection);
+                    let _ = closed.await;
+                    Ok(())
+                })
+                .await
+        });
+        let connection = ready.await.expect("the app connects");
+        connection
+            .send_request(initialize_with(
+                serde_json::json!({ "rustcode": { "threads": 1 } }),
+            ))
+            .block_task()
+            .await
+            .expect("the app initializes");
+
+        // The gateway routes the paired computer's request to the engine's thread host.
+        let folder = tempfile::tempdir().expect("folder");
+        let folder_path = std::fs::canonicalize(folder.path()).expect("folder");
+        let info = hosted::start(
+            &server,
+            remote::ThreadStart {
+                path: Some(folder_path.display().to_string()),
+                harness: Some(crate::harness::BUILTIN_ID.to_owned()),
+                model: None,
+            },
+        )
+        .await
+        .expect("the thread starts");
+
+        let announced = tokio::time::timeout(std::time::Duration::from_secs(10), created.recv())
+            .await
+            .expect("the app is told about the thread")
+            .expect("a row");
+        assert_eq!(announced.session_id, info.session_id);
+        assert_eq!(announced.cwd, folder_path);
+
+        let _ = close.send(());
+        app.await.expect("client").expect("client ends cleanly");
+        serving
+            .await
+            .expect("connection")
+            .expect("connection ends cleanly");
+        server.shutdown().await;
+    }
+
+    /// A thread that starts in a new worktree is announced under the worktree, the folder it
+    /// runs in, not under the checkout the caller named.
+    #[test]
+    fn a_worktree_thread_is_announced_under_its_worktree() {
+        on_a_large_stack(worktree_thread_is_announced_under_its_worktree());
+    }
+
+    async fn worktree_thread_is_announced_under_its_worktree() {
+        let server = AcpServer::new(false).expect("server");
+        let (_repo_dir, repo) = crate::worktrees::tests::repo();
+
+        let (engine, transport) = agent_client_protocol::Channel::duplex();
+        let (created_tx, mut created) = tokio::sync::mpsc::unbounded_channel();
+        let (ready_tx, ready) = tokio::sync::oneshot::channel();
+        let (close, closed) = tokio::sync::oneshot::channel();
+        let serving = serve_on_thread(&server, engine);
+        let app = tokio::spawn(async move {
+            agent_client_protocol::Client
+                .builder()
+                .on_receive_notification(
+                    async move |notification: ThreadCreatedNotification, _connection| {
+                        let _ = created_tx.send(notification);
+                        Ok(())
+                    },
+                    agent_client_protocol::on_receive_notification!(),
+                )
+                .connect_with(transport, async move |connection| {
+                    let _ = ready_tx.send(connection);
+                    let _ = closed.await;
+                    Ok(())
+                })
+                .await
+        });
+        let connection = ready.await.expect("the app connects");
+        connection
+            .send_request(initialize_with(
+                serde_json::json!({ "rustcode": { "threads": 1 } }),
+            ))
+            .block_task()
+            .await
+            .expect("the app initializes");
+
+        let mut request = NewSessionRequest::new(repo.clone());
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "rustcode".to_owned(),
+            serde_json::json!({ "worktree": { "repo": repo.display().to_string() } }),
+        );
+        request.meta = Some(meta);
+        let response = connection
+            .send_request(request)
+            .block_task()
+            .await
+            .expect("the thread starts in a worktree");
+        let worktree = response
+            .meta
+            .as_ref()
+            .and_then(|meta| meta["rustcode"]["worktree"]["path"].as_str())
+            .expect("the answer names the worktree")
+            .to_owned();
+        assert_ne!(std::path::Path::new(&worktree), repo.as_path());
+
+        let announced = tokio::time::timeout(std::time::Duration::from_secs(10), created.recv())
+            .await
+            .expect("the app is told about the thread")
+            .expect("a row");
+        assert_eq!(announced.session_id, response.session_id.to_string());
+        assert_eq!(announced.cwd, std::path::PathBuf::from(&worktree));
+
+        let _ = close.send(());
+        app.await.expect("client").expect("client ends cleanly");
+        serving
+            .await
+            .expect("connection")
+            .expect("connection ends cleanly");
         server.shutdown().await;
     }
 
