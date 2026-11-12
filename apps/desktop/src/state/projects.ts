@@ -133,3 +133,25 @@ export function matchProject(
   if (!name) return undefined;
   return candidates.find((candidate) => candidate.name.trim().toLowerCase() === name);
 }
+
+/**
+ * The project on another machine an agent's delegate starts in when the call names none, matched
+ * by repository rather than guessed (orchestration version 16): a checkout of the caller's
+ * repository (`origin`, as {@link remoteRepository} spells it), the one named like the caller's
+ * folder first, else the one used last (`candidates` are newest first). A caller with no
+ * repository has only its folder's name, and only a folder that is not a checkout of something
+ * else (or could not be read: `undefined`) is that folder. Nothing otherwise: never the machine's
+ * only or most recent project, which may be an unrelated one (B6).
+ */
+export function projectByRepository(
+  own: { name: string; repository: string | null | undefined },
+  candidates: readonly (Project & { repository: string | null | undefined })[],
+): Project | undefined {
+  if (own.repository) {
+    const same = candidates.filter((candidate) => candidate.repository === own.repository);
+    return same.find((candidate) => candidate.name === own.name) ?? same[0];
+  }
+  if (!own.name) return undefined;
+  const byName = candidates.filter((candidate) => candidate.name === own.name && !candidate.repository);
+  return byName.length === 1 ? byName[0] : undefined;
+}
