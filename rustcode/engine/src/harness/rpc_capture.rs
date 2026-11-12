@@ -439,8 +439,12 @@ fn flush_loop(pending: &Mutex<Pending>, path: Option<&PathBuf>, woken: &mpsc::Re
                 flush(pending, path);
                 return;
             }
+            // The interval is up: whatever is buffered goes now, so a row of a quiet thread waits
+            // one interval rather than until `FLUSH_ROWS` more arrive (a thread that went quiet
+            // mid-turn looked silent in `harness_rpc_messages` for minutes).
             Err(RecvTimeoutError::Timeout) => {
-                if first.take().is_some() {
+                first = None;
+                if pending_len(pending) > 0 {
                     flush(pending, path);
                 }
             }
@@ -751,6 +755,33 @@ mod tests {
         assert_eq!(rows[0].1, KIND_REQUEST);
         assert_eq!(rows[0].3.as_deref(), Some("session/prompt"));
         assert_eq!(rows[1].0, DIRECTION_HARNESS_TO_RUSTCODE);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_few_rows_are_written_within_the_interval() {
+        let path = scratch("interval");
+        let _ = std::fs::remove_file(&path);
+        let recorder = RpcRecorder::to_path(path.clone(), "thread-1", false);
+        let asked = request(1, "session/prompt");
+        recorder.record_outbound(&asked, 10);
+        // Far fewer than `FLUSH_ROWS`: only the interval writes it, with the recorder still alive.
+        // Counted without `stored`, which expects the table the first flush creates.
+        let count = || {
+            rusqlite::Connection::open(&path)
+                .and_then(|db| {
+                    db.query_row("SELECT COUNT(*) FROM harness_rpc_messages", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                })
+                .unwrap_or(0)
+        };
+        let deadline = Instant::now() + FLUSH_INTERVAL * 5;
+        while count() == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(count(), 1);
+        drop(recorder);
         let _ = std::fs::remove_file(&path);
     }
 
