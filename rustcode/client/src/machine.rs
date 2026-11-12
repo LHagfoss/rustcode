@@ -18,6 +18,16 @@
 //! rotation is acknowledged, so a crash between the two leaves the previous
 //! token valid as the retry the machine makes idempotent.
 //!
+//! Before a token leaves this computer, the socket asks who answers
+//! (`describe`): a route whose gateway names another machine is dropped with
+//! the token unsent, and once a machine has answered `describe` it must on
+//! every route ([`Machine::describes`]). Only a refusal from the machine
+//! itself can then say "pair again" (#B1, #B2 of the connect audit).
+//!
+//! [`Connector::pair_with_code`] pairs with a connect code the other
+//! machine's owner created there ([`crate::connect_code`]): no request, no
+//! accept step.
+//!
 //! A machine can be reached by several routes. [`Connector::connect`] races
 //! them ([`crate::routes`]): every LAN route at once, the overlay routes
 //! after a second, and the first that authenticates as the machine we expect.
@@ -25,13 +35,15 @@
 //! [`Connector::connect`] callers save as learned routes, so pairing once is
 //! enough to reach the machine on another network.
 
+use crate::connect_code::ConnectCode;
 use crate::protocol::{
-    CAPABILITY_TOKEN_ROTATION, DEVICE_KIND_CLI, DEVICE_KIND_DESKTOP, HANDSHAKE_PROTOCOL_VERSION,
-    HandshakeRequest, HandshakeResponse, HostRoute, PairingMethod, Secret,
+    CAPABILITY_TOKEN_ROTATION, DEVICE_KIND_CLI, DEVICE_KIND_DESKTOP,
+    GATEWAY_CAPABILITY_MACHINE_CODES, HANDSHAKE_PROTOCOL_VERSION, HandshakeRequest,
+    HandshakeResponse, HostRoute, PairingMethod, Secret,
 };
 use crate::registry::{
-    Machine, ProbeOutcome, Route, RouteKind, RouteProbe, may_send_secrets, plain_ws_refusal,
-    write_private_json,
+    Machine, MachineRegistry, ProbeOutcome, Route, RouteKind, RouteProbe, may_send_secrets,
+    plain_ws_refusal, write_private_json,
 };
 use crate::routes::{DialFailure, Race, RaceSettings, RouteFailure, race};
 use crate::tokens::{Access, TokenStore};
@@ -253,12 +265,25 @@ pub struct Connector {
     /// [`Connector::route_timeout`], so a socket that never answers does not
     /// hold the next route either.
     credentials: tokio::sync::Mutex<()>,
+    /// Where `machines.json` is, to remember that a machine proves who it is.
+    config_dir: PathBuf,
+}
+
+/// What a socket proved about who answers it before a credential was sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Proof {
+    /// It answered `describe` with the saved machine's `gateway_id`.
+    Described,
+    /// It predates `describe`, and the machine has never answered one: the
+    /// `authenticated` frame's identity is checked afterwards, as before.
+    Legacy,
 }
 
 impl Connector {
     pub fn new(config_dir: &Path, kind: ClientKind) -> Result<Self> {
         Ok(Self {
             kind,
+            config_dir: config_dir.to_path_buf(),
             identity: Identity::load(config_dir)?,
             timeout: crate::transport::CONNECT_TIMEOUT,
             route_timeout: ROUTE_TIMEOUT,
@@ -337,17 +362,80 @@ impl Connector {
     ) -> Result<Session> {
         // One presentation at a time: a refresh token rotated concurrently
         // would be a replay, and a replay revokes the pairing.
+        if !may_send_secrets(address) {
+            return Err(plain_ws_refusal(address));
+        }
+        let first = self.open_proven(address, machine, None).await?;
         let _serialized = self.credentials.lock().await;
-        self.authenticate_with(None, address, machine, tokens).await
+        self.authenticate_with(Some(first), address, machine, tokens)
+            .await
     }
 
-    /// Authenticate on `first` when the caller already dialled it, so a race
-    /// can open the sockets concurrently and still present the credential on
-    /// one at a time. A caller that holds no lock must use
+    /// Open a socket to `address` and ask who answers before anything secret
+    /// goes on it. `before` is what an earlier socket to the same address
+    /// proved: a machine that answered `describe` once must answer it again.
+    ///
+    /// A gateway that names another machine is [`NotThisMachine`]; one that
+    /// predates `describe` (it answers `invalid_frame` and closes) is dialled
+    /// again for the old handshake, unless this machine is known to answer
+    /// `describe`, when it is [`NotThisMachine`] too: whoever answers there
+    /// cannot prove it is the machine, so it gets no token.
+    async fn open_proven(
+        &self,
+        address: &str,
+        machine: &Machine,
+        before: Option<Proof>,
+    ) -> Result<(Connection, Proof)> {
+        let mut connection = Connection::open_with_timeout(address, self.route_timeout).await?;
+        if before == Some(Proof::Legacy) {
+            return Ok((connection, Proof::Legacy));
+        }
+        connection.send_handshake(&describe()).await?;
+        match connection.next_handshake(self.timeout).await? {
+            HandshakeResponse::Described {
+                gateway_id,
+                host_name,
+                ..
+            } => {
+                if gateway_id != machine.host_id {
+                    return Err(anyhow::Error::new(NotThisMachine {
+                        address: address.to_owned(),
+                        machine: machine.name.clone(),
+                        answered: Some(match host_name {
+                            Some(name) => format!("{name} ({gateway_id})"),
+                            None => gateway_id,
+                        }),
+                    }));
+                }
+                Ok((connection, Proof::Described))
+            }
+            HandshakeResponse::Error {
+                code: crate::protocol::ErrorCode::InvalidFrame,
+                ..
+            } if !machine.describes && before.is_none() => {
+                drop(connection);
+                let connection = Connection::open_with_timeout(address, self.route_timeout).await?;
+                Ok((connection, Proof::Legacy))
+            }
+            HandshakeResponse::Error {
+                code: crate::protocol::ErrorCode::InvalidFrame,
+                ..
+            } => Err(anyhow::Error::new(NotThisMachine {
+                address: address.to_owned(),
+                machine: machine.name.clone(),
+                answered: None,
+            })),
+            other => Err(handshake_failure("describe", other)),
+        }
+    }
+
+    /// Authenticate on `first`, a socket the caller dialled and proved, so a
+    /// race can open and prove the sockets concurrently and still present
+    /// the credential on one at a time. A caller that holds no lock must use
     /// [`Connector::authenticate`].
     async fn authenticate_with(
         &self,
-        first: Option<Connection>,
+        first: Option<(Connection, Proof)>,
         address: &str,
         machine: &Machine,
         tokens: &TokenStore,
@@ -358,9 +446,9 @@ impl Connector {
         let _presenting = tokens
             .presentation_lock(&machine.host_id, self.timeout)
             .await?;
-        let stored = tokens.get(&machine.host_id)?.with_context(|| {
-            format!("{} has no pairing token; pair with it again", machine.name)
-        })?;
+        let stored = tokens
+            .get(&machine.host_id)?
+            .ok_or_else(|| PairingLost::new(machine, PairingLostReason::NoToken))?;
         let result = self.present(first, address, machine, tokens, &stored).await;
         if let Err(error) = &result
             && error
@@ -380,13 +468,14 @@ impl Connector {
     /// the presentation lock.
     async fn present(
         &self,
-        first: Option<Connection>,
+        first: Option<(Connection, Proof)>,
         address: &str,
         machine: &Machine,
         tokens: &TokenStore,
         stored: &Secret,
     ) -> Result<Session> {
         let mut first = first;
+        let mut proof = first.as_ref().map(|(_, proof)| *proof);
 
         // 1. The access token from the last connection, while it is valid. A
         //    reconnect inside its 15 minutes rotates nothing.
@@ -395,9 +484,11 @@ impl Connector {
             .filter(|access| access.is_valid_at(Utc::now()))
         {
             let (connection, answer) = self
-                .exchange_or(
-                    first.take(),
+                .exchange_proven(
+                    &mut first,
+                    &mut proof,
                     address,
+                    machine,
                     &authenticate_access(machine, access.token()),
                 )
                 .await?;
@@ -413,7 +504,7 @@ impl Connector {
                 }
                 HandshakeResponse::Authenticated { .. } => {
                     return self
-                        .accept(machine, tokens, connection, answer, Some(access))
+                        .accept(machine, tokens, connection, answer, Some(access), proof)
                         .await;
                 }
                 other => return Err(handshake_failure("authenticate", other)),
@@ -426,9 +517,11 @@ impl Connector {
         //    paired with before rotation keeps working: the machine answers a
         //    refresh credential for a non-rotating record with that record.
         let (connection, answer) = self
-            .exchange_or(
-                first.take(),
+            .exchange_proven(
+                &mut first,
+                &mut proof,
                 address,
+                machine,
                 &authenticate_refresh(machine, stored),
             )
             .await?;
@@ -440,45 +533,51 @@ impl Connector {
             // A gateway from before rotating tokens does not know
             // `refresh_token`; the static form is what it reads.
             let (connection, answer) = self
-                .exchange(address, &authenticate_static(machine, stored))
+                .exchange_proven(
+                    &mut first,
+                    &mut proof,
+                    address,
+                    machine,
+                    &authenticate_static(machine, stored),
+                )
                 .await?;
             return match answer {
                 HandshakeResponse::Authenticated { .. } => {
-                    self.accept(machine, tokens, connection, answer, None).await
+                    self.accept(machine, tokens, connection, answer, None, proof)
+                        .await
                 }
                 other => Err(handshake_failure("authenticate", other)),
             };
         }
         match answer {
             HandshakeResponse::Authenticated { .. } => {
-                self.accept(machine, tokens, connection, answer, None).await
+                self.accept(machine, tokens, connection, answer, None, proof)
+                    .await
             }
             other => Err(handshake_failure("authenticate", other)),
         }
     }
 
     /// Send one handshake frame and read the answer, on `first` when the
-    /// caller already opened it and on a fresh socket otherwise. Error frames
-    /// come back as the frame, not as an error, so the caller can read the
-    /// code and try the next credential.
-    async fn exchange(
+    /// caller already opened and proved it, and otherwise on a fresh socket
+    /// proved the way the first one was ([`Connector::open_proven`]): the
+    /// gateway closes a socket after an error frame, and the next credential
+    /// must not go to a stranger either. Error frames come back as the frame,
+    /// not as an error, so the caller can read the code and try the next
+    /// credential.
+    async fn exchange_proven(
         &self,
+        first: &mut Option<(Connection, Proof)>,
+        proof: &mut Option<Proof>,
         address: &str,
+        machine: &Machine,
         frame: &HandshakeRequest,
     ) -> Result<(Connection, HandshakeResponse)> {
-        self.exchange_or(None, address, frame).await
-    }
-
-    async fn exchange_or(
-        &self,
-        first: Option<Connection>,
-        address: &str,
-        frame: &HandshakeRequest,
-    ) -> Result<(Connection, HandshakeResponse)> {
-        let mut connection = match first {
-            Some(connection) => connection,
-            None => Connection::open_with_timeout(address, self.route_timeout).await?,
+        let (mut connection, proved) = match first.take() {
+            Some(opened) => opened,
+            None => self.open_proven(address, machine, *proof).await?,
         };
+        *proof = Some(proved);
         connection.send_handshake(frame).await?;
         let answer = connection.next_handshake(self.timeout).await?;
         Ok((connection, answer))
@@ -495,6 +594,7 @@ impl Connector {
         mut connection: Connection,
         answer: HandshakeResponse,
         presented: Option<Access>,
+        proof: Option<Proof>,
     ) -> Result<Session> {
         let HandshakeResponse::Authenticated {
             gateway_id,
@@ -569,6 +669,7 @@ impl Connector {
                 routes: learned_routes(&routes),
             },
             access,
+            described: proof == Some(Proof::Described),
         })
     }
 
@@ -617,15 +718,25 @@ impl Connector {
             crate::routes::ordered_for_this_computer(&routes, &crate::routes::local_addresses());
         let settings = RaceSettings::default();
         let outcome = race(&routes, &settings, |route| async move {
-            // Dial before taking the credential lock: a LAN route that hangs
-            // must not keep the overlay route from opening its socket.
-            let connection =
-                match Connection::open_with_timeout(&route.address, self.route_timeout).await {
-                    Ok(connection) => connection,
-                    Err(error) => {
-                        return Err(DialFailure::unreachable(format!("{error:#}")));
-                    }
-                };
+            // Dial and ask who answers before taking the credential lock: a
+            // LAN route that hangs must not keep the overlay route from
+            // opening its socket, and a stranger on a stale address is
+            // dropped here, its token unsent and its refusal never heard.
+            let opened = match tokio::time::timeout(
+                self.route_timeout,
+                self.open_proven(&route.address, machine, None),
+            )
+            .await
+            {
+                Ok(Ok(opened)) => opened,
+                Ok(Err(error)) => return Err(DialFailure::unreachable(format!("{error:#}"))),
+                Err(_) => {
+                    return Err(DialFailure::unreachable(format!(
+                        "the address did not say who it is in {:.1}s",
+                        self.route_timeout.as_secs_f64()
+                    )));
+                }
+            };
             let _serialized = self.credentials.lock().await;
             // Bound the locked section: a route that completes the WebSocket
             // upgrade and then never answers holds this lock through the
@@ -633,7 +744,7 @@ impl Connector {
             // at the route timeout keeps the race's own deadline in charge.
             let resolved = match tokio::time::timeout(
                 self.route_timeout,
-                self.authenticate_with(Some(connection), &route.address, machine, tokens),
+                self.authenticate_with(Some(opened), &route.address, machine, tokens),
             )
             .await
             {
@@ -646,9 +757,20 @@ impl Connector {
             match resolved {
                 Ok(session) => Ok(session),
                 Err(error) => {
+                    // Every refusal here came from a socket that proved to be
+                    // this machine (or from a machine that predates proving
+                    // it), so it may say "pair again". A pairing this machine
+                    // replaced or a token that is gone says the same, typed.
+                    let refusal = error
+                        .downcast_ref::<Refusal>()
+                        .map(|refusal| refusal.code)
+                        .or_else(|| {
+                            error
+                                .downcast_ref::<PairingLost>()
+                                .map(|_| crate::protocol::ErrorCode::Unauthorized)
+                        });
                     // A refusal that revoked the pairing already removed the
                     // token it made worthless ([`Self::authenticate_with`]).
-                    let refusal = error.downcast_ref::<Refusal>().map(|refusal| refusal.code);
                     Err(DialFailure {
                         reason: format!("{error:#}"),
                         refusal,
@@ -662,12 +784,17 @@ impl Connector {
                 value,
                 route,
                 failures,
-            } => Ok(Connected {
-                learned: value.welcome.routes.clone(),
-                session: value,
-                route,
-                failed: failures,
-            }),
+            } => {
+                if value.described && !machine.describes {
+                    self.remember_describes(machine);
+                }
+                Ok(Connected {
+                    learned: value.welcome.routes.clone(),
+                    session: value,
+                    route,
+                    failed: failures,
+                })
+            }
             Race::Lost { failures } => {
                 let refused = failures.iter().find_map(|failure| failure.refusal);
                 Err(anyhow::Error::new(Unreachable {
@@ -680,6 +807,157 @@ impl Connector {
                 }))
             }
         }
+    }
+
+    /// Remember that `machine` answers `describe`, so no route to it ever
+    /// gets a token again without proving it is the machine. Best effort: a
+    /// registry that cannot be written is asked again on the next connection.
+    fn remember_describes(&self, machine: &Machine) {
+        if let Ok(mut registry) = MachineRegistry::load(&self.config_dir) {
+            let _ = registry.set_describes(&machine.host_id);
+        }
+    }
+
+    /// Pair with a connect code the other machine's owner created there: no
+    /// request, no accept step. `address` is where to reach it when the code
+    /// carries no address, or overrides the one it carries.
+    ///
+    /// The code's routes are raced for one that answers `describe` as a
+    /// gateway that takes connect codes, and as the machine the code names
+    /// when it names one; only that socket gets the code's secret, once. A
+    /// public address is refused before anything is dialled, as in
+    /// [`Connector::ask`].
+    pub async fn pair_with_code(
+        &self,
+        code: &ConnectCode,
+        address: Option<&str>,
+    ) -> Result<(Paired, Route)> {
+        let routes: Vec<Route> = match address.map(str::trim).filter(|a| !a.is_empty()) {
+            Some(address) => vec![Route::new(address)],
+            None => code
+                .routes()
+                .iter()
+                .map(|route| {
+                    Route::reported(
+                        route.address.clone(),
+                        &route.kind,
+                        route.provider.as_deref(),
+                    )
+                })
+                .collect(),
+        };
+        ensure!(
+            !routes.is_empty(),
+            "that connect code carries no address; give the address shown next to it"
+        );
+        let usable: Vec<Route> = routes
+            .iter()
+            .filter(|route| may_send_secrets(&route.address))
+            .cloned()
+            .collect();
+        if usable.is_empty() {
+            return Err(plain_ws_refusal(&routes[0].address));
+        }
+        let usable =
+            crate::routes::ordered_for_this_computer(&usable, &crate::routes::local_addresses());
+        let expected = code.gateway_id();
+        let outcome = race(&usable, &RaceSettings::default(), |route| async move {
+            let described = tokio::time::timeout(self.route_timeout, async {
+                let mut connection =
+                    Connection::open_with_timeout(&route.address, self.route_timeout).await?;
+                connection.send_handshake(&describe()).await?;
+                let answer = connection.next_handshake(self.timeout).await?;
+                anyhow::Ok((connection, answer))
+            })
+            .await;
+            let (connection, answer) = match described {
+                Ok(Ok(described)) => described,
+                Ok(Err(error)) => return Err(DialFailure::unreachable(format!("{error:#}"))),
+                Err(_) => return Err(DialFailure::unreachable("the address did not answer")),
+            };
+            match answer {
+                HandshakeResponse::Described {
+                    gateway_id,
+                    host_name,
+                    capabilities,
+                    ..
+                } => {
+                    if expected.is_some_and(|expected| expected != gateway_id) {
+                        return Err(DialFailure::unreachable(format!(
+                            "that address answers as {}, not the computer the code was made on;                              nothing was sent",
+                            host_name.unwrap_or(gateway_id)
+                        )));
+                    }
+                    if !capabilities
+                        .iter()
+                        .any(|capability| capability == GATEWAY_CAPABILITY_MACHINE_CODES)
+                    {
+                        return Err(DialFailure::unreachable(OLDER_MACHINE));
+                    }
+                    Ok(connection)
+                }
+                HandshakeResponse::Error {
+                    code: crate::protocol::ErrorCode::InvalidFrame,
+                    ..
+                } => Err(DialFailure::unreachable(OLDER_MACHINE)),
+                other => Err(DialFailure::unreachable(format!(
+                    "{:#}",
+                    handshake_failure("describe", other)
+                ))),
+            }
+        })
+        .await;
+        let (mut connection, route) = match outcome {
+            Race::Won { value, route, .. } => (value, route),
+            Race::Lost { failures } => {
+                return Err(anyhow::Error::new(Unreachable {
+                    machine: code.host_name().map_or_else(
+                        || "the computer the code was made on".to_owned(),
+                        str::to_owned,
+                    ),
+                    attempts: failures
+                        .iter()
+                        .map(|failure| format!("{}: {}", failure.route.address, failure.reason))
+                        .collect(),
+                    refused: None,
+                }));
+            }
+        };
+        let request = HandshakeRequest::Pair {
+            protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+            method: PairingMethod::Machine,
+            secret: code.secret().clone(),
+            device_name: self.identity.device_name.clone(),
+            install_id: Some(self.identity.install_id.clone()),
+            wire_names: None,
+            device_kind: Some(self.kind.as_str().to_owned()),
+            platform: Some(platform().to_owned()),
+            host_id: Some(self.identity.host_id.clone()),
+            capabilities: Some(vec![CAPABILITY_TOKEN_ROTATION.to_owned()]),
+        };
+        connection.send_handshake(&request).await?;
+        let answer = connection
+            .next_handshake(crate::transport::CONNECT_TIMEOUT)
+            .await?;
+        if let Some(expected) = expected
+            && let HandshakeResponse::Paired { gateway_id, .. } = &answer
+        {
+            ensure!(
+                gateway_id == expected,
+                "the machine that answered is not the one the code was made on; nothing was saved"
+            );
+        }
+        if let HandshakeResponse::Error {
+            code: crate::protocol::ErrorCode::PairingFailed,
+            ..
+        } = &answer
+        {
+            bail!(
+                "that code has expired, was already used or was mistyped. Create a new one on \
+                 that machine (Settings › Machines › Create connect code, or `rustcode machines code`)"
+            );
+        }
+        Ok((paired_from(connection, answer)?, route))
     }
 
     /// Connect to one route's address and drop the connection: no token and no
@@ -940,6 +1218,13 @@ impl Approved {
             .connection
             .next_handshake(crate::transport::CONNECT_TIMEOUT)
             .await?;
+        paired_from(self.connection, answer)
+    }
+}
+
+/// The token and session a `paired` frame hands out, on the socket it came on.
+fn paired_from(connection: Connection, answer: HandshakeResponse) -> Result<Paired> {
+    {
         match answer {
             HandshakeResponse::Paired {
                 gateway_id,
@@ -971,7 +1256,7 @@ impl Approved {
                     secret,
                     access,
                     session: Session {
-                        connection: self.connection,
+                        connection,
                         welcome: Welcome {
                             gateway_id,
                             instance_id,
@@ -985,6 +1270,7 @@ impl Approved {
                             routes: learned_routes(&routes),
                         },
                         access: None,
+                        described: true,
                     },
                 })
             }
@@ -1077,6 +1363,9 @@ pub struct Session {
     welcome: Welcome,
     /// The access token this connection presented or was given, in memory only.
     access: Option<Access>,
+    /// The socket answered `describe` as the machine before any token went
+    /// on it (or the token was a pairing's, which needs no proof).
+    described: bool,
 }
 
 impl std::fmt::Debug for Session {
@@ -1161,13 +1450,24 @@ fn check_identity(machine: &Machine, gateway_id: &str, device_id: &str) -> Resul
         );
     }
     if device_id != machine.device_id {
-        bail!(
-            "{} replaced this computer's device record; pair with it again",
-            machine.name
-        );
+        return Err(anyhow::Error::new(PairingLost::new(
+            machine,
+            PairingLostReason::DeviceReplaced,
+        )));
     }
     Ok(())
 }
+
+/// The first frame that asks who answers.
+fn describe() -> HandshakeRequest {
+    HandshakeRequest::Describe {
+        protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+    }
+}
+
+/// What a machine that predates connect codes earns.
+const OLDER_MACHINE: &str = "that machine runs an older RustCode without connect codes; update \
+     RustCode there, or add it with `rustcode machines add <address>` and accept the request there";
 
 /// The `authenticate` frame that reconnects with an access token: no
 /// capability, because nothing is asked for and nothing rotates.
@@ -1305,6 +1605,99 @@ impl std::fmt::Display for Unreachable {
 }
 
 impl std::error::Error for Unreachable {}
+
+/// Another machine answered on a route, or one that cannot prove it is the
+/// machine: nothing was sent to it, and what it says does not count.
+#[derive(Debug, Clone)]
+pub struct NotThisMachine {
+    pub address: String,
+    /// The saved machine's name.
+    pub machine: String,
+    /// Who answered instead, by name or id. `None` when it could not say:
+    /// an older RustCode where this machine always says who it is.
+    pub answered: Option<String>,
+}
+
+impl std::fmt::Display for NotThisMachine {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.answered {
+            Some(answered) => write!(
+                formatter,
+                "{} answers as {answered}, not {}; its token was not sent",
+                self.address, self.machine
+            ),
+            None => write!(
+                formatter,
+                "{} answers without saying which machine it is, and {} always says; its token \
+                 was not sent",
+                self.address, self.machine
+            ),
+        }
+    }
+}
+
+impl std::error::Error for NotThisMachine {}
+
+/// Why the pairing with a machine is gone on this side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairingLostReason {
+    /// This computer holds no token for the machine.
+    NoToken,
+    /// The machine authenticated this computer's token as another device
+    /// record: it was paired again from here meanwhile.
+    DeviceReplaced,
+}
+
+/// The pairing is gone and pairing again is the fix: a typed reason, so a
+/// caller never reads it out of the message (#B8).
+#[derive(Debug, Clone)]
+pub struct PairingLost {
+    pub machine: String,
+    pub reason: PairingLostReason,
+}
+
+impl PairingLost {
+    pub fn new(machine: &Machine, reason: PairingLostReason) -> Self {
+        Self {
+            machine: machine.name.clone(),
+            reason,
+        }
+    }
+}
+
+impl std::fmt::Display for PairingLost {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.reason {
+            PairingLostReason::NoToken => {
+                write!(
+                    formatter,
+                    "{} has no pairing token; pair with it again",
+                    self.machine
+                )
+            }
+            PairingLostReason::DeviceReplaced => write!(
+                formatter,
+                "{} replaced this computer's device record; pair with it again",
+                self.machine
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PairingLost {}
+
+/// Whether pairing again is what fixes `error`: a refusal from the machine
+/// itself that a new pairing fixes, or a pairing gone on this side. Read from
+/// the types, never from the message.
+pub fn needs_new_pairing(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<Unreachable>()
+        .is_some_and(Unreachable::needs_new_pairing)
+        || error.downcast_ref::<PairingLost>().is_some()
+        || error
+            .downcast_ref::<Refusal>()
+            .is_some_and(|refusal| refusal.code.needs_new_pairing())
+}
 
 /// Digits only: a code typed as `4821-9034` is the same code as `48219034`.
 pub fn normalize_code(code: &str) -> String {

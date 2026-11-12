@@ -209,6 +209,27 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
             },
         ),
         (
+            "describe",
+            HandshakeRequest::Describe {
+                protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+            },
+        ),
+        (
+            "pair_machine",
+            HandshakeRequest::Pair {
+                protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+                method: PairingMethod::Machine,
+                secret: Secret::new("abc0123def4"),
+                device_name: "Lars's Linux box".to_owned(),
+                install_id: Some("0B7C5E2A-41D9-4F6E-9A3B-7C2D1E0F9A8B".to_owned()),
+                wire_names: None,
+                device_kind: Some("desktop".to_owned()),
+                platform: Some("linux".to_owned()),
+                host_id: Some("3f9a1c7e5b2d4086".to_owned()),
+                capabilities: Some(vec![CAPABILITY_TOKEN_ROTATION.to_owned()]),
+            },
+        ),
+        (
             "token_ack",
             HandshakeRequest::TokenAck(TokenAck {
                 rotation_id: "5be1c4a07d2e9f63".to_owned(),
@@ -220,6 +241,21 @@ pub fn golden_handshake_requests() -> Vec<(&'static str, HandshakeRequest)> {
 /// The handshake answers and one bare error frame per code.
 pub fn golden_handshake_responses() -> Vec<(String, HandshakeResponse)> {
     let mut frames = vec![
+        (
+            "described".to_owned(),
+            HandshakeResponse::Described {
+                protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+                gateway_id: "8e1f4b7a2c9d0e35".to_owned(),
+                instance_id: "c03d5e7f9a1b2c4d".to_owned(),
+                host_name: Some("Lars's MacBook Pro".to_owned()),
+                version: Some(CONTRACT_VERSION.to_owned()),
+                platform: Some("macos".to_owned()),
+                capabilities: crate::remote_gateway::handshake::GATEWAY_CAPABILITIES
+                    .iter()
+                    .map(|capability| (*capability).to_owned())
+                    .collect(),
+            },
+        ),
         (
             "connect_pending".to_owned(),
             HandshakeResponse::ConnectPending {

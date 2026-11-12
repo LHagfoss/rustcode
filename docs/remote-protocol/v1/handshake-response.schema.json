@@ -159,6 +159,61 @@
   "description": "Frames the gateway sends during the handshake, and the error frame that\nprecedes a close. After authentication an `error` frame is never the\nanswer to a request: those are `response` frames carrying the request ID.",
   "oneOf": [
     {
+      "description": "The answer to `describe`: who this gateway is, and nothing secret. The\nsocket stays open for the next first frame.",
+      "properties": {
+        "capabilities": {
+          "description": "What this gateway takes beyond protocol v1's first frames:\n[`GATEWAY_CAPABILITY_DESCRIBE`], [`GATEWAY_CAPABILITY_MACHINE_CODES`].",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "gateway_id": {
+          "type": "string"
+        },
+        "host_name": {
+          "description": "The host's own name, for display. A label, not an identity.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "instance_id": {
+          "type": "string"
+        },
+        "platform": {
+          "description": "`macos`, `linux` or `windows`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "protocol_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "type": {
+          "const": "described",
+          "type": "string"
+        },
+        "version": {
+          "description": "The RustCode version running on this host.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "protocol_version",
+        "gateway_id",
+        "instance_id"
+      ],
+      "type": "object"
+    },
+    {
       "description": "The connection request is in front of the host's owner. Wait on the\nsame socket, sending nothing but pings, for the answer.",
       "properties": {
         "expires_in_secs": {

@@ -11,18 +11,20 @@ use super::address::{
     host_routes,
 };
 use super::connect::{ConnectRequests, OpenError, Outcome, RequestEnd, RequestState};
+use super::connect_code;
 use super::control::{
     CONTROL_TIMEOUT, ConnectAnswer, ConnectRequestSummary, ConnectionSummary, ControlRequest,
     ControlResponse, DeviceSummary, EndedChallenge, EndedConnectRequest, GatewayStatus,
-    OfferDetails, PairingStatus, RefusalReason, RefusedConnection,
+    MachineOfferDetails, MachineOfferStatus, OfferDetails, PairingStatus, RefusalReason,
+    RefusedConnection,
 };
 use super::devices::{
     Acknowledgement, AuthenticateError, Credential, DeviceError, DeviceKind, DeviceProfile,
     DeviceRecord, DeviceStore, Devices, RevocationNotes, apply_revocation_notes,
 };
 use super::handshake::{
-    DeviceHint, ErrorCode, HANDSHAKE_PROTOCOL_VERSION, HandshakeRequest, HandshakeResponse,
-    PairingMethod, device_hint,
+    DeviceHint, ErrorCode, GATEWAY_CAPABILITIES, HANDSHAKE_PROTOCOL_VERSION, HandshakeRequest,
+    HandshakeResponse, PairingMethod, Secret, device_hint,
 };
 use super::hub::{HubIdentity, SessionHub};
 use super::lifecycle::{GatewayRegistration, RemoteLifecycle};
@@ -159,6 +161,9 @@ fn clean_host_name(name: &str) -> Option<String> {
 
 struct State {
     pairing: PairingState,
+    /// The connect code a device paired with last, and that device's name,
+    /// so the owner's sheet can say who used it.
+    machine_paired: Option<(u64, String, String)>,
     connect: ConnectRequests,
     devices: Devices,
     live: HashMap<u64, Live>,
@@ -518,6 +523,12 @@ impl Shared {
                 ErrorCode::InvalidFrame,
                 "a connection request is only valid as the first frame",
             )),
+            // The transport answers `describe` before the first frame that
+            // counts ([`Self::describe`]); a second one never reaches here.
+            HandshakeRequest::Describe { .. } => Err(HandshakeResponse::error(
+                ErrorCode::InvalidFrame,
+                "describe is answered once per connection",
+            )),
             HandshakeRequest::Pair {
                 method,
                 secret,
@@ -796,9 +807,14 @@ impl Shared {
             devices.enroll_as(device_name, install_id, &profile)
         }
         .map_err(|error| busy(error.to_string()))?;
-        // Only the owner-approved, socket-bound desktop request grants ACP.
-        // A standalone short code, regardless of its claimed kind, never does.
-        if request.is_some() && profile.kind == super::devices::DeviceKind::Desktop {
+        // ACP follows the owner's consent: an accepted, socket-bound desktop
+        // request, or a connect code the owner created for another computer.
+        // The phone challenge's code and credential, whatever kind the frame
+        // claims, never grant it.
+        let owner_granted = (request.is_some()
+            && profile.kind == super::devices::DeviceKind::Desktop)
+            || method == PairingMethod::Machine;
+        if owner_granted {
             enrolled.record = devices.set_acp(&enrolled.record.id, true).unwrap();
         }
         if let Err(error) = self.persist(&mut state, devices) {
@@ -810,6 +826,11 @@ impl Shared {
         }
         let record = enrolled.record;
         let issued = enrolled.issued;
+        if method == PairingMethod::Machine
+            && let Some((serial, _)) = state.pairing.machine_ended()
+        {
+            state.machine_paired = Some((serial, record.id.clone(), record.name.clone()));
+        }
         // The same install paired again: its old token is gone, and so is
         // anything still connected with it.
         if let Some(replaced) = enrolled.replaced {
@@ -1157,6 +1178,65 @@ impl Shared {
         Ok(())
     }
 
+    /// Who this gateway is, for a `describe`: nothing secret.
+    pub(super) fn describe(&self) -> HandshakeResponse {
+        HandshakeResponse::Described {
+            protocol_version: HANDSHAKE_PROTOCOL_VERSION,
+            gateway_id: self.gateway_id.clone(),
+            instance_id: self.instance_id.clone(),
+            host_name: self.host_name.clone(),
+            version: Some(host_version()),
+            platform: Some(host_platform().to_owned()),
+            capabilities: GATEWAY_CAPABILITIES
+                .iter()
+                .map(|capability| (*capability).to_owned())
+                .collect(),
+        }
+    }
+
+    /// Create a connect code, replacing an open one. The phone challenge and
+    /// an accepted computer's code stay as they are.
+    fn issue_machine_offer(&self) -> MachineOfferDetails {
+        let routes = routes_now(self);
+        let now = Instant::now();
+        let mut state = self.state();
+        let secrets = state.pairing.issue_machine(now);
+        let locked_for_secs = state.pairing.lockout(now).map(|left| left.as_secs().max(1));
+        drop(state);
+        let address = connect_code::short_address(&routes);
+        let short_secret = u64::from_str_radix(secrets.short.expose(), 16)
+            .expect("the short secret is hex the gateway wrote");
+        let link = connect_code::ConnectLink {
+            v: connect_code::LINK_VERSION,
+            gateway_id: self.gateway_id.clone(),
+            host_name: self.host_name.clone(),
+            routes: routes.clone(),
+            credential: secrets.credential,
+        };
+        MachineOfferDetails {
+            code: Secret::new(connect_code::short_code(address, short_secret)),
+            link: Secret::new(connect_code::long_code(&link)),
+            address: address
+                .map(|ip| format!("{ip}:{}", super::DEFAULT_PORT))
+                .or_else(|| routes.first().map(|route| route.address.clone()))
+                .unwrap_or_else(|| self.advertised.borrow().to_string()),
+            address_in_code: address.is_some(),
+            gateway_id: self.gateway_id.clone(),
+            instance_id: self.instance_id.clone(),
+            host_name: self.host_name.clone(),
+            routes,
+            loopback_only: self.loopback_only(),
+            expires_in_secs: secrets.lifetime.as_secs(),
+            serial: secrets.serial,
+            locked_for_secs,
+        }
+    }
+
+    /// Withdraw the open connect code. True when one was open.
+    fn cancel_machine_offer(&self) -> bool {
+        self.state().pairing.withdraw_machine(Instant::now())
+    }
+
     fn issue_pairing(&self) -> OfferDetails {
         // Read the interfaces before taking the state lock.
         let advertised = self.advertised.borrow().clone();
@@ -1463,6 +1543,7 @@ impl Gateway {
                 devices,
                 live: HashMap::new(),
                 next_connection: 1,
+                machine_paired: None,
             }),
             unauthenticated: Mutex::new(Unauthenticated::default()),
             refusals: Mutex::new(Refusals::default()),
@@ -1792,6 +1873,12 @@ async fn serve_control(shared: Arc<Shared>, started: Instant, stream: LocalStrea
             ControlRequest::Pair => ControlResponse::Offer {
                 offer: shared.issue_pairing(),
             },
+            ControlRequest::MachineOffer => ControlResponse::MachineOffer {
+                offer: Box::new(shared.issue_machine_offer()),
+            },
+            ControlRequest::CancelMachineOffer => ControlResponse::MachineOfferCancelled {
+                was_open: shared.cancel_machine_offer(),
+            },
             ControlRequest::SetAcp { device, allow } => match shared.set_acp(&device, allow) {
                 Ok(()) => ControlResponse::Ack,
                 Err(error) => ControlResponse::Error {
@@ -1943,6 +2030,28 @@ fn status(shared: &Shared, started: Instant) -> GatewayStatus {
                 .pairing
                 .last_ended()
                 .map(|(challenge, end)| EndedChallenge { challenge, end }),
+        }),
+        machine_offer: Some(MachineOfferStatus {
+            open: state
+                .pairing
+                .open_machine(now)
+                .map(|(serial, left, tries)| super::control::OpenMachineOffer {
+                    serial,
+                    expires_in_secs: left.as_secs(),
+                    attempts_left: tries,
+                }),
+            last_ended: state.pairing.machine_ended().map(|(serial, end)| {
+                let paired = state
+                    .machine_paired
+                    .as_ref()
+                    .filter(|(paired, _, _)| *paired == serial);
+                super::control::EndedMachineOffer {
+                    serial,
+                    end,
+                    device_id: paired.map(|(_, id, _)| id.clone()),
+                    device_name: paired.map(|(_, _, name)| name.clone()),
+                }
+            }),
         }),
         unregistered_owners,
         log_path: Some(shared.lifecycle.log_path()),

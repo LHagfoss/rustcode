@@ -27,6 +27,12 @@ pub const MAX_HANDSHAKE_FRAME_BYTES: usize = 8 * 1024;
 /// still presents and stores.
 pub const CAPABILITY_TOKEN_ROTATION: &str = "token_rotation";
 
+/// What a `described` frame lists when the gateway takes `describe`.
+pub const GATEWAY_CAPABILITY_DESCRIBE: &str = "describe";
+
+/// What a `described` frame lists when the gateway redeems connect codes.
+pub const GATEWAY_CAPABILITY_MACHINE_CODES: &str = "machine_codes";
+
 /// Digits in the pairing code a machine shows and the owner types, as the
 /// gateway issues it. A `connect_approved` frame reports the same number.
 pub const PAIRING_CODE_DIGITS: u32 = 8;
@@ -68,12 +74,20 @@ pub enum PairingMethod {
     Credential,
     /// The eight-digit code typed by hand next to the address.
     Code,
+    /// A connect code's secret: the short code's or the long form's
+    /// credential. Pairs with full thread access and no accept step, since
+    /// the machine's owner created the code.
+    Machine,
 }
 
 /// First frame from a device, and the two that follow it during a pairing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HandshakeRequest {
+    /// Ask who answers before anything secret is sent: the gateway answers
+    /// `described` and takes one more first frame on the same socket. An
+    /// older gateway answers `invalid_frame` and closes it.
+    Describe { protocol_version: u32 },
     /// Ask the machine's owner to let this client pair. Carries no secret. The
     /// socket stays open for the answer, then takes one `pair` frame with the
     /// code the owner reads off the machine.
@@ -162,6 +176,22 @@ pub struct HostRoute {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HandshakeResponse {
+    /// Who answered a `describe`; nothing secret.
+    Described {
+        protocol_version: u32,
+        gateway_id: String,
+        instance_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        platform: Option<String>,
+        /// What the gateway takes beyond v1's first frames:
+        /// [`GATEWAY_CAPABILITY_DESCRIBE`], [`GATEWAY_CAPABILITY_MACHINE_CODES`].
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        capabilities: Vec<String>,
+    },
     /// The request is in front of the machine's owner. Wait on the same socket.
     ConnectPending {
         request_id: String,
@@ -399,8 +429,10 @@ mod tests {
                 "authenticate_thread_names.json".to_owned(),
                 "connect_request.json".to_owned(),
                 "connect_request_desktop.json".to_owned(),
+                "describe.json".to_owned(),
                 "pair_code.json".to_owned(),
                 "pair_credential.json".to_owned(),
+                "pair_machine.json".to_owned(),
                 "token_ack.json".to_owned(),
             ]),
             "a golden request was added or removed: update this mirror and this list"

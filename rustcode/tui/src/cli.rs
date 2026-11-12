@@ -521,6 +521,37 @@ pub enum MachineCommands {
         /// Name, host id or a prefix of one
         machine: String,
     },
+    /// Create a connect code here, for another computer to pair with this
+    /// one: valid ten minutes, once, no accept step. Anyone who has it can see
+    /// and run all threads on this computer.
+    #[command(after_help = "Examples:
+  rustcode machines code                 # show the code and the link
+  rustcode machines code --link          # print only the link, for a script
+  rustcode machines connect \"$(ssh box rustcode machines code --link)\"")]
+    Code {
+        /// Print only the long form (`rustcode://connect/…`), for a script
+        /// or `ssh <host> rustcode machines code --link`
+        #[arg(long, conflicts_with_all = ["json", "cancel"])]
+        link: bool,
+        /// Print the code as JSON
+        #[arg(long, conflicts_with = "cancel")]
+        json: bool,
+        /// Withdraw the open connect code instead
+        #[arg(long)]
+        cancel: bool,
+    },
+    /// Pair with a connect code created on another computer and save it
+    Connect {
+        /// The code (`K7MQ-29XH-TP4W-NRD6`) or link (`rustcode://connect/…`)
+        code: String,
+        /// Where to reach that computer, when the code carries no address or
+        /// to use another one than it carries
+        #[arg(long)]
+        address: Option<String>,
+        /// Name to save the machine under (default: the name it reports)
+        #[arg(long)]
+        name: Option<String>,
+    },
     /// List the machines on this network that take a desktop client
     Discover {
         /// How long to listen for announcements

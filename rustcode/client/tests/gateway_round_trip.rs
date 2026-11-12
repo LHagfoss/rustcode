@@ -362,8 +362,11 @@ async fn a_machine_without_a_token_asks_for_a_new_pairing() {
     let host = Host::start().await;
     let config = tempfile::tempdir_in("/tmp").unwrap();
     let connector = Connector::new(config.path(), ClientKind::Cli).unwrap();
+    // The gateway's own id: a route that answers as another machine is
+    // dropped before the token is even looked for.
+    let gateway_id = host.lifecycle.status().await.unwrap().unwrap().gateway_id;
     let machine = rustcode_client::Machine::new(
-        "gw-0123456789abcdef",
+        gateway_id,
         "Studio",
         "macos",
         "0011223344556677",
@@ -377,6 +380,10 @@ async fn a_machine_without_a_token_asks_for_a_new_pairing() {
     assert!(
         format!("{error:#}").contains("pair with it again"),
         "{error:#}"
+    );
+    assert!(
+        rustcode_client::needs_new_pairing(&error),
+        "a missing token is typed as a lost pairing: {error:#}"
     );
     host.stop().await;
 }
@@ -576,7 +583,29 @@ async fn an_older_gateway_reads_the_static_token_after_the_refresh_form() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
-        // The rotating form first: this gateway cannot read it, exactly as one
+        // `describe` first: a gateway from before it cannot read it, answers
+        // `invalid_frame` and closes, and nothing secret was on that socket.
+        {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let Some(Ok(Message::Text(frame))) = socket.next().await else {
+                panic!("the client asks who answers first");
+            };
+            assert!(frame.contains("\"describe\""), "{frame}");
+            assert!(!frame.contains("token"), "{frame}");
+            socket
+                .send(Message::text(
+                    serde_json::json!({
+                        "type": "error",
+                        "code": "invalid_frame",
+                        "message": "first frame must be a pair or authenticate request",
+                    })
+                    .to_string(),
+                ))
+                .await
+                .unwrap();
+        }
+        // The rotating form next: this gateway cannot read it, exactly as one
         // from before rotating tokens answers it.
         {
             let (stream, _) = listener.accept().await.unwrap();
@@ -812,5 +841,154 @@ async fn two_processes_refreshing_do_not_replay_each_other() {
     }
     // A replay would have removed the pairing at the machine.
     assert_eq!(host.lifecycle.devices().unwrap().len(), 1);
+    host.stop().await;
+}
+
+/// A connect code made on the machine pairs this computer with no request and
+/// no accept step: full thread access, one use, and the phone challenge open
+/// beside it survives (B9).
+#[tokio::test]
+async fn a_connect_code_pairs_once_without_an_accept_step() {
+    let host = Host::start().await;
+    let challenge = host.lifecycle.pair().await.expect("a phone challenge");
+    let offer = host
+        .lifecycle
+        .machine_offer()
+        .await
+        .expect("a connect code");
+    assert_eq!(offer.expires_in_secs, 600);
+    let status = host.lifecycle.status().await.unwrap().unwrap();
+    assert!(status.pairing_open, "the phone challenge is still open");
+    assert!(status.machine_offer.unwrap().open.is_some());
+
+    let config = tempfile::tempdir_in("/tmp").unwrap();
+    let connector = Connector::new(config.path(), ClientKind::Desktop).unwrap();
+    // A loopback gateway reports no routes, so the code carries none and the
+    // address is given next to it, as `--address` does.
+    let code = rustcode_client::connect_code::parse(offer.code.expose()).unwrap();
+    let (paired, route) = connector
+        .pair_with_code(&code, Some(&host.address()))
+        .await
+        .expect("the code pairs");
+    assert_eq!(route.address, host.address());
+    let welcome = paired.session.welcome().clone();
+    assert_eq!(welcome.gateway_id, status.gateway_id);
+    drop(paired);
+
+    // The device has full thread access: the owner created the code.
+    let devices = host.lifecycle.devices().unwrap();
+    let device = devices
+        .iter()
+        .find(|device| device.id == welcome.device_id)
+        .expect("the device is recorded");
+    assert!(device.acp, "a connect code grants ACP");
+    let status = host.lifecycle.status().await.unwrap().unwrap();
+    let offer_status = status.machine_offer.unwrap();
+    assert!(offer_status.open.is_none(), "the code is spent");
+    let ended = offer_status.last_ended.expect("it ended early");
+    assert_eq!(ended.device_id.as_deref(), Some(welcome.device_id.as_str()));
+    assert!(
+        status.pairing_open,
+        "the phone challenge survived the pairing"
+    );
+
+    // Single use: the same code, either form, is refused with what to do.
+    let error = connector
+        .pair_with_code(&code, Some(&host.address()))
+        .await
+        .expect_err("a used code is refused");
+    assert!(
+        format!("{error:#}").contains("expired, was already used"),
+        "{error:#}"
+    );
+    let link = rustcode_client::connect_code::parse(offer.link.expose()).unwrap();
+    assert!(
+        connector
+            .pair_with_code(&link, Some(&host.address()))
+            .await
+            .is_err()
+    );
+    drop(challenge);
+    host.stop().await;
+}
+
+/// The long form names the gateway it was made on: another gateway on the
+/// address gets nothing, and says who it is instead.
+#[tokio::test]
+async fn a_connect_link_is_not_redeemed_by_another_gateway() {
+    let host = Host::start().await;
+    let other = Host::start().await;
+    let offer = host.lifecycle.machine_offer().await.unwrap();
+    let link = rustcode_client::connect_code::parse(offer.link.expose()).unwrap();
+    let config = tempfile::tempdir_in("/tmp").unwrap();
+    let connector = Connector::new(config.path(), ClientKind::Desktop).unwrap();
+    let error = connector
+        .pair_with_code(&link, Some(&other.address()))
+        .await
+        .expect_err("another gateway is not the one the link names");
+    assert!(
+        format!("{error:#}").contains("not the computer the code was made on"),
+        "{error:#}"
+    );
+    // The code is still open on its own machine: nothing was presented.
+    let status = host.lifecycle.status().await.unwrap().unwrap();
+    assert!(status.machine_offer.unwrap().open.is_some());
+    other.stop().await;
+    host.stop().await;
+}
+
+/// A saved address that another RustCode machine answers now: the token is
+/// never sent there, the other machine records no refusal, and the result is
+/// not "pair again" (B1, B2). The machine is remembered as one that proves
+/// who it is, so an address that cannot is skipped from then on.
+#[tokio::test]
+async fn a_stranger_on_a_saved_address_gets_no_token_and_cannot_unpair() {
+    let host = Host::start().await;
+    let stranger = Host::start().await;
+    let config = tempfile::tempdir_in("/tmp").unwrap();
+    let connector = Connector::new(config.path(), ClientKind::Desktop).unwrap();
+    let (mut machine, tokens, paired) = pair(&host, &connector, config.path()).await;
+    drop(paired);
+    MachineRegistry::load(config.path())
+        .unwrap()
+        .insert(machine.clone())
+        .unwrap();
+
+    // The real machine proves who it is, and the client remembers that.
+    connector
+        .connect(&machine, &tokens)
+        .await
+        .expect("connects");
+    let saved = MachineRegistry::load(config.path()).unwrap();
+    assert!(saved.get(&machine.host_id).unwrap().describes);
+    machine.describes = true;
+
+    // Its address now belongs to the stranger.
+    machine.routes = vec![Route::new(stranger.address())];
+    let error = connector
+        .connect(&machine, &tokens)
+        .await
+        .expect_err("the stranger is not the machine");
+    assert!(
+        !rustcode_client::needs_new_pairing(&error),
+        "a stranger's answer must not end the retries: {error:#}"
+    );
+    assert!(
+        format!("{error:#}").contains("token was not sent"),
+        "{error:#}"
+    );
+    let seen = stranger.lifecycle.status().await.unwrap().unwrap();
+    assert!(
+        seen.refused_connections.is_empty(),
+        "the stranger was sent nothing to refuse: {:?}",
+        seen.refused_connections
+    );
+    // The token is intact: the real machine still takes it.
+    machine.routes = vec![Route::new(host.address())];
+    connector
+        .connect(&machine, &tokens)
+        .await
+        .expect("the pairing survived");
+    stranger.stop().await;
     host.stop().await;
 }

@@ -358,6 +358,13 @@ pub struct Machine {
     /// still open and the connection stays up. A local choice, never sent.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub paused: bool,
+    /// The machine has answered `describe` with its own id: from then on a
+    /// route must prove it is the machine before this computer's token goes
+    /// to it, and an address that cannot is skipped, token unsent. `false`
+    /// for a machine whose RustCode predates `describe`, which keeps the
+    /// old handshake until it updates.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub describes: bool,
 }
 
 fn unknown_platform() -> String {
@@ -389,6 +396,7 @@ impl Machine {
             last_route: None,
             probes: Vec::new(),
             paused: false,
+            describes: false,
         };
         machine.normalize_routes();
         machine
@@ -608,6 +616,7 @@ impl MachineRegistry {
                         existing.version = machine.version;
                     }
                     existing.device_id = machine.device_id;
+                    existing.describes |= machine.describes;
                     for route in machine.routes {
                         existing.learn_route(route);
                     }
@@ -665,6 +674,22 @@ impl MachineRegistry {
             }
             machine.version = version;
             Ok(true)
+        })
+    }
+
+    /// Remember that a machine answers `describe` as itself
+    /// ([`Machine::describes`]). Never cleared: a machine does not go back.
+    pub fn set_describes(&mut self, host_id: &str) -> Result<bool> {
+        self.mutate(|machines| {
+            let Some(machine) = machines
+                .iter_mut()
+                .find(|machine| machine.host_id == host_id)
+            else {
+                bail!("no saved machine has host id {host_id}");
+            };
+            let changed = !machine.describes;
+            machine.describes = true;
+            Ok(changed)
         })
     }
 
