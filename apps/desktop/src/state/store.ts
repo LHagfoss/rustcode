@@ -163,6 +163,7 @@ import {
   loadBook,
   orchestrationCallDropped,
   queuedLinkDropped,
+  reconcileLinks,
   requeueUnreadSteers,
   resetWaits,
   restoreQueuedThreads,
@@ -1993,6 +1994,7 @@ function onSessionUpdate(params: JsonObject) {
     clearStatusMark(sessionId);
     // A lost turn on this thread is settled now if the machine says it stopped running there.
     lostTurnStatus(sessionId, status);
+    if (status !== "running" && status !== "needs_input") reconcileLinks();
   }
   if (update.kind === "title") {
     set((s) => ({
@@ -2090,6 +2092,8 @@ export async function refreshSessions(): Promise<void> {
     // A thread the engine no longer lists keeps no place in the arrangement. A capped list is not
     // the whole list, so it prunes nothing: the rows of the rest are still there.
     if (!capped) pruneSidebarOrder(get().sessions.map((x) => x.id));
+    // A link still Working beside a thread the engine says is idle is settled (issue 3541).
+    reconcileLinks();
   } catch (error) {
     set({ sessionsLoaded: true });
     toast(`Could not list threads: ${errorText(error)}`, "error");

@@ -3,7 +3,14 @@
 // sidebar and the parent's delegate row stop saying "working" without the thread being opened.
 
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { linkSteered, requeueUnreadSteers, takeSteeredLinks, threadTurnEnded } from "./host";
+import {
+  linkSteered,
+  reconcileLinks,
+  requeueUnreadSteers,
+  stopLink,
+  takeSteeredLinks,
+  threadTurnEnded,
+} from "./host";
 import { emptyBook, type Link, liveState } from "./orchestration";
 import { resetForTests, statusOf, updateThread, useApp } from "./store";
 import { emptyThread, requeueSteers } from "./thread";
@@ -134,5 +141,71 @@ describe("a delegate steered mid-turn", () => {
     expect(state("steer-2")?.state).toBe("working");
     turnEnds("completed");
     expect(state("steer-2")?.state).toBe("done");
+  });
+});
+
+describe("a link whose thread stopped (issue 3541)", () => {
+  const idle = () =>
+    useApp.setState((s) => ({
+      sessionsLoaded: true,
+      threads: { ...s.threads, [TARGET]: { ...s.threads[TARGET]!, running: false } },
+    }));
+
+  test("Stop settles a working link whose thread runs nothing, and the banner and spinner go", async () => {
+    idle();
+    expect(shown("own")).toBe("working");
+    expect(await stopLink("own")).toBe(true);
+    expect(state("own")?.state).toBe("cancelled");
+    expect(shown("own")).toBe("cancelled");
+    // Already settled: a second press has nothing to stop.
+    expect(await stopLink("own")).toBe(false);
+  });
+
+  test("reconciling settles an idle thread's working links, with its last reply", () => {
+    idle();
+    updateThread(TARGET, (t) => ({ ...t, items: [{ kind: "assistant", id: "a1", text: "Done, 12 pass" }] }));
+    reconcileLinks(10_000_000);
+    expect([state("own")?.state, state("steer-1")?.state, state("steer-2")?.state]).toEqual([
+      "done",
+      "done",
+      "done",
+    ]);
+    expect(state("own")?.answer).toBe("Done, 12 pass");
+  });
+
+  test("reconciling fails the link of a thread whose last turn failed", () => {
+    idle();
+    updateThread(TARGET, (t) => ({ ...t, error: "the provider refused" }));
+    reconcileLinks(10_000_000);
+    expect(state("own")?.state).toBe("failed");
+  });
+
+  test("a running thread, a link that is only starting and a queued message are left working", () => {
+    // Running: nothing to reconcile.
+    useApp.setState({ sessionsLoaded: true });
+    reconcileLinks(10_000_000);
+    expect(state("own")?.state).toBe("working");
+    idle();
+    // Starting: the turn has not begun yet.
+    useApp.setState((s) => ({
+      links: {
+        ...s.links,
+        links: s.links.links.map((l) => (l.id === "own" ? { ...l, startedAt: 9_999_999 } : l)),
+      },
+    }));
+    // Its message still waits in the thread's queue.
+    updateThread(TARGET, (t) => ({ ...t, queue: [{ id: "q1", text: "next", link: "steer-1" }] }));
+    reconcileLinks(10_000_000);
+    expect([state("own")?.state, state("steer-1")?.state]).toEqual(["working", "working"]);
+    expect(state("steer-2")?.state).toBe("done");
+  });
+
+  test("a thread held for a usage limit keeps its link working", () => {
+    idle();
+    useApp.setState({
+      limitWaits: { [TARGET]: { until: 1, reason: "limit", harness: "claude-code", account: null } as never },
+    });
+    reconcileLinks(10_000_000);
+    expect(state("own")?.state).toBe("working");
   });
 });

@@ -5139,7 +5139,18 @@ export function queuedLinkDropped(id: string) {
   wakeTick();
 }
 
-/** Stop a link: its queued message goes, or its running turn is cancelled. The user's own turns there go on. */
+/** Whether `id` runs nothing and waits on nobody, as far as this window can tell. */
+function threadIdle(id: string): boolean {
+  const state = useApp.getState();
+  const status = statusOf(state, id);
+  return status !== "running" && status !== "needs_input";
+}
+
+/**
+ * Stop a link: its queued message goes, or its running turn is cancelled. A link whose thread runs
+ * nothing has no turn to cancel and would stay Working for good, so stopping it settles it as
+ * cancelled and wakes the parent. The user's own turns there go on.
+ */
 export async function stopLink(id: string): Promise<boolean> {
   const link = book().links.find((l) => l.id === id);
   if (!link || !isActive(link.state)) return false;
@@ -5148,8 +5159,44 @@ export async function stopLink(id: string): Promise<boolean> {
     setBook((b) => updateLink(b, id, { state: "cancelled" }));
     return true;
   }
+  if (threadIdle(link.target)) {
+    linksFinished([id], link.target, "cancelled", undefined, []);
+    return true;
+  }
   await cancel(link.target);
   return true;
+}
+
+/** How long a working link may sit beside an idle thread before it is read as lost, not just starting. */
+export const STALE_LINK_MS = 20_000;
+
+/**
+ * Settles the working links whose thread, by its real status, runs nothing: a turn that ended
+ * without settling its link (a steer, a window that missed the end) must not read Working for
+ * hours. The answer is the thread's last reply, or its failure. Run when the thread list is read
+ * (load and refocus) and when a thread reports a status. A link that is only starting (its turn
+ * has not begun yet), one whose message waits in the thread's queue, and another computer's
+ * threads (their lost turns are followed by `lostTurn`) are left alone.
+ */
+export function reconcileLinks(now = Date.now()): void {
+  const state = useApp.getState();
+  if (!state.sessionsLoaded) return;
+  const stale = book().links.filter((link) => {
+    if (link.state !== "working" && link.state !== "needs_user") return false;
+    if (isRemoteThread(link.target) || now - Math.max(link.startedAt ?? 0, link.createdAt) < STALE_LINK_MS) {
+      return false;
+    }
+    const thread = state.threads[link.target];
+    if (thread?.loading || thread?.queue.some((q) => q.link === link.id)) return false;
+    if (!thread && !sessionById(state, link.target)) return false;
+    // A thread held for a usage limit, the internet or background commands carries on by itself.
+    if (state.limitWaits[link.target] || state.internetWaits[link.target] || thread?.waiting) return false;
+    return threadIdle(link.target);
+  });
+  for (const link of stale) {
+    const error = state.threads[link.target]?.error;
+    linksFinished([link.id], link.target, error ? "failed" : "completed", error, []);
+  }
 }
 
 /** The threads whose work is being stopped right now: a cascade stops each one once. */
