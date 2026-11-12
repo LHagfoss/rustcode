@@ -465,7 +465,7 @@ pub(crate) async fn load_session(
 ) -> Result<LoadSessionResponse, agent_client_protocol::Error> {
     let session_id = request.session_id.to_string();
     let cwd = super::canonical_acp_cwd(&request.cwd, "session/load")?;
-    if std::fs::canonicalize(&record.cwd).ok().as_ref() != Some(&cwd) {
+    if !super::opens_in(&record.cwd, &cwd) {
         return Err(failure(
             "session/load cwd does not match the recorded workspace".to_owned(),
         ));
