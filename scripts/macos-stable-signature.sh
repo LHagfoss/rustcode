@@ -8,7 +8,10 @@
 # Signing with one local certificate makes the identity
 # `org.rustcode.cli` + that certificate, which survives updates.
 #
-# Usage: scripts/macos-stable-signature.sh [path-to-rustcode]
+# Usage: scripts/macos-stable-signature.sh [path-to-rustcode | path-to-RustCode.app]
+#
+# Given RustCode.app, it signs the bundled CLI, the app binary and the bundle,
+# the same way the app's updater and scripts/install.sh do.
 #
 # Run it once. It creates a self-signed code-signing certificate named
 # "RustCode Local Signing" in the login keychain (macOS may ask for the login
@@ -29,7 +32,7 @@ if [ "$(uname -s)" != "Darwin" ]; then
 fi
 
 TARGET="${1:-$(command -v rustcode || true)}"
-if [ -z "$TARGET" ] || [ ! -f "$TARGET" ]; then
+if [ -z "$TARGET" ] || [ ! -e "$TARGET" ]; then
     echo "Could not find rustcode; pass its path as the first argument." >&2
     exit 1
 fi
@@ -60,6 +63,14 @@ CONFIG
     echo "Created the \"$IDENTITY\" certificate in the login keychain."
 fi
 
-codesign --force --sign "$IDENTITY" --identifier "$IDENTIFIER" "$TARGET"
+if [ -d "$TARGET" ]; then
+    DESKTOP_IDENTIFIER="com.lhagfoss.rustcode.desktop"
+    codesign --force --sign "$IDENTITY" --identifier "$IDENTIFIER" "$TARGET/Contents/MacOS/rustcode"
+    codesign --force --sign "$IDENTITY" --identifier "$DESKTOP_IDENTIFIER" "$TARGET/Contents/MacOS/rustcode-desktop"
+    codesign --force --sign "$IDENTITY" --identifier "$DESKTOP_IDENTIFIER" "$TARGET"
+    codesign --verify --deep --strict "$TARGET"
+else
+    codesign --force --sign "$IDENTITY" --identifier "$IDENTIFIER" "$TARGET"
+fi
 echo "Signed $TARGET:"
 codesign -d -r- "$TARGET" 2>&1 | sed -n 's/^designated => /  /p'
