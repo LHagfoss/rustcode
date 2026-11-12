@@ -3,6 +3,7 @@ import {
   badgeCount,
   bodyFor,
   createNotifyGate,
+  finishIsNews,
   firstLine,
   type NotifyContext,
   type NotifyEvent,
@@ -225,5 +226,33 @@ describe("what a thread that slept has to say", () => {
 
   test("a quiet return says nothing at all", () => {
     expect(wakeEvent(read)).toBeNull();
+  });
+});
+
+describe("which finishes are news", () => {
+  const idle = { waiting: false, delegated: false, queued: false };
+
+  test("a thread that is truly finished is", () => {
+    expect(finishIsNews(idle)).toBe(true);
+  });
+
+  test("a turn that ends while background work or a delegate is still going is not", () => {
+    expect(finishIsNews({ ...idle, waiting: true })).toBe(false);
+  });
+
+  test("a delegate finishing is not: its parent hears it", () => {
+    expect(finishIsNews({ ...idle, delegated: true })).toBe(false);
+  });
+
+  test("a turn that hands over to a queued message is between turns", () => {
+    expect(finishIsNews({ ...idle, queued: true })).toBe(false);
+  });
+
+  test("a question reaches the gate whatever else the thread is doing", () => {
+    const gate = createNotifyGate();
+    const away = { enabled: true, backgroundOnly: true, windowFocused: false, onScreen: null };
+    expect(
+      gate.take({ threadId: "a", kind: "question", key: "7", title: "Fix it", detail: "Which runner?" }, away),
+    ).not.toBeNull();
   });
 });

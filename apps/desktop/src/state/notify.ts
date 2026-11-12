@@ -60,6 +60,16 @@ export function bodyFor(event: NotifyEvent): string {
   return line || NOTIFY_BODY.question;
 }
 
+/**
+ * Whether a turn that ended without failing is worth announcing, as a toast or a notification: the
+ * thread is truly finished. Not while it waits on what it started (commands parked on, delegates
+ * it handed work to): it continues on its own, and that later end is the one to say. Not for a
+ * delegate (its parent hears it), nor between turns, when a queued message starts at once.
+ */
+export function finishIsNews(read: { waiting: boolean; delegated: boolean; queued: boolean }): boolean {
+  return !read.waiting && !read.delegated && !read.queued;
+}
+
 /** The first line of a text, at most a notification's width. */
 export function firstLine(text: string, max = 120): string {
   const line = text
