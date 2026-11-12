@@ -226,7 +226,7 @@ describe("a link whose thread stopped (issue 3541)", () => {
     expect(state("own")?.state).toBe("working");
   });
 
-  test("a steered link saved with no start time settles once its thread is idle (issue 3548)", () => {
+  test("a steered link saved with no start time settles once its thread is idle", () => {
     idle();
     useApp.setState((s) => ({
       links: {
