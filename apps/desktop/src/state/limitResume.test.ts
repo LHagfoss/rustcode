@@ -89,6 +89,36 @@ describe("a turn that ended on a limit", () => {
     }
   });
 
+  test("reads Codex's usage limit, as a time of day or as a wait", () => {
+    // The machine's own clock, like the time Codex prints.
+    const morning = new Date(2026, 10, 12, 10, 0).getTime();
+    const codex =
+      "Codex: You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at 3:47 PM.";
+    expect(limitReset(codex, morning)).toBe(new Date(2026, 10, 12, 15, 47).getTime());
+    expect(limitReset(codex.replace("3:47 PM", "Nov 15th, 2026 3:47 PM"), morning)).toBe(
+      new Date(2026, 10, 15, 15, 47).getTime(),
+    );
+    expect(limitReset("You've hit your usage limit. Try again in 3 days 2 hours 5 minutes.", morning)).toBe(
+      morning + 3 * 86_400_000 + 2 * 3_600_000 + 5 * 60_000,
+    );
+    expect(limitReset("You've hit your usage limit. Try again in soon.", morning)).toBeNull();
+  });
+
+  test("reads Gemini's quota reset", () => {
+    expect(
+      limitReset(
+        "Gemini CLI: You have exhausted your capacity on this model. Your quota will reset after 3h42m18s.",
+        NOW,
+      ),
+    ).toBe(NOW + 3 * 3_600_000 + 42 * 60_000 + 18_000);
+    expect(limitReset("Your quota will reset after 54s.", NOW)).toBe(NOW + 54_000);
+    expect(limitReset("Your quota will reset after a while.", NOW)).toBeNull();
+    // A reply that only mentions it is not the message.
+    expect(
+      limitReset("I read that your quota will reset after 54s in the docs, so I waited.", NOW),
+    ).toBeNull();
+  });
+
   test("a limit with no time takes the latest full window of the plan", () => {
     const windows = [
       { usedPercent: 100, resetsAt: NOW + 1000 },

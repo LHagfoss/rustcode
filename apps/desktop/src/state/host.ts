@@ -200,6 +200,7 @@ import {
   permissionModeOf,
   planCacheStale,
   refreshReadPlanLogins,
+  releaseLimitWaitLink,
   removeQueued,
   renameThread,
   request,
@@ -4919,7 +4920,9 @@ export function linksResumed(ids: readonly string[]): void {
  */
 export function linksReopened(thread: string, ids: readonly string[]): void {
   if (!ids.length) return;
-  const next = reopenLinks(book(), thread, ids, Date.now());
+  // A parent the user archived is not woken by a delegate that carries on without it.
+  const archived = useApp.getState().archived;
+  const next = reopenLinks(book(), thread, ids, Date.now(), (orchestrator) => !!archived[orchestrator]);
   if (next === book()) return;
   setBook(() => next);
 }
@@ -4973,6 +4976,11 @@ export function linksFinished(
   outcome: "completed" | "cancelled" | "failed",
   failed: string | undefined,
   items: TranscriptItem[],
+  /**
+   * The thread waits to carry on again (a usage limit, an overload): a link the parent already
+   * heard the stop of stays heard, so it is woken once when the thread settles for good.
+   */
+  holding = false,
 ) {
   if (!ids.length) return;
   const now = Date.now();
@@ -4999,6 +5007,7 @@ export function linksFinished(
           truncated: says.truncated,
           filesChanged: says.filesChanged,
           settledAt: now,
+          ...(holding || state === "cancelled" ? {} : { notifiedAt: undefined }),
           ...harness,
           ...(workedMs ? { workedMs } : {}),
         },
@@ -5114,10 +5123,38 @@ export async function stopLinksFrom(orchestrator: string): Promise<number> {
       if (link.orchestrator !== orchestrator || !isActive(link.state)) continue;
       if (await stopLink(link.id)) stopped += 1;
     }
+    stopped += releaseLimitWaitsFrom(orchestrator);
     return stopped;
   } finally {
     stopping.delete(orchestrator);
   }
+}
+
+/**
+ * The delegates of `orchestrator` that are waiting out a usage limit stop with it: their failed
+ * links are cancelled and their wait is let go (or only the link, when another parent's link
+ * shares it), so the reset never wakes a parent the user stopped or archived. Returns how many
+ * links it cancelled.
+ */
+export function releaseLimitWaitsFrom(orchestrator: string): number {
+  const waits = useApp.getState().limitWaits;
+  const held = book().links.filter(
+    (l) =>
+      l.orchestrator === orchestrator &&
+      (l.state === "failed" || l.state === "done") &&
+      waits[l.target]?.links?.includes(l.id),
+  );
+  if (!held.length) return 0;
+  const now = Date.now();
+  const ids = new Set(held.map((l) => l.id));
+  setBook((b) => ({
+    ...b,
+    links: b.links.map((l) =>
+      ids.has(l.id) ? advanceLink(l, { state: "cancelled", settledAt: now }, now) : l,
+    ),
+  }));
+  for (const link of held) releaseLimitWaitLink(link.target, link.id);
+  return held.length;
 }
 
 /** Forget a finished link's chip. */
