@@ -1114,7 +1114,11 @@ mod tests {
         let theirs = tempfile::tempdir().unwrap();
         let caller = super::super::local_threads::test_thread(mine.path());
         crate::config::save_session_yolo(&caller, true);
-        let child = super::super::local_threads::test_thread(mine.path());
+        let elsewhere = tempfile::tempdir().unwrap();
+        // A thread the caller started reaches across projects; a sibling in
+        // the caller's own project does too.
+        let child = super::super::local_threads::test_thread(elsewhere.path());
+        let sibling = super::super::local_threads::test_thread(mine.path());
         let other = super::super::local_threads::test_thread(theirs.path());
         crate::thread_parent::record(
             &child,
@@ -1133,7 +1137,7 @@ mod tests {
         assert_eq!(refused["error"]["code"], json!("not_allowed"), "{refused}");
 
         // The same project, and a thread the caller started, are reachable.
-        for reachable in [&caller, &child] {
+        for reachable in [&sibling, &child] {
             let answer = answer_json(
                 &caller,
                 &CancellationToken::new(),
@@ -1153,7 +1157,7 @@ mod tests {
         assert_eq!(own["error"]["code"], json!("not_allowed"), "{own}");
 
         set_setting("read-across-projects", json!(true));
-        for id in [&caller, &other, &child] {
+        for id in [&caller, &other, &child, &sibling] {
             let _ =
                 crate::config::get_active_session_dir(id).map(|dir| std::fs::remove_dir_all(dir));
         }
