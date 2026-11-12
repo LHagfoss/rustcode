@@ -17,8 +17,8 @@
 //! - [`machine`]: the ask-to-connect pairing flow, route selection and the one
 //!   ACP read (`session/list`).
 //! - [`reconnect`]: the backoff a client waits out while a machine is away, the
-//!   route that worked last first, and the network change that cuts the wait
-//!   short.
+//!   route that worked last first, the network change or wake from sleep that
+//!   cuts the wait short, and why the last attempt failed.
 //! - [`discovery`]: Bonjour, for machines that take a desktop client.
 //! - [`protocol`]: the remote protocol v1 frames this client sends, mirrored
 //!   against the committed contract in `docs/remote-protocol/v1`.
@@ -45,7 +45,10 @@ pub use protocol::{
     AcpClientFrame, AcpServerFrame, CAPABILITY_TOKEN_ROTATION, ErrorCode, HandshakeRequest,
     HandshakeResponse, PAIRING_CODE_DIGITS, Secret,
 };
-pub use reconnect::{backoff_cap, backoff_delay, network_changed, prefer_last_working};
+pub use reconnect::{
+    Cause, SILENCE_LIMIT, answer_deadline, backoff_cap, backoff_delay, network_changed,
+    prefer_last_working, slept,
+};
 pub use registry::{
     Machine, MachineRegistry, OverlayProvider, ProbeOutcome, Route, RouteKind, RouteProbe,
 };

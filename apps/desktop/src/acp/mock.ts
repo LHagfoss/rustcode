@@ -5878,6 +5878,10 @@ export class MockTransport implements Transport {
       this.machineList = [...this.machineList.filter((machine) => machine.id !== paired.id), paired];
       return { ...paired, state: "connecting" };
     }
+    if (command === "machines_retry") {
+      // Nothing waits on a backoff in the mock: no machine is woken.
+      return [];
+    }
     if (command === "machines_probe") {
       // The LAN answers; an overlay that accepts no inbound connections times out.
       const at = new Date().toISOString();

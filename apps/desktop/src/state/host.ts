@@ -68,6 +68,8 @@ import {
   machineName,
   offlineSinceLabel,
   probeMachineRoutes,
+  refreshMachines,
+  retryMachines,
   selfName,
   useMachines,
 } from "./machines";
@@ -751,7 +753,37 @@ export function machineUnavailable(machine: MachineRef): Failure | null {
     );
   }
   const since = offlineSinceLabel(useMachines.getState().offlineSince[machine.host]);
+  // A machine that answered and refused says what it said: "offline" would send the agent to check
+  // a network that works.
+  if (saved?.state === "unavailable") {
+    return failure(
+      "offline",
+      `${machine.name} answers but is not serving this computer${saved.detail ? `: ${saved.detail}` : ""}; nothing was sent`,
+    );
+  }
   return failure("offline", `${machine.name} is offline${since ? ` since ${since}` : ""}; nothing was sent`);
+}
+
+/**
+ * Where a machine stands, as `list_machines` says it: `connected`, `connecting`, `reconnecting`
+ * (no route answered; the app is on its retry clock), `unavailable` (a route answered and the
+ * machine would not serve: `reason` says why), `revoked` (it refused this computer's pairing), or
+ * `offline` (not connected and not trying).
+ */
+function machineState(saved: Machine | undefined, connected: boolean): string {
+  if (connected) return "connected";
+  switch (saved?.state) {
+    case "needsPairing":
+      return "revoked";
+    case "connecting":
+      return "connecting";
+    case "unavailable":
+      return "unavailable";
+    case "offline":
+      return saved.retryInSecs ? "reconnecting" : "offline";
+    default:
+      return "offline";
+  }
 }
 
 /** What every machine-aware answer carries, so an agent can tell where a thread runs. */
@@ -808,7 +840,7 @@ function checkedMachine(asked: string | undefined): MachineRef | Failure {
 async function machineEntry(machine: MachineRef): Promise<JsonObject> {
   const saved = useMachines.getState().machines.find((m) => m.id === machine.id);
   const connected = !!connectionFor(machine.host);
-  const state = connected ? "connected" : saved?.state === "needsPairing" ? "revoked" : "offline";
+  const state = machineState(saved, connected);
   return {
     id: machine.id,
     // The reported name stays here, so a client that never heard of the local
@@ -822,6 +854,10 @@ async function machineEntry(machine: MachineRef): Promise<JsonObject> {
     platform: machine.platform,
     ...(machine.host ? {} : { current: true }),
     state,
+    // Why it is not connected: a word to branch on, the shell's own words, and when it tries again.
+    ...(!connected && saved?.reason ? { reason: saved.reason } : {}),
+    ...(!connected && saved?.detail ? { detail: saved.detail } : {}),
+    ...(!connected && saved?.retryInSecs ? { retry_in_secs: saved.retryInSecs } : {}),
     ...(saved?.route
       ? { route: { kind: saved.route.kind, address: saved.route.address, encrypted: saved.route.encrypted } }
       : {}),
@@ -848,13 +884,56 @@ async function machineEntry(machine: MachineRef): Promise<JsonObject> {
   };
 }
 
+/** How long `list_machines` with `probe` waits for the machines it woke to connect or say why not. */
+const RECONNECT_WAIT_MS = 10_000;
+const RECONNECT_POLL_MS = 500;
+
+/**
+ * Try every paired machine that is not connected again now, and wait (at most
+ * `RECONNECT_WAIT_MS`) until each is connected or its attempt ended with a
+ * reason. A probe whose route answered has already woken its machine in the
+ * shell; this also wakes one whose routes all timed out, since a probe is only
+ * a TCP connect.
+ */
+async function reconnectMachines(): Promise<void> {
+  const woken = new Set(await retryMachines());
+  // The ones the probe woke are trying already.
+  for (const m of useMachines.getState().machines) {
+    if (m.state === "connecting" && !connectionFor(m.id)) woken.add(m.id);
+  }
+  if (!woken.size) return;
+  const tried = new Set<string>();
+  const deadline = Date.now() + RECONNECT_WAIT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, RECONNECT_POLL_MS));
+    await refreshMachines();
+    const machines = useMachines.getState().machines;
+    let pending = false;
+    for (const id of woken) {
+      const m = machines.find((entry) => entry.id === id);
+      if (!m || connectionFor(id) || m.state === "needsPairing" || m.state === "stopped") continue;
+      if (m.state === "connecting" || m.state === "connected") {
+        tried.add(id);
+        pending = true;
+      } else if (!tried.has(id)) {
+        // Still on the backoff it had before the wake reached it.
+        pending = true;
+      }
+    }
+    if (!pending) return;
+  }
+}
+
 /**
  * `list_machines`: this computer and each paired machine, one call. With `probe`
  * every route of every paired machine is tested first, so the answer carries
- * what each found now rather than the last test.
+ * what each found now rather than the last test, and every machine that is not
+ * connected is tried again at once; the answer then says whether it came up,
+ * or why not.
  */
 async function listMachines(probe = false): Promise<JsonObject> {
   const probed = probe ? await probeMachineRoutes() : undefined;
+  if (probe) await reconnectMachines();
   const local = localMachine();
   const machines = [local, ...useMachines.getState().machines.map(machineRef)];
   return {

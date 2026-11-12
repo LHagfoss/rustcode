@@ -315,6 +315,65 @@ describe("list_machines routes", () => {
   });
 });
 
+describe("list_machines says why a machine is not connected", () => {
+  test("a machine that answered and would not serve is unavailable, with the reason and the route", async () => {
+    watchMachineConnection(LINUX, null);
+    const detail =
+      "the machine refused acp_open (internal): the relay to this machine's engine could not be opened; no RustCode engine is running there to relay to";
+    useMachines.setState((state) => ({
+      machines: state.machines.map((m) =>
+        m.id === LINUX
+          ? {
+              ...m,
+              state: "unavailable",
+              reason: "server_not_running",
+              detail,
+              retryInSecs: 8,
+              route: { kind: "vpn", address: "100.90.27.158:17879", encrypted: true },
+            }
+          : m,
+      ),
+    }));
+    const answer = await answerOrchestration({ sessionId: CALLER, tool: "list_machines", args: {} });
+    expect((answer.machines as JsonObject[])[1]).toMatchObject({
+      id: LINUX,
+      state: "unavailable",
+      reason: "server_not_running",
+      detail,
+      retry_in_secs: 8,
+      route: { kind: "vpn", address: "100.90.27.158:17879", encrypted: true },
+    });
+    // A call on it says what the machine said, not that it is offline.
+    const refused = await answerOrchestration({
+      sessionId: CALLER,
+      tool: "list_sessions",
+      args: { machine: LINUX },
+    });
+    expect(String((refused.error as JsonObject).message)).toContain("no RustCode engine is running there");
+  });
+
+  test("a machine on its retry clock is reconnecting, and a connected one carries no reason", async () => {
+    watchMachineConnection(LINUX, null);
+    useMachines.setState((state) => ({
+      machines: state.machines.map((m) =>
+        m.id === LINUX ? { ...m, state: "offline", reason: "unreachable", retryInSecs: 30 } : m,
+      ),
+    }));
+    let answer = await answerOrchestration({ sessionId: CALLER, tool: "list_machines", args: {} });
+    expect((answer.machines as JsonObject[])[1]).toMatchObject({
+      state: "reconnecting",
+      reason: "unreachable",
+    });
+    const { conn } = recordingConnection();
+    watchMachineConnection(LINUX, conn);
+    answer = await answerOrchestration({ sessionId: CALLER, tool: "list_machines", args: {} });
+    const listed = (answer.machines as JsonObject[])[1]!;
+    expect(listed.state).toBe("connected");
+    expect(listed.reason).toBeUndefined();
+    expect(listed.retry_in_secs).toBeUndefined();
+  });
+});
+
 describe("a machine's projects", () => {
   test("list_machines names the projects, never the folder a thread with no project lists", async () => {
     const { conn } = recordingConnection();

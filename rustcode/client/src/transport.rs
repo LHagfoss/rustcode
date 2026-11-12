@@ -131,6 +131,7 @@ impl Connection {
         match serde_json::from_str::<AcpServerFrame>(&answer) {
             Ok(AcpServerFrame::AcpOpened) => Ok(AcpChannel {
                 socket: connection.socket,
+                last_heard: tokio::time::Instant::now(),
             }),
             Err(_) => {
                 // The gateway refuses with an `error` frame: ACP access is a
@@ -225,9 +226,29 @@ impl Connection {
 /// [`Self::request`] filters for the one it asked for.
 pub struct AcpChannel {
     socket: Socket,
+    /// When anything last arrived from the machine: a frame, a ping, a pong.
+    /// The gateway pings every 30 s, so a long silence is a dead link.
+    last_heard: tokio::time::Instant,
 }
 
 impl AcpChannel {
+    /// When anything last arrived from the machine, pings included. A relay
+    /// that hears nothing for well past the gateway's ping interval holds a
+    /// connection the network dropped without a close.
+    pub fn last_heard(&self) -> tokio::time::Instant {
+        self.last_heard
+    }
+
+    /// Ask the machine to answer now: its pong moves [`Self::last_heard`]. A
+    /// relay sends one after a wake from sleep or a network change, when the
+    /// socket may be dead without having said so.
+    pub async fn ping(&mut self) -> Result<()> {
+        self.socket
+            .send(Message::Ping(Default::default()))
+            .await
+            .context("ping the machine")
+    }
+
     /// Send one JSON-RPC frame, request or notification.
     pub async fn send(&mut self, frame: Value) -> Result<()> {
         self.socket
@@ -265,6 +286,9 @@ impl AcpChannel {
                     })?,
                 None => self.socket.next().await,
             };
+            if matches!(next, Some(Ok(_))) {
+                self.last_heard = tokio::time::Instant::now();
+            }
             match next {
                 Some(Ok(Message::Text(text))) => {
                     return Ok(Some(

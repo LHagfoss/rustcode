@@ -637,7 +637,19 @@ impl Connector {
                 failed: failures,
             }),
             Race::Lost { failures } => {
-                let refused = failures.iter().find_map(|failure| failure.refusal);
+                // A route that refused the handshake answered: the machine is
+                // up there, so the app shows that route rather than the first
+                // saved one, which may be a LAN address that is not this
+                // network's. The route it answered on last is the best witness
+                // when several refused.
+                let refusing = failures
+                    .iter()
+                    .filter(|failure| failure.refusal.is_some())
+                    .min_by_key(|failure| {
+                        machine.last_route.as_deref() != Some(failure.route.address.as_str())
+                    });
+                let refused = refusing.and_then(|failure| failure.refusal);
+                let answered = refusing.map(|failure| failure.route.address.clone());
                 Err(anyhow::Error::new(Unreachable {
                     machine: machine.name.clone(),
                     attempts: failures
@@ -645,6 +657,7 @@ impl Connector {
                         .map(|failure| format!("{}: {}", failure.route.address, failure.reason))
                         .collect(),
                     refused,
+                    answered,
                 }))
             }
         }
@@ -1252,12 +1265,32 @@ pub struct Unreachable {
     /// One line per route: the address and what happened.
     pub attempts: Vec<String>,
     pub refused: Option<crate::protocol::ErrorCode>,
+    /// The address of the route whose refusal that was: it answered, so the
+    /// machine is up there even though it would not let this computer in.
+    pub answered: Option<String>,
 }
 
 impl Unreachable {
     /// Whether pairing again is what would fix this.
     pub fn needs_new_pairing(&self) -> bool {
         self.refused.is_some_and(|code| code.needs_new_pairing())
+    }
+
+    /// The same, believing a plain `unauthorized` only from the route the
+    /// machine answered on last (`last_route`). Every RustCode gateway answers
+    /// a device it does not know with `unauthorized`, so a saved LAN address
+    /// that now belongs to another RustCode computer would otherwise unpair a
+    /// machine that is merely asleep. A revocation or a replayed token names
+    /// this device's own pairing, which only the machine itself knows, so it
+    /// is believed from any route. With no route on record, every refusal is.
+    pub fn needs_new_pairing_at(&self, last_route: Option<&str>) -> bool {
+        match self.refused {
+            Some(code) if code.revoked_pairing() => true,
+            Some(code) if code.needs_new_pairing() => {
+                last_route.is_none() || self.answered.as_deref() == last_route
+            }
+            _ => false,
+        }
     }
 }
 

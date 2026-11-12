@@ -599,7 +599,7 @@ are all visible at once.
 | **Machines found › Enter an address** | The `host:port` a machine is reached on when it is not announced (an overlay, or another subnet). The fallback, never the first step. |
 | **Waiting for ‹host› to accept on that machine…** | The request is on that machine's screen; *Cancel* drops it. Once its owner accepts, the eight digits it shows are typed here, one box per digit. |
 | **Checking the code** | The code is being checked with that machine, which answers within ten seconds. After half a minute the page stops waiting and says so — *‹host› did not answer* — with **Ask again** and **Cancel**: a machine that accepted the code but could not store the token still lists this computer as a device, so it is removed there and the pairing started again. No stage of the flow is a spinner without a way out. |
-| A machine row | Its name and platform, the state chip at the row's top right — *Connected*, *Connecting*, *Reconnecting…* (a machine that is away while the app retries it on its own), *Offline*, *Needs pairing* — the route **in use** under the name as `LAN · Unencrypted` or `NetBird`/`Tailscale`/`VPN · Encrypted`, then when it was last reached and how many threads it has. **Remove** sits in a row of its own below. Under the route, the hint for one kind of route that answers while another does not (see [Machines](#machines)), and a version skew line when that machine runs another RustCode: *RustCode 0.96.0 on that machine — update it there: Settings › About › Check for updates, or `brew upgrade rustcode`* (the platform's own way, from [install](install.md#updating); a development build never shows the line), or *update RustCode here* when that machine is newer. |
+| A machine row | Its name and platform, the state chip at the row's top right — *Connected*, *Connecting*, *Reconnecting…* (a machine that is away while the app retries it on its own), *Offline*, what a machine that answered and would not serve said — *Server not running*, *Version mismatch*, *Not allowed*, *Busy*, *Refused* — and *Needs pairing* — the route **in use** (else the one it answered on last) under the name as `LAN · Unencrypted` or `NetBird`/`Tailscale`/`VPN · Encrypted`, then when it was last reached and how many threads it has. **Remove** sits in a row of its own below. Under the route, the hint for one kind of route that answers while another does not (see [Machines](#machines)), and a version skew line when that machine runs another RustCode: *RustCode 0.96.0 on that machine — update it there: Settings › About › Check for updates, or `brew upgrade rustcode`* (the platform's own way, from [install](install.md#updating); a development build never shows the line), or *update RustCode here* when that machine is newer. |
 | **This computer · RustCode server** | Whether the RustCode server is installed as a background service: *Server: Installed · Running*, or *Not installed* with **Install server**. Installed, that engine stays up when the app closes and starts when you log in; the threads this app starts still run in its own engine and end with it. What `rustcode server status` reports, including a running version that differs from the app's, is on the same line. |
 | **Remove** | Forgets it here: token, routes and its threads' rows go. The machine keeps listing this computer until it is revoked there. |
 | **Pair again** | On a machine whose pairing it ended (*Needs pairing*): asks it again, so a new code can be typed. |
@@ -610,14 +610,28 @@ is asleep or away comes back on its own. Each attempt tries every known route �
 the LAN, the `.local` name Bonjour gave it, every overlay address — starting
 with the route the machine answered on last time, so a dropped connection comes
 back the way it came. A change to this computer's own network (a VPN coming up
-or going away, another Wi-Fi) ends the wait at once instead of after the
-backoff, and while it waits the row's chip says *Reconnecting…* next to when
-the machine was last reached, rather than *Offline*, which reads as something
-the user has to fix. The first read of the machine list at app start is tried
+or going away, another Wi-Fi), a wake from sleep, the app coming to the front
+or the network coming back, a route test that finds a route answering, and
+`list_machines` with `probe: true` each end the wait at once instead of after
+the backoff, and while it waits the row's chip says *Reconnecting…* next to
+when the machine was last reached, rather than *Offline*, which reads as
+something the user has to fix. A machine whose route answered but that would
+not serve this computer is not *Offline*: the chip says what it said (its
+RustCode server is not running behind the gateway, another protocol version,
+this device not allowed), the row shows the route that answered, and the app
+keeps trying, since most of these end on that machine's side. While connected,
+the app listens for the machine: nothing at all for 75 seconds (two and a half
+of the gateway's pings) is a dead link, and after a wake from sleep or a
+network change it pings the machine and reconnects if no answer comes within
+3 seconds on the LAN or 15 on an overlay. The first read of the machine list at app start is tried
 again on a doubling wait too (`state/machines.ts` `startMachines`, 1 s to
 30 s), so a shell that was still starting up does not leave every machine
 without a connection until a page is opened. A pairing that was refused is not retried:
-nothing changes until it is paired again, and the row says so.
+nothing changes until it is paired again, and the row says so. A plain
+`unauthorized` is believed only from the route the machine answered on last:
+every RustCode gateway refuses a device it does not know that way, so a saved
+LAN address that another RustCode computer now holds would otherwise unpair a
+machine that is only asleep; that refusal is retried instead.
 The connection and the token live in the app's Rust shell
 (`apps/desktop/src-tauri/src/machines.rs`); the page only shows what it is
 told, and the thread count comes from the machine's own `session/list` over

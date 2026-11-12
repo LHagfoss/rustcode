@@ -4,8 +4,10 @@
 //! `Origin`s, and the pairing token is in the operating system credential
 //! store), so this module owns the connection to each saved machine: one
 //! supervisor per machine that connects over the first route that answers,
-//! retries with jittered backoff — the route that worked last first, and at
-//! once when this computer's network changes — and relays the machine's ACP
+//! retries with jittered backoff for as long as the machine is saved — the
+//! route that worked last first, and at once when this computer's network
+//! changes, it wakes from sleep, the app comes to the front, a probe finds a
+//! route that answers, or an agent asks (`machines_retry`) — and relays the machine's ACP
 //! frames to the webview over a Tauri Channel in the same shape the local
 //! engine uses
 //! (`engine.rs`). `rustcode-client` holds the registry, the tokens, the
@@ -19,8 +21,8 @@ use anyhow::Error;
 use rustcode_client::machine::{machine_from_pairing, normalize_code, Connector};
 use rustcode_client::tokens::{self as token_store, STORE_TIMEOUT};
 use rustcode_client::{
-    backoff_delay, browse_async, Approved, ClientKind, DiscoveredMachine, Machine, MachineRegistry,
-    OverlayProvider, Route, RouteProbe, TokenStore, Unreachable,
+    backoff_delay, browse_async, Approved, Cause, ClientKind, DiscoveredMachine, Machine,
+    MachineRegistry, OverlayProvider, ProbeOutcome, Route, RouteProbe, TokenStore, Unreachable,
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -53,6 +55,11 @@ pub enum MachineState {
     Connected,
     /// Not reachable; the supervisor tries again after `retryInSecs`.
     Offline,
+    /// A route answered, but the machine would not serve this computer: its
+    /// server is not running, it speaks another protocol version, it does not
+    /// allow this device. `reason` says which; the supervisor keeps trying,
+    /// since most of these end on the machine's side.
+    Unavailable,
     /// The machine refused this computer's pairing: it has to be paired again.
     NeedsPairing,
     /// Not connected and not trying: the app has not asked yet, or was told to stop.
@@ -139,6 +146,11 @@ pub struct MachineView {
     /// The route this connection came up over, or the one it will try first.
     route: Option<RouteView>,
     state: MachineState,
+    /// Why it is not connected, as a word to branch on (`unreachable`,
+    /// `rejected_token`, `version_mismatch`, `not_allowed`,
+    /// `server_not_running`, `busy`, `rejected`, `dropped`), or none while it
+    /// is connected or has not tried yet.
+    reason: Option<&'static str>,
     /// Why it is not connected, in words a person can act on.
     detail: Option<String>,
     /// What to check when it is reachable one way and not another, e.g. the
@@ -236,11 +248,20 @@ struct Live {
     task: Option<tauri::async_runtime::JoinHandle<()>>,
     state: MachineState,
     route: Option<Route>,
+    /// The route that answered in the last attempt that failed: a machine that
+    /// refused, or whose server is gone, is shown where it was reached rather
+    /// than on the first saved route.
+    answered: Option<Route>,
+    /// Why the last attempt failed.
+    cause: Option<Cause>,
     detail: Option<String>,
     /// What to check when one kind of route answers and another does not,
     /// e.g. a NetBird address blocked while the LAN works (#3202).
     hint: Option<String>,
     retry_in_secs: Option<u64>,
+    /// Ends the supervisor's backoff early: the app came to the front, a probe
+    /// found a route that answers, or an agent asked. Kept across restarts.
+    wake: Arc<Notify>,
 }
 
 impl Live {
@@ -250,10 +271,22 @@ impl Live {
             task: None,
             state: MachineState::Stopped,
             route: None,
+            answered: None,
+            cause: None,
             detail: None,
             hint: None,
             retry_in_secs: None,
+            wake: Arc::new(Notify::new()),
         }
+    }
+
+    /// Whether the supervisor is waiting out a backoff, which a wake ends.
+    fn waiting(&self) -> bool {
+        self.task.is_some()
+            && matches!(
+                self.state,
+                MachineState::Offline | MachineState::Unavailable
+            )
     }
 }
 
@@ -316,6 +349,20 @@ impl Machines {
             .collect())
     }
 
+    /// Wake the supervisors waiting out a backoff: one machine's, or every
+    /// machine's when `id` is none. Answers the ids that were woken; a machine
+    /// that is connected, connecting, stopped or needs pairing is left alone.
+    fn retry(&self, id: Option<&str>) -> Vec<String> {
+        let live = self.live.lock().unwrap();
+        live.iter()
+            .filter(|(key, entry)| id.is_none_or(|id| id == key.as_str()) && entry.waiting())
+            .map(|(key, entry)| {
+                entry.wake.notify_one();
+                key.clone()
+            })
+            .collect()
+    }
+
     /// Start (or restart) one machine's supervisor. The webview calls this
     /// with a channel of its own, so a page that reloads gets a fresh one.
     fn connect(self: &Arc<Self>, id: &str, channel: Channel<EngineEvent>) -> Result<(), String> {
@@ -326,7 +373,7 @@ impl Machines {
             .ok_or("That machine is no longer saved.")?
             .clone();
         let (outbox, inbox) = tokio::sync::mpsc::channel::<String>(256);
-        {
+        let wake = {
             let mut live = self.live.lock().unwrap();
             let entry = live.entry(id.to_owned()).or_insert_with(Live::new);
             if let Some(task) = entry.task.take() {
@@ -335,16 +382,22 @@ impl Machines {
             entry.outbox = Some(outbox);
             entry.state = MachineState::Connecting;
             entry.route = None;
+            entry.answered = None;
+            entry.cause = None;
             entry.detail = None;
             entry.hint = None;
             entry.retry_in_secs = None;
-        }
+            // A fresh wake: a permit left by a wake nobody waited for must not
+            // cut the new supervisor's first backoff short.
+            entry.wake = Arc::new(Notify::new());
+            Arc::clone(&entry.wake)
+        };
         let machines = Arc::clone(self);
         let target = id.to_owned();
         let task = tauri::async_runtime::spawn({
             let target = target.clone();
             async move {
-                supervise(machines, target, machine, channel, inbox).await;
+                supervise(machines, target, machine, channel, inbox, wake).await;
             }
         });
         if let Some(entry) = self.live.lock().unwrap().get_mut(&target) {
@@ -369,11 +422,18 @@ fn view(machine: &Machine, live: Option<&Live>) -> MachineView {
             .iter()
             .map(|route| RouteView::of(route, machine))
             .collect(),
+        // The route in use; else the one that answered last time it was
+        // tried; else the one it last connected over. A Windows machine
+        // reachable over NetBird was shown on a LAN address that timed out.
         route: live
-            .and_then(|live| live.route.as_ref())
-            .or_else(|| machine.preferred_route())
+            .and_then(|live| live.route.as_ref().or(live.answered.as_ref()))
+            .or_else(|| machine.last_working_route())
             .map(|route| RouteView::of(route, machine)),
         state: live.map_or(MachineState::Stopped, |live| live.state),
+        reason: live
+            .filter(|live| live.state != MachineState::Connected)
+            .and_then(|live| live.cause)
+            .map(Cause::as_str),
         detail: live.and_then(|live| live.detail.clone()),
         hint: live.and_then(|live| live.hint.clone()),
         retry_in_secs: live.and_then(|live| live.retry_in_secs),
@@ -425,7 +485,9 @@ enum End {
     /// The machine closed the channel, or this side did.
     Closed,
     /// The machine could not be reached, or the ACP channel could not open.
-    Failed(Error),
+    /// The route is the one that answered, when one did: the handshake went
+    /// through, or the machine refused it.
+    Failed(Error, Option<Route>),
     /// The machine is no longer saved; nobody is waiting for it.
     Removed,
 }
@@ -441,6 +503,7 @@ async fn supervise(
     machine: Machine,
     channel: Channel<EngineEvent>,
     mut inbox: tokio::sync::mpsc::Receiver<String>,
+    wake: Arc<Notify>,
 ) {
     let config_dir = match config_dir() {
         Ok(dir) => dir,
@@ -463,29 +526,46 @@ async fn supervise(
         // Why this attempt did not stay up, in the words the row shows. The
         // countdown is the chip (`retryInSecs`), never the detail, so a reason
         // is not replaced by "Retrying in N s" (#3341).
-        let reason = match relay_once(&machines, &config_dir, &id, &channel, &mut inbox).await {
-            End::Removed => return,
-            End::Closed => "The machine closed the connection.".to_owned(),
-            End::Failed(error) => {
-                let message = format!("{error:#}");
-                if needs_pairing(&error) {
-                    set_state(
-                        &machines,
-                        &id,
-                        MachineState::NeedsPairing,
-                        Some(message),
-                        None,
+        let (cause, answered, reason) =
+            match relay_once(&machines, &config_dir, &id, &channel, &mut inbox).await {
+                End::Removed => return,
+                End::Closed => (
+                    Cause::Dropped,
+                    None,
+                    "The machine closed the connection.".to_owned(),
+                ),
+                End::Failed(error, answered) => {
+                    let message = format!("{error:#}");
+                    // The route it answered on last, as saved now: a
+                    // connection since the supervisor started may have moved it.
+                    let last_route = MachineRegistry::load(&config_dir)
+                        .ok()
+                        .and_then(|registry| registry.get(&id).and_then(|m| m.last_route.clone()))
+                        .or_else(|| machine.last_route.clone());
+                    if needs_pairing(&error, last_route.as_deref()) {
+                        set_failure(&machines, &id, Cause::RejectedToken, answered);
+                        set_state(
+                            &machines,
+                            &id,
+                            MachineState::NeedsPairing,
+                            Some(message),
+                            None,
+                        );
+                        emit_closed(&channel, "The machine's pairing is no longer valid.");
+                        return;
+                    }
+                    let cause = attempt_cause(&error, answered.is_some());
+                    emit_log(
+                        &channel,
+                        format!(
+                            "desktop: {} is not connected ({}): {message}",
+                            machine.name,
+                            cause.as_str()
+                        ),
                     );
-                    emit_closed(&channel, "The machine's pairing is no longer valid.");
-                    return;
+                    (cause, answered, message)
                 }
-                emit_log(
-                    &channel,
-                    format!("desktop: {} is not reachable: {message}", machine.name),
-                );
-                message
-            }
-        };
+            };
         // A connection that worked for a while deserves a fresh schedule.
         if started.elapsed() >= STABLE_AFTER {
             attempt = 0;
@@ -493,15 +573,40 @@ async fn supervise(
         let delay = backoff_delay(attempt, jitter());
         attempt = attempt.saturating_add(1);
         let secs = delay.as_secs().max(1);
-        set_state(
-            &machines,
-            &id,
-            MachineState::Offline,
-            Some(reason),
-            Some(secs),
-        );
+        set_failure(&machines, &id, cause, answered);
+        // A machine that answered and would not serve is not "offline": the
+        // row and `list_machines` say what it said.
+        let state = if cause.reachable() {
+            MachineState::Unavailable
+        } else {
+            MachineState::Offline
+        };
+        set_state(&machines, &id, state, Some(reason), Some(secs));
         emit_closed(&channel, &format!("Waiting {secs} s before trying again."));
-        wait_out(&machines, &id, &channel, delay).await;
+        wait_out(&machines, &id, &channel, &wake, delay).await;
+    }
+}
+
+/// Why one attempt failed. A failure after the handshake went through that
+/// names no refusal is a connection that came up and then ended, not a
+/// machine that did not answer.
+fn attempt_cause(error: &Error, answered: bool) -> Cause {
+    match Cause::of(error) {
+        Cause::Unreachable if answered => Cause::Dropped,
+        cause => cause,
+    }
+}
+
+/// Record why the last attempt failed and which route answered in it.
+fn set_failure(machines: &Arc<Machines>, id: &str, cause: Cause, answered: Option<Route>) {
+    let mut live = machines.live.lock().unwrap();
+    if let Some(entry) = live.get_mut(id) {
+        entry.cause = Some(cause);
+        // A route that answered once stays the one shown until another does:
+        // a later timeout on every route says nothing about where it was.
+        if answered.is_some() {
+            entry.answered = answered;
+        }
     }
 }
 
@@ -509,19 +614,39 @@ async fn supervise(
 /// network changes: a machine that went away because the VPN dropped is
 /// reachable again the moment it is back, without waiting out the minute
 /// (#3436). The wait is spent in [`NETWORK_POLL`] slices so a change is
-/// noticed in seconds.
+/// noticed in seconds. It also ends when this computer wakes from sleep, and
+/// when `wake` fires: the app came to the front, a probe found a route that
+/// answers, or an agent asked for the machine.
 async fn wait_out(
     machines: &Arc<Machines>,
     id: &str,
     channel: &Channel<EngineEvent>,
+    wake: &Notify,
     delay: Duration,
 ) {
     let before = local_addresses();
     let mut left = delay;
     while !left.is_zero() {
         let slice = left.min(NETWORK_POLL);
-        tokio::time::sleep(slice).await;
+        let (started, wall) = (Instant::now(), SystemTime::now());
+        tokio::select! {
+            () = tokio::time::sleep(slice) => {}
+            () = wake.notified() => {
+                emit_log(channel, "desktop: trying the machine again now, as asked.".to_owned());
+                set_state(machines, id, MachineState::Connecting, None, None);
+                return;
+            }
+        }
         left = left.saturating_sub(slice);
+        let walled = SystemTime::now().duration_since(wall).unwrap_or_default();
+        if rustcode_client::slept(started.elapsed(), walled) {
+            emit_log(
+                channel,
+                "desktop: this computer woke from sleep; trying the machine again now.".to_owned(),
+            );
+            set_state(machines, id, MachineState::Connecting, None, None);
+            return;
+        }
         if rustcode_client::network_changed(&before, &local_addresses()) {
             emit_log(
                 channel,
@@ -550,15 +675,15 @@ async fn relay_once(
             Some(machine) => machine.clone(),
             None => return End::Removed,
         },
-        Err(error) => return End::Failed(error),
+        Err(error) => return End::Failed(error, None),
     };
     let tokens = match machines.tokens(config_dir).await {
         Ok(tokens) => tokens,
-        Err(error) => return End::Failed(anyhow::anyhow!(error)),
+        Err(error) => return End::Failed(anyhow::anyhow!(error), None),
     };
     let connector = match Machines::connector(config_dir) {
         Ok(connector) => connector,
-        Err(error) => return End::Failed(anyhow::anyhow!(error)),
+        Err(error) => return End::Failed(anyhow::anyhow!(error), None),
     };
     // The route the machine answered on last time is tried first after a
     // drop; the classes still decide most of the race, so a laptop that comes
@@ -568,7 +693,15 @@ async fn relay_once(
         rustcode_client::prefer_last_working(&machine.routes, machine.last_route.as_deref());
     let connected = match connector.connect_raced(&machine, &tokens).await {
         Ok(connected) => connected,
-        Err(error) => return End::Failed(error),
+        Err(error) => {
+            // A route that refused the handshake answered: show that one.
+            let answered = error
+                .downcast_ref::<Unreachable>()
+                .and_then(|lost| lost.answered.as_deref())
+                .and_then(|address| machine.routes.iter().find(|route| route.address == address))
+                .cloned();
+            return End::Failed(error, answered);
+        }
     };
     let route = connected.route.clone();
     let hint = connected.hint(&machine.routes, &rustcode_client::local_addresses());
@@ -593,7 +726,9 @@ async fn relay_once(
     }
     let mut acp = match session.acp().await {
         Ok(acp) => acp,
-        Err(error) => return End::Failed(error),
+        // The handshake went through on this route, so the machine is there:
+        // a gateway whose server is gone refuses ACP here.
+        Err(error) => return End::Failed(error, Some(route)),
     };
     set_connected(machines, id, &route);
     set_hint(machines, id, hint);
@@ -611,14 +746,24 @@ async fn relay_once(
     let _ = channel.send(EngineEvent::Open {
         engine: format!("{} ({})", machine.name, route.address),
     });
+    // Liveness: a link the network dropped without a close is noticed by its
+    // silence, and checked at once after a wake from sleep or a network
+    // change by a ping the machine has to answer.
+    let mut addresses = local_addresses();
+    let mut check = tokio::time::interval(NETWORK_POLL);
+    check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut clocks = (Instant::now(), SystemTime::now());
+    // A ping in flight: when it went out, and when it must have been answered.
+    let mut pinged: Option<(tokio::time::Instant, tokio::time::Instant)> = None;
     loop {
-        // One step per pass: read the machine's next frame, or send a line the
-        // webview wrote. The read is cancelled when a line goes first, so the
-        // frame branch is polled first and a frame that is already there is
-        // never dropped.
+        // One step per pass: read the machine's next frame, send a line the
+        // webview wrote, or check the link. The read is cancelled when another
+        // branch goes first, so the frame branch is polled first and a frame
+        // that is already there is never dropped.
         enum Step {
             Frame(Result<Option<serde_json::Value>, Error>),
             Line(Option<String>),
+            Check,
         }
         let step = {
             let read = acp.next();
@@ -627,9 +772,53 @@ async fn relay_once(
                 biased;
                 frame = &mut read => Step::Frame(frame),
                 line = inbox.recv() => Step::Line(line),
+                _ = check.tick() => Step::Check,
             }
         };
         match step {
+            Step::Check => {
+                let now = tokio::time::Instant::now();
+                let heard = acp.last_heard();
+                if now.duration_since(heard) >= rustcode_client::SILENCE_LIMIT {
+                    return End::Failed(
+                        anyhow::anyhow!(
+                            "the machine sent nothing for {} s; the connection is gone",
+                            rustcode_client::SILENCE_LIMIT.as_secs()
+                        ),
+                        Some(route.clone()),
+                    );
+                }
+                if let Some((sent, due)) = pinged {
+                    if heard >= sent {
+                        pinged = None;
+                    } else if now >= due {
+                        return End::Failed(
+                            anyhow::anyhow!(
+                                "the machine did not answer a ping within {} s; the connection is gone",
+                                rustcode_client::answer_deadline(&route).as_secs()
+                            ),
+                            Some(route.clone()),
+                        );
+                    }
+                }
+                let (started, wall) = clocks;
+                clocks = (Instant::now(), SystemTime::now());
+                let walled = clocks.1.duration_since(wall).unwrap_or_default();
+                let woke = rustcode_client::slept(started.elapsed(), walled);
+                let current = local_addresses();
+                let moved = rustcode_client::network_changed(&addresses, &current);
+                addresses = current;
+                if (woke || moved) && pinged.is_none() {
+                    if let Err(error) = acp.ping().await {
+                        return End::Failed(error, Some(route.clone()));
+                    }
+                    let sent = tokio::time::Instant::now();
+                    pinged = Some((sent, sent + rustcode_client::answer_deadline(&route)));
+                    // Check again as soon as the answer is due, not at the
+                    // next poll.
+                    check.reset_after(rustcode_client::answer_deadline(&route));
+                }
+            }
             Step::Frame(Ok(Some(frame))) => {
                 if channel
                     .send(EngineEvent::Line {
@@ -641,14 +830,14 @@ async fn relay_once(
                 }
             }
             Step::Frame(Ok(None)) => return End::Closed,
-            Step::Frame(Err(error)) => return End::Failed(error),
+            Step::Frame(Err(error)) => return End::Failed(error, Some(route.clone())),
             Step::Line(Some(line)) => {
                 // A line the webview wrote; only JSON reaches a machine.
                 let Ok(frame) = serde_json::from_str::<serde_json::Value>(&line) else {
                     continue;
                 };
                 if let Err(error) = acp.send(frame).await {
-                    return End::Failed(error);
+                    return End::Failed(error, Some(route.clone()));
                 }
             }
             Step::Line(None) => return End::Closed,
@@ -656,20 +845,23 @@ async fn relay_once(
     }
 }
 
-/// Whether pairing again is what would fix this failure.
-pub fn needs_pairing(error: &Error) -> bool {
-    if error
+/// Whether pairing again is what would fix this failure, for a machine whose
+/// last working route is `last_route`.
+///
+/// A plain `unauthorized` from another route is not believed: a stale LAN
+/// address that another RustCode computer now answers on refuses every device
+/// it does not know, and stopping there would leave a machine that is only
+/// asleep at *Needs pairing* for good. That failure keeps being retried.
+pub fn needs_pairing(error: &Error, last_route: Option<&str>) -> bool {
+    if let Some(lost) = error
         .downcast_ref::<Unreachable>()
-        .is_some_and(Unreachable::needs_new_pairing)
+        .filter(|lost| lost.refused.is_some())
     {
-        return true;
+        return lost.needs_new_pairing_at(last_route);
     }
-    // `Session::check` and the token lookup report a device record another
-    // pairing replaced, or a token that is gone, as plain errors.
-    let text = format!("{error:#}");
-    text.contains("pair with it again")
-        || text.contains("replaced this computer's device record")
-        || text.contains("no pairing token")
+    // The token lookup and the identity check (a device record another
+    // pairing replaced, a token that is gone) report as plain errors.
+    Cause::of(error) == Cause::RejectedToken
 }
 
 fn set_connected(machines: &Arc<Machines>, id: &str, route: &Route) {
@@ -677,6 +869,8 @@ fn set_connected(machines: &Arc<Machines>, id: &str, route: &Route) {
     if let Some(entry) = live.get_mut(id) {
         entry.state = MachineState::Connected;
         entry.route = Some(route.clone());
+        entry.answered = None;
+        entry.cause = None;
         entry.detail = None;
         entry.hint = None;
         entry.retry_in_secs = None;
@@ -1250,6 +1444,10 @@ pub fn machines_set_paused(id: String, paused: bool) -> Result<(), String> {
 /// Test every route of one machine (all of them when `id` is none) with a plain
 /// connect, save what each found, and answer the refreshed machines. The
 /// connect carries no token, so a route that is down costs only its timeout.
+///
+/// A machine that is waiting out its backoff while one of its routes answered
+/// is tried again at once: a probe that finds the machine is the best reason
+/// there is to connect to it.
 #[tauri::command(async)]
 pub async fn machines_probe(
     machines: tauri::State<'_, Arc<Machines>>,
@@ -1280,11 +1478,30 @@ pub async fn machines_probe(
     let mut registry = registry;
     for (machine, task) in targets.iter().zip(tasks) {
         let probes = task.await.map_err(|error| error.to_string())??;
+        let answered = probes
+            .iter()
+            .any(|probe| probe.outcome == ProbeOutcome::Reachable);
         registry
             .set_probes(&machine.host_id, probes)
             .map_err(chain)?;
+        if answered {
+            machines.retry(Some(&machine.host_id));
+        }
     }
     machines.list()
+}
+
+/// Try machines again now instead of at the end of their backoff: one machine,
+/// or every machine that is waiting when `id` is none. The app calls it when
+/// its window comes to the front or the network comes back, and
+/// `list_machines` when an agent asks for a machine. Answers the ids that were
+/// woken.
+#[tauri::command(async)]
+pub fn machines_retry(
+    machines: tauri::State<'_, Arc<Machines>>,
+    id: Option<String>,
+) -> Result<Vec<String>, String> {
+    Ok(machines.retry(id.as_deref()))
 }
 
 /// Connect to one machine and relay its ACP to this page.
@@ -1333,6 +1550,8 @@ pub fn machine_disconnect(
         entry.outbox = None;
         entry.state = MachineState::Stopped;
         entry.route = None;
+        entry.answered = None;
+        entry.cause = None;
         entry.detail = None;
         entry.hint = None;
         entry.retry_in_secs = None;
@@ -1379,20 +1598,41 @@ mod tests {
             machine: "Studio".into(),
             attempts: vec!["192.168.1.20:17879: unauthorized".into()],
             refused: Some(ErrorCode::Revoked),
+            answered: Some("192.168.1.20:17879".into()),
         });
-        assert!(needs_pairing(&revoked));
+        assert!(needs_pairing(&revoked, Some("10.0.0.9:17879")));
         let replaced =
             Error::msg("Studio replaced this computer's device record; pair with it again");
-        assert!(needs_pairing(&replaced));
+        assert!(needs_pairing(&replaced, None));
         let unreachable = Error::new(Unreachable {
             machine: "Studio".into(),
             attempts: vec!["192.168.1.20:17879: connection refused".into()],
             refused: None,
+            answered: None,
         });
-        assert!(!needs_pairing(&unreachable));
-        assert!(!needs_pairing(&Error::msg(
-            "no frame from the machine within 5s"
-        )));
+        assert!(!needs_pairing(&unreachable, None));
+        assert!(!needs_pairing(
+            &Error::msg("no frame from the machine within 5s"),
+            None
+        ));
+
+        // A stale LAN address another RustCode computer answers on refuses
+        // with `unauthorized`; the machine itself was last reached over
+        // NetBird and only timed out. That is retried, not unpaired.
+        let stranger = Error::new(Unreachable {
+            machine: "Studio".into(),
+            attempts: vec![
+                "192.168.1.20:17879: unauthorized".into(),
+                "100.90.16.237:17879: timed out".into(),
+            ],
+            refused: Some(ErrorCode::Unauthorized),
+            answered: Some("192.168.1.20:17879".into()),
+        });
+        assert!(!needs_pairing(&stranger, Some("100.90.16.237:17879")));
+        // From the route it answered on last, `unauthorized` is believed, and
+        // so it is when no route is on record yet.
+        assert!(needs_pairing(&stranger, Some("192.168.1.20:17879")));
+        assert!(needs_pairing(&stranger, None));
     }
 
     /// The page reads these names: camelCase fields, and a state per word it
@@ -1420,6 +1660,105 @@ mod tests {
         assert_eq!(json["routes"][0]["encrypted"], false);
         // Offline, the row still says which route it will try.
         assert_eq!(json["route"]["address"], "192.168.1.20:17879");
+    }
+
+    /// A machine whose gateway answered on NetBird but has no server behind
+    /// it is "unavailable" with the reason, on the route that answered, not
+    /// "offline" on the LAN address that timed out (Lagos, 2026-11-12).
+    #[test]
+    fn a_machine_that_answered_and_would_not_serve_says_why_and_where() {
+        let mut saved = machine();
+        let netbird = Route::with_kind(RouteKind::Vpn, "100.90.27.158:17879");
+        saved.routes.push(netbird.clone());
+        let refusal = Error::new(rustcode_client::Refusal {
+            step: "acp_open".into(),
+            code: ErrorCode::Internal,
+            message: "the relay to this machine's engine could not be opened".into(),
+            retry_after_secs: None,
+        });
+        assert!(!needs_pairing(&refusal, None), "a dead server is retried");
+        let cause = attempt_cause(&refusal, true);
+        assert_eq!(cause, Cause::ServerNotRunning);
+        let live = Live {
+            state: MachineState::Unavailable,
+            answered: Some(netbird),
+            cause: Some(cause),
+            detail: Some(format!("{refusal:#}")),
+            retry_in_secs: Some(8),
+            ..Live::new()
+        };
+        let json = serde_json::to_value(view(&saved, Some(&live))).unwrap();
+        assert_eq!(json["state"], "unavailable");
+        assert_eq!(json["reason"], "server_not_running");
+        assert_eq!(json["route"]["address"], "100.90.27.158:17879");
+        assert!(json["detail"]
+            .as_str()
+            .unwrap()
+            .contains("no RustCode engine is running there"));
+
+        // Nothing answered this time: the route it last connected over is
+        // shown, not the first saved one.
+        saved.last_route = Some("100.90.27.158:17879".into());
+        let away = Live {
+            state: MachineState::Offline,
+            cause: Some(Cause::Unreachable),
+            ..Live::new()
+        };
+        let json = serde_json::to_value(view(&saved, Some(&away))).unwrap();
+        assert_eq!(json["reason"], "unreachable");
+        assert_eq!(json["route"]["address"], "100.90.27.158:17879");
+
+        // A connection that came up and then ended without a refusal dropped.
+        assert_eq!(
+            attempt_cause(&Error::msg("the connection to the machine failed"), true),
+            Cause::Dropped
+        );
+        assert_eq!(
+            attempt_cause(&Error::msg("connection refused"), false),
+            Cause::Unreachable
+        );
+    }
+
+    /// A wake reaches only a supervisor that is waiting out its backoff, and
+    /// ends that wait.
+    #[tokio::test]
+    async fn a_retry_wakes_only_the_machines_that_wait() {
+        let machines = Machines::default();
+        let parked = |state| Live {
+            state,
+            task: Some(tauri::async_runtime::spawn(std::future::pending::<()>())),
+            ..Live::new()
+        };
+        {
+            let mut live = machines.live.lock().unwrap();
+            live.insert("away".into(), parked(MachineState::Offline));
+            live.insert("refused".into(), parked(MachineState::Unavailable));
+            live.insert("up".into(), parked(MachineState::Connected));
+            live.insert("unpaired".into(), parked(MachineState::NeedsPairing));
+            // Never started: there is no supervisor to wake.
+            live.insert(
+                "stopped".into(),
+                Live {
+                    state: MachineState::Offline,
+                    ..Live::new()
+                },
+            );
+        }
+        let mut woken = machines.retry(None);
+        woken.sort();
+        assert_eq!(woken, ["away", "refused"]);
+        assert_eq!(machines.retry(Some("up")), Vec::<String>::new());
+        assert_eq!(machines.retry(Some("away")), ["away"]);
+        // The permit is there for the waiting supervisor to take.
+        let wake = Arc::clone(&machines.live.lock().unwrap()["away"].wake);
+        tokio::time::timeout(Duration::from_secs(1), wake.notified())
+            .await
+            .expect("the wake reaches the wait");
+        for entry in machines.live.lock().unwrap().values_mut() {
+            if let Some(task) = entry.task.take() {
+                task.abort();
+            }
+        }
     }
 
     /// A route carries what its last test found, and none before a test.
@@ -1472,6 +1811,7 @@ mod tests {
             (MachineState::Connecting, "connecting"),
             (MachineState::Connected, "connected"),
             (MachineState::Offline, "offline"),
+            (MachineState::Unavailable, "unavailable"),
             (MachineState::NeedsPairing, "needsPairing"),
             (MachineState::Stopped, "stopped"),
         ] {
