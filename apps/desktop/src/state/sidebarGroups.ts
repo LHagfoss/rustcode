@@ -1,39 +1,19 @@
-// The sidebar's machine groups: one heading per paired computer, this one first, and the threads
-// by project inside it (docs/desktop.md › Several machines). It is a pure function of the rows,
-// the machines and the section, so the rule for an empty machine — shown in Threads, skipped in
-// Working and Pinned — is testable without a window (state/sidebarGroups.test.ts).
+// The sidebar's project folders, for the "Group by project" pref. The list is one flat list of
+// every computer's threads (docs/desktop.md › Several machines); a folder holds one computer's
+// threads of one project, so two computers' same-named projects never share a key.
 
 import type { SessionSummary } from "../acp/types";
 import { projectName } from "../acp/types";
-import type { SectionId } from "./sidebarRows";
 import { LOCAL_HOST } from "./threadKeys";
 
-/** What a machine heading says: its name, and how its channel stands. */
-export interface MachineHead {
-  id: string;
-  name: string;
-  state: "connecting" | "connected" | "offline" | "needsPairing" | "stopped";
-  /** Seconds until the next attempt, while the supervisor waits. */
-  retryInSecs: number | null;
-}
-
-/** The machines a group can be drawn for: the saved ones, as the store keeps them. */
-export type GroupedMachine = MachineHead;
-
-/** One project's rows in one machine's group. */
+/** One project's rows. */
 export interface ProjectGroup {
   /** Unique across machines: the project's path cannot collide with another machine's. */
   key: string;
   label: string;
   items: SessionSummary[];
-  /** The folder the group's threads run in: what **New thread** under it starts on. */
+  /** The folder the group's threads run in on this computer: what **New thread** under it starts on. */
   project?: string;
-  /** The machine the group belongs to, drawn above its first project. */
-  machine?: MachineHead;
-  /** The first project of its machine: the heading goes here. */
-  first?: boolean;
-  /** The machine's only project: its rows are drawn under the machine's name, with no folder. */
-  only?: boolean;
 }
 
 /** A thread's machine: its host, or this computer when the list came from here. */
@@ -41,97 +21,22 @@ export function hostOf(session: Pick<SessionSummary, "host">): string {
   return session.host ?? LOCAL_HOST;
 }
 
-/**
- * The delegates that run on another machine than their parent. A delegate is drawn under its
- * parent's row, never as a row of its own — but the parent's row lives in another machine's
- * list, so in the machine the delegate runs on it would be listed nowhere. Those keep a row in
- * their own machine's list, with a hint that names the parent (`parentOf`: child → parent id).
- */
-export function crossMachineDelegates(
-  sessions: readonly Pick<SessionSummary, "id" | "host">[],
-  parentOf: ReadonlyMap<string, string>,
-): Set<string> {
-  const hosts = new Map(sessions.map((session) => [session.id, hostOf(session)] as const));
-  const out = new Set<string>();
-  for (const [child, parent] of parentOf) {
-    const parentHost = hosts.get(parent);
-    if (parentHost !== undefined && parentHost !== hosts.get(child)) out.add(child);
-  }
-  return out;
-}
-
-/**
- * The machine groups of one section's rows.
- *
- * The Threads list keeps a heading for a machine that has listed no thread yet (away, or just
- * paired), so the list still says it is there. Working and Pinned show work, not machines: an
- * idle machine there would draw a heading with nothing under it, so it is left out.
- */
-export function machineGroups(
-  section: SectionId,
-  items: readonly SessionSummary[],
-  machines: readonly GroupedMachine[],
-): ProjectGroup[] {
-  const keepEmpty = section === "threads";
-  const groups: ProjectGroup[] = [];
-  // A thread whose machine was just removed is still in the list for a frame: it keeps a group of
-  // its own rather than vanishing from the section, which draws only what is grouped here.
-  const known = new Set([LOCAL_HOST, ...machines.map((machine) => machine.id)]);
-  const extra = [...new Set(items.map(hostOf))].filter((host) => !known.has(host));
-  for (const host of [...known, ...extra]) {
-    const saved = machines.find((machine) => machine.id === host);
-    const head: MachineHead = saved ?? {
-      id: host,
-      name: host === LOCAL_HOST ? "This computer" : "Another computer",
-      state: host === LOCAL_HOST ? "connected" : "offline",
-      retryInSecs: null,
-    };
-    const mine = items.filter((session) => hostOf(session) === host);
-    if (!mine.length && (host === LOCAL_HOST || !keepEmpty)) continue;
-    if (!mine.length) {
-      groups.push({ key: `${host}\u0000`, label: "", items: [], machine: head, first: true, only: true });
-      continue;
-    }
-    // The rows by project: a worktree thread belongs to its repository.
-    const perProject = new Map<string, SessionSummary[]>();
-    for (const session of mine) {
-      const key = session.worktree?.repo || session.cwd || "";
-      perProject.set(key, [...(perProject.get(key) ?? []), session]);
-    }
-    let first = true;
-    for (const [project, rows] of perProject) {
-      groups.push({
-        key: `${host}\u0000${project}`,
-        label: project ? projectName(project) : "No folder",
-        ...(project ? { project } : {}),
-        items: rows,
-        machine: head,
-        first,
-        only: perProject.size === 1,
-      });
-      first = false;
-    }
-  }
-  return groups;
-}
-
-/** Resolve a sidebar selection safely when a paired device is removed. */
-export function sidebarHost(selection: string | null, machines: readonly GroupedMachine[]): string {
-  return machines.some((machine) => machine.id === selection) ? selection! : LOCAL_HOST;
-}
-
-/** Project identity is scoped to the selected computer, including worktree repositories. */
-export function sidebarProjects(items: readonly SessionSummary[], host: string): ProjectGroup[] {
-  const projects = new Map<string, SessionSummary[]>();
+/** The rows by project and computer, in the order each first appears. A worktree thread belongs to its repository. */
+export function sidebarProjects(items: readonly SessionSummary[]): ProjectGroup[] {
+  const projects = new Map<string, { host: string; project: string; rows: SessionSummary[] }>();
   for (const item of items) {
-    if (hostOf(item) !== host) continue;
+    const host = hostOf(item);
     const project = item.worktree?.repo || item.cwd || "";
-    projects.set(project, [...(projects.get(project) ?? []), item]);
+    const key = host === LOCAL_HOST ? project : `${host}\u0000${project}`;
+    const group = projects.get(key) ?? { host, project, rows: [] };
+    group.rows.push(item);
+    projects.set(key, group);
   }
-  return [...projects].map(([project, rows]) => ({
-    key: host === LOCAL_HOST ? project : `${host}\u0000${project}`,
+  return [...projects].map(([key, { host, project, rows }]) => ({
+    key,
     label: project ? projectName(project) : "No folder",
-    project: project || undefined,
+    // A folder on another computer is not one this computer can start a thread in.
+    project: host === LOCAL_HOST ? project || undefined : undefined,
     items: rows,
   }));
 }

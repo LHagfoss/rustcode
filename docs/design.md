@@ -632,7 +632,7 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   stays an error card over the composer. No banners.
 - **Title row:** the window's title row is one row (44px on macOS, 36px elsewhere) with no brand in it:
   the traffic lights (`trafficLightPosition` x 20, y 30, centred on the row) and the
-  sidebar's toggle at its trailing edge; the main column's header shares its
+  sidebar's toggle with **Settings** beside it (the same two buttons, in the same place, whether the sidebar is open or hidden; Settings shows a small amber dot while a paired machine is not connected); the main column's header shares its
   height and line (`ui/Titlebar.tsx`). The app's name and version live in
   Settings › About.
 - **Sidebar sections:** one Threads list, always open, under Pinned when
@@ -658,15 +658,13 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   needs you stays in Pinned and says so in its chip, never drawn twice. A
   section header never folds and is always open, so a `rustcode.sidebar.folded`
   value an older release stored for one (`working`, `threads`) is dropped on
-  mount; a project's folder (`project:<path>`) and a machine's group
-  (`machine:<id>`) are kept. A machine's heading is a group of its own above its
-  project folders and thread rows, with its platform's glyph, its name and a
-  connection dot, and a machine that is away starts folded to one muted row
-  (docs/desktop.md › Several machines). The sidebar has no
+  mount; a project's folder (`project:<path>`) is kept. Threads from every paired
+  machine share the one list; a thread from another machine carries its glyph
+  and name in muted text on its meta line, and a thread from this computer
+  carries none (docs/desktop.md › Several machines). The sidebar has no
   search field or filter menu, and none of the buttons it used to carry past
   the toggle in its toolbar: no Add project or New thread row above the list,
-  and no Pull requests or Usage row at its foot. The foot carries one icon
-  button, shaped like the title row's: **Settings**. Threads are found with
+  and no Pull requests or Usage row at its foot. The foot carries no buttons: **Settings** lives in the title row. Threads are found with
   ⌘K, which also holds the view options (group by project, Working at the top,
   one project), New thread, Add project folder, Open Settings, Open Git, Open
   Usage and Statistics, each with the shortcut it has. A snoozed row shows when
