@@ -15,7 +15,7 @@
 //! Everything here is a pure function of its arguments, so the schedule, the
 //! route order and "did the network change" are unit-tested rather than timed.
 
-use crate::machine::{Refusal, Unreachable};
+use crate::machine::{NotThisMachine, PairingLost, Refusal, Unreachable};
 use crate::protocol::ErrorCode;
 use crate::registry::Route;
 use std::net::IpAddr;
@@ -194,11 +194,12 @@ impl Cause {
         }
     }
 
-    /// Why an attempt failed, from its error. A refusal names its code
-    /// ([`Refusal`], or [`Unreachable::refused`] when every route failed and
-    /// one of them refused); a saved token that is gone or belongs to a
-    /// replaced device record is a token problem; anything else did not
-    /// answer.
+    /// Why an attempt failed, from its typed error, never its message. A
+    /// refusal names its code ([`Refusal`], or [`Unreachable::refused`] when
+    /// every route failed and one that proved it is the machine refused); a
+    /// saved token that is gone or belongs to a replaced device record
+    /// ([`PairingLost`]) is a token problem; another computer on a saved
+    /// address ([`NotThisMachine`]) and anything else did not answer.
     pub fn of(error: &anyhow::Error) -> Self {
         if let Some(refusal) = error.downcast_ref::<Refusal>() {
             return Self::of_code(refusal.code);
@@ -209,12 +210,11 @@ impl Cause {
         {
             return Self::of_code(code);
         }
-        let text = format!("{error:#}");
-        if text.contains("pair with it again")
-            || text.contains("replaced this computer's device record")
-            || text.contains("no pairing token")
-        {
+        if error.downcast_ref::<PairingLost>().is_some() {
             return Self::RejectedToken;
+        }
+        if error.downcast_ref::<NotThisMachine>().is_some() {
+            return Self::Unreachable;
         }
         Self::Unreachable
     }
@@ -305,25 +305,37 @@ mod tests {
             Cause::RejectedToken
         );
 
-        // The token lookup and the identity check report as plain errors.
+        // The token lookup and the identity check report typed errors; the
+        // same words without the type are not a token problem.
+        let lost = anyhow::Error::new(PairingLost {
+            machine: "Lagos".to_owned(),
+            reason: crate::machine::PairingLostReason::NoToken,
+        })
+        .context("connecting to Lagos");
+        assert_eq!(Cause::of(&lost), Cause::RejectedToken);
         assert_eq!(
             Cause::of(&anyhow::anyhow!(
                 "Lagos has no pairing token; pair with it again"
             )),
-            Cause::RejectedToken
+            Cause::Unreachable
         );
+        let stranger = anyhow::Error::new(NotThisMachine {
+            address: "10.0.0.31:17879".to_owned(),
+            machine: "Lagos".to_owned(),
+            answered: Some("Office PC".to_owned()),
+        });
+        assert_eq!(Cause::of(&stranger), Cause::Unreachable);
         assert_eq!(
             Cause::of(&anyhow::anyhow!("connection refused")),
             Cause::Unreachable
         );
-        // A race lost because the token is gone says so in a route's line.
+        // A race lost because the token is gone carries it as `unauthorized`
+        // from the route that proved it is the machine.
         let tokenless = anyhow::Error::new(Unreachable {
             machine: "Lagos".to_owned(),
-            attempts: vec![
-                "10.0.0.31:17879: Lagos has no pairing token; pair with it again".into(),
-            ],
-            refused: None,
-            answered: None,
+            attempts: vec!["100.90.27.158:17879: Lagos has no pairing token".into()],
+            refused: Some(ErrorCode::Unauthorized),
+            answered: Some("100.90.27.158:17879".into()),
         });
         assert_eq!(Cause::of(&tokenless), Cause::RejectedToken);
         assert_eq!(Cause::RejectedToken.as_str(), "rejected_token");

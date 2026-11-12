@@ -13,7 +13,8 @@
 // what runs on it (docs/terminology.md).
 
 import { create } from "zustand";
-import { AcpConnection, type JsonObject, obj, str } from "../acp/jsonrpc";
+import { AcpConnection, bool, type JsonObject, num, obj, str } from "../acp/jsonrpc";
+import { RemoteMethod } from "../acp/remote";
 import { isTauri, MachineTransport } from "../acp/transport";
 import { initializeParams, Method, parseSessionList, type SessionSummary } from "../acp/types";
 import { currentPlatform } from "../lib/platform";
@@ -28,6 +29,7 @@ import {
   flushMachineOutbox,
   isTombstoned,
   keptUnlisted,
+  request,
   settleKeptUnlisted,
   toast,
   tombstoneThread,
@@ -254,6 +256,11 @@ interface MachinesStore {
   discoverError: string | null;
   pairing: Pairing | null;
   pairingError: string | null;
+  /** The connect code this computer shows for another one, while it is open. */
+  connectOffer: ConnectOffer | null;
+  /** Creating, withdrawing or redeeming a connect code is running now. */
+  connectBusy: boolean;
+  connectError: string | null;
   /** This computer's RustCode server as a background service, once asked. */
   server: ServerService | null;
   /** This computer's own name and icon, kept here because it is not paired. */
@@ -278,6 +285,9 @@ export const useMachines = create<MachinesStore>(() => ({
   discoverError: null,
   pairing: null,
   pairingError: null,
+  connectOffer: null,
+  connectBusy: false,
+  connectError: null,
   server: null,
   serverInstalling: false,
   serverLinking: false,
@@ -1548,6 +1558,137 @@ export async function pairMachine(code: string): Promise<void> {
   } catch (error) {
     // The request is spent either way; asking again is what recovers it.
     useMachines.setState({ pairing: null, pairingError: errorText(error) });
+  }
+}
+
+// ---------------------------------------------------------------- connect codes
+
+/**
+ * A connect code this computer shows for another computer to pair with it: no request and no
+ * accept step, valid ten minutes, once (docs/remote.md › Connect codes). The engine creates it on
+ * this computer's gateway; the other computer redeems it with `machines_connect_code` (or
+ * `rustcode machines connect`).
+ */
+export interface ConnectOffer {
+  /** The short form, `K7MQ-29XH-TP4W-NRD6`. */
+  code: string;
+  /** The long form, `rustcode://connect/…`: every address and the gateway's id. */
+  link: string;
+  /** The address the short code carries, or the one to type next to it. */
+  address: string;
+  addressInCode: boolean;
+  hostName: string | null;
+  loopbackOnly: boolean;
+  serial: number;
+  expiresAt: number;
+  /** The computer that paired with it, once one has. */
+  pairedWith: string | null;
+  /** Its wrong tries ran out. */
+  usedUp: boolean;
+}
+
+/** Read the engine's `connectCode` answer. */
+export function parseConnectOffer(value: unknown, now = Date.now()): ConnectOffer | null {
+  const offer = obj(value);
+  const code = str(offer?.code);
+  const link = str(offer?.link);
+  if (!offer || !code || !link) return null;
+  return {
+    code,
+    link,
+    address: str(offer.address) ?? "",
+    addressInCode: bool(offer.addressInCode) ?? false,
+    hostName: str(offer.hostName) ?? null,
+    loopbackOnly: bool(offer.loopbackOnly) ?? false,
+    serial: num(offer.serial) ?? 0,
+    expiresAt: now + (num(offer.expiresInSecs) ?? 600) * 1000,
+    pairedWith: null,
+    usedUp: false,
+  };
+}
+
+/** Create a connect code on this computer. Remote access is switched on first if it was off. */
+export async function createConnectCode(): Promise<void> {
+  useMachines.setState({ connectBusy: true, connectError: null });
+  try {
+    const answer = obj(await request<JsonObject>(RemoteMethod.connectCode, {}, 20_000));
+    const offer = parseConnectOffer(answer?.connectCode);
+    const error = str(answer?.connectCodeError);
+    useMachines.setState({
+      connectOffer: offer,
+      connectError: offer ? null : (error ?? "The gateway did not hand out a connect code."),
+    });
+  } catch (error) {
+    useMachines.setState({ connectError: errorText(error) });
+  } finally {
+    useMachines.setState({ connectBusy: false });
+  }
+}
+
+/** Withdraw the open connect code, or take a spent one off the screen. */
+export async function cancelConnectCode(): Promise<void> {
+  const offer = useMachines.getState().connectOffer;
+  useMachines.setState({ connectOffer: null, connectError: null });
+  if (!offer || offer.pairedWith || offer.usedUp || offer.expiresAt <= Date.now()) return;
+  try {
+    await request(RemoteMethod.connectCode, { cancel: true }, 15_000);
+  } catch (error) {
+    toast(errorText(error), "error");
+  }
+}
+
+/**
+ * Follow the open connect code: the gateway says when a computer paired with it, or its tries ran
+ * out. The page asks while the code is on screen.
+ */
+export async function followConnectCode(): Promise<void> {
+  const offer = useMachines.getState().connectOffer;
+  if (!offer || offer.pairedWith || offer.usedUp) return;
+  try {
+    const status = obj(await request<JsonObject>(RemoteMethod.status, {}, 10_000));
+    const ended = obj(obj(obj(status?.gateway)?.machineOffer)?.lastEnded);
+    if (!ended || num(ended.serial) !== offer.serial) return;
+    const current = useMachines.getState().connectOffer;
+    if (current?.serial !== offer.serial) return;
+    useMachines.setState({
+      connectOffer:
+        str(ended.end) === "paired"
+          ? { ...current, pairedWith: str(ended.deviceName) ?? "A computer" }
+          : { ...current, usedUp: true },
+    });
+  } catch {
+    // The next tick asks again; the countdown says when it no longer matters.
+  }
+}
+
+/**
+ * Pair with a connect code created on another computer. `address` is where to reach it when the
+ * code carries none.
+ */
+export async function connectWithCode(code: string, address?: string): Promise<boolean> {
+  const typed = code.trim();
+  if (!typed) {
+    useMachines.setState({ connectError: "Paste or type the connect code first." });
+    return false;
+  }
+  useMachines.setState({ connectBusy: true, connectError: null });
+  try {
+    const machine = await shellCallWithin<Machine>(PAIR_DEADLINE_MS, "machines_connect_code", {
+      code: typed,
+      address: address?.trim() || null,
+      name: null,
+    });
+    useMachines.setState((state) => ({
+      machines: [...state.machines.filter((saved) => saved.id !== machine.id), machine],
+    }));
+    toast(`Connected to ${machine.name}.`, "success");
+    await refreshMachines();
+    return true;
+  } catch (error) {
+    useMachines.setState({ connectError: errorText(error) });
+    return false;
+  } finally {
+    useMachines.setState({ connectBusy: false });
   }
 }
 

@@ -536,13 +536,7 @@ async fn supervise(
                 ),
                 End::Failed(error, answered) => {
                     let message = format!("{error:#}");
-                    // The route it answered on last, as saved now: a
-                    // connection since the supervisor started may have moved it.
-                    let last_route = MachineRegistry::load(&config_dir)
-                        .ok()
-                        .and_then(|registry| registry.get(&id).and_then(|m| m.last_route.clone()))
-                        .or_else(|| machine.last_route.clone());
-                    if needs_pairing(&error, last_route.as_deref()) {
+                    if needs_pairing(&error) {
                         set_failure(&machines, &id, Cause::RejectedToken, answered);
                         set_state(
                             &machines,
@@ -845,23 +839,13 @@ async fn relay_once(
     }
 }
 
-/// Whether pairing again is what would fix this failure, for a machine whose
-/// last working route is `last_route`.
-///
-/// A plain `unauthorized` from another route is not believed: a stale LAN
-/// address that another RustCode computer now answers on refuses every device
-/// it does not know, and stopping there would leave a machine that is only
-/// asleep at *Needs pairing* for good. That failure keeps being retried.
-pub fn needs_pairing(error: &Error, last_route: Option<&str>) -> bool {
-    if let Some(lost) = error
-        .downcast_ref::<Unreachable>()
-        .filter(|lost| lost.refused.is_some())
-    {
-        return lost.needs_new_pairing_at(last_route);
-    }
-    // The token lookup and the identity check (a device record another
-    // pairing replaced, a token that is gone) report as plain errors.
-    Cause::of(error) == Cause::RejectedToken
+/// Whether pairing again is what would fix this failure. Read from the
+/// client's typed errors, never the message: a reworded error must not turn a
+/// revoked pairing into endless retries, or the reverse. A refusal counts only
+/// from a route that proved it is the machine, so a stranger on a stale
+/// address never ends the retries.
+pub fn needs_pairing(error: &Error) -> bool {
+    rustcode_client::needs_new_pairing(error)
 }
 
 fn set_connected(machines: &Arc<Machines>, id: &str, route: &Route) {
@@ -1304,6 +1288,42 @@ pub async fn machines_pair(
         .map_err(|error| format!("The code was not accepted: {error:#}"))?;
     let welcome = paired.session.welcome().clone();
     let machine = machine_from_pairing(&welcome, Route::new(pending.address), pending.name);
+    save_pairing(&machines, machine, &paired).await
+}
+
+/// Pair with a connect code created on another machine (`Settings ›
+/// Machines › Connect with a code`): no request and no accept step there.
+/// `address` is where to reach it when the code carries none, or instead of
+/// the one it carries.
+#[tauri::command]
+pub async fn machines_connect_code(
+    machines: tauri::State<'_, Arc<Machines>>,
+    code: String,
+    address: Option<String>,
+    name: Option<String>,
+) -> Result<MachineView, String> {
+    let code = rustcode_client::connect_code::parse(&code).map_err(chain)?;
+    let config_dir = config_dir()?;
+    let connector = Machines::connector(&config_dir)?;
+    // The store before the code is spent, as for a request (#3325).
+    machines.tokens(&config_dir).await?;
+    let (paired, route) = connector
+        .pair_with_code(&code, address.as_deref())
+        .await
+        .map_err(chain)?;
+    let welcome = paired.session.welcome().clone();
+    let mut machine = machine_from_pairing(&welcome, route, name);
+    // It answered `describe` before the code went out.
+    machine.describes = true;
+    save_pairing(&machines, machine, &paired).await
+}
+
+/// Keep what a pairing handed out: the token, then the machine.
+async fn save_pairing(
+    machines: &Arc<Machines>,
+    machine: Machine,
+    paired: &rustcode_client::Paired,
+) -> Result<MachineView, String> {
     let config_dir = config_dir()?;
     // The token first: a saved machine without one would only ever say "pair
     // again", while a token whose machine was not saved is unreachable. The
@@ -1562,7 +1582,7 @@ pub fn machine_disconnect(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rustcode_client::{ErrorCode, RouteKind};
+    use rustcode_client::{ErrorCode, RouteKind, Unreachable};
 
     fn machine() -> Machine {
         Machine::new(
@@ -1600,39 +1620,34 @@ mod tests {
             refused: Some(ErrorCode::Revoked),
             answered: Some("192.168.1.20:17879".into()),
         });
-        assert!(needs_pairing(&revoked, Some("10.0.0.9:17879")));
-        let replaced =
-            Error::msg("Studio replaced this computer's device record; pair with it again");
-        assert!(needs_pairing(&replaced, None));
+        assert!(needs_pairing(&revoked));
+        let replaced = Error::new(rustcode_client::PairingLost {
+            machine: "Studio".into(),
+            reason: rustcode_client::PairingLostReason::DeviceReplaced,
+        })
+        .context("connecting to Studio");
+        assert!(needs_pairing(&replaced));
+        // The same words without the type are not a reason to stop.
+        assert!(!needs_pairing(&Error::msg(
+            "Studio replaced this computer's device record; pair with it again"
+        )));
+        // A stranger on a stale address never ends the retries.
+        let stranger = Error::new(rustcode_client::NotThisMachine {
+            address: "192.168.1.20:17879".into(),
+            machine: "Studio".into(),
+            answered: Some("Office PC".into()),
+        });
+        assert!(!needs_pairing(&stranger));
         let unreachable = Error::new(Unreachable {
             machine: "Studio".into(),
             attempts: vec!["192.168.1.20:17879: connection refused".into()],
             refused: None,
             answered: None,
         });
-        assert!(!needs_pairing(&unreachable, None));
-        assert!(!needs_pairing(
-            &Error::msg("no frame from the machine within 5s"),
-            None
-        ));
-
-        // A stale LAN address another RustCode computer answers on refuses
-        // with `unauthorized`; the machine itself was last reached over
-        // NetBird and only timed out. That is retried, not unpaired.
-        let stranger = Error::new(Unreachable {
-            machine: "Studio".into(),
-            attempts: vec![
-                "192.168.1.20:17879: unauthorized".into(),
-                "100.90.16.237:17879: timed out".into(),
-            ],
-            refused: Some(ErrorCode::Unauthorized),
-            answered: Some("192.168.1.20:17879".into()),
-        });
-        assert!(!needs_pairing(&stranger, Some("100.90.16.237:17879")));
-        // From the route it answered on last, `unauthorized` is believed, and
-        // so it is when no route is on record yet.
-        assert!(needs_pairing(&stranger, Some("192.168.1.20:17879")));
-        assert!(needs_pairing(&stranger, None));
+        assert!(!needs_pairing(&unreachable));
+        assert!(!needs_pairing(&Error::msg(
+            "no frame from the machine within 5s"
+        )));
     }
 
     /// The page reads these names: camelCase fields, and a state per word it
@@ -1676,7 +1691,7 @@ mod tests {
             message: "the relay to this machine's engine could not be opened".into(),
             retry_after_secs: None,
         });
-        assert!(!needs_pairing(&refusal, None), "a dead server is retried");
+        assert!(!needs_pairing(&refusal), "a dead server is retried");
         let cause = attempt_cause(&refusal, true);
         assert_eq!(cause, Cause::ServerNotRunning);
         let live = Live {

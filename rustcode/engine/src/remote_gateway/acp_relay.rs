@@ -401,6 +401,8 @@ mod tests {
             "_rustcode/provider/credentials",
             "_rustcode/login",
             "_rustcode/remote/pair",
+            // Another machine must not mint a way into this one.
+            "_rustcode/remote/connect_code",
             "_rustcode/server/status",
             "_rustcode/server/stop",
             "_rustcode/mcp/set",

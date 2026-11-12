@@ -46,7 +46,9 @@ use crate::remote::{
     RemoteOperation, RemoteRequest, RemoteResponse, RemoteResult, RemoteSnapshot, SessionPublisher,
     SessionRegistration, apply_session_mutation, read_session,
 };
-use crate::remote_gateway::control::{DeviceSummary, OfferDetails};
+use crate::remote_gateway::control::{
+    DeviceSummary, MachineOfferDetails, MachineOfferStatus, OfferDetails,
+};
 use crate::remote_gateway::lifecycle::RemoteLifecycle;
 use crate::remote_gateway::service;
 use std::time::{Duration, Instant};
@@ -107,6 +109,17 @@ pub(crate) struct RemoteStopRequest {
 pub(crate) struct RemoteAnswerRequest {
     pub id: String,
     pub accept: bool,
+}
+
+/// Create a connect code for another computer (Settings › Machines › Create
+/// connect code), or withdraw the open one with `cancel`. The answer is the
+/// machine's status plus `connectCode` (shown once) or `connectCodeError`.
+#[derive(Debug, Clone, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
+#[serde(rename_all = "camelCase")]
+#[request(method = "_rustcode/remote/connect_code", response = serde_json::Value)]
+pub(crate) struct RemoteConnectCodeRequest {
+    #[serde(default)]
+    pub cancel: bool,
 }
 
 /// Forget a paired device and close its connections. The answer is the
@@ -1232,6 +1245,9 @@ async fn host_status() -> Value {
                 "lastChallenge": pairing.last_challenge,
             })),
             "sessions": status.sessions.as_ref().map(|sessions| sessions.len()).unwrap_or(0),
+            // The connect code for another computer, apart from the
+            // challenge: open, and how the last one ended.
+            "machineOffer": status.machine_offer.as_ref().map(machine_offer_status_json),
         })
     });
     let connect_requests = status
@@ -1375,6 +1391,93 @@ async fn pair_host() -> Value {
         }
     }
     status
+}
+
+fn machine_offer_status_json(offer: &MachineOfferStatus) -> Value {
+    json!({
+        "open": offer.open.map(|open| json!({
+            "serial": open.serial,
+            "expiresInSecs": open.expires_in_secs,
+            "attemptsLeft": open.attempts_left,
+        })),
+        "lastEnded": offer.last_ended.as_ref().map(|ended| json!({
+            "serial": ended.serial,
+            "end": ended.end,
+            "deviceId": ended.device_id,
+            "deviceName": ended.device_name,
+        })),
+    })
+}
+
+/// A connect code for another computer, or the open one withdrawn. Creating
+/// one switches remote access on when it is off, as pairing a phone does: the
+/// other computer reaches this one through the gateway.
+pub(crate) async fn connect_code(cancel: bool) -> Value {
+    let Some(directory) = crate::config::get_config_dir() else {
+        return json!({
+            "available": true,
+            "enabled": false,
+            "connectCodeError": "no configuration directory",
+        });
+    };
+    let lifecycle = RemoteLifecycle::new(&directory);
+    if cancel {
+        let cancelled = lifecycle.cancel_machine_offer().await;
+        let mut status = host_status().await;
+        if let Some(object) = status.as_object_mut() {
+            match cancelled {
+                Ok(was_open) => object.insert("connectCodeCancelled".to_owned(), json!(was_open)),
+                Err(error) => {
+                    object.insert("connectCodeError".to_owned(), json!(format!("{error:#}")))
+                }
+            };
+        }
+        return status;
+    }
+    if let Err(error) = service::enable_for_host().await {
+        let mut status = host_status().await;
+        if let Some(object) = status.as_object_mut() {
+            object.insert("connectCodeError".to_owned(), json!(format!("{error:#}")));
+        }
+        return status;
+    }
+    let result = tokio::time::timeout(Duration::from_secs(15), lifecycle.machine_offer()).await;
+    let mut status = host_status().await;
+    let Some(object) = status.as_object_mut() else {
+        return status;
+    };
+    match result {
+        Ok(Ok(offer)) => {
+            object.insert("connectCode".to_owned(), connect_code_json(&offer));
+        }
+        Ok(Err(error)) => {
+            object.insert("connectCodeError".to_owned(), json!(format!("{error:#}")));
+        }
+        Err(_) => {
+            object.insert(
+                "connectCodeError".to_owned(),
+                json!("the remote gateway did not answer in time"),
+            );
+        }
+    }
+    status
+}
+
+fn connect_code_json(offer: &MachineOfferDetails) -> Value {
+    json!({
+        "code": offer.code.expose(),
+        "link": offer.link.expose(),
+        "address": offer.address,
+        "addressInCode": offer.address_in_code,
+        "gatewayId": offer.gateway_id,
+        "instanceId": offer.instance_id,
+        "hostName": offer.host_name,
+        "routes": offer.routes,
+        "loopbackOnly": offer.loopback_only,
+        "expiresInSecs": offer.expires_in_secs,
+        "serial": offer.serial,
+        "lockedForSecs": offer.locked_for_secs,
+    })
 }
 
 /// Settings › Remote access, or the prompt anywhere in the app: the owner's

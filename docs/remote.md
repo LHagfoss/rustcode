@@ -498,6 +498,8 @@ fills in the same saved machines.
 
 | Command | Behavior |
 | --- | --- |
+| `rustcode machines code [--link] [--json] [--cancel]` | Create a [connect code](#connect-codes) on **this** computer for another one to pair with: the short code, the address it carries, the long link and what to run on the other computer. `--link` prints only the link, for a script; `--cancel` withdraws the open code. Switches remote access on when it is off, as `rustcode remote pair` does. |
+| `rustcode machines connect <code> [--address <host:port>] [--name <name>]` | Pair with a connect code created on another computer, with no accept step there: stores the token and saves the machine. `--address` is where to reach it when the short code carries no address, or instead of the one it carries. `rustcode machines add <code>` does the same. Over SSH in one line: `rustcode machines connect "$(ssh box rustcode machines code --link)"`. |
 | `rustcode machines add <address> [--name <name>] [--code <digits>]` | Ask the machine to let this one in; the code is exactly the eight digits it shows (spaces and dashes are ignored). It shows *‹name› wants to connect* on that machine; accept it there, then type the eight-digit code it shows (or pass `--code`). Prints `Waiting for … to accept…` while the request is open. Pairs, stores the token and saves the machine. |
 | `rustcode machines add --discover` | The same, choosing the machine from Bonjour when exactly one answers. |
 | `rustcode machines list [--threads] [--json]` | Name, platform, the route in use and whether the machine answers now. Under a machine that is reachable one way and not another, it prints the hint: e.g. `Not reachable over NetBird (100.90.16.237:17879). On that machine, check that NetBird allows inbound connections and that an access policy allows TCP 17879 between the two machines.` The platform comes from the gateway (`macos`, `windows` or `linux`) and is refreshed whenever the machine is reached; a gateway older than that reports none, and the row keeps `unknown`. With `--threads`, each connected machine's thread titles over ACP (`session/list`), printed under the machine's row and after its hint. `--json` for scripts, with the same hint under `hint`. |
@@ -564,7 +566,21 @@ holds until encrypted transport (#2651) lands.
   authenticates *as the machine we saved* — same `host_id`, and the device
   record the token belongs to — wins, and the rest are cancelled. The whole
   race ends after five seconds. An address that now belongs to another
-  computer is refused rather than trusted. Because a connection that drops is
+  computer is refused rather than trusted.
+- **Identity before credentials.** Every socket asks who answers before a
+  token goes on it: the first frame is `describe`, the gateway answers
+  `described` with its `gateway_id`, name, version and capabilities, and the
+  same socket then takes `authenticate`. A route whose gateway names another
+  machine is dropped with the token unsent. Once a machine has answered
+  `describe` the client remembers it (`describes` in `machines.json`) and from
+  then on drops any address that cannot answer it — an older RustCode on a
+  saved address that now belongs to someone else gets nothing. A machine
+  whose RustCode predates `describe` keeps the old handshake until it
+  updates. A refusal (`unauthorized`, `revoked`) counts as *Needs pairing*
+  only when it came from a socket that proved to be the machine, so a
+  stranger on a stale LAN address can no longer stop the retries; the app
+  reads that from the client's typed errors (`PairingLost`, `Unreachable`),
+  never from the message text. Because a connection that drops is
   re-raced, the client moves to a route that works again (a LAN after
   returning home, an overlay after leaving it) on the next attempt.
 - The addresses a machine reports after authentication are learned and
@@ -592,6 +608,54 @@ holds until encrypted transport (#2651) lands.
   would send them to a network they are not on. Those routes are still kept
   and dialled, but only after every route that can answer.
 
+### Connect codes
+
+A connect code pairs two computers by carrying one string from one to the
+other: no request to accept, and no address to look up when the code carries
+it.
+
+1. On the computer to be reached: Settings › Machines › **Create connect code**
+   (or `rustcode machines code`). It shows `K7MQ-29XH-TP4W-NRD6` with **Copy**
+   and **Copy link**, the address the code carries, and a countdown with
+   *Waiting for a computer…*, which becomes *Paired ‹name›*.
+2. On the other computer: Settings › Machines › **Connect to another
+   computer**, paste the code or the link, **Connect** (or
+   `rustcode machines connect <code>`). It is paired, its token stored, and
+   the first computer's threads appear.
+
+| | Short code | Link |
+| --- | --- | --- |
+| Looks like | `K7MQ-29XH-TP4W-NRD6` | `rustcode://connect/<base64url JSON>` |
+| Carries | one IPv4 address on port 17879 (an overlay address first, else the LAN), or none, and a 44-bit secret | the gateway's id and name, every route it answers on, a 256-bit credential |
+| Use | read aloud, typed by hand | pasted, over SSH, in a script |
+
+- A code works **once, for ten minutes**, and five wrong tries destroy it; the
+  host-wide pairing lockout (ten failures in five minutes) applies as well.
+  Creating a new code replaces the open one; **Cancel code** (or
+  `rustcode machines code --cancel`) withdraws it. `rustcode remote status`
+  lists an open code.
+- It lives in a slot of its own next to the phone challenge: showing a QR
+  code, accepting a computer's connection request and creating a connect code
+  never replace each other's code.
+- **Anyone who has the code can see and run all threads on that computer**: it
+  pairs a `desktop` device with ACP access, because creating the code is the
+  owner's consent. The device it creates is listed under Settings › Remote
+  access › Devices and `rustcode remote devices`, and removed there like any
+  other.
+- The short code has the alphabet `23456789ABCDEFGHJKLMNPQRSTUVWXYZ` (no `0`,
+  `1`, `I`, `O`); case, spaces and dashes do not matter. When the gateway
+  listens on another port or has no IPv4 address, the short code carries none
+  and the address it shows goes next to it (`--address`).
+- The redeeming side races the code's routes with `describe`, sends the
+  secret once on the first that answers as a gateway that takes connect codes
+  (and, for the link, as the gateway the link names), and saves the machine.
+  A machine with an older RustCode answers *update RustCode there*.
+- On the wire it is `pair` with `method: "machine"`; a gateway lists
+  `machine_codes` in its `described` capabilities
+  (`docs/remote-protocol/v1`).
+- Like every pairing, the code crosses a LAN in clear text; an overlay
+  (NetBird, Tailscale) encrypts it.
+
 ### In the desktop app
 
 Settings › **Machines** is the same pairing without a terminal: *This Mac* (or
@@ -604,6 +668,7 @@ are all visible at once.
 
 | In the app | What it does |
 | --- | --- |
+| **Connect with a code** | *Create connect code* shows a code for another computer to pair with this one ([Connect codes](#connect-codes)); *Connect to another computer* takes a code or link created there, with an optional address for a short code that carries none. |
 | **Machines found** | The machines the Add sheet lists without an address typed, filled in when the page opens (*Look again* to repeat): Bonjour, the same browse as `machines discover`, for every machine whose record lists `caps=desktops`; and the *saved* machines whose handshake reported a NetBird, Tailscale or ZeroTier address, which no browse on the LAN can hear. One machine found both ways is one row, merged by its host id. Each row names the machine, its platform, the RustCode version it runs, the network its address is on (`LAN`, `NetBird`, `Tailscale`, `VPN`, `Public`) and the address. A machine not yet paired has *Ask to connect*; one already saved is *Saved*. When the local browse itself fails (a container or a network without multicast), the rows from the saved machines are still listed and the sheet says *Could not look for machines on this network* with the reason. |
 | **Machines found › Enter an address** | The `host:port` a machine is reached on when it is not announced (an overlay, or another subnet). The fallback, never the first step. |
 | **Waiting for ‹host› to accept on that machine…** | The request is on that machine's screen; *Cancel* drops it. Once its owner accepts, the eight digits it shows are typed here, one box per digit. |
@@ -636,11 +701,7 @@ network change it pings the machine and reconnects if no answer comes within
 again on a doubling wait too (`state/machines.ts` `startMachines`, 1 s to
 30 s), so a shell that was still starting up does not leave every machine
 without a connection until a page is opened. A pairing that was refused is not retried:
-nothing changes until it is paired again, and the row says so. A plain
-`unauthorized` is believed only from the route the machine answered on last:
-every RustCode gateway refuses a device it does not know that way, so a saved
-LAN address that another RustCode computer now holds would otherwise unpair a
-machine that is only asleep; that refusal is retried instead.
+nothing changes until it is paired again, and the row says so.
 The connection and the token live in the app's Rust shell
 (`apps/desktop/src-tauri/src/machines.rs`); the page only shows what it is
 told, and the thread count comes from the machine's own `session/list` over
