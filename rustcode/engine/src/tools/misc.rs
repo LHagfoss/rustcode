@@ -713,7 +713,7 @@ pub const LIST_PROJECTS: Tool = Tool {
 /// paired, which `start_session` and the other machine-aware tools take.
 pub const LIST_MACHINES: Tool = Tool {
     name: crate::orchestration::LIST_MACHINES,
-    description: "List the computers this RustCode is paired with: this one (current: true) and each machine with id, name (the name the machine reports), display_name (the name the app shows, or null), icon, icon_tint, platform, state (connected or offline), paused, route in use, its routes with the last test of each (reachable, refused or timeout, with latency), its harnesses and project names. Ask it when the user asks what machines they have, which one a thread runs on, or where a task can run. Every tool whose schema has a `machine` argument takes an id or name from here; omit it to act on this computer. Threads on another machine answer with an id that carries that machine, so later calls need no `machine`. Acting on another machine asks the user first, and an offline one is refused by name. Pass `probe: true` to test every route now and answer what each found; it takes a few seconds, so ask only when the user wants a route checked.",
+    description: "List the computers this RustCode is paired with: this one (current: true) and each machine with id, name, display_name, icon, icon_tint, platform, state (connected or offline), paused, route in use, routes with the last test of each (reachable, refused or timeout, latency), harnesses and project names. Every tool whose schema has a `machine` argument takes an id or name from here; omit it to act on this computer. Threads on another machine answer with an id that carries that machine, so later calls need no `machine`. Acting on another machine asks the user first, and an offline one is refused by name. `probe: true` tests every route now (a few seconds).",
     arguments: r#"{}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -721,7 +721,7 @@ pub const LIST_MACHINES: Tool = Tool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "probe": {"type": "boolean", "description": "Test every route of every paired machine now"}
+                "probe": {"type": "boolean"}
             },
             "required": [],
             "additionalProperties": false
