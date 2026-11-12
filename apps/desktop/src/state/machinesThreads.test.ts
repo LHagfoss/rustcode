@@ -33,6 +33,7 @@ import {
   setPinned,
   setSnoozed,
   setThreadsStatus,
+  settleThread,
   startMachineRouting,
   statusOf,
   threadIsRemote,
@@ -408,6 +409,64 @@ describe("a remote thread's operations", () => {
     expect(params("_rustcode/session/status").session_id).toBe("mock-linux-1");
     // A key is this window's name for a thread; the machine only knows its own id.
     expect(JSON.stringify(calls)).not.toContain(LINUX);
+  });
+
+  test("remote status updates immediately and rolls back if saving fails", async () => {
+    let frame: JsonObject | undefined;
+    const conn = new AcpConnection((line) => {
+      frame = JSON.parse(line) as JsonObject;
+    });
+    watchMachineConnection(LINUX, conn);
+    const saving = setThreadsStatus([LINUX_THREAD], "done");
+    expect(statusOf(useApp.getState(), LINUX_THREAD)).toBe("done");
+    await Promise.resolve();
+    conn.receive(JSON.stringify({ jsonrpc: "2.0", id: frame!.id, error: { code: -32601, message: "No" } }));
+    expect(await saving).toBe(1);
+    expect(statusOf(useApp.getState(), LINUX_THREAD)).toBe("idle");
+  });
+
+  test("settling a remote thread leaves it immediately and offers undo", async () => {
+    const frames: JsonObject[] = [];
+    const conn = new AcpConnection((line) => {
+      const frame = JSON.parse(line) as JsonObject;
+      if (frame.method === "_rustcode/session/status") frames.push(frame);
+    });
+    watchMachineConnection(LINUX, conn);
+    useApp.setState({ selectedId: LINUX_THREAD, view: { kind: "chat" } });
+    const saving = settleThread(LINUX_THREAD);
+    expect(useApp.getState().selectedId).toBeNull();
+    const undo = useApp.getState().toasts.find((t) => t.text.includes("Settled"))?.action;
+    expect(undo?.label).toBe("Undo");
+    undo?.run();
+    expect(statusOf(useApp.getState(), LINUX_THREAD)).toBe("idle");
+    await Promise.resolve();
+    conn.receive(JSON.stringify({ jsonrpc: "2.0", id: frames[0]!.id, result: {} }));
+    await saving;
+    await Promise.resolve();
+    conn.receive(JSON.stringify({ jsonrpc: "2.0", id: frames[1]!.id, result: {} }));
+    await sleep();
+    expect(statusOf(useApp.getState(), LINUX_THREAD)).toBe("idle");
+  });
+
+  test("successive remote changes reach the owner in order", async () => {
+    const frames: JsonObject[] = [];
+    const conn = new AcpConnection((line) => {
+      const frame = JSON.parse(line) as JsonObject;
+      if (frame.method === "_rustcode/session/status") frames.push(frame);
+    });
+    watchMachineConnection(LINUX, conn);
+    const first = setThreadsStatus([LINUX_THREAD], "done");
+    const second = setThreadsStatus([LINUX_THREAD], "idle");
+    expect(statusOf(useApp.getState(), LINUX_THREAD)).toBe("idle");
+    await Promise.resolve();
+    expect(frames).toHaveLength(1);
+    conn.receive(JSON.stringify({ jsonrpc: "2.0", id: frames[0]!.id, result: {} }));
+    await first;
+    await Promise.resolve();
+    expect(frames).toHaveLength(2);
+    conn.receive(JSON.stringify({ jsonrpc: "2.0", id: frames[1]!.id, result: {} }));
+    await second;
+    expect(statusOf(useApp.getState(), LINUX_THREAD)).toBe("idle");
   });
 
   test("an unsupported remote method cannot leave a local status mark", async () => {
