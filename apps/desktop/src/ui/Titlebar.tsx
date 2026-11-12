@@ -7,25 +7,26 @@
 
 import { type ReactNode, useEffect, useState } from "react";
 import { isTauri } from "../acp/transport";
-import { appPlatform } from "../lib/platform";
+import { appPlatform, currentPlatform } from "../lib/platform";
 import { cx } from "./primitives";
 
 /**
  * Room the traffic lights take, plus the SwiftUI app's gap after them. With
- * `trafficLightPosition` x 18 the zoom button ends at x 78 (measured in the
+ * `trafficLightPosition` x 20 the zoom button ends at x 80 (measured in the
  * window); the SwiftUI app's lights end near x 66 with its first cluster at
- * 80 (SidebarMetrics.barLeading), a 14 pt gap, so the row starts at 92.
+ * 80 (SidebarMetrics.barLeading), a 14 pt gap, so the row starts at 94.
  */
-export const LIGHTS_INSET = 92;
+export const LIGHTS_INSET = 94;
 
 /**
- * The title row's height, on every platform: the window's drag strip, the
- * traffic lights and the main column's header all sit on this one line.
- * `trafficLightPosition.y` is 22 so the lights' centre (tao sizes their bar to
- * the close button's height plus y and centres them in it) lands on 18, where
- * they sat before the row grew to hold a brand.
+ * The title row's height: the window's drag strip, the traffic lights and the
+ * main column's header all sit on this one line. macOS gets 44 so the controls
+ * clear the window's top edge; Windows and Linux keep 36. The lights' centre
+ * is (close button height 14 + `trafficLightPosition.y`) / 2 (tao sizes their
+ * bar to that and centres them in it), so y 30 puts it on 22, the row's centre.
+ * Read from the user agent: it is needed at import, before `data-platform` is set.
  */
-export const TITLEBAR_HEIGHT = 36;
+export const TITLEBAR_HEIGHT = currentPlatform() === "mac" ? 44 : 36;
 
 let fullscreen = false;
 const listeners = new Set<(v: boolean) => void>();

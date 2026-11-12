@@ -630,8 +630,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   action), not to repeat what the screen already shows (no pin, archive,
   theme, harness-switch or steering notice); an error about a thread's turn
   stays an error card over the composer. No banners.
-- **Title row:** the window's title row is one 36px row with no brand in it:
-  the traffic lights (`trafficLightPosition` y 22, centred on the row) and the
+- **Title row:** the window's title row is one row (44px on macOS, 36px elsewhere) with no brand in it:
+  the traffic lights (`trafficLightPosition` x 20, y 30, centred on the row) and the
   sidebar's toggle at its trailing edge; the main column's header shares its
   height and line (`ui/Titlebar.tsx`). The app's name and version live in
   Settings › About.
