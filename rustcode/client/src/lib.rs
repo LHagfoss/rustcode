@@ -19,6 +19,8 @@
 //! - [`reconnect`]: the backoff a client waits out while a machine is away, the
 //!   route that worked last first, and the network change that cuts the wait
 //!   short.
+//! - [`connect_code`]: the connect codes another computer's owner creates
+//!   there and this computer redeems.
 //! - [`discovery`]: Bonjour, for machines that take a desktop client.
 //! - [`protocol`]: the remote protocol v1 frames this client sends, mirrored
 //!   against the committed contract in `docs/remote-protocol/v1`.
@@ -27,6 +29,7 @@
 //! line both link it, and the engine links neither.
 
 pub mod config;
+pub mod connect_code;
 pub mod discovery;
 pub mod machine;
 pub mod protocol;
@@ -36,10 +39,12 @@ pub mod routes;
 pub mod tokens;
 pub mod transport;
 
+pub use connect_code::ConnectCode;
 pub use discovery::{DiscoveredMachine, SERVICE_TYPE, browse, browse_async};
 pub use machine::{
-    Approved, Ask, ClientKind, Connector, Identity, Paired, Refusal, Session, Unreachable, Welcome,
-    machine_from_pairing, platform,
+    Approved, Ask, ClientKind, Connector, Identity, NotThisMachine, Paired, PairingLost,
+    PairingLostReason, Refusal, Session, Unreachable, Welcome, machine_from_pairing,
+    needs_new_pairing, platform,
 };
 pub use protocol::{
     AcpClientFrame, AcpServerFrame, CAPABILITY_TOKEN_ROTATION, ErrorCode, HandshakeRequest,

@@ -10,6 +10,7 @@ describe("remote access", () => {
       stop: "_rustcode/remote/stop",
       answer: "_rustcode/remote/answer",
       revoke: "_rustcode/remote/revoke",
+      connectCode: "_rustcode/remote/connect_code",
     });
   });
 

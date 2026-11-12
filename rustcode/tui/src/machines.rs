@@ -1,7 +1,8 @@
 //! `rustcode machines`: the other computers this one is paired with.
 //!
-//! Pairing is ask-to-connect: this end asks, the person at the other machine
-//! accepts and reads an eight-digit code off it, this end types that code.
+//! Pairing is either a connect code (`code` there, `connect <code>` here: no
+//! accept step), or ask-to-connect: this end asks, the person at the other
+//! machine accepts and reads an eight-digit code off it, this end types it.
 //! The token that comes back goes in the operating system credential store
 //! and the machine goes into `machines.json`; see the `rustcode-client` crate.
 
@@ -80,6 +81,14 @@ pub async fn run(command: &MachineCommands) -> Result<()> {
             )
             .await
         }
+        MachineCommands::Code { link, json, cancel } => {
+            create_code(&config_dir, *link, *json, *cancel).await
+        }
+        MachineCommands::Connect {
+            code,
+            address,
+            name,
+        } => connect_code(&config_dir, code, address.as_deref(), name.clone()).await,
         MachineCommands::Remove { machine } => remove(&config_dir, machine),
         MachineCommands::Discover { secs, json } => {
             discover(Duration::from_secs(*secs), *json).await
@@ -332,6 +341,14 @@ async fn add(
     from_discovery: bool,
     discover_for: Duration,
 ) -> Result<()> {
+    // A connect code where an address was expected: pair with it instead of
+    // asking, as `rustcode machines connect` does.
+    if let Some(given) = address
+        && code.is_none()
+        && rustcode_client::connect_code::looks_like_code(given)
+    {
+        return connect_code(config_dir, given, None, name).await;
+    }
     let address = match (address, from_discovery) {
         (Some(address), false) => address.to_owned(),
         (None, true) => pick_discovered(discover_for).await?,
@@ -393,6 +410,142 @@ async fn add(
         return Err(error).context("the machine is paired but could not be saved");
     }
     // Pairing is a successful connection; `list` shows when it happened.
+    registry.mark_connected(
+        &machine.host_id,
+        &machine.routes[0].address,
+        chrono::Utc::now(),
+    )?;
+    println!(
+        "Paired with {} ({}). Saved as \"{}\"; `rustcode machines list` shows it.",
+        welcome.machine_name(),
+        machine.host_id,
+        machine.name
+    );
+    Ok(())
+}
+
+/// Create a connect code on this computer, switching remote access on as
+/// `rustcode remote pair` does, and print it.
+async fn create_code(
+    config_dir: &std::path::Path,
+    link_only: bool,
+    json: bool,
+    cancel: bool,
+) -> Result<()> {
+    let lifecycle = rustcode::remote_gateway::lifecycle::RemoteLifecycle::new(config_dir);
+    if cancel {
+        let was_open = lifecycle.cancel_machine_offer().await?;
+        println!(
+            "{}",
+            if was_open {
+                "The connect code was withdrawn."
+            } else {
+                "No connect code was open."
+            }
+        );
+        return Ok(());
+    }
+    rustcode::remote_gateway::service::enable_for_host()
+        .await
+        .context("could not start remote access on this computer")?;
+    let offer = lifecycle.machine_offer().await?;
+    if link_only {
+        println!("{}", offer.link.expose());
+        return Ok(());
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "code": offer.code.expose(),
+                "link": offer.link.expose(),
+                "address": offer.address,
+                "address_in_code": offer.address_in_code,
+                "gateway_id": offer.gateway_id,
+                "host_name": offer.host_name,
+                "routes": offer.routes,
+                "expires_in_secs": offer.expires_in_secs,
+                "loopback_only": offer.loopback_only,
+            }))?
+        );
+        return Ok(());
+    }
+    print!("{}", code_text(&offer));
+    Ok(())
+}
+
+/// What `rustcode machines code` prints for a person.
+fn code_text(offer: &rustcode::remote_gateway::control::MachineOfferDetails) -> String {
+    let minutes = offer.expires_in_secs.div_ceil(60);
+    let mut text = format!(
+        "Connect code{}: {}\n\n",
+        offer
+            .host_name
+            .as_deref()
+            .map(|name| format!(" for {name}"))
+            .unwrap_or_default(),
+        offer.code.expose()
+    );
+    text.push_str(&format!(
+        "Works once, for {minutes} minutes. Anyone who has it can see and run all threads on this computer.\n"
+    ));
+    if offer.loopback_only {
+        text.push_str(
+            "Remote access listens on this computer only, so no other computer can use it; set `remote.bind` and restart the gateway.\n",
+        );
+    }
+    if offer.address_in_code {
+        text.push_str(&format!(
+            "\nOn the other computer:\n  rustcode machines connect {}\n",
+            offer.code.expose()
+        ));
+    } else {
+        text.push_str(&format!(
+            "\nThe code carries no address. On the other computer:\n  rustcode machines connect {} --address {}\n",
+            offer.code.expose(),
+            offer.address
+        ));
+    }
+    text.push_str(&format!(
+        "\nOr paste the link, which carries every address this computer answers on:\n  {}\n",
+        offer.link.expose()
+    ));
+    text.push_str("\nWithdraw it with `rustcode machines code --cancel`.\n");
+    text
+}
+
+/// Pair with a connect code created on another computer, and save it.
+async fn connect_code(
+    config_dir: &std::path::Path,
+    code: &str,
+    address: Option<&str>,
+    name: Option<String>,
+) -> Result<()> {
+    let code = rustcode_client::connect_code::parse(code)?;
+    let connector = Connector::new(config_dir, ClientKind::Desktop)?;
+    // The credential store before the machine: a store that cannot answer
+    // must stop here, not after the code was spent (#3325).
+    let tokens = std::sync::Arc::new(
+        rustcode_client::tokens::open_bounded(config_dir, rustcode_client::tokens::STORE_TIMEOUT)
+            .await?,
+    );
+    let (paired, route) = connector.pair_with_code(&code, address).await?;
+    let welcome = paired.session.welcome().clone();
+    let mut machine = rustcode_client::machine_from_pairing(&welcome, route, name);
+    machine.describes = true;
+    rustcode_client::tokens::set_bounded(
+        std::sync::Arc::clone(&tokens),
+        machine.host_id.clone(),
+        paired.secret.clone(),
+        rustcode_client::tokens::STORE_TIMEOUT,
+    )
+    .await
+    .context("the machine is paired but its token could not be stored")?;
+    let mut registry = MachineRegistry::load(config_dir)?;
+    if let Err(error) = registry.insert(machine.clone()) {
+        let _ = tokens.remove(&machine.host_id);
+        return Err(error).context("the machine is paired but could not be saved");
+    }
     registry.mark_connected(
         &machine.host_id,
         &machine.routes[0].address,

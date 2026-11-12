@@ -1,0 +1,13 @@
+{
+  "type": "described",
+  "protocol_version": 1,
+  "gateway_id": "8e1f4b7a2c9d0e35",
+  "instance_id": "c03d5e7f9a1b2c4d",
+  "host_name": "Lars's MacBook Pro",
+  "version": "1.28.0",
+  "platform": "macos",
+  "capabilities": [
+    "describe",
+    "machine_codes"
+  ]
+}

@@ -2905,6 +2905,17 @@ async fn serve_connection(
         )
         .on_receive_request(
             {
+                async move |request: remote::RemoteConnectCodeRequest, responder, connection| {
+                    connection.spawn(async move {
+                        responder.respond(remote::connect_code(request.cancel).await)?;
+                        Ok(())
+                    })
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            {
                 let server = server.clone();
                 async move |request: remote::RemoteRevokeRequest, responder, connection| {
                     let server = server.clone();
