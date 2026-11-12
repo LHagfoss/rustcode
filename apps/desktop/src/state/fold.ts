@@ -193,11 +193,19 @@ function pushTurn(
     pushLiveTurn(items, from, to, rows);
     return;
   }
+  const end = items.slice(from, to).find((x) => x.kind === "turnEnd");
   if (!work.length) {
-    for (let i = from; i < to; i++) rows.push({ key: items[i]!.id, item: items[i]! });
+    // A turn that only replied still says how long it took, over its answer: a divider with
+    // nothing to open (`steps: 0`).
+    const timed = end?.kind === "turnEnd" && end.elapsedMs !== undefined ? end : undefined;
+    const at = answerFrom < to ? answerFrom : items.indexOf(end as TranscriptItem, from);
+    for (let i = from; i < to; i++) {
+      if (timed && i === at)
+        rows.push({ key: turnFoldKey(timed.id), fold: replyFold(timed, items, answerFrom, to) });
+      rows.push({ key: items[i]!.id, item: items[i]! });
+    }
     return;
   }
-  const end = items.slice(from, to).find((x) => x.kind === "turnEnd");
   const key = turnFoldKey(end?.id ?? items[work[0]!]!.id);
   const files = new Set<string>();
   let tools = 0;
@@ -232,6 +240,28 @@ function pushTurn(
   }
 }
 
+/** The divider over a turn that did nothing but reply: its time, and no steps to open. */
+function replyFold(
+  end: Extract<TranscriptItem, { kind: "turnEnd" }>,
+  items: TranscriptItem[],
+  answerFrom: number,
+  to: number,
+): TurnFold {
+  return {
+    key: turnFoldKey(end.id),
+    open: false,
+    elapsedMs: end.elapsedMs,
+    stopped: end.outcome === "cancelled",
+    failedTurn: end.outcome === "failed",
+    time: end.at,
+    answered: items.slice(answerFrom, to).some((item) => item.kind === "assistant" && !!item.text.trim()),
+    steps: 0,
+    tools: 0,
+    failed: 0,
+    files: 0,
+  };
+}
+
 /**
  * The running turn shows as it streams; `groupTools` then folds each run of
  * its finished calls into one line, so what it does now reads on its own.
@@ -242,7 +272,8 @@ function pushLiveTurn(items: TranscriptItem[], from: number, to: number, rows: F
 
 /** The divider's words: `Worked for 1m 3s`, or `You stopped after 12s`. */
 export function foldLabel(fold: TurnFold, formatDuration: (ms: number) => string): string {
-  const time = fold.elapsedMs !== undefined ? formatDuration(fold.elapsedMs) : undefined;
+  // Under a second still reads as `1s`, never `0s`.
+  const time = fold.elapsedMs !== undefined ? formatDuration(Math.max(fold.elapsedMs, 1000)) : undefined;
   if (fold.stopped) return time ? `You stopped after ${time}` : "You stopped this response";
   return time ? `Worked for ${time}` : "Worked";
 }
@@ -525,4 +556,32 @@ export function turnItemsByEnd(
     from = i + 1;
   });
   return map;
+}
+
+/**
+ * The same automatic message sent back to back (two delegates resumed after one restart, say) as
+ * one row that counts them: the first row stays, with `repeats` set to how many there were.
+ */
+export function collapseRepeats<
+  T extends { key: string; item?: TranscriptItem; inFold?: string; repeats?: number },
+>(rows: readonly T[], repeated: (item: TranscriptItem) => boolean): T[] {
+  const out: T[] = [];
+  for (const row of rows) {
+    const prev = out.at(-1);
+    if (
+      prev?.item &&
+      row.item &&
+      repeated(row.item) &&
+      repeated(prev.item) &&
+      prev.item.kind === "user" &&
+      row.item.kind === "user" &&
+      prev.item.text === row.item.text &&
+      prev.inFold === row.inFold
+    ) {
+      out[out.length - 1] = { ...prev, repeats: (prev.repeats ?? 1) + 1 };
+      continue;
+    }
+    out.push(row);
+  }
+  return out;
 }

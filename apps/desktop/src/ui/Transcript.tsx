@@ -24,6 +24,7 @@ import { type Branch, branchesOf } from "../state/branches";
 import { COLLAPSED_MESSAGE_HEIGHT, messageCollapses } from "../state/compose";
 import {
   collapseNotices,
+  collapseRepeats,
   foldEnds,
   foldTurns,
   footerChangeTurns,
@@ -90,6 +91,8 @@ import { TurnTrace } from "./TurnTrace";
 export type Row = {
   key: string;
   item?: TranscriptItem;
+  /** How many of the same automatic message this row stands for (`collapseRepeats`). */
+  repeats?: number;
   /** The running turn's header; on the moment it ends, `done` holds its check. */
   working?: { done?: boolean; elapsedMs?: number };
   /** Two or more subagents in a row, shown as one. */
@@ -473,8 +476,9 @@ export function Transcript({
     // Finished turns fold, then runs of finished tool calls inside what shows fold into one row each,
     // and the same quiet notice said back to back reads as one row with its count.
     const shown = searching ? ALL_OPEN : open;
-    const grouped: Row[] = collapseNotices(
-      groupTools(foldTurns(visible, thread.running, shown), shown),
+    const grouped: Row[] = collapseRepeats(
+      collapseNotices(groupTools(foldTurns(visible, thread.running, shown), shown)),
+      (item) => item.kind === "user" && item.text === RESUME_TEXT,
     ).filter(
       // The turn that just finished keeps its live header for a moment instead of its fold
       // divider: the header settles on a check and then becomes this divider.
@@ -741,8 +745,12 @@ export function Transcript({
   // folded to hold it (state/fold.ts, footerChangeTurns).
   const footerLines = useMemo(() => {
     const ends = thread.items.flatMap((item) => (item.kind === "turnEnd" ? [item.id] : []));
-    return new Set(footerChangeTurns(ends, { last: lastEnd, folded: foldedEnds }));
-  }, [thread.items, lastEnd, foldedEnds]);
+    // A reply-only turn's divider folds nothing away, so its footer keeps the change line.
+    const folded = new Set(foldedEnds);
+    for (const row of rows)
+      if (row.fold && !row.fold.steps) folded.delete(row.fold.key.slice("fold-".length));
+    return new Set(footerChangeTurns(ends, { last: lastEnd, folded }));
+  }, [thread.items, lastEnd, foldedEnds, rows]);
 
   // An older turn with steps draws its change line as the last row inside its own fold, so it
   // appears only when that turn is opened.
@@ -1315,6 +1323,7 @@ export function Transcript({
                         <span className="h-px flex-1 bg-border" />
                         <RotateCw size={11} />
                         Continued after a restart
+                        {(row.repeats ?? 1) > 1 && <span className="tabular">×{row.repeats}</span>}
                         <span className="h-px flex-1 bg-border" />
                       </div>
                     ) : item?.kind === "user" ? (

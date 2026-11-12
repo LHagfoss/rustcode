@@ -27,6 +27,7 @@
 // Pure (no React, no store), so the page and its tests share one answer.
 
 import type { UsageCounts, UsageRow } from "../acp/rustcode";
+import { MODEL_ALIASES } from "../lib/modelNames";
 
 /** The day the prices below were last checked against the providers' list prices. */
 export const PRICE_DATE = "2026-11-12";
@@ -73,22 +74,7 @@ const PRICES: Record<string, Price> = {
   "deepseek/deepseek-v4.1-flash": price(0.3, 0.007, 0, 1.2),
 };
 
-/**
- * A harness that records a short name for the model it ran: Claude Code's
- * `opus` and `sonnet` aliases, and the provider spelling Pi and the built-in
- * harness write.
- */
-const ALIASES: Record<string, string> = {
-  opus: "claude-opus-5-5",
-  sonnet: "claude-sonnet-5",
-  fable: "claude-fable-5-2",
-  haiku: "claude-haiku-5-5",
-  "claude-sonnet-5.5": "claude-sonnet-5-5",
-  "deepseek/flash": "deepseek/deepseek-v4.1-flash",
-  "chatgpt/gpt-6-luna": "gpt-6-luna",
-};
-
-const known = (id: string): Price | undefined => PRICES[ALIASES[id] ?? id];
+const known = (id: string): Price | undefined => PRICES[MODEL_ALIASES[id] ?? id];
 
 /**
  * The price of a model the table knows, or undefined (never zero) for one it does not. An id a
