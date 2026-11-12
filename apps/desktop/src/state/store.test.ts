@@ -59,6 +59,7 @@ import {
   fetchHarnessModels,
   forgetPlans,
   forkThread,
+  isRepairableOpenError,
   loadTotalLimit,
   localChoices,
   MAX_PANELS,
@@ -5773,5 +5774,130 @@ describe("projects and scheduled work", () => {
     expect(useApp.getState().grant?.detail).toContain("Morning build check");
     resolveGrant("once");
     expect(await running).toMatchObject({ id: "task-morning", state: "claimed" });
+  });
+});
+
+/**
+ * A mock engine whose `session/load` refuses with the cwd mismatch the first `loadFailures` times,
+ * and whose repair answers what the test sets (`repairProblems` empty: the record is put right).
+ */
+class MismatchedRecordTransport implements Transport {
+  readonly name = "mock" as const;
+  private readonly mock = new MockTransport({ delayMs: 0 });
+  private onEvent: ((event: TransportEvent) => void) | null = null;
+  readonly requests: JsonObject[] = [];
+  loadFailures = 0;
+  repairProblems: string[] = [];
+  repairFails = false;
+  target: string | undefined;
+
+  async start(onEvent: (event: TransportEvent) => void): Promise<void> {
+    this.onEvent = onEvent;
+    await this.mock.start(onEvent);
+  }
+
+  send(line: string): void {
+    const request = JSON.parse(line) as JsonObject;
+    this.requests.push(request);
+    const params = request.params as JsonObject | undefined;
+    const reply = (body: JsonObject) =>
+      queueMicrotask(() =>
+        this.onEvent?.({ type: "line", line: JSON.stringify({ jsonrpc: "2.0", id: request.id, ...body }) }),
+      );
+    if (request.method === Method.sessionLoad && params?.sessionId === this.target && this.loadFailures > 0) {
+      this.loadFailures -= 1;
+      reply({
+        error: {
+          code: -32602,
+          message: "Invalid params",
+          data: "session/load cwd does not match the recorded workspace",
+        },
+      });
+      return;
+    }
+    if (request.method === Method.sessionRepair && params?.sessionId === this.target) {
+      if (this.repairFails) reply({ error: { code: -32603, message: "repair broke" } });
+      else reply({ result: { cwd: "/Users/you/code/rustcode", fixed: [], problems: this.repairProblems } });
+      return;
+    }
+    this.mock.send(line);
+  }
+
+  count(method: string): number {
+    return this.requests.filter((r) => r.method === method && (r.params as JsonObject)?.sessionId === this.target)
+      .length;
+  }
+
+  async restart(): Promise<void> {
+    await this.mock.restart();
+  }
+
+  async stop(): Promise<void> {
+    await this.mock.stop();
+  }
+}
+
+describe("a thread whose record names another folder", () => {
+  async function ready(configure: (transport: MismatchedRecordTransport) => void) {
+    const transport = new MismatchedRecordTransport();
+    configure(transport);
+    await connect(transport);
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessions.length > 1);
+    const target = useApp.getState().sessions.find((x) => x.id !== useApp.getState().selectedId)!.id;
+    transport.target = target;
+    return { transport, target };
+  }
+
+  test("is repaired and opened again, with no banner", async () => {
+    const { transport, target } = await ready((t) => (t.loadFailures = 1));
+    expect(await openThread(target)).toBeNull();
+    const thread = useApp.getState().threads[target];
+    expect(thread?.loaded).toBe(true);
+    expect(thread?.openFailed).toBeUndefined();
+    expect(thread?.error).toBeUndefined();
+    expect(transport.count(Method.sessionRepair)).toBe(1);
+    expect(transport.count(Method.sessionLoad)).toBe(2);
+  });
+
+  test("shows the banner when the repair reports problems", async () => {
+    const { transport, target } = await ready((t) => {
+      t.loadFailures = 1;
+      t.repairProblems = ["The folder /gone no longer exists. Move the thread to another folder."];
+    });
+    const message = await openThread(target);
+    expect(message).toContain("Could not open this thread");
+    expect(useApp.getState().threads[target]?.openFailed).toBe(true);
+    expect(transport.count(Method.sessionLoad)).toBe(1);
+  });
+
+  test("shows the banner when the repair itself fails", async () => {
+    const { transport, target } = await ready((t) => {
+      t.loadFailures = 1;
+      t.repairFails = true;
+    });
+    expect(await openThread(target)).toContain("Could not open this thread");
+    expect(transport.count(Method.sessionRepair)).toBe(1);
+  });
+
+  test("shows the banner when the open fails again after the repair, and tries no second repair", async () => {
+    const { transport, target } = await ready((t) => (t.loadFailures = 3));
+    expect(await openThread(target)).toContain("Could not open this thread");
+    expect(useApp.getState().threads[target]?.openFailed).toBe(true);
+    expect(transport.count(Method.sessionRepair)).toBe(1);
+    expect(transport.count(Method.sessionLoad)).toBe(2);
+    // Opening it again (the user picks the thread once more) fails without another automatic repair.
+    expect(await openThread(target)).toContain("Could not open this thread");
+    expect(transport.count(Method.sessionRepair)).toBe(1);
+    expect(transport.count(Method.sessionLoad)).toBe(3);
+  });
+
+  test("an unrelated failure is not repaired", async () => {
+    const { transport, target } = await ready(() => {});
+    expect(isRepairableOpenError(new Error("engine restarting"))).toBe(false);
+    expect(isRepairableOpenError(new Error("session/load cwd does not match the recorded workspace"))).toBe(
+      true,
+    );
+    expect(await openThread(target)).toBeNull();
+    expect(transport.count(Method.sessionRepair)).toBe(0);
   });
 });
