@@ -184,3 +184,23 @@ export function liveSubagents(
   }
   return out;
 }
+
+/**
+ * A sidebar row's delegate count: the running delegates and subagents as a number and the tooltip
+ * that names them (`2 delegates working: Fix login, Add tests`). Only what works or waits on the
+ * user counts, like the stack; a delegate with no title is named by its harness. Undefined when
+ * nothing runs, so the row draws nothing.
+ */
+export function delegateCount(
+  agents: readonly StackAgent[] | undefined,
+  harnessName: (id: string) => string = (id) => id,
+): { count: number; title: string } | undefined {
+  const { order, needs } = agentStack(agents ?? []);
+  if (!order.length) return undefined;
+  const names = order.map(
+    (agent) => agent.label?.trim() || (agent.harness ? harnessName(agent.harness) : "Thread"),
+  );
+  const noun = order.length === 1 ? "delegate" : "delegates";
+  const state = needs ? ` (${needs} ${needs === 1 ? "needs" : "need"} you)` : "";
+  return { count: order.length, title: `${order.length} ${noun} working${state}: ${names.join(", ")}` };
+}

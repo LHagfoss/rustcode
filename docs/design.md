@@ -697,10 +697,12 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   Line 2 (`text-sub`, `fg-muted`): the project's 14px mark and name (under a
   project heading, the harness instead) and the computer it runs on — another
   computer always, this one too once a machine is paired; at the right, the
-  diff (`+N −N` in `success`/`danger`) and the pull request's mark.
+  diff (`+N −N` in `success`/`danger`) and the pull request's mark, led by the
+  count of running delegates and subagents (a 11px bot and the number, muted,
+  with the list in its tooltip; `delegateCount` in `state/agentStack.ts`).
   Line 3: the branch, or what the thread asks of you in
   `warning` in its place (`in <parent title>` for a delegated row drawn on its
-  own); at the right, the model and harness mark, or the stack of delegates;
+  own); at the right, always the harness mark and the model;
   renaming edits the title in place at the row's height. A line with
   nothing to say stays empty rather than collapsing, so the height never
   changes. Counts are shown only for a thread the app has already read.
@@ -719,8 +721,8 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   by the row `session/new` adds), so a thread being spawned never shows as a
   row of its own in between. The tree is resolved against every session, so a
   project filter or a search never turns a delegate into a top-level row. Its
-  parent's second line ends with a stack of at most three 16px circles
-  (`ui/AgentStack.tsx`), each with a 1.5px ring in the sidebar's surface so the
+  parent's second line counts them (see Line 2); a group card in the chat draws a stack of at
+  most three 16px circles (`ui/AgentStack.tsx`), each with a 1.5px ring in the sidebar's surface so the
   overlapping marks stay apart, the harness glyph filling 60% of the circle,
   the circles overlapping by 30% of the diameter, then `+N` past the third.
   A mark never spins: the row's one spinner is in its trailing slot, so the
