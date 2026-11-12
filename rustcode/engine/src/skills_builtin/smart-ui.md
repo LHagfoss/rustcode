@@ -11,8 +11,12 @@ keywords: interactive, widget, component, html, chart, slider, filter, sort, tog
 
 Default to a view for anything structured: a table, comparison, breakdown,
 status overview, plan, numbers, a chart or a dashboard, asked or not. Prose, a
-single fact, a few bullets, code and diffs stay Markdown. Put the finding in a
-sentence before the view. A report to another thread stays plain Markdown.
+single fact, a few bullets, code and diffs stay Markdown. A report to another
+thread stays plain Markdown.
+
+Around the view: one short line before it with the finding, nothing after it.
+Caveats go in the view (`.rc-callout`, `.rc-muted`); sources go last in it,
+folded (Kit › Sources), never as a Markdown list after it.
 
 Pick by question: a trend over time → line chart; parts of a whole → stacked
 bar or donut; a ranking → `.rc-bars`; exact values the user will scan → a table
@@ -31,7 +35,7 @@ hovering a column shows that column.
 ````
 
 `<title>` labels the view; do not repeat it. Optional inline `<script>`, data
-embedded. No network, imports, storage or navigation. Limits: 64 KB, 5,000
+embedded. No network, imports or storage; a link opens in the browser, never in the view. Limits: 64 KB, 5,000
 elements. The app draws it as it streams: lead with the part worth reading.
 
 ## Theme
@@ -67,6 +71,7 @@ so leave out margins. A `.rc-card` is already a card: never nest one.
   An item is a label row with an optional trailing value and may carry a description block (`div` or `p`).
   `<ul class="rc-list"><li class="rc-item"><span>Name</span><span class="rc-badge rc-ok">Ready</span></li></ul>`
 - Plans: `<ol class="rc-steps"><li class="rc-step rc-done">Built</li></ol>`, also `rc-active rc-failed rc-todo`.
+- Sources: `<details class="rc-details rc-sources"><summary>Sources</summary><ol><li><a href="https://…">Title</a></li></ol></details>`; a link opens in the browser.
 - Folding: `<details class="rc-details"><summary>Files</summary>…</details>`,
   `.rc-tree` around nested ones, `.rc-file` rows of name and value.
 - Output: `<div class="rc-term"><div>$ cargo test</div><div class="rc-ok">ok</div></div>`

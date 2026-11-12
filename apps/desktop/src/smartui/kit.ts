@@ -30,6 +30,11 @@ export const KIT_SCRIPT = `
     }
     return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
   };
+  // The site a source link is on, without "www."; "" for anything but a web link.
+  const rcHost = (href) => {
+    const match = /^https?:\\/\\/(?:[^@/?#]*@)?([^/:?#]+)/i.exec(String(href == null ? "" : href).trim());
+    return match ? match[1].toLowerCase().replace(/^www\\./, "") : "";
+  };
   // The numbers in a data attribute: "1,4,2" and "1 4 2" both give [1, 4, 2].
   const rcSparkValues = (text) => String(text == null ? "" : text)
     .split(/[\\s,]+/)
@@ -55,9 +60,12 @@ export const KIT_SCRIPT = `
 
 /** The helpers in [`KIT_SCRIPT`], for the tests that exercise them directly. */
 export function kitHelpers() {
-  return new Function(`${KIT_SCRIPT}; return { rcMeasure, rcCompare, rcSparkValues, rcSparkPoints };`)() as {
+  return new Function(
+    `${KIT_SCRIPT}; return { rcMeasure, rcCompare, rcHost, rcSparkValues, rcSparkPoints };`,
+  )() as {
     rcMeasure: (text: string) => { value: number; unit: string } | null;
     rcCompare: (a: string, b: string, kind: "number" | "text") => number;
+    rcHost: (href: string | null) => string;
     rcSparkValues: (text: string) => number[];
     rcSparkPoints: (values: number[], width: number, height: number) => string;
   };

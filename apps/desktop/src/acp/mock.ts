@@ -4947,7 +4947,7 @@ export const MOCK_KIT = [
  * sparkline and a table that sorts on a heading click. No CSS of its own.
  */
 export const MOCK_CHARTS = [
-  "Failures fell to zero after Thursday's fixture fix; here is the week, and the suites ranked.\n\n",
+  "Failures fell to zero after Thursday's fixture fix.\n\n",
   "```rustcode-ui v1\n",
   "<title>Failures this week</title>\n",
   '<p class="rc-lead">Failures fell to zero after Thursday\'s fixture fix.</p>\n',
@@ -4989,6 +4989,10 @@ export const MOCK_CHARTS = [
   "new Chart(canvases[1], { type: 'doughnut', data: { labels: ['engine','desktop','auth','core'],\n",
   "  datasets: [{ label: 'Runs', data: [64,38,19,7] }] }, options: { plugins: { legend: { display: false } } } });\n",
   "</script>\n",
+  '<details class="rc-details rc-sources"><summary>Sources</summary><ol>\n',
+  '  <li><a href="https://github.com/LHagfoss/rustcode/actions">CI runs, this week</a></li>\n',
+  '  <li><a href="https://www.example.com/flaky-tests">Flaky test triage notes</a></li>\n',
+  "</ol></details>\n",
   "```\n",
 ];
 

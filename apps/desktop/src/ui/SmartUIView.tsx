@@ -7,6 +7,7 @@ import { Check, Code, Copy, Play, Square } from "lucide-react";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { isTauri } from "../acp/transport";
 import { KEYBOARD_NAV } from "../lib/focusModality";
+import { openExternal } from "../lib/native";
 import { shellCall } from "../lib/shell";
 import { cssVar, isDark, onAppThemeChange } from "../lib/theme";
 import { chartSource } from "../smartui/chart";
@@ -343,6 +344,7 @@ export function SmartUIView({
   useEffect(() => {
     if (!page) return;
     const gate = new SendGate();
+    const links = new SendGate(1000);
     let lastSign = Date.now();
     let loaded = false;
     const onMessage = (event: MessageEvent) => {
@@ -376,7 +378,8 @@ export function SmartUIView({
             haltWith(`The view built more than ${MAX_ELEMENTS.toLocaleString()} elements.`);
           else {
             // A hover overlay may have moved the content; a click or key may open a panel.
-            const interacted = navigator.userActivation?.isActive ?? false;
+            // The page says when it was pressed: an arrow key on a tab grants the app no activation.
+            const interacted = data.interacted === true || (navigator.userActivation?.isActive ?? false);
             const next = sizeGate().measure(measured, interacted);
             if (next !== null) {
               rememberHeight(source, next);
@@ -399,6 +402,17 @@ export function SmartUIView({
             return;
           }
           sendFromView(threadId, text);
+          break;
+        }
+        case "open": {
+          // A link in the view (a source, a reference) opens in the browser: only a web or
+          // mail address, only from a real click on this view, at most one a second.
+          const gesture =
+            (navigator.userActivation ? navigator.userActivation.isActive : true) &&
+            document.activeElement === frame.current;
+          const url = typeof data.url === "string" ? data.url.trim() : "";
+          if (!gesture || !/^(https?:\/\/|mailto:)/i.test(url) || !links.allow()) return;
+          openExternal(url);
           break;
         }
         case "copy":

@@ -258,6 +258,15 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 .rc-details > :not(summary) { margin-bottom: 8px; }
 .rc-tree .rc-details { border-bottom: 0; }
 .rc-tree .rc-details > :not(summary) { margin: 0 0 0 5px; padding-left: 12px; border-left: 1px solid var(--rc-separator); }
+.rc-sources { border-bottom: 0; font-size: var(--rc-text-size-sm); }
+.rc-sources > summary { padding: 4px 0; color: var(--rc-muted); }
+.rc-sources > summary:hover, .rc-sources[open] > summary { color: var(--rc-text); }
+.rc-details.rc-sources > summary > .rc-sources-count { margin-left: 0; font-size: var(--rc-text-size-xs); color: var(--rc-faint); font-variant-numeric: tabular-nums; }
+.rc-sources :is(ol, ul) { display: grid; gap: 3px; margin: 0 0 4px; padding-left: 22px; color: var(--rc-muted); }
+.rc-sources li::marker { font-variant-numeric: tabular-nums; }
+.rc-sources a { text-decoration: none; overflow-wrap: anywhere; }
+.rc-sources a:hover { text-decoration: underline; }
+.rc-sources-host { margin-left: 6px; font-size: var(--rc-text-size-xs); color: var(--rc-faint); }
 .rc-file { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; font: var(--rc-text-size-sm)/18px var(--rc-mono); }
 .rc-file > :last-child:not(:first-child) { flex: none; color: var(--rc-muted); }
 
@@ -350,6 +359,13 @@ export function runtimeScript(token: string, theme: PageTheme): string {
   const pointer = () => setKeyboardNav(false);
   window.addEventListener("pointerdown", pointer, true);
   window.addEventListener("mousedown", pointer, true);
+  // When the user last pressed something in this page. A size that changes right after
+  // (a tab, a fold, a sort) is the user's doing and applies at once, even with the pointer
+  // inside; an arrow key that switches a tab grants no user activation the app could see.
+  let gestureAt = -Infinity;
+  const gesture = () => { gestureAt = performance.now(); };
+  window.addEventListener("pointerdown", gesture, true);
+  window.addEventListener("keydown", gesture, true);
   // The content, not the document: the root holds what the view wrote, in flow, and a
   // hover overlay (a tip, a bar's label) is placed out of it, so revealing one never
   // changes the size the app reserves (issue 3304).
@@ -369,7 +385,10 @@ export function runtimeScript(token: string, theme: PageTheme): string {
     const height = contentHeight();
     const elements = document.getElementsByTagName("*").length;
     const next = height + ":" + elements;
-    if (next !== last) { last = next; post({ type: "size", height, elements }); }
+    if (next !== last) {
+      last = next;
+      post({ type: "size", height, elements, interacted: performance.now() - gestureAt < 1000 });
+    }
   };
   // A heartbeat, so the app can tell a busy loop from a quiet page.
   setInterval(() => { post({ type: "alive" }); report(); }, 500);
@@ -385,6 +404,15 @@ export function runtimeScript(token: string, theme: PageTheme): string {
   document.addEventListener("pointerover", () => setHovering(true), true);
   document.addEventListener("pointerout", (event) => { if (!event.relatedTarget) setHovering(false); }, true);
 
+  // A chart laid out while hidden (another tab, a closed fold) measured 0 x 0. Resize it
+  // now, before the frame paints, rather than leave a blank box for Chart.js's own observer.
+  const refitCharts = (scope) => {
+    if (!window.Chart || typeof window.Chart.getChart !== "function") return;
+    for (const canvas of scope.querySelectorAll("canvas")) {
+      const chart = window.Chart.getChart(canvas);
+      if (chart) chart.resize();
+    }
+  };
   // The kit's behaviour, so a view needs no script for it (docs/smart-ui.md).
   const own = (group, selector) => Array.from(group.querySelectorAll(selector)).filter((el) => el.closest(".rc-tabs") === group);
 ${KIT_SCRIPT}
@@ -414,7 +442,10 @@ ${KIT_SCRIPT}
     }
     for (const panel of own(group, "[data-rc-panel]")) {
       panel.setAttribute("role", "tabpanel");
-      panel.hidden = panel.getAttribute("data-rc-panel") !== name;
+      const hidden = panel.getAttribute("data-rc-panel") !== name;
+      const shown = panel.hidden && !hidden;
+      panel.hidden = hidden;
+      if (shown) refitCharts(panel);
     }
     report();
   };
@@ -452,9 +483,27 @@ ${KIT_SCRIPT}
       sendForm(form, (form.getAttribute("data-rc-send") || "").trim());
     }
   });
+  // A link never navigates the frame, which would replace the view. A web or mail link
+  // asks the app to open it in the browser, only from a click.
+  const openLink = (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const link = target && target.closest("a[href]");
+    if (!link) return false;
+    event.preventDefault();
+    const href = (link.getAttribute("href") || "").trim();
+    if (event.type === "click" && /^(https?:\\/\\/|mailto:)/i.test(href)) post({ type: "open", url: href.slice(0, 2048) });
+    return true;
+  };
+  document.addEventListener("auxclick", openLink);
+  // A fold that opens or closes changes the height now, and may reveal a chart.
+  document.addEventListener("toggle", (event) => {
+    if (event.target instanceof HTMLDetailsElement && event.target.open) refitCharts(event.target);
+    report();
+  }, true);
   document.addEventListener("click", (event) => {
     const target = event.target instanceof Element ? event.target : null;
     if (!target) return;
+    if (openLink(event)) return;
     const send = target.closest("[data-rc-send]");
     // A form marked data-rc-send sends on submit (above), never on a click into it. A control
     // marked inside a form sends its own text with that form's fields.
@@ -514,6 +563,29 @@ ${KIT_SCRIPT}
     }
     for (const table of document.querySelectorAll("table.rc-table[data-rc-sort]")) {
       for (const heading of (table.tHead ? table.tHead.rows[0].cells : [])) heading.tabIndex = 0;
+    }
+    // A sources fold says how many it holds and which site each link is on.
+    for (const sources of document.querySelectorAll("details.rc-sources")) {
+      const links = sources.querySelectorAll("li a[href]");
+      const summary = sources.querySelector(":scope > summary");
+      if (summary && links.length) {
+        let count = summary.querySelector(":scope > .rc-sources-count");
+        if (!count) {
+          count = document.createElement("span");
+          count.className = "rc-sources-count";
+          summary.append(count);
+        }
+        count.textContent = String(links.length);
+      }
+      for (const link of links) {
+        if (link.nextElementSibling && link.nextElementSibling.classList.contains("rc-sources-host")) continue;
+        const host = rcHost(link.getAttribute("href"));
+        if (!host || link.textContent.trim().toLowerCase() === host) continue;
+        const label = document.createElement("span");
+        label.className = "rc-sources-host";
+        label.textContent = host;
+        link.after(label);
+      }
     }
     for (const spark of document.querySelectorAll(".rc-spark[data-values]")) {
       if (spark.firstElementChild) continue;
@@ -615,7 +687,6 @@ export const CHART_THEME_SCRIPT = `(() => {
     return gradient;
   };
   const radial = (t) => t === "pie" || t === "doughnut" || t === "polarArea";
-  const calm = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
   const paint = (chart) => {
     const s = series();
     const type = chart.config.type;
@@ -657,8 +728,9 @@ export const CHART_THEME_SCRIPT = `(() => {
     d.responsive = true;
     d.maintainAspectRatio = false;
     d.resizeDelay = 0;
-    // A second of animation in a transcript is noise; reduce motion asks for none.
-    d.animation = calm() ? false : { duration: 180 };
+    // No tweening: a hover, a legend toggle or a tab that reveals a chart answers at once.
+    // Eased tooltips and points trailed the pointer, which read as slow and jagged.
+    d.animation = false;
     // Chart.js tweens colours through interpolators keyed by type, and a gradient is
     // an object with no interpolator: the animator then throws "this._fn is not a
     // function" on its first tick and the chart never draws. Colours apply at once.

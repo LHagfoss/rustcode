@@ -5168,9 +5168,10 @@ fn harness_instructions_teach_smart_ui_from_the_setting() {
         crate::network::compaction::estimate_tokens(super::schema::SMART_UI_OFF_PROMPT_HINT),
     );
     assert!(bytes < 4_096, "{bytes} bytes");
-    // 1,983 bytes: the "pick by question" rule and the kit's chart, sparkline,
-    // sortable-table and hover pieces cost about 390 over the 1,592 it was, paid
-    // on every turn of every external thread, so it stays under 2,000.
+    // 1,998 bytes: the "pick by question" rule, the kit's chart, sparkline,
+    // sortable-table and hover pieces, and the folded-sources rule cost about
+    // 400 over the 1,592 it was, paid on every turn of every external thread,
+    // so it stays under 2,000.
     assert!(
         SMART_UI_HARNESS_HINT.len() < 2_000,
         "{}",
@@ -5243,7 +5244,8 @@ fn smart_ui_on_teaches_views_and_not_rustcode_viz() {
     for rule in [
         "Default to a view for anything structured: a table, comparison, breakdown, status overview, plan, numbers, a chart or a dashboard, asked or not.",
         "Prose, a single fact, a few bullets, code and diffs stay Markdown.",
-        "Put the finding in a sentence before the view.",
+        "Put the finding in one short line before the view and nothing after it.",
+        "Sources go last inside the view, folded: details.rc-sources > ol > li > a[href].",
         "A report to another thread stays plain Markdown.",
     ] {
         assert!(SMART_UI_PROMPT_HINT.contains(rule), "{rule}");
