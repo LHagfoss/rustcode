@@ -13,6 +13,14 @@
 //! gateway restarts, and the refresh token is what reconnects then. Nothing
 //! here writes an access token anywhere.
 //!
+//! Presenting a refresh token and storing the one that replaces it is one step
+//! across every process on this profile: the app, a CLI run and the server each
+//! hold a [`TokenStore`], and two of them presenting the same refresh token is a
+//! replay that revokes the pairing. [`TokenStore::presentation_lock`] takes an
+//! exclusive lock on `machines/<host id>.auth.lock` for that step, and re-reads
+//! the store under it, so the second process presents the token the first one
+//! stored.
+//!
 //! One keychain service holds one entry per machine per *profile*: the
 //! account is `<install id>/<host id>`, where the install id is the random
 //! identifier `machines/install-id` holds for this configuration directory.
@@ -237,6 +245,8 @@ impl fmt::Debug for Backend {
 #[derive(Debug)]
 pub struct TokenStore {
     backend: Backend,
+    /// `machines/` of this profile, where the presentation locks live.
+    locks: PathBuf,
     /// Access tokens, in memory only, keyed by `host_id`. Dropped by a new
     /// refresh token, a re-pairing and a removal, because each of those makes
     /// the access token the machine minted before it worthless.
@@ -279,6 +289,7 @@ impl TokenStore {
                 )?;
                 Ok(Self {
                     backend: Backend::Keychain { profile },
+                    locks: crate::config::machines_dir(config_dir),
                     access: std::sync::Mutex::new(BTreeMap::new()),
                 })
             }
@@ -301,6 +312,7 @@ impl TokenStore {
                 path,
                 tokens: std::sync::Mutex::new(tokens),
             },
+            locks: crate::config::machines_dir(config_dir),
             access: std::sync::Mutex::new(BTreeMap::new()),
         })
     }
@@ -377,6 +389,62 @@ impl TokenStore {
         }
     }
 
+    /// Remove the durable token of `host_id` only while it is still `presented`.
+    /// A refusal that revokes the pairing makes the token that was presented
+    /// worthless, but not a newer one another process stored meanwhile, such as
+    /// a pairing made again in the app while a CLI run was being refused.
+    pub fn remove_if_current(&self, host_id: &str, presented: &Secret) -> Result<bool> {
+        if let Backend::File { path, tokens } = &self.backend {
+            *tokens.lock().expect("token map is not poisoned") = read_tokens(path)?;
+        }
+        if self.get(host_id)?.as_ref() != Some(presented) {
+            return Ok(false);
+        }
+        self.remove(host_id)?;
+        Ok(true)
+    }
+
+    /// Take the lock that makes reading `host_id`'s token, presenting it and
+    /// storing the one that replaces it a single step across processes, then
+    /// re-read the store so what is presented is what the last holder stored.
+    ///
+    /// Waits at most `wait` for another process that holds it, without
+    /// blocking the runtime, and says so if it is still held then. The lock is
+    /// released when the returned guard is dropped, including when the future
+    /// that holds it is cancelled.
+    pub async fn presentation_lock(
+        &self,
+        host_id: &str,
+        wait: Duration,
+    ) -> Result<PresentationLock> {
+        let path = self.locks.join(lock_file_name(host_id));
+        let file = open_lock_file(&path)?;
+        let deadline = tokio::time::Instant::now() + wait;
+        loop {
+            match file.try_lock() {
+                Ok(()) => break,
+                Err(std::fs::TryLockError::WouldBlock) => {
+                    if tokio::time::Instant::now() >= deadline {
+                        bail!(
+                            "another RustCode process on this computer is still signing in to \
+                             machine {host_id}; try again in a moment"
+                        );
+                    }
+                    tokio::time::sleep(LOCK_POLL).await;
+                }
+                Err(std::fs::TryLockError::Error(error)) => {
+                    return Err(error).with_context(|| format!("lock {}", path.display()));
+                }
+            }
+        }
+        if let Backend::File { path, tokens } = &self.backend {
+            // Another process may have rotated the token since this one read
+            // the file; the keychain is read afresh on every call already.
+            *tokens.lock().expect("token map is not poisoned") = read_tokens(path)?;
+        }
+        Ok(PresentationLock { _file: file })
+    }
+
     /// The access token this process holds for `host_id`, if any. Never read
     /// from disk: it is gone after a restart, which is what the machine
     /// expects.
@@ -403,6 +471,51 @@ impl TokenStore {
             .expect("access token map is not poisoned")
             .remove(host_id);
     }
+}
+
+/// How often a held presentation lock is tried again.
+const LOCK_POLL: Duration = Duration::from_millis(25);
+
+/// The exclusive lock of one machine's token presentation, held until dropped.
+/// See [`TokenStore::presentation_lock`].
+#[derive(Debug)]
+pub struct PresentationLock {
+    _file: std::fs::File,
+}
+
+/// `<host id>.auth.lock`, with anything but ASCII letters, digits, `-` and `_`
+/// replaced so a host id can never name a path outside `machines/`.
+fn lock_file_name(host_id: &str) -> String {
+    let safe: String = host_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("{safe}.auth.lock")
+}
+
+/// Open (creating, owner-only) the lock file at `path`, in an owner-only
+/// `machines/`.
+fn open_lock_file(path: &Path) -> Result<std::fs::File> {
+    let directory = path
+        .parent()
+        .context("a presentation lock needs a parent directory")?;
+    crate::registry::create_private_directory(directory)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
+        .open(path)
+        .with_context(|| format!("open {}", path.display()))
 }
 
 fn keyring_error(action: &str, host_id: &str, error: anyhow::Error) -> anyhow::Error {
@@ -1166,5 +1279,80 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(store.get("gw-a").unwrap().unwrap().expose(), "token-a");
+    }
+
+    /// Two stores on one profile stand for two processes: the second waits for
+    /// the first's presentation and then reads the token the first stored.
+    #[tokio::test]
+    async fn a_second_process_waits_for_the_presentation_and_reads_its_token() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let app = TokenStore::in_file(dir.path()).unwrap();
+        let cli = TokenStore::in_file(dir.path()).unwrap();
+        app.set("gw-a", &Secret::new("refresh-1")).unwrap();
+
+        let held = app
+            .presentation_lock("gw-a", Duration::from_secs(1))
+            .await
+            .unwrap();
+        let error = cli
+            .presentation_lock("gw-a", Duration::from_millis(60))
+            .await
+            .expect_err("the lock is held");
+        assert!(
+            format!("{error:#}").contains("still signing in"),
+            "{error:#}"
+        );
+        // Another machine is not held up.
+        drop(
+            cli.presentation_lock("gw-b", Duration::from_millis(60))
+                .await
+                .unwrap(),
+        );
+        // The holder rotates while the other one waits.
+        let waiting = tokio::spawn(async move {
+            let _lock = cli
+                .presentation_lock("gw-a", Duration::from_secs(5))
+                .await
+                .unwrap();
+            cli.get("gw-a").unwrap().unwrap().expose().to_owned()
+        });
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        app.set("gw-a", &Secret::new("refresh-2")).unwrap();
+        drop(held);
+        assert_eq!(waiting.await.unwrap(), "refresh-2");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let lock = crate::config::machines_dir(dir.path()).join("gw-a.auth.lock");
+            let mode = std::fs::metadata(lock).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+    }
+
+    #[test]
+    fn a_lock_file_name_stays_inside_the_machines_directory() {
+        assert_eq!(lock_file_name("gw-a_1"), "gw-a_1.auth.lock");
+        assert_eq!(lock_file_name("../../etc/x"), "______etc_x.auth.lock");
+    }
+
+    /// A refusal that revokes the pairing removes the token that was refused,
+    /// never a newer one another process stored meanwhile.
+    #[test]
+    fn only_the_refused_token_is_removed() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let cli = TokenStore::in_file(dir.path()).unwrap();
+        let app = TokenStore::in_file(dir.path()).unwrap();
+        cli.set("gw-a", &Secret::new("refresh-1")).unwrap();
+        app.set("gw-a", &Secret::new("paired-again")).unwrap();
+        assert!(
+            !cli.remove_if_current("gw-a", &Secret::new("refresh-1"))
+                .unwrap()
+        );
+        assert_eq!(cli.get("gw-a").unwrap().unwrap().expose(), "paired-again");
+        assert!(
+            cli.remove_if_current("gw-a", &Secret::new("paired-again"))
+                .unwrap()
+        );
+        assert!(cli.get("gw-a").unwrap().is_none());
     }
 }
