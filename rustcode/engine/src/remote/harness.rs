@@ -1251,6 +1251,7 @@ fn project_messages(
                 elapsed_work_ms: turn.elapsed_work_ms,
                 outcome: None,
             }),
+            origin: super::projection::project_origin(message),
         })
         .collect()
 }
@@ -1565,6 +1566,50 @@ mod tests {
             !turn.can_steer,
             "a harness that does not steer is not offered"
         );
+    }
+
+    // #3516: a harness thread keeps only the text of a prompt, and the mirror
+    // says who sent it all the same.
+    #[test]
+    fn a_mirrored_prompt_says_who_sent_it() {
+        let mirror = mirror();
+        mirror.note_prompt("From thread “Ship the tree” (agent):\n\nReview the rules.");
+        mirror.note_prompt(
+            "Delegate failed: Fix the build\n\nFinished:\n\n- link_id session-1/4 · failed · “Fix the build” · Codex · session child-9\n  answer: (nothing it said came back)\n\n<!-- rustcode:wake -->",
+        );
+        mirror.note_prompt("thanks");
+        let snapshot = mirror.snapshot(&registration(), 1, &ProjectionLimits::default());
+        let origins = snapshot
+            .transcript
+            .iter()
+            .map(|message| {
+                message
+                    .origin
+                    .clone()
+                    .expect("a user message has an origin")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            origins
+                .iter()
+                .map(|origin| origin.kind.as_str())
+                .collect::<Vec<_>>(),
+            vec!["agent", "delegate", "user"]
+        );
+        assert_eq!(
+            origins[0].threads[0].title.as_deref(),
+            Some("Ship the tree")
+        );
+        assert_eq!(
+            origins[1].threads,
+            vec![crate::remote::RemoteOriginThread {
+                session_id: Some("child-9".to_owned()),
+                title: Some("Fix the build".to_owned()),
+                status: Some("failed".to_owned()),
+                link_id: Some("session-1/4".to_owned()),
+            }]
+        );
+        assert!(origins[2].threads.is_empty());
     }
 
     #[test]
