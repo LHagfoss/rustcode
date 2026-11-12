@@ -109,9 +109,11 @@ import {
   contextRow,
   type HiddenKind,
   hiddenKind,
+  isNestedKey,
   isShelf,
   keepListed,
   listedPicks,
+  nestedKey,
   nextRow,
   type OrderKey,
   type OrderRow,
@@ -121,6 +123,7 @@ import {
   type RowStatus,
   type RowStatusKind,
   rangeRows,
+  rowIdOf,
   rowKeyAction,
   rowMeta,
   rowStatus,
@@ -945,8 +948,7 @@ const ThreadRow = memo(function ThreadRow({
           >
             <button
               type="button"
-              data-row-id={session.id}
-              data-nested={nested ? "" : undefined}
+              data-row-id={nested ? nestedKey(session.id) : session.id}
               tabIndex={navActive ? 0 : -1}
               onClick={() => selectThread(session.id)}
               onDoubleClick={startRename}
@@ -2212,11 +2214,13 @@ export function Sidebar() {
     // sub-rows, because the list draws them.
     const toOrder = (items: SessionSummary[]): OrderRow[] => {
       const rows: OrderRow[] = [];
-      const add = (s: SessionSummary, depth: number) => {
-        rows.push({ id: s.id });
+      const add = (s: SessionSummary, depth: number, nested = false) => {
+        // A delegate on another machine is drawn here and in its machine's group: this copy has a
+        // key of its own, so the keyboard and the tab stop know which of the two they are on.
+        rows.push({ id: nested && remoteDelegates.has(s.id) ? nestedKey(s.id) : s.id });
         const sub = subOf.get(s.id);
         const child = sub && depth < 8 ? byId.get(sub.id) : undefined;
-        if (child) add(child, depth + 1);
+        if (child) add(child, depth + 1, true);
         if (depth === 0) for (const kid of branchesUnder(s.id).rows) rows.push({ id: kid.session.id });
       };
       for (const s of items) add(s, 0);
@@ -2266,16 +2270,13 @@ export function Sidebar() {
   useEffect(() => {
     if (!openRemote) return;
     const frame = requestAnimationFrame(() => {
-      const nested = list.current?.querySelector<HTMLElement>(
-        `[data-row-id="${CSS.escape(openRemote)}"][data-nested]`,
-      );
-      (nested ?? rowElement(openRemote))?.scrollIntoView({ block: "nearest" });
+      (rowElement(nestedKey(openRemote)) ?? rowElement(openRemote))?.scrollIntoView({ block: "nearest" });
     });
     return () => cancelAnimationFrame(frame);
   }, [openRemote]);
 
   useEffect(() => {
-    setPicked((prev) => (prev.size ? keepListed(prev, orderIds) : prev));
+    setPicked((prev) => (prev.size ? keepListed(prev, orderIds.map(rowIdOf)) : prev));
   }, [orderIds]);
 
   const pickedSessions = useMemo(() => listedPicks(sessions, picked), [sessions, picked]);
@@ -2303,7 +2304,7 @@ export function Sidebar() {
     // The pending row has no thread yet: there is nothing to pin or settle, as a click and the
     // row's own menu already know.
     if (pending && focused === pending.id) return;
-    const ids = pickedSessions.length > 1 ? pickedSessions.map((s) => s.id) : [focused];
+    const ids = pickedSessions.length > 1 ? pickedSessions.map((s) => s.id) : [rowIdOf(focused)];
     if (command === "pin-thread") {
       // The same rule as the selection bar's button: unpin when every row is pinned, else pin.
       const wasPinned = ids.filter((id) => pinned.includes(id));
@@ -2358,7 +2359,8 @@ export function Sidebar() {
     if (!editable && e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
       if (!target?.closest("[data-row-id]") || !currentId) return;
       e.preventDefault();
-      moveRow(currentId, e.key === "ArrowUp" ? -1 : 1);
+      // The copy under a parent has no place of its own in a list to arrange.
+      if (!isNestedKey(currentId)) moveRow(currentId, e.key === "ArrowUp" ? -1 : 1);
       return;
     }
     const action = rowKeyAction({
@@ -2385,7 +2387,7 @@ export function Sidebar() {
       return;
     }
     if (action?.kind === "open") {
-      if (currentId) selectThread(currentId);
+      if (currentId) selectThread(rowIdOf(currentId));
       clearSelection();
       return;
     }
@@ -2404,34 +2406,37 @@ export function Sidebar() {
   // ⌘-click toggles a row, ⇧-click takes the range from the last row clicked, and a plain click
   // opens the thread and lets the selection go (the row's own onClick does the opening).
   const onListClick = (e: React.MouseEvent) => {
-    const id = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-row-id]")?.dataset.rowId;
-    if (!id) return;
+    const key = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-row-id]")?.dataset.rowId;
+    if (!key) return;
+    // What is picked is the thread, whichever of its rows was clicked; the keyboard and the range
+    // anchor stay on the row.
+    const id = rowIdOf(key);
     // The pending row has no session to pin, settle or rename: it opens, and never joins a bulk pick.
     if (pending && id === pending.id) {
       if (primaryModifier(e) || e.shiftKey) {
         e.preventDefault();
         e.stopPropagation();
       }
-      setActiveId(id);
-      anchor.current = id;
+      setActiveId(key);
+      anchor.current = key;
       clearSelection();
       return;
     }
     const mod = primaryModifier(e);
     if (!mod && !e.shiftKey) {
-      setActiveId(id);
-      anchor.current = id;
+      setActiveId(key);
+      anchor.current = key;
       clearSelection();
       return;
     }
     e.preventDefault();
     e.stopPropagation();
-    setActiveId(id);
+    setActiveId(key);
     if (e.shiftKey) {
-      setPicked(new Set(rangeRows(orderIds, anchor.current ?? id, id)));
+      setPicked(new Set(rangeRows(orderIds, anchor.current ?? key, key).map(rowIdOf)));
       return;
     }
-    anchor.current = id;
+    anchor.current = key;
     setPicked((prev) => {
       const next = new Set(prev);
       if (!next.delete(id)) next.add(id);
@@ -2493,7 +2498,7 @@ export function Sidebar() {
       hint={hint ? hintFor(s) : undefined}
       onHint={hint ? openParent(s) : undefined}
       agents={stacks.get(s.id)}
-      navActive={s.id === currentId}
+      navActive={(nested && remoteDelegates.has(s.id) ? nestedKey(s.id) : s.id) === currentId}
       picked={picked.has(s.id)}
       bulk={picked.size > 1 && picked.has(s.id) ? pickedSessions : undefined}
       pinKey={pinKey}
