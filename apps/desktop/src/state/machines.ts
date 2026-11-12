@@ -13,13 +13,23 @@
 // what runs on it (docs/terminology.md).
 
 import { create } from "zustand";
-import { AcpConnection, obj, str } from "../acp/jsonrpc";
+import { AcpConnection, type JsonObject, obj, str } from "../acp/jsonrpc";
 import { isTauri, MachineTransport } from "../acp/transport";
-import { parseSessionList, type SessionSummary } from "../acp/types";
+import { initializeParams, Method, parseSessionList, type SessionSummary } from "../acp/types";
 import { currentPlatform } from "../lib/platform";
 import { hasShell, shellCall } from "../lib/shell";
 import { appVersion } from "../lib/updater";
-import { askConfirm, toast } from "./store";
+import {
+  APP_VERSION,
+  askConfirm,
+  deferAnnouncement,
+  isTombstoned,
+  keptUnlisted,
+  settleKeptUnlisted,
+  toast,
+  tombstoneThread,
+} from "./store";
+import { splitThreadKey, threadKey } from "./threadKeys";
 import { compareVersions } from "./updates";
 
 /** Where a machine stands, as the shell reports it. */
@@ -424,6 +434,24 @@ export function offlineSinceLabel(at: number | undefined): string | undefined {
   return new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
+/**
+ * Whether a machine that is away is already on its supervisor's retry clock.
+ * The app reconnects on its own with backoff (PR 3506), so its state is
+ * "reconnecting", not a failure the user has to act on (issue 3487).
+ */
+export function machineReconnecting(
+  machine: Pick<Machine, "state" | "retryInSecs"> | null | undefined,
+): boolean {
+  return machine?.state === "offline" && !!machine.retryInSecs;
+}
+
+/** The same, for the machine a thread runs on, as its key's host (`state/threadKeys.ts`). */
+export function useMachineReconnecting(host: string | null | undefined): boolean {
+  return useMachines((state) =>
+    machineReconnecting(host ? state.machines.find((entry) => entry.id === host) : undefined),
+  );
+}
+
 /** The words a row's state chip uses. */
 export function stateLabel(machine: Pick<Machine, "state" | "retryInSecs">): string {
   switch (machine.state) {
@@ -434,21 +462,21 @@ export function stateLabel(machine: Pick<Machine, "state" | "retryInSecs">): str
     case "needsPairing":
       return "Needs pairing";
     case "offline":
-      return machine.retryInSecs ? `Offline · retrying in ${machine.retryInSecs} s` : "Offline";
+      return machineReconnecting(machine) ? "Reconnecting…" : "Offline";
     case "stopped":
       return "Not connected";
   }
 }
 
-/** The chip's tone for a state: green while connected, amber while it is not. */
-export function stateTone(machine: Pick<Machine, "state">): "ok" | "warn" | "bad" | "idle" {
+/** The chip's tone for a state: `ok` while connected, `warn` once it has given up retrying by itself. */
+export function stateTone(machine: Pick<Machine, "state" | "retryInSecs">): "ok" | "warn" | "bad" | "idle" {
   switch (machine.state) {
     case "connected":
       return "ok";
     case "connecting":
       return "idle";
     case "offline":
-      return "warn";
+      return machineReconnecting(machine) ? "idle" : "warn";
     case "needsPairing":
       return "bad";
     case "stopped":
@@ -501,7 +529,10 @@ export function machineLine(machine: Machine): string {
     case "needsPairing":
       return machine.detail ?? "This machine no longer accepts this computer's pairing. Pair it again.";
     case "offline":
-      return machine.detail ?? "Not connected. The app keeps trying.";
+      return (
+        machine.detail ??
+        (machineReconnecting(machine) ? "Trying again. The app keeps reconnecting." : "Not connected.")
+      );
     case "stopped":
       return "Not connected.";
   }
@@ -700,14 +731,51 @@ export function newAskId(): string {
 }
 
 /**
+ * The waits between first-read attempts at app start: 1, 2, 4, 8, 16 and 30
+ * seconds, then the app stops trying and the Machines page reads again when it
+ * is opened. The same doubling idea the supervisors use, bounded to a start.
+ */
+export const START_RETRY_WAITS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
+
+/** The app's own wait; a test passes one that does not sleep. */
+async function waitMs(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Read until the shell answers: `read` says whether it did, and is called once,
+ * then again after each of `START_RETRY_WAITS_MS`. Answers at the first truthy
+ * read, so a shell that is up at once costs no wait.
+ */
+export async function readUntilAnswering(
+  read: () => Promise<boolean>,
+  wait: (ms: number) => Promise<void> = waitMs,
+): Promise<void> {
+  if (await read()) return;
+  for (const ms of START_RETRY_WAITS_MS) {
+    await wait(ms);
+    if (await read()) return;
+  }
+}
+
+/**
  * Read the saved machines once, then let each one's supervisor reach the app.
  * Called when the app starts; a machine saved later is picked up by
  * `refreshMachines`.
+ *
+ * The first read can fail while the shell is still coming up (the registry
+ * being written, a config folder that is not there yet). Giving up there would
+ * leave every paired machine without a supervisor until a page asked, which is
+ * how a machine stayed away after an app update: try again instead, and stop as
+ * soon as one read answers.
  */
 export async function startMachines(): Promise<void> {
   if (started || !hasShell()) return;
   started = true;
-  await refreshMachines();
+  await readUntilAnswering(async () => {
+    await refreshMachines();
+    return !useMachines.getState().error;
+  });
 }
 
 /** Read the machines and their live state from the shell. */
@@ -744,6 +812,63 @@ export async function refreshMachines(): Promise<void> {
 }
 
 /**
+ * A thread a client just made on a machine (`_rustcode/threads/created`). The machine's server
+ * owns its threads, so its list gains the row before any `session/list`: every window drawing
+ * that machine shows it at once (docs/desktop.md › Several machines). The row itself is kept by
+ * the store's one keep-unlisted set (`state/store.ts`), which a later read merges too.
+ */
+function rememberCreated(machine: string, params: JsonObject): void {
+  const id = str(params.sessionId);
+  const cwd = str(params.cwd);
+  if (!id || !cwd) return;
+  // While this window has a `session/new` out, the creation says which thread is its own.
+  if (deferAnnouncement(threadKey(machine, id), () => rememberCreated(machine, params))) return;
+  // A thread trashed a moment ago is not made again by a late announcement.
+  if (isTombstoned(threadKey(machine, id))) return;
+  useMachines.setState((state) => {
+    const listed = state.sessions[machine] ?? [];
+    // The client that asked for it may have listed it already, through its own `session/new`.
+    if (listed.some((session) => session.id === id)) return {};
+    const summary: SessionSummary = {
+      id,
+      cwd,
+      updatedAt: Date.now(),
+      title: str(params.title) || undefined,
+      harness: str(params.harness) || undefined,
+      model: str(params.model) || undefined,
+    };
+    return {
+      sessions: { ...state.sessions, [machine]: [summary, ...listed] },
+      counts: { ...state.counts, [machine]: listed.length + 1 },
+    };
+  });
+}
+
+/** A thread trashed on a machine (`_rustcode/threads/deleted`): its row leaves this window too. */
+function forgetCreated(machine: string, sessionId: string | undefined): void {
+  if (!sessionId) return;
+  forgetMachineThread(machine, sessionId);
+}
+
+/**
+ * Take a trashed thread out of a machine's list cache, whether the machine said so or this window
+ * trashed it while the link was down, and refuse it to the reads that follow (a `session/list` that
+ * was in flight already names it).
+ */
+export function forgetMachineThread(machine: string, sessionId: string): void {
+  tombstoneThread(threadKey(machine, sessionId));
+  useMachines.setState((state) => {
+    const listed = state.sessions[machine];
+    if (!listed?.some((session) => session.id === sessionId)) return {};
+    const sessions = listed.filter((session) => session.id !== sessionId);
+    return {
+      sessions: { ...state.sessions, [machine]: sessions },
+      counts: { ...state.counts, [machine]: sessions.length },
+    };
+  });
+}
+
+/**
  * Give one machine a channel of its own. The supervisor inside the shell keeps
  * retrying on that channel, so it is made once and kept while the machine is
  * saved, whatever state it is in.
@@ -758,21 +883,36 @@ async function attach(machine: Machine): Promise<void> {
       if (event.type === "open") {
         const connection = new AcpConnection((line) => transport.send(line));
         // Keep the list cache current too: another machine's list refresh must not
-        // overwrite a status/deadline just broadcast by this owner.
+        // overwrite a status/deadline just broadcast by this owner, and a thread
+        // any client starts there must be listed before the next read.
         connection.onInbound((message) => {
-          if (message.type !== "notification" || message.method !== "session/update") return;
+          if (message.type !== "notification") return;
+          if (message.method === Method.threadCreated) {
+            rememberCreated(machine.id, message.params);
+            return;
+          }
+          if (message.method === Method.threadDeleted) {
+            forgetCreated(machine.id, str(message.params.sessionId));
+            return;
+          }
+          if (message.method !== "session/update") return;
           const id = str(message.params.sessionId);
-          const meta = obj(obj(obj(message.params.update)?._meta)?.rustcode);
-          if (!id || !meta) return;
+          const update = obj(message.params.update);
+          // A title carries no `_meta`; a status and a snooze do.
+          const title = str(update?.title);
+          const meta = obj(obj(update?._meta)?.rustcode);
+          if (!id || (!title && !meta)) return;
+          const parsed = meta
+            ? parseSessionList({ sessions: [{ sessionId: id, _meta: { rustcode: meta } }] }).sessions[0]
+            : undefined;
           useMachines.setState((state) => ({
             sessions: {
               ...state.sessions,
               [machine.id]: (state.sessions[machine.id] ?? []).map((session) => {
                 if (session.id !== id) return session;
-                const parsed = parseSessionList({ sessions: [{ sessionId: id, _meta: { rustcode: meta } }] })
-                  .sessions[0];
                 return {
                   ...session,
+                  ...(title ? { title } : {}),
                   ...(parsed?.status ? { status: parsed.status } : {}),
                   ...(parsed?.snoozedUntil !== undefined ? { snoozedUntil: parsed.snoozedUntil } : {}),
                 };
@@ -888,7 +1028,9 @@ function detach(id: string): void {
 async function readThreads(id: string, connection: AcpConnection, link?: Link): Promise<void> {
   try {
     if (!link?.ready) {
-      await connection.request("initialize", { protocolVersion: 1 }, 10_000);
+      // A machine's server announces its threads to the clients that list them
+      // (`_rustcode/threads/created`, docs/desktop.md › Several machines).
+      await connection.request("initialize", initializeParams(APP_VERSION, { threads: 1 }), 10_000);
       if (link) link.ready = true;
     }
     const sessions: SessionSummary[] = [];
@@ -901,10 +1043,36 @@ async function readThreads(id: string, connection: AcpConnection, link?: Link): 
       if (!cursor) break;
     }
     if (connection.isClosed) return;
-    useMachines.setState((state) => ({
-      counts: { ...state.counts, [id]: sessions.length },
-      sessions: { ...state.sessions, [id]: sessions },
+    // Rows the app keeps that this read does not name yet stay: a snapshot from before a thread
+    // was announced is not news that it is gone. The ones it names now need no keeping.
+    // A thread trashed while this read was out is not news that it came back.
+    for (let i = sessions.length - 1; i >= 0; i--) {
+      if (isTombstoned(threadKey(id, sessions[i]?.id ?? ""))) sessions.splice(i, 1);
+    }
+    const listed = new Set(sessions.map((session) => session.id));
+    settleKeptUnlisted(id, listed);
+    const kept = keptUnlisted(id, listed).map((summary) => ({
+      ...summary,
+      id: splitThreadKey(summary.id).id,
+      host: undefined,
     }));
+    useMachines.setState((state) => {
+      // The kept summary was stored with no status. The cache row has the one a status broadcast
+      // wrote (a thread another client announced is running), so keep that, or the row reads idle
+      // and its keep expires while the thread still runs.
+      const cached = state.sessions[id] ?? [];
+      const rows = [
+        ...sessions,
+        ...kept.map((summary) => {
+          const status = cached.find((row) => row.id === summary.id)?.status;
+          return status ? { ...summary, status } : summary;
+        }),
+      ];
+      return {
+        counts: { ...state.counts, [id]: rows.length },
+        sessions: { ...state.sessions, [id]: rows },
+      };
+    });
   } catch {
     // An older machine, or one whose ACP is not allowed yet: no count.
   }

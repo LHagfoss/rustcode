@@ -104,6 +104,7 @@ import {
   platformIcon,
   selfName,
   useLocalIdentity,
+  useMachineReconnecting,
   useMachines,
 } from "../state/machines";
 import {
@@ -484,6 +485,8 @@ export const Composer = memo(function Composer({
   // and the header and a note over the field say which computer it is (state/store.ts `threadOffline`).
   const offline = useThreadOffline(thread?.id);
   const offMachine = useMachineOfThread(thread?.id);
+  // Away, but on the shell's own retry clock: the field says it is coming back, not that it is gone.
+  const offReconnecting = useMachineReconnecting(thread ? splitThreadKey(thread.id).host : undefined);
   // What ⌘⏎ would do with what is in the field now, by the same rule the queued row uses: the
   // placeholder says it, so a message that will wait does not read as one that steers.
   const decision = thread ? sendDecisionFor(thread, extras) : undefined;
@@ -1192,7 +1195,9 @@ export const Composer = memo(function Composer({
   };
 
   const placeholder = offline
-    ? `Not connected${offMachine ? ` to ${offMachine}` : ""}. This thread is read-only until it is back…`
+    ? offReconnecting
+      ? `Reconnecting${offMachine ? ` to ${offMachine}` : ""}… This thread is read-only until it is back…`
+      : `Not connected${offMachine ? ` to ${offMachine}` : ""}. This thread is read-only until it is back…`
     : queuedEdit
       ? "Edit the queued message: ⏎ saves it in the queue, esc leaves it…"
       : extras.command

@@ -1,15 +1,9 @@
-// The Devices view in the sidebar's foot: this computer first, then every
-// paired one, and above a machine's threads a card that says what that machine
-// is and how to reach it. What a row says is decided here, so the words can be
-// tested without a window (docs/desktop.md › Several machines).
-//
-// A row is two lines: the platform's glyph and the name, with the state as a
-// chip; then the route once, the threads that run on it out of its own, and
-// how long ago a machine that is away last answered. An offline row takes a
-// third line: the last error in words a reader can act on, and the one action
-// that can bring it back. The machine's own card carries the version and
-// whether it differs from this app's, because an old RustCode on the other end
-// is a sentence, not a silent connection failure.
+// What the app says about a machine beside the sidebar's thread list: the
+// platform's glyph, the state as a word, the route once, the threads that run
+// on it out of its own, and how long ago a machine that is away last answered.
+// The words are decided here, so they are tested without a window
+// (docs/desktop.md › Several machines). An old RustCode on the other end is a
+// sentence, not a silent connection failure.
 
 import type { SessionSummary } from "../acp/types";
 import {
@@ -17,6 +11,7 @@ import {
   lastSeen,
   type Machine,
   type MachineIcon,
+  machineReconnecting,
   platformIcon,
   platformName,
   routeName,
@@ -37,15 +32,19 @@ export interface DeviceStatus {
   tone: "ok" | "warn" | "bad" | "idle";
 }
 
-/** The state as the row's chip: `Connected`, `Connecting`, `Offline`, `Needs pairing`. */
-export function deviceStatus(machine: Pick<Machine, "state">): DeviceStatus {
+/** The state as the row's chip: `Connected`, `Connecting`, `Reconnecting…`, `Offline`, `Needs pairing`. */
+export function deviceStatus(machine: Pick<Machine, "state" | "retryInSecs">): DeviceStatus {
   switch (machine.state) {
     case "connected":
       return { label: "Connected", tone: "ok" };
     case "connecting":
       return { label: "Connecting", tone: "idle" };
     case "offline":
-      return { label: "Offline", tone: "warn" };
+      // On its own retry clock the machine is coming back by itself, which is
+      // not the failure a plain `Offline` chip reads as (issue 3487).
+      return machineReconnecting(machine)
+        ? { label: "Reconnecting…", tone: "idle" }
+        : { label: "Offline", tone: "warn" };
     case "needsPairing":
       return { label: "Needs pairing", tone: "bad" };
     case "stopped":
