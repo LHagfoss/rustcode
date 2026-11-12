@@ -621,7 +621,8 @@ describe("smart ui", () => {
     expect(defaults.responsive).toBe(true);
     expect(defaults.maintainAspectRatio).toBe(false);
     expect(defaults.resizeDelay).toBe(0);
-    expect(defaults.animation.duration).toBe(180);
+    // No tweening: a hover or a revealed chart answers at once.
+    expect(defaults.animation).toBe(false);
     expect(defaults.plugins.tooltip.usePointStyle).toBe(true);
     expect(defaults.plugins.legend.labels.usePointStyle).toBe(true);
     expect(defaults.elements.point.hitRadius).toBe(10);
@@ -670,12 +671,12 @@ describe("smart ui", () => {
     expect(stops).toEqual(["rgba(142, 142, 147, 0.3)", "rgba(142, 142, 147, 0)"]);
   });
 
-  test("reduce motion turns the chart's animation off", () => {
+  test("reduce motion keeps the chart's animation off", () => {
     const { defaults } = runChartTheme({ reduced: true });
     expect(defaults.animation).toBe(false);
   });
 
-  test("the presets draw with the real Chart.js, animation on", async () => {
+  test("the presets draw with the real Chart.js", async () => {
     // The page's own globals, borrowed for one test: the library is the bundled
     // build, a canvas is a stub, and the animation frames are pumped by hand.
     const g = globalThis as any;
@@ -890,7 +891,6 @@ describe("smart ui", () => {
 
   test("the chart theme follows the variables, in both themes", () => {
     expect(CHART_THEME_SCRIPT).toContain("--rc-series-");
-    expect(CHART_THEME_SCRIPT).toContain("prefers-reduced-motion");
     expect(CHART_THEME_SCRIPT).toContain("usePointStyle");
     expect(CHART_THEME_SCRIPT).toContain("hoverBackgroundColor");
     expect(CHART_THEME_SCRIPT).toContain("createLinearGradient");
@@ -919,6 +919,34 @@ describe("smart ui", () => {
     expect(rcCompare("Beta", "alpha", "text")).toBeGreaterThan(0);
     expect(rcCompare("7 s", "alpha", "number")).toBeLessThan(0);
     expect(rcCompare("same", "same", "number")).toBe(0);
+  });
+
+  test("a source shows the site it is on", () => {
+    const { rcHost } = kitHelpers();
+    expect(rcHost("https://www.streamscharts.com/news/q3")).toBe("streamscharts.com");
+    expect(rcHost("http://user@Example.org:8080/a?b")).toBe("example.org");
+    for (const not of [null, "", "/relative", "mailto:a@b.c", "javascript:alert(1)"])
+      expect(rcHost(not)).toBe("");
+  });
+
+  test("a link opens in the browser, never in the frame, and a press marks the next size", () => {
+    const script = runtimeScript(
+      "tok",
+      pageTheme("light", () => ""),
+    );
+    expect(script).toContain('post({ type: "open", url: href.slice(0, 2048) })');
+    expect(script).toContain("event.preventDefault();");
+    expect(script).toContain('document.addEventListener("auxclick", openLink);');
+    expect(script).toContain("interacted: performance.now() - gestureAt < 1000");
+    expect(script).toContain('document.addEventListener("toggle"');
+    expect(() => new Function(script)).not.toThrow();
+  });
+
+  test("sources fold quietly and charts answer the pointer at once", () => {
+    expect(BASE_CSS).toContain(".rc-sources { border-bottom: 0;");
+    expect(BASE_CSS).toContain(".rc-sources-host {");
+    expect(CHART_THEME_SCRIPT).toContain("d.animation = false;");
+    expect(CHART_THEME_SCRIPT).not.toContain("duration: 180");
   });
 
   test("a sparkline reads its numbers from the attribute, commas or spaces", () => {
