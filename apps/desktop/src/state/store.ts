@@ -6094,11 +6094,12 @@ export async function settleThreads(ids: string[]): Promise<void> {
     toast("Already settled", "info");
     return;
   }
-  const errors = await setThreadsStatus(
+  const optimistic = before.every((x) => threadIsRemote(x.id) && connectionForThread(x.id));
+  const saving = setThreadsStatus(
     before.map((x) => x.id),
     "done",
   );
-  if (errors) return;
+  if (!optimistic && (await saving)) return;
   if (
     get().view.kind === "chat" &&
     get().selectedId === state.selectedId &&
@@ -6111,17 +6112,22 @@ export async function settleThreads(ids: string[]): Promise<void> {
     before.length === 1
       ? sessionById(state, before[0]!.id)?.title || get().threads[before[0]!.id]?.title || "New thread"
       : "";
-  toast(before.length === 1 ? `Settled "${title}"` : `Settled ${before.length} threads`, "info", {
-    action: {
-      label: "Undo",
-      run: () => {
-        const review = before.filter((x) => x.status === "review").map((x) => x.id);
-        const rest = before.filter((x) => x.status !== "review").map((x) => x.id);
-        if (review.length) void setThreadsStatus(review, "review");
-        if (rest.length) void setThreadsStatus(rest, "idle");
+  const toastId = toast(
+    before.length === 1 ? `Settled "${title}"` : `Settled ${before.length} threads`,
+    "info",
+    {
+      action: {
+        label: "Undo",
+        run: () => {
+          const review = before.filter((x) => x.status === "review").map((x) => x.id);
+          const rest = before.filter((x) => x.status !== "review").map((x) => x.id);
+          if (review.length) void setThreadsStatus(review, "review");
+          if (rest.length) void setThreadsStatus(rest, "idle");
+        },
       },
     },
-  });
+  );
+  if (optimistic && (await saving)) dismissToast(toastId);
 }
 
 /** Settles one thread, with the same Undo and the same rule about leaving the screen. */
