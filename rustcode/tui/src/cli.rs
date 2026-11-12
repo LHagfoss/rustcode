@@ -397,6 +397,10 @@ pub enum ServerCommands {
         /// Restart even if turns are running, without asking
         #[arg(short, long)]
         yes: bool,
+        /// Set by the restart itself on the helper it hands a restart to when
+        /// it runs inside the server it stops
+        #[arg(long, hide = true)]
+        detached: bool,
     },
     /// Point the `rustcode` a shell runs at this one, when it is another
     /// version
@@ -1462,14 +1466,24 @@ mod tests {
             server(&["restart", "--when-idle"]),
             ServerCommands::Restart {
                 when_idle: true,
-                yes: false
+                yes: false,
+                detached: false
             }
         ));
         assert!(matches!(
             server(&["restart", "-y"]),
             ServerCommands::Restart {
                 when_idle: false,
-                yes: true
+                yes: true,
+                detached: false
+            }
+        ));
+        assert!(matches!(
+            server(&["restart", "--yes", "--when-idle", "--detached"]),
+            ServerCommands::Restart {
+                when_idle: true,
+                yes: true,
+                detached: true
             }
         ));
         assert!(matches!(server(&["link-path"]), ServerCommands::LinkPath));

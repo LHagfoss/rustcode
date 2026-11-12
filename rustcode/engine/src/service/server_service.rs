@@ -772,6 +772,128 @@ pub fn plan_restart(when_idle: bool, yes: bool, running: Option<usize>) -> Resta
     }
 }
 
+/// Who runs a restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestartRun {
+    /// This process stops the server and starts it again.
+    Here,
+    /// Hand it to a detached helper that outlives this process: the caller
+    /// runs inside the server (a thread's shell tool), and stopping the
+    /// server ends the caller before it could start the new one.
+    Detached,
+}
+
+/// Decide who restarts. `inside_server` is whether the caller descends from
+/// the server it would stop; `is_helper` is whether the caller already is
+/// the detached helper (`restart --detached`), which must not hand off again.
+pub fn plan_restart_run(inside_server: bool, is_helper: bool) -> RestartRun {
+    if inside_server && !is_helper {
+        RestartRun::Detached
+    } else {
+        RestartRun::Here
+    }
+}
+
+/// The processes above `start`, nearest first, given each one's parent. Stops
+/// at a process without a parent, and at a repeat (a reused pid can close a
+/// loop).
+fn ancestors(start: u32, parent_of: impl Fn(u32) -> Option<u32>) -> Vec<u32> {
+    let mut chain = Vec::new();
+    let mut current = start;
+    while let Some(parent) = parent_of(current) {
+        if parent == 0 || parent == start || chain.contains(&parent) || chain.len() >= 64 {
+            break;
+        }
+        chain.push(parent);
+        current = parent;
+    }
+    chain
+}
+
+/// Whether this process runs inside the server `server_pid`: a thread's shell
+/// tool is a descendant of the server that runs the thread.
+pub fn runs_inside(server_pid: u32) -> bool {
+    use sysinfo::{Pid, ProcessesToUpdate, System};
+    let mut system = System::new();
+    system.refresh_processes(ProcessesToUpdate::All, true);
+    ancestors(std::process::id(), |pid| {
+        system
+            .process(Pid::from_u32(pid))
+            .and_then(|process| process.parent())
+            .map(|parent| parent.as_u32())
+    })
+    .contains(&server_pid)
+}
+
+/// Start `program server restart --yes [--when-idle] --detached` as a helper
+/// that outlives this process and everything above it, with its output in the
+/// server log. It waits a moment first, so that the command that asked for the
+/// restart ends and its thread records the result before the server stops.
+pub fn spawn_detached_restart(when_idle: bool) -> Result<()> {
+    use anyhow::Context;
+    let program = super::executable_path()?;
+    let log_path = crate::server::log_path()?;
+    if let Some(logs) = log_path.parent() {
+        std::fs::create_dir_all(logs)?;
+    }
+    let spawn = |breakaway: bool| -> std::io::Result<()> {
+        let mut log = std::fs::OpenOptions::new();
+        log.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            log.mode(0o600);
+        }
+        let log = log.open(&log_path)?;
+        let mut command = std::process::Command::new(&program);
+        command.args(["server", "restart", "--yes"]);
+        if when_idle {
+            command.arg("--when-idle");
+        }
+        command
+            .arg("--detached")
+            .stdin(std::process::Stdio::null())
+            .stdout(log.try_clone()?)
+            .stderr(log);
+        #[cfg(unix)]
+        {
+            let _ = breakaway;
+            // Its own session and process group: the server's kill of a
+            // harness's group does not reach it.
+            crate::platform::detach(&mut command);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(windows_helper_flags(breakaway));
+        }
+        // Not waited for: it outlives this process.
+        command.spawn().map(drop)
+    };
+    // A job that forbids breakaway refuses the flag: start inside it then.
+    spawn(true)
+        .or_else(|_| spawn(false))
+        .context("could not start the restart in the background")
+}
+
+/// Windows creation flags of the helper: no console, its own process group,
+/// and out of the job a harness may have put the caller in.
+#[cfg(windows)]
+fn windows_helper_flags(breakaway: bool) -> u32 {
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+    let flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
+    if breakaway {
+        flags | CREATE_BREAKAWAY_FROM_JOB
+    } else {
+        flags
+    }
+}
+
+/// How long the detached helper waits before it stops the server.
+pub const HELPER_DELAY: Duration = Duration::from_secs(1);
+
 /// How waiting for an idle server ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Idle {
@@ -944,6 +1066,38 @@ fn same_file(a: &Path, b: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_restart_from_inside_the_server_goes_to_a_detached_helper() {
+        assert_eq!(plan_restart_run(true, false), RestartRun::Detached);
+        // The helper itself runs it, even if a stale parent link still points
+        // into the server.
+        assert_eq!(plan_restart_run(true, true), RestartRun::Here);
+        // An outside shell restarts as before.
+        assert_eq!(plan_restart_run(false, false), RestartRun::Here);
+        assert_eq!(plan_restart_run(false, true), RestartRun::Here);
+    }
+
+    #[test]
+    fn ancestors_walk_up_and_stop_at_a_loop_or_a_missing_parent() {
+        let parents = |pid: u32| match pid {
+            40 => Some(30),
+            30 => Some(20),
+            20 => Some(10),
+            _ => None,
+        };
+        assert_eq!(ancestors(40, parents), vec![30, 20, 10]);
+        assert!(ancestors(10, parents).is_empty());
+        // Pid reuse can make the chain loop back on itself.
+        let looped = |pid: u32| match pid {
+            3 => Some(2),
+            2 => Some(1),
+            1 => Some(2),
+            _ => None,
+        };
+        assert_eq!(ancestors(3, looped), vec![2, 1]);
+        assert_eq!(ancestors(5, |_| Some(0)), Vec::<u32>::new());
+    }
 
     #[test]
     fn the_default_server_is_named_server_and_another_directory_gets_its_own() {
