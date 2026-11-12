@@ -2072,6 +2072,13 @@ pub fn get_config_dir() -> Option<PathBuf> {
         let _ = fs::create_dir_all(&dir);
         return Some(dir);
     }
+    default_config_dir()
+}
+
+/// The configuration directory without `RUSTCODE_CONFIG_DIR`: the user's own.
+/// A process started with the variable set to this directory (a gateway the
+/// server or the app started) still works for the user's default server.
+pub fn default_config_dir() -> Option<PathBuf> {
     #[cfg(test)]
     {
         let dir = test_config_dir();

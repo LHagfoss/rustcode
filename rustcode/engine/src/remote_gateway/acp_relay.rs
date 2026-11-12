@@ -9,6 +9,7 @@ use futures_util::{
 use serde_json::{Value, json};
 use std::{
     collections::HashSet,
+    path::Path,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -128,13 +129,16 @@ fn allowed(method: &str) -> bool {
             .any(|prefix| method.starts_with(prefix))
 }
 
-/// Connect to the first engine that answers, and relay between it and the
-/// device. A description left behind by an engine that has since ended is
-/// logged and skipped, then the next endpoint is tried. The caller keeps
-/// revocation and gateway shutdown cancellation active for the lifetime of
-/// this future.
+/// Connect to the first engine of `config_directory` that answers, and relay
+/// between it and the device. An app-spawned engine publishes its own
+/// endpoint and a shared server `run/server.json`; either description can be
+/// a dead process's, so each is tried in turn (#3341). When none answers, the
+/// server is started again (`server/supervise.rs`); when that fails too, the
+/// device is refused with `internal`, which a client reads as
+/// `server_not_running`. The caller keeps revocation and gateway shutdown
+/// cancellation active for the lifetime of this future.
 pub(super) async fn relay(
-    endpoints: &[String],
+    config_directory: &Path,
     writer: &mut SplitSink<Socket, Message>,
     reader: &mut SplitStream<Socket>,
     control: Arc<ConnectionControl>,
@@ -142,12 +146,27 @@ pub(super) async fn relay(
     ping_interval: Duration,
     idle_timeout: Duration,
 ) -> Option<ErrorCode> {
-    let Some(stream) = connect_first(endpoints, write_timeout).await else {
-        eprintln!(
-            "remote ACP: no local RustCode engine accepted a connection (tried {})",
-            endpoints.join(", ")
-        );
-        return Some(ErrorCode::Internal);
+    let endpoints = crate::server::relay_endpoints(config_directory);
+    let stream = match connect_first(&endpoints, write_timeout).await {
+        Some(stream) => {
+            crate::server::supervise::answered();
+            stream
+        }
+        None => {
+            match crate::server::supervise::revive(crate::server::supervise::RELAY_WAIT).await {
+                Ok(stream) => stream,
+                Err(why) => {
+                    let tried = if endpoints.is_empty() {
+                        "no engine described itself in run/".to_owned()
+                    } else {
+                        format!("tried {}", endpoints.join(", "))
+                    };
+                    eprintln!("remote ACP: server_not_running: {why} ({tried})");
+                    crate::dbg_log!("remote ACP: server_not_running: {why} ({tried})");
+                    return Some(ErrorCode::Internal);
+                }
+            }
+        }
     };
     if !matches!(
         tokio::time::timeout(

@@ -21,6 +21,7 @@ pub(crate) mod engine_endpoint;
 pub(crate) mod listen;
 mod lock;
 mod peer;
+pub(crate) mod supervise;
 
 pub use lock::ServerInfo;
 
@@ -82,22 +83,51 @@ pub enum RunOutcome {
 /// stops the process. `service` is set by a service manager (`--service`):
 /// on Windows it has no console window to keep open.
 pub async fn run(auto_approve: bool, service: bool) -> anyhow::Result<RunOutcome> {
-    let dir = run_dir()?;
-    let lock = match lock::acquire(&dir)? {
-        lock::Acquired::Held(lock) => lock,
-        lock::Acquired::Running(info) => return Ok(RunOutcome::AlreadyRunning(info)),
-    };
-    if service {
-        detach_console();
-    }
-    // `rustcode server logs` reads this; only a server writes it.
+    // `rustcode server logs` reads this; only a server writes it. From the
+    // first line on, so a server that cannot start says why there: a service
+    // manager or a `Run` entry keeps no output of its own (panics land here
+    // too, through the panic hook).
     crate::logger::mirror_to_server_log();
-    crate::dbg_log!(
+    let starting = format!(
         "RustCode server {} starting (pid {}{})",
         env!("CARGO_PKG_VERSION"),
         std::process::id(),
         if service { ", as a service" } else { "" }
     );
+    let outcome = serve_until_stopped(auto_approve, service, &starting).await;
+    if let Err(error) = &outcome {
+        crate::dbg_log!("RustCode server could not start: {error:#}");
+    }
+    outcome
+}
+
+async fn serve_until_stopped(
+    auto_approve: bool,
+    service: bool,
+    starting: &str,
+) -> anyhow::Result<RunOutcome> {
+    let dir = run_dir()?;
+    let lock = match lock::acquire(&dir)? {
+        lock::Acquired::Held(lock) => lock,
+        lock::Acquired::Running(info) => {
+            let running = info.as_ref().map_or_else(
+                || "another one is starting".to_owned(),
+                |info| format!("pid {} already serves", info.pid),
+            );
+            crate::dbg_log!("{starting}: not started, {running}");
+            return Ok(RunOutcome::AlreadyRunning(info));
+        }
+    };
+    if service {
+        detach_console();
+    }
+    crate::dbg_log!("{starting}");
+    // A server that stops removes its description while it holds the lock,
+    // so one still there was left by a server that did not stop: it crashed
+    // or was killed, and wrote nothing about it. Say so, with what it was.
+    if let Some(previous) = lock::read_info(&dir) {
+        crate::dbg_log!("{}", ended_without_stopping(&previous));
+    }
     let endpoint = listen::endpoint(&dir);
     let mut listener = listen::Listener::bind(&endpoint)?;
     let engine = AcpEngine::start(auto_approve)?;
@@ -116,8 +146,11 @@ pub async fn run(auto_approve: bool, service: bool) -> anyhow::Result<RunOutcome
     if service {
         auto_update::spawn();
     }
-    serve(&engine, &mut listener, stop_signal()).await;
-    crate::dbg_log!("RustCode server stopping");
+    serve(&engine, &mut listener, async {
+        let why = stop_signal().await;
+        crate::dbg_log!("RustCode server stopping: {why}");
+    })
+    .await;
     engine.shutdown().await;
     drop(listener);
     drop(lock);
@@ -181,9 +214,28 @@ fn detach_console() {
     }
 }
 
-/// Resolves when the process is asked to stop: Ctrl-C, or on Unix
-/// `SIGTERM` (launchd, systemd) and `SIGHUP`.
-async fn stop_signal() {
+/// What the log says of a server that left its description behind.
+fn ended_without_stopping(previous: &ServerInfo) -> String {
+    let started =
+        chrono::DateTime::from_timestamp(i64::try_from(previous.started_at).unwrap_or(i64::MAX), 0)
+            .map(|at| {
+                at.with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string()
+            })
+            .unwrap_or_else(|| previous.started_at.to_string());
+    format!(
+        "the previous RustCode server (pid {}, version {}, started {started}) ended without stopping \
+         cleanly: it was killed (as `rustcode server restart` does on Windows) or crashed; on Windows, \
+         the SSH session or job that started it also ends it when it closes",
+        previous.pid, previous.version
+    )
+}
+
+/// Resolves when the process is asked to stop, naming what asked: Ctrl-C,
+/// on Unix `SIGTERM` (launchd, systemd) and `SIGHUP`, and on Windows the
+/// console's Ctrl+Break, close, logoff and shutdown events.
+async fn stop_signal() -> &'static str {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
@@ -192,19 +244,54 @@ async fn stop_signal() {
             signal(SignalKind::hangup()),
         ) else {
             let _ = tokio::signal::ctrl_c().await;
-            return;
+            return "Ctrl-C";
         };
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {}
-            _ = term.recv() => {}
-            _ = hangup.recv() => {}
+            _ = tokio::signal::ctrl_c() => "Ctrl-C",
+            _ = term.recv() => "SIGTERM",
+            _ = hangup.recv() => "SIGHUP",
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        let _ = tokio::signal::ctrl_c().await;
+        use tokio::signal::windows;
+        async fn next(listener: std::io::Result<impl WindowsSignal>) -> Option<()> {
+            listener.ok()?.next().await
+        }
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => "Ctrl-C",
+            Some(()) = next(windows::ctrl_break()) => "Ctrl+Break",
+            Some(()) = next(windows::ctrl_close()) => "its console closing",
+            Some(()) = next(windows::ctrl_logoff()) => "the user logging off",
+            Some(()) = next(windows::ctrl_shutdown()) => "the system shutting down",
+        }
     }
 }
+
+/// The Windows console events [`stop_signal`] waits for, as one kind.
+#[cfg(windows)]
+trait WindowsSignal {
+    async fn next(&mut self) -> Option<()>;
+}
+
+#[cfg(windows)]
+macro_rules! windows_signal {
+    ($($kind:ty),*) => {$(
+        impl WindowsSignal for $kind {
+            async fn next(&mut self) -> Option<()> {
+                self.recv().await
+            }
+        }
+    )*};
+}
+
+#[cfg(windows)]
+windows_signal!(
+    tokio::signal::windows::CtrlBreak,
+    tokio::signal::windows::CtrlClose,
+    tokio::signal::windows::CtrlLogoff,
+    tokio::signal::windows::CtrlShutdown
+);
 
 /// `rustcode server connect`: relay stdin and stdout to the server until
 /// either side closes, starting the server first if none runs. `program` is
@@ -213,7 +300,7 @@ pub async fn connect(program: PathBuf) -> anyhow::Result<()> {
     let stream = match connect_running().await {
         Ok(stream) => stream,
         Err(_) => {
-            start_in_background(&program)?;
+            start_in_background(&program, false)?;
             wait_for_server().await?
         }
     };
@@ -264,9 +351,12 @@ pub fn log_path() -> io::Result<PathBuf> {
 }
 
 /// Start `program server run` detached from this process: its own process
-/// group, no terminal, nothing inherited but the environment, so it lives
-/// on when the client that started it ends.
-pub(crate) fn start_in_background(program: &std::path::Path) -> io::Result<()> {
+/// group, no terminal, nothing inherited but the environment, and on Windows
+/// out of the job object the caller runs in, so it lives on when the client
+/// that started it ends (an SSH session ends everything left in its job).
+/// `service` starts it as the background service's server (`--service`): the
+/// one a Windows `Run` entry starts at logon, which keeps itself up to date.
+pub(crate) fn start_in_background(program: &std::path::Path, service: bool) -> io::Result<()> {
     let dir = run_dir()?;
     lock::ensure_private_dir(&dir)?;
     let log_path = log_path()?;
@@ -287,21 +377,28 @@ pub(crate) fn start_in_background(program: &std::path::Path) -> io::Result<()> {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(log);
+    if service {
+        command.arg("--service");
+    }
+    // Not waited for: it outlives this process. A server that finds another
+    // already running exits at once, and the connect below finds that one.
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
+        command.spawn().map(drop)
     }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+        crate::platform::spawn_breaking_away(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW, |flags| {
+            command.creation_flags(flags);
+            command.spawn()
+        })
+        .map(drop)
     }
-    // Not waited for: it outlives this process. A server that finds another
-    // already running exits at once, and the connect below finds that one.
-    command.spawn().map(drop)
 }
 
 /// Copy `input` to `stream` and `stream` to `output` until either ends.

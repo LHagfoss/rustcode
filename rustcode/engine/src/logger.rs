@@ -555,6 +555,12 @@ fn append_server_log_bounded(path: &Path, line: &str, limit_bytes: u64) {
     let _guard = log_write_lock()
         .lock()
         .unwrap_or_else(|error| error.into_inner());
+    append_server_log_locked(path, line, limit_bytes);
+}
+
+/// [`append_server_log_bounded`] for a caller that already holds
+/// [`log_write_lock`] (the panic hook, which must never wait for it).
+fn append_server_log_locked(path: &Path, line: &str, limit_bytes: u64) {
     let line = capped_log_line(line, limit_bytes);
     let append_bytes = line.len().saturating_add(1) as u64;
     let current_bytes = std::fs::metadata(path).map_or(0, |metadata| metadata.len());
@@ -908,6 +914,15 @@ fn try_append_line_to_logs_with_limit(
     let Some(_file_lock) = try_acquire_log_file_lock(config_dir) else {
         return false;
     };
+    // A server's panic belongs in its own log too: a server that dies leaves
+    // `server.log` as the evidence `rustcode server logs` shows.
+    if SERVER_LOG.load(Ordering::Acquire) {
+        append_server_log_locked(
+            &config_dir.join("logs").join("server.log"),
+            line,
+            MAX_SERVER_LOG_BYTES,
+        );
+    }
     let line = capped_log_line(line, limit_bytes);
     let append_bytes = line.len().saturating_add(1) as u64;
     append_bounded_line(config_dir, &line, append_bytes, limit_bytes);
