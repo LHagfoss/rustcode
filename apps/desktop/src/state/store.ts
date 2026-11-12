@@ -203,6 +203,17 @@ import {
 } from "./limitResume";
 import { newThreadAccountOn, type SignedOutLogins, signedOutFrom } from "./logins";
 import { loadTranscript, saveTranscript, threadFromTranscript } from "./machineCache";
+import {
+  changesFor,
+  forgetThreadOutbox,
+  type OutboxChange,
+  pendingStatus,
+  queueChange,
+  removeChange,
+  resolveChange,
+  storedStatus,
+  useOutbox,
+} from "./machineOutbox";
 import { finishIsNews, type NotifyEvent, notifyThread, startNotifications, wakeEvent } from "./notify";
 import {
   CAPABILITY_VERSION,
@@ -1436,7 +1447,8 @@ function mergeMachineLists(lists: Record<string, readonly SessionSummary[]>): vo
             id,
             host,
             title,
-            status: remoteStatusPending.get(id)?.status ?? session.status,
+            // A change made while the machine was away shows until the machine has it.
+            status: remoteStatusPending.get(id)?.status ?? pendingStatus(id) ?? session.status,
           };
         });
       // A thread the app was told about, here or by another client, that this list has not got to
@@ -1465,6 +1477,135 @@ function mergeMachineLists(lists: Record<string, readonly SessionSummary[]>): vo
       },
     };
   });
+}
+
+/**
+ * What a toast adds when some of `ids` run on a machine that is away: that the change waits for it.
+ * `lead` ends the sentence before it, when the toast's own text has no full stop.
+ */
+function syncNote(ids: readonly string[], lead = ""): string {
+  const names = [
+    ...new Set(
+      ids
+        .filter((id) => threadIsRemote(id) && !connectionForThread(id))
+        .map((id) => machineOfThread(id) ?? ""),
+    ),
+  ].filter(Boolean);
+  if (!names.length) return "";
+  return `${lead} Syncs when ${names.length === 1 ? `${names[0]} is` : "those computers are"} back.`;
+}
+
+/** Machines whose waiting changes are being sent now: a second list read does not send them twice. */
+const flushingOutbox = new Set<string>();
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/**
+ * Send what the user changed about `host`'s threads while it was away (`state/machineOutbox.ts`),
+ * in the order it was made, now that `rows` (the machine's own list, with its own ids) says what
+ * the machine has. A change the machine already has, or that its newer state overrides, is
+ * dropped before anything is sent, so the list drawn from `rows` next shows the machine's state;
+ * one the machine refuses is dropped and said; one cut off by the machine going away again waits
+ * for the next time. `state/machines.ts` `readThreads` calls it with every list it reads.
+ */
+export async function flushMachineOutbox(
+  host: string,
+  conn: AcpConnection,
+  rows: readonly SessionSummary[],
+): Promise<void> {
+  if (flushingOutbox.has(host) || !changesFor(host).length) return;
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  let overridden = 0;
+  const toSend: OutboxChange[] = [];
+  for (const change of changesFor(host)) {
+    const row = byId.get(splitThreadKey(change.key).id);
+    const verdict = resolveChange(change, row);
+    if (verdict === "send") {
+      toSend.push(change);
+      continue;
+    }
+    removeChange(change);
+    if (verdict !== "machine") continue;
+    overridden++;
+    restoreRow(change, row);
+  }
+  const name = () => get().machineNames[host] ?? "The machine";
+  if (overridden) {
+    toast(
+      `${name()} changed ${plural(overridden, "thread")} after you did, so its newer state stands.`,
+      "info",
+    );
+  }
+  if (!toSend.length) return;
+  flushingOutbox.add(host);
+  let synced = 0;
+  const failures: unknown[] = [];
+  try {
+    for (const change of toSend) {
+      if (conn.isClosed) break;
+      const { id: sessionId } = splitThreadKey(change.key);
+      try {
+        await (change.kind === "status"
+          ? conn.request(V2Method.sessionStatus, { session_id: sessionId, status: change.value }, 10_000)
+          : conn.request(V2Method.sessionPin, { session_id: sessionId, pinned: change.value }, 10_000));
+        synced++;
+        await keepSent(host, sessionId, change);
+        removeChange(change);
+      } catch (error) {
+        // The machine went away again: the change waits for the next time it is back.
+        if (conn.isClosed) break;
+        // Refused (an older machine keeps no status or pin of its own): said, not retried, and
+        // the row goes back to what the machine has.
+        removeChange(change);
+        restoreRow(change, byId.get(sessionId));
+        failures.push(error);
+      }
+    }
+  } finally {
+    flushingOutbox.delete(host);
+  }
+  if (synced) toast(`Synced ${plural(synced, "change")} to ${name()}.`, "info");
+  if (failures.length) {
+    toast(
+      `Could not sync ${plural(failures.length, "change")} to ${name()}: ${errorText(failures[0])}`,
+      "error",
+    );
+  }
+}
+
+/**
+ * Write a sent change into the machine's list as this computer holds it, so the row keeps it once
+ * the change stops covering it, until the machine's next list says the same.
+ */
+async function keepSent(host: string, sessionId: string, change: OutboxChange): Promise<void> {
+  const { useMachines } = await import("./machines");
+  useMachines.setState((state) => {
+    const rows = state.sessions[host];
+    if (!rows?.some((row) => row.id === sessionId)) return {};
+    const patch = change.kind === "status" ? { status: change.value } : { pinned: change.value };
+    return {
+      sessions: {
+        ...state.sessions,
+        [host]: rows.map((row) => (row.id === sessionId ? { ...row, ...patch } : row)),
+      },
+    };
+  });
+}
+
+/** Put a thread's row back the way its machine has it, once a change to it is not sent. */
+function restoreRow(change: OutboxChange, row: SessionSummary | undefined): void {
+  const key = change.key;
+  if (change.kind === "status") {
+    const status = row?.status;
+    set((s) => ({ sessions: s.sessions.map((x) => (x.id === key ? { ...x, status } : x)) }));
+    return;
+  }
+  const on = !!row?.pinned;
+  const pinned = get().pinned;
+  if (pinned.includes(key) === on) return;
+  const next = on ? [key, ...pinned] : pinned.filter((id) => id !== key);
+  set({ pinned: next });
+  store(STORAGE.pinned, JSON.stringify(next));
 }
 
 /** Ignore machine-status reads that started before a newer answer changed remote state. */
@@ -3384,11 +3525,17 @@ export function setPinned(ids: string[], on: boolean) {
   // keeps the app's pin, as before.
   const groups = new Map<AcpConnection, string[]>();
   const unreachable: string[] = [];
+  const queued: string[] = [];
   for (const id of ids) {
     const conn = connectionForThread(id);
     if (conn) groups.set(conn, [...(groups.get(conn) ?? []), id]);
-    else if (threadIsRemote(id)) unreachable.push(id);
+    // A paired machine that is away gets the pin when it is back (`state/machineOutbox.ts`).
+    else if (threadIsRemote(id) && machineOfThread(id)) {
+      queueChange({ kind: "pin", key: id, value: on, base: before.includes(id), at: Date.now() });
+      queued.push(id);
+    } else if (threadIsRemote(id)) unreachable.push(id);
   }
+  if (queued.length) toast(`${on ? "Pinned" : "Unpinned"}.${syncNote(queued)}`, "info");
   if (!groups.size && !unreachable.length) return;
   type PinResult = { id: string; ok: true } | { id: string; ok: false; error: unknown };
   void Promise.all<PinResult>([
@@ -3505,6 +3652,7 @@ export async function renameThread(id: string, title: string): Promise<boolean> 
 /** Take a thread out of every list, mark and stored place a trashed thread leaves behind. */
 function forgetThreadRow(id: string): void {
   keptUnlistedThreads.delete(id);
+  forgetThreadOutbox(id);
   tombstoneThread(id);
   const { [id]: _gone, ...threads } = get().threads;
   const archived = { ...get().archived };
@@ -5720,6 +5868,8 @@ export function statusOf(s: AppState, id: string): ThreadStatus {
   const listed = sessionById(s, id)?.status;
   const pending = remoteStatusPending.get(id);
   if (pending) return pending.status;
+  const queued = threadIsRemote(id) ? pendingStatus(id) : undefined;
+  if (queued) return queued;
   const mark = threadIsRemote(id) ? undefined : s.statusMarks[id];
   if (listed === "done" || listed === "review") return mark ?? listed;
   return mark ?? "idle";
@@ -6127,8 +6277,29 @@ export async function setThreadsStatus(ids: string[], status: "review" | "done" 
   const remoteRequests = remote.map(async (id) => {
     const conn = connectionForThread(id);
     if (!conn) {
-      toast("Could not save the status: That computer is not connected.", "error");
-      return 1;
+      // A paired machine that is away gets the change when it is back (`state/machineOutbox.ts`);
+      // the row shows it now.
+      if (!machineOfThread(id)) {
+        toast("Could not save the status: That computer is not connected.", "error");
+        return 1;
+      }
+      queueChange({
+        kind: "status",
+        key: id,
+        value: status,
+        base: storedStatus(statusOf(get(), id)),
+        at: Date.now(),
+      });
+      set((s) => ({
+        sessions: s.sessions.map((x) => (x.id === id ? { ...x, status } : x)),
+        ...(status === "done"
+          ? {
+              failed: Object.fromEntries(Object.entries(s.failed).filter(([key]) => key !== id)),
+              finished: without(s.finished, id),
+            }
+          : {}),
+      }));
+      return 0;
     }
     let pending = remoteStatusPending.get(id);
     if (!pending) {
@@ -6256,7 +6427,10 @@ export async function settleThreads(ids: string[]): Promise<void> {
       ? sessionById(state, before[0]!.id)?.title || get().threads[before[0]!.id]?.title || "New thread"
       : "";
   const toastId = toast(
-    before.length === 1 ? `Settled "${title}"` : `Settled ${before.length} threads`,
+    `${before.length === 1 ? `Settled "${title}"` : `Settled ${before.length} threads`}${syncNote(
+      before.map((x) => x.id),
+      ".",
+    )}`,
     "info",
     {
       action: {
@@ -6293,7 +6467,10 @@ export function unsettleThreads(ids: string[], options: { quiet?: boolean } = {}
   if (!settled.length) return;
   void setThreadsStatus(settled, "idle");
   if (options.quiet) return;
-  toast(settled.length === 1 ? "Unsettled" : `Unsettled ${settled.length} threads`, "info");
+  toast(
+    `${settled.length === 1 ? "Unsettled" : `Unsettled ${settled.length} threads`}${syncNote(settled, ".")}`,
+    "info",
+  );
 }
 
 export function setView(view: AppState["view"]) {
@@ -7455,6 +7632,8 @@ export function resetForTests() {
   keptUnlistedThreads.clear();
   deletedThreads.clear();
   deferredAnnouncements.length = 0;
+  flushingOutbox.clear();
+  useOutbox.setState({ byHost: {} });
   creatingSessions = 0;
   forgetAutoCompact();
   // A lost turn's timers outlive a test file, and its links belong to that file's book.

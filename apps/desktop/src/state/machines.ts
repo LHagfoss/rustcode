@@ -20,10 +20,12 @@ import { currentPlatform } from "../lib/platform";
 import { hasShell, shellCall, shellCallWithin } from "../lib/shell";
 import { appVersion } from "../lib/updater";
 import { forgetMachineCache, forgetTranscript, loadThreadList, saveThreadList } from "./machineCache";
+import { forgetMachineOutbox, forgetThreadOutbox } from "./machineOutbox";
 import {
   APP_VERSION,
   askConfirm,
   deferAnnouncement,
+  flushMachineOutbox,
   isTombstoned,
   keptUnlisted,
   settleKeptUnlisted,
@@ -909,6 +911,7 @@ function forgetCreated(machine: string, sessionId: string | undefined): void {
 export function forgetMachineThread(machine: string, sessionId: string): void {
   tombstoneThread(threadKey(machine, sessionId));
   forgetTranscript(threadKey(machine, sessionId));
+  forgetThreadOutbox(threadKey(machine, sessionId));
   useMachines.setState((state) => {
     const listed = state.sessions[machine];
     if (!listed?.some((session) => session.id === sessionId)) return {};
@@ -1057,8 +1060,10 @@ export function resetMachinesForTests(): void {
 
 /** Stop a machine's channel: the shell stops its supervisor with it. */
 function detach(id: string): void {
-  // A machine that is removed leaves nothing of its threads on this computer.
+  // A machine that is removed leaves nothing of its threads on this computer, and nothing waits
+  // to be sent to it.
   forgetMachineCache(id);
+  forgetMachineOutbox(id);
   const link = links.get(id);
   links.delete(id);
   if (!link) return;
@@ -1104,6 +1109,9 @@ async function readThreads(id: string, connection: AcpConnection, link?: Link): 
     for (let i = sessions.length - 1; i >= 0; i--) {
       if (isTombstoned(threadKey(id, sessions[i]?.id ?? ""))) sessions.splice(i, 1);
     }
+    // What the user changed here while the machine was away goes to it now; a change this list
+    // shows the machine overrides is dropped first, so the rows below draw the machine's state.
+    void flushMachineOutbox(id, connection, sessions);
     const listed = new Set(sessions.map((session) => session.id));
     settleKeptUnlisted(id, listed);
     const kept = keptUnlisted(id, listed).map((summary) => ({

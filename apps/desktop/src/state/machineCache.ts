@@ -91,13 +91,16 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 
 /**
  * A machine's thread list as it is kept: the newest threads, without what is only true while the
- * machine answers (a running status, the host the list came through).
+ * machine answers (a running status, the host the list came through). A stored status (Settled,
+ * Review) is the thread's own, so a settled thread stays in Settled while its machine is away.
  */
 export function listToKeep(sessions: readonly SessionSummary[]): SessionSummary[] {
   return [...sessions]
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     .slice(0, MAX_CACHED_THREADS)
-    .map(({ status: _status, host: _host, ...row }) => row);
+    .map(({ status, host: _host, ...row }) =>
+      status === "done" || status === "review" ? { ...row, status } : row,
+    );
 }
 
 /** Keeps what a machine last listed. */
@@ -315,12 +318,15 @@ export function offlineNotice(options: {
   since?: string;
   reconnecting: boolean;
   hasCopy: boolean;
+  /** A settle or pin made here meanwhile waits to be sent (`state/machineOutbox.ts`). */
+  unsynced?: boolean;
 }): string {
   const name = options.machine ?? "The machine";
   const lead = options.reconnecting
     ? `Reconnecting to ${name}…`
     : `${name} is offline${options.since ? ` since ${options.since}` : ""}.`;
-  return options.hasCopy
+  const body = options.hasCopy
     ? `${lead} This is the last copy this computer saw; it updates when the machine is back.`
     : `${lead} This computer has no copy of this thread; it opens when the machine is back.`;
+  return options.unsynced ? `${body} Your change to it syncs then.` : body;
 }

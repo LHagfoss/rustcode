@@ -30,6 +30,7 @@ import { composedText, emptyExtras, sentAttachments } from "../state/compose";
 import { chooseFolder } from "../state/folders";
 import type { HeaderButtonId } from "../state/headerButtons";
 import { offlineNotice } from "../state/machineCache";
+import { hasPendingChange, useOutbox } from "../state/machineOutbox";
 import {
   machineGlyph,
   machineTint,
@@ -447,7 +448,7 @@ function Header({
             <Tooltip
               label={
                 offline
-                  ? `${machine} is not connected${lastUpdated ? `. Last updated ${lastUpdated}` : ""}. This thread is read-only until it is back.`
+                  ? `${machine} is not connected${lastUpdated ? `. Last updated ${lastUpdated}` : ""}. Its turns wait until it is back; settling or pinning it syncs then.`
                   : `This thread runs on ${machine}. Its turns, files and shell are there, not here.`
               }
             >
@@ -838,6 +839,8 @@ export function ChatView() {
   // Away but already on its supervisor's retry clock: read-only still, and coming back by itself.
   const offReconnecting = useMachineReconnecting(thread ? splitThreadKey(thread.id).host : undefined);
   // When it went away, and whether this computer holds a copy of the thread to read meanwhile.
+  // A settle or pin made here meanwhile, waiting for the machine (state/machineOutbox.ts).
+  const offUnsynced = useOutbox((o) => !!thread && hasPendingChange(o.byHost, thread.id));
   const offSince = useMachines((s) =>
     thread ? offlineSinceLabel(s.offlineSince[splitThreadKey(thread.id).host]) : undefined,
   );
@@ -960,6 +963,7 @@ export function ChatView() {
                       since: offSince,
                       reconnecting: offReconnecting,
                       hasCopy: !!thread.items.length,
+                      unsynced: offUnsynced,
                     })}
                     {ownRequest
                       ? ownRequest.question
