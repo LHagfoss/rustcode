@@ -92,7 +92,17 @@ updates when the machine is back.", the composer is disabled, and the
 header shows `Runs on ‹machine› · ‹harness› · ‹model›`; the controls that read
 this computer (terminal, working tree, pull requests, Finder, worktrees,
 checkpoints and undo) stay disabled with "Runs on ‹machine›" where the action
-would be. The Rust shell owns one connection supervisor per machine
+would be. Settling a thread there (or Review, Unsettle, pin and unpin) still
+works: the row changes at once, the toast says "Syncs when ‹machine› is back",
+the row carries a cloud glyph, and the change waits in the app's storage
+(`state/machineOutbox.ts`, one per thread and kind, so a settle undone before
+then sends nothing). When the machine lists its threads again
+(`machines.ts` `readThreads`) the changes go to it in order. A change the
+machine already has is not sent again; one the machine overrode is dropped,
+the newer one winning: the machine's when its thread was active there after
+the change was made (its `updatedAt` is later), the user's otherwise. A change
+the machine refuses (an older server) puts the row back and says so. The Rust
+shell owns one connection supervisor per machine
 (`src-tauri/src/machines.rs`, `rustcode/client`) and the webview gives each a
 channel (`MachineTransport` in `src/acp/transport.ts`, `src/state/machines.ts`),
 because a web view cannot dial a gateway and the pairing token belongs in the

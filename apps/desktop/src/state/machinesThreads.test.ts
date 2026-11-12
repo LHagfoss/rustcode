@@ -512,10 +512,13 @@ describe("a remote thread's operations", () => {
     }
   });
 
-  test("offline status and snooze refuse without hiding the thread", async () => {
+  test("offline status waits for the machine, and snooze refuses without hiding the thread", async () => {
     watchMachineConnection(LINUX, null);
     const before = statusOf(useApp.getState(), LINUX_THREAD);
-    expect(await setThreadsStatus([LINUX_THREAD], "done")).toBe(1);
+    // A settle shows at once and waits for the machine (state/machineOutbox.test.ts).
+    expect(await setThreadsStatus([LINUX_THREAD], "done")).toBe(0);
+    expect(statusOf(useApp.getState(), LINUX_THREAD)).toBe("done");
+    expect(await setThreadsStatus([LINUX_THREAD], "idle")).toBe(0);
     expect(statusOf(useApp.getState(), LINUX_THREAD)).toBe(before);
     expect(await setSnoozed(LINUX_THREAD, Date.now() + 60_000)).toBe(false);
     expect(useApp.getState().snoozed[LINUX_THREAD]).toBeUndefined();

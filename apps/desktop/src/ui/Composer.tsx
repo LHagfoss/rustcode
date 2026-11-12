@@ -1197,8 +1197,8 @@ export const Composer = memo(function Composer({
 
   const placeholder = offline
     ? offReconnecting
-      ? `Reconnecting${offMachine ? ` to ${offMachine}` : ""}… This thread is read-only until it is back…`
-      : `Not connected${offMachine ? ` to ${offMachine}` : ""}. This thread is read-only until it is back…`
+      ? `Reconnecting${offMachine ? ` to ${offMachine}` : ""}… Messages can be sent once it is back…`
+      : `Not connected${offMachine ? ` to ${offMachine}` : ""}. Messages can be sent once it is back…`
     : queuedEdit
       ? "Edit the queued message: ⏎ saves it in the queue, esc leaves it…"
       : extras.command
