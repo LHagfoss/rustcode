@@ -46,7 +46,9 @@ pub use protocol::{
     HandshakeResponse, PAIRING_CODE_DIGITS, Secret,
 };
 pub use reconnect::{backoff_cap, backoff_delay, network_changed, prefer_last_working};
-pub use registry::{Machine, MachineRegistry, OverlayProvider, Route, RouteKind};
+pub use registry::{
+    Machine, MachineRegistry, OverlayProvider, ProbeOutcome, Route, RouteKind, RouteProbe,
+};
 pub use routes::{
     AddressSpace, DialFailure, LAN_GRACE, RACE_DEADLINE, Race, RaceSettings, RouteFailure,
     RouteReport, address_space, local_addresses, on_local_overlay, ordered_for_this_computer,

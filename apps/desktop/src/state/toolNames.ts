@@ -228,7 +228,7 @@ function orchestrationLabel(
     case "list_projects":
       return { title: "Listed projects", summary: text(args.machine) || undefined };
     case "list_machines":
-      return { title: "Listed machines" };
+      return { title: args.probe === true ? "Tested machine routes" : "Listed machines" };
     case "list_pull_requests": {
       const state = text(args.state) || "open";
       return { title: "Listed pull requests", summary: state };

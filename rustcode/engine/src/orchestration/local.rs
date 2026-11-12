@@ -84,7 +84,7 @@ pub(crate) async fn answer_json(
         super::LIST_SESSIONS => list_sessions(session_id, args),
         super::READ_SESSION => read_session(session_id, args),
         super::LIST_HARNESSES => list_harnesses(args).await,
-        super::LIST_MACHINES => list_machines(),
+        super::LIST_MACHINES => list_machines(args),
         super::THREAD_STATUS => thread_status(session_id, args),
         super::WAIT_SESSION => wait_session(session_id, cancel, args).await,
         _ => app_required(name),
@@ -561,6 +561,91 @@ struct SavedMachine {
     paused: bool,
     #[serde(default)]
     last_connected_at: Option<String>,
+    #[serde(default)]
+    routes: Vec<SavedRoute>,
+    #[serde(default)]
+    probes: Vec<SavedProbe>,
+}
+
+/// One saved route; its kind is `lan`, `vpn`, `tailscale` or `public`.
+#[derive(Debug, Default, serde::Deserialize)]
+struct SavedRoute {
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    address: String,
+}
+
+/// What the last test of one route found, as the app saved it.
+#[derive(Debug, Default, serde::Deserialize)]
+struct SavedProbe {
+    #[serde(default)]
+    address: String,
+    #[serde(default)]
+    outcome: String,
+    #[serde(default)]
+    latency_ms: Option<u64>,
+    #[serde(default)]
+    at: Option<String>,
+}
+
+/// The gateway's port, which an address without one means.
+const GATEWAY_PORT: u16 = 17879;
+
+/// Whether two spellings name one endpoint: `studio.local:17879` and
+/// `studio.local`, `[fd00::1]:17879` and `fd00::1`. The engine does not link
+/// the client, so this is `rustcode-client`'s `registry::same_address`, which
+/// matches probes to routes in the app.
+fn same_address(left: &str, right: &str) -> bool {
+    left.eq_ignore_ascii_case(right) || endpoint(left) == endpoint(right)
+}
+
+/// An address's lowercase host and port, with the scheme and path dropped.
+fn endpoint(address: &str) -> (String, u16) {
+    let address = address.trim();
+    let address = address.split_once("://").map_or(address, |(_, rest)| rest);
+    let address = address.split('/').next().unwrap_or(address);
+    let (host, port) = if let Some(rest) = address.strip_prefix('[') {
+        let (host, after) = rest.split_once(']').unwrap_or((rest, ""));
+        (host, after.strip_prefix(':'))
+    } else {
+        match address.rsplit_once(':') {
+            Some((host, port))
+                if !host.contains(':') && port.chars().all(|c| c.is_ascii_digit()) =>
+            {
+                (host, Some(port))
+            }
+            _ => (address, None),
+        }
+    };
+    let port = port
+        .and_then(|port| port.parse::<u16>().ok())
+        .filter(|port| *port != 0)
+        .unwrap_or(GATEWAY_PORT);
+    (host.to_ascii_lowercase(), port)
+}
+
+impl SavedMachine {
+    /// Each route with the last test of it, or `null` for one never tested.
+    fn route_rows(&self) -> Vec<Value> {
+        self.routes
+            .iter()
+            .map(|route| {
+                let probe = self
+                    .probes
+                    .iter()
+                    .find(|probe| same_address(&probe.address, &route.address))
+                    .map(|probe| {
+                        let mut row = json!({"result": probe.outcome, "tested_at": probe.at});
+                        if let Some(latency) = probe.latency_ms {
+                            row["latency_ms"] = json!(latency);
+                        }
+                        row
+                    });
+                json!({"kind": route.kind, "address": route.address, "probe": probe})
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -574,8 +659,9 @@ fn unknown_platform() -> String {
 }
 
 /// `list_machines`: this computer and every machine paired on disk. The app
-/// owns the live connections, so a saved machine's state is `unknown` here.
-fn list_machines() -> Value {
+/// owns the live connections, so a saved machine's state is `unknown` here, and
+/// the routes are not tested: each shows the last test the app saved.
+fn list_machines(args: &Value) -> Value {
     let mut machines = vec![json!({
         "id": LOCAL_MACHINE_ID,
         "name": local_name(),
@@ -603,16 +689,27 @@ fn list_machines() -> Value {
         if machine.paused {
             row["paused"] = json!(true);
         }
+        let routes = machine.route_rows();
+        if !routes.is_empty() {
+            row["routes"] = json!(routes);
+        }
         if let Some(last_connected) = machine.last_connected_at {
             row["last_connected"] = json!(last_connected);
         }
         machines.push(row);
     }
-    json!({
+    let mut answer = json!({
         "current": LOCAL_MACHINE_ID,
         "machines": machines,
         "note": "The RustCode app is not attached, so paired machines come from machines.json and whether each one answers was not checked.",
-    })
+    });
+    if args.get("probe").and_then(Value::as_bool) == Some(true) {
+        answer["probed"] = json!(false);
+        answer["note"] = json!(
+            "The RustCode app is not attached, so the routes were not tested: each shows the last test the app saved, or null if it never ran one."
+        );
+    }
+    answer
 }
 
 /// `thread_status`: where this thread's delegates stand, from the link book and
@@ -1011,6 +1108,29 @@ fn replay(mut answer: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_saved_machine_lists_each_route_with_its_last_test() {
+        let saved: SavedMachine = serde_json::from_value(json!({
+            "host_id": "gw-a",
+            "routes": [
+                {"kind": "lan", "address": "192.168.1.20:17879"},
+                {"kind": "vpn", "address": "100.90.16.237:17879"}
+            ],
+            "probes": [
+                {"address": "192.168.1.20", "outcome": "reachable", "latency_ms": 4, "at": "2026-11-12T10:00:00Z"}
+            ]
+        }))
+        .unwrap();
+        let rows = saved.route_rows();
+        assert_eq!(rows[0]["probe"]["result"], "reachable");
+        assert_eq!(rows[0]["probe"]["latency_ms"], 4);
+        // A probe saved under one spelling of the address still matches the route.
+        assert!(rows[1]["probe"].is_null(), "an untested route says so");
+        assert!(same_address("[fd00::1]:17879", "FD00::1"));
+        assert!(!same_address("studio.local:9000", "studio.local"));
+        assert_eq!(rows[1]["address"], "100.90.16.237:17879");
+    }
 
     /// A caller thread with Full access, so a read does not need the app's card.
     fn full_access_caller() -> String {

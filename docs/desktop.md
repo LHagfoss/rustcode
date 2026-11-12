@@ -117,7 +117,11 @@ Disconnect (keeps the machine saved), Forget and **Pause new threads here**:
 there is no main machine, every computer is a peer and **Run on** starts on this
 one unless it names another. A paused machine keeps its
 connection and its existing threads, and **Run on** refuses it until it is
-resumed. Below them are that machine's harnesses with their install and
+resumed. Below them are its **Routes**: each saved address (the VPN route is
+saved with its port like the others) with the last test of it, reachable,
+refused, timed out or unreachable, with the latency, and a **Test routes**
+button that connects to every address now (a plain connect with no sign-in; the
+shell's `machines_probe`), then that machine's harnesses with their install and
 sign-in state and one **Check** (re-detect there, read its snapshot again), and
 **What syncs**: one row per Settings row, generated from the same registry the
 **Applying to** bar reads, in three columns — Shared, This machine only, This

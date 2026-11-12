@@ -67,6 +67,7 @@ import {
   type Machine,
   machineName,
   offlineSinceLabel,
+  probeMachineRoutes,
   selfName,
   useMachines,
 } from "./machines";
@@ -777,16 +778,42 @@ async function machineEntry(machine: MachineRef): Promise<JsonObject> {
       ? { route: { kind: saved.route.kind, address: saved.route.address, encrypted: saved.route.encrypted } }
       : {}),
     ...(saved?.lastConnectedAt ? { last_connected: saved.lastConnectedAt } : {}),
+    // Each route with what its last test found: reachable, refused or timeout, with the latency.
+    ...(saved?.routes.length
+      ? {
+          routes: saved.routes.map((route) => ({
+            kind: route.kind,
+            address: route.address,
+            encrypted: route.encrypted,
+            probe: route.probe
+              ? {
+                  result: route.probe.outcome,
+                  ...(route.probe.latencyMs === null ? {} : { latency_ms: route.probe.latencyMs }),
+                  tested_at: route.probe.at,
+                }
+              : null,
+          })),
+        }
+      : {}),
     harnesses: await machineHarnesses(machine),
     projects: projectsOn(useApp.getState().sessions, machine.host).map((project) => project.name),
   };
 }
 
-/** `list_machines`: this computer and each paired machine, one call. */
-async function listMachines(): Promise<JsonObject> {
+/**
+ * `list_machines`: this computer and each paired machine, one call. With `probe`
+ * every route of every paired machine is tested first, so the answer carries
+ * what each found now rather than the last test.
+ */
+async function listMachines(probe = false): Promise<JsonObject> {
+  const probed = probe ? await probeMachineRoutes() : undefined;
   const local = localMachine();
   const machines = [local, ...useMachines.getState().machines.map(machineRef)];
-  return { current: local.id, machines: await Promise.all(machines.map(machineEntry)) };
+  return {
+    current: local.id,
+    machines: await Promise.all(machines.map(machineEntry)),
+    ...(probed === undefined ? {} : { probed }),
+  };
 }
 
 /** The harnesses one machine can run: this app's own snapshot, or that machine's. */
@@ -1529,7 +1556,7 @@ async function perform(
       return answer.error ? answer : { ...answer, ...machineFields(machine) };
     }
     case "list_machines":
-      return listMachines();
+      return listMachines(call.probe);
     case "search_sessions":
       if (call.allProjects && !acrossProjects()) return reachRefused();
       return searchSessions(threads(), caller, call.query, call.allProjects);

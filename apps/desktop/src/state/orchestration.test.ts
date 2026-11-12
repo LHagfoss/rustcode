@@ -401,7 +401,11 @@ describe("orchestration rules", () => {
       query: "",
       allProjects: false,
     });
-    expect(parseCall({ tool: "list_machines", args: {} })).toEqual({ tool: "list_machines" });
+    expect(parseCall({ tool: "list_machines", args: {} })).toEqual({ tool: "list_machines", probe: false });
+    expect(parseCall({ tool: "list_machines", args: { probe: true } })).toEqual({
+      tool: "list_machines",
+      probe: true,
+    });
     expect(parseCall({ tool: "list_projects", args: { machine: "gw-1" } })).toMatchObject({
       machine: "gw-1",
     });

@@ -270,6 +270,48 @@ pub fn plain_ws_refusal(address: &str) -> anyhow::Error {
     )
 }
 
+/// What a TCP connect to one route found, the last time it was tried.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProbeOutcome {
+    /// The address accepted a connection.
+    Reachable,
+    /// Something answered and turned the connection away: the host is there,
+    /// nothing listens on that port, or a firewall rejects it.
+    Refused,
+    /// Nothing answered in time.
+    Timeout,
+    /// The connect failed some other way: no route to the host, the name did
+    /// not resolve.
+    Unreachable,
+}
+
+impl ProbeOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Reachable => "reachable",
+            Self::Refused => "refused",
+            Self::Timeout => "timeout",
+            Self::Unreachable => "unreachable",
+        }
+    }
+}
+
+/// The last probe of one route: what it found and how long it took.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouteProbe {
+    /// The route's address, as saved.
+    pub address: String,
+    pub outcome: ProbeOutcome,
+    /// Milliseconds to connect, or to be turned away; none for a timeout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u64>,
+    /// The error text of a connect that failed other than by timing out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub at: DateTime<Utc>,
+}
+
 /// A computer this client has paired with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Machine {
@@ -308,6 +350,10 @@ pub struct Machine {
     /// until the machine has been reached once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_route: Option<String>,
+    /// What the last test of each route found. Rebuilt whenever the routes
+    /// are probed; an entry for a route that was removed is dropped with it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub probes: Vec<RouteProbe>,
     /// New threads are not started here from this app, though its threads
     /// still open and the connection stays up. A local choice, never sent.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -328,7 +374,7 @@ impl Machine {
         route: Route,
         now: DateTime<Utc>,
     ) -> Self {
-        Self {
+        let mut machine = Self {
             host_id: host_id.into(),
             name: name.into(),
             display_name: None,
@@ -341,8 +387,11 @@ impl Machine {
             added_at: now,
             last_connected_at: None,
             last_route: None,
+            probes: Vec::new(),
             paused: false,
-        }
+        };
+        machine.normalize_routes();
+        machine
     }
 
     /// The name this app shows: the local display name when one is set, else
@@ -363,7 +412,8 @@ impl Machine {
     /// learns its kind and product. A learned route keeps the order the races
     /// rely on: it goes after the routes of its own class, so a LAN address
     /// learned later is still tried before an overlay one.
-    pub(crate) fn learn_route(&mut self, route: Route) -> bool {
+    pub(crate) fn learn_route(&mut self, mut route: Route) -> bool {
+        route.address = explicit_overlay_address(&route);
         if let Some(existing) = self
             .routes
             .iter_mut()
@@ -372,6 +422,12 @@ impl Machine {
             let mut changed = false;
             if existing.kind != route.kind {
                 existing.kind = route.kind;
+                changed = true;
+            }
+            // A VPN route saved before ports were spelled out gets its port.
+            let explicit = explicit_overlay_address(existing);
+            if existing.address != explicit {
+                existing.address = explicit;
                 changed = true;
             }
             if route.provider.is_some() && existing.provider != route.provider {
@@ -391,6 +447,47 @@ impl Machine {
             .map_or(0, |last| last + 1);
         self.routes.insert(index, route);
         true
+    }
+}
+
+impl Machine {
+    /// Spell out the port of every overlay route, so a VPN route reads like the
+    /// LAN ones (`100.90.16.237:17879`) and a probe or a hint names the port it
+    /// used. Returns whether anything changed.
+    fn normalize_routes(&mut self) -> bool {
+        let mut changed = false;
+        for route in &mut self.routes {
+            let explicit = explicit_overlay_address(route);
+            if route.address != explicit {
+                if self
+                    .last_route
+                    .as_deref()
+                    .is_some_and(|last| same_address(last, &route.address))
+                {
+                    self.last_route = Some(explicit.clone());
+                }
+                route.address = explicit;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// What the last test of `address` found, if it was tested.
+    pub fn probe_for(&self, address: &str) -> Option<&RouteProbe> {
+        self.probes
+            .iter()
+            .find(|probe| same_address(&probe.address, address))
+    }
+}
+
+/// A VPN or Tailscale route's address with its port spelled out; any other
+/// route's address as it is.
+fn explicit_overlay_address(route: &Route) -> String {
+    if matches!(route.kind, RouteKind::Vpn | RouteKind::Tailscale) {
+        crate::transport::with_explicit_port(&route.address)
+    } else {
+        route.address.clone()
     }
 }
 
@@ -671,6 +768,29 @@ impl MachineRegistry {
         })
     }
 
+    /// Save what a test of the machine's routes found, replacing the last one.
+    /// Only a route the machine still has keeps its entry.
+    pub fn set_probes(&mut self, host_id: &str, probes: Vec<RouteProbe>) -> Result<()> {
+        self.mutate(|machines| {
+            let Some(machine) = machines
+                .iter_mut()
+                .find(|machine| machine.host_id == host_id)
+            else {
+                bail!("no saved machine has host id {host_id}");
+            };
+            let routes = &machine.routes;
+            machine.probes = probes
+                .into_iter()
+                .filter(|probe| {
+                    routes
+                        .iter()
+                        .any(|route| same_address(&route.address, &probe.address))
+                })
+                .collect();
+            Ok(())
+        })
+    }
+
     /// Pause or resume new threads on a machine. Its connection and its
     /// existing threads are untouched; only **Run on** refuses it.
     pub fn set_paused(&mut self, host_id: &str, paused: bool) -> Result<()> {
@@ -765,7 +885,7 @@ fn read_stored(path: &Path) -> Result<Stored> {
             machines: Vec::new(),
         });
     };
-    let stored: Stored = serde_json::from_slice(&bytes)
+    let mut stored: Stored = serde_json::from_slice(&bytes)
         .with_context(|| format!("{} is not a machine registry", path.display()))?;
     ensure!(
         stored.version <= STORE_VERSION,
@@ -773,6 +893,11 @@ fn read_stored(path: &Path) -> Result<Stored> {
         path.display(),
         stored.version
     );
+    // A file written before VPN routes carried a port is read with it, and
+    // written that way by the next change.
+    for machine in &mut stored.machines {
+        machine.normalize_routes();
+    }
     Ok(stored)
 }
 
@@ -1156,6 +1281,100 @@ mod tests {
             "the product is kept, so a hint can name it"
         );
         assert!(store.learn_routes("gw-missing", &learned).is_err());
+    }
+
+    /// A VPN route is saved with its port like the LAN ones, and one saved
+    /// without a port by an older release is read with it.
+    #[test]
+    fn a_vpn_route_is_stored_with_its_port() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let mut store = load(dir.path());
+        store
+            .insert(machine("gw-a", "Studio", "192.168.1.20:17879"))
+            .unwrap();
+        store
+            .add_route("gw-a", Route::with_kind(RouteKind::Vpn, "100.90.16.237"))
+            .unwrap();
+        store
+            .add_route("gw-a", Route::with_kind(RouteKind::Vpn, "fdfd::2"))
+            .unwrap();
+        let reloaded = load(dir.path());
+        let addresses: Vec<&str> = reloaded.machines()[0]
+            .routes
+            .iter()
+            .map(|route| route.address.as_str())
+            .collect();
+        assert_eq!(
+            addresses,
+            [
+                "192.168.1.20:17879",
+                "100.90.16.237:17879",
+                "[fdfd::2]:17879"
+            ]
+        );
+        // Learning the same address with its port again changes nothing.
+        assert!(
+            !store
+                .add_route(
+                    "gw-a",
+                    Route::with_kind(RouteKind::Vpn, "100.90.16.237:17879")
+                )
+                .unwrap()
+        );
+        // A file from before ports were spelled out reads with them.
+        let path = crate::config::machines_file(dir.path());
+        let text = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("100.90.16.237:17879", "100.90.16.237");
+        std::fs::write(&path, text).unwrap();
+        let old = load(dir.path());
+        assert_eq!(old.machines()[0].routes[1].address, "100.90.16.237:17879");
+    }
+
+    #[test]
+    fn route_probes_round_trip_and_follow_the_routes() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let mut store = load(dir.path());
+        store
+            .insert(machine("gw-a", "Studio", "192.168.1.20:17879"))
+            .unwrap();
+        store
+            .add_route("gw-a", Route::with_kind(RouteKind::Vpn, "100.90.16.237"))
+            .unwrap();
+        let probe = |address: &str, outcome, latency_ms| RouteProbe {
+            address: address.to_owned(),
+            outcome,
+            latency_ms,
+            detail: None,
+            at: Utc::now(),
+        };
+        store
+            .set_probes(
+                "gw-a",
+                vec![
+                    probe("192.168.1.20:17879", ProbeOutcome::Reachable, Some(3)),
+                    probe("100.90.16.237:17879", ProbeOutcome::Timeout, None),
+                    probe("10.0.0.9:17879", ProbeOutcome::Refused, Some(1)),
+                ],
+            )
+            .unwrap();
+        let reloaded = load(dir.path());
+        let studio = &reloaded.machines()[0];
+        assert_eq!(
+            studio.probes.len(),
+            2,
+            "a probe of a route it lacks is dropped"
+        );
+        assert_eq!(
+            studio.probe_for("192.168.1.20").map(|p| p.outcome),
+            Some(ProbeOutcome::Reachable),
+            "a route is found by its endpoint, however the port is spelled"
+        );
+        assert_eq!(
+            studio.probe_for("100.90.16.237:17879").map(|p| p.outcome),
+            Some(ProbeOutcome::Timeout)
+        );
+        assert!(store.set_probes("gw-missing", Vec::new()).is_err());
     }
 
     /// The kinds a machine reports become this client's kinds, including the
