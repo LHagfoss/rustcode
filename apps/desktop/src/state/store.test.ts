@@ -156,7 +156,7 @@ import {
   wakeSnoozed,
   windowNow,
 } from "./store";
-import { turnCompletion } from "./thread";
+import { emptyThread, turnCompletion } from "./thread";
 import { type DelegatedThread, topLevel } from "./topLevel";
 
 const until = async (check: () => boolean, ms = 2000) => {
@@ -3801,6 +3801,94 @@ describe("toasts", () => {
     expect(useApp.getState().toasts[0]!.expiresAt).not.toBeNull();
     clearToasts();
     setToastsPaused(false);
+  });
+});
+
+describe("which thread endings are announced", () => {
+  const live = (id: string, over: Partial<ReturnType<typeof emptyThread>> = {}) => ({
+    ...emptyThread(id, "/p", id),
+    loaded: true,
+    ...over,
+  });
+  const delegate = (parent: string, target: string) => ({
+    id: `${parent}/1`,
+    orchestrator: parent,
+    target,
+    orchestratorTitle: "Parent",
+    targetTitle: "Child",
+    message: "do it",
+    state: "working" as const,
+    createdAt: Date.now(),
+  });
+  const stage = async (
+    threads: Record<string, ReturnType<typeof live>>,
+    links: ReturnType<typeof delegate>[] = [],
+  ) => {
+    const { clearToasts } = await import("./store");
+    clearToasts();
+    useApp.setState({
+      selectedId: "other",
+      snoozed: {},
+      messaged: {},
+      sessions: [],
+      threads,
+      links: { ...emptyBook(), links },
+    });
+  };
+  const said = () => useApp.getState().toasts.map((t) => t.text);
+
+  test("a turn that ends with a background command parked says nothing; the woken turn's end does", async () => {
+    const { finishToast, announceFinished } = await import("./store");
+    await stage({ a: live("a", { waiting: 2 }) });
+    finishToast("a", "completed");
+    expect(said()).toEqual([]);
+    // The commands finish, the thread wakes itself, and that later turn ends with nothing left.
+    useApp.setState({ threads: { a: live("a", { waiting: undefined }) } });
+    announceFinished("a");
+    expect(said()).toEqual(["“A thread” finished"]);
+  });
+
+  test("a turn that ends while a delegate still works says nothing", async () => {
+    const { finishToast } = await import("./store");
+    await stage({ a: live("a"), c: live("c", { running: true }) }, [delegate("a", "c")]);
+    finishToast("a", "completed");
+    expect(said()).toEqual([]);
+  });
+
+  test("a delegate finishing says nothing, its failure does", async () => {
+    const { finishToast } = await import("./store");
+    await stage({ a: live("a"), c: live("c") }, [delegate("a", "c")]);
+    finishToast("c", "completed");
+    expect(said()).toEqual([]);
+    finishToast("c", "failed");
+    expect(said()).toEqual(["“A thread” failed"]);
+  });
+
+  test("a thread that is truly finished says so, and so does a failure", async () => {
+    const { finishToast } = await import("./store");
+    await stage({ a: live("a") });
+    finishToast("a", "completed");
+    expect(said()).toEqual(["“A thread” finished"]);
+    finishToast("a", "failed");
+    expect(said()).toContain("“A thread” failed");
+  });
+
+  test("a turn that ends into a queued message is between turns and says nothing", async () => {
+    const { finishToast } = await import("./store");
+    const queued = live("a", {
+      queue: [{ id: "q1", text: "next", queuedAt: Date.now() }],
+    });
+    await stage({ a: queued });
+    finishToast("a", "completed");
+    expect(said()).toEqual([]);
+  });
+
+  test("a hit limit is a problem and always says so", async () => {
+    const { finishToast } = await import("./store");
+    await stage({ a: live("a", { waiting: 1 }) });
+    finishToast("a", "failed", { waiting: { until: Date.now() + 60_000 } });
+    expect(said()).toHaveLength(1);
+    expect(said()[0]).toContain("hit its limit");
   });
 });
 
