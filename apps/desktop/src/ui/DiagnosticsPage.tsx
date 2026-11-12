@@ -367,7 +367,7 @@ export function DiagnosticsPage() {
                     h.path ? (
                       <PathText key="binary" path={h.path} />
                     ) : h.command[0] ? (
-                      <Literal>{h.command[0]}</Literal>
+                      <Literal key="command">{h.command[0]}</Literal>
                     ) : null,
                   ],
                   ["Version", h.version],
