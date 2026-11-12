@@ -63,6 +63,86 @@ fn link_gate() -> &'static tokio::sync::Mutex<()> {
     &GATE
 }
 
+/// Slots a call has checked and not yet turned into links, by caller. Counted
+/// with the book's active links, so calls that start threads side by side
+/// cannot overshoot a limit while the threads are still starting.
+fn reservations() -> &'static std::sync::Mutex<std::collections::HashMap<String, u64>> {
+    static RESERVED: LazyLock<std::sync::Mutex<std::collections::HashMap<String, u64>>> =
+        LazyLock::new(Default::default);
+    &RESERVED
+}
+
+fn reserved(caller: &str) -> (u64, u64) {
+    let held = reservations()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    (
+        held.get(caller).copied().unwrap_or(0),
+        held.values().sum::<u64>(),
+    )
+}
+
+/// `count` slots held for `caller` until each becomes a link or the call ends.
+#[derive(Debug)]
+struct Reservation {
+    caller: String,
+    left: std::sync::Mutex<u64>,
+}
+
+impl Reservation {
+    fn release_one(&self) {
+        let mut left = self.left.lock().unwrap_or_else(|error| error.into_inner());
+        if *left > 0 {
+            *left -= 1;
+            self.give_back(1);
+        }
+    }
+
+    fn give_back(&self, count: u64) {
+        let mut held = reservations()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(mine) = held.get_mut(&self.caller) {
+            *mine = mine.saturating_sub(count);
+            if *mine == 0 {
+                held.remove(&self.caller);
+            }
+        }
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        let left = std::mem::take(
+            self.left
+                .get_mut()
+                .unwrap_or_else(|error| error.into_inner()),
+        );
+        if left > 0 {
+            self.give_back(left);
+        }
+    }
+}
+
+/// Check that `count` more delegates fit and hold their slots. Only this check
+/// runs under the gate; starting the threads does not.
+async fn reserve(caller: &str, count: u64) -> Result<Reservation, Value> {
+    let _gate = link_gate().lock().await;
+    if let Some(refusal) = slot_refusal(caller, count) {
+        return Err(refusal);
+    }
+    reservations()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .entry(caller.to_owned())
+        .and_modify(|held| *held += count)
+        .or_insert(count);
+    Ok(Reservation {
+        caller: caller.to_owned(),
+        left: std::sync::Mutex::new(count),
+    })
+}
+
 /// What a delegate is asked to end with, word for word as the app asks it.
 const DELEGATE_REPORT: &str = "When you finish, end with a short report for the orchestrator, at most about 12 lines: the outcome, the branch and pull request, the checks you ran and their result, and anything left open. No code, diffs or logs in it; it reads your thread if it needs more.";
 
@@ -305,8 +385,18 @@ pub(crate) async fn start(caller: &str, args: &Value) -> Value {
     if let Err(refusal) = delegation(caller, "start_session") {
         return refusal;
     }
-    let _gate = link_gate().lock().await;
-    match start_one(caller, &ask_of(args)).await {
+    let ask = ask_of(args);
+    // The slot is checked and held under the gate, which is let go before the
+    // thread starts: a harness that takes minutes to start blocks only itself.
+    let reservation = if ask.standalone {
+        None
+    } else {
+        match reserve(caller, 1).await {
+            Ok(reservation) => Some(reservation),
+            Err(refusal) => return refusal,
+        }
+    };
+    match start_one(caller, &ask, reservation.as_ref()).await {
         Ok(answer) => answer,
         Err(refusal) => refusal,
     }
@@ -340,10 +430,14 @@ pub(crate) async fn fan_out(caller: &str, args: &Value) -> Value {
         );
     }
     let base = ask_of(args);
-    let _gate = link_gate().lock().await;
-    if let Some(refusal) = slot_refusal(caller, entries.len() as u64) {
-        return refusal;
-    }
+    let reservation = if base.standalone {
+        None
+    } else {
+        match reserve(caller, entries.len() as u64).await {
+            Ok(reservation) => Some(reservation),
+            Err(refusal) => return refusal,
+        }
+    };
     let fan_id = fan_id();
     let title = title_of(&base);
     let mut out: Vec<Value> = Vec::new();
@@ -361,7 +455,7 @@ pub(crate) async fn fan_out(caller: &str, args: &Value) -> Value {
             standalone: base.standalone,
             fan_out: Some(&fan_id),
         };
-        match start_one(caller, &ask).await {
+        match start_one(caller, &ask, reservation.as_ref()).await {
             Ok(answer) => {
                 if let Some(link) = answer.get("link_id").and_then(Value::as_str) {
                     link_ids.push(link.to_owned());
@@ -397,16 +491,15 @@ fn title_of(ask: &Ask<'_>) -> String {
 }
 
 /// Start one thread and hand its first turn to [`deliver`].
-async fn start_one(caller: &str, ask: &Ask<'_>) -> Result<Value, Value> {
+async fn start_one(
+    caller: &str,
+    ask: &Ask<'_>,
+    reservation: Option<&Reservation>,
+) -> Result<Value, Value> {
     if chain_refusal(caller) {
         return Err(not_allowed(format!(
             "delegation goes {MAX_DEPTH} levels deep; this thread is at the bottom of one and cannot start another"
         )));
-    }
-    if !ask.standalone
-        && let Some(refusal) = slot_refusal(caller, 1)
-    {
-        return Err(refusal);
     }
     let caller_meta = crate::config::session_meta_by_id(caller)
         .ok_or_else(|| failed("this thread's own record is missing"))?;
@@ -492,6 +585,10 @@ async fn start_one(caller: &str, ask: &Ask<'_>) -> Result<Value, Value> {
         deliver(engine, session_id, ask.prompt.to_owned(), None);
         answer["standalone"] = json!(true);
         return Ok(answer);
+    }
+    // The link takes the slot from here on, so the reservation lets it go.
+    if let Some(reservation) = reservation {
+        reservation.release_one();
     }
     let link = match record_link(
         caller,
@@ -864,6 +961,7 @@ fn record_link(
             "state": "working",
             "started": started,
             "engine": true,
+            "engineBeat": at,
             "harness": harness,
             "harnessName": harness_name,
             "createdAt": at,
@@ -897,10 +995,47 @@ fn record_link(
             crate::data_store::engine_link_ended(id);
         }
     })?;
+    keep_beating();
     link.get("id")
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| "the link has no id".to_owned())
+}
+
+/// While this process runs any link, stamp them every few seconds, so a reader
+/// can tell them from the links of an engine that died.
+fn keep_beating() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static BEATING: AtomicBool = AtomicBool::new(false);
+    if BEATING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        BEATING.store(false, Ordering::SeqCst);
+        return;
+    };
+    runtime.spawn(async move {
+        loop {
+            tokio::time::sleep(crate::data_store::ENGINE_BEAT_EVERY).await;
+            if crate::data_store::engine_live_links().is_empty() {
+                BEATING.store(false, Ordering::SeqCst);
+                // A link opened between the check and the store would find
+                // the loop still marked running: take it up again.
+                if crate::data_store::engine_live_links().is_empty()
+                    || BEATING
+                        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_err()
+                {
+                    break;
+                }
+                continue;
+            }
+            let _ = tokio::task::spawn_blocking(crate::data_store::beat_engine_links).await;
+        }
+    });
 }
 
 fn record_fan_out(caller: &str, fan_id: &str, title: &str, prompt: &str, links: &[String]) {
@@ -949,7 +1084,9 @@ fn active_links(caller: &str) -> (u64, u64) {
             mine += 1;
         }
     }
-    (mine, all)
+    // Slots a start has checked and not yet recorded.
+    let (held_mine, held_all) = reserved(caller);
+    (mine + held_mine, all + held_all)
 }
 
 fn links_left(caller: &str) -> u64 {
@@ -1706,6 +1843,29 @@ mod tests {
         assert_eq!(chosen(Access::Full), "once");
         assert_eq!(chosen(Access::Edits), "no");
         assert_eq!(chosen(Access::Ask), "no");
+    }
+
+    #[tokio::test]
+    async fn slots_checked_by_a_start_in_flight_count_until_it_records_its_link() {
+        let caller = format!("caller-reserve-{}-{}", std::process::id(), now());
+        let (per_thread, _) = slot_limits();
+        let first = reserve(&caller, per_thread).await.expect("the slots fit");
+        // Every slot is held while the threads start: a second start waits for none.
+        let refused = reserve(&caller, 1).await;
+        assert_eq!(
+            refused
+                .as_ref()
+                .err()
+                .map(|refusal| refusal["error"]["code"].clone()),
+            Some(json!("busy")),
+            "{refused:?}"
+        );
+        // A recorded link takes over one slot from the reservation.
+        first.release_one();
+        assert_eq!(reserved(&caller).0, per_thread - 1);
+        drop(first);
+        assert_eq!(reserved(&caller).0, 0, "the call's end gives the rest back");
+        assert!(reserve(&caller, 1).await.is_ok());
     }
 
     #[test]

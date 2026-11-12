@@ -863,6 +863,92 @@ pub fn engine_live_links() -> Vec<String> {
     live
 }
 
+/// How often the engine stamps the links it runs, and how long without a stamp
+/// before another reader takes such a link for one whose engine died.
+pub const ENGINE_BEAT_EVERY: Duration = Duration::from_secs(10);
+const ENGINE_BEAT_STALE_MS: i64 = 45_000;
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Stamp every link this process runs with the time, so a reader in another
+/// process (or this one after a restart) can tell a running engine's link from
+/// one whose engine died with the turn still `working`.
+pub fn beat_engine_links() {
+    let at = now_ms();
+    for id in engine_live_links() {
+        let _ = change_link(&id, |mut link| {
+            link["engineBeat"] = json!(at);
+            link
+        });
+    }
+}
+
+/// An engine's link still `working` that no live engine stamps any more: the
+/// engine died mid-turn. This process's own live links never count.
+fn orphaned_link(link: &Value, live: &HashSet<String>, at: i64) -> bool {
+    if link.get("engine").and_then(Value::as_bool) != Some(true)
+        || !is_active_link(link.get("state").and_then(Value::as_str))
+        || link_id(link).is_some_and(|id| live.contains(id))
+    {
+        return false;
+    }
+    let stamped = link
+        .get("engineBeat")
+        .and_then(Value::as_i64)
+        .or_else(|| link.get("createdAt").and_then(Value::as_i64))
+        .unwrap_or(0);
+    at - stamped > ENGINE_BEAT_STALE_MS
+}
+
+/// The link as the app would leave it after a restart.
+fn interrupted_orphan(mut link: Value, at: i64) -> Value {
+    link["state"] = json!("interrupted");
+    link["settledAt"] = json!(at);
+    let mut events = link
+        .get("events")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    events.push(json!({ "kind": "interrupted", "at": at }));
+    link["events"] = Value::Array(events);
+    link
+}
+
+/// Interrupt the links of engines that died mid-turn, in the default store.
+pub fn interrupt_orphaned_links() -> usize {
+    data_path()
+        .filter(|path| path.is_file())
+        .and_then(|path| interrupt_orphaned_links_at(&path).ok())
+        .unwrap_or(0)
+}
+
+/// [`interrupt_orphaned_links`] against one store file.
+pub fn interrupt_orphaned_links_at(path: &Path) -> Result<usize, String> {
+    let connection = open(path)?;
+    let live = engine_live().clone();
+    let at = now_ms();
+    // Look first without the write lock: almost every call finds nothing.
+    let stored = read_links(&connection)?;
+    if !stored.iter().any(|link| orphaned_link(link, &live, at)) {
+        return Ok(0);
+    }
+    let transaction = immediate(&connection)?;
+    let mut changed = 0;
+    for link in read_links(&transaction)? {
+        if orphaned_link(&link, &live, at) {
+            write_link(&transaction, &interrupted_orphan(link, at))?;
+            changed += 1;
+        }
+    }
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(changed)
+}
+
 fn is_final_link(state: Option<&str>) -> bool {
     matches!(state, Some("done" | "failed" | "cancelled"))
 }
@@ -899,8 +985,9 @@ fn protect_engine_links(
                     incoming[at] = kept.clone();
                 }
             }
-            None if live.contains(id) => incoming.push(kept.clone()),
-            None => {}
+            // The app's copy predates the link (another window, an older load):
+            // dropping it would lose a settled answer before its caller reads it.
+            None => incoming.push(kept.clone()),
         }
     }
     incoming
@@ -923,7 +1010,7 @@ fn merge_counters(incoming: Option<&Value>, stored: &Value) -> Value {
     Value::Object(out)
 }
 
-fn read_links(transaction: &Transaction<'_>) -> Result<Vec<Value>, String> {
+fn read_links(transaction: &Connection) -> Result<Vec<Value>, String> {
     let mut statement = transaction
         .prepare_cached("SELECT body FROM thread_links ORDER BY started_at, id")
         .map_err(|error| error.to_string())?;
@@ -1172,6 +1259,10 @@ pub fn load_link_book_at(path: &Path) -> Result<Value, String> {
     if !path.is_file() {
         return Ok(json!({ "stored": false, "book": empty_book() }));
     }
+    // An engine that died mid-turn leaves its link `working`: settle it before
+    // reading, so every reader (the app, `wait_session`, the slot count) sees
+    // it interrupted.
+    let _ = interrupt_orphaned_links_at(path);
     let connection = open(path)?;
     let mut statement = connection
         .prepare(
@@ -4156,6 +4247,69 @@ mod tests {
         .unwrap();
         let loaded = load_link_book_at(&path).unwrap();
         assert_eq!(loaded["book"]["links"][0]["state"], json!("interrupted"));
+    }
+
+    #[test]
+    fn a_link_whose_engine_died_is_interrupted_on_the_next_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let dead = "caller-dead-read";
+        // Stamped long ago and never live in this process: its engine is gone.
+        open_link_at(&path, dead, |n| {
+            engine_link(&format!("{dead}/{n}"), dead, "working")
+        })
+        .unwrap();
+        let live_caller = "caller-live-read";
+        let live = open_link_at(&path, live_caller, |n| {
+            engine_link(&format!("{live_caller}/{n}"), live_caller, "working")
+        })
+        .unwrap();
+        engine_link_started(live["id"].as_str().unwrap());
+        // One a running engine stamped a moment ago is not orphaned either.
+        let fresh = open_link_at(&path, "caller-fresh-read", |n| {
+            let mut link = engine_link(
+                &format!("caller-fresh-read/{n}"),
+                "caller-fresh-read",
+                "working",
+            );
+            link["engineBeat"] = json!(now_ms());
+            link
+        })
+        .unwrap();
+
+        let loaded = load_link_book_at(&path).unwrap();
+        let state = |id: &str| {
+            loaded["book"]["links"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|link| link["id"] == json!(id))
+                .map(|link| link["state"].clone())
+        };
+        assert_eq!(state(&format!("{dead}/1")), Some(json!("interrupted")));
+        assert_eq!(state(live["id"].as_str().unwrap()), Some(json!("working")));
+        assert_eq!(state(fresh["id"].as_str().unwrap()), Some(json!("working")));
+        engine_link_ended(live["id"].as_str().unwrap());
+    }
+
+    #[test]
+    fn a_settled_engine_link_survives_an_app_copy_that_never_saw_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let caller = "caller-settled-kept";
+        let opened = open_link_at(&path, caller, |n| {
+            engine_link(&format!("{caller}/{n}"), caller, "done")
+        })
+        .unwrap();
+        // A second window's book from before the link existed.
+        save_link_book_at(&path, &book_json()).unwrap();
+        let loaded = load_link_book_at(&path).unwrap();
+        let kept = loaded["book"]["links"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|link| link["id"] == opened["id"]);
+        assert!(kept, "{loaded}");
     }
 
     #[test]

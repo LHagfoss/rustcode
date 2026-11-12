@@ -340,8 +340,9 @@ What it does not do, and says so by name:
 - **Per-thread access.** The engine keeps the access each prompt carries
   (`_meta.rustcode.access`: `ask`, `edits`, `full`) beside the thread
   (`config::save_session_access`), and reads it for the caller and for a
-  message's target. Only a thread no client has prompted since this was kept
-  falls back to its own `/yolo` flag, else Settings › General › Default access
+  message's target. `/yolo` in a terminal or
+  a paired device writes the same record (on is Full, off is Ask). Only a thread
+  no client has prompted since this was kept falls back to its own `/yolo` flag, else Settings › General › Default access
   — and so a thread the app narrowed to Ask under a Full default can read as
   Full until its next prompt. A missing or unknown setting reads as Ask.
 - **Targets run at their own access.** A `message_session` turn runs at the
@@ -356,8 +357,9 @@ What it does not do, and says so by name:
   a message to a thread that is working is refused as `busy`, unless it
   carries `steer: true`, which joins the running turn (if the steer is not
   taken, nothing is sent as a new message either). `fan_out` takes 2 to 4
-  harnesses. Calls that open links run one at a time, so parallel calls cannot
-  overshoot the limits.
+  harnesses. Calls that open links check the slots and hold them (a reservation)
+  one at a time, and start their threads outside that lock, so parallel calls
+  cannot overshoot the limits and one slow harness start blocks no other call.
 - **Who owns the link.** A link the engine opens carries `engine: true`, and
   the engine settles it in the store with a write of that link alone
   (`data_store::open_link`, `change_link`), never a read-and-replace of the
@@ -365,8 +367,14 @@ What it does not do, and says so by name:
   (`_rustcode/data/links/load` answers `engineLive`, and `syncLinkBook` skips
   those), and the app's whole-book save cannot replace it or move a counter
   back (`docs/data-store.md`). The app reads the store every few seconds while
-  one is active and takes what settled. If the engine dies mid-turn the link is
-  no longer live, and the next app that connects interrupts it like any other.
+  one is active and takes what settled. The engine stamps its live links
+  (`engineBeat`) every 10 seconds. If it dies mid-turn, a link nobody stamps for
+  45 seconds is interrupted by the next reader — the engine at start, any read
+  of the book (so `wait_session` and the slot count never see it as working), or
+  the app — rather than left `working` for good. A laptop asleep for longer than
+  that can have a live link interrupted by another process; when its turn ends
+  the engine still settles it. A settled engine link stays in the book even when
+  a stale app copy never saw it.
 
 Management and merge tools (`update_session`, `configure_session`,
 `transfer_session`, `interrupt_session`, `merge_when_green`, `cleanup_worktree`,

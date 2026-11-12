@@ -2124,6 +2124,8 @@ impl AcpEngine {
         // Metadata for `rustcode usage` and `rustcode data query`; a background
         // backfill of the existing threads runs once, on first open.
         crate::data_store::warm();
+        // Links an earlier engine was running when it died are not running now.
+        tokio::task::spawn_blocking(crate::data_store::interrupt_orphaned_links);
         let server = AcpServer::new(auto_approve)?;
         // Linked pull requests from before a restart carry on from here, and
         // one made by a tool during this run is picked up on the next round
