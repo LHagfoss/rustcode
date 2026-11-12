@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { comparisonBase, shortRef } from "./gitRef";
+import { comparisonBase, rowBranch, shortRef } from "./gitRef";
 
 describe("shortRef", () => {
   test("a branch name stays as it is", () => {
@@ -50,5 +50,19 @@ describe("comparisonBase", () => {
     expect(comparisonBase(undefined)).toBeUndefined();
     expect(comparisonBase({})).toBeUndefined();
     expect(comparisonBase({ baseRef: "", base: "" })).toBeUndefined();
+  });
+});
+
+describe("rowBranch", () => {
+  test("drops a Conventional Commits type", () => {
+    expect(rowBranch("feat/desktop-smart-ui-snappier-sources")).toBe("desktop-smart-ui-snappier-sources");
+    expect(rowBranch("fix/tui-composer-selection")).toBe("tui-composer-selection");
+    expect(rowBranch("chore/a/b")).toBe("a/b");
+  });
+  test("keeps any other branch whole", () => {
+    expect(rowBranch("main")).toBe("main");
+    expect(rowBranch("lars/spike")).toBe("lars/spike");
+    expect(rowBranch("release/1.2")).toBe("release/1.2");
+    expect(rowBranch("feat/")).toBe("feat/");
   });
 });
