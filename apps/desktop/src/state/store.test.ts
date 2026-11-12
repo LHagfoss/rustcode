@@ -5197,6 +5197,63 @@ describe("a turn that stopped on something other than a limit", () => {
     storage.done();
   });
 
+  test("a delegate that ended on Claude Code's limit error waits, then answers its link again", async () => {
+    const { continueDueThreads } = await import("./store");
+    const { storage, transport, id, sent } = await readyWithFailingTurns();
+    const parent = useApp.getState().sessions.find((x) => x.id !== id)?.id ?? "parent";
+    const limit = "You've hit your 5-hour limit · resets 2:40am (Europe/Oslo)";
+    const link: Link = {
+      id: `${parent}/1`,
+      orchestrator: parent,
+      target: id,
+      orchestratorTitle: "Parent",
+      targetTitle: "Child",
+      message: "do it",
+      state: "working",
+      createdAt: Date.now(),
+    };
+    useApp.setState({ links: { ...emptyBook(), links: [link], counters: { [parent]: 1 } } });
+    const linkOf = () => useApp.getState().links.links.find((l) => l.id === link.id)!;
+
+    // The exact error five delegates ended on: the turn fails, the link fails.
+    transport.failure = `Internal error: ${limit}: {"errorKind":"rate_limit"}`;
+    await runPrompt(id, "do the thing", undefined, { link: link.id });
+    expect(linkOf().state).toBe("failed");
+    const wait = useApp.getState().limitWaits[id]!;
+    expect(wait.reason ?? "limit").toBe("limit");
+    expect(wait.until).toBeGreaterThan(Date.now());
+    expect(wait.links).toEqual([link.id]);
+    // It is saved, so an app restart reads the same wait back.
+    expect(storage.data.get("rustcode.limitWaits")).toContain(link.id);
+
+    // The reset has passed, even by days (the Mac slept): the next tick sends the resume.
+    transport.failure = null;
+    const turns = sent().length;
+    useApp.setState({ limitWaits: { [id]: { ...wait, until: Date.now() - 3 * 86_400_000 } } });
+    await continueDueThreads();
+    await until(() => sent().length > turns);
+    expect(prompted(sent().at(-1)!)).toContain("usage limit that stopped your last turn has reset");
+    // The link is working again while the resume runs; the mock asks before it edits.
+    await until(() => (useApp.getState().threads[id]?.permissions.length ?? 0) > 0);
+    expect(linkOf().state).toBe("working");
+    const ask = useApp.getState().threads[id]!.permissions[0]!;
+    answerPermission(ask, ask.options.find((o) => o.kind === "allow_once")!);
+    // ... and it settles with the new answer.
+    await until(() => linkOf().state === "done", 4000);
+    expect(linkOf().answer).not.toContain("hit your 5-hour limit");
+    expect(linkOf().notifiedAt).toBeUndefined();
+    expect(useApp.getState().limitWaits[id]).toBeUndefined();
+    storage.done();
+  });
+
+  test("a harness's name in front of the limit still waits for the reset", async () => {
+    const { storage, transport, id } = await readyWithFailingTurns();
+    transport.failure = "Claude Code: You've hit your 5-hour limit · resets 2:40am (Europe/Oslo)";
+    await runPrompt(id, "do the thing");
+    expect(useApp.getState().limitWaits[id]).toBeDefined();
+    storage.done();
+  });
+
   test("a credit limit never waits: the thread stays stopped", async () => {
     const { storage, transport, id } = await readyWithFailingTurns();
     transport.failure =

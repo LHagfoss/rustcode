@@ -138,6 +138,7 @@ import {
   reachesThread,
   reachOf,
   renderRead,
+  reopenLinks,
   restateLinks,
   sameProject,
   sameReach,
@@ -186,6 +187,8 @@ import {
   clearFinished,
   connectionFor,
   createSession,
+  dropInternetWait,
+  dropLimitWait,
   effortMemory,
   ensureHarnessModels,
   errorText,
@@ -3566,7 +3569,7 @@ async function messageNow(
     (await steer(target.id, delivered(text, caller.title), extras))
   ) {
     delivery = "steered";
-    setBook((b) => updateLink(b, id, { state: "working" }));
+    linkSteered(target.id, id, delivered(text, caller.title));
   } else {
     deliver(target.id, delivered(text, caller.title), id, caller.id, extras);
     delivery = useApp.getState().threads[target.id]?.queue.some((q) => q.link === id) ? "queued" : "started";
@@ -4561,6 +4564,7 @@ export function resetQueues(): void {
   restoredQueues.clear();
   watchedQueues.clear();
   steeredLinks.clear();
+  steeredIntoTurn.clear();
 }
 
 /** The threads whose saved queue this window has already put back. */
@@ -4914,6 +4918,92 @@ export function linkStarted(id: string) {
 }
 
 /**
+ * The links whose message went into a running turn of a thread (`steer`), by thread, with the text
+ * the engine was given: that turn settles them, and the text finds the ones it never read.
+ */
+const steeredIntoTurn = new Map<string, Map<string, string>>();
+
+/** What a steer says as the thread recorded it (`appendSteer`), else the text it was asked with. */
+const steerText = (thread: string, fallback: string) =>
+  useApp.getState().threads[thread]?.steers.at(-1)?.text ?? fallback;
+
+/**
+ * A link's message `text` was steered into the running turn of `thread`. No turn of its own carries
+ * the link (`runPrompt` `options.link`), so the running turn is the one that answers it: the link
+ * works from here and is settled when that turn ends (`threadTurnEnded`), however many steers went
+ * in and whether or not the thread is open.
+ *
+ * A turn that ended while the steer was in flight either handed the steer back (a copy waits in the
+ * queue: it carries the link, and the link is `queued` behind it so a failed turn fails it) or read
+ * it, in which case that turn's own reply is the answer and the link settles on it. The message is
+ * never sent a second time.
+ */
+export function linkSteered(thread: string, link: string | undefined, text: string): void {
+  if (!link) return;
+  linkStarted(link);
+  const said = steerText(thread, text);
+  const current = useApp.getState().threads[thread];
+  if (!current?.running) {
+    const queued = current?.queue.find((q) => !q.link && q.text.trim() === said.trim());
+    if (queued) {
+      updateThread(thread, (t) => ({
+        ...t,
+        queue: t.queue.map((q) => (q.id === queued.id ? { ...q, link } : q)),
+      }));
+      setBook((b) => updateLink(b, link, { state: "queued" }));
+    } else {
+      linksFinished([link], thread, "completed", undefined, []);
+    }
+    return;
+  }
+  const links = steeredIntoTurn.get(thread) ?? new Map<string, string>();
+  links.set(link, said);
+  steeredIntoTurn.set(thread, links);
+}
+
+/**
+ * The turn of `thread` ended and the engine handed back steers it never read (`unusedSteers`); they
+ * wait in the queue as turns of their own. The links they came from are still owed an answer, so
+ * those turns carry them, and the ending turn does not settle them (`threadTurnEnded`).
+ */
+export function requeueUnreadSteers(thread: string, unused: readonly string[]): void {
+  const steered = steeredIntoTurn.get(thread);
+  if (!steered?.size || !unused.length) return;
+  const carried = new Map<string, string>();
+  for (const said of unused) {
+    const found = [...steered].find(([link, text]) => !carried.has(link) && text.trim() === said.trim());
+    if (!found) continue;
+    carried.set(found[0], found[1]);
+    steered.delete(found[0]);
+  }
+  if (!steered.size) steeredIntoTurn.delete(thread);
+  if (!carried.size) return;
+  // Queued behind the turn that will read it: a failed turn that holds the queue fails the link
+  // (`failQueuedOn`) instead of leaving it Working beside a thread that runs nothing.
+  setBook((b) => [...carried.keys()].reduce((acc, link) => updateLink(acc, link, { state: "queued" }), b));
+  updateThread(thread, (t) => {
+    const waiting = new Map(carried);
+    return {
+      ...t,
+      queue: t.queue.map((q) => {
+        if (q.link) return q;
+        const found = [...waiting].find(([, text]) => text.trim() === q.text.trim());
+        if (!found) return q;
+        waiting.delete(found[0]);
+        return { ...q, link: found[0] };
+      }),
+    };
+  });
+}
+
+/** The links steered into `thread`'s turn, taken from it: a turn that is lost carries them on (`lostTurn`). */
+export function takeSteeredLinks(thread: string): string[] {
+  const links = [...(steeredIntoTurn.get(thread)?.keys() ?? [])];
+  steeredIntoTurn.delete(thread);
+  return links;
+}
+
+/**
  * The links a resumed turn of `thread` answers: the ones a restart severed while their turn ran
  * (`orchestration.ts` `interruptActive`). A link the restart caught still queued is not one of
  * them: its message never reached the thread, and the queue it waited in is read back and run on
@@ -4956,6 +5046,17 @@ export function linksResumed(ids: readonly string[]): void {
         : link,
     ),
   }));
+}
+
+/**
+ * A thread carries on after the app waited out the stop that ended its turn (`store.ts`
+ * `continueDueThreads`): the links that stop settled work again and settle with the new turn.
+ */
+export function linksReopened(thread: string, ids: readonly string[]): void {
+  if (!ids.length) return;
+  const next = reopenLinks(book(), thread, ids, Date.now());
+  if (next === book()) return;
+  setBook(() => next);
 }
 
 /** The harness a settled link ran on, as the notice names it: its id and display name. */
@@ -5075,6 +5176,9 @@ export function threadTurnEnded(
   failed: string | undefined,
   items: TranscriptItem[],
 ) {
+  // The links whose messages were steered into this turn end with it: no prompt carries them.
+  const steered = takeSteeredLinks(thread);
+  if (steered.length) linksFinished(steered, thread, outcome, failed, items);
   // A stopped turn is not an answer: the link turns record their own, and nothing else does. Its
   // end still matters to a parent: this thread no longer runs, so what it owes may be due now.
   if (outcome !== "cancelled") {
@@ -5112,7 +5216,21 @@ export function queuedLinkDropped(id: string) {
   wakeTick();
 }
 
-/** Stop a link: its queued message goes, or its running turn is cancelled. The user's own turns there go on. */
+/** Whether `id` runs nothing and waits on nobody, as far as this window can tell. */
+function threadIdle(id: string): boolean {
+  const state = useApp.getState();
+  const status = statusOf(state, id);
+  if (status === "running" || status === "needs_input") return false;
+  // A thread this window has not opened may be running in the engine: its list row says so.
+  const listed = sessionById(state, id)?.status;
+  return listed !== "running" && listed !== "needs_input";
+}
+
+/**
+ * Stop a link: its queued message goes, or its running turn is cancelled. A link whose thread runs
+ * nothing has no turn to cancel and would stay Working for good, so stopping it settles it as
+ * cancelled and wakes the parent. The user's own turns there go on.
+ */
 export async function stopLink(id: string): Promise<boolean> {
   const link = book().links.find((l) => l.id === id);
   if (!link || !isActive(link.state)) return false;
@@ -5121,8 +5239,50 @@ export async function stopLink(id: string): Promise<boolean> {
     setBook((b) => updateLink(b, id, { state: "cancelled" }));
     return true;
   }
+  // Another computer's thread is cancelled on that computer, whatever this window last heard of it.
+  if (!isRemoteThread(link.target) && threadIdle(link.target)) {
+    // A wait that would carry the thread on (a limit, the internet) is the work being stopped.
+    dropLimitWait(link.target);
+    dropInternetWait(link.target);
+    linksFinished([id], link.target, "cancelled", undefined, []);
+    return true;
+  }
   await cancel(link.target);
   return true;
+}
+
+/** How long a working link may sit beside an idle thread before it is read as lost, not just starting. */
+export const STALE_LINK_MS = 20_000;
+
+/**
+ * Settles the working links whose thread, by its real status, runs nothing: a turn that ended
+ * without settling its link (a steer, a window that missed the end) must not read Working for
+ * hours. The answer is the thread's last reply, or its failure. Run when the thread list is read
+ * (load and refocus) and when a thread reports a status. A link that is only starting (its turn
+ * has not begun yet), one whose message waits in the thread's queue, and another computer's
+ * threads (their lost turns are followed by `lostTurn`) are left alone.
+ */
+export function reconcileLinks(now = Date.now()): void {
+  const state = useApp.getState();
+  if (!state.sessionsLoaded) return;
+  const stale = book().links.filter((link) => {
+    if (link.state !== "working" && link.state !== "needs_user") return false;
+    // Only a turn that has begun can have ended unseen: a link with no start time is still waiting
+    // for its turn (a worktree being made, a cold harness), and the thread beside it is idle for now.
+    if (isRemoteThread(link.target) || link.startedAt === undefined || now - link.startedAt < STALE_LINK_MS) {
+      return false;
+    }
+    const thread = state.threads[link.target];
+    if (thread?.loading || thread?.queue.some((q) => q.link === link.id)) return false;
+    if (!thread && !sessionById(state, link.target)) return false;
+    // A thread held for a usage limit, the internet or background commands carries on by itself.
+    if (state.limitWaits[link.target] || state.internetWaits[link.target] || thread?.waiting) return false;
+    return threadIdle(link.target);
+  });
+  for (const link of stale) {
+    const error = state.threads[link.target]?.error;
+    linksFinished([link.id], link.target, error ? "failed" : "completed", error, []);
+  }
 }
 
 /** The threads whose work is being stopped right now: a cascade stops each one once. */
