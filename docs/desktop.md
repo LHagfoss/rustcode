@@ -66,7 +66,10 @@ that is away starts folded to one muted row: opening it lists the copy this
 window kept, read-only, and its chat says “Not connected. Last updated HH:MM”.
 New thread and ⌘N still start here; a heading's New thread starts on that
 machine, named in the draft’s Run on pill, and Settings › Machines keeps the
-pairing, Reconnect and each machine's own page. Every client that lists threads
+pairing, Reconnect and each machine's own page. A machine that is away while
+the app retries it on its own reads **Reconnecting…** rather than Offline (in
+Settings › Machines and in the notice of its open thread), because it is coming
+back without anyone pressing anything. Every client that lists threads
 hears of one another makes there (`_rustcode/threads/created`), a just-made
 thread stays listed until that machine's own list names it, and one trashed in
 any app leaves the others' lists (`_rustcode/threads/deleted`).
@@ -1717,6 +1720,27 @@ An install that fails leaves the running app as it was and shows the reason
 with a **Release page** button. The channel is the app's own: Homebrew and the
 CLI updater stay on stable (`scripts/release.sh --beta` publishes a GitHub
 prerelease both skip).
+
+**After an update, the copies outside the app catch up.** The updater replaces
+the app and its engine; the next start of the new app brings the rest to the
+same version (`src-tauri/src/service.rs` `catch_up_after_update`, issue #3487):
+
+- The `rustcode` a terminal runs — the install script's copy in `~/.local/bin`
+  or `/usr/local/bin`, `~/.rustcode/bin`, or whatever the login shell finds
+  first — is replaced by `rustcode server update-cli` when it is older and this
+  app may own it. Homebrew's copy and `cargo install`'s are named as theirs and
+  left to `brew upgrade` / `cargo install`, a development build is never
+  touched, and a link that already points at the app needs nothing.
+- A service installed from an AppImage gets the new engine copied to it.
+- A background server still running the engine from before the update is
+  restarted (`rustcode server restart --when-idle`, so a running turn finishes
+  first). When its definition names another `rustcode`, the app rewrites the
+  definition to its engine while that is still the program it installed the
+  service with, and otherwise leaves it alone and the Machines page says
+  *Server runs an older rustcode at `<path>`*, once per version pair.
+
+Paired machines that lose this computer while its server restarts reconnect on
+their own, as they do after any drop.
 
 It does not use `tauri-plugin-updater`: that plugin requires its own
 signing key pair, and a release without the private key in CI would fail.

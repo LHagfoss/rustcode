@@ -80,6 +80,8 @@ start when you log in, and come back after a crash, install it as a service:
 rustcode server install     # write the service, start it, wait for the socket
 rustcode server status      # installed? running? clients, turns, problems
 rustcode server restart     # now; --when-idle waits until no turn is running
+rustcode server link-path   # point the rustcode on PATH at this one
+rustcode server update-cli  # update the rustcode in ~/.rustcode/bin, if older
 rustcode server logs -f     # the server's log
 rustcode server uninstall   # remove the service
 ```
@@ -124,6 +126,35 @@ rustcode server uninstall   # remove the service
   running). If the definition changed while the server runs (a new binary
   path) the file is rewritten, the running server is left alone and `install`
   says so: `rustcode server restart --when-idle` applies it.
+- **The app brings the server up to date at every start.** A service installed
+  from the app's own engine keeps running the engine it started with, so after
+  an app update the app reads `server status` once, and when the server it runs
+  is on an *older* engine it acts on what the definition names (`binary`):
+  - The unit runs this app's engine, or a copy `update-cli` manages (the
+    install script's or the app's, replaced by this start or by an earlier one
+    whose restart was cut short) that runs a newer version than the server: `rustcode server restart --when-idle` in the background (issue
+    #3487). Running turns finish first, and a wait longer than ten minutes
+    leaves the old server for the next start, where `status` reports
+    `restart-pending`: a wait cut off by a long turn is not a failure, nothing
+    is remembered, and the next start asks again. Only a refusal, or a server
+    that came back on the old engine, is remembered.
+  - The unit runs another `rustcode`, and it is still the one **the app
+    installed the service with** (Settings › Machines › *Install server* writes
+    that program to `<config dir>/service/installed-by-app`; the app moved, or
+    an AppImage's copy did): `rustcode server install` rewrites the definition to
+    this app's engine, then the same `--when-idle` restart. A definition a
+    terminal installed — or reinstalled over the app's — is never rewritten.
+  - The unit runs another `rustcode` the app does not install (Homebrew's,
+    `cargo install`'s): nothing is restarted, since a restart would bring the
+    same copy back. The page says `server-other-rustcode` — *Server runs an
+    older rustcode at `<path>`* — in place of `version-mismatch`, once per
+    version pair: the pair, the engine and the unit's binary are remembered in
+    `<config dir>/service/catch-up.json`, and any of them changing is a fresh
+    decision.
+
+  A server on a *newer* engine (a Homebrew one, a beta) is never restarted by
+  an older app, and a development build does none of this: it is not the engine
+  a released service runs.
 - `uninstall` stops the server the service runs and removes the service.
   Threads, settings, pairings and logs stay. It asks first when turns are
   running (`--yes` skips the question).
@@ -252,6 +283,13 @@ touches.
 | `path-version-mismatch-server` | The same copy is another version than the running server, which is a different build; the message names the server's binary and version. |
 | `unmanaged` | The server that answers was not started by the service (an app started it); `restart` hands it over. |
 
+The desktop app adds one code of its own to this list: `server-other-rustcode`,
+when the service definition runs a `rustcode` that is older than the app's and
+that the app does not install (Homebrew's, `cargo install`'s). A restart would
+bring the same copy back, so the app says *Server runs an older rustcode at
+`<path>`* instead of the `version-mismatch` advice, and leaves the restart to
+whoever updates that copy (see *Running in the background*).
+
 ### `link-path`
 
 `rustcode server link-path` is the one action behind that warning (Settings ›
@@ -264,6 +302,50 @@ nothing when a shell already finds this version, leaves Homebrew's copy to
 `brew upgrade lhagfoss/tap/rustcode`, and refuses a development build. Run by
 the app, it is the app's engine, so it is the app's version that a terminal
 runs afterwards.
+
+### `update-cli`
+
+`rustcode server update-cli` brings the `rustcode` a shell runs up to this
+engine's version after an app update (issue #3487). It looks at the copy a shell
+finds first on the login shell's `PATH` *and* at every file an install writes,
+so a foreign or `/usr/local/bin` copy first on `PATH` does not leave the
+`~/.rustcode/bin` one a service runs stale. The files an install writes, in this
+order: `~/.rustcode/bin/rustcode`, `~/.local/bin` and
+`/usr/local/bin` (`install.sh` writes to the last two; Windows has the one copy
+the script and the app write, `%USERPROFILE%\.rustcode\bin\rustcode.exe`).
+
+- A copy it may replace (the install script's or the app's) is replaced in
+  place, as a copy rather than a link: it still runs if the app is moved or
+  removed, and the next app update replaces it again. Only a copy read as
+  *older* is replaced — or a link whose target is gone, which cannot be read at
+  all. A link that already is this engine needs nothing.
+- Homebrew's copy (`/opt/homebrew`, or a `/usr/local/bin` link into
+  `/usr/local/Cellar`) and `cargo install`'s (`~/.cargo/bin`, `$CARGO_HOME/bin`)
+  are named as *managed by Homebrew* / *managed by cargo* and left to
+  `brew upgrade lhagfoss/tap/rustcode` or `cargo install --path rustcode/tui`.
+  A development build is never replaced either.
+- Any other copy is *foreign* and left exactly as it is. Only the files the
+  install script and the app write are the app's to replace
+  (`~/.rustcode/bin`, `~/.local/bin`, `/usr/local/bin`, or
+  `%USERPROFILE%\.rustcode\bin` on Windows, and the app's own engine), so
+  your own build in `~/bin`, a `cargo install --root` elsewhere or a tarball
+  under `/opt` is named, never overwritten, whatever its version; update it
+  yourself, or remove it so a shell finds this app's version. The command
+  exits with a non-zero status and the message says which copy it left.
+- On macOS and Linux the replacement is one atomic rename, so the name is never
+  missing and a `rustcode.old` you keep beside it is never touched; Windows
+  renames the running file aside to `.rustcode-old-<pid>` and clears what is left
+  of it on the next run.
+- `--json` prints `{ "outcome", "path", "was", "now", "version", "message",
+  "copies" }`: the first copy as the top-level fields, and `copies` with one
+  such entry per copy looked at. `outcome` is one of `missing`, `current`,
+  `updated`, `homebrew`, `cargo`, `development`, `foreign`, `failed`; `now` is
+  the version the copy runs afterwards. One copy failing does not stop the
+  others. The app runs it at every start: that is what makes an app update reach
+  the copies an earlier install left behind.
+
+It is not `link-path`: `link-path` is a person's one action on the copy a shell
+runs, `update-cli` is the app's own catch-up, and it never edits `PATH`.
 
 ### `restart`
 

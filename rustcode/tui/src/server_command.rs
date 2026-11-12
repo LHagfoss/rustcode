@@ -34,6 +34,7 @@ async fn execute(command: &ServerCommands) -> anyhow::Result<i32> {
         }
         ServerCommands::Restart { when_idle, yes } => restart(*when_idle, *yes).await,
         ServerCommands::LinkPath => link_path().await,
+        ServerCommands::UpdateCli { json } => update_cli(*json).await,
         ServerCommands::Uninstall { yes } => uninstall(*yes).await,
         ServerCommands::Logs { follow, lines } => show_logs(*follow, *lines).await,
         ServerCommands::Run { .. } | ServerCommands::Connect => {
@@ -141,6 +142,175 @@ async fn link_path() -> anyhow::Result<i32> {
             );
             Ok(0)
         }
+    }
+}
+
+/// What `update-cli` found and did about one copy.
+#[derive(Clone, serde::Serialize)]
+struct CopyReport {
+    /// `missing`, `current`, `updated`, `homebrew`, `cargo`, `development`,
+    /// `foreign` or `failed`.
+    outcome: &'static str,
+    /// The copy it looked at, when one was there.
+    path: Option<String>,
+    /// The version the copy reported before it was replaced.
+    was: Option<String>,
+    /// The version the copy answers now, when it is one the app may restart a
+    /// server from: this engine's after a replace, its own when it was left.
+    now: Option<String>,
+    /// What a person should read.
+    message: String,
+}
+
+/// What `update-cli` found and did, for a person and for the app: the copy a
+/// shell runs first (the top-level fields), then every copy it looked at.
+#[derive(serde::Serialize)]
+struct UpdatedCli {
+    #[serde(flatten)]
+    first: CopyReport,
+    /// The version this engine is.
+    version: &'static str,
+    copies: Vec<CopyReport>,
+}
+
+/// Bring the `rustcode` copies the app is responsible for up to this engine's
+/// version (issue #3487). The app runs this after an update, when its own
+/// engine is the new version; a copy that is current, newer or unreadable is
+/// left alone, as is one Homebrew or `cargo install` owns, a development
+/// build, and any copy this app did not write.
+async fn update_cli(json: bool) -> anyhow::Result<i32> {
+    use rustcode::service::path_binary::update_installed_copies;
+    let version = env!("CARGO_PKG_VERSION");
+    let mut copies = Vec::new();
+    let mut code = 0;
+    for copy in update_installed_copies(version).await? {
+        let (report, copy_code) = describe_copy(copy, version);
+        code = code.max(copy_code);
+        copies.push(report);
+    }
+    if json {
+        // `update_installed_copies` always answers at least one copy.
+        let first = copies[0].clone();
+        let report = UpdatedCli {
+            first,
+            version,
+            copies,
+        };
+        println!("{}", serde_json::to_string(&report)?);
+    } else {
+        for report in &copies {
+            println!("{}", report.message);
+        }
+    }
+    Ok(code)
+}
+
+fn describe_copy(
+    copy: rustcode::service::path_binary::InstalledCopy,
+    version: &'static str,
+) -> (CopyReport, i32) {
+    use rustcode::service::path_binary::InstalledCopy;
+    let brew = "`brew upgrade lhagfoss/tap/rustcode`";
+    let shown = |path: &std::path::Path| Some(path.display().to_string());
+    match copy {
+        InstalledCopy::Missing => (
+            CopyReport {
+                outcome: "missing",
+                path: None,
+                was: None,
+                now: None,
+                message: "No `rustcode` is installed where a shell or an install puts one, so there is nothing to update.".to_owned(),
+            },
+            0,
+        ),
+        InstalledCopy::Current { path, version: now } => (
+            CopyReport {
+                outcome: "current",
+                path: shown(&path),
+                was: None,
+                now,
+                message: format!("{} is already current ({version}).", path.display()),
+            },
+            0,
+        ),
+        InstalledCopy::Replaced { path, was } => {
+            let before = was
+                .as_ref()
+                .map(|was| format!(", it was {was}"))
+                .unwrap_or_default();
+            (
+                CopyReport {
+                    outcome: "updated",
+                    path: shown(&path),
+                    was,
+                    now: Some(version.to_owned()),
+                    message: format!("{} now runs this version ({version}){before}.", path.display()),
+                },
+                0,
+            )
+        }
+        InstalledCopy::Managed { path, by: "Homebrew" } => (
+            CopyReport {
+                outcome: "homebrew",
+                path: shown(&path),
+                was: None,
+                now: None,
+                message: format!(
+                    "{} is Homebrew's copy (managed by Homebrew); update it with {brew}.",
+                    path.display()
+                ),
+            },
+            1,
+        ),
+        InstalledCopy::Managed { path, by } => (
+            CopyReport {
+                outcome: "cargo",
+                path: shown(&path),
+                was: None,
+                now: None,
+                message: format!(
+                    "{} is `cargo install`'s copy (managed by {by}); update it with `cargo install --path rustcode/tui`, or remove it.",
+                    path.display()
+                ),
+            },
+            1,
+        ),
+        InstalledCopy::Development(path) => (
+            CopyReport {
+                outcome: "development",
+                path: shown(&path),
+                was: None,
+                now: None,
+                message: format!(
+                    "{} is a development build (inside a cargo target directory); a released RustCode does not replace it.",
+                    path.display()
+                ),
+            },
+            1,
+        ),
+        InstalledCopy::Foreign(path) => (
+            CopyReport {
+                outcome: "foreign",
+                path: shown(&path),
+                was: None,
+                now: None,
+                message: format!(
+                    "{} is a copy this app did not install, so it is left as it is; update it yourself, or remove it so a shell finds this app's version.",
+                    path.display()
+                ),
+            },
+            1,
+        ),
+        InstalledCopy::Failed { path, error } => (
+            CopyReport {
+                outcome: "failed",
+                path: shown(&path),
+                was: None,
+                now: None,
+                message: format!("{} could not be updated: {error}", path.display()),
+            },
+            1,
+        ),
     }
 }
 
