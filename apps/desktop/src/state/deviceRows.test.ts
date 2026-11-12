@@ -66,6 +66,14 @@ describe("a device's chip", () => {
       label: "Reconnecting…",
       tone: "idle",
     });
+    // It answered and would not serve: the chip says what it said, as a warning to act on.
+    expect(deviceStatus({ state: "unavailable", retryInSecs: 8, reason: "server_not_running" })).toEqual({
+      label: "Server not running",
+      tone: "warn",
+    });
+    expect(deviceStatus({ state: "unavailable", retryInSecs: 8, reason: "version_mismatch" }).label).toBe(
+      "Version mismatch",
+    );
     expect(deviceStatus({ state: "needsPairing", retryInSecs: null })).toEqual({
       label: "Needs pairing",
       tone: "bad",

@@ -718,7 +718,7 @@ pub const LIST_PROJECTS: Tool = Tool {
 /// paired, which `start_session` and the other machine-aware tools take.
 pub const LIST_MACHINES: Tool = Tool {
     name: crate::orchestration::LIST_MACHINES,
-    description: "List the computers this RustCode is paired with: this one (current: true) and each machine with id, name, platform, version, state (connected, connecting, offline or revoked) and why not connected, routes with the last test of each, running and waiting threads, harnesses with models and accounts, and projects with path and git remote. Every tool's `machine` argument takes an id or name from here; omit it to act on this computer. Threads on another machine answer with an id that carries that machine, so later calls need no `machine`. Acting on another machine asks the user first, and an offline one is refused by name. `probe: true` tests every route now (a few seconds).",
+    description: "List the computers this RustCode is paired with: this one (current: true) and each machine with id, name, platform, version, state (connected, connecting, reconnecting, unavailable, offline or revoked), why not connected and its cause, routes with the last test of each, running and waiting threads, harnesses with models and accounts, and projects with path and git remote. Every tool's `machine` argument takes an id or name from here; omit it to act on this computer. Threads on another machine answer with an id that carries that machine, so later calls need no `machine`. Acting on another machine asks the user first, and an offline one is refused by name. `probe: true` tests every route and retries machines not connected (up to 10 s).",
     arguments: r#"{}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
