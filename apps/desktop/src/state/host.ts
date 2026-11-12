@@ -134,6 +134,7 @@ import {
   prune,
   QUEUE_PREVIEW_CHARS,
   queueWake,
+  quietBelow,
   quietTree,
   type RuleThread,
   reachesThread,
@@ -4742,6 +4743,11 @@ function filledWith(link: Link, reply: string): Link {
  */
 export function subtreeQuiet(id: string): boolean {
   return quietTree(book(), wakeContext(Date.now()), id);
+}
+
+/** {@link quietBelow} over the app's book: what `id` handed out is done, whatever `id` does now. */
+export function subtreeQuietBelow(id: string): boolean {
+  return quietBelow(book(), wakeContext(Date.now()), id);
 }
 
 /**

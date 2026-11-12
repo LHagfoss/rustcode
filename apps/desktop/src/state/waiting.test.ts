@@ -16,7 +16,7 @@ const link = (id: string, orchestrator: string, target: string, state: LinkState
 /** The reads `waitingOn` needs of the app: the showing state, and what owes it an answer. */
 const read = (
   shown: Record<string, LinkState>,
-  rest: { running?: boolean; commands?: number; links: Link[]; quiet?: string[] },
+  rest: { running?: boolean; commands?: number; links: Link[]; quiet?: string[]; runs?: string[] },
 ) =>
   waitingOn({
     id: "p",
@@ -24,7 +24,9 @@ const read = (
     commands: rest.commands,
     links: rest.links,
     state: (l) => shown[l.id] ?? l.state,
-    quiet: (target) => !(rest.quiet ?? []).includes(target),
+    // `quiet` lists the targets with work still going under them; `runs` the ones whose own turn runs.
+    quiet: (target) => !(rest.quiet ?? []).includes(target) && !(rest.runs ?? []).includes(target),
+    quietBelow: (target) => !(rest.quiet ?? []).includes(target),
   });
 
 describe("waiting on background work", () => {
@@ -43,6 +45,15 @@ describe("waiting on background work", () => {
     expect(read({}, { links })).toBeUndefined();
     // The child's own child still works: the parent is not finished either.
     expect(read({}, { links, quiet: ["a"] })?.links.map((l) => l.id)).toEqual(["p/1"]);
+  });
+
+  test("a turn the target runs after it answered is not this thread's to wait on", () => {
+    // It messaged "a" once and had its answer; the user now writes to "a" in its own thread.
+    const links = [link("p/1", "p", "a", "done")];
+    expect(read({ "p/1": "working" }, { links, runs: ["a"] })).toBeUndefined();
+    // A link still waiting for its answer keeps waiting while its target works.
+    const live = [link("p/1", "p", "a", "working")];
+    expect(read({}, { links: live, runs: ["a"] })?.links.map((l) => l.id)).toEqual(["p/1"]);
   });
 
   test("the state as shown counts: a child waiting on you is still worked with", () => {
@@ -105,7 +116,7 @@ describe("the threads the list draws with the ones that work", () => {
   const ids = ["p", "q", "r"];
   const wait = (
     links: Link[],
-    rest: { running?: string[]; parked?: Record<string, number>; quiet?: string[] } = {},
+    rest: { running?: string[]; parked?: Record<string, number>; quiet?: string[]; runs?: string[] } = {},
   ) => [
     ...waitingIds({
       ids,
@@ -113,7 +124,8 @@ describe("the threads the list draws with the ones that work", () => {
       parked: new Map(Object.entries(rest.parked ?? {})),
       links,
       state: (l) => l.state,
-      quiet: (target) => !(rest.quiet ?? []).includes(target),
+      quiet: (target) => !(rest.quiet ?? []).includes(target) && !(rest.runs ?? []).includes(target),
+      quietBelow: (target) => !(rest.quiet ?? []).includes(target),
     }),
   ];
 
@@ -127,6 +139,10 @@ describe("the threads the list draws with the ones that work", () => {
   test("a settled link whose subtree still works keeps its parent waiting, a quiet one does not", () => {
     const links = [link("p/1", "p", "a", "done"), link("q/1", "q", "b", "done")];
     expect(wait(links, { quiet: ["a"] })).toEqual(["p"]);
+  });
+
+  test("a settled thread that once messaged another does not come back while the user works there", () => {
+    expect(wait([link("p/1", "p", "a", "done")], { runs: ["a"] })).toEqual([]);
   });
 
   test("commands a thread parked on count on their own, and idle threads are not waiting", () => {

@@ -5,7 +5,7 @@
 // decision is pure, so both, and their tests, read it the same way.
 
 import { useMemo } from "react";
-import { stateOf, subtreeQuiet } from "./host";
+import { stateOf, subtreeQuiet, subtreeQuietBelow } from "./host";
 import { isActive, type Link, type LinkState, linkThreads } from "./orchestration";
 import { useApp } from "./store";
 
@@ -23,6 +23,22 @@ export interface WaitingRead {
   state: (link: Link) => LinkState;
   /** Whether a link's target owes it nothing more (state/host.ts `subtreeQuiet`). */
   quiet: (target: string) => boolean;
+  /**
+   * Whether what the target handed out is done, whatever its own turn does (state/host.ts
+   * `subtreeQuietBelow`): what a link that has already answered still waits on.
+   */
+  quietBelow: (target: string) => boolean;
+}
+
+/**
+ * Whether one link still owes its thread something. A link whose turn has not answered yet owes
+ * while it is live, or while its target still works on it. One that already answered owes only the
+ * work its target handed out on that turn: a turn the target runs later is someone else's (the user
+ * writing to it), so a thread that messaged it once and was settled does not come back as waiting.
+ */
+export function linkOwes(link: Link, read: Pick<WaitingRead, "state" | "quiet" | "quietBelow">): boolean {
+  if (isActive(link.state)) return isActive(read.state(link)) || !read.quiet(link.target);
+  return !read.quietBelow(link.target);
 }
 
 /** The background work a thread still waits on. */
@@ -43,9 +59,7 @@ export interface Waiting {
  */
 export function waitingOn(read: WaitingRead): Waiting | undefined {
   if (read.running) return undefined;
-  const links = read.links.filter(
-    (link) => link.orchestrator === read.id && (isActive(read.state(link)) || !read.quiet(link.target)),
-  );
+  const links = read.links.filter((link) => link.orchestrator === read.id && linkOwes(link, read));
   // One link per thread: a delegate messaged twice is one thread it waits on, not two.
   const threads = linkThreads(
     links,
@@ -102,6 +116,7 @@ export function useWaiting(threadId: string): Waiting | undefined {
         links: mine,
         state: (link) => states.get(link.id) ?? link.state,
         quiet: subtreeQuiet,
+        quietBelow: subtreeQuietBelow,
       }),
     [threadId, running, commands, mine, states],
   );
@@ -127,6 +142,7 @@ export interface WaitingIdsRead {
   links: readonly Link[];
   state: (link: Link) => LinkState;
   quiet: (target: string) => boolean;
+  quietBelow: (target: string) => boolean;
 }
 
 /**
@@ -146,7 +162,7 @@ export function waitingIds(read: WaitingIdsRead): Set<string> {
   for (const id of read.ids) {
     if (read.running.has(id)) continue;
     const links = byParent.get(id) ?? [];
-    const live = links.some((link) => isActive(read.state(link)) || !read.quiet(link.target));
+    const live = links.some((link) => linkOwes(link, read));
     if (live || (read.parked.get(id) ?? 0) > 0) waiting.add(id);
   }
   return waiting;
@@ -187,6 +203,7 @@ export function useWaitingIds(ids: readonly string[]): ReadonlySet<string> {
       links,
       state: (link) => states.get(link.id) ?? link.state,
       quiet: subtreeQuiet,
+      quietBelow: subtreeQuietBelow,
     });
   }, [ids, running, parked, links, states]);
 }
