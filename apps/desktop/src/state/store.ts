@@ -202,6 +202,7 @@ import {
   waitHolds,
 } from "./limitResume";
 import { newThreadAccountOn, type SignedOutLogins, signedOutFrom } from "./logins";
+import { loadTranscript, saveTranscript, threadFromTranscript } from "./machineCache";
 import { finishIsNews, type NotifyEvent, notifyThread, startNotifications, wakeEvent } from "./notify";
 import {
   CAPABILITY_VERSION,
@@ -1071,6 +1072,34 @@ const machineOff = new Map<string, () => void>();
 let machineRouting: Promise<void> | null = null;
 /** The machine store's own subscription, kept so a test reset can let it go. */
 let machineMirrorOff: (() => void) | null = null;
+let transcriptKeepOff: (() => void) | null = null;
+/** Threads whose transcript is waiting to be kept on this computer, by key. */
+const transcriptTimers = new Map<string, ReturnType<typeof setTimeout>>();
+/** A remote thread's transcript is kept at most this often while it changes. */
+const KEEP_TRANSCRIPT_MS = 2_000;
+
+/**
+ * Keep the transcript of a thread opened on a machine (`state/machineCache.ts`), so it can be read
+ * while the machine is away. Only a copy the machine just gave is kept: one drawn from this
+ * computer's own copy is already what is kept.
+ */
+function keepRemoteTranscript(key: string): void {
+  transcriptTimers.delete(key);
+  const thread = get().threads[key];
+  if (!thread?.loaded || thread.loading || !machineConnections.has(splitThreadKey(key).host)) return;
+  saveTranscript(thread, key);
+}
+
+function watchRemoteTranscripts(next: AppState, prev: AppState): void {
+  if (next.threads === prev.threads) return;
+  for (const [key, thread] of Object.entries(next.threads)) {
+    if (thread === prev.threads[key] || !isRemoteThread(key) || transcriptTimers.has(key)) continue;
+    transcriptTimers.set(
+      key,
+      setTimeout(() => keepRemoteTranscript(key), KEEP_TRANSCRIPT_MS),
+    );
+  }
+}
 /** `state/machines.ts` `resetMachinesForTests`, once its module is loaded. */
 let machineReset: (() => void) | null = null;
 
@@ -1162,6 +1191,7 @@ export async function startMachineRouting(): Promise<void> {
     machineMirrorOff = machines.useMachines.subscribe((state, prev) => {
       if (state.sessions !== prev.sessions || state.machines !== prev.machines) mirror();
     });
+    transcriptKeepOff = useApp.subscribe(watchRemoteTranscripts);
     for (const link of machines.machineLinks()) watchMachineConnection(link.machine.id, link.connection);
     mirror();
   })();
@@ -1179,6 +1209,10 @@ export function resetMachinesForTests(): void {
   machineRouting = null;
   machineMirrorOff?.();
   machineMirrorOff = null;
+  transcriptKeepOff?.();
+  transcriptKeepOff = null;
+  for (const timer of transcriptTimers.values()) clearTimeout(timer);
+  transcriptTimers.clear();
   // Kept once loaded: a later reset has to clear the machines module too, even after a file
   // attached machines without ever routing through this module (`state/machines.test.ts`).
   machineReset?.();
@@ -2629,12 +2663,18 @@ export function openThread(id: string): Promise<string | null> {
   // with the chat and the composer saying so (docs/desktop.md › Several machines). Without this it
   // would draw as a new thread, with this computer's folder and controls.
   if (!conn && threadIsRemote(id)) {
-    if (!existing) {
+    if (!existing || (!existing.loaded && !existing.items.length)) {
       const summary = get().sessions.find((x) => x.id === id);
+      // The last copy this computer read from the machine, if it kept one; it is replaced by the
+      // machine's own replay when the machine is back (`watchMachineConnection`).
+      const cached = loadTranscript(id);
+      const base = cached
+        ? threadFromTranscript(cached)
+        : { ...emptyThread(id, summary?.cwd ?? "", summary?.title), loaded: false };
       set((s) => ({
         threads: {
           ...s.threads,
-          [id]: { ...emptyThread(id, summary?.cwd ?? "", summary?.title), loaded: false },
+          [id]: { ...base, cwd: summary?.cwd || base.cwd, title: summary?.title ?? base.title },
         },
       }));
     }

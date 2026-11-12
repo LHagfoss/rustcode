@@ -61,8 +61,9 @@ glyph (a laptop for macOS, a monitor for Windows, a terminal for Linux, a
 question mark when it has not said) and its name in muted text on its row
 (hover: `Runs on ‹name›`); a thread on this computer carries nothing. A delegate
 stays under its parent whichever machine it runs on. A machine that is away
-lists the copy this window kept, read-only, and its chat says “Not connected.
-Last updated HH:MM”; the Settings gear shows an amber dot while any paired
+lists the copy this computer last read from it, read-only, and its chat says
+“‹Machine› is offline since HH:MM. This is the last copy this computer saw; it
+updates when the machine is back.”; the Settings gear shows an amber dot while any paired
 machine is not connected. New thread and ⌘N still start here; the draft's Run on pill picks another machine, and Settings › Machines keeps the
 pairing, Reconnect and each machine's own page. A machine that is away while
 the app retries it on its own reads **Reconnecting…** rather than Offline (in
@@ -81,8 +82,13 @@ A thread key carries its machine (`local` keeps its bare id, another one reads
 that machine's own connection: `connectionFor` in `src/state/store.ts` returns
 the local engine or the machine's `AcpConnection`, open the thread and its
 permission answers travel there, and its `session/update` stream keeps it live.
-A machine that is away keeps its threads listed and read-only: the chat says
-"Not connected. Last updated HH:MM", the composer is disabled, and the
+A machine that is away keeps its threads listed and read-only, also after the
+app restarted: the app keeps what it last read from each machine in its own
+storage (`state/machineCache.ts`: the 200 newest threads per machine, and the
+transcript of each thread opened in the last 30 days, capped in size; never a
+token), and a live read replaces it when the machine is back. The chat says
+"‹Machine› is offline since HH:MM. This is the last copy this computer saw; it
+updates when the machine is back.", the composer is disabled, and the
 header shows `Runs on ‹machine› · ‹harness› · ‹model›`; the controls that read
 this computer (terminal, working tree, pull requests, Finder, worktrees,
 checkpoints and undo) stay disabled with "Runs on ‹machine›" where the action
