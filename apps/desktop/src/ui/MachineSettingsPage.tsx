@@ -36,7 +36,7 @@ import {
 } from "../state/machines";
 import { SERVER_SETTINGS } from "../state/settingsRegistry";
 import {
-  checkMachineHarness,
+  checkMachineHarnesses,
   loadServerSettings,
   localServerSettingValues,
   serverValueDiffers,
@@ -217,11 +217,15 @@ function Harnesses({ machine }: { machine: Machine }) {
   const check = async () => {
     setBusy(true);
     setChecked(null);
-    const results: string[] = [];
-    for (const entry of harnesses) {
-      results.push(`${entry.name}: ${await checkMachineHarness(machine.id, entry.id)}`);
-    }
-    setChecked(results.join(" · ") || "The machine listed no harnesses.");
+    // One request for all of them: a harness that is slow to answer holds only itself.
+    const lines = await checkMachineHarnesses(
+      machine.id,
+      harnesses.map((entry) => entry.id),
+    );
+    setChecked(
+      harnesses.map((entry) => `${entry.name}: ${lines[entry.id]}`).join(" · ") ||
+        "The machine listed no harnesses.",
+    );
     setBusy(false);
   };
   return (
@@ -244,7 +248,15 @@ function Harnesses({ machine }: { machine: Machine }) {
         <Row title="Reading harnesses…" subtitle="Asking that machine what it can run." />
       )}
       {harness.error && harnesses.length === 0 && (
-        <Row title="Could not read the harnesses" subtitle={harness.error} />
+        <Row
+          title="Could not read the harnesses"
+          subtitle={harness.error}
+          badge={
+            <Action quiet size="sm" disabled={harness.loading} onClick={harness.reload}>
+              {harness.loading ? "Retrying…" : "Retry"}
+            </Action>
+          }
+        />
       )}
       {!harness.loading && !harness.error && harnesses.length === 0 && (
         <Row title="No harnesses listed" subtitle="That machine reported none." />

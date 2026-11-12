@@ -8,11 +8,16 @@
 import { useMemo, useState } from "react";
 import type { Harness } from "../acp/types";
 import { failureSummary, runOnMachines } from "../state/settingsRegistry";
-import { type ScopeMachine, useMachineHarnessList, writeHarnessEnabled } from "../state/settingsScope";
+import {
+  loadMachineHarness,
+  type ScopeMachine,
+  useMachineHarnessList,
+  writeHarnessEnabled,
+} from "../state/settingsScope";
 import { HarnessIcon } from "./HarnessIcon";
 import { cx, Spinner, Switch, Tooltip } from "./primitives";
 import { MixedChip } from "./SettingsScope";
-import { Row } from "./settingsKit";
+import { Action, Row } from "./settingsKit";
 
 export function ScopedHarnessList({ targets, writes }: { targets: ScopeMachine[]; writes: ScopeMachine[] }) {
   const snapshots = useMachineHarnessList(targets.map((machine) => machine.host));
@@ -33,8 +38,29 @@ export function ScopedHarnessList({ targets, writes }: { targets: ScopeMachine[]
     return <Row title="No harnesses read" subtitle="The machine did not answer." />;
   }
   const reading = snapshots.some((entry) => entry.loading);
+  // A machine that did not answer is told apart, with its own Retry, and the
+  // others stay usable.
+  const failed = snapshots.filter((entry) => entry.error && !entry.snapshot);
+  const nameOf = (host: string) => targets.find((machine) => machine.host === host)?.name ?? "That machine";
   return (
     <div className="divide-y divide-border">
+      {failed.map((entry) => (
+        <Row
+          key={`error-${entry.host}`}
+          title={`Could not read ${nameOf(entry.host)}'s harnesses`}
+          subtitle={entry.error}
+          badge={
+            <Action
+              quiet
+              size="sm"
+              disabled={entry.loading}
+              onClick={() => void loadMachineHarness(entry.host)}
+            >
+              {entry.loading ? "Retrying…" : "Retry"}
+            </Action>
+          }
+        />
+      ))}
       {rows.map(({ harness, byHost }) => {
         const online = targets.filter((machine) => machine.online);
         const values = online.map((machine) => byHost.get(machine.host)?.enabled);

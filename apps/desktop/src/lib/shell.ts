@@ -2,6 +2,7 @@
 // mirror of them in `dev:web`, the mock's canned answers in tests.
 
 import { isTauri, type Transport } from "../acp/transport";
+import { withTimeout } from "./withTimeout";
 
 let current: Transport | null = null;
 
@@ -26,4 +27,17 @@ export async function shellCall<T>(command: string, args: Record<string, unknown
   }
   if (current?.call) return (await current.call(command, args)) as T;
   throw new Error("Only the app can do this.");
+}
+
+/**
+ * `shellCall` that gives up after `timeoutMs`, for a read or a button whose
+ * native side may wait on a machine that is away. The native work is not
+ * cancelled; the page just stops waiting and can say so.
+ */
+export function shellCallWithin<T>(
+  timeoutMs: number,
+  command: string,
+  args: Record<string, unknown> = {},
+): Promise<T> {
+  return withTimeout(shellCall<T>(command, args), timeoutMs, "The app");
 }

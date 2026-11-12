@@ -15,7 +15,7 @@
 import { useEffect } from "react";
 import { create } from "zustand";
 import { arr, type Json, type JsonObject, obj } from "../acp/jsonrpc";
-import type { HarnessSnapshot } from "../acp/types";
+import type { Harness, HarnessSnapshot } from "../acp/types";
 import { Method, parseHarnessSnapshot } from "../acp/types";
 import { useMachines } from "./machines";
 import {
@@ -425,18 +425,31 @@ export function useMachineHarness(host: string): MachineHarness {
   const loading = useMachineHarnesses((state) => state.loading[host] === true);
   const error = useMachineHarnesses((state) => state.errors[host] ?? null);
   const reload = () => void loadMachineHarness(host);
+  // A failed read is not asked again here: it would end at once for a machine
+  // that is away and start the next one, over and over. Retry is `reload`.
   useEffect(() => {
-    if (host !== LOCAL_HOST && !remote && !loading) void loadMachineHarness(host);
-  }, [host, remote, loading]);
+    if (shouldAutoLoadHarness(host, { remote, loading, error })) void loadMachineHarness(host);
+  }, [host, remote, loading, error]);
   if (host === LOCAL_HOST) return { snapshot: local, error: null, loading: false, reload };
   return { snapshot: remote ?? null, error, loading, reload };
 }
+
+/** Whether a page that shows a machine's harnesses should read them now: once, never again after a failure. */
+export function shouldAutoLoadHarness(
+  host: string,
+  state: { remote: HarnessSnapshot | undefined | null; loading: boolean; error: string | null },
+): boolean {
+  return host !== LOCAL_HOST && !state.remote && !state.loading && !state.error;
+}
+
+/** Short bound for the read of a machine's harness list; an away machine must not hold a page. */
+export const HARNESS_READ_MS = 10_000;
 
 export async function loadMachineHarness(host: string): Promise<void> {
   if (host === LOCAL_HOST) return;
   useMachineHarnesses.setState((state) => ({ loading: { ...state.loading, [host]: true } }));
   try {
-    const snapshot = parseHarnessSnapshot(await machineRequest(host, Method.harnesses, {}, 20_000));
+    const snapshot = parseHarnessSnapshot(await machineRequest(host, Method.harnesses, {}, HARNESS_READ_MS));
     useMachineHarnesses.setState((state) => ({
       byHost: { ...state.byHost, [host]: snapshot },
       errors: { ...state.errors, [host]: null },
@@ -460,19 +473,47 @@ export async function loadMachineHarness(host: string): Promise<void> {
  * Nothing is started here; the snapshot is what its own server reports.
  */
 export async function checkMachineHarness(host: string, id: string): Promise<string> {
+  return (await checkMachineHarnesses(host, [id]))[id] ?? "That harness is not listed on the machine now.";
+}
+
+/** Where one harness ended on a machine, in words. */
+export function harnessCheckLine(harness: Pick<Harness, "installed" | "auth"> | undefined): string {
+  if (!harness) return "That harness is not listed on the machine now.";
+  if (!harness.installed) return "Not installed on that machine.";
+  if (harness.auth === "needs_login") return "Needs sign-in on that machine.";
+  return "Installed and signed in.";
+}
+
+/**
+ * A Check on every harness of one machine at once: one request re-detects them
+ * all (never one request per harness, one after the other, where a slow CLI
+ * would stall the rest), then one read of the snapshot. Never throws: a
+ * machine that does not answer gives every harness the same error.
+ */
+export async function checkMachineHarnesses(host: string, ids: string[]): Promise<Record<string, string>> {
+  const lines: Record<string, string> = {};
+  if (ids.length === 0) return lines;
   try {
-    await machineRequest(host, Method.harnessAccountCheck, { redetect: [id] }, 30_000);
+    await machineRequest(host, Method.harnessAccountCheck, { redetect: ids }, HARNESS_CHECK_MS);
     await loadMachineHarness(host);
     const snapshot = useMachineHarnesses.getState().byHost[host];
-    const harness = snapshot?.harnesses.find((entry) => entry.id === id);
-    if (!harness) return "That harness is not listed on the machine now.";
-    if (!harness.installed) return "Not installed on that machine.";
-    if (harness.auth === "needs_login") return "Needs sign-in on that machine.";
-    return "Installed and signed in.";
+    const readError = useMachineHarnesses.getState().errors[host];
+    for (const id of ids) {
+      lines[id] = readError
+        ? readError
+        : harnessCheckLine(snapshot?.harnesses.find((entry) => entry.id === id));
+    }
   } catch (error) {
-    return errorText(error);
+    for (const id of ids) lines[id] = errorText(error);
   }
+  return lines;
 }
+
+/** A switch or a default is a write the engine answers with its snapshot. */
+const HARNESS_WRITE_MS = 15_000;
+
+/** A Check starts each CLI once; it may take a while, but it ends. */
+const HARNESS_CHECK_MS = 30_000;
 
 /** Every chosen machine's harness snapshot, loaded as needed (one hook, not one per row). */
 export function useMachineHarnessList(hosts: string[]): {
@@ -508,7 +549,7 @@ export async function writeHarnessEnabled(host: string, id: string, enabled: boo
     return;
   }
   const snapshot = parseHarnessSnapshot(
-    await machineRequest(host, Method.harnessSet, { id, enabled }, 20_000),
+    await machineRequest(host, Method.harnessSet, { id, enabled }, HARNESS_WRITE_MS),
   );
   useMachineHarnesses.setState((state) => ({
     byHost: { ...state.byHost, [host]: snapshot },
@@ -527,7 +568,7 @@ export async function writeDefaultHarness(host: string, choice: NewThreadChoice)
       host,
       Method.harnessDefault,
       { harness: choice.harness, model: choice.model, effort: choice.effort },
-      20_000,
+      HARNESS_WRITE_MS,
     ),
   );
   useMachineHarnesses.setState((state) => ({
@@ -544,6 +585,8 @@ export interface ScopedDefaultHarness {
   targets: ScopeMachine[];
   writes: ScopeMachine[];
   error: string | null;
+  /** Read the shown machine's harnesses again after a failure. */
+  reload: () => void;
   set: (choice: NewThreadChoice) => Promise<void>;
 }
 
@@ -586,6 +629,9 @@ export function useScopedDefaultHarness(): ScopedDefaultHarness {
     targets,
     writes,
     error: shownHost === undefined ? null : (errors[shownHost] ?? null),
+    reload: () => {
+      if (shownHost !== undefined) void loadMachineHarness(shownHost);
+    },
     set,
   };
 }
