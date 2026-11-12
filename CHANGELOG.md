@@ -1,3 +1,23 @@
+## [v1.31.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.31.0) - 2026-11-12
+
+### Features
+- Threads started on another paired computer appear there and here at once, a title change reaches every app, a trashed thread leaves every list, and a thread no list has yet is no longer dropped by a read that started before it. (#3522)
+- A thread with no RustCode app open can now start, fan out and message other threads (at Full access), and wait on them. (#3534)
+- After an app update, the next start updates the `rustcode` a terminal runs and restarts a background server still on the old engine (or names the Homebrew/cargo copy it cannot update), and a paired machine that is away says Reconnecting… while the app brings it back. (#3521)
+- Threads and delegates stopped by a usage limit now continue on their own after the reset, including the Claude Code "Internal error" form of the message. (#3543)
+- Machine settings lists each route of a paired machine with whether it answers and how fast, with a Test routes button; list_machines shows the same and takes probe: true. The VPN route is now saved with its port. (#3545)
+- Removed the "main machine" from paired machines: every machine is a peer, and `machines list` and Settings > Machines no longer mark one. `rustcode machines list --json` no longer has a `main` key. (#3546)
+- Remote delegates: an answered turn no longer shows as Failed with no reason, `start_session` names the thread on its machine and never starts in the app's data folder, and `read_activity` and a delegate's provider error are read from the machine the thread runs on. (#3528)
+- A paired phone is now told who sent each message, so a delegate's report or a message from another thread no longer looks like something you typed. (#3537)
+- A thread whose app is closed now gets RustCode's orchestration tools: the engine answers thread and machine lookups itself, within the app's read-access rules, and names the app for the calls that still need it. (#3520)
+- A delegate waiting out a usage limit wakes its parent once instead of at every retry, stopping or archiving the parent cancels that wait, and Codex and Gemini limits now continue on their own too. (#3547)
+- Fix a delegate that kept showing as working after its turn ended, and make Stop settle a link whose thread is no longer running. (#3535)
+- Fix a delegate that was messaged mid-turn staying on Working after its thread went idle. (#3548)
+- Fixed a thread started from another machine disappearing from the list about 10 minutes in while it was still running. (#3536)
+- `thread_status` reports no pull request provider, not a GitHub error, for a project whose remote is not on GitHub. (#3538)
+- A Codex thread on Windows now says in its instructions that the sandbox denies WMI, and what to read instead; `docs/harnesses.md` documents the denial and the registry/.NET alternatives (#3526). (#3531)
+- A thread whose answer mentions being offline or a lost connection no longer gets "The internet connection is back. Please continue." sent to it over and over. (#3518)
+- Correct the docs: a new thread's banner fills the whole pane (#3519)
 ## [v1.30.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.30.0) - 2026-11-11
 
 ### Features
