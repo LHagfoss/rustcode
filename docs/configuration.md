@@ -306,6 +306,20 @@ roots = ["/Volumes/Work", "/opt/projects"]   # absolute or ~/…; missing ones a
 The gateway reads `roots` on every request, so a change needs no restart. Like
 the rest of the section it is read from the user configuration only.
 
+## Keeping the server up to date
+
+A RustCode server that runs as a background service installs the newest stable
+release by itself once no turn is running, then restarts onto it. It is on by
+default; turn it off in the user configuration:
+
+```toml
+[server]
+auto_update = false
+```
+
+It is read from the user configuration only. How it works and what it logs is
+in [`server.md`](server.md#staying-up-to-date).
+
 ## Project configuration
 
 Create a project-local override with:

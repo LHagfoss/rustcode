@@ -2189,6 +2189,25 @@ subagent_max_rounds = 12
 }
 
 #[test]
+fn server_auto_update_is_on_by_default_and_user_config_only() {
+    assert!(AppConfig::default().server.auto_update);
+    // A `[server]` section without the key keeps it on.
+    let empty: TomlConfig = toml::from_str("[server]").unwrap();
+    let mut config = AppConfig::default();
+    apply_toml_config(&mut config, empty);
+    assert!(config.server.auto_update);
+
+    let off: TomlConfig = toml::from_str("[server]\nauto_update = false").unwrap();
+    apply_toml_config(&mut config, off.clone());
+    assert!(!config.server.auto_update);
+
+    // A checked-out project must not decide whether this machine installs software.
+    let mut project = AppConfig::default();
+    apply_project_toml_config(&mut project, off);
+    assert!(project.server.auto_update);
+}
+
+#[test]
 fn yolo_default_is_user_config_only_and_round_trips() {
     let file: TomlConfig = toml::from_str("yolo = true").unwrap();
     let mut config = AppConfig::default();

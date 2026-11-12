@@ -189,6 +189,24 @@ pub struct RemoteConfig {
     pub roots: Vec<String>,
 }
 
+/// `[server]` in config.toml: how this machine's background server behaves.
+/// User config only: a checked-out project must not decide whether a
+/// machine installs software.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerConfig {
+    /// A server running as a background service installs the newest stable
+    /// release by itself once no turn is running, then restarts onto it
+    /// (`docs/server.md` › Staying up to date). On by default.
+    #[serde(default = "default_true")]
+    pub auto_update: bool,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self { auto_update: true }
+    }
+}
+
 /// Loop-guard budgets, configurable under `[loop_guard]` in config.toml.
 /// `evidence_recovery_streak` arms evidence-based recovery after that many
 /// corroborated (same tool or same failure class) no-progress observations;
@@ -1452,6 +1470,9 @@ pub struct AppConfig {
     /// Remote gateway address (`[remote]` in config.toml). User config only.
     #[serde(default)]
     pub remote: RemoteConfig,
+    /// Background server behaviour (`[server]` in config.toml). User config only.
+    #[serde(default)]
+    pub server: ServerConfig,
     #[serde(default)]
     pub last_active_session_id: Option<String>,
     #[serde(default)]
@@ -1813,6 +1834,8 @@ struct TomlConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     remote: Option<RemoteConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    server: Option<ServerConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     last_active_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mcp_servers: Option<Vec<McpServerConfig>>,
@@ -1991,6 +2014,7 @@ impl Default for AppConfig {
             delegation_enabled: true,
             loop_guard: LoopGuardConfig::default(),
             remote: RemoteConfig::default(),
+            server: ServerConfig::default(),
             vision_model: Some("gemini-3.6-flash".to_string()),
             last_active_session_id: None,
             mcp_servers: vec![McpServerConfig {
@@ -2479,6 +2503,7 @@ fn save_config_to_result(dir: &Path, config: &AppConfig) -> Result<(), String> {
         delegation_enabled: Some(config.delegation_enabled),
         loop_guard: Some(config.loop_guard),
         remote: (config.remote != RemoteConfig::default()).then(|| config.remote.clone()),
+        server: (config.server != ServerConfig::default()).then_some(config.server),
         last_active_session_id: config.last_active_session_id.clone(),
         mcp_servers: Some(config.mcp_servers.clone()),
         approved_command_prefixes: Some(config.approved_command_prefixes.clone()),
@@ -2614,6 +2639,9 @@ fn apply_toml_config(config: &mut AppConfig, file: TomlConfig) {
     if let Some(remote) = file.remote {
         config.remote = remote;
     }
+    if let Some(server) = file.server {
+        config.server = server;
+    }
     if let Some(session_id) = file.last_active_session_id {
         config.last_active_session_id = Some(session_id);
     }
@@ -2736,6 +2764,8 @@ fn apply_project_toml_config(config: &mut AppConfig, mut file: TomlConfig) {
     file.loop_guard = None;
     // Which interface exposes the user's sessions is the user's decision.
     file.remote = None;
+    // Whether this machine installs updates by itself is the user's decision.
+    file.server = None;
     // Delegation is an explicit user-level capability; checked-out project
     // config must not enable it when the user has disabled it.
     file.delegation_enabled = None;
@@ -2873,6 +2903,7 @@ pub fn init_project_config(workspace: &Path) -> Result<PathBuf, String> {
         delegation_enabled: None,
         loop_guard: None,
         remote: None,
+        server: None,
         last_active_session_id: None,
         mcp_servers: None,
         approved_command_prefixes: None,

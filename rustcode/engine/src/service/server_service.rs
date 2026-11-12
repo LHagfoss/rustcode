@@ -830,8 +830,14 @@ pub fn runs_inside(server_pid: u32) -> bool {
 /// server log. It waits a moment first, so that the command that asked for the
 /// restart ends and its thread records the result before the server stops.
 pub fn spawn_detached_restart(when_idle: bool) -> Result<()> {
+    spawn_detached_restart_from(&super::executable_path()?, when_idle)
+}
+
+/// [`spawn_detached_restart`] starting `program`: a server that replaced its
+/// own binary names the path it had before, because a replaced running
+/// binary reports another one (Linux adds " (deleted)").
+pub fn spawn_detached_restart_from(program: &Path, when_idle: bool) -> Result<()> {
     use anyhow::Context;
-    let program = super::executable_path()?;
     let log_path = crate::server::log_path()?;
     if let Some(logs) = log_path.parent() {
         std::fs::create_dir_all(logs)?;
@@ -845,7 +851,7 @@ pub fn spawn_detached_restart(when_idle: bool) -> Result<()> {
             log.mode(0o600);
         }
         let log = log.open(&log_path)?;
-        let mut command = std::process::Command::new(&program);
+        let mut command = std::process::Command::new(program);
         command.args(["server", "restart", "--yes"]);
         if when_idle {
             command.arg("--when-idle");
@@ -966,7 +972,7 @@ pub fn mark_restart_pending() -> Result<Option<PendingRestart>> {
     Ok(file.try_lock().ok().map(|()| PendingRestart(file)))
 }
 
-fn restart_waiting() -> bool {
+pub(crate) fn restart_waiting() -> bool {
     let Ok(path) = pending_path() else {
         return false;
     };

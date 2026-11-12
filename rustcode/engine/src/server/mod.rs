@@ -16,6 +16,7 @@
 //! (`engine_endpoint.rs`), so a paired device opens the threads the app shows
 //! without a server running behind it.
 
+pub(crate) mod auto_update;
 pub(crate) mod engine_endpoint;
 pub(crate) mod listen;
 mod lock;
@@ -109,6 +110,12 @@ pub async fn run(auto_approve: bool, service: bool) -> anyhow::Result<RunOutcome
     // remote gateway and starts it again when it stops. The app adopts a
     // gateway started here instead of binding a second one.
     crate::remote_gateway::host::spawn();
+    // A server a service manager runs also keeps itself up to date, so a
+    // machine nobody sits at does not stay on the version it was installed
+    // with (docs/server.md). A server an app or a terminal started is theirs.
+    if service {
+        auto_update::spawn();
+    }
     serve(&engine, &mut listener, stop_signal()).await;
     crate::dbg_log!("RustCode server stopping");
     engine.shutdown().await;
