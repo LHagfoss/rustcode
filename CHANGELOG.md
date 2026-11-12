@@ -1,3 +1,15 @@
+## [v1.31.4](https://github.com/LHagfoss/rustcode/releases/tag/v1.31.4) - 2026-11-12
+
+### Fixes
+- Fewer thread toasts and notifications: only a question, an approval, a failure, or a thread that is truly finished. (#3580)
+- A thread whose recorded folder differs now repairs itself and opens without pressing Repair Thread. (#3578)
+- Fix `rustcode server restart` run from a thread inside the server killing the server without starting a new one. (#3579)
+- The desktop app installs updates by itself once no thread is working; turn it off in Settings › About. (#3581)
+- A paired machine that is offline keeps its threads in the sidebar and readable from the last copy this computer saw, even after the app restarts. (#3582)
+- Settings no longer freezes or loops when a paired machine or a harness does not answer; it shows the error with Retry. (#3583)
+- A background RustCode server now installs new stable releases by itself once no turn is running and restarts onto them; turn it off with `[server] auto_update = false`. (#3584)
+- Settings reads easier: monospace is limited to short paths, commands and ids, paths are shortened with the full path on hover, and errors start with a plain sentence. (#3585)
+- A thread row keeps its own model and shows its running delegates as a count on the line above. (#3586)
 ## [v1.31.3](https://github.com/LHagfoss/rustcode/releases/tag/v1.31.3) - 2026-11-12
 
 ### Fixes
