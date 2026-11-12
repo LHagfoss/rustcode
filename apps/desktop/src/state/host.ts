@@ -186,6 +186,8 @@ import {
   clearFinished,
   connectionFor,
   createSession,
+  dropInternetWait,
+  dropLimitWait,
   effortMemory,
   ensureHarnessModels,
   errorText,
@@ -4882,9 +4884,12 @@ const steerText = (thread: string, fallback: string) =>
  * A link's message `text` was steered into the running turn of `thread`. No turn of its own carries
  * the link (`runPrompt` `options.link`), so the running turn is the one that answers it: the link
  * works from here and is settled when that turn ends (`threadTurnEnded`), however many steers went
- * in and whether or not the thread is open. A turn that ended while the steer was in flight cannot
- * answer it: the message goes as a turn of its own that carries the link — the copy the engine
- * handed back, if the queue holds one — so the link never settles with an older reply.
+ * in and whether or not the thread is open.
+ *
+ * A turn that ended while the steer was in flight either handed the steer back (a copy waits in the
+ * queue: it carries the link, and the link is `queued` behind it so a failed turn fails it) or read
+ * it, in which case that turn's own reply is the answer and the link settles on it. The message is
+ * never sent a second time.
  */
 export function linkSteered(thread: string, link: string | undefined, text: string): void {
   if (!link) return;
@@ -4898,8 +4903,9 @@ export function linkSteered(thread: string, link: string | undefined, text: stri
         ...t,
         queue: t.queue.map((q) => (q.id === queued.id ? { ...q, link } : q)),
       }));
+      setBook((b) => updateLink(b, link, { state: "queued" }));
     } else {
-      void runPrompt(thread, said, undefined, { link });
+      linksFinished([link], thread, "completed", undefined, []);
     }
     return;
   }
@@ -4925,6 +4931,9 @@ export function requeueUnreadSteers(thread: string, unused: readonly string[]): 
   }
   if (!steered.size) steeredIntoTurn.delete(thread);
   if (!carried.size) return;
+  // Queued behind the turn that will read it: a failed turn that holds the queue fails the link
+  // (`failQueuedOn`) instead of leaving it Working beside a thread that runs nothing.
+  setBook((b) => [...carried.keys()].reduce((acc, link) => updateLink(acc, link, { state: "queued" }), b));
   updateThread(thread, (t) => {
     const waiting = new Map(carried);
     return {
@@ -5153,7 +5162,10 @@ export function queuedLinkDropped(id: string) {
 function threadIdle(id: string): boolean {
   const state = useApp.getState();
   const status = statusOf(state, id);
-  return status !== "running" && status !== "needs_input";
+  if (status === "running" || status === "needs_input") return false;
+  // A thread this window has not opened may be running in the engine: its list row says so.
+  const listed = sessionById(state, id)?.status;
+  return listed !== "running" && listed !== "needs_input";
 }
 
 /**
@@ -5169,7 +5181,11 @@ export async function stopLink(id: string): Promise<boolean> {
     setBook((b) => updateLink(b, id, { state: "cancelled" }));
     return true;
   }
-  if (threadIdle(link.target)) {
+  // Another computer's thread is cancelled on that computer, whatever this window last heard of it.
+  if (!isRemoteThread(link.target) && threadIdle(link.target)) {
+    // A wait that would carry the thread on (a limit, the internet) is the work being stopped.
+    dropLimitWait(link.target);
+    dropInternetWait(link.target);
     linksFinished([id], link.target, "cancelled", undefined, []);
     return true;
   }
@@ -5193,7 +5209,9 @@ export function reconcileLinks(now = Date.now()): void {
   if (!state.sessionsLoaded) return;
   const stale = book().links.filter((link) => {
     if (link.state !== "working" && link.state !== "needs_user") return false;
-    if (isRemoteThread(link.target) || now - Math.max(link.startedAt ?? 0, link.createdAt) < STALE_LINK_MS) {
+    // Only a turn that has begun can have ended unseen: a link with no start time is still waiting
+    // for its turn (a worktree being made, a cold harness), and the thread beside it is idle for now.
+    if (isRemoteThread(link.target) || link.startedAt === undefined || now - link.startedAt < STALE_LINK_MS) {
       return false;
     }
     const thread = state.threads[link.target];

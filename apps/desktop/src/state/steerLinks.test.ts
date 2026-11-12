@@ -100,11 +100,20 @@ describe("a delegate steered mid-turn", () => {
     turnEnds("completed");
     expect(state("steer-2")?.state).toBe("done");
     // Not settled with the reply of a turn that never read it, and not woken for.
-    expect(state("steer-1")?.state).toBe("working");
+    expect(state("steer-1")?.state).toBe("queued");
     expect(state("steer-1")?.answer).toBeUndefined();
     expect(useApp.getState().threads[TARGET]?.queue.map((q) => [q.text, q.link])).toEqual([
       ["wrap up now", "steer-1"],
     ]);
+  });
+
+  test("a failed turn fails the link of a steer that was waiting in its queue", () => {
+    linkSteered(TARGET, "steer-1", "wrap up now");
+    updateThread(TARGET, (t) => requeueSteers(t, ["wrap up now"]));
+    requeueUnreadSteers(TARGET, ["wrap up now"]);
+    turnEnds("failed", "the provider refused");
+    expect(state("steer-1")?.state).toBe("failed");
+    expect(useApp.getState().threads[TARGET]?.queue).toEqual([]);
   });
 
   test("a lost remote turn carries the steered links on, and a later turn does not settle them", () => {
@@ -116,19 +125,21 @@ describe("a delegate steered mid-turn", () => {
     expect([state("steer-1")?.state, state("steer-2")?.state]).toEqual(["working", "working"]);
   });
 
-  test("a steer that lands after the turn ended goes as a turn of its own, never with an older reply", () => {
-    useApp.setState((s) => ({
-      threads: { ...s.threads, [TARGET]: { ...s.threads[TARGET]!, running: false } },
+  test("a steer that lands after the turn ended is answered by the queued copy or by the turn that read it", () => {
+    useApp.setState((st) => ({
+      threads: { ...st.threads, [TARGET]: { ...st.threads[TARGET]!, running: false } },
     }));
-    // The engine handed it back already: the queued copy carries the link.
+    // The engine handed it back already: the queued copy carries the link, behind a failed turn's fate.
     updateThread(TARGET, (t) => ({ ...t, queue: [{ id: "q1", text: "wrap up now" }] }));
     linkSteered(TARGET, "steer-1", "wrap up now");
     expect(useApp.getState().threads[TARGET]?.queue.map((q) => q.link)).toEqual(["steer-1"]);
-    expect(state("steer-1")?.state).toBe("working");
-    // Nothing queued: it is sent now (no engine here, so it only stays unanswered).
+    expect(state("steer-1")?.state).toBe("queued");
+    // No copy: the turn that ended read it, so that turn's reply answers it. It is not sent again.
+    updateThread(TARGET, (t) => ({ ...t, items: [{ kind: "assistant", id: "a1", text: "Wrapped up" }] }));
     linkSteered(TARGET, "steer-2", "second change");
-    expect(state("steer-2")?.state).toBe("working");
-    expect(state("steer-2")?.answer).toBeUndefined();
+    expect(state("steer-2")?.state).toBe("done");
+    expect(state("steer-2")?.answer).toBe("Wrapped up");
+    expect(useApp.getState().threads[TARGET]?.queue).toHaveLength(1);
   });
 
   test("a link steered into one turn is not settled by the next", () => {
@@ -198,6 +209,38 @@ describe("a link whose thread stopped (issue 3541)", () => {
     reconcileLinks(10_000_000);
     expect([state("own")?.state, state("steer-1")?.state]).toEqual(["working", "working"]);
     expect(state("steer-2")?.state).toBe("done");
+  });
+
+  test("a link whose turn has not begun is left working", () => {
+    idle();
+    useApp.setState((s) => ({
+      links: {
+        ...s.links,
+        links: s.links.links.map((l) => (l.id === "own" ? { ...l, startedAt: undefined } : l)),
+      },
+    }));
+    reconcileLinks(10_000_000);
+    expect(state("own")?.state).toBe("working");
+  });
+
+  test("a thread this window never opened, which the engine still runs, keeps its links working", () => {
+    idle();
+    useApp.setState((s) => ({
+      threads: Object.fromEntries(Object.entries(s.threads).filter(([id]) => id !== TARGET)),
+      sessions: s.sessions.map((x) => (x.id === TARGET ? { ...x, status: "running" as const } : x)),
+    }));
+    reconcileLinks(10_000_000);
+    expect(state("steer-1")?.state).toBe("working");
+  });
+
+  test("Stop on a thread held for a limit settles the link and drops the wait", async () => {
+    idle();
+    useApp.setState({
+      limitWaits: { [TARGET]: { until: 1, reason: "limit", harness: "claude-code", account: null } as never },
+    });
+    expect(await stopLink("own")).toBe(true);
+    expect(state("own")?.state).toBe("cancelled");
+    expect(useApp.getState().limitWaits[TARGET]).toBeUndefined();
   });
 
   test("a thread held for a usage limit keeps its link working", () => {
