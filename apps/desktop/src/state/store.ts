@@ -154,18 +154,23 @@ import {
   interruptedLinks,
   linkFinished,
   linkStarted,
+  linkSteered,
   linksFinished,
   linksOf,
+  linksReopened,
   linksResumed,
   linkWaitEnded,
   linkWaitStarted,
   loadBook,
   orchestrationCallDropped,
   queuedLinkDropped,
+  reconcileLinks,
+  requeueUnreadSteers,
   resetWaits,
   restoreQueuedThreads,
   stopLinksFrom,
   syncLinkBook,
+  takeSteeredLinks,
   threadTurnEnded,
   wakeDelivered,
   wakeTick,
@@ -1990,6 +1995,7 @@ function onSessionUpdate(params: JsonObject) {
     clearStatusMark(sessionId);
     // A lost turn on this thread is settled now if the machine says it stopped running there.
     lostTurnStatus(sessionId, status);
+    if (status !== "running" && status !== "needs_input") reconcileLinks();
   }
   if (update.kind === "title") {
     set((s) => ({
@@ -2087,6 +2093,8 @@ export async function refreshSessions(): Promise<void> {
     // A thread the engine no longer lists keeps no place in the arrangement. A capped list is not
     // the whole list, so it prunes nothing: the rows of the rest are still there.
     if (!capped) pruneSidebarOrder(get().sessions.map((x) => x.id));
+    // A link still Working beside a thread the engine says is idle is settled (issue 3541).
+    reconcileLinks();
   } catch (error) {
     set({ sessionsLoaded: true });
     toast(`Could not list threads: ${errorText(error)}`, "error");
@@ -3989,6 +3997,8 @@ export async function sendQueuedNow(id: string, queuedId: string): Promise<boole
   if (await steer(id, item.text, item.extras)) {
     removeQueued(id, queuedId);
     glideAway(id, item);
+    // A delegate's message that was waiting: the turn it went into answers its link.
+    linkSteered(id, item.link, item.text);
     return true;
   }
   toast(QUEUE_REASON.refused);
@@ -4427,7 +4437,11 @@ export async function runPrompt(
   if (options.link) linkStarted(options.link);
   // The turn a restart resumes this thread with answers the links the quit severed: they work again
   // from here, so the parent reads this turn's answer and its time, never the time before the quit.
-  if (options.resumeLinks?.length) linksResumed(options.resumeLinks);
+  if (options.resumeLinks?.length) {
+    linksResumed(options.resumeLinks);
+    // Links a usage limit settled as failed work again: this turn is the one that answers them.
+    linksReopened(id, options.resumeLinks);
+  }
   // A queued wake reports its links now, as its turn starts: late enough that a restart before this
   // point brings the wake back, early enough that nothing in the turn reports it again.
   if (options.wake && options.wakeLinks?.length) wakeDelivered(options.wakeLinks, options.wakeAsking ?? []);
@@ -4507,7 +4521,7 @@ export async function runPrompt(
       // closed channel is what refused the request, this is what ends it.
       if (get().threads[id]?.running)
         updateThread(id, (t) => finishTurn(t, "failed", Date.now(), MACHINE_LOST_TURN));
-      lostTurn(id, [options.link, ...(options.resumeLinks ?? [])]);
+      lostTurn(id, [options.link, ...(options.resumeLinks ?? []), ...takeSteeredLinks(id)]);
       return "skipped";
     }
     outcome = "failed";
@@ -4521,12 +4535,14 @@ export async function runPrompt(
     ...requeueSteers(finishTurn(t, outcome, Date.now(), failure, options.autoCompact), unused),
     ...(rawFailure !== failure ? { errorDetail: rawFailure } : {}),
   }));
+  // Steers the turn never read wait as turns of their own, and carry the links they came from.
+  if (!options.autoCompact) requeueUnreadSteers(id, unused);
   // The stop is settled first: a turn it stopped is reported as the stop, not twice.
   // An automatic compaction must leave a pending wait alone, not settle it.
   const waiting = options.autoCompact
     ? (get().limitWaits[id] ?? null)
     : // The stop is read from what the harness said, not the words the thread shows.
-      settleStopWait(id, outcome, rawFailure, startIndex);
+      settleStopWait(id, outcome, rawFailure, startIndex, [options.link, ...(options.resumeLinks ?? [])]);
   // A thread waiting for the internet is held, not dead: it says so in the composer's row.
   const offline = options.autoCompact ? undefined : get().internetWaits[id];
   // An automatic compaction is not a turn the user waits for: it is not "Done"
@@ -7418,6 +7434,7 @@ function settleStopWait(
   outcome: "completed" | "cancelled" | "failed",
   failure: string | undefined,
   startIndex: number,
+  turnLinks: readonly (string | undefined)[] = [],
 ): LimitWait | null {
   const s = get();
   if (!s.continueAfterLimit || outcome === "cancelled") {
@@ -7425,16 +7442,18 @@ function settleStopWait(
     return null;
   }
   const reply = s.threads[id]?.items.slice(startIndex).findLast((i) => i.kind === "assistant");
-  const said = failure ?? (reply?.kind === "assistant" ? reply.text : undefined);
+  const replied = reply?.kind === "assistant" ? reply.text : undefined;
   const key = planKeyFor(s, id);
   const windows = (key ? s.planCache[key]?.windows : undefined) ?? [];
   const now = Date.now();
-  const resetAt = limitReset(said, now, windows);
-  const overload = resetAt === null && overloadStop(said);
+  // Either can say the limit: Claude Code writes it as the reply, and again as the turn's error
+  // (`Internal error: You've hit your 5-hour limit · resets 2:40am (Europe/Oslo): {"errorKind":…}`).
+  const resetAt = limitReset(failure, now, windows) ?? limitReset(replied, now, windows);
+  const overload = resetAt === null && overloadStop(failure ?? replied);
   if (resetAt === null && !overload) {
     // Not a stop that waits for a time: the network may be what the turn lost.
     dropLimitWait(id);
-    if (networkStop(failure, reply?.kind === "assistant" ? reply.text : undefined)) waitForInternet(id, now);
+    if (networkStop(failure, replied)) waitForInternet(id, now);
     else dropInternetWait(id);
     return null;
   }
@@ -7450,6 +7469,9 @@ function settleStopWait(
     harness: harnessOf(s, id),
     account: accountOn(s, id),
     reason,
+    // The links this stop settled, kept across waits of the same stop so the turn that gets
+    // through reopens and answers them.
+    links: [...new Set([...(prior?.links ?? []), ...turnLinks.filter((x): x is string => !!x)])],
   });
   if (!wait) {
     dropLimitWait(id);
@@ -7486,7 +7508,8 @@ function tickWaits() {
 // waiting for the next tick: a network that comes back just after one is not waited out.
 if (typeof window !== "undefined") {
   const nowOnline = () => {
-    if (Object.keys(get().internetWaits).length > 0) tickWaits();
+    // A Mac that slept past a reset wakes with focus and visibility events: the wait goes on at once.
+    if (Object.keys(get().internetWaits).length > 0 || Object.keys(get().limitWaits).length > 0) tickWaits();
   };
   window.addEventListener("online", nowOnline);
   window.addEventListener("focus", nowOnline);
@@ -7537,7 +7560,11 @@ export async function continueDueThreads(now = Date.now()): Promise<void> {
         dropLimitWait(id);
         continue;
       }
-      void runPrompt(id, resumeText(wait), undefined, { automatic: true, autoResume: true });
+      void runPrompt(id, resumeText(wait), undefined, {
+        automatic: true,
+        autoResume: true,
+        resumeLinks: wait.links,
+      });
     }
   } finally {
     continuing = false;
@@ -7612,7 +7639,7 @@ export function resumeWaitNow(id: string) {
   const offline = get().internetWaits[id];
   if (!wait && !offline) return;
   dropWaits(id);
-  if (wait) void runPrompt(id, resumeText(wait), undefined, { automatic: true });
+  if (wait) void runPrompt(id, resumeText(wait), undefined, { automatic: true, resumeLinks: wait.links });
   else void runPrompt(id, INTERNET_RESUME_TEXT, undefined, { automatic: true });
 }
 
