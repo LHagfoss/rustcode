@@ -119,7 +119,7 @@ pub const V12_TOOL_NAMES: [&str; 1] = [LIST_MACHINES];
 /// Added by version 13: where a thread's work stands, and handing it over.
 pub const V13_TOOL_NAMES: [&str; 2] = [WORKTREE_STATUS, HANDOFF_WORKTREE];
 /// The newest version this engine speaks.
-pub const VERSION: u8 = 15;
+pub const VERSION: u8 = 16;
 /// Version 14 adds mid-turn messaging.
 pub const STEER_VERSION: u8 = 14;
 /// Version 15 adds `standalone` to `start_session` and `fan_out`: the thread
@@ -148,6 +148,42 @@ pub const MACHINE_TOOL_NAMES: [&str; 11] = [
     THREAD_STATUS,
     LIST_PENDING_REQUESTS,
 ];
+/// Version 16 adds `machine` to the rest of the thread tools and the project
+/// reads, so a remote delegate's questions, queue, activity and worktrees are
+/// reached from here, and a project is read or cloned there. Gated like
+/// version 12: an older app never sees the field and has one refused.
+pub const REMOTE_TOOLS_VERSION: u8 = 16;
+/// The tools version 16 gives `machine`.
+pub const V16_MACHINE_TOOL_NAMES: [&str; 11] = [
+    ANSWER_REQUEST,
+    MANAGE_QUEUE,
+    SEARCH_SESSIONS,
+    READ_ACTIVITY,
+    CONFIGURE_SESSION,
+    UPDATE_SESSION,
+    WORKTREE_STATUS,
+    LIST_WORKTREES,
+    LIST_PULL_REQUESTS,
+    READ_PROJECT,
+    CLONE_PROJECT,
+];
+
+/// The version that gave `name` its `machine` argument, or `None` for a tool
+/// that never takes one.
+pub fn machine_version(name: &str) -> Option<u8> {
+    if MACHINE_TOOL_NAMES.contains(&name) {
+        Some(MACHINE_VERSION)
+    } else if V16_MACHINE_TOOL_NAMES.contains(&name) {
+        Some(REMOTE_TOOLS_VERSION)
+    } else {
+        None
+    }
+}
+
+/// Whether a client of `version` may name a machine on `name`.
+pub fn takes_machine(name: &str, version: u8) -> bool {
+    machine_version(name).is_some_and(|since| version >= since)
+}
 /// What `schedule_task` may ask the scheduler for.
 pub const SCHEDULE_KINDS: [&str; 2] = ["cron", "at"];
 /// Version 5 adds named account targeting to the existing `start_session` and
@@ -269,6 +305,9 @@ pub const PROMPT_HINT_V14: &str = "\n\nRustCode's threads: `list_sessions`, `sea
 /// [`PROMPT_HINT_V14`] for version 15 clients, which can start a thread
 /// of the user's own instead of a delegate (issue 3443).
 pub const PROMPT_HINT_V15: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user, and `answer_request` answers one of those on a thread in your own tree. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, and `message_session` reaches any project with user approval, attaches files by path and takes `steer: true` for mid-turn input (otherwise queued); `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. `thread_status` reports a delegate's worktree, branch, pull request and checks; `merge_when_green` merges it once green; `cleanup_worktree` removes its worktree and branch and settles it; `worktree_status` reports a worktree's branch, its distance from the branch it tracks, changed files, last commit and pull request; `handoff_worktree` moves a delegate's work into the user's checkout, or a thread's checkout work into a worktree of its own, and keeps every commit. The thread tools take another paired computer's id or name, as `list_machines` lists them, in `machine`: omitted, they act on this computer, and a remote thread's id carries its machine. Name one only when the user did. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`. For a thread the user will follow up themselves, pass `standalone: true`: it is a thread of their own at the top level of its project, nothing is delivered back and `wait_session` does not apply, so name its session id to them. `update_session`, `organize_threads`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those, answering, merge, cleanup and handoff change other threads, so do them only when the user asks; the user approves, and a card for another machine names it. Stay lean: every call resends this thread's context, so leave reading code, diffs, logs and CI to delegates, and check their pull requests with `thread_status`. Wait on all links in one `wait_session` with `link_ids`, or end the turn: the app wakes this thread when a child finishes. Call `list_harnesses` once. Projects: `read_project` reads a folder's git remote, branch and default branch; `create_project` registers a folder (an empty one gets `git init`), `clone_project` clones a URL into a parent folder, `update_project` sets a project's display name or the harness and model new threads in it start on, and `remove_project` unregisters one without deleting any files. Scheduled work: `schedule_task` adds a prompt that runs on a cron expression or once at an ISO time, `list_scheduled_tasks`, `delete_scheduled_task` and `run_scheduled_task_now` manage what the scheduler daemon holds; the daemon is `rustcode daemon start`, and without it nothing runs. Do both only when the user asks; the user approves.";
+/// [`PROMPT_HINT_V15`] for version 16 clients, which reach the rest of the
+/// thread tools, and a project by its git remote, on another machine.
+pub const PROMPT_HINT_V16: &str = "\n\nRustCode's threads: `list_sessions`, `search_sessions`, `read_session`, `list_worktrees` and `list_projects` answer what the user asks about their threads, projects and past work, so ask them instead of looking for that data elsewhere, and pass `all_projects` to reach every project. Given a thread id, `read_session` it before answering about it, and `read_activity` pages what RustCode recorded about it (events, retries, provider attempts) as metadata, never prompts. `thread_usage` totals tokens and the cost each harness reported (never a price RustCode computed) by harness, model, day, project or thread; `query_data` runs one read-only SQL statement over what the harnesses recorded (turns, tool_calls, threads, daily_usage). `list_harnesses` shows what can run and its named accounts, `list_pull_requests` this project's pull requests, `list_pending_requests` which threads wait on the user, and `answer_request` answers one of those on a thread in your own tree. `start_session` and `fan_out` take a harness's named `account`; `start_session`, `fan_out` and `message_session` give other threads work, and `message_session` reaches any project with user approval, attaches files by path and takes `steer: true` for mid-turn input (otherwise queued); `wait_session` returns their answers; `manage_queue` lists, edits, cancels or steers what this thread queued on a busy one. `thread_status` reports a delegate's worktree, branch, pull request and checks; `merge_when_green` merges it once green; `cleanup_worktree` removes its worktree and branch and settles it; `worktree_status` reports a worktree's branch, its distance from the branch it tracks, changed files, last commit and pull request; `handoff_worktree` moves a delegate's work into the user's checkout, or a thread's checkout work into a worktree of its own, and keeps every commit. The thread tools, `list_projects`, `read_project` and `clone_project` take another paired computer's id or name, as `list_machines` lists them, in `machine`: omitted, they act on this computer, and a remote thread's id carries its machine. Name one only when the user did, and never fall back to this computer when it is offline. There a thread starts in the project with this one's git remote; with none, pass `project` from the list the refusal gives, or `clone_project` there. Delegates use `$TMPDIR/rustcode/<session>`, never a shared `/tmp` path. A thread `start_session` or `fan_out` starts is a delegate, shown nested under this one: give it a whole task; a Claude Code thread has no subagent tool, so delegate through `start_session` or `fan_out`. For a thread the user will follow up themselves, pass `standalone: true`: it is a thread of their own at the top level of its project, nothing is delivered back and `wait_session` does not apply, so name its session id to them. `update_session`, `organize_threads`, `configure_session`, `transfer_session` and `interrupt_session` manage them. Those, answering, merge, cleanup and handoff change other threads, so do them only when the user asks; the user approves, and a card for another machine names it. Stay lean: every call resends this thread's context, so leave reading code, diffs, logs and CI to delegates, and check their pull requests with `thread_status`. Wait on all links in one `wait_session` with `link_ids`, or end the turn: the app wakes this thread when a child finishes. Call `list_harnesses` once. Projects: `read_project` reads a folder's git remote, branch and default branch; `create_project` registers a folder (an empty one gets `git init`), `clone_project` clones a URL into a parent folder, `update_project` sets a project's display name or the harness and model new threads in it start on, and `remove_project` unregisters one without deleting any files. Scheduled work: `schedule_task` adds a prompt that runs on a cron expression or once at an ISO time, `list_scheduled_tasks`, `delete_scheduled_task` and `run_scheduled_task_now` manage what the scheduler daemon holds; the daemon is `rustcode daemon start`, and without it nothing runs. Do both only when the user asks; the user approves.";
 
 /// The prompt hint a client of `version` gets.
 pub fn prompt_hint(version: u8) -> &'static str {
@@ -288,7 +327,8 @@ pub fn prompt_hint(version: u8) -> &'static str {
         12 => PROMPT_HINT_V12,
         13 => PROMPT_HINT_V13,
         14 => PROMPT_HINT_V14,
-        _ => PROMPT_HINT_V15,
+        15 => PROMPT_HINT_V15,
+        _ => PROMPT_HINT_V16,
     }
 }
 
@@ -454,8 +494,9 @@ pub fn schema_for(name: &str, version: u8, mut schema: Value) -> Value {
             properties.remove("standalone");
         }
     }
-    // Machine targeting arrived in version 12, and leaves the schema the same way.
-    if version < MACHINE_VERSION && MACHINE_TOOL_NAMES.contains(&name) {
+    // Machine targeting arrived in version 12 (16 for the rest of the tools),
+    // and leaves the schema the same way.
+    if machine_version(name).is_some() && !takes_machine(name, version) {
         if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
             properties.remove("machine");
         }
@@ -494,10 +535,10 @@ pub(crate) fn requests_standalone(name: &str, args: &Value) -> bool {
             .is_some_and(|standalone| *standalone == Value::Bool(true))
 }
 
-/// Whether a call tries to name a machine, which only a version 12 client can
-/// do: an older app would act on this computer instead.
+/// Whether a call tries to name a machine, which only a client of
+/// [`machine_version`] can do: an older app would act on this computer instead.
 pub(crate) fn names_a_machine(name: &str, args: &Value) -> bool {
-    MACHINE_TOOL_NAMES.contains(&name)
+    machine_version(name).is_some()
         && args
             .get("machine")
             .is_some_and(|machine| !machine.is_null())
@@ -719,7 +760,7 @@ fn absolute_project(args: &Value) -> Result<(), String> {
 /// Check the arguments before they leave the engine.
 pub fn validate(name: &str, args: &Value) -> Result<(), String> {
     // The machine a call acts on is the same argument on every tool that takes it.
-    if MACHINE_TOOL_NAMES.contains(&name) {
+    if machine_version(name).is_some() {
         optional_name(args, "machine")?;
     }
     match name {
@@ -1269,7 +1310,7 @@ pub async fn execute_versioned(
     }
     // And for a machine: acting on this computer when the user asked for another
     // one is worse than saying the app is too old.
-    if client.is_some() && version < MACHINE_VERSION && names_a_machine(name, args) {
+    if client.is_some() && !takes_machine(name, version) && names_a_machine(name, args) {
         return ToolExecutionOutput::failure_with_kind(
             format!("error: {name} with machine needs a newer RustCode app. Nothing was sent."),
             ToolErrorKind::UnavailableDependency,
@@ -1464,7 +1505,8 @@ mod tests {
         assert_eq!(version(json!({"rustcode": {"orchestration": 10}})), 10);
         assert_eq!(version(json!({"rustcode": {"orchestration": 11}})), 11);
         // A newer client gets what this engine speaks.
-        assert_eq!(version(json!({"rustcode": {"orchestration": 15}})), VERSION);
+        assert_eq!(version(json!({"rustcode": {"orchestration": 15}})), 15);
+        assert_eq!(version(json!({"rustcode": {"orchestration": 16}})), VERSION);
         assert_eq!(version(json!({"rustcode": {"orchestration": 99}})), VERSION);
         assert_eq!(version(json!({"rustcode": {"preview": 1}})), 0);
         assert_eq!(client_meta_version(None), 0);
@@ -1503,8 +1545,9 @@ mod tests {
     #[test]
     fn version_four_adds_the_data_store_tools_only_for_its_clients() {
         // The newest version this engine speaks; v14 added `steer` and v15
-        // `standalone` to existing tools, so the tool list stops changing at v13.
-        assert_eq!(VERSION, 15);
+        // `standalone` and v16 `machine` to existing tools, so the tool list
+        // stops changing at v13.
+        assert_eq!(VERSION, 16);
         let v3 = tool_names(3);
         assert!(v3.iter().all(|name| !is_v4_tool(name)), "{v3:?}");
         let v4 = tool_names(4);
@@ -1610,7 +1653,23 @@ mod tests {
             PROMPT_HINT_V14,
             "a v14 app keeps its exact hint"
         );
-        assert_eq!(prompt_hint(VERSION), PROMPT_HINT_V15);
+        assert_eq!(
+            prompt_hint(15),
+            PROMPT_HINT_V15,
+            "a v15 app keeps its exact hint"
+        );
+        assert_eq!(prompt_hint(VERSION), PROMPT_HINT_V16);
+        // v16 teaches `machine` on the project tools and matching by remote.
+        for said in ["`clone_project` take", "this one's git remote", "offline"] {
+            assert!(PROMPT_HINT_V16.contains(said), "{said} in the v16 hint");
+            assert!(!PROMPT_HINT_V15.contains(said), "{said} is v16 only");
+        }
+        for said in ["standalone", "`steer: true`", "handoff_worktree"] {
+            assert!(PROMPT_HINT_V16.contains(said), "{said} in the v16 hint");
+        }
+        for name in V16_MACHINE_TOOL_NAMES {
+            assert!(PROMPT_HINT_V16.contains(name), "{name} in the v16 hint");
+        }
         // Every tool `machine` applies to is named in the v12 hint.
         for name in MACHINE_TOOL_NAMES {
             assert!(PROMPT_HINT_V12.contains(name), "{name} in the v12 hint");
@@ -1668,8 +1727,9 @@ mod tests {
         assert_eq!(prompt_hint(13), PROMPT_HINT_V13);
         assert_eq!(prompt_hint(14), PROMPT_HINT_V14);
         assert_eq!(prompt_hint(15), PROMPT_HINT_V15);
+        assert_eq!(prompt_hint(16), PROMPT_HINT_V16);
         // A version this engine does not speak yet gets the newest hint it has.
-        assert_eq!(prompt_hint(16), PROMPT_HINT_V15);
+        assert_eq!(prompt_hint(17), PROMPT_HINT_V16);
         assert_eq!(prompt_hint(0), "");
         // Accounts arrived in 5: a v4 hint promises nothing it cannot do.
         assert!(!PROMPT_HINT_V4.contains("account"));
@@ -2420,8 +2480,9 @@ mod tests {
         assert!(tool(LIST_HARNESSES).description.contains("named accounts"));
     }
 
-    /// A machine is a version 11 argument: a v10 app never sees the field, and
-    /// a call that names one is refused rather than acted on here.
+    /// A machine is a version 12 argument (16 for the rest of the tools): an
+    /// older app never sees the field, and a call that names one is refused
+    /// rather than acted on here.
     #[test]
     fn a_machine_is_optional_and_advertised_where_it_is_used() {
         let tool = |name: &str| {
@@ -2444,8 +2505,31 @@ mod tests {
             assert!(new["properties"]["machine"].is_object(), "{name} at v12");
             assert!(PROMPT_HINT_V12.contains(name), "{name} in the hint");
         }
-        // The tools that do not act on a machine are unchanged.
-        for name in [MERGE_WHEN_GREEN, CLEANUP_WORKTREE, SEARCH_SESSIONS] {
+        // Version 16 gives the rest of the thread tools and the project reads
+        // the same argument, hidden from a v15 client.
+        for name in V16_MACHINE_TOOL_NAMES {
+            let schema = (tool(name).schema)();
+            assert_eq!(
+                schema["properties"]["machine"]["type"], "string",
+                "{name} takes a machine"
+            );
+            let old = schema_for(name, 15, schema.clone());
+            assert!(old["properties"]["machine"].is_null(), "{name} at v15");
+            let new = schema_for(name, 16, schema);
+            assert!(new["properties"]["machine"].is_object(), "{name} at v16");
+            assert_eq!(machine_version(name), Some(REMOTE_TOOLS_VERSION));
+            assert!(validate(name, &json!({"machine": "  "})).is_err(), "{name}");
+        }
+        // The tools that do not act on a machine are unchanged: they act on a
+        // checkout and a GitHub session that live on the other machine.
+        for name in [
+            MERGE_WHEN_GREEN,
+            CLEANUP_WORKTREE,
+            HANDOFF_WORKTREE,
+            TRANSFER_SESSION,
+            ORGANIZE_THREADS,
+            CREATE_PROJECT,
+        ] {
             let schema = (tool(name).schema)();
             assert!(
                 schema["properties"]["machine"].is_null(),
@@ -2523,6 +2607,28 @@ mod tests {
         .await;
         assert!(!refused.success);
         assert!(refused.content.contains("newer RustCode app"));
+        // A v16 machine tool is refused by a v15 app and sent by a v16 one.
+        let answer =
+            json!({"session_id": "s", "request_id": "1", "choice": "deny", "machine": "Studio"});
+        let refused = execute_versioned(
+            client(json!({"session_id": "s"})),
+            15,
+            &cancel,
+            ANSWER_REQUEST,
+            &answer,
+        )
+        .await;
+        assert!(!refused.success);
+        assert!(refused.content.contains("answer_request with machine"));
+        let sent = execute_versioned(
+            client(json!({"session_id": "s"})),
+            16,
+            &cancel,
+            ANSWER_REQUEST,
+            &answer,
+        )
+        .await;
+        assert!(sent.success, "{}", sent.content);
         // A null is no machine, so it is not a version 12 argument.
         let null = json!({"prompt": "go", "machine": null});
         let sent = execute_versioned(
