@@ -3,7 +3,7 @@
 // macOS bundle, a Linux AppImage or .deb, or a Windows NSIS install.
 
 import { isTauri } from "../acp/transport";
-import { shellCall } from "./shell";
+import { shellCall, shellCallWithin } from "./shell";
 
 /** Stable releases, or the betas of the next one too (Settings › About). */
 export type UpdateChannel = "stable" | "beta";
@@ -37,9 +37,12 @@ export function updateChannels(): Promise<UpdateChannel[]> {
   return shellCall<UpdateChannel[]>("update_channels");
 }
 
+const UPDATE_CHECK_MS = 30_000;
+
 /** One check on `channel`, hiding the beta named `skipped` (a skipped beta only). */
 export function checkForUpdate(channel: UpdateChannel, skipped: string | null): Promise<UpdateInfo> {
-  return shellCall<UpdateInfo>("update_check", { channel, skipped });
+  // GitHub may be slow or away: the check ends in an error Settings can show.
+  return shellCallWithin<UpdateInfo>(UPDATE_CHECK_MS, "update_check", { channel, skipped });
 }
 
 /** Where an install is (updater.rs `InstallProgress`). */
