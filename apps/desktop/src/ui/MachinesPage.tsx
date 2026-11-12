@@ -2,8 +2,10 @@
 //
 // This computer first — the RustCode server the app starts itself — then every
 // other computer the app is paired with, each with the route it is reached
-// over, how long ago it answered and how many threads it has. "Add machine"
-// asks one to let this app in: the request appears on that machine, its owner
+// over, how long ago it answered and how many threads it has. "Connect with a
+// code" pairs two computers by carrying one string: "Create connect code" on
+// one, paste it on the other, with no accept step. "Add machine" asks one to
+// let this app in instead: the request appears on that machine, its owner
 // accepts, and the eight-digit code it then shows is typed here.
 //
 // The app's Rust shell holds each machine's connection supervisor (an app
@@ -17,20 +19,25 @@
 // A row of another machine says which RustCode version it runs, so an old one
 // is a sentence with a command, not a silent connection failure.
 
-import { RefreshCw, Search, Server, SquareTerminal } from "lucide-react";
+import { Copy, KeyRound, RefreshCw, Search, Server, SquareTerminal } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { currentPlatform } from "../lib/platform";
 import { hasShell } from "../lib/shell";
 import {
   askInstallServer,
   askMachine,
+  type ConnectOffer,
+  cancelConnectCode,
   cancelPairing,
   codeCheckOverdue,
   codeComplete,
   codeDigits,
+  connectWithCode,
+  createConnectCode,
   type DiscoveredMachine,
   defaultSelfName,
   discoverMachines,
+  followConnectCode,
   gatewayLine,
   lastSeen,
   linkCliToApp,
@@ -64,7 +71,7 @@ import {
 import { openMachineSettings, toast, useApp } from "../state/store";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachineIdentityEditor } from "./MachineProfile";
-import { cx, noTextHelpers, Spinner } from "./primitives";
+import { copyText, cx, noTextHelpers, Spinner } from "./primitives";
 import { Action, Chip, fieldClass, Group, Loading, Row } from "./settingsKit";
 
 /** How often the page asks the shell where the machines stand. */
@@ -125,8 +132,164 @@ export function MachinesPage() {
         {machines.length === 0 && <NoMachines />}
       </Group>
 
+      <ConnectCodeGroup now={now} />
+
       {pairing ? <PairingGroup pairing={pairing} /> : <AddMachine error={pairingError} local={local} />}
     </>
+  );
+}
+
+// ---------------------------------------------------------------- connect codes
+
+/**
+ * Pair two computers by carrying one string: create a code here for another computer, or paste
+ * one created there. No request to accept, no address to look up when the code carries it.
+ */
+function ConnectCodeGroup({ now }: { now: number }) {
+  const offer = useMachines((s) => s.connectOffer);
+  const busy = useMachines((s) => s.connectBusy);
+  const error = useMachines((s) => s.connectError);
+  const [code, setCode] = useState("");
+  const [address, setAddress] = useState("");
+  const open = offer !== null && !offer.pairedWith && !offer.usedUp && offer.expiresAt > now;
+
+  // While a code is on screen, ask the gateway whether a computer used it.
+  useEffect(() => {
+    if (!open) return;
+    const timer = setInterval(() => void followConnectCode(), POLL_MS);
+    return () => clearInterval(timer);
+  }, [open]);
+
+  const connect = () => {
+    void connectWithCode(code, address).then((paired) => {
+      if (!paired) return;
+      setCode("");
+      setAddress("");
+    });
+  };
+  return (
+    <Group
+      title="Connect with a code"
+      footer="A connect code works once, for ten minutes, and needs no answer on the computer that made it: anyone who has it can see and run all threads there. The two computers still need a network between them (the same LAN, or an overlay such as NetBird or Tailscale)."
+    >
+      {offer ? (
+        <ConnectOfferRow offer={offer} now={now} />
+      ) : (
+        <Row
+          title="Let another computer in"
+          subtitle="Shows a code to type or paste on the other computer. That computer then sees and runs this computer's threads."
+        >
+          <Action disabled={busy} onClick={() => void createConnectCode()}>
+            {busy ? <Spinner /> : <KeyRound size={13} />}
+            Create connect code
+          </Action>
+        </Row>
+      )}
+      {/* Remounted when the row above changes: Chrome kept this container-query row at zero height
+          after its sibling was replaced inside the group's fieldset. Its inputs live in this component. */}
+      <Row
+        key={offer ? "after-offer" : "after-create"}
+        stacked
+        title="Connect to another computer"
+        subtitle="Paste the code or link created on that computer (Settings › Machines › Create connect code there, or rustcode machines code). Add its address only when the code carries none."
+      >
+        <div className="flex w-full flex-wrap items-center gap-2">
+          <input
+            value={code}
+            onChange={(event) => setCode(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") connect();
+            }}
+            placeholder="K7MQ-29XH-TP4W-NRD6 or rustcode://connect/…"
+            aria-label="Connect code"
+            {...noTextHelpers}
+            className={cx(fieldClass, "min-w-0 flex-[2] font-mono")}
+          />
+          <input
+            value={address}
+            onChange={(event) => setAddress(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") connect();
+            }}
+            placeholder="Address (optional)"
+            aria-label="Address of the other computer"
+            {...noTextHelpers}
+            className={cx(fieldClass, "min-w-0 flex-1 font-mono")}
+          />
+          <Action prominent disabled={busy || !code.trim()} onClick={connect}>
+            {busy && !offer ? <Spinner /> : null}
+            Connect
+          </Action>
+        </div>
+      </Row>
+      {error && <p className="m-0 px-4 pb-4 text-callout text-warning leading-normal">{error}</p>}
+    </Group>
+  );
+}
+
+/** The code this computer shows: copy it, see how long it lasts, and who used it. */
+function ConnectOfferRow({ offer, now }: { offer: ConnectOffer; now: number }) {
+  const left = Math.max(0, Math.ceil((offer.expiresAt - now) / 1000));
+  const countdown = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+  const where = offer.addressInCode
+    ? `It carries ${offer.address}; the link carries every address this computer answers on.`
+    : `It carries no address: type ${offer.address} next to it on the other computer, or paste the link instead.`;
+  if (offer.pairedWith) {
+    return (
+      <Row
+        stacked
+        title={`Paired with ${offer.pairedWith}`}
+        subtitle="It now sees and runs this computer's threads. Remove it under Settings › Remote access › Devices to take that back."
+        badge={<Chip tone="ok">Used</Chip>}
+      >
+        <Action onClick={() => void cancelConnectCode()}>Done</Action>
+      </Row>
+    );
+  }
+  if (offer.usedUp || left === 0) {
+    return (
+      <Row
+        stacked
+        title={offer.usedUp ? "The code was refused too often" : "The code has expired"}
+        subtitle="Nothing was paired with it. Create a new one when the other computer is ready."
+        badge={<Chip tone="warn">{offer.usedUp ? "Used up" : "Expired"}</Chip>}
+      >
+        <Action onClick={() => void createConnectCode()}>Create a new code</Action>
+        <Action quiet onClick={() => void cancelConnectCode()}>
+          Close
+        </Action>
+      </Row>
+    );
+  }
+  return (
+    <div className="px-4 py-4">
+      <div className="font-medium text-body text-fg">Connect code</div>
+      <div className="flex flex-wrap items-center gap-3 pt-2">
+        <code className="select-all font-mono text-title text-fg tabular tracking-wider">{offer.code}</code>
+        <Action size="sm" onClick={() => void copyText(offer.code)}>
+          <Copy size={12} /> Copy
+        </Action>
+        <Action quiet size="sm" onClick={() => void copyText(offer.link)}>
+          Copy link
+        </Action>
+      </div>
+      <p className="m-0 max-w-[60ch] pt-2 text-callout text-fg-muted leading-normal">
+        On the other computer: Settings › Machines › Connect to another computer, or{" "}
+        <code className="font-mono">rustcode machines connect {offer.code}</code>. {where}
+      </p>
+      {offer.loopbackOnly && (
+        <p className="m-0 pt-1 text-callout text-warning leading-normal">
+          Remote access listens on this computer only, so no other computer can reach it.
+        </p>
+      )}
+      <div className="flex flex-wrap items-center gap-3 pt-3 text-callout text-fg-muted">
+        <Spinner />
+        <span className="tabular">Waiting for a computer · expires in {countdown}</span>
+        <Action quiet size="sm" onClick={() => void cancelConnectCode()}>
+          Cancel code
+        </Action>
+      </div>
+    </div>
   );
 }
 

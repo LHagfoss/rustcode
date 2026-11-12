@@ -18,6 +18,7 @@ mod acp_relay;
 pub mod address;
 pub mod command;
 pub mod connect;
+pub mod connect_code;
 pub mod control;
 pub mod devices;
 pub mod discovery;

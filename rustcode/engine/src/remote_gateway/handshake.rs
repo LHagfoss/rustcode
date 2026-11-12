@@ -35,6 +35,21 @@ pub const MAX_HANDSHAKE_FRAME_BYTES: usize = 8 * 1024;
 /// the static token and its 30-day expiry, exactly as before.
 pub const CAPABILITY_TOKEN_ROTATION: &str = "token_rotation";
 
+/// What a gateway lists in a `described` frame's `capabilities` when it takes
+/// `describe` itself: a device that saw it once never sends a credential to
+/// that machine again without asking who answers first.
+pub const GATEWAY_CAPABILITY_DESCRIBE: &str = "describe";
+
+/// What a gateway lists when it redeems connect codes (`pair` with
+/// `method: "machine"`).
+pub const GATEWAY_CAPABILITY_MACHINE_CODES: &str = "machine_codes";
+
+/// Everything a `described` frame lists, in that order.
+pub const GATEWAY_CAPABILITIES: [&str; 2] = [
+    GATEWAY_CAPABILITY_DESCRIBE,
+    GATEWAY_CAPABILITY_MACHINE_CODES,
+];
+
 /// A pairing credential, manual code or device token. Serializes as a plain
 /// string; `Debug` never prints the value, so it cannot reach logs or error
 /// strings through a derived impl.
@@ -67,12 +82,26 @@ pub enum PairingMethod {
     Credential,
     /// The short code typed by hand next to the address.
     Code,
+    /// A connect code the host's owner created for another computer
+    /// (`rustcode machines code`, Settings › Machines › Create connect code):
+    /// the short code's secret or the long form's credential. It pairs a
+    /// desktop with full thread access, since creating it was the owner's
+    /// consent; the phone challenge and its code are a separate slot.
+    Machine,
 }
 
 /// First frame from a device. Anything else closes the connection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HandshakeRequest {
+    /// Ask who answers, before any secret is sent. Carries nothing secret; the
+    /// gateway answers `described` and keeps the socket open for one more
+    /// first frame (`pair`, `authenticate` or `connect_request`) within the
+    /// same handshake deadline. A device that holds a token checks the
+    /// answer's `gateway_id` against the machine it saved and closes the
+    /// socket, token unsent, when another machine answers. An older gateway
+    /// answers `invalid_frame`.
+    Describe { protocol_version: u32 },
     /// Ask the host's owner to let this device pair. Carries no secret. The
     /// socket stays open for the answer (`connect_pending`, then
     /// `connect_approved`, `connect_denied` or `connect_expired`); after
@@ -263,7 +292,7 @@ impl HandshakeRequest {
             Self::Pair { wire_names, .. } | Self::Authenticate { wire_names, .. } => {
                 wire_names.as_deref() == Some(WIRE_NAMES_THREAD)
             }
-            Self::ConnectRequest { .. } | Self::TokenAck(_) => false,
+            Self::Describe { .. } | Self::ConnectRequest { .. } | Self::TokenAck(_) => false,
         }
     }
 
@@ -273,7 +302,9 @@ impl HandshakeRequest {
             Self::Pair { capabilities, .. } | Self::Authenticate { capabilities, .. } => {
                 capabilities
             }
-            Self::ConnectRequest { .. } | Self::TokenAck(_) => return false,
+            Self::Describe { .. } | Self::ConnectRequest { .. } | Self::TokenAck(_) => {
+                return false;
+            }
         };
         capabilities
             .as_deref()
@@ -330,7 +361,9 @@ impl HandshakeRequest {
             ),
             // Neither says what the device is: an authenticated device was
             // recorded when it paired, and an acknowledgement says nothing.
-            Self::Authenticate { .. } | Self::TokenAck(_) => DeviceProfile::default(),
+            Self::Describe { .. } | Self::Authenticate { .. } | Self::TokenAck(_) => {
+                DeviceProfile::default()
+            }
         }
     }
 
@@ -372,6 +405,26 @@ impl HandshakeRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HandshakeResponse {
+    /// The answer to `describe`: who this gateway is, and nothing secret. The
+    /// socket stays open for the next first frame.
+    Described {
+        protocol_version: u32,
+        gateway_id: String,
+        instance_id: String,
+        /// The host's own name, for display. A label, not an identity.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        host_name: Option<String>,
+        /// The RustCode version running on this host.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+        /// `macos`, `linux` or `windows`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        platform: Option<String>,
+        /// What this gateway takes beyond protocol v1's first frames:
+        /// [`GATEWAY_CAPABILITY_DESCRIBE`], [`GATEWAY_CAPABILITY_MACHINE_CODES`].
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        capabilities: Vec<String>,
+    },
     /// The connection request is in front of the host's owner. Wait on the
     /// same socket, sending nothing but pings, for the answer.
     ConnectPending {
@@ -622,6 +675,50 @@ mod tests {
             HandshakeResponse::ConnectExpired.to_text(),
             r#"{"type":"connect_expired"}"#
         );
+    }
+
+    #[test]
+    fn describe_carries_nothing_and_its_answer_names_the_gateway() {
+        let describe = HandshakeRequest::parse(r#"{"type":"describe","protocol_version":1}"#)
+            .expect("describe parses");
+        assert_eq!(
+            describe,
+            HandshakeRequest::Describe {
+                protocol_version: 1
+            }
+        );
+        assert!(!describe.wants_thread_names());
+        assert!(!describe.wants_token_rotation());
+        assert!(describe.presented().is_none());
+        assert_eq!(describe.device_profile(), DeviceProfile::default());
+        let described = HandshakeResponse::Described {
+            protocol_version: 1,
+            gateway_id: "gw".into(),
+            instance_id: "inst".into(),
+            host_name: Some("studio".into()),
+            version: None,
+            platform: Some("macos".into()),
+            capabilities: GATEWAY_CAPABILITIES
+                .iter()
+                .map(|c| (*c).to_owned())
+                .collect(),
+        };
+        assert_eq!(
+            described.to_text(),
+            r#"{"type":"described","protocol_version":1,"gateway_id":"gw","instance_id":"inst","host_name":"studio","platform":"macos","capabilities":["describe","machine_codes"]}"#
+        );
+        // A connect code is `pair` with the machine method.
+        let pair = HandshakeRequest::parse(
+            r#"{"type":"pair","protocol_version":1,"method":"machine","secret":"abc0123def4","device_name":"box","device_kind":"desktop"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            pair,
+            HandshakeRequest::Pair {
+                method: PairingMethod::Machine,
+                ..
+            }
+        ));
     }
 
     #[test]

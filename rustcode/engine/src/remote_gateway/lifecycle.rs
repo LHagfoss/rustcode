@@ -8,7 +8,8 @@
 //! from scheduled jobs.
 
 use super::control::{
-    self, ConnectAnswer, ControlRequest, ControlResponse, GatewayStatus, OfferDetails,
+    self, ConnectAnswer, ControlRequest, ControlResponse, GatewayStatus, MachineOfferDetails,
+    OfferDetails,
 };
 use super::devices::{DeviceRecord, DeviceStore, RevocationNotes};
 use super::local_socket::{CONTROL_ENDPOINT, OWNER_ENDPOINT};
@@ -23,6 +24,10 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
+
+/// Why a control request the gateway should know went unanswered: the running
+/// gateway predates it.
+const OLD_GATEWAY: &str = "the running remote gateway did not answer; it may be from an older RustCode. Restart it with `rustcode remote stop` and `rustcode remote start`, then try again";
 
 const OWNER: &str = "remote gateway";
 
@@ -571,6 +576,38 @@ impl RemoteLifecycle {
             ControlResponse::Offer { offer } => Ok(offer),
             ControlResponse::Error { message } => bail!(message),
             response => bail!("unexpected pairing response: {response:?}"),
+        }
+    }
+
+    /// Ask the running gateway for a connect code. A gateway started by an
+    /// older RustCode does not know the request and closes the socket.
+    pub async fn machine_offer(&self) -> Result<MachineOfferDetails> {
+        ensure!(
+            self.status().await?.is_some(),
+            "the remote gateway is not running; start it with `rustcode remote start`"
+        );
+        let response = control::request(&self.socket_path(), &ControlRequest::MachineOffer)
+            .await
+            .context(OLD_GATEWAY)?;
+        match response {
+            ControlResponse::MachineOffer { offer } => Ok(*offer),
+            ControlResponse::Error { message } => bail!(message),
+            response => bail!("unexpected connect code response: {response:?}"),
+        }
+    }
+
+    /// Withdraw the open connect code. Returns whether one was open.
+    pub async fn cancel_machine_offer(&self) -> Result<bool> {
+        if self.status().await?.is_none() {
+            return Ok(false);
+        }
+        let response = control::request(&self.socket_path(), &ControlRequest::CancelMachineOffer)
+            .await
+            .context(OLD_GATEWAY)?;
+        match response {
+            ControlResponse::MachineOfferCancelled { was_open } => Ok(was_open),
+            ControlResponse::Error { message } => bail!(message),
+            response => bail!("unexpected connect code response: {response:?}"),
         }
     }
 

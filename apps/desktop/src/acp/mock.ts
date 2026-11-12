@@ -2139,6 +2139,9 @@ export class MockEngine {
     connect: [] as MockConnectRequest[],
     /** Requests that ended, oldest first, as the gateway keeps its last eight. */
     endedConnect: [] as { id: string; deviceName: string; end: string; deviceId?: string; at: number }[],
+    /** The open connect code for another computer, apart from the challenge (`pairing.rs`). */
+    machineOffer: null as { serial: number; expiresAt: number } | null,
+    machineSerial: 0,
   };
   private removedWorktrees = new Set<string>();
   /** The link book the app keeps in the data store: none until it saves one, and kept in `options` as the engine's disk does. */
@@ -2687,6 +2690,18 @@ export class MockEngine {
         pairedDevices: this.remote.devices.length,
         pairingOpen: offer !== null,
         sessions: this.remote.shared.size,
+      };
+      const machineOffer = this.remote.machineOffer;
+      gateway.machineOffer = {
+        open:
+          machineOffer && machineOffer.expiresAt > Date.now()
+            ? {
+                serial: machineOffer.serial,
+                expiresInSecs: Math.ceil((machineOffer.expiresAt - Date.now()) / 1000),
+                attemptsLeft: 5,
+              }
+            : null,
+        lastEnded: null,
       };
       if (offer) {
         gateway.pairing = {
@@ -3618,6 +3633,35 @@ export class MockEngine {
         if (!this.remote.gateway) this.remote.gateway = this.remoteGateway();
         this.issueRemoteOffer();
         return { ...obj(this.remoteStatus(sessionId)), offer: this.remoteOffer() } as Json;
+      }
+      case "_rustcode/remote/connect_code": {
+        await this.sleep(this.delay * 2);
+        if (params.cancel === true) {
+          const wasOpen = this.remote.machineOffer !== null;
+          this.remote.machineOffer = null;
+          return { ...this.remoteHost(), connectCodeCancelled: wasOpen };
+        }
+        // A connect code lives beside the QR challenge; creating one replaces only the last code.
+        this.remote.enabled = true;
+        if (!this.remote.gateway) this.remote.gateway = this.remoteGateway();
+        this.remote.machineSerial += 1;
+        this.remote.machineOffer = { serial: this.remote.machineSerial, expiresAt: Date.now() + 600_000 };
+        return {
+          ...this.remoteHost(),
+          connectCode: {
+            code: "K7MQ-29XH-TP4W-NRD6",
+            link: "rustcode://connect/eyJ2IjoxLCJnYXRld2F5X2lkIjoiOWYyYzFkMGI0YTZlOGM3ZCIsImhvc3RfbmFtZSI6Ik1vY2sgTWFjQm9vayBQcm8iLCJyb3V0ZXMiOlt7ImFkZHJlc3MiOiIxMDAuOTAuMTYuMjM3OjE3ODc5Iiwia2luZCI6Im92ZXJsYXkifV0sImNyZWRlbnRpYWwiOiJtb2NrIn0",
+            address: "100.90.16.237:17879",
+            addressInCode: true,
+            gatewayId: "9f2c1d0b4a6e8c7d5b3a1908f7e6d5c4",
+            instanceId: "mock-instance",
+            hostName: "Mock MacBook Pro",
+            routes: [{ address: "100.90.16.237:17879", kind: "overlay", provider: "netbird" }],
+            loopbackOnly: false,
+            expiresInSecs: 600,
+            serial: this.remote.machineSerial,
+          },
+        };
       }
       case "_rustcode/remote/answer": {
         const id = str(params.id) ?? "";
@@ -5874,6 +5918,15 @@ export class MockTransport implements Transport {
       const code = String(args.code ?? "");
       if (!/^\d{8}$/.test(code))
         throw new Error("A pairing code is exactly 8 digits. Ask the machine again for a new code.");
+      const paired = mockMachine("connected", Date.now());
+      this.machineList = [...this.machineList.filter((machine) => machine.id !== paired.id), paired];
+      return { ...paired, state: "connecting" };
+    }
+    if (command === "machines_connect_code") {
+      const code = String(args.code ?? "").trim();
+      const short = code.replace(/[-\s]/g, "").toUpperCase();
+      if (!code.toLowerCase().startsWith("rustcode://connect/") && !/^[2-9A-HJ-NP-Z]{16}$/.test(short))
+        throw new Error("a connect code has 16 characters, like K7MQ-29XH-TP4W-NRD6");
       const paired = mockMachine("connected", Date.now());
       this.machineList = [...this.machineList.filter((machine) => machine.id !== paired.id), paired];
       return { ...paired, state: "connecting" };

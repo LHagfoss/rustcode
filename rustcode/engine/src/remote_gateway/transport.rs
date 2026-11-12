@@ -83,7 +83,7 @@ pub(super) async fn serve_connection(
     };
     let first = tokio::select! {
         _ = shared.shutdown.cancelled() => return,
-        first = tokio::time::timeout_at(deadline, first_frame(&mut socket)) => first,
+        first = tokio::time::timeout_at(deadline, first_frame_after_describe(&shared, &mut socket)) => first,
     };
     let mut thread_names = false;
     let admission = match first {
@@ -223,6 +223,38 @@ async fn first_frame(socket: &mut Socket) -> Result<String, Option<HandshakeResp
             Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return Err(None),
         }
     }
+}
+
+/// The first frame that is not `describe`. A socket may ask who answers
+/// once, before anything secret: it is told `described` and its next frame is
+/// the real first frame, under the same deadline. Asking twice is refused.
+async fn first_frame_after_describe(
+    shared: &Shared,
+    socket: &mut Socket,
+) -> Result<String, Option<HandshakeResponse>> {
+    let text = first_frame(socket).await?;
+    if !is_describe(&text) {
+        return Ok(text);
+    }
+    send_frame(shared, socket, &shared.describe())
+        .await
+        .ok_or(None)?;
+    let text = first_frame(socket).await?;
+    if is_describe(&text) {
+        return Err(Some(HandshakeResponse::error(
+            ErrorCode::InvalidFrame,
+            "describe is answered once per connection",
+        )));
+    }
+    Ok(text)
+}
+
+fn is_describe(text: &str) -> bool {
+    text.contains("\"describe\"")
+        && matches!(
+            HandshakeRequest::parse(text),
+            Ok(HandshakeRequest::Describe { .. })
+        )
 }
 
 /// How a connection request ended for its socket.

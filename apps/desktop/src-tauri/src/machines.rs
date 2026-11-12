@@ -20,7 +20,7 @@ use rustcode_client::machine::{machine_from_pairing, normalize_code, Connector};
 use rustcode_client::tokens::{self as token_store, STORE_TIMEOUT};
 use rustcode_client::{
     backoff_delay, browse_async, Approved, ClientKind, DiscoveredMachine, Machine, MachineRegistry,
-    OverlayProvider, Route, RouteProbe, TokenStore, Unreachable,
+    OverlayProvider, Route, RouteProbe, TokenStore,
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -656,20 +656,13 @@ async fn relay_once(
     }
 }
 
-/// Whether pairing again is what would fix this failure.
+/// Whether pairing again is what would fix this failure. Read from the
+/// client's typed errors, never the message: a reworded error must not turn a
+/// revoked pairing into endless retries, or the reverse. A refusal counts only
+/// from a route that proved it is the machine, so a stranger on a stale
+/// address never ends the retries.
 pub fn needs_pairing(error: &Error) -> bool {
-    if error
-        .downcast_ref::<Unreachable>()
-        .is_some_and(Unreachable::needs_new_pairing)
-    {
-        return true;
-    }
-    // `Session::check` and the token lookup report a device record another
-    // pairing replaced, or a token that is gone, as plain errors.
-    let text = format!("{error:#}");
-    text.contains("pair with it again")
-        || text.contains("replaced this computer's device record")
-        || text.contains("no pairing token")
+    rustcode_client::needs_new_pairing(error)
 }
 
 fn set_connected(machines: &Arc<Machines>, id: &str, route: &Route) {
@@ -1110,6 +1103,42 @@ pub async fn machines_pair(
         .map_err(|error| format!("The code was not accepted: {error:#}"))?;
     let welcome = paired.session.welcome().clone();
     let machine = machine_from_pairing(&welcome, Route::new(pending.address), pending.name);
+    save_pairing(&machines, machine, &paired).await
+}
+
+/// Pair with a connect code created on another machine (`Settings ›
+/// Machines › Connect with a code`): no request and no accept step there.
+/// `address` is where to reach it when the code carries none, or instead of
+/// the one it carries.
+#[tauri::command]
+pub async fn machines_connect_code(
+    machines: tauri::State<'_, Arc<Machines>>,
+    code: String,
+    address: Option<String>,
+    name: Option<String>,
+) -> Result<MachineView, String> {
+    let code = rustcode_client::connect_code::parse(&code).map_err(chain)?;
+    let config_dir = config_dir()?;
+    let connector = Machines::connector(&config_dir)?;
+    // The store before the code is spent, as for a request (#3325).
+    machines.tokens(&config_dir).await?;
+    let (paired, route) = connector
+        .pair_with_code(&code, address.as_deref())
+        .await
+        .map_err(chain)?;
+    let welcome = paired.session.welcome().clone();
+    let mut machine = machine_from_pairing(&welcome, route, name);
+    // It answered `describe` before the code went out.
+    machine.describes = true;
+    save_pairing(&machines, machine, &paired).await
+}
+
+/// Keep what a pairing handed out: the token, then the machine.
+async fn save_pairing(
+    machines: &Arc<Machines>,
+    machine: Machine,
+    paired: &rustcode_client::Paired,
+) -> Result<MachineView, String> {
     let config_dir = config_dir()?;
     // The token first: a saved machine without one would only ever say "pair
     // again", while a token whose machine was not saved is unreachable. The
@@ -1343,7 +1372,7 @@ pub fn machine_disconnect(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rustcode_client::{ErrorCode, RouteKind};
+    use rustcode_client::{ErrorCode, RouteKind, Unreachable};
 
     fn machine() -> Machine {
         Machine::new(
@@ -1381,9 +1410,23 @@ mod tests {
             refused: Some(ErrorCode::Revoked),
         });
         assert!(needs_pairing(&revoked));
-        let replaced =
-            Error::msg("Studio replaced this computer's device record; pair with it again");
+        let replaced = Error::new(rustcode_client::PairingLost {
+            machine: "Studio".into(),
+            reason: rustcode_client::PairingLostReason::DeviceReplaced,
+        })
+        .context("connecting to Studio");
         assert!(needs_pairing(&replaced));
+        // The same words without the type are not a reason to stop.
+        assert!(!needs_pairing(&Error::msg(
+            "Studio replaced this computer's device record; pair with it again"
+        )));
+        // A stranger on a stale address never ends the retries.
+        let stranger = Error::new(rustcode_client::NotThisMachine {
+            address: "192.168.1.20:17879".into(),
+            machine: "Studio".into(),
+            answered: Some("Office PC".into()),
+        });
+        assert!(!needs_pairing(&stranger));
         let unreachable = Error::new(Unreachable {
             machine: "Studio".into(),
             attempts: vec!["192.168.1.20:17879: connection refused".into()],

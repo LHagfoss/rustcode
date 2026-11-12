@@ -68,6 +68,7 @@ pub fn run() {
             machines::machines_discover,
             machines::machines_ask,
             machines::machines_pair,
+            machines::machines_connect_code,
             machines::machines_cancel,
             machines::machines_remove,
             machines::machines_probe,

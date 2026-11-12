@@ -707,6 +707,18 @@ pub fn format_status_for(status: Option<&GatewayStatus>, this_session: Option<&s
         ));
     }
     lines.push(format!("  pairing        {pairing}"));
+    if let Some(open) = status
+        .machine_offer
+        .as_ref()
+        .and_then(|offer| offer.open.as_ref())
+    {
+        lines.push(format!(
+            "  connect code   open for {}:{:02}, {} wrong tries left (withdraw it with `rustcode machines code --cancel`)",
+            open.expires_in_secs / 60,
+            open.expires_in_secs % 60,
+            open.attempts_left
+        ));
+    }
     if !status.connect_requests.is_empty() {
         lines.push(format!(
             "  asking to connect {} (answer in the desktop app, or `rustcode remote accept|deny <id>`)",
@@ -1133,9 +1145,18 @@ mod tests {
             }],
             automatic_bind: Some(false),
             fixed_advertise: Some(false),
+            machine_offer: Some(super::super::control::MachineOfferStatus {
+                open: Some(super::super::control::OpenMachineOffer {
+                    serial: 2,
+                    expires_in_secs: 541,
+                    attempts_left: 5,
+                }),
+                last_ended: None,
+            }),
         };
         let text = format_status(Some(&status));
         for expected in [
+            "connect code   open for 9:01, 5 wrong tries left",
             "listening on   192.168.31.237:17879",
             "started by     the app",
             "192.168.31.185  (en0)",

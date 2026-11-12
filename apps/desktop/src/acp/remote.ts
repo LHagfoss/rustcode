@@ -21,6 +21,8 @@ export const RemoteMethod = {
   answer: "_rustcode/remote/answer",
   /** Forget a paired device and close its connections (`{ deviceId }`). */
   revoke: "_rustcode/remote/revoke",
+  /** A connect code for another computer (`connectCode`), or `{ cancel: true }` to withdraw it. */
+  connectCode: "_rustcode/remote/connect_code",
 } as const;
 
 /**

@@ -12,6 +12,11 @@
           "const": "code",
           "description": "The short code typed by hand next to the address.",
           "type": "string"
+        },
+        {
+          "const": "machine",
+          "description": "A connect code the host's owner created for another computer\n(`rustcode machines code`, Settings › Machines › Create connect code):\nthe short code's secret or the long form's credential. It pairs a\ndesktop with full thread access, since creating it was the owner's\nconsent; the phone challenge and its code are a separate slot.",
+          "type": "string"
         }
       ]
     },
@@ -36,6 +41,25 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "First frame from a device. Anything else closes the connection.",
   "oneOf": [
+    {
+      "description": "Ask who answers, before any secret is sent. Carries nothing secret; the\ngateway answers `described` and keeps the socket open for one more\nfirst frame (`pair`, `authenticate` or `connect_request`) within the\nsame handshake deadline. A device that holds a token checks the\nanswer's `gateway_id` against the machine it saved and closes the\nsocket, token unsent, when another machine answers. An older gateway\nanswers `invalid_frame`.",
+      "properties": {
+        "protocol_version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "type": {
+          "const": "describe",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "protocol_version"
+      ],
+      "type": "object"
+    },
     {
       "description": "Ask the host's owner to let this device pair. Carries no secret. The\nsocket stays open for the answer (`connect_pending`, then\n`connect_approved`, `connect_denied` or `connect_expired`); after\n`connect_approved` it sends one `pair` frame with `method: \"code\"` and\nthe code the owner reads off the host. Only gateways that list\n`connect_requests` in their Bonjour `caps` take it.",
       "properties": {

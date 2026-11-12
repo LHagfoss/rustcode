@@ -9,6 +9,11 @@
 //! ([`super::connect`]): the host's owner accepted a device that asked to
 //! connect, and only that device's socket may redeem the code shown for it.
 //!
+//! A connect code ([`PairingState::issue_machine`]) lives in a slot of its
+//! own next to the challenge, so creating one never replaces a code a phone
+//! or an accepted computer is about to type, and showing a QR code never
+//! destroys a connect code. Both share the host-wide failure budget.
+//!
 //! The state is plain data behind the gateway's one state lock, so redeeming
 //! is atomic: two sockets racing on one challenge cannot both win. Time is
 //! passed in, which keeps expiry and rate limits testable without sleeping.
@@ -36,6 +41,35 @@ pub const HOST_FAILURE_WINDOW: Duration = Duration::from_secs(300);
 
 /// Digits of the manual code, without the separator.
 pub const CODE_DIGITS: usize = 8;
+
+/// How long a connect code can be redeemed.
+pub const MACHINE_OFFER_LIFETIME: Duration = Duration::from_secs(600);
+
+/// Random bits in a connect code's short secret: what the short form has room
+/// for next to an IPv4 address. Five tries per code and the host-wide lockout
+/// make it unguessable in practice; the long form's credential has 256 bits.
+pub const MACHINE_SHORT_SECRET_BITS: u32 = 44;
+
+/// A freshly issued connect code's secrets, the only place they exist in the
+/// clear. Either one redeems the code.
+#[derive(Debug, Clone)]
+pub struct MachineSecrets {
+    /// [`MACHINE_SHORT_SECRET_BITS`] random bits, as lowercase hex: what the
+    /// short code carries and what a device presents for it.
+    pub short: Secret,
+    /// 256 random bits, base64url: what the long form carries.
+    pub credential: Secret,
+    pub lifetime: Duration,
+    /// Numbers connect codes from 1, apart from the challenges.
+    pub serial: u64,
+}
+
+/// The canonical text of a short secret: zero-padded lowercase hex, so both
+/// ends digest the same bytes.
+pub fn short_secret_text(value: u64) -> String {
+    let width = MACHINE_SHORT_SECRET_BITS.div_ceil(4) as usize;
+    format!("{value:0width$x}")
+}
 
 /// A freshly issued challenge. The only place the secrets exist in the clear.
 #[derive(Debug, Clone)]
@@ -119,9 +153,23 @@ struct Challenge {
     bound_to: Option<String>,
 }
 
+struct MachineOffer {
+    serial: u64,
+    short_digest: [u8; 32],
+    credential_digest: [u8; 32],
+    expires_at: Instant,
+    attempts_left: u8,
+}
+
 #[derive(Default)]
 pub struct PairingState {
     challenge: Option<Challenge>,
+    /// The open connect code, apart from the challenge.
+    machine: Option<MachineOffer>,
+    /// Serial of the last connect code issued.
+    machine_issued: u64,
+    /// The last connect code that ended early, and how.
+    machine_ended: Option<(u64, ChallengeEnd)>,
     /// Serial of the last challenge issued; challenges are numbered from 1.
     issued: u64,
     /// The last challenge that ended early, and how.
@@ -218,6 +266,83 @@ impl PairingState {
         }
     }
 
+    /// Issue a connect code, replacing an open one but never the challenge.
+    /// Only the local owner reaches this, as with [`Self::issue`].
+    pub fn issue_machine(&mut self, now: Instant) -> MachineSecrets {
+        let short =
+            short_secret_text(rand::rng().random_range(0..1u64 << MACHINE_SHORT_SECRET_BITS));
+        let mut bytes = [0u8; 32];
+        rand::rng().fill(&mut bytes);
+        let credential = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+        self.machine_issued += 1;
+        self.machine = Some(MachineOffer {
+            serial: self.machine_issued,
+            short_digest: digest(short.as_bytes()),
+            credential_digest: digest(credential.as_bytes()),
+            expires_at: now + MACHINE_OFFER_LIFETIME,
+            attempts_left: ATTEMPTS_PER_CHALLENGE,
+        });
+        MachineSecrets {
+            short: Secret::new(short),
+            credential: Secret::new(credential),
+            lifetime: MACHINE_OFFER_LIFETIME,
+            serial: self.machine_issued,
+        }
+    }
+
+    /// The open connect code's serial, lifetime left and wrong tries left.
+    pub fn open_machine(&self, now: Instant) -> Option<(u64, Duration, u8)> {
+        self.machine
+            .as_ref()
+            .filter(|offer| now < offer.expires_at && offer.attempts_left > 0)
+            .map(|offer| {
+                (
+                    offer.serial,
+                    offer.expires_at.duration_since(now),
+                    offer.attempts_left,
+                )
+            })
+    }
+
+    /// The last connect code that ended before it expired, and how.
+    pub fn machine_ended(&self) -> Option<(u64, ChallengeEnd)> {
+        self.machine_ended
+    }
+
+    /// Withdraw the open connect code, as its owner does with *Cancel*.
+    /// Returns whether one was open.
+    pub fn withdraw_machine(&mut self, now: Instant) -> bool {
+        let open = self.open_machine(now).is_some();
+        self.machine = None;
+        open
+    }
+
+    /// Redeem the open connect code with either of its secrets. Success
+    /// destroys it; so do five wrong tries. Every failure counts against the
+    /// host, as a wrong challenge code does.
+    fn redeem_machine(&mut self, now: Instant, presented: &str) -> Result<(), PairingError> {
+        if self.open_machine(now).is_none() {
+            self.machine = None;
+            return Err(self.fail(now));
+        }
+        let offer = self.machine.as_mut().expect("connect code is open");
+        offer.attempts_left -= 1;
+        let presented = digest(presented.trim().as_bytes());
+        // Both compared, always: which form was presented is not observable.
+        let short = constant_time_eq(&presented, &offer.short_digest);
+        let long = constant_time_eq(&presented, &offer.credential_digest);
+        if short | long {
+            self.machine_ended = Some((offer.serial, ChallengeEnd::Paired));
+            self.machine = None;
+            return Ok(());
+        }
+        if offer.attempts_left == 0 {
+            self.machine_ended = Some((offer.serial, ChallengeEnd::UsedUp));
+            self.machine = None;
+        }
+        Err(self.fail(now))
+    }
+
     /// Remaining lockout, if too many attempts failed on this host.
     pub fn lockout(&mut self, now: Instant) -> Option<Duration> {
         self.locked_for(now)
@@ -251,6 +376,13 @@ impl PairingState {
         if let Some(retry_after) = self.locked_for(now) {
             return Err(PairingError::RateLimited { retry_after });
         }
+        if method == PairingMethod::Machine {
+            // A connect code is never bound to a request socket.
+            if request.is_some() {
+                return Err(PairingError::Failed);
+            }
+            return self.redeem_machine(now, presented);
+        }
         if !self.is_open(now) {
             self.challenge = None;
             return Err(self.fail(now));
@@ -273,6 +405,7 @@ impl PairingState {
                 &digest(normalize_code(presented).as_bytes()),
                 &challenge.code_digest,
             ),
+            PairingMethod::Machine => unreachable!("a connect code is redeemed above"),
         };
         if matches {
             self.ended = Some((challenge.serial, ChallengeEnd::Paired));
@@ -423,6 +556,7 @@ mod tests {
             let secret = match method {
                 PairingMethod::Credential => offer.credential.expose(),
                 PairingMethod::Code => offer.code.expose(),
+                PairingMethod::Machine => unreachable!(),
             };
             assert_eq!(state.redeem(now, method, secret), Ok(()));
             assert!(!state.is_open(now));
@@ -704,6 +838,118 @@ mod tests {
         let debug = format!("{offer:?}");
         assert!(!debug.contains(offer.credential.expose()));
         assert!(!debug.contains(offer.code.expose()));
+    }
+
+    #[test]
+    fn a_connect_code_lives_beside_the_challenge() {
+        let now = Instant::now();
+        let mut state = PairingState::default();
+        let challenge = state.issue(now);
+        let code = state.issue_machine(now);
+        assert_eq!(code.serial, 1);
+        assert_eq!(code.short.expose().len(), 11);
+        assert_eq!(code.credential.expose().len(), 43);
+        assert_eq!(code.lifetime, Duration::from_secs(600));
+        // Showing a QR code again does not destroy the connect code, and a
+        // new connect code does not destroy the challenge (B9).
+        let challenge_again = state.issue(now);
+        assert!(state.open_machine(now).is_some());
+        let second = state.issue_machine(now);
+        assert!(state.is_open(now));
+        assert_eq!(second.serial, 2);
+        // The first connect code was replaced by the second.
+        assert_eq!(
+            state.redeem(now, PairingMethod::Machine, code.short.expose()),
+            Err(PairingError::Failed)
+        );
+        // The challenge's own secrets do not redeem a connect code, nor the reverse.
+        assert_eq!(
+            state.redeem(now, PairingMethod::Machine, challenge_again.code.expose()),
+            Err(PairingError::Failed)
+        );
+        assert_eq!(
+            state.redeem(now, PairingMethod::Code, second.short.expose()),
+            Err(PairingError::Failed)
+        );
+        drop(challenge);
+    }
+
+    #[test]
+    fn either_form_of_a_connect_code_pairs_once() {
+        let now = Instant::now();
+        for long in [false, true] {
+            let mut state = PairingState::default();
+            let code = state.issue_machine(now);
+            let secret = if long {
+                code.credential.expose()
+            } else {
+                code.short.expose()
+            };
+            assert_eq!(state.redeem(now, PairingMethod::Machine, secret), Ok(()));
+            assert_eq!(state.machine_ended(), Some((1, ChallengeEnd::Paired)));
+            assert_eq!(state.open_machine(now), None);
+            // Single use: neither form works a second time.
+            assert_eq!(
+                state.redeem(now, PairingMethod::Machine, code.short.expose()),
+                Err(PairingError::Failed)
+            );
+            assert_eq!(
+                state.redeem(now, PairingMethod::Machine, code.credential.expose()),
+                Err(PairingError::Failed)
+            );
+        }
+    }
+
+    #[test]
+    fn a_connect_code_expires_after_ten_minutes_and_after_five_wrong_tries() {
+        let now = Instant::now();
+        let mut state = PairingState::default();
+        let code = state.issue_machine(now);
+        let expired = now + MACHINE_OFFER_LIFETIME;
+        assert!(
+            state
+                .open_machine(expired - Duration::from_millis(1))
+                .is_some()
+        );
+        assert_eq!(
+            state.redeem(expired, PairingMethod::Machine, code.short.expose()),
+            Err(PairingError::Failed)
+        );
+
+        let code = state.issue_machine(now);
+        for left in (0..ATTEMPTS_PER_CHALLENGE).rev() {
+            assert_eq!(
+                state.redeem(now, PairingMethod::Machine, "00000000000"),
+                Err(PairingError::Failed)
+            );
+            assert_eq!(
+                state.open_machine(now).map(|(_, _, tries)| tries),
+                (left > 0).then_some(left)
+            );
+        }
+        assert_eq!(state.machine_ended(), Some((2, ChallengeEnd::UsedUp)));
+        // The right secret after the sixth try is refused: the code is gone.
+        assert_eq!(
+            state.redeem(now, PairingMethod::Machine, code.short.expose()),
+            Err(PairingError::Failed)
+        );
+    }
+
+    #[test]
+    fn a_withdrawn_connect_code_is_gone_and_a_request_socket_cannot_redeem_one() {
+        let now = Instant::now();
+        let mut state = PairingState::default();
+        let code = state.issue_machine(now);
+        assert_eq!(
+            state.redeem_as(now, Some("r1"), PairingMethod::Machine, code.short.expose()),
+            Err(PairingError::Failed)
+        );
+        assert!(state.withdraw_machine(now));
+        assert!(!state.withdraw_machine(now));
+        assert_eq!(
+            state.redeem(now, PairingMethod::Machine, code.short.expose()),
+            Err(PairingError::Failed)
+        );
     }
 
     #[test]

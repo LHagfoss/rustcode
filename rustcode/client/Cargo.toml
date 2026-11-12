@@ -7,6 +7,7 @@ description = "The machine client: saved machines, pairing, the WebSocket transp
 
 [dependencies]
 anyhow = "1.0.97"
+base64 = "0.22.1"
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
 futures-util = "0.3.32"
 hex = "0.4"

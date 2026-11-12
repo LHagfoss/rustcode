@@ -35,6 +35,11 @@ pub enum ControlRequest {
     },
     /// Issue a pairing challenge, replacing any outstanding one.
     Pair,
+    /// Create a connect code for another computer, replacing an open one.
+    /// The pairing challenge is left as it is.
+    MachineOffer,
+    /// Withdraw the open connect code.
+    CancelMachineOffer,
     /// Revoke a device by identifier, identifier prefix or unique name.
     Revoke {
         device: String,
@@ -61,6 +66,13 @@ pub enum ControlResponse {
     },
     Offer {
         offer: OfferDetails,
+    },
+    MachineOffer {
+        offer: Box<MachineOfferDetails>,
+    },
+    MachineOfferCancelled {
+        /// Whether a connect code was still open.
+        was_open: bool,
     },
     Revoked {
         device_id: String,
@@ -122,6 +134,10 @@ pub struct GatewayStatus {
     /// `None` from a gateway that does not report it.
     #[serde(default)]
     pub pairing: Option<PairingStatus>,
+    /// The connect code, apart from the challenge. `None` from a gateway
+    /// without connect codes.
+    #[serde(default)]
+    pub machine_offer: Option<MachineOfferStatus>,
     /// Sessions whose owner process is alive but not registered here.
     #[serde(default)]
     pub unregistered_owners: Vec<String>,
@@ -205,6 +221,66 @@ pub struct PairingStatus {
     /// The last challenge that ended before it expired.
     #[serde(default)]
     pub ended: Option<EndedChallenge>,
+}
+
+/// Where the connect code stands, without any secret.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MachineOfferStatus {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open: Option<OpenMachineOffer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_ended: Option<EndedMachineOffer>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenMachineOffer {
+    pub serial: u64,
+    pub expires_in_secs: u64,
+    /// Wrong tries the code still tolerates.
+    pub attempts_left: u8,
+}
+
+/// A connect code that ended before it expired: a computer paired with it,
+/// or its wrong tries ran out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EndedMachineOffer {
+    pub serial: u64,
+    pub end: ChallengeEnd,
+    /// The device record the code created, when it paired one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_name: Option<String>,
+}
+
+/// A connect code, shown once by whoever asked for it. Secrets stay
+/// redacted in `Debug`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MachineOfferDetails {
+    /// The short form, `K7MQ-29XH-TP4W-NRD6`.
+    pub code: Secret,
+    /// The long form, `rustcode://connect/…`: every route and the gateway's id.
+    pub link: Secret,
+    /// The address the short code carries, or the one to type next to it
+    /// when it carries none (`address_in_code` is false).
+    pub address: String,
+    pub address_in_code: bool,
+    pub gateway_id: String,
+    pub instance_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_name: Option<String>,
+    /// Every address in the long form, best first.
+    #[serde(default)]
+    pub routes: Vec<crate::remote_gateway::address::HostRoute>,
+    /// No other computer can reach this gateway: the code is useless.
+    #[serde(default)]
+    pub loopback_only: bool,
+    pub expires_in_secs: u64,
+    /// Numbers connect codes, to follow this one in [`MachineOfferStatus`].
+    pub serial: u64,
+    /// Pairing is locked on this host right now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locked_for_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
