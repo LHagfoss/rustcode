@@ -489,27 +489,27 @@ const STATUS_TINT: Record<RowStatusKind, string> = {
 };
 
 /**
- * What the roomy row's first line ends with: an icon and a word in the state's tone — `Working`
- * with the running turn's clock, `Needs you`, `Waiting`, `Failed`, `Done` until you open it, or
- * `Review`. A row that shows its age instead has none (state/sidebarRows.ts `rowStatus`).
+ * What the roomy row's first line ends with: an icon in the state's tone, with no word, so the
+ * title keeps the room. `Working` spins and keeps the running turn's clock, `Needs you` pulses
+ * (respecting reduced motion), and `Waiting`, `Failed`, `Done` until you open it and `Review` hold
+ * still. The word is the icon's accessible name and its tooltip. A row that shows its age instead
+ * has none (state/sidebarRows.ts `rowStatus`).
  */
 function RowStatusLabel({ status, startedAt }: { status: RowStatus; startedAt?: number }) {
   const kind = status.kind;
   return (
     <span
       // The long form goes in the title, which the app reads out as the row's label
-      // (lib/quietNative.ts); the words are what the eye gets.
-      title={status.title}
+      // (lib/quietNative.ts); the icon is what the eye gets, the word what a screen reader says.
+      title={status.title ?? status.label}
       className={cx("inline-flex shrink-0 items-center gap-1 font-medium", STATUS_TINT[kind])}
     >
       {kind === "working" ? (
         <Spinner size={10} />
       ) : kind === "needs" ? (
-        status.approval ? (
-          <ShieldQuestion size={13} />
-        ) : (
-          <MessageCircleQuestion size={13} />
-        )
+        <span className="flex motion-safe:animate-pulse">
+          {status.approval ? <ShieldQuestion size={13} /> : <MessageCircleQuestion size={13} />}
+        </span>
       ) : kind === "waiting" ? (
         <Clock size={12} />
       ) : kind === "failed" ? (
@@ -519,7 +519,7 @@ function RowStatusLabel({ status, startedAt }: { status: RowStatus; startedAt?: 
       ) : (
         <Eye size={13} />
       )}
-      <span>{status.label}</span>
+      <span className="sr-only">{status.label}</span>
       {kind === "working" && startedAt !== undefined && (
         <span className="font-normal text-fg-muted tabular">
           <Elapsed since={startedAt} />
@@ -561,11 +561,20 @@ function RowAction({
 
 /**
  * Hovering swaps the row's trailing state for its actions: Pin, Settle (or Unsettle) and the menu,
- * three 24px buttons in the slot the state held. The right column is never narrower than they are,
- * so nothing reflows and nothing is drawn over text.
+ * three 24px buttons in the slot the state held. The slot widens to hold them while they show
+ * (`ACTIONS_ROOM`), so nothing is drawn over text.
  * The actions themselves sit beside the row's button (a button cannot hold buttons), placed on the
  * slot's line and fading in as the state fades out.
  */
+/**
+ * The slot's width while the actions show: their 76px, and only then. At rest the slot is as wide
+ * as its icon or age, so the title takes the rest; on hover the title gives the actions room.
+ */
+const ACTIONS_ROOM = cx(
+  "group-hover:min-w-[76px]",
+  "group-has-[:focus-visible]:min-w-[76px]",
+  "group-has-[[data-state=open]]:min-w-[76px]",
+);
 /** The state's slot while the actions show: its own state hidden under them. */
 const SWAPPED_ON_HOVER = cx(
   "group-hover:*:invisible",
@@ -927,7 +936,7 @@ const ThreadRow = memo(function ThreadRow({
                 </span>
                 <span
                   title={chip?.title}
-                  className={cx(ROW_RIGHT, "min-w-[76px] text-sub text-fg-muted", SWAPPED_ON_HOVER)}
+                  className={cx(ROW_RIGHT, "text-sub text-fg-muted", ACTIONS_ROOM, SWAPPED_ON_HOVER)}
                 >
                   <span className="flex min-w-0 items-center justify-end">{state}</span>
                 </span>
