@@ -12,7 +12,7 @@ import { fileManagerName, primaryModifier, trashName } from "../lib/platform";
 // (state/sidebarRows.ts `rowStatus`), with the harness mark and a lone diff
 // beside it; the branch and the counts go on the quiet line under it (48px). The
 // row layout preference (Settings › Appearance) keeps the opt-in compact row as
-// one 32px line, with a second only for a branch, a pull request or a stack.
+// a compact title line and a quiet line for its branch and other details.
 
 import {
   Check,
@@ -70,6 +70,7 @@ import { openTerminalAt, openThreadLog, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { liveSubagents, type StackAgent } from "../state/agentStack";
 import { type BranchRow, branchKindOf, branchRows } from "../state/branches";
+import { useCheckoutBranch } from "../state/checkoutBranch";
 import { type ChildInfo, childInfo } from "../state/children";
 import { stateOf } from "../state/host";
 import { machineGlyph, machineName, machineTint, useMachines } from "../state/machines";
@@ -645,8 +646,7 @@ function PullMark({ pull }: { pull: PullRequest }) {
 }
 
 // Memoized, and reads only the flags it shows: a streamed chunk must not re-render 500 rows.
-// Compact: one line, a mark, the title drawn by what the thread wants, and the state in a fixed
-// slot at its end, with a second line only for a branch, a diff, a pull request or a stack.
+// Compact: a title and state, then a quiet line for the branch and other details.
 // Comfortable: the title first, the project's mark and the branch under it. Hovering swaps the
 // slot for the row's actions in both, so nothing shifts.
 const ThreadRow = memo(function ThreadRow({
@@ -705,6 +705,8 @@ const ThreadRow = memo(function ThreadRow({
   const wake = useApp((s) => s.snoozed[session.id]);
   const status = useApp((s) => statusOf(s, session.id));
   const worktree = useApp((s) => worktreeOf(s, session.id));
+  const checkoutBranch = useCheckoutBranch(session, host?.state, !worktree);
+  const gitBranch = worktree?.branch || checkoutBranch;
   const harnesses = useApp((s) => s.harnesses);
   const pinned = useApp((s) => s.pinned.includes(session.id));
   const finishedAt = useApp((s) => s.finished[session.id]);
@@ -782,18 +784,12 @@ const ThreadRow = memo(function ThreadRow({
   const branch = session.parent ? branchKindOf(session.parent) : undefined;
   // The open thread is a delegated one with no row of its own: its parent stands in as the context.
   const lit = selected || !!context;
-  // One line by default (Settings › Appearance): the second is for a row that has something to put
-  // there. What it carries is the branch and its pull request; a plain chat thread has neither, and
-  // a diff, its delegates or the mark of its harness ride in the trailing slot rather than opening a
-  // line (state/sidebarRows.ts `rowMeta`).
+  // Both layouts reserve a branch line, including for threads outside git.
   const compact = rowLayout === "compact";
-  // What it asks of you (or the thread it belongs under) takes the row's last line in place of the
-  // branch, so a card is never more than three lines; the branch and pull request return once
-  // answered, and the hover card shows them meanwhile.
   const asks = !!(request || hint);
   const meta = rowMeta({
-    branch: !!worktree && !asks,
-    pull: !!pull && !asks,
+    branch: true,
+    pull: !!pull,
     stack: !!stack?.length,
     harness: external,
     diff,
@@ -982,18 +978,20 @@ const ThreadRow = memo(function ThreadRow({
                     )}
                     {stateSlot(false)}
                   </span>
-                  {/* The second line, only when there is something to say: the branch it works in,
-                      its pull request, and who else works beside it. The harness mark is not on it
-                      unless those are: alone it would be a 12px glyph on an empty line, so it rides
-                      in the trailing slot instead. */}
+                  {/* Branch, request and other details share the reserved second line. */}
                   {meta === "line" && (
-                    <span className="relative flex w-full min-w-0 items-center gap-2 text-sub text-fg-muted">
-                      {worktree && (
+                    <span className="relative flex min-h-4 w-full min-w-0 items-center gap-2 text-sub text-fg-muted">
+                      {gitBranch && (
                         <span className="flex min-w-0 items-center gap-1">
                           <GitBranch size={10} className="shrink-0" />
-                          <span className="min-w-0 truncate font-mono text-[10px]" title={worktree.branch}>
-                            {worktree.branch}
+                          <span className="min-w-0 truncate font-mono text-[10px]" title={gitBranch}>
+                            {gitBranch}
                           </span>
+                        </span>
+                      )}
+                      {asks && (
+                        <span className="min-w-0 truncate">
+                          {request ? (request.question ? request.question.text : request.title) : hint}
                         </span>
                       )}
                       {diff && <DiffStat diff={diff} />}
@@ -1065,19 +1063,23 @@ const ThreadRow = memo(function ThreadRow({
                       )
                     )}
                   </span>
-                  {/* The third line, only when it has something to say: the branch, what it changed,
-                      its pull request, and who works beside it. */}
+                  {/* Branch, request and other details share the reserved third line. */}
                   {meta === "line" && (
-                    <span className="flex min-w-0 items-center gap-1.5 text-sub text-fg-muted">
-                      {worktree ? (
+                    <span className="flex min-h-4 min-w-0 items-center gap-1.5 text-sub text-fg-muted">
+                      {gitBranch ? (
                         <span className="title-first-branch flex min-w-0 flex-1 items-center gap-1">
                           <GitBranch size={10} className="shrink-0" />
-                          <span className="min-w-0 truncate font-mono text-[10px]" title={worktree.branch}>
-                            {worktree.branch}
+                          <span className="min-w-0 truncate font-mono text-[10px]" title={gitBranch}>
+                            {gitBranch}
                           </span>
                         </span>
                       ) : (
                         <span className="flex-1" />
+                      )}
+                      {asks && (
+                        <span className="min-w-0 truncate">
+                          {request ? (request.question ? request.question.text : request.title) : hint}
+                        </span>
                       )}
                       <span className="title-first-badges ml-auto flex shrink-0 items-center gap-1.5">
                         {diff && <DiffStat diff={diff} />}
@@ -1098,13 +1100,6 @@ const ThreadRow = memo(function ThreadRow({
                       </span>
                     </span>
                   )}
-                </span>
-              )}
-              {/* What it asks of you, or which thread a delegated one without a parent row above it
-                belongs under. */}
-              {(request || hint) && (
-                <span className="relative truncate text-fg-muted text-sub">
-                  {request ? (request.question ? request.question.text : request.title) : hint}
                 </span>
               )}
             </button>
