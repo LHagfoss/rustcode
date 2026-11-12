@@ -2253,6 +2253,7 @@ export function Sidebar() {
     snoozedOpen,
     settledShelfOpen,
     subOf,
+    remoteDelegates,
     layoutMode,
   ]);
   const orderIds = useMemo(() => visibleRows(order), [order]);
