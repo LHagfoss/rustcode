@@ -764,7 +764,13 @@ impl Connector {
                 })
             }
             Race::Lost { failures } => {
-                let refused = failures.iter().find_map(|failure| failure.refusal);
+                // A route that refused the handshake answered: the machine is
+                // up there, so the app shows that route rather than the first
+                // saved one, which may be a LAN address that is not this
+                // network's.
+                let refusing = failures.iter().find(|failure| failure.refusal.is_some());
+                let refused = refusing.and_then(|failure| failure.refusal);
+                let answered = refusing.map(|failure| failure.route.address.clone());
                 Err(anyhow::Error::new(Unreachable {
                     machine: machine.name.clone(),
                     attempts: failures
@@ -772,6 +778,7 @@ impl Connector {
                         .map(|failure| format!("{}: {}", failure.route.address, failure.reason))
                         .collect(),
                     refused,
+                    answered,
                 }))
             }
         }
@@ -888,6 +895,7 @@ impl Connector {
                         .map(|failure| format!("{}: {}", failure.route.address, failure.reason))
                         .collect(),
                     refused: None,
+                    answered: None,
                 }));
             }
         };
@@ -1552,6 +1560,9 @@ pub struct Unreachable {
     /// One line per route: the address and what happened.
     pub attempts: Vec<String>,
     pub refused: Option<crate::protocol::ErrorCode>,
+    /// The address of the route whose refusal that was: it answered, so the
+    /// machine is up there even though it would not let this computer in.
+    pub answered: Option<String>,
 }
 
 impl Unreachable {

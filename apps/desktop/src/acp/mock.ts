@@ -5922,6 +5922,10 @@ export class MockTransport implements Transport {
       this.machineList = [...this.machineList.filter((machine) => machine.id !== paired.id), paired];
       return { ...paired, state: "connecting" };
     }
+    if (command === "machines_retry") {
+      // Nothing waits on a backoff in the mock: no machine is woken.
+      return [];
+    }
     if (command === "machines_connect_code") {
       const code = String(args.code ?? "").trim();
       const short = code.replace(/[-\s]/g, "").toUpperCase();

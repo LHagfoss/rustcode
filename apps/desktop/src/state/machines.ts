@@ -37,8 +37,33 @@ import {
 import { splitThreadKey, threadKey } from "./threadKeys";
 import { compareVersions } from "./updates";
 
-/** Where a machine stands, as the shell reports it. */
-export type MachineState = "connecting" | "connected" | "offline" | "needsPairing" | "stopped";
+/**
+ * Where a machine stands, as the shell reports it. `unavailable` is a machine a route reached
+ * that would not serve this computer (its server is not running, another protocol version, this
+ * device not allowed): `reason` says which, and the shell keeps trying.
+ */
+export type MachineState =
+  | "connecting"
+  | "connected"
+  | "offline"
+  | "unavailable"
+  | "needsPairing"
+  | "stopped";
+
+/**
+ * Why a machine is not connected, as the shell names it: `unreachable` (no route answered),
+ * `rejected_token`, `version_mismatch`, `not_allowed`, `server_not_running`, `busy`, `rejected`,
+ * or `dropped` (it was up and the connection ended).
+ */
+export type MachineReason =
+  | "unreachable"
+  | "rejected_token"
+  | "version_mismatch"
+  | "not_allowed"
+  | "server_not_running"
+  | "busy"
+  | "rejected"
+  | "dropped";
 
 /** One way to reach a machine: a LAN address, Tailscale, a VPN, or public. */
 export interface MachineRoute {
@@ -82,6 +107,8 @@ export interface Machine {
   /** The route in use, or the one it will try first. */
   route: MachineRoute | null;
   state: MachineState;
+  /** Why it is not connected, or null while it is (or has not tried yet). */
+  reason?: MachineReason | null;
   detail: string | null;
   /**
    * What to check when the machine is reachable one way and not another, e.g.
@@ -488,7 +515,7 @@ export function useMachineReconnecting(host: string | null | undefined): boolean
 }
 
 /** The words a row's state chip uses. */
-export function stateLabel(machine: Pick<Machine, "state" | "retryInSecs">): string {
+export function stateLabel(machine: Pick<Machine, "state" | "retryInSecs" | "reason">): string {
   switch (machine.state) {
     case "connected":
       return "Connected";
@@ -498,8 +525,28 @@ export function stateLabel(machine: Pick<Machine, "state" | "retryInSecs">): str
       return "Needs pairing";
     case "offline":
       return machineReconnecting(machine) ? "Reconnecting…" : "Offline";
+    case "unavailable":
+      return reasonLabel(machine.reason);
     case "stopped":
       return "Not connected";
+  }
+}
+
+/** A machine that answered and would not serve, in a chip's few words. */
+export function reasonLabel(reason: MachineReason | null | undefined): string {
+  switch (reason) {
+    case "server_not_running":
+      return "Server not running";
+    case "version_mismatch":
+      return "Version mismatch";
+    case "not_allowed":
+      return "Not allowed";
+    case "rejected_token":
+      return "Pairing refused";
+    case "busy":
+      return "Busy";
+    default:
+      return "Refused";
   }
 }
 
@@ -512,6 +559,8 @@ export function stateTone(machine: Pick<Machine, "state" | "retryInSecs">): "ok"
       return "idle";
     case "offline":
       return machineReconnecting(machine) ? "idle" : "warn";
+    case "unavailable":
+      return "warn";
     case "needsPairing":
       return "bad";
     case "stopped":
@@ -568,6 +617,8 @@ export function machineLine(machine: Machine): string {
         machine.detail ??
         (machineReconnecting(machine) ? "Trying again. The app keeps reconnecting." : "Not connected.")
       );
+    case "unavailable":
+      return machine.detail ?? `${routeLabel(machine.route)} answered but refused. The app keeps trying.`;
     case "stopped":
       return "Not connected.";
   }
@@ -1184,6 +1235,50 @@ export function onMachineLinks(listener: (id: string, connection: AcpConnection 
 
 function announce(id: string, connection: AcpConnection | null): void {
   for (const listener of linkListeners) listener(id, connection);
+}
+
+/** The least time between two wakes the app sends on its own (a focus, the network coming back). */
+const RETRY_GAP_MS = 5_000;
+let lastRetryAt = 0;
+
+/**
+ * Ask the shell to try machines again now instead of at the end of their backoff: one machine, or
+ * every machine waiting when none is named. Answers the ids woken; a machine that is connected,
+ * connecting or needs pairing is left alone.
+ */
+export async function retryMachines(id?: string): Promise<string[]> {
+  if (!hasShell()) return [];
+  try {
+    const woken = await shellCallWithin<string[]>(SHELL_READ_MS, "machines_retry", id ? { id } : {});
+    if (woken.length) await refreshMachines();
+    return woken;
+  } catch {
+    return [];
+  }
+}
+
+/** Whether any saved machine is waiting out a backoff that a wake would end. */
+function anyWaiting(): boolean {
+  return useMachines
+    .getState()
+    .machines.some((machine) => machine.state === "offline" || machine.state === "unavailable");
+}
+
+// The window coming to the front, or the network coming back, is when a machine that went away is
+// most likely back too, and when the person is looking: try it now, not at the end of the wait.
+if (typeof window !== "undefined") {
+  const wake = () => {
+    const now = Date.now();
+    if (!started || !anyWaiting() || now - lastRetryAt < RETRY_GAP_MS) return;
+    lastRetryAt = now;
+    void retryMachines();
+  };
+  window.addEventListener("focus", wake);
+  window.addEventListener("online", wake);
+  if (typeof document !== "undefined")
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") wake();
+    });
 }
 
 /** Re-read every connected machine's thread list (a window focus, a reconnect). */

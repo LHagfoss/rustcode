@@ -7,9 +7,16 @@
 //! another Wi-Fi — because that is what makes a route that was dead work
 //! (#3436).
 //!
+//! It also ends a wait when this computer wakes from sleep ([`slept`]), and
+//! names why the last attempt failed ([`Cause`]): a machine that answered and
+//! refused is not the same as one that is off, and the app and agents say
+//! which.
+//!
 //! Everything here is a pure function of its arguments, so the schedule, the
 //! route order and "did the network change" are unit-tested rather than timed.
 
+use crate::machine::{NotThisMachine, PairingLost, Refusal, Unreachable};
+use crate::protocol::ErrorCode;
 use crate::registry::Route;
 use std::net::IpAddr;
 use std::time::Duration;
@@ -91,10 +98,249 @@ pub fn network_changed(before: &[IpAddr], after: &[IpAddr]) -> bool {
     before != after
 }
 
+/// How long a connected machine may say nothing at all, pings included,
+/// before the link counts as dead: two and a half of the gateway's 30 s pings.
+/// A laptop that slept or a VPN that dropped without a reset leaves a socket
+/// that never closes; without this the row would say *Connected* until the
+/// TCP stack gave up, minutes later.
+pub const SILENCE_LIMIT: Duration = Duration::from_secs(75);
+
+/// How long a connected machine has to answer a ping sent after a wake from
+/// sleep or a network change: a LAN answers in milliseconds, while an overlay
+/// over a relay can take seconds on a live socket.
+pub fn answer_deadline(route: &Route) -> Duration {
+    match route.kind {
+        crate::registry::RouteKind::Lan => Duration::from_secs(3),
+        _ => Duration::from_secs(15),
+    }
+}
+
+/// How much further the wall clock may run than the monotonic one during a
+/// wait before the difference counts as sleep. Generous, so a clock that NTP
+/// nudges does not read as a wake.
+pub const SLEEP_GAP: Duration = Duration::from_secs(10);
+
+/// Whether this computer slept during a wait that took `monotonic` by the
+/// monotonic clock and `wall` by the wall clock. The monotonic clock stops
+/// while macOS and Linux sleep and the wall clock does not, so a lid that was
+/// closed shows up as the wall clock running ahead. A network that came back
+/// with the lid is worth trying at once rather than at the end of the backoff.
+pub fn slept(monotonic: Duration, wall: Duration) -> bool {
+    wall > monotonic.saturating_add(SLEEP_GAP)
+}
+
+/// Why a paired machine is not connected, as a word an agent and the app can
+/// branch on. Only [`Cause::Unreachable`] means no route answered; every other
+/// cause is a machine that is up and said something.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cause {
+    /// No route answered: the machine is off, asleep, or on no network this
+    /// computer reaches.
+    Unreachable,
+    /// The machine answered and refused this computer's pairing token: pair
+    /// with it again. Not retried, because nothing changes until then.
+    RejectedToken,
+    /// The machine speaks another remote protocol version: update RustCode on
+    /// one side.
+    VersionMismatch,
+    /// The machine let this computer in but not at its threads: its owner has
+    /// to allow this device.
+    NotAllowed,
+    /// The machine's gateway answered, but no RustCode server runs behind it
+    /// to relay to.
+    ServerNotRunning,
+    /// The machine answered and is busy, rate-limiting or restarting.
+    Busy,
+    /// The machine answered and refused for another reason.
+    Rejected,
+    /// The connection came up and then ended.
+    Dropped,
+}
+
+impl Cause {
+    /// The wire name `list_machines` and the app use.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unreachable => "unreachable",
+            Self::RejectedToken => "rejected_token",
+            Self::VersionMismatch => "version_mismatch",
+            Self::NotAllowed => "not_allowed",
+            Self::ServerNotRunning => "server_not_running",
+            Self::Busy => "busy",
+            Self::Rejected => "rejected",
+            Self::Dropped => "dropped",
+        }
+    }
+
+    /// Whether a route answered: the machine is on, and the problem is what
+    /// it said rather than whether it is there.
+    pub fn reachable(self) -> bool {
+        !matches!(self, Self::Unreachable | Self::Dropped)
+    }
+
+    /// The cause a gateway error code stands for.
+    pub fn of_code(code: ErrorCode) -> Self {
+        match code {
+            code if code.needs_new_pairing() => Self::RejectedToken,
+            ErrorCode::UnsupportedVersion => Self::VersionMismatch,
+            ErrorCode::UnauthorizedAccess => Self::NotAllowed,
+            ErrorCode::Internal => Self::ServerNotRunning,
+            ErrorCode::Busy
+            | ErrorCode::ConnectBusy
+            | ErrorCode::RateLimited
+            | ErrorCode::ConnectRateLimited
+            | ErrorCode::ShuttingDown => Self::Busy,
+            _ => Self::Rejected,
+        }
+    }
+
+    /// Why an attempt failed, from its typed error, never its message. A
+    /// refusal names its code ([`Refusal`], or [`Unreachable::refused`] when
+    /// every route failed and one that proved it is the machine refused); a
+    /// saved token that is gone or belongs to a replaced device record
+    /// ([`PairingLost`]) is a token problem; another computer on a saved
+    /// address ([`NotThisMachine`]) and anything else did not answer.
+    pub fn of(error: &anyhow::Error) -> Self {
+        if let Some(refusal) = error.downcast_ref::<Refusal>() {
+            return Self::of_code(refusal.code);
+        }
+        if let Some(code) = error
+            .downcast_ref::<Unreachable>()
+            .and_then(|unreachable| unreachable.refused)
+        {
+            return Self::of_code(code);
+        }
+        if error.downcast_ref::<PairingLost>().is_some() {
+            return Self::RejectedToken;
+        }
+        if error.downcast_ref::<NotThisMachine>().is_some() {
+            return Self::Unreachable;
+        }
+        Self::Unreachable
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::registry::{OverlayProvider, RouteKind};
+
+    #[test]
+    fn a_lan_answers_a_ping_sooner_than_an_overlay() {
+        assert_eq!(
+            answer_deadline(&Route::with_kind(RouteKind::Lan, "10.0.0.31:17879")),
+            Duration::from_secs(3)
+        );
+        assert_eq!(
+            answer_deadline(&Route::with_kind(RouteKind::Vpn, "100.90.27.158:17879")),
+            Duration::from_secs(15)
+        );
+        // Silence is judged against the gateway's 30 s ping, with room for two
+        // lost ones.
+        assert!(SILENCE_LIMIT > Duration::from_secs(60));
+    }
+
+    #[test]
+    fn a_wall_clock_that_ran_ahead_is_a_wake_from_sleep() {
+        let five = Duration::from_secs(5);
+        assert!(!slept(five, five));
+        // NTP nudging the clock is not sleep.
+        assert!(!slept(five, five + Duration::from_secs(3)));
+        // A lid closed for an hour during a five-second slice.
+        assert!(slept(five, Duration::from_secs(3_605)));
+        // A wall clock set back is not sleep either.
+        assert!(!slept(five, Duration::ZERO));
+    }
+
+    #[test]
+    fn a_machine_that_answered_is_told_apart_from_one_that_did_not() {
+        let refusal = |code| {
+            anyhow::Error::new(Refusal {
+                step: "acp_open".to_owned(),
+                code,
+                message: "the relay to this machine's engine could not be opened".to_owned(),
+                retry_after_secs: None,
+            })
+        };
+        // What a gateway whose server died says (Lagos, 2026-11-12).
+        let no_server = Cause::of(&refusal(ErrorCode::Internal));
+        assert_eq!(no_server, Cause::ServerNotRunning);
+        assert!(no_server.reachable());
+        assert_eq!(
+            Cause::of(&refusal(ErrorCode::UnsupportedVersion)),
+            Cause::VersionMismatch
+        );
+        assert_eq!(
+            Cause::of(&refusal(ErrorCode::UnauthorizedAccess)),
+            Cause::NotAllowed
+        );
+        assert_eq!(
+            Cause::of(&refusal(ErrorCode::Unauthorized)),
+            Cause::RejectedToken
+        );
+        assert_eq!(Cause::of(&refusal(ErrorCode::Busy)), Cause::Busy);
+        // A context on top does not hide the refusal.
+        assert_eq!(
+            Cause::of(&refusal(ErrorCode::Internal).context("open ACP")),
+            Cause::ServerNotRunning
+        );
+
+        // Every route failed: one that refused decides, else none answered.
+        let lost = |refused| {
+            anyhow::Error::new(Unreachable {
+                machine: "Lagos".to_owned(),
+                attempts: vec!["10.0.0.31:17879: timed out".to_owned()],
+                refused,
+                answered: refused.map(|_| "100.90.27.158:17879".to_owned()),
+            })
+        };
+        assert_eq!(Cause::of(&lost(None)), Cause::Unreachable);
+        assert!(!Cause::Unreachable.reachable());
+        assert_eq!(
+            Cause::of(&lost(Some(ErrorCode::UnsupportedVersion))),
+            Cause::VersionMismatch
+        );
+        assert_eq!(
+            Cause::of(&lost(Some(ErrorCode::TokenReplayed))),
+            Cause::RejectedToken
+        );
+
+        // The token lookup and the identity check report typed errors; the
+        // same words without the type are not a token problem.
+        let lost = anyhow::Error::new(PairingLost {
+            machine: "Lagos".to_owned(),
+            reason: crate::machine::PairingLostReason::NoToken,
+        })
+        .context("connecting to Lagos");
+        assert_eq!(Cause::of(&lost), Cause::RejectedToken);
+        assert_eq!(
+            Cause::of(&anyhow::anyhow!(
+                "Lagos has no pairing token; pair with it again"
+            )),
+            Cause::Unreachable
+        );
+        let stranger = anyhow::Error::new(NotThisMachine {
+            address: "10.0.0.31:17879".to_owned(),
+            machine: "Lagos".to_owned(),
+            answered: Some("Office PC".to_owned()),
+        });
+        assert_eq!(Cause::of(&stranger), Cause::Unreachable);
+        assert_eq!(
+            Cause::of(&anyhow::anyhow!("connection refused")),
+            Cause::Unreachable
+        );
+        // A race lost because the token is gone carries it as `unauthorized`
+        // from the route that proved it is the machine.
+        let tokenless = anyhow::Error::new(Unreachable {
+            machine: "Lagos".to_owned(),
+            attempts: vec!["100.90.27.158:17879: Lagos has no pairing token".into()],
+            refused: Some(ErrorCode::Unauthorized),
+            answered: Some("100.90.27.158:17879".into()),
+        });
+        assert_eq!(Cause::of(&tokenless), Cause::RejectedToken);
+        assert_eq!(Cause::RejectedToken.as_str(), "rejected_token");
+        assert_eq!(Cause::ServerNotRunning.as_str(), "server_not_running");
+    }
 
     #[test]
     fn the_backoff_doubles_to_a_minute_and_stays_there() {
