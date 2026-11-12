@@ -97,6 +97,34 @@ detached helper (`restart --detached`, hidden) and returns at once; the helper's
 output is in `rustcode server logs`. The caller counts as inside when the server's
 pid is one of its ancestors. From an outside shell nothing changes.
 
+Every background start (the server a restart, an install or `server connect`
+starts, and the remote gateway) leaves the caller's Windows job object when
+the job allows it. Windows OpenSSH runs each session in a job that ends every
+process in it when the session closes, so a server restarted over SSH used to
+die a few seconds later, when the SSH command returned, without a line in any
+log. A server the `Run` entry runs is started again with `--service`, as at
+logon, so it keeps updating itself.
+
+The server writes why it could not start (a lock, a socket, the engine) and
+any panic to `server.log`, and what stopped it (a signal, or on Windows the
+console closing, a logoff or a shutdown). A server that finds the description
+of an earlier one still in `run/server.json` logs that the earlier one ended
+without stopping cleanly (killed or crashed), with its pid, version and start
+time, so a server that died silently still leaves evidence.
+
+**The gateway keeps the server running.** A paired machine reaches threads
+through the gateway, which relays to the server, and the gateway can outlive
+it. When a device opens ACP and no engine answers, the gateway starts the
+server (through the service manager when it is installed, otherwise as
+`server connect` does) and relays to it once it listens. With the server
+installed, it also looks every 30 seconds and starts a server found gone on
+two looks in a row. A described server is gone when its process has ended or
+its pid names a later process; one whose process still runs is left alone.
+Failed starts wait 5, 10, 20 and 40 seconds, then 30 minutes after the fifth;
+each start and its outcome is written to the gateway's log
+(`<config dir>/remote/gateway.log`). A device still refused gets `internal`,
+which RustCode shows as *server not running*.
+
 | OS | Mechanism | Runs when |
 | --- | --- | --- |
 | macOS | LaunchAgent `~/Library/LaunchAgents/no.rustcode.server.plist`, `RunAtLoad` and `KeepAlive` (restart after a crash, not after a clean stop) | you are logged in |

@@ -14,6 +14,7 @@ import {
   machineReconnecting,
   platformIcon,
   platformName,
+  reasonLabel,
   routeName,
 } from "./machines";
 import { LOCAL_HOST } from "./threadKeys";
@@ -33,7 +34,7 @@ export interface DeviceStatus {
 }
 
 /** The state as the row's chip: `Connected`, `Connecting`, `Reconnecting…`, `Offline`, `Needs pairing`. */
-export function deviceStatus(machine: Pick<Machine, "state" | "retryInSecs">): DeviceStatus {
+export function deviceStatus(machine: Pick<Machine, "state" | "retryInSecs" | "reason">): DeviceStatus {
   switch (machine.state) {
     case "connected":
       return { label: "Connected", tone: "ok" };
@@ -45,6 +46,9 @@ export function deviceStatus(machine: Pick<Machine, "state" | "retryInSecs">): D
       return machineReconnecting(machine)
         ? { label: "Reconnecting…", tone: "idle" }
         : { label: "Offline", tone: "warn" };
+    case "unavailable":
+      // A route answered and the machine would not serve: say what it said.
+      return { label: reasonLabel(machine.reason), tone: "warn" };
     case "needsPairing":
       return { label: "Needs pairing", tone: "bad" };
     case "stopped":

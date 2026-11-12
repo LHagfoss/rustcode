@@ -416,6 +416,17 @@ impl Machine {
         self.routes.first()
     }
 
+    /// The route to show for a machine that is not connected now: the one it
+    /// answered on last, while it is still saved, else the first one. The
+    /// first saved route is often a LAN address of a network this computer has
+    /// left, which tells a person nothing about where the machine was reached.
+    pub fn last_working_route(&self) -> Option<&Route> {
+        self.last_route
+            .as_deref()
+            .and_then(|last| self.routes.iter().find(|route| route.address == last))
+            .or_else(|| self.preferred_route())
+    }
+
     /// Add a route unless the same address is already there, which only
     /// learns its kind and product. A learned route keeps the order the races
     /// rely on: it goes after the routes of its own class, so a LAN address
@@ -967,7 +978,7 @@ pub(crate) fn write_private_json<T: Serialize>(path: &Path, value: &T) -> Result
     Ok(())
 }
 
-fn create_private_directory(directory: &Path) -> Result<()> {
+pub(crate) fn create_private_directory(directory: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
@@ -1268,6 +1279,15 @@ mod tests {
         assert_eq!(studio.last_route.as_deref(), Some("100.90.16.237:17879"));
         // The saved routes are untouched: the order is the race's.
         assert_eq!(studio.preferred_route().unwrap().kind, RouteKind::Lan);
+        // A machine that is away is shown on the route it answered on, not on
+        // a LAN address of a network this computer left.
+        assert_eq!(
+            studio.last_working_route().unwrap().address,
+            "100.90.16.237:17879"
+        );
+        let mut forgotten = studio.clone();
+        forgotten.last_route = Some("10.9.9.9:17879".to_owned());
+        assert_eq!(forgotten.last_working_route().unwrap().kind, RouteKind::Lan);
     }
 
     /// Routes a handshake reports are saved in the order the race uses, with

@@ -107,6 +107,12 @@ pub async fn serve(
     )
     .await?;
     let port = gateway.local_addr().port();
+    // This gateway won the owner lock: it is the one that keeps the server it
+    // relays to running (`server/supervise.rs`), so a server that died with
+    // the session that started it does not leave paired machines refused.
+    if let Ok(program) = crate::service::executable_path() {
+        crate::server::supervise::supervise(program, config_directory.to_path_buf());
+    }
     // What this gateway listens on and where it announces itself, kept for
     // the next start: the RustCode server reads it to start the gateway at
     // login with no app or terminal around. Written only now: the bind above

@@ -174,6 +174,41 @@ pub fn installed() -> bool {
         .unwrap_or(false)
 }
 
+/// The service manager of the server for `config_directory`. A gateway runs
+/// with `RUSTCODE_CONFIG_DIR` set even for the user's own directory (its
+/// launcher always passes it), and that directory's server is the `server`
+/// service, not one named after an override.
+fn manager_for(config_directory: &Path) -> Result<Box<dyn Manager>> {
+    let default = crate::config::default_config_dir();
+    let overridden = (!default
+        .as_deref()
+        .is_some_and(|default| same_directory(default, config_directory)))
+    .then_some(config_directory);
+    super::manager(&service_name(overridden))
+}
+
+fn same_directory(a: &Path, b: &Path) -> bool {
+    a == b
+        || matches!(
+            (std::fs::canonicalize(a), std::fs::canonicalize(b)),
+            (Ok(a), Ok(b)) if a == b
+        )
+}
+
+/// [`installed`] for the server of `config_directory`.
+pub fn installed_for(config_directory: &Path) -> bool {
+    manager_for(config_directory)
+        .and_then(|manager| manager.state())
+        .is_ok_and(|state| state.installed)
+}
+
+/// Have the service manager start the server of `config_directory` again:
+/// for a gateway that finds the installed server dead. It ends what the
+/// manager still runs (nothing, for a dead server) and starts its own.
+pub fn start_installed_for(config_directory: &Path) -> Result<()> {
+    manager_for(config_directory)?.restart()
+}
+
 /// One problem `server status` can report.
 fn problem(code: &'static str, message: impl Into<String>) -> Problem {
     Problem {

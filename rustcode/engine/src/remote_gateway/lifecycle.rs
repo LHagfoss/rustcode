@@ -468,8 +468,10 @@ impl RemoteLifecycle {
             .stdin(Stdio::null())
             .stdout(log.try_clone()?)
             .stderr(log);
-        crate::platform::detach(command.as_std_mut());
-        let mut child = command.spawn().context("failed to start the gateway")?;
+        // Out of the starting session's Windows job too: a gateway started
+        // over SSH must not end when that session closes.
+        let mut child =
+            crate::platform::spawn_detached(&mut command).context("failed to start the gateway")?;
         let started = tokio::time::timeout(self.health_timeout, async {
             loop {
                 // Two terminals may start one at the same moment: the owner

@@ -194,7 +194,7 @@ async fn ensure_server(
     }
     if service::live_status().await.is_none() {
         let program = std::env::current_exe().context("cannot find this rustcode")?;
-        rustcode::server::start_in_background(&program)
+        rustcode::server::start_in_background(&program, false)
             .context("could not start the server in the background")?;
     }
     let live = wait_for(|| service::live_status(), Duration::from_secs(20)).await;
