@@ -102,7 +102,7 @@ export function MachinesPage() {
     void localAppVersion().then(setLocal);
   }, []);
 
-  if (!ready) return <Loading error={error} />;
+  if (!ready) return <Loading error={error} onRetry={() => void refreshMachines()} />;
 
   return (
     <>

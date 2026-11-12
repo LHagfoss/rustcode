@@ -32,7 +32,11 @@ async fn execute(command: &ServerCommands) -> anyhow::Result<i32> {
             }
             Ok(0)
         }
-        ServerCommands::Restart { when_idle, yes } => restart(*when_idle, *yes).await,
+        ServerCommands::Restart {
+            when_idle,
+            yes,
+            detached,
+        } => restart(*when_idle, *yes, *detached).await,
         ServerCommands::LinkPath => link_path().await,
         ServerCommands::UpdateCli { json } => update_cli(*json).await,
         ServerCommands::Uninstall { yes } => uninstall(*yes).await,
@@ -66,8 +70,20 @@ async fn install(force_dev: bool, yes: bool) -> anyhow::Result<i32> {
     Ok(i32::from(report.live.is_none()))
 }
 
-async fn restart(when_idle: bool, yes: bool) -> anyhow::Result<i32> {
-    let running = service::running_turns().await;
+async fn restart(when_idle: bool, yes: bool, detached: bool) -> anyhow::Result<i32> {
+    if detached {
+        // The helper of a restart started inside the server: let that command
+        // end and its thread record the result before the server stops.
+        tokio::time::sleep(service::HELPER_DELAY).await;
+    }
+    // A caller that descends from the server cannot restart it: stopping the
+    // server ends the caller before it starts the new one.
+    let live = service::live_status().await;
+    let inside = live
+        .as_ref()
+        .is_some_and(|live| service::runs_inside(live.pid));
+    let run = service::plan_restart_run(inside, detached);
+    let running = live.map(|live| live.running_turns);
     match service::plan_restart(when_idle, yes, running) {
         service::RestartPlan::Now => {}
         service::RestartPlan::Confirm { running } => {
@@ -78,6 +94,9 @@ async fn restart(when_idle: bool, yes: bool) -> anyhow::Result<i32> {
                 return Ok(1);
             }
         }
+        // The turn of a thread inside the server runs until this command
+        // ends, so the helper does the waiting.
+        service::RestartPlan::WaitForIdle if run == service::RestartRun::Detached => {}
         service::RestartPlan::WaitForIdle => {
             let _pending = service::mark_restart_pending()?;
             let outcome = service::wait_until_idle(
@@ -99,6 +118,19 @@ async fn restart(when_idle: bool, yes: bool) -> anyhow::Result<i32> {
                 anyhow::bail!("{running} turns were still running");
             }
         }
+    }
+    if run == service::RestartRun::Detached {
+        service::spawn_detached_restart(when_idle)?;
+        println!(
+            "This runs inside the server, so the restart continues in the background{}. \
+             See `rustcode server logs` for the result.",
+            if when_idle {
+                ", once no turn is running"
+            } else {
+                " after this command ends"
+            }
+        );
+        return Ok(0);
     }
     match service::restart().await? {
         Some(live) => {

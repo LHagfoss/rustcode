@@ -147,13 +147,18 @@ export function AccountsList({ harness }: { harness: Harness }) {
   useEffect(() => {
     if (!waiting) return;
     const deadline = Date.now() + SIGN_IN_WAIT_MS;
+    // A read still on its way is not asked again: an engine that is slow would pile them up.
+    let reading = false;
     const timer = setInterval(() => {
       if (Date.now() > deadline) {
         setWaiting(null);
         setGaveUp(waiting);
         return;
       }
+      if (reading) return;
+      reading = true;
       void checkHarnessAccounts(false).then((snapshot) => {
+        reading = false;
         const found = snapshot?.harnesses
           .find((h) => h.id === harness.id)
           ?.accounts?.find((a) => a.id === waiting);

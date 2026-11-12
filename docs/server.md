@@ -86,6 +86,12 @@ rustcode server logs -f     # the server's log
 rustcode server uninstall   # remove the service
 ```
 
+A restart run from a thread (a shell tool inside the server) would end its own
+caller when the server stops, so the command hands the stop and start to a
+detached helper (`restart --detached`, hidden) and returns at once; the helper's
+output is in `rustcode server logs`. The caller counts as inside when the server's
+pid is one of its ancestors. From an outside shell nothing changes.
+
 | OS | Mechanism | Runs when |
 | --- | --- | --- |
 | macOS | LaunchAgent `~/Library/LaunchAgents/no.rustcode.server.plist`, `RunAtLoad` and `KeepAlive` (restart after a crash, not after a clean stop) | you are logged in |

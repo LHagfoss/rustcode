@@ -113,6 +113,7 @@ import {
   installProgress,
   loadChannels,
   offersUpdate,
+  setAutoInstall,
   setUpdateChannel,
   showWhatsNew,
   useUpdates,
@@ -206,6 +207,9 @@ const pageLabel = (id: SettingsSection) => PAGES.find((p) => p.id === id)?.label
  * folder name and whether a turn runs. It reads the same `discord_rpc_enabled` the CLI writes, so
  * this row and `rustcode discord` are one setting.
  */
+/** A status read on a Settings page ends in an error row within this, never a spinner that stays. */
+const STATUS_READ_MS = 8_000;
+
 function PresenceRow() {
   const projectCwd = useApp((s) => s.projectCwd || s.defaultCwd);
   const status = useApp((s) => s.status);
@@ -223,7 +227,7 @@ function PresenceRow() {
     try {
       const params: JsonObject = {};
       if (projectCwd) params.cwd = projectCwd;
-      show(await request("_rustcode/presence", params));
+      show(await request("_rustcode/presence", params, STATUS_READ_MS));
     } catch (e) {
       setError(errorText(e));
     }
@@ -579,7 +583,7 @@ function AgentsPage() {
   useAutoDetect();
   // An unsaved choice stays here while it is not valid yet (a harness that still lists models).
   const [choice, setChoice] = useState<NewThreadChoice | null>(null);
-  if (!snapshot) return <Loading error={scoped.error} />;
+  if (!snapshot) return <Loading error={scoped.error} onRetry={scoped.reload} />;
   // The default saves as it changes: there is nothing to confirm, and the choice is easy to undo.
   const change = (next: NewThreadChoice) => {
     setSaved(false);
@@ -1413,7 +1417,7 @@ function RecordRequestBodiesGroup() {
   const [pending, setPending] = useState(false);
   const load = useCallback(async () => {
     try {
-      setCapture(parsePayloadCapture(await request(Method.telemetry)));
+      setCapture(parsePayloadCapture(await request(Method.telemetry, {}, STATUS_READ_MS)));
       setError(null);
     } catch (e) {
       setError(errorText(e));
@@ -1512,6 +1516,7 @@ function AboutPage() {
     >
       <AppVersion />
       <UpdateChannelRow />
+      <AutoInstallRow />
     </Group>
   );
 }
@@ -1548,6 +1553,24 @@ function UpdateChannelRow() {
           { value: "beta", label: "Beta" },
         ]}
       />
+    </Row>
+  );
+}
+
+/**
+ * Settings › About › Install updates automatically: a newer release on the
+ * selected channel installs and reopens RustCode by itself once no thread is
+ * working. A running turn, an approval or a question is never interrupted.
+ */
+function AutoInstallRow() {
+  const enabled = useUpdates((s) => s.autoInstall);
+  if (!canUpdate()) return null;
+  return (
+    <Row
+      title="Install updates automatically"
+      subtitle="Installs a newer release and reopens RustCode once no thread is working. A running turn is never interrupted."
+    >
+      <Switch label="Install updates automatically" checked={enabled} onChange={setAutoInstall} />
     </Row>
   );
 }

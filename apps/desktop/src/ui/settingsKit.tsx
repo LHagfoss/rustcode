@@ -633,9 +633,16 @@ export function Slider({
   );
 }
 
-export function Loading({ error }: { error: string | null }) {
+export function Loading({ error, onRetry }: { error: string | null; onRetry?: () => void }) {
   return error ? (
-    <p className="text-callout text-warning">{error}</p>
+    <div className="flex items-center gap-3">
+      <p className="text-callout text-warning">{error}</p>
+      {onRetry && (
+        <Action quiet size="sm" onClick={onRetry}>
+          Retry
+        </Action>
+      )}
+    </div>
   ) : (
     // Where the page's list will be: a group card of rows, title and subtitle each.
     <section className="mb-6" role="status" aria-label="Loading">

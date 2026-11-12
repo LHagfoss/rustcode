@@ -17,8 +17,9 @@ import { AcpConnection, type JsonObject, obj, str } from "../acp/jsonrpc";
 import { isTauri, MachineTransport } from "../acp/transport";
 import { initializeParams, Method, parseSessionList, type SessionSummary } from "../acp/types";
 import { currentPlatform } from "../lib/platform";
-import { hasShell, shellCall } from "../lib/shell";
+import { hasShell, shellCall, shellCallWithin } from "../lib/shell";
 import { appVersion } from "../lib/updater";
+import { forgetMachineCache, forgetTranscript, loadThreadList, saveThreadList } from "./machineCache";
 import {
   APP_VERSION,
   askConfirm,
@@ -255,6 +256,16 @@ export const useMachines = create<MachinesStore>(() => ({
   local: readLocalIdentity(),
 }));
 
+// What a machine last listed is kept on this computer, so its rows survive the machine going
+// away and the app restarting (`state/machineCache.ts`). A live read replaces the rows in memory,
+// and this keeps the newest of them.
+useMachines.subscribe((state, prev) => {
+  if (state.sessions === prev.sessions) return;
+  for (const [host, rows] of Object.entries(state.sessions)) {
+    if (rows !== prev.sessions[host]) saveThreadList(host, rows);
+  }
+});
+
 // ---------------------------------------------------------------- labels
 
 /** The id `list_machines` gives this computer: the machine a call is on when it names none. */
@@ -412,7 +423,7 @@ export async function setMachineDisplayName(
   displayName: string | null,
 ): Promise<void> {
   try {
-    await shellCall("machines_set_display_name", {
+    await shellCallWithin(SHELL_READ_MS, "machines_set_display_name", {
       id: machine.id,
       name: cleanMachineName(displayName),
     });
@@ -429,7 +440,7 @@ export async function setMachineIcon(
   tint: MachineTint | null,
 ): Promise<void> {
   try {
-    await shellCall("machines_set_icon", {
+    await shellCallWithin(SHELL_READ_MS, "machines_set_icon", {
       id: machine.id,
       icon: icon ?? null,
       tint: icon ? (tint ?? null) : null,
@@ -790,11 +801,24 @@ export async function startMachines(): Promise<void> {
   });
 }
 
+/**
+ * How long the app waits on the shell before a Machines page shows an error
+ * instead of a spinner. A machine that is away must never hold the page: the
+ * shell reads and writes its own files, so a few seconds is generous.
+ */
+const SHELL_READ_MS = 10_000;
+/** Bonjour browses for a few seconds; the rest is the overlay rows. */
+const DISCOVER_MS = 20_000;
+/** `rustcode server status --json` starts a process. */
+const SERVER_STATUS_MS = 15_000;
+/** One task per machine runs in parallel, each with its own connect timeout. */
+const PROBE_MS = 45_000;
+
 /** Read the machines and their live state from the shell. */
 export async function refreshMachines(): Promise<void> {
   if (!hasShell()) return;
   try {
-    const machines = await shellCall<Machine[]>("machines_list");
+    const machines = await shellCallWithin<Machine[]>(SHELL_READ_MS, "machines_list");
     const now = Date.now();
     const since = { ...useMachines.getState().offlineSince };
     // A machine that was removed leaves nothing behind.
@@ -813,7 +837,22 @@ export async function refreshMachines(): Promise<void> {
         since[machine.id] = Number.isNaN(last) ? now : last;
       }
     }
-    useMachines.setState({ machines, offlineSince: since, ready: true, error: null });
+    // A machine this run has not listed yet draws the threads this computer last read from it, so
+    // an offline one keeps its rows (and a reconnect replaces them: `readThreads`).
+    const state = useMachines.getState();
+    const cached: Record<string, SessionSummary[]> = {};
+    for (const machine of machines) {
+      if (state.sessions[machine.id]) continue;
+      const rows = loadThreadList(machine.id);
+      if (rows.length) cached[machine.id] = rows;
+    }
+    useMachines.setState({
+      machines,
+      offlineSince: since,
+      ready: true,
+      error: null,
+      ...(Object.keys(cached).length ? { sessions: { ...state.sessions, ...cached } } : {}),
+    });
     for (const machine of machines) void attach(machine);
     for (const id of [...links.keys()]) {
       if (!machines.some((machine) => machine.id === id)) detach(id);
@@ -869,6 +908,7 @@ function forgetCreated(machine: string, sessionId: string | undefined): void {
  */
 export function forgetMachineThread(machine: string, sessionId: string): void {
   tombstoneThread(threadKey(machine, sessionId));
+  forgetTranscript(threadKey(machine, sessionId));
   useMachines.setState((state) => {
     const listed = state.sessions[machine];
     if (!listed?.some((session) => session.id === sessionId)) return {};
@@ -1017,6 +1057,8 @@ export function resetMachinesForTests(): void {
 
 /** Stop a machine's channel: the shell stops its supervisor with it. */
 function detach(id: string): void {
+  // A machine that is removed leaves nothing of its threads on this computer.
+  forgetMachineCache(id);
   const link = links.get(id);
   links.delete(id);
   if (!link) return;
@@ -1137,7 +1179,7 @@ export function refreshMachineThreads(): void {
 export async function discoverMachines(): Promise<void> {
   useMachines.setState({ discovering: true, discoverError: null });
   try {
-    const { rows, notice } = await shellCall<Discovery>("machines_discover");
+    const { rows, notice } = await shellCallWithin<Discovery>(DISCOVER_MS, "machines_discover");
     // A failed browse still lists the overlay rows: the notice says why the
     // local search found nothing, and the saved machines are below it.
     useMachines.setState({ discovered: mergeDiscovered(rows), discoverError: notice, discovering: false });
@@ -1154,7 +1196,9 @@ export async function discoverMachines(): Promise<void> {
 export async function refreshServerService(): Promise<void> {
   if (!hasShell()) return;
   try {
-    useMachines.setState({ server: await shellCall<ServerService>("server_service_status") });
+    useMachines.setState({
+      server: await shellCallWithin<ServerService>(SERVER_STATUS_MS, "server_service_status"),
+    });
   } catch (error) {
     useMachines.setState({
       server: {
@@ -1455,7 +1499,11 @@ export function probeTone(probe: RouteProbe | null | undefined): "ok" | "bad" | 
 export async function probeMachineRoutes(machine?: Pick<Machine, "id">): Promise<boolean> {
   useMachines.setState({ probing: true });
   try {
-    const machines = await shellCall<Machine[]>("machines_probe", machine ? { id: machine.id } : {});
+    const machines = await shellCallWithin<Machine[]>(
+      PROBE_MS,
+      "machines_probe",
+      machine ? { id: machine.id } : {},
+    );
     useMachines.setState({ machines, probing: false });
     return true;
   } catch (error) {
@@ -1472,7 +1520,7 @@ export async function setMachinePaused(machine: Pick<Machine, "id">, paused: boo
     machines: state.machines.map((entry) => (entry.id === machine.id ? { ...entry, paused } : entry)),
   }));
   try {
-    await shellCall("machines_set_paused", { id: machine.id, paused });
+    await shellCallWithin(SHELL_READ_MS, "machines_set_paused", { id: machine.id, paused });
     await refreshMachines();
   } catch (error) {
     await refreshMachines();
@@ -1483,7 +1531,7 @@ export async function setMachinePaused(machine: Pick<Machine, "id">, paused: boo
 /** Close a machine's connection without forgetting it; Run on can still use it another time. */
 export async function disconnectMachine(machine: Pick<Machine, "id">): Promise<void> {
   try {
-    await shellCall("machine_disconnect", { id: machine.id });
+    await shellCallWithin(SHELL_READ_MS, "machine_disconnect", { id: machine.id });
     await refreshMachines();
   } catch (error) {
     toast(errorText(error), "error");

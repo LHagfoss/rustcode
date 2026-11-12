@@ -61,8 +61,9 @@ glyph (a laptop for macOS, a monitor for Windows, a terminal for Linux, a
 question mark when it has not said) and its name in muted text on its row
 (hover: `Runs on ‹name›`); a thread on this computer carries nothing. A delegate
 stays under its parent whichever machine it runs on. A machine that is away
-lists the copy this window kept, read-only, and its chat says “Not connected.
-Last updated HH:MM”; the Settings gear shows an amber dot while any paired
+lists the copy this computer last read from it, read-only, and its chat says
+“‹Machine› is offline since HH:MM. This is the last copy this computer saw; it
+updates when the machine is back.”; the Settings gear shows an amber dot while any paired
 machine is not connected. New thread and ⌘N still start here; the draft's Run on pill picks another machine, and Settings › Machines keeps the
 pairing, Reconnect and each machine's own page. A machine that is away while
 the app retries it on its own reads **Reconnecting…** rather than Offline (in
@@ -81,8 +82,13 @@ A thread key carries its machine (`local` keeps its bare id, another one reads
 that machine's own connection: `connectionFor` in `src/state/store.ts` returns
 the local engine or the machine's `AcpConnection`, open the thread and its
 permission answers travel there, and its `session/update` stream keeps it live.
-A machine that is away keeps its threads listed and read-only: the chat says
-"Not connected. Last updated HH:MM", the composer is disabled, and the
+A machine that is away keeps its threads listed and read-only, also after the
+app restarted: the app keeps what it last read from each machine in its own
+storage (`state/machineCache.ts`: the 200 newest threads per machine, and the
+transcript of each thread opened in the last 30 days, capped in size; never a
+token), and a live read replaces it when the machine is back. The chat says
+"‹Machine› is offline since HH:MM. This is the last copy this computer saw; it
+updates when the machine is back.", the composer is disabled, and the
 header shows `Runs on ‹machine› · ‹harness› · ‹model›`; the controls that read
 this computer (terminal, working tree, pull requests, Finder, worktrees,
 checkpoints and undo) stay disabled with "Runs on ‹machine›" where the action
@@ -1690,7 +1696,16 @@ and switching back to Stable never offers a downgrade (a beta is already newer
 than the release before it). On Beta the row reads **Update to
 1.21.0-beta.3**, with **Skip this beta** under it: that version is kept out of
 the row across restarts (`rustcode.skippedBeta`) and the next beta is offered
-as usual. **Update to X** installs in place on macOS, Linux (AppImage and
+as usual. **Install updates automatically** (Settings › About, on by default,
+`rustcode.autoInstallUpdates`) installs an offered release by itself once no
+thread is working: no running turn, no background command a turn waits on, no
+pending approval or question (`autoInstallDecision` in `state/updates.ts`).
+While something works it asks again every 10 seconds and never interrupts a
+turn; a skipped beta stays skipped, a dev build never installs, and an install
+that failed is left to the sidebar row. It shows *Updating to X…*, installs and
+reopens like **Update to X** does, so the app starts its bundled engine anew
+and, in a release build, its start-up catch-up restarts a background server
+onto the new binary with `rustcode server restart --when-idle`. **Update to X** installs in place on macOS, Linux (AppImage and
 `.deb`) and Windows; how depends on how this copy was installed
 (`Install` in `updater.rs`, decided from `$APPIMAGE`, the binary's path,
 `dpkg-query -S` and the files beside it). Every route first downloads the

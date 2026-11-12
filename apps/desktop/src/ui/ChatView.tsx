@@ -29,7 +29,14 @@ import { motionAllowed, PENDING_ENTRY_MS } from "../lib/sendFlight";
 import { composedText, emptyExtras, sentAttachments } from "../state/compose";
 import { chooseFolder } from "../state/folders";
 import type { HeaderButtonId } from "../state/headerButtons";
-import { machineGlyph, machineTint, useMachineReconnecting, useMachines } from "../state/machines";
+import { offlineNotice } from "../state/machineCache";
+import {
+  machineGlyph,
+  machineTint,
+  offlineSinceLabel,
+  useMachineReconnecting,
+  useMachines,
+} from "../state/machines";
 import { heldSetup, type PendingSetup, pendingStatus } from "../state/setup";
 import {
   autoCompactOffFor,
@@ -830,8 +837,9 @@ export function ChatView() {
   const offMachine = useMachineOfThread(thread?.id);
   // Away but already on its supervisor's retry clock: read-only still, and coming back by itself.
   const offReconnecting = useMachineReconnecting(thread ? splitThreadKey(thread.id).host : undefined);
-  const offUpdated = useApp((s) =>
-    thread ? s.sessions.find((x) => x.id === thread.id)?.updatedAt : undefined,
+  // When it went away, and whether this computer holds a copy of the thread to read meanwhile.
+  const offSince = useMachines((s) =>
+    thread ? offlineSinceLabel(s.offlineSince[splitThreadKey(thread.id).host]) : undefined,
   );
   const ownRequest = thread?.permissions[0];
   // The approval just answered, which stands where its card was for a moment.
@@ -945,15 +953,14 @@ export function ChatView() {
               {thread && offline && (
                 <LaneItem over>
                   <Callout floating>
-                    {/* The shell retries a machine that went away on its own, so a callout that
-                        only says "not connected" reads as a failure the user has to fix. */}
-                    {offReconnecting
-                      ? `Reconnecting${offMachine ? ` to ${offMachine}` : ""}…`
-                      : `Not connected${offMachine ? ` to ${offMachine}` : ""}.`}
-                    {!offReconnecting && offUpdated
-                      ? ` Last updated ${new Date(offUpdated).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}.`
-                      : ""}{" "}
-                    This thread is read-only until the computer is back.
+                    {/* The shell retries a machine that went away on its own, so a reconnecting
+                        machine reads as coming back, not as a failure the user has to fix. */}
+                    {offlineNotice({
+                      machine: offMachine,
+                      since: offSince,
+                      reconnecting: offReconnecting,
+                      hasCopy: !!thread.items.length,
+                    })}
                     {ownRequest
                       ? ownRequest.question
                         ? " It is waiting for your answer there."
