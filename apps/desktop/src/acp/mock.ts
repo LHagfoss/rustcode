@@ -3399,6 +3399,15 @@ export class MockEngine {
       case "_rustcode/scheduled/run":
         return { id: str(obj(params)?.id) ?? "", state: "claimed" };
       case "_rustcode/pulls/state": {
+        // A project whose remote is on another forge: `gh` knows no pull requests there.
+        if (str(obj(params)?.cwd)?.includes("/gitlab-")) {
+          return {
+            error: {
+              code: "no_provider",
+              message: "none of the git remotes configured for this repository point to a known GitHub host",
+            },
+          };
+        }
         const branch = str(obj(params)?.branch) || "feat/delegate-pull";
         return {
           branch,

@@ -1720,6 +1720,23 @@ describe("engine controller with the mock engine", () => {
     expect((updated.delegates as JsonObject[])[0]!.idle_ms).toBeLessThan(90_000);
   });
 
+  test("thread status reports no pull request provider for a remote that is not on GitHub", async () => {
+    const { parent, target } = await stagedMerge();
+    const gitlab = "/Users/you/code/gitlab-service";
+    useApp.setState((st) => ({ sessions: st.sessions.map((x) => ({ ...x, cwd: gitlab })) }));
+    updateThread(parent, (t) => ({ ...t, cwd: gitlab }));
+    updateThread(target, (t) => ({ ...t, cwd: gitlab }));
+    const answer = await answerOrchestration({
+      sessionId: parent,
+      tool: "thread_status",
+      args: { session_id: target },
+    });
+    const delegate = (answer.delegates as JsonObject[])[0]!;
+    expect(delegate.error).toBeUndefined();
+    expect(delegate.pull).toBeNull();
+    expect(delegate.pull_note).toBe("no pull request provider for this remote");
+  });
+
   test("read_activity forwards newest order to the data store", async () => {
     const { parent, target, transport } = await stagedMerge();
     const answer = await answerOrchestration({
