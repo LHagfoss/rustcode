@@ -24,8 +24,16 @@ export interface OrderSection {
   limit?: number;
 }
 
-/** Every row the list draws, in the order it draws them: a shut section or group draws none. */
+/**
+ * Every row the list draws, in the order it draws them: a shut section or group draws none. A
+ * delegate on another machine is drawn twice (under its open parent and in its own machine's
+ * group), and the keyboard visits it once, at the first row.
+ */
 export function visibleRows(sections: readonly OrderSection[]): string[] {
+  return [...new Set(drawnRows(sections))];
+}
+
+function drawnRows(sections: readonly OrderSection[]): string[] {
   const out: string[] = [];
   for (const section of sections) {
     if (section.shut) continue;

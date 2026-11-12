@@ -670,6 +670,7 @@ const ThreadRow = memo(function ThreadRow({
   selected,
   context,
   grouped,
+  nested,
   machine,
   now,
   hint,
@@ -692,6 +693,8 @@ const ThreadRow = memo(function ThreadRow({
   dragging?: boolean;
   /** Under its project's heading: the row leaves out the mark and the name it would repeat. */
   grouped: boolean;
+  /** Drawn indented under the thread that started it: a delegate on another machine says where it runs. */
+  nested?: boolean;
   /** The computer the thread runs on, when that is not this one: the hover card says so. */
   machine?: string;
   now: number;
@@ -943,6 +946,7 @@ const ThreadRow = memo(function ThreadRow({
             <button
               type="button"
               data-row-id={session.id}
+              data-nested={nested ? "" : undefined}
               tabIndex={navActive ? 0 : -1}
               onClick={() => selectThread(session.id)}
               onDoubleClick={startRename}
@@ -989,7 +993,7 @@ const ThreadRow = memo(function ThreadRow({
                     {!grouped && <ProjectMark name={project} size={14} className={markTint} />}
                     {glyphs}
                     <span className={titleTint}>{session.title || "New thread"}</span>
-                    {machine && !grouped && (
+                    {machine && (!grouped || nested) && (
                       <span
                         className="flex shrink-0 items-center gap-0.5 text-fg-faint"
                         title={`Runs on ${machine}`}
@@ -1052,7 +1056,7 @@ const ThreadRow = memo(function ThreadRow({
                       <ProjectMark name={project} size={14} className={markTint} />
                     )}
                     <span className="min-w-0 flex-1 truncate">{grouped ? (harnessName ?? "") : project}</span>
-                    {machine && !grouped && (
+                    {machine && (!grouped || nested) && (
                       <span
                         className="flex shrink-0 items-center gap-0.5 text-fg-faint"
                         title={`Runs on ${machine}`}
@@ -2256,6 +2260,20 @@ export function Sidebar() {
   const currentId =
     activeId && orderIds.includes(activeId) ? activeId : (contextSelected ?? orderIds[0] ?? null);
 
+  // Opening a delegate that runs on another machine brings its row under the parent into view, the
+  // place it is drawn as part of the thread that started it (the machine's group lists it too).
+  const openRemote = selectedId && remoteDelegates.has(selectedId) ? selectedId : null;
+  useEffect(() => {
+    if (!openRemote) return;
+    const frame = requestAnimationFrame(() => {
+      const nested = list.current?.querySelector<HTMLElement>(
+        `[data-row-id="${CSS.escape(openRemote)}"][data-nested]`,
+      );
+      (nested ?? rowElement(openRemote))?.scrollIntoView({ block: "nearest" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [openRemote]);
+
   useEffect(() => {
     setPicked((prev) => (prev.size ? keepListed(prev, orderIds) : prev));
   }, [orderIds]);
@@ -2459,9 +2477,11 @@ export function Sidebar() {
     if (!parent || !remoteDelegates.has(s.id)) return undefined;
     return () => selectThread(parent.id);
   };
-  const rowFor = (s: SessionSummary, grouped: boolean, hint = true) => (
+  const rowFor = (s: SessionSummary, grouped: boolean, hint = true, nested = false) => (
     <ThreadRow
       session={s}
+      // Under its parent, a delegate that runs on another machine names the machine on its row.
+      nested={nested && remoteDelegates.has(s.id)}
       machine={s.host ? machines.find((m) => m.id === s.host)?.name : undefined}
       selected={s.id === selectedId}
       context={s.id === contextSelected && s.id !== selectedId}
@@ -2491,7 +2511,7 @@ export function Sidebar() {
     if (!child || depth > 8) return null;
     return (
       <OpenChild
-        row={current ? rowFor(current, grouped, false) : null}
+        row={current ? rowFor(current, grouped, false, true) : null}
         deeper={openBelow(child.id, grouped, depth + 1)}
       />
     );

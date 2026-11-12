@@ -31,6 +31,20 @@ import type { TranscriptItem } from "./thread";
 const ROWS = ["a", "b", "c", "d", "e"];
 
 describe("the rows the list draws", () => {
+  test("a delegate drawn under its parent and in its machine's group is visited once", () => {
+    // Local parent with its open remote delegate beneath it, then the machine's group row.
+    const rows = visibleRows([
+      {
+        id: "threads",
+        groups: [
+          { key: "local", rows: [{ id: "parent" }, { id: "host/1" }] },
+          { key: "host", rows: [{ id: "host/1" }, { id: "host/2" }] },
+        ],
+      },
+    ]);
+    expect(rows).toEqual(["parent", "host/1", "host/2"]);
+  });
+
   test("sections keep their order, and a shut one draws none of its rows", () => {
     expect(
       visibleRows([

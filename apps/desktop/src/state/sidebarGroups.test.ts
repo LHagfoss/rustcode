@@ -12,6 +12,7 @@ import {
   sidebarProjects,
 } from "./sidebarGroups";
 import { LOCAL_HOST } from "./threadKeys";
+import { openChain } from "./topLevel";
 
 const LINUX = "gw-7c1d9e4f2a8b6d30";
 const STUDIO = "gw-8e1f4b7a5c2d4e6f";
@@ -177,6 +178,20 @@ describe("delegates that run on another machine than their parent", () => {
     const groups = machineGroups("threads", drawn, [mac(LINUX, "Lars's Linux box")]);
     const linuxGroup = groups.find((g) => g.machine?.id === LINUX);
     expect(linuxGroup?.items.map((s) => s.id)).toEqual([delegate.id]);
+  });
+
+  test("the open remote delegate is drawn under its local parent and in its machine's group", () => {
+    const parentOf = new Map([[delegate.id, local.id]]);
+    const own = crossMachineDelegates([local, delegate], parentOf);
+    const topRows = new Set([local.id]);
+    // Under the parent: the chain the list draws for the open thread.
+    expect(openChain(delegate.id, parentOf, topRows)).toEqual([
+      { id: delegate.id, parent: local.id, depth: 1 },
+    ]);
+    // In the group: one row, so no duplicate inside it.
+    const groups = machineGroups("threads", [local, delegate], [mac(LINUX, "Lars's Linux box")]);
+    expect(groups.find((g) => g.machine?.id === LINUX)?.items.map((s) => s.id)).toEqual([delegate.id]);
+    expect(own.has(delegate.id)).toBe(true);
   });
 
   test("a delegate on its parent's machine stays nested under it", () => {
