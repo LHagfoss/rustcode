@@ -154,6 +154,7 @@ import {
   interruptedLinks,
   linkFinished,
   linkStarted,
+  linkSteered,
   linksFinished,
   linksOf,
   linksReopened,
@@ -163,11 +164,14 @@ import {
   loadBook,
   orchestrationCallDropped,
   queuedLinkDropped,
+  reconcileLinks,
   releaseLimitWaitsFrom,
+  requeueUnreadSteers,
   resetWaits,
   restoreQueuedThreads,
   stopLinksFrom,
   syncLinkBook,
+  takeSteeredLinks,
   threadTurnEnded,
   wakeDelivered,
   wakeTick,
@@ -1992,6 +1996,7 @@ function onSessionUpdate(params: JsonObject) {
     clearStatusMark(sessionId);
     // A lost turn on this thread is settled now if the machine says it stopped running there.
     lostTurnStatus(sessionId, status);
+    if (status !== "running" && status !== "needs_input") reconcileLinks();
   }
   if (update.kind === "title") {
     set((s) => ({
@@ -2089,6 +2094,8 @@ export async function refreshSessions(): Promise<void> {
     // A thread the engine no longer lists keeps no place in the arrangement. A capped list is not
     // the whole list, so it prunes nothing: the rows of the rest are still there.
     if (!capped) pruneSidebarOrder(get().sessions.map((x) => x.id));
+    // A link still Working beside a thread the engine says is idle is settled (issue 3541).
+    reconcileLinks();
   } catch (error) {
     set({ sessionsLoaded: true });
     toast(`Could not list threads: ${errorText(error)}`, "error");
@@ -3993,6 +4000,8 @@ export async function sendQueuedNow(id: string, queuedId: string): Promise<boole
   if (await steer(id, item.text, item.extras)) {
     removeQueued(id, queuedId);
     glideAway(id, item);
+    // A delegate's message that was waiting: the turn it went into answers its link.
+    linkSteered(id, item.link, item.text);
     return true;
   }
   toast(QUEUE_REASON.refused);
@@ -4515,7 +4524,7 @@ export async function runPrompt(
       // closed channel is what refused the request, this is what ends it.
       if (get().threads[id]?.running)
         updateThread(id, (t) => finishTurn(t, "failed", Date.now(), MACHINE_LOST_TURN));
-      lostTurn(id, [options.link, ...(options.resumeLinks ?? [])]);
+      lostTurn(id, [options.link, ...(options.resumeLinks ?? []), ...takeSteeredLinks(id)]);
       return "skipped";
     }
     outcome = "failed";
@@ -4529,6 +4538,8 @@ export async function runPrompt(
     ...requeueSteers(finishTurn(t, outcome, Date.now(), failure, options.autoCompact), unused),
     ...(rawFailure !== failure ? { errorDetail: rawFailure } : {}),
   }));
+  // Steers the turn never read wait as turns of their own, and carry the links they came from.
+  if (!options.autoCompact) requeueUnreadSteers(id, unused);
   // The stop is settled first: a turn it stopped is reported as the stop, not twice.
   // An automatic compaction must leave a pending wait alone, not settle it.
   const waiting = options.autoCompact

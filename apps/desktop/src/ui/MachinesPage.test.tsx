@@ -11,7 +11,6 @@ const MACHINE: Machine = {
   name: "Studio",
   platform: "macos",
   version: "1.29.1",
-  main: false,
   routes: [{ kind: "lan", address: "192.168.1.31:17879", encrypted: false }],
   route: { kind: "lan", address: "192.168.1.31:17879", encrypted: false },
   state: "connected",

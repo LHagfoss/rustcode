@@ -58,7 +58,6 @@ const MACHINE: Machine = {
   name: "Lars's Linux box",
   platform: "linux",
   version: "1.28.0",
-  main: false,
   routes: [{ kind: "lan", address: "192.168.1.31:17879", encrypted: false }],
   route: { kind: "lan", address: "192.168.1.31:17879", encrypted: false },
   state: "connected",
@@ -133,7 +132,7 @@ class FakeShell implements Transport {
         return this.ask;
       case "machines_pair": {
         if (this.pairError) throw new Error(this.pairError.message);
-        const paired: Machine = { ...MACHINE, state: "connecting", main: false };
+        const paired: Machine = { ...MACHINE, state: "connecting" };
         this.machines = [paired];
         return paired;
       }
@@ -153,9 +152,6 @@ class FakeShell implements Transport {
         return this.appVersion;
       case "machines_remove":
         this.machines = this.machines.filter((machine) => machine.id !== args.id);
-        return null;
-      case "machines_set_main":
-        this.machines = this.machines.map((machine) => ({ ...machine, main: machine.id === args.id }));
         return null;
       default:
         throw new Error(`The fake shell does not run ${command}.`);

@@ -529,8 +529,8 @@ holds until encrypted transport (#2651) lands.
   neither, so the row keeps `unknown` for the platform and says nothing about
   a version rather than guessing one. A route keeps the product
   an overlay address is on (`netbird`,
-  `zerotier`; a Tailscale address is its own kind and provider). The first
-  machine saved is the **main** one. A change takes
+  `zerotier`; a Tailscale address is its own kind and provider). Every machine is a peer; a `main` field in a file written
+  by an older release is read and ignored. A change takes
   `machines.lock` next to the file and re-reads it first, so two
   `rustcode machines` runs cannot drop each other's machine.
 - Tokens are kept in the operating system credential store (Keychain,
@@ -599,9 +599,8 @@ are all visible at once.
 | **Machines found › Enter an address** | The `host:port` a machine is reached on when it is not announced (an overlay, or another subnet). The fallback, never the first step. |
 | **Waiting for ‹host› to accept on that machine…** | The request is on that machine's screen; *Cancel* drops it. Once its owner accepts, the eight digits it shows are typed here, one box per digit. |
 | **Checking the code** | The code is being checked with that machine, which answers within ten seconds. After half a minute the page stops waiting and says so — *‹host› did not answer* — with **Ask again** and **Cancel**: a machine that accepted the code but could not store the token still lists this computer as a device, so it is removed there and the pairing started again. No stage of the flow is a spinner without a way out. |
-| A machine row | Its name and platform, the state chip at the row's top right — *Connected*, *Connecting*, *Reconnecting…* (a machine that is away while the app retries it on its own), *Offline*, *Needs pairing* — the route **in use** under the name as `LAN · Unencrypted` or `NetBird`/`Tailscale`/`VPN · Encrypted`, then whether it is the main machine, when it was last reached and how many threads it has. **Main machine** and **Remove** sit in a row of their own below. Under the route, the hint for one kind of route that answers while another does not (see [Machines](#machines)), and a version skew line when that machine runs another RustCode: *RustCode 0.96.0 on that machine — update it there: Settings › About › Check for updates, or `brew upgrade rustcode`* (the platform's own way, from [install](install.md#updating); a development build never shows the line), or *update RustCode here* when that machine is newer. |
+| A machine row | Its name and platform, the state chip at the row's top right — *Connected*, *Connecting*, *Reconnecting…* (a machine that is away while the app retries it on its own), *Offline*, *Needs pairing* — the route **in use** under the name as `LAN · Unencrypted` or `NetBird`/`Tailscale`/`VPN · Encrypted`, then when it was last reached and how many threads it has. **Remove** sits in a row of its own below. Under the route, the hint for one kind of route that answers while another does not (see [Machines](#machines)), and a version skew line when that machine runs another RustCode: *RustCode 0.96.0 on that machine — update it there: Settings › About › Check for updates, or `brew upgrade rustcode`* (the platform's own way, from [install](install.md#updating); a development build never shows the line), or *update RustCode here* when that machine is newer. |
 | **This computer · RustCode server** | Whether the RustCode server is installed as a background service: *Server: Installed · Running*, or *Not installed* with **Install server**. Installed, that engine stays up when the app closes and starts when you log in; the threads this app starts still run in its own engine and end with it. What `rustcode server status` reports, including a running version that differs from the app's, is on the same line. |
-| **Main machine** | The machine listed first and the default **Run on**. One at a time. |
 | **Remove** | Forgets it here: token, routes and its threads' rows go. The machine keeps listing this computer until it is revoked there. |
 | **Pair again** | On a machine whose pairing it ended (*Needs pairing*): asks it again, so a new code can be typed. |
 

@@ -151,7 +151,9 @@ fn machines_list_shows_columns_and_reports_an_unreachable_machine() {
     assert!(output.status.success(), "{}", stderr(&output));
     let text = stdout(&output);
     assert!(text.contains("NAME") && text.contains("STATE"), "{text}");
-    assert!(text.contains("Studio (main)"), "{text}");
+    // The file says `main: true`, as one written before every machine was a peer does.
+    assert!(text.contains("Studio"), "{text}");
+    assert!(!text.contains("(main)"), "{text}");
     assert!(text.contains("127.0.0.1:1"), "{text}");
     assert!(text.contains("not paired"), "{text}");
     // A machine with no token is not dialled at all.
@@ -162,7 +164,7 @@ fn machines_list_shows_columns_and_reports_an_unreachable_machine() {
     assert_eq!(machines[0]["host_id"], "gw-8e1f4b7a00112233");
     assert_eq!(machines[0]["platform"], "macos");
     assert_eq!(machines[0]["state"], "not paired");
-    assert_eq!(machines[0]["main"], true);
+    assert!(machines[0].get("main").is_none());
     assert_eq!(machines[0]["routes"][0]["kind"], "lan");
     assert!(machines[0]["threads"].is_null());
 }

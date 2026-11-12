@@ -113,8 +113,9 @@ A machine's own **Machine settings** page (`src/ui/MachineSettingsPage.tsx`) is
 one screen per computer, reached from a Machines row in Settings. Its header
 says the local name and glyph, the platform, the RustCode version it runs (with
 the skew warning), the state, the route and when it was last seen. The controls are Reconnect,
-Disconnect (keeps the machine saved), Forget, **Make default for new threads**
-(the main machine) and **Pause new threads here**: a paused machine keeps its
+Disconnect (keeps the machine saved), Forget and **Pause new threads here**:
+there is no main machine, every computer is a peer and **Run on** starts on this
+one unless it names another. A paused machine keeps its
 connection and its existing threads, and **Run on** refuses it until it is
 resumed. Below them are that machine's harnesses with their install and
 sign-in state and one **Check** (re-detect there, read its snapshot again), and
