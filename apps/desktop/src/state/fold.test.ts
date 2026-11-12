@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   collapseNotices,
+  collapseRepeats,
   foldEnds,
   foldLabel,
   foldTurns,
@@ -97,13 +98,15 @@ describe("turn folding", () => {
     expect(rows.filter((r) => "inFold" in r && r.inFold === "fold-e1").length).toBe(5);
   });
 
-  test("errors and warnings stay visible; a turn with no work does not fold", () => {
+  test("errors and warnings stay visible; a turn with no work still says its time", () => {
     const rows = foldTurns(
       [user("u1"), tool("c1"), error("x1"), reply("r1"), end("e1"), user("u2"), reply("r2"), end("e2")],
       false,
       new Set(),
     );
-    expect(keys(rows)).toEqual(["u1", "[fold-e1]", "x1", "r1", "e1", "u2", "r2", "e2"]);
+    expect(keys(rows)).toEqual(["u1", "[fold-e1]", "x1", "r1", "e1", "u2", "[fold-e2]", "r2", "e2"]);
+    const divider = rows.find((r) => "fold" in r && r.fold.key === "fold-e2");
+    expect(divider && "fold" in divider ? divider.fold.steps : undefined).toBe(0);
   });
 
   test("the divider reads how long it worked, or that you stopped it", () => {
@@ -420,7 +423,8 @@ describe("changes once a newer turn exists", () => {
       end("e2"),
     ];
     const rows = foldTurns(items, false, new Set());
-    expect(rows.some((r) => "fold" in r)).toBe(false);
+    // Each says how long it took, but folds nothing away.
+    expect(rows.every((r) => !("fold" in r) || r.fold.steps === 0)).toBe(true);
     const ends = items.flatMap((item) => (item.kind === "turnEnd" ? [item.id] : []));
     expect(footerChangeTurns(ends, { last: newestTurnEnd(rows), folded: new Set() })).toEqual(["e1", "e2"]);
   });
@@ -499,4 +503,27 @@ describe("repeated notices", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.item).toMatchObject({ id: "n-x", count: 3 });
   });
+});
+
+describe("collapseRepeats", () => {
+  test("the same automatic message back to back is one row with its count", () => {
+    const resume = (id: string): TranscriptItem => ({ kind: "user", id, text: "resume" });
+    const rows = collapseRepeats(
+      [resume("a"), resume("b"), reply("c"), resume("d")].map(
+        (item): { key: string; item: TranscriptItem; repeats?: number } => ({ key: item.id, item }),
+      ),
+      (item) => item.kind === "user" && item.text === "resume",
+    );
+    expect(rows.map((r) => [r.key, r.repeats])).toEqual([
+      ["a", 2],
+      ["c", undefined],
+      ["d", undefined],
+    ]);
+  });
+});
+
+test("a turn under a second reads as 1s", () => {
+  const rows = foldTurns([user("u"), reply("r"), end("e", 300)], false, new Set());
+  const fold = rows.find((r) => "fold" in r);
+  expect(fold && "fold" in fold ? foldLabel(fold.fold, (ms) => `${ms / 1000}s`) : "").toBe("Worked for 1s");
 });

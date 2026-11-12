@@ -1,6 +1,7 @@
 // ACP v1 shapes the app uses, and parsers from raw JSON. Ported from the
 // SwiftUI app's RustCodeKit (ACPTypes.swift, FileDiff.swift, SessionUsage.swift).
 
+import { modelTitle } from "../lib/modelNames";
 import { basename, shortenHome } from "../lib/paths";
 import { stripOutputFence } from "../lib/toolOutput";
 import { arr, bool, type Json, type JsonObject, num, obj, rustcodeMeta, str } from "./jsonrpc";
@@ -339,9 +340,10 @@ export function projectName(cwd: string): string {
   return cwd ? basename(plain) || cwd : "";
 }
 
-/** `provider/model` reads as just the model. */
+/** `provider/model` reads as just the model, and a Claude id or alias as `Opus 5.5`. */
 export function modelName(model: string | undefined): string | undefined {
-  return model?.split("/").pop();
+  const name = model?.split("/").pop();
+  return name ? modelTitle(name) : name;
 }
 
 // ---------------------------------------------------------------- config options

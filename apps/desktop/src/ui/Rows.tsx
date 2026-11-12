@@ -903,6 +903,25 @@ export const TurnFoldRow = memo(function TurnFoldRow({
   /** The hairline under it: dropped when the row above is already a divider. */
   rule?: boolean;
 }) {
+  // A turn that only replied has nothing to open: the time alone, over its answer.
+  if (!fold.steps)
+    return (
+      <div
+        className={cx(
+          "flex w-full items-center gap-1.5 pt-0 pb-2 text-body text-fg-muted",
+          rule && "border-border/60 border-b",
+        )}
+      >
+        {fold.stopped && <SquareStop size={12} className="shrink-0" aria-hidden />}
+        <span className="truncate tabular">{foldLabel(fold, formatDuration)}</span>
+        {!fold.answered && fold.time !== undefined && (
+          <span className="shrink-0 text-caption text-fg-faint tabular">· {messageTime(fold.time)}</span>
+        )}
+        {fold.failedTurn && (
+          <CircleX size={12} className="shrink-0 text-danger" aria-label="The turn failed" />
+        )}
+      </div>
+    );
   return (
     <button
       type="button"
