@@ -245,7 +245,9 @@ pub struct Connector {
     pub route_timeout: Duration,
     /// One credential presentation at a time, across the routes of one race.
     /// A rotating refresh token presented on two sockets at once looks like a
-    /// replay to the machine, which revokes the pairing; the lock is taken
+    /// replay to the machine, which revokes the pairing. Other connectors and
+    /// other processes are kept out by the token store's file lock
+    /// ([`TokenStore::presentation_lock`]), taken under this one; it is taken
     /// *after* a route's socket opens, so a dead LAN dial does not hold the
     /// overlay attempt up, and the presentation under it is bounded by
     /// [`Connector::route_timeout`], so a socket that never answers does not
@@ -321,6 +323,12 @@ impl Connector {
     /// gateway that predates rotating tokens does not know the `refresh_token`
     /// field and answers `invalid_frame`; the static form saved by an older
     /// pairing is tried once after that.
+    ///
+    /// The whole step, from reading the stored token to storing the one that
+    /// replaces it, runs under [`TokenStore::presentation_lock`], so the app, a
+    /// CLI run and the server never present the same refresh token. A refusal
+    /// that revokes the pairing removes the stored token, unless another
+    /// process stored a newer one meanwhile.
     pub async fn authenticate(
         &self,
         address: &str,
@@ -347,10 +355,38 @@ impl Connector {
         if !may_send_secrets(address) {
             return Err(plain_ws_refusal(address));
         }
-        let mut first = first;
+        let _presenting = tokens
+            .presentation_lock(&machine.host_id, self.timeout)
+            .await?;
         let stored = tokens.get(&machine.host_id)?.with_context(|| {
             format!("{} has no pairing token; pair with it again", machine.name)
         })?;
+        let result = self.present(first, address, machine, tokens, &stored).await;
+        if let Err(error) = &result
+            && error
+                .downcast_ref::<Refusal>()
+                .is_some_and(|refusal| refusal.code.revoked_pairing())
+        {
+            // The machine revoked this pairing (or a token it retired came
+            // back): the token presented is worthless, and keeping it would
+            // only present it again. A newer one stored by another process
+            // since, a pairing made again for one, is kept.
+            let _ = tokens.remove_if_current(&machine.host_id, &stored);
+        }
+        result
+    }
+
+    /// Present the access token, then `stored`, on `address`. The caller holds
+    /// the presentation lock.
+    async fn present(
+        &self,
+        first: Option<Connection>,
+        address: &str,
+        machine: &Machine,
+        tokens: &TokenStore,
+        stored: &Secret,
+    ) -> Result<Session> {
+        let mut first = first;
 
         // 1. The access token from the last connection, while it is valid. A
         //    reconnect inside its 15 minutes rotates nothing.
@@ -393,7 +429,7 @@ impl Connector {
             .exchange_or(
                 first.take(),
                 address,
-                &authenticate_refresh(machine, &stored),
+                &authenticate_refresh(machine, stored),
             )
             .await?;
         if let HandshakeResponse::Error {
@@ -404,7 +440,7 @@ impl Connector {
             // A gateway from before rotating tokens does not know
             // `refresh_token`; the static form is what it reads.
             let (connection, answer) = self
-                .exchange(address, &authenticate_static(machine, &stored))
+                .exchange(address, &authenticate_static(machine, stored))
                 .await?;
             return match answer {
                 HandshakeResponse::Authenticated { .. } => {
@@ -610,13 +646,9 @@ impl Connector {
             match resolved {
                 Ok(session) => Ok(session),
                 Err(error) => {
+                    // A refusal that revoked the pairing already removed the
+                    // token it made worthless ([`Self::authenticate_with`]).
                     let refusal = error.downcast_ref::<Refusal>().map(|refusal| refusal.code);
-                    if refusal.is_some_and(|code| code.revoked_pairing()) {
-                        // The machine revoked this pairing (or a token it
-                        // retired came back): the saved token is worthless,
-                        // and keeping it would only present it again.
-                        let _ = tokens.remove(&machine.host_id);
-                    }
                     Err(DialFailure {
                         reason: format!("{error:#}"),
                         refusal,

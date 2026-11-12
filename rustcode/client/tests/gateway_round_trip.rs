@@ -771,3 +771,33 @@ async fn racing_routes_present_the_refresh_token_once() {
         .expect("the pairing survived the race");
     host.stop().await;
 }
+
+/// The app, a CLI run and the server each hold a token store and a connector
+/// of their own. Refreshing at the same moment, the second waits for the first
+/// and presents the token it stored, instead of replaying the one they both
+/// read and revoking the pairing (B4).
+#[tokio::test]
+async fn two_processes_refreshing_at_once_do_not_replay_each_other() {
+    let host = Host::start().await;
+    let config = tempfile::tempdir_in("/tmp").unwrap();
+    let app = Connector::new(config.path(), ClientKind::Desktop).unwrap();
+    let (machine, app_tokens, paired) = pair(&host, &app, config.path()).await;
+    drop(paired);
+    // Opened after the pairing, as a CLI run is: it read the same refresh token.
+    let cli = Connector::new(config.path(), ClientKind::Cli).unwrap();
+    let cli_tokens = TokenStore::in_file(config.path()).unwrap();
+    for _ in 0..4 {
+        // No access token on either side: each presents the refresh token.
+        app_tokens.forget_access(&machine.host_id);
+        cli_tokens.forget_access(&machine.host_id);
+        let (from_app, from_cli) = tokio::join!(
+            app.connect(&machine, &app_tokens),
+            cli.connect(&machine, &cli_tokens),
+        );
+        drop(from_app.expect("the app connects"));
+        drop(from_cli.expect("the CLI connects, with the token the app stored"));
+    }
+    // A replay would have removed the pairing at the machine.
+    assert_eq!(host.lifecycle.devices().unwrap().len(), 1);
+    host.stop().await;
+}

@@ -862,7 +862,7 @@ impl Shared {
         let mut devices = state.devices.clone();
         let accepted = match devices.accept(device_id, credential, now) {
             Ok(accepted) => accepted,
-            Err(error @ (AuthenticateError::Replayed | AuthenticateError::Exhausted)) => {
+            Err(AuthenticateError::Replayed) => {
                 // The family is gone from `devices`: write that down before
                 // anything is closed or answered, close whatever is still live
                 // with it, and tell the owner. A removal that could not be
@@ -874,19 +874,12 @@ impl Shared {
                     device_name.as_deref(),
                     family_id.as_deref(),
                     closed,
-                    error,
                     persisted,
                 );
-                return Err(match error {
-                    AuthenticateError::Replayed => HandshakeResponse::error(
-                        ErrorCode::TokenReplayed,
-                        "a copy of this device's key was used; the host removed it. Pair again if this was you",
-                    ),
-                    _ => HandshakeResponse::error(
-                        ErrorCode::Unauthorized,
-                        "this pairing rotated more tokens than the host keeps history for and was removed; pair again",
-                    ),
-                });
+                return Err(HandshakeResponse::error(
+                    ErrorCode::TokenReplayed,
+                    "a copy of this device's key was used; the host removed it. Pair again if this was you",
+                ));
             }
             Err(AuthenticateError::AccessExpired) => {
                 return Err(HandshakeResponse::error(
@@ -952,15 +945,6 @@ impl Shared {
     pub(super) fn acknowledge_rotation(self: &Arc<Self>, device_id: &str, rotation_id: &str) {
         let mut state = self.state();
         let mut devices = state.devices.clone();
-        let record = state
-            .devices
-            .list()
-            .iter()
-            .find(|record| record.id == device_id);
-        let device_name = record.map(|record| record.name.clone());
-        let family_id = record
-            .and_then(|record| record.family_id())
-            .map(str::to_owned);
         match devices.acknowledge(device_id, rotation_id) {
             Acknowledgement::Ignored => {}
             Acknowledgement::Retired => match self.persist(&mut state, devices) {
@@ -969,20 +953,6 @@ impl Shared {
                     crate::dbg_log!("remote gateway: device store write failed: {error:#}");
                 }
             },
-            // The history was full: the family is removed rather than left
-            // with a token it can no longer recognize.
-            Acknowledgement::Exhausted => {
-                let persisted = self.revoke_family(&mut state, devices, device_id);
-                let closed = close_device(&mut state, device_id);
-                report_family_revocation(
-                    device_id,
-                    device_name.as_deref(),
-                    family_id.as_deref(),
-                    closed,
-                    AuthenticateError::Exhausted,
-                    persisted,
-                );
-            }
         }
     }
 
@@ -1258,27 +1228,19 @@ fn report_family_revocation(
     device_name: Option<&str>,
     family_id: Option<&str>,
     closed_connections: usize,
-    reason: AuthenticateError,
     persisted: bool,
 ) {
     let name = device_name.unwrap_or("a paired device");
-    let (event, why) = match reason {
-        AuthenticateError::Exhausted => (
-            "remote.pairing_retired",
-            "rotated more refresh tokens than the host keeps history for",
-        ),
-        _ => ("remote.token_replayed", "presented a retired refresh token"),
-    };
     let durability = if persisted {
         "the revocation is on disk"
     } else {
         "the revocation could not be written and is not on disk"
     };
     crate::dbg_log!(
-        "remote gateway: {name} ({device_id}) {why}; the pairing was revoked ({durability}) and {closed_connections} live connection(s) closed"
+        "remote gateway: {name} ({device_id}) presented a retired refresh token; the pairing was revoked ({durability}) and {closed_connections} live connection(s) closed"
     );
     crate::logger::operational_event(
-        event,
+        "remote.token_replayed",
         serde_json::json!({
             "device_id": device_id,
             "device_name": name,

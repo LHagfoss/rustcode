@@ -942,7 +942,7 @@ pub(crate) fn write_private_json<T: Serialize>(path: &Path, value: &T) -> Result
     Ok(())
 }
 
-fn create_private_directory(directory: &Path) -> Result<()> {
+pub(crate) fn create_private_directory(directory: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;

@@ -49,12 +49,16 @@ pub const DEVICE_LIFETIME: chrono::Duration = chrono::Duration::days(30);
 /// reconnect on a flapping network without rotating its refresh token.
 pub const ACCESS_TOKEN_LIFETIME: chrono::Duration = chrono::Duration::minutes(15);
 
-/// Retired refresh-token fingerprints kept for one device, so any token this
-/// host ever issued is recognized as a replay instead of being answered as a
-/// wrong token. Each is 64 bits of the token's SHA-256, which keeps 1024 of
-/// them to a few dozen KiB of the owner-only store. A family that rotates past
-/// the cap is revoked conservatively rather than forgotten, so no issued
-/// token can fall out of the history.
+/// Retired refresh-token fingerprints kept for one device: the newest this
+/// many tokens the host replaced are recognized as a replay instead of being
+/// answered as a wrong token. Each is 64 bits of the token's SHA-256, which
+/// keeps 1024 of them to a few dozen KiB of the owner-only store.
+///
+/// Past it the oldest fingerprint is dropped. A pairing lasts until it is
+/// revoked, so it must outlive any number of rotations; a token that old is
+/// still refused, only as `unauthorized` rather than as a replay that revokes
+/// the family. A stolen token is worth nothing once the device rotated past
+/// it, and a thief who uses one sooner is caught by the device's next refresh.
 const MAX_RETIRED_TOKENS: usize = 1024;
 
 /// Bytes of a digest kept for a retired refresh token. 64 bits is far beyond
@@ -309,12 +313,8 @@ impl TokenFamily {
     }
 
     /// Replace the tokens after the newest refresh token was presented. The
-    /// token before it is retired for good. `None` when the family already
-    /// keeps as many retired tokens as it may; the caller revokes it then.
-    fn rotate(&mut self, now: DateTime<Utc>) -> Option<Issued> {
-        if !self.has_room() {
-            return None;
-        }
+    /// token before it is retired for good.
+    fn rotate(&mut self, now: DateTime<Utc>) -> Issued {
         if let Some(previous) = self.previous.take() {
             self.retire(previous);
         }
@@ -333,12 +333,12 @@ impl TokenFamily {
             access_expires_at,
             rotation_id: rotation_id.clone(),
         });
-        Some(Issued {
+        Issued {
             refresh_token: refresh,
             access_token: access,
             access_expires_at,
             rotation_id: Some(rotation_id),
-        })
+        }
     }
 
     /// The answer still awaiting acknowledgement, for a retry with the
@@ -354,11 +354,6 @@ impl TokenFamily {
         })
     }
 
-    /// Whether one more retired token fits in the history.
-    fn has_room(&self) -> bool {
-        self.retired.len() < MAX_RETIRED_TOKENS
-    }
-
     /// Whether `presented` is a refresh token this family retired.
     fn is_retired(&self, presented: &[u8; 32]) -> bool {
         self.retired
@@ -367,8 +362,10 @@ impl TokenFamily {
     }
 
     /// Forget a token for good, keeping the fingerprint its digest starts
-    /// with. Only called with room ([`Self::has_room`]).
+    /// with. A full history drops its oldest fingerprints to make room.
     fn retire(&mut self, digest: String) {
+        let excess = (self.retired.len() + 1).saturating_sub(MAX_RETIRED_TOKENS);
+        self.retired.drain(..excess);
         self.retired
             .push(digest.chars().take(RETIRED_FINGERPRINT_BYTES * 2).collect());
     }
@@ -525,10 +522,6 @@ pub enum AuthenticateError {
     /// A refresh token this family retired for good: the whole family was
     /// revoked by this call.
     Replayed,
-    /// The family retired as many tokens as the host keeps history for, so it
-    /// was revoked rather than let an issued token be answered as a wrong one.
-    /// The device pairs again.
-    Exhausted,
 }
 
 /// What `Devices::acknowledge` did.
@@ -538,8 +531,6 @@ pub enum Acknowledgement {
     Ignored,
     /// The previous refresh token is retired for good.
     Retired,
-    /// The history was full, so the family was removed instead.
-    Exhausted,
 }
 
 /// The set of paired devices, as held in memory and written to disk.
@@ -708,15 +699,14 @@ impl Devices {
     ///   of the previous token therefore gains nothing the device did not
     ///   already receive, and cannot rotate the stored token away. Without the
     ///   answer in memory (a restart since the rotation) the retry is a replay.
-    /// - Any token this family retired is a replay, and removes the whole
-    ///   record. A token this host never issued is only refused, so a guessed
-    ///   device identifier cannot revoke a device.
+    /// - Any of the newest [`MAX_RETIRED_TOKENS`] tokens this family retired
+    ///   is a replay, and removes the whole record. A token this host never
+    ///   issued, or one older than that history, is only refused, so a guessed
+    ///   device identifier cannot revoke a device and no number of rotations
+    ///   ends a pairing.
     /// - An access token that is not the live one is answered
     ///   [`AuthenticateError::AccessExpired`], so a route holding the one a
     ///   rotation replaced refreshes instead of pairing again.
-    /// - A family that has retired as many tokens as it may keep is removed
-    ///   ([`AuthenticateError::Exhausted`]): forgetting a retired token would
-    ///   answer it `unauthorized` instead of a replay.
     pub fn accept(
         &mut self,
         device_id: &str,
@@ -812,11 +802,7 @@ impl Devices {
             };
         }
         let mut family = family;
-        let Some(issued) = family.rotate(now) else {
-            // No room left to remember this one: revoke rather than forget.
-            self.devices.remove(index);
-            return Err(AuthenticateError::Exhausted);
-        };
+        let issued = family.rotate(now);
         let access_expires_at = issued.access_expires_at;
         let mut record = record.clone();
         record.rotation = Some(family);
@@ -837,27 +823,16 @@ impl Devices {
         let Some(index) = self.devices.iter().position(|r| r.id == device_id) else {
             return Acknowledgement::Ignored;
         };
-        let exhausted = {
-            let Some(family) = self.devices[index].rotation.as_mut() else {
-                return Acknowledgement::Ignored;
-            };
-            if family.rotation_id.as_deref() != Some(rotation_id) {
-                return Acknowledgement::Ignored;
-            }
-            family.rotation_id = None;
-            family.pending = None;
-            match family.previous.take() {
-                Some(previous) if family.has_room() => {
-                    family.retire(previous);
-                    false
-                }
-                Some(_) => true,
-                None => false,
-            }
+        let Some(family) = self.devices[index].rotation.as_mut() else {
+            return Acknowledgement::Ignored;
         };
-        if exhausted {
-            self.devices.remove(index);
-            return Acknowledgement::Exhausted;
+        if family.rotation_id.as_deref() != Some(rotation_id) {
+            return Acknowledgement::Ignored;
+        }
+        family.rotation_id = None;
+        family.pending = None;
+        if let Some(previous) = family.previous.take() {
+            family.retire(previous);
         }
         Acknowledgement::Retired
     }
@@ -2092,10 +2067,12 @@ mod rotation_tests {
     }
 
     #[test]
-    fn a_family_that_retires_too_many_tokens_is_revoked_not_forgotten() {
+    fn a_pairing_outlives_any_number_of_rotations() {
         let (mut devices, record, mut refresh, _access) = rotating();
+        let first = refresh.clone();
         let mut at = record.paired_at;
-        for _ in 0..MAX_RETIRED_TOKENS {
+        let mut recent = Vec::new();
+        for _ in 0..MAX_RETIRED_TOKENS + 8 {
             at += chrono::Duration::minutes(1);
             let rotated = devices
                 .accept(&record.id, Credential::Refresh(refresh.expose()), at)
@@ -2107,64 +2084,60 @@ mod rotation_tests {
                 devices.acknowledge(&record.id, &rotation_id),
                 Acknowledgement::Retired
             );
-            refresh = rotated.refresh_token;
+            recent.push(std::mem::replace(&mut refresh, rotated.refresh_token));
         }
+        // The history keeps the newest tokens and nothing more.
         let family = devices.list()[0].rotation.as_ref().unwrap();
         assert_eq!(family.retired.len(), MAX_RETIRED_TOKENS);
-        // One more rotation would have to forget the oldest fingerprint, which
-        // would answer an issued token as a wrong one: revoke instead.
+        // A token older than the history is refused, not taken as a replay:
+        // the pairing stays.
         at += chrono::Duration::minutes(1);
         assert_eq!(
             devices
-                .accept(&record.id, Credential::Refresh(refresh.expose()), at)
+                .accept(&record.id, Credential::Refresh(first.expose()), at)
                 .unwrap_err(),
-            AuthenticateError::Exhausted
+            AuthenticateError::Unauthorized
+        );
+        assert_eq!(devices.list().len(), 1);
+        // The newest token still rotates.
+        let rotated = devices
+            .accept(&record.id, Credential::Refresh(refresh.expose()), at)
+            .unwrap()
+            .issued
+            .expect("a refresh token rotates");
+        devices.acknowledge(&record.id, rotated.rotation_id.as_deref().unwrap());
+        // A recently retired token is still a replay.
+        let replayed = recent.last().unwrap();
+        assert_eq!(
+            devices
+                .accept(&record.id, Credential::Refresh(replayed.expose()), at)
+                .unwrap_err(),
+            AuthenticateError::Replayed
         );
         assert!(devices.list().is_empty());
     }
 
     #[test]
-    fn an_acknowledgement_that_would_overfill_the_history_revokes_the_family() {
-        let (mut devices, record, mut refresh, _access) = rotating();
-        let mut at = record.paired_at;
-        for _ in 0..MAX_RETIRED_TOKENS - 1 {
-            at += chrono::Duration::minutes(1);
-            let rotated = devices
-                .accept(&record.id, Credential::Refresh(refresh.expose()), at)
-                .unwrap()
-                .issued
-                .expect("a refresh token rotates");
-            let rotation_id = rotated.rotation_id.expect("a rotation has an id");
-            assert_eq!(
-                devices.acknowledge(&record.id, &rotation_id),
-                Acknowledgement::Retired
-            );
-            refresh = rotated.refresh_token;
-        }
-        // One rotation leaves the history full with a token still pending, so
-        // the next rotation retires the one before it and fills the history.
-        let first = devices
+    fn a_full_history_from_an_older_host_keeps_rotating() {
+        let (mut devices, record, refresh, _access) = rotating();
+        // A record written by a host that kept more than the window.
+        let family = devices.devices[0].rotation.as_mut().unwrap();
+        family.retired = (0..MAX_RETIRED_TOKENS + 3)
+            .map(|n| format!("{n:016x}"))
+            .collect();
+        let at = record.paired_at + chrono::Duration::minutes(1);
+        let rotated = devices
             .accept(&record.id, Credential::Refresh(refresh.expose()), at)
             .unwrap()
             .issued
             .expect("a refresh token rotates");
-        let second = devices
-            .accept(
-                &record.id,
-                Credential::Refresh(first.refresh_token.expose()),
-                at,
-            )
-            .unwrap()
-            .issued
-            .expect("a refresh token rotates");
         assert_eq!(
-            devices.acknowledge(
-                &record.id,
-                second.rotation_id.as_deref().expect("a rotation has an id")
-            ),
-            Acknowledgement::Exhausted
+            devices.acknowledge(&record.id, rotated.rotation_id.as_deref().unwrap()),
+            Acknowledgement::Retired
         );
-        assert!(devices.list().is_empty());
+        let family = devices.list()[0].rotation.as_ref().unwrap();
+        assert_eq!(family.retired.len(), MAX_RETIRED_TOKENS);
+        assert!(!family.retired.contains(&format!("{:016x}", 0)));
     }
 }
 
