@@ -1092,8 +1092,11 @@ code never grants ACP. The owner can run `rustcode remote devices allow <id>`
 or `rustcode remote devices deny <id>`; deny immediately disconnects the device.
 Devices without the grant receive a gateway
 `error` with code `unauthorized_access` when opening ACP. When no engine is
-running, or none of the described ones answers, the connection is closed with
-`internal` and the gateway writes why to its log.
+running, or none of the described ones answers, the gateway started by
+`rustcode remote serve` starts the server and relays to it once it listens
+(within about 7 seconds; starts back off, see `docs/server.md`). When that
+fails too, the connection is closed with `internal`, which a client reports as
+`server_not_running`, and the gateway writes why to its log.
 
 Client requests and notifications are restricted to these exact methods:
 

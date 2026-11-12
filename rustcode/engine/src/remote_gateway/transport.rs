@@ -545,24 +545,7 @@ async fn pump(
                         }
                         // Stop hub pushes before switching to raw ACP frames.
                         shared.router.disconnected(&connection.context);
-                        // An app-spawned engine publishes its own endpoint; a
-                        // shared server publishes `run/server.json`. Either
-                        // description can be a dead process's, so relaying
-                        // tries each in turn (#3341).
-                        let endpoints = crate::server::relay_endpoints(
-                            &shared.lifecycle.config_directory(),
-                        );
-                        if endpoints.is_empty() {
-                            eprintln!(
-                                "remote ACP: no RustCode engine is running to relay to; \
-                                 keep the app open on this machine, or run `rustcode server run`"
-                            );
-                            crate::dbg_log!(
-                                "remote ACP: no engine described itself in run/ (no engine.json, no server.json)"
-                            );
-                            return Some(ErrorCode::Internal);
-                        }
-                        return super::acp_relay::relay(&endpoints, writer, reader, Arc::clone(&connection.control), limits.write_timeout, limits.ping_interval, limits.idle_timeout).await;
+                        return super::acp_relay::relay(&shared.lifecycle.config_directory(), writer, reader, Arc::clone(&connection.control), limits.write_timeout, limits.ping_interval, limits.idle_timeout).await;
                     }
                     if thread_names {
                         let text = wire_names::to_session_names(text.as_str());

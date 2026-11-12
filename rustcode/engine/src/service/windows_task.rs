@@ -213,7 +213,9 @@ impl WindowsTask {
             );
             Ok(())
         } else {
-            crate::server::start_in_background(program).context("could not start the server")
+            // The `Run` entry's server: `--service`, as at logon, and out of
+            // the caller's job, so a restart over SSH outlives the session.
+            crate::server::start_in_background(program, true).context("could not start the server")
         }
     }
 }
