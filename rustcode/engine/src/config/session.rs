@@ -475,6 +475,36 @@ pub fn save_session_title(session_id: &str, title: &str) {
     }
 }
 
+/// The most a title a `session/new` asked for may be: the app's own titles are
+/// short, and a request is trimmed to this rather than trusted whole.
+pub const MAX_REQUESTED_TITLE_CHARS: usize = 200;
+
+/// The title a `session/new` asked for, from its `_meta.rustcode.title`.
+///
+/// A thread another machine started is named where it runs: the app's
+/// `thread_rename` is this computer's shell, so without this the thread keeps
+/// the first message it was sent (`From thread “…”`) as its name (issue 3524).
+pub(crate) fn requested_title(
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<String> {
+    let title = meta?.get("rustcode")?.get("title")?.as_str()?.trim();
+    (!title.is_empty()).then(|| title.chars().take(MAX_REQUESTED_TITLE_CHARS).collect())
+}
+
+/// Name a thread the `session/new` that made it asked for, before its first
+/// turn would name it from the message it was sent.
+pub(crate) fn save_requested_title(
+    session_id: &str,
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) {
+    if session_id.is_empty() {
+        return;
+    }
+    if let Some(title) = requested_title(meta) {
+        save_session_title(session_id, &title);
+    }
+}
+
 pub(crate) fn save_session_title_if_absent(session_id: &str, history: &[ChatMessage]) {
     if session_id.is_empty() {
         return;

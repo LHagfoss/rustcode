@@ -5037,7 +5037,7 @@ fn output_style_reaches_root_prompts_within_budget() {
 #[test]
 fn harness_instructions_teach_the_viz_types_the_client_draws() {
     use super::schema::{harness_instructions, harness_output_style};
-    let none = harness_instructions("Claude Code", 0, crate::app::SmartUi::Unsupported, None);
+    let none = harness_instructions("Claude Code", 0, crate::app::SmartUi::Unsupported, None, "");
     assert!(none.contains("through the Claude Code harness"));
     // It knows the app is what owns its threads, and where to ask or look.
     assert!(none.contains("owns this machine's threads"));
@@ -5052,11 +5052,11 @@ fn harness_instructions_teach_the_viz_types_the_client_draws() {
     let style = harness_output_style(crate::app::SmartUi::Unsupported);
     assert!(none.ends_with(&style));
 
-    let level_1 = harness_instructions("Codex", 1, crate::app::SmartUi::Unsupported, None);
+    let level_1 = harness_instructions("Codex", 1, crate::app::SmartUi::Unsupported, None, "");
     assert!(level_1.contains("```rustcode-viz") && !level_1.contains("line_chart"));
     assert!(level_1.ends_with(&style));
 
-    let level_2 = harness_instructions("Pi", 2, crate::app::SmartUi::Unsupported, None);
+    let level_2 = harness_instructions("Pi", 2, crate::app::SmartUi::Unsupported, None, "");
     assert!(level_2.contains("line_chart") && level_2.contains("checklist"));
 }
 
@@ -5065,11 +5065,33 @@ fn harness_instructions_carry_the_skills_note_before_the_reply_style() {
     use super::schema::{harness_instructions, harness_output_style};
     use crate::app::SmartUi;
     let note = "# Skills\nRustCode keeps this machine's skills here: `/skills`.\n\n";
-    let with = harness_instructions("Codex", 1, SmartUi::On, Some(note));
-    let without = harness_instructions("Codex", 1, SmartUi::On, None);
+    let with = harness_instructions("Codex", 1, SmartUi::On, Some(note), "");
+    let without = harness_instructions("Codex", 1, SmartUi::On, None, "");
     assert!(with.contains(note));
     assert!(!without.contains("RustCode keeps this machine's skills here"));
     assert!(with.ends_with(&harness_output_style(SmartUi::On)));
+}
+
+/// Codex's Windows sandbox denies WMI (#3526), so the thread is told what to read instead. It is the
+/// harness's note, only on Windows, and it never displaces the reply style at the end.
+#[test]
+fn harness_instructions_carry_the_sandbox_note_before_the_reply_style() {
+    use super::schema::{
+        CODEX_WINDOWS_SANDBOX_NOTE, codex_windows_sandbox_note, harness_instructions,
+        harness_output_style,
+    };
+    use crate::app::SmartUi;
+    assert_eq!(codex_windows_sandbox_note().is_empty(), !cfg!(windows));
+    let with = harness_instructions("Codex", 1, SmartUi::On, None, CODEX_WINDOWS_SANDBOX_NOTE);
+    assert!(with.contains("Get-CimInstance"), "{with}");
+    assert!(
+        with.contains(r"HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0"),
+        "{with}"
+    );
+    assert!(with.contains("Full access"), "{with}");
+    assert!(with.ends_with(&harness_output_style(SmartUi::On)));
+    let plain = harness_instructions("Codex", 1, SmartUi::On, None, "");
+    assert!(!plain.contains("Get-CimInstance"), "{plain}");
 }
 
 #[test]
@@ -5078,7 +5100,7 @@ fn harness_instructions_teach_smart_ui_from_the_setting() {
         SMART_UI_HARNESS_HINT, SMART_UI_OFF_PROMPT_HINT, harness_instructions, harness_output_style,
     };
     use crate::app::SmartUi;
-    let instructions = |smart_ui| harness_instructions("Codex", 2, smart_ui, None);
+    let instructions = |smart_ui| harness_instructions("Codex", 2, smart_ui, None, "");
 
     // On: the fence, the rule, the kit's names and what the card refuses.
     let on = instructions(SmartUi::On);
@@ -5189,7 +5211,7 @@ fn smart_ui_off_and_unsupported_prompts_keep_their_exact_text() {
         actual.push_str(&format!(
             "=== root {name}\n{}=== harness {name}\n{}",
             root_prompt_hints(level, smart_ui),
-            harness_instructions("Codex", level, smart_ui, None)
+            harness_instructions("Codex", level, smart_ui, None, "")
         ));
     }
     assert_eq!(actual, expected);
@@ -5210,7 +5232,7 @@ fn smart_ui_on_teaches_views_and_not_rustcode_viz() {
             output_style_hint(level, SmartUi::On),
             format!("{STYLE}{VIEWS}\n")
         );
-        let harness = harness_instructions("Codex", level, SmartUi::On, None);
+        let harness = harness_instructions("Codex", level, SmartUi::On, None, "");
         for text in [&root, &harness] {
             assert!(!text.contains("rustcode-viz"), "{text}");
             assert!(!text.contains("# Visualizations"), "{text}");

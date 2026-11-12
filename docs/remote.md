@@ -599,7 +599,7 @@ are all visible at once.
 | **Machines found › Enter an address** | The `host:port` a machine is reached on when it is not announced (an overlay, or another subnet). The fallback, never the first step. |
 | **Waiting for ‹host› to accept on that machine…** | The request is on that machine's screen; *Cancel* drops it. Once its owner accepts, the eight digits it shows are typed here, one box per digit. |
 | **Checking the code** | The code is being checked with that machine, which answers within ten seconds. After half a minute the page stops waiting and says so — *‹host› did not answer* — with **Ask again** and **Cancel**: a machine that accepted the code but could not store the token still lists this computer as a device, so it is removed there and the pairing started again. No stage of the flow is a spinner without a way out. |
-| A machine row | Its name and platform, the state chip at the row's top right — *Connected*, *Connecting*, *Offline · retrying in N s*, *Needs pairing* — the route **in use** under the name as `LAN · Unencrypted` or `NetBird`/`Tailscale`/`VPN · Encrypted`, then whether it is the main machine, when it was last reached and how many threads it has. **Main machine** and **Remove** sit in a row of their own below. Under the route, the hint for one kind of route that answers while another does not (see [Machines](#machines)), and a version skew line when that machine runs another RustCode: *RustCode 0.96.0 on that machine — update it there: Settings › About › Check for updates, or `brew upgrade rustcode`* (the platform's own way, from [install](install.md#updating); a development build never shows the line), or *update RustCode here* when that machine is newer. |
+| A machine row | Its name and platform, the state chip at the row's top right — *Connected*, *Connecting*, *Reconnecting…* (a machine that is away while the app retries it on its own), *Offline*, *Needs pairing* — the route **in use** under the name as `LAN · Unencrypted` or `NetBird`/`Tailscale`/`VPN · Encrypted`, then whether it is the main machine, when it was last reached and how many threads it has. **Main machine** and **Remove** sit in a row of their own below. Under the route, the hint for one kind of route that answers while another does not (see [Machines](#machines)), and a version skew line when that machine runs another RustCode: *RustCode 0.96.0 on that machine — update it there: Settings › About › Check for updates, or `brew upgrade rustcode`* (the platform's own way, from [install](install.md#updating); a development build never shows the line), or *update RustCode here* when that machine is newer. |
 | **This computer · RustCode server** | Whether the RustCode server is installed as a background service: *Server: Installed · Running*, or *Not installed* with **Install server**. Installed, that engine stays up when the app closes and starts when you log in; the threads this app starts still run in its own engine and end with it. What `rustcode server status` reports, including a running version that differs from the app's, is on the same line. |
 | **Main machine** | The machine listed first and the default **Run on**. One at a time. |
 | **Remove** | Forgets it here: token, routes and its threads' rows go. The machine keeps listing this computer until it is revoked there. |
@@ -612,8 +612,12 @@ the LAN, the `.local` name Bonjour gave it, every overlay address — starting
 with the route the machine answered on last time, so a dropped connection comes
 back the way it came. A change to this computer's own network (a VPN coming up
 or going away, another Wi-Fi) ends the wait at once instead of after the
-backoff, and while it waits the row says *Offline · retrying in N s* next to
-when the machine was last reached. A pairing that was refused is not retried:
+backoff, and while it waits the row's chip says *Reconnecting…* next to when
+the machine was last reached, rather than *Offline*, which reads as something
+the user has to fix. The first read of the machine list at app start is tried
+again on a doubling wait too (`state/machines.ts` `startMachines`, 1 s to
+30 s), so a shell that was still starting up does not leave every machine
+without a connection until a page is opened. A pairing that was refused is not retried:
 nothing changes until it is paired again, and the row says so.
 The connection and the token live in the app's Rust shell
 (`apps/desktop/src-tauri/src/machines.rs`); the page only shows what it is

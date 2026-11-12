@@ -701,6 +701,9 @@ pub enum RemoteEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timing: Option<RemoteTurnTiming>,
         prompt: BoundedText,
+        /// Who sent `prompt`, as on its transcript message. Absent from a host that predates it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<RemoteMessageOrigin>,
     },
     TextDelta {
         text: String,
@@ -1262,6 +1265,39 @@ pub struct RemoteMessage {
     /// Correlation and footer for this message's logical turn, repeated across phases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn: Option<RemoteTurnTiming>,
+    /// Who sent a `user` message. Absent on every other role, and from a host that predates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<RemoteMessageOrigin>,
+}
+
+/// Who sent a `user` message: not every one is something the user typed.
+/// The message text is sent unchanged, with the wording the host gave it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoteMessageOrigin {
+    /// `user` (typed here or on a device), `agent` (another thread's agent sent it),
+    /// `delegate` (the host woke the thread for its delegates) or `system` (the host's own
+    /// prompt). A client that does not know a value shows the message as a notice, not as the
+    /// user's.
+    pub kind: String,
+    /// The sender of an `agent` message; each delegate a `delegate` message reports.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub threads: Vec<RemoteOriginThread>,
+}
+
+/// A thread a message came from. Every field is absent when the message does not say it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoteOriginThread {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// The thread's title when the message was sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// A delegate's state: `done`, `failed`, `needs_user` or `stalled`. Open-ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// The link the delegate answers on, as `wait_session` names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_id: Option<String>,
 }
 
 /// Set on a tool-result message.

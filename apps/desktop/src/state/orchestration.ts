@@ -8,6 +8,7 @@
 import type { Json, JsonObject } from "../acp/jsonrpc";
 import { plainPath } from "../acp/types";
 import type { ThreadStatus, Worktree } from "../acp/v2";
+import { answerPreview } from "./answerPreview";
 import { MAX_ATTACHMENT_FILES } from "./attachments";
 import type { PermissionMode } from "./permissions";
 import { snoozeAt } from "./snooze";
@@ -203,8 +204,13 @@ export function advanceLink(link: Link, change: Partial<Link>, at: number): Link
   if (change.state === undefined || change.state === link.state) return next;
   const kind = EVENT_OF_STATE[change.state];
   if (!kind) return next;
+  // A failure's own words go in the event, so the tip says why, not only that it did.
   const worked = kind === "answered" ? workedTime(next, at) : undefined;
-  const detail = worked ? `worked ${formatDuration(worked)}` : undefined;
+  const detail = worked
+    ? `worked ${formatDuration(worked)}`
+    : kind === "failed"
+      ? answerPreview(next.error)
+      : undefined;
   return noteEvent(next, kind, at, detail);
 }
 
@@ -1828,6 +1834,9 @@ export function waitEnded(links: readonly Link[], thread: string, at: number): L
   return changed ? next : (links as Link[]);
 }
 
+/** Why a link to a thread that no longer exists failed: the row and the tip say the same. */
+export const REASON_THREAD_DELETED = "That thread was deleted.";
+
 export function forget(book: LinkBook, thread: string, at = Date.now()): LinkBook {
   const grants = Object.fromEntries(
     Object.entries(book.grants)
@@ -1841,7 +1850,11 @@ export function forget(book: LinkBook, thread: string, at = Date.now()): LinkBoo
       .filter((l) => l.orchestrator !== thread)
       .map((l) =>
         l.target === thread && isActive(l.state)
-          ? advanceLink(l, { state: "failed", answer: "That thread was deleted." }, at)
+          ? advanceLink(
+              l,
+              { state: "failed", answer: REASON_THREAD_DELETED, error: REASON_THREAD_DELETED },
+              at,
+            )
           : l,
       ),
     fanOuts: book.fanOuts.filter((f) => f.orchestrator !== thread),
@@ -1872,6 +1885,9 @@ export function linkResult(
   };
   if (status) entry.thread_status = status;
   if (link.answer !== undefined) entry.answer = link.answer;
+  // Why it failed, apart from what the reply said: without it a caller cannot say more than
+  // "failed", and the answer it did give reads as the reason (issue 3523).
+  if (link.error !== undefined) entry.error = link.error;
   if (link.truncated) {
     // The answer was cut at the 8 KiB budget: the rest is in read_session on this thread.
     entry.answer_truncated = true;

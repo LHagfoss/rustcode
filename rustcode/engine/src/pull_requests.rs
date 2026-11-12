@@ -108,8 +108,8 @@ pub struct PullDetail {
 /// Why the pull requests could not be read, said so the app can show it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PullError {
-    /// `gh_missing`, `not_connected`, `not_a_repository`, `timed_out` or
-    /// `failed`.
+    /// `gh_missing`, `not_connected`, `not_a_repository`, `no_provider` (the
+    /// remote is not on GitHub), `timed_out` or `failed`.
     pub code: &'static str,
     pub message: String,
 }
@@ -917,7 +917,11 @@ pub async fn merge_when_green(
 fn classify(stderr: &str) -> PullError {
     let message = stderr.trim().to_owned();
     let lower = message.to_lowercase();
-    let code = if lower.contains("gh auth login") || lower.contains("not logged in") {
+    // `gh` answers a remote it does not know (GitLab, a self-hosted forge) with a hint to run
+    // `gh auth login`; that is no connection to make, so the host is checked first.
+    let code = if lower.contains("known github host") {
+        "no_provider"
+    } else if lower.contains("gh auth login") || lower.contains("not logged in") {
         "not_connected"
     } else if lower.contains("not a git repository")
         || lower.contains("no git remotes")
@@ -1405,6 +1409,11 @@ mod tests {
             "not_a_repository"
         );
         assert_eq!(classify("no git remotes found").code, "not_a_repository");
+        // A remote on another forge is not a missing sign-in, though gh suggests one.
+        assert_eq!(
+            classify("none of the git remotes configured for this repository point to a known GitHub host. To tell gh about a new GitHub host, please use `gh auth login`").code,
+            "no_provider"
+        );
         let other = classify("HTTP 502\n");
         assert_eq!((other.code, other.message.as_str()), ("failed", "HTTP 502"));
     }

@@ -360,6 +360,8 @@ pub(crate) async fn new_session(
     if session_id.is_empty() {
         return Err(failure("session storage is unavailable".to_owned()));
     }
+    // The name the thread was made with, from the app that made it (issue 3524).
+    crate::config::save_requested_title(&session_id, request.meta.as_ref());
     // The thread that started this one, kept in its metadata so a pruned link
     // cannot turn it into a top-level thread (`thread_parent.rs`).
     if let Some((parent, relationship)) = crate::thread_parent::requested(request.meta.as_ref()) {
@@ -418,7 +420,27 @@ async fn attach_orchestrator(
     smart_ui: crate::app::SmartUi,
     clients: &SessionClients,
 ) -> bool {
-    if orchestration < 2 || !harness::capabilities(&session.harness).orchestration {
+    if !harness::capabilities(&session.harness).orchestration {
+        return false;
+    }
+    // No app hosts the tools: this engine answers the reads itself and names
+    // the app for the calls that need it (#3422). An app that turned them off
+    // still turns them off, so nothing is attached then.
+    if orchestration == 0 {
+        if clients.app_attached() {
+            return false;
+        }
+        let launch = crate::orchestration::hub::launch_local_for(
+            &session.id,
+            crate::orchestration::VERSION,
+            smart_ui,
+        )
+        .await;
+        let attached = launch.is_some();
+        session.set_orchestrator(launch);
+        return attached;
+    }
+    if orchestration < 2 {
         return false;
     }
     let Some(client) = super::preview::orchestration_client_for(true, clients) else {
@@ -596,13 +618,30 @@ pub(crate) async fn attach_open(
     let account = harness::config::config_dir().ok().and_then(|dir| {
         harness::config::account_for_load(&harness::config::load_accounts_in(&dir), &record)
     });
+    // The app that loads this thread hosts its orchestration from now on. A
+    // thread registered locally while no app was attached keeps its running
+    // `mcp-orchestrator` and its token; only the hub's client is swapped, in
+    // place (#3422).
+    let info = peer.info();
+    let session_clients = peer.clients().session(&session_id);
+    let orchestrated = if !session.orchestrated() {
+        attach_orchestrator(session, info.orchestration, info.smart_ui, &session_clients).await
+    } else if info.orchestration >= 1 {
+        if let Some(client) = super::preview::orchestration_client_for(true, &session_clients) {
+            let _ = crate::orchestration::hub::swap_client(&session_id, client, info.orchestration)
+                .await;
+        }
+        true
+    } else {
+        true
+    };
     Ok(position.finish(
         LoadSessionResponse::new()
             .config_options(session.config_options().await)
             .meta(harness::session_meta_for(
                 &session.harness,
                 account.as_ref(),
-                session.orchestrated(),
+                orchestrated,
             )),
     ))
 }

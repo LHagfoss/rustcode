@@ -2671,13 +2671,16 @@ pub(crate) fn harness_output_style(smart_ui: crate::app::SmartUi) -> String {
 /// link what it makes so the app opens it, that RustCode is what owns its threads and projects, then
 /// either Smart UI when the user has it on or the `rustcode-viz` types the connected client draws (none
 /// at level 0), then `skills` ([`crate::skills::harness_skills_note`], because this harness has no
-/// `use_skill`), then [`harness_output_style`]. Codex takes this as `developerInstructions` and Claude Code's adapter
-/// as its `systemPrompt`: it goes in every prompt, so every byte here is paid on every turn.
+/// `use_skill`), what its own sandbox blocks on this platform (`sandbox_note`, empty when it blocks
+/// nothing the model would reach for), then [`harness_output_style`]. Codex takes this as
+/// `developerInstructions` and Claude Code's adapter as its `systemPrompt`: it goes in every prompt,
+/// so every byte here is paid on every turn.
 pub(crate) fn harness_instructions(
     harness: &str,
     visualization_level: u8,
     smart_ui: crate::app::SmartUi,
     skills: Option<&str>,
+    sandbox_note: &str,
 ) -> String {
     let harness = harness.split_whitespace().collect::<Vec<_>>().join(" ");
     format!(
@@ -2690,12 +2693,30 @@ pub(crate) fn harness_instructions(
          the same from a shell. Thread data lives in `~/.config/rustcode/threads`, not in another tool's \
          database. Tokens and reported cost are `thread_usage` (or `rustcode usage`), and what the \
          harnesses recorded of turns and tool calls is `query_data` (or `rustcode data query \"<sql>\"`); \
-         its description lists the tables.</runtime_info>\n\n{}{}{}{}",
+         its description lists the tables.</runtime_info>\n\n{}{}{}{}{}",
         taught_visualization_hint(visualization_level, smart_ui),
         harness_smart_ui_hint(smart_ui),
         skills.unwrap_or_default(),
+        sandbox_note,
         harness_output_style(smart_ui)
     )
+}
+
+/// What Codex's own Windows sandbox denies, for a Codex thread there (#3526). RustCode passes no
+/// Windows-specific policy: the sandbox holds its shell in a restricted token either way, and that
+/// token cannot reach the WMI service, so the model is told what to read instead of retrying.
+pub(crate) const CODEX_WINDOWS_SANDBOX_NOTE: &str = r#"# Sandbox on Windows
+This thread's shell runs in Codex's Windows sandbox unless the user picks Full access. WMI answers out of process, so the sandbox denies it and `Get-CimInstance`, `Get-WmiObject`, `wmic` and `systeminfo` fail with `Access denied` (0x80041003); retrying or wrapping it does not help. Read the same facts without WMI: `Get-ItemProperty HKLM:\HARDWARE\DESCRIPTION\System\CentralProcessor\0` and `HKLM:\HARDWARE\DESCRIPTION\System\BIOS` for the CPU and board, `[System.Environment]::ProcessorCount` and `[System.Environment]::OSVersion` for counts and version, `[System.IO.DriveInfo]::GetDrives()` for disks, and `Get-Counter` (performance counters, not WMI) for load and memory. Registry and .NET reads are not restricted.
+
+"#;
+
+/// [`CODEX_WINDOWS_SANDBOX_NOTE`] on Windows, where Codex sandboxes the shell at all.
+pub(crate) fn codex_windows_sandbox_note() -> &'static str {
+    if cfg!(windows) {
+        CODEX_WINDOWS_SANDBOX_NOTE
+    } else {
+        ""
+    }
 }
 
 /// The tag [`runtime_reminder`] wraps [`harness_instructions`] in, and the

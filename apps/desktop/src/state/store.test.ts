@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { type JsonObject, RpcError } from "../acp/jsonrpc";
 import { MockTransport } from "../acp/mock";
 import { harnessPlanKey, parsePlans, type UsagePlan } from "../acp/rustcode";
@@ -144,6 +144,7 @@ import {
   submit,
   switchNewThreadHarness,
   threadCreated,
+  threadDeleted,
   toast,
   togglePin,
   toggleRightPanel,
@@ -1313,7 +1314,7 @@ describe("engine controller with the mock engine", () => {
     expect(useApp.getState().theme).toBe("dark");
   });
 
-  test("a thread the engine started for a paired device joins the list once", async () => {
+  test("a thread another client made joins the list once, on its machine", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
     await until(() => useApp.getState().sessions.length > 0);
     // `_rustcode/threads/created`: Remote access started it while a phone asked for a thread.
@@ -1333,6 +1334,82 @@ describe("engine controller with the mock engine", () => {
     const rows = useApp.getState().sessions.filter((x) => x.id === "phone-thread");
     expect(rows).toHaveLength(1);
     expect(useApp.getState().sessions.some((x) => x.id === "no-folder")).toBe(false);
+    // A machine's own id reaches this window as a key, and its row keeps the machine.
+    threadCreated({
+      sessionId: "gw-7c1d9e4f2a8b6d30/from-studio",
+      cwd: "/home/lars/code/rustcode",
+      harness: "codex",
+    });
+    const remote = useApp.getState().sessions.find((x) => x.id === "gw-7c1d9e4f2a8b6d30/from-studio");
+    expect(remote?.host).toBe("gw-7c1d9e4f2a8b6d30");
+    expect(remote?.harness).toBe("codex");
+  });
+
+  test("a just-announced thread keeps its row until the engine lists it, and a deletion takes it", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().sessions.length > 0);
+    // The engine lists a session once it saved history, so this one is not in the list yet.
+    threadCreated({ sessionId: "brand-new", cwd: "/tmp/project" });
+    await refreshSessions();
+    expect(useApp.getState().sessions.some((x) => x.id === "brand-new")).toBe(true);
+    // Its folder was trashed before it was ever listed: the engine's notice takes it away.
+    threadDeleted({ sessionId: "brand-new" });
+    expect(useApp.getState().sessions.some((x) => x.id === "brand-new")).toBe(false);
+  });
+
+  test("the thread this window is creating is announced to it once, and another client's waits for the answer", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().sessions.length > 0);
+    // The engine announces the new thread to this client before `session/new` answers; another
+    // client's thread announced meanwhile waits too, and joins the list when the creation ends.
+    const made = createSession({ cwd: "/tmp/project", harness: "rustcode" });
+    threadCreated({ sessionId: "from-phone", cwd: "/tmp/project" });
+    expect(useApp.getState().sessions.some((x) => x.id === "from-phone")).toBe(false);
+    const id = await made;
+    expect(useApp.getState().sessions.filter((x) => x.id === id)).toHaveLength(1);
+    expect(useApp.getState().sessions.filter((x) => x.id === "from-phone")).toHaveLength(1);
+  });
+
+  test("a thread that runs its first turn for longer than the keep stays listed (issue 3523)", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().sessions.length > 0);
+    threadCreated({ sessionId: "long-first-turn", cwd: "/tmp/project" });
+    const status = (running: boolean) =>
+      useApp.setState((s) => ({
+        sessions: s.sessions.map((x) =>
+          x.id === "long-first-turn" ? { ...x, status: running ? "running" : "idle" } : x,
+        ),
+      }));
+    const start = Date.now();
+    try {
+      // Six minutes in, the engine has still not listed it (no history until the turn ends): it
+      // runs, so the keep is renewed and the row stays.
+      status(true);
+      setSystemTime(new Date(start + 6 * 60_000));
+      await refreshSessions();
+      expect(useApp.getState().sessions.some((x) => x.id === "long-first-turn")).toBe(true);
+      // A thread nobody sees running and no list names is dropped once its keep has run out.
+      status(false);
+      setSystemTime(new Date(start + 13 * 60_000));
+      await refreshSessions();
+      expect(useApp.getState().sessions.some((x) => x.id === "long-first-turn")).toBe(false);
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test("a list already in flight when a thread is trashed does not bring its row back", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().sessions.length > 0);
+    // The mock still lists this thread, as an engine does for a read that started before the trash.
+    const id = useApp.getState().sessions[0]!.id;
+    threadDeleted({ sessionId: id });
+    expect(useApp.getState().sessions.some((x) => x.id === id)).toBe(false);
+    await refreshSessions();
+    expect(useApp.getState().sessions.some((x) => x.id === id)).toBe(false);
+    // …and a late announcement of it makes no row either.
+    threadCreated({ sessionId: id, cwd: "/tmp/project" });
+    expect(useApp.getState().sessions.some((x) => x.id === id)).toBe(false);
   });
 
   test("pins live in the engine when it has them; Settled is threads marked Done", async () => {
@@ -1718,6 +1795,23 @@ describe("engine controller with the mock engine", () => {
       args: { session_id: target },
     });
     expect((updated.delegates as JsonObject[])[0]!.idle_ms).toBeLessThan(90_000);
+  });
+
+  test("thread status reports no pull request provider for a remote that is not on GitHub", async () => {
+    const { parent, target } = await stagedMerge();
+    const gitlab = "/Users/you/code/gitlab-service";
+    useApp.setState((st) => ({ sessions: st.sessions.map((x) => ({ ...x, cwd: gitlab })) }));
+    updateThread(parent, (t) => ({ ...t, cwd: gitlab }));
+    updateThread(target, (t) => ({ ...t, cwd: gitlab }));
+    const answer = await answerOrchestration({
+      sessionId: parent,
+      tool: "thread_status",
+      args: { session_id: target },
+    });
+    const delegate = (answer.delegates as JsonObject[])[0]!;
+    expect(delegate.error).toBeUndefined();
+    expect(delegate.pull).toBeNull();
+    expect(delegate.pull_note).toBe("no pull request provider for this remote");
   });
 
   test("read_activity forwards newest order to the data store", async () => {

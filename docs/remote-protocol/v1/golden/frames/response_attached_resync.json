@@ -116,7 +116,10 @@
             "total_bytes": 30,
             "content_id": "message:h2:60"
           },
-          "timestamp": "2026-10-09T18:41:00+02:00"
+          "timestamp": "2026-10-09T18:41:00+02:00",
+          "origin": {
+            "kind": "user"
+          }
         },
         {
           "message_id": "m61",
@@ -136,6 +139,29 @@
             "pending": false
           },
           "timestamp": "2026-10-09T18:41:10+02:00"
+        },
+        {
+          "message_id": "m62",
+          "role": "user",
+          "content": {
+            "text": "Delegate finished: Review the parser tests\n\nFinished:\n\n- link_id 20261009-183000-9f2a/1 · done · “Review the parser tests” · Pi · worked 31s · session 20261009-184105-c41d\n  answer: Two tests cover the empty input.\n\n<!-- rustcode:wake -->",
+            "truncated": false,
+            "offset": 0,
+            "total_bytes": 247,
+            "content_id": "message:h2:62"
+          },
+          "timestamp": "2026-10-09T18:41:40+02:00",
+          "origin": {
+            "kind": "delegate",
+            "threads": [
+              {
+                "session_id": "20261009-184105-c41d",
+                "title": "Review the parser tests",
+                "status": "done",
+                "link_id": "20261009-183000-9f2a/1"
+              }
+            ]
+          }
         }
       ],
       "history_revision": "h2",
