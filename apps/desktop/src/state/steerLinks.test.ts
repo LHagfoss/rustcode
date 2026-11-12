@@ -246,14 +246,16 @@ describe("a link whose thread stopped (issue 3541)", () => {
         links: s.links.links.map((l) => ({ ...l, startedAt: undefined })),
       },
     }));
-    updateThread(TARGET, (t) => ({ ...t, queue: [{ id: "q1", text: "next", link: "steer-1" }] }));
-    reconcileLinks(10_000_000);
-    expect(state("steer-1")?.state).toBe("working");
     useApp.setState({
       limitWaits: { [TARGET]: { until: 1, reason: "limit", harness: "claude-code", account: null } as never },
     });
     reconcileLinks(10_000_000);
     expect(state("own")?.state).toBe("working");
+    useApp.setState({ limitWaits: {} });
+    updateThread(TARGET, (t) => ({ ...t, queue: [{ id: "q1", text: "next", link: "steer-1" }] }));
+    reconcileLinks(10_000_000);
+    expect(state("steer-1")?.state).toBe("working");
+    expect(state("own")?.state).toBe("done");
   });
 
   test("Stop settles a steered link with no start time on an idle thread", async () => {
