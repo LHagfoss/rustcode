@@ -38,7 +38,7 @@ import {
 import { HarnessIcon } from "./HarnessIcon";
 import { CopyButton } from "./Markdown";
 import { cx, noTextHelpers, Skeleton, Spinner, Switch, Tooltip } from "./primitives";
-import { Action, Chip, Choice, Select, type SelectOption } from "./settingsKit";
+import { Action, Chip, Choice, ErrorDetails, PathText, Select, type SelectOption } from "./settingsKit";
 
 function StatusDot({ tone }: { tone: "ok" | "warn" | "off" }) {
   return (
@@ -73,7 +73,9 @@ function SignIn({ harness }: { harness: Harness }) {
             credentials.
           </p>
           <div className="flex items-center gap-2 rounded-md bg-fill-subtle py-1 pr-1 pl-2">
-            <code className="selectable flex-1 truncate font-mono text-callout">{line}</code>
+            <code className="selectable flex-1 truncate font-mono text-callout" title={line}>
+              {line}
+            </code>
             <CopyButton text={line} />
           </div>
           {canOpenTerminal() && (
@@ -260,7 +262,10 @@ export function AccountsList({ harness }: { harness: Harness }) {
               </div>
               {account.auth !== "ok" && accountSignIn(harness) && (
                 <div className="flex items-center gap-2 rounded-md bg-fill py-1 pr-1 pl-2">
-                  <code className="selectable flex-1 truncate font-mono text-caption text-fg-muted">
+                  <code
+                    className="selectable flex-1 truncate font-mono text-caption text-fg-muted"
+                    title={accountLoginCommand(harness, account)}
+                  >
                     {accountLoginCommand(harness, account)}
                   </code>
                   <CopyButton text={accountLoginCommand(harness, account)} />
@@ -311,9 +316,7 @@ export function AccountsList({ harness }: { harness: Harness }) {
           <span className="text-caption text-fg-muted">Found on this computer</span>
           {discovered.map((found) => (
             <div key={found.config_dir} className="flex items-center gap-2">
-              <span className="min-w-0 flex-1 truncate font-mono text-caption text-fg-muted">
-                {found.config_dir}
-              </span>
+              <PathText path={found.config_dir} className="flex-1 text-caption text-fg-muted" />
               <span className="shrink-0 text-caption text-fg-faint">{found.suggested_name}</span>
               <Action
                 size="sm"
@@ -436,16 +439,20 @@ export function HarnessCard({ harness }: { harness: Harness }) {
       {!harness.installed && harness.install_hint && (
         <div className="ml-11 flex items-center gap-2 rounded-md bg-fill-subtle py-1 pr-1 pl-2">
           <span className="text-caption text-fg-muted">Install</span>
-          <code className="selectable flex-1 truncate font-mono text-callout">{harness.install_hint}</code>
+          <code className="selectable flex-1 truncate font-mono text-callout" title={harness.install_hint}>
+            {harness.install_hint}
+          </code>
           <CopyButton text={harness.install_hint} />
         </div>
       )}
       {(accountSignIn(harness) || (harness.accounts?.length ?? 0) > 0) && <AccountsList harness={harness} />}
       {/* A failure's own words; every other end is already the status line. */}
       {(result ? result.state === "error" : harness.error) && !checking && (
-        <div className="selectable ml-11 text-callout text-warning">
-          {result ? result.text : harness.error}
-        </div>
+        <ErrorDetails
+          className="ml-11 text-warning"
+          summary={`${harness.name} could not be checked.`}
+          detail={result ? result.text : harness.error}
+        />
       )}
       <div className="ml-11">
         <button
@@ -462,7 +469,10 @@ export function HarnessCard({ harness }: { harness: Harness }) {
             {!local && harness.command.length > 0 && (
               <div className="flex items-center gap-2 text-caption">
                 <span className="text-fg-muted">Runs</span>
-                <code className="selectable truncate font-mono text-fg-muted">
+                <code
+                  className="selectable truncate font-mono text-fg-muted"
+                  title={commandLine(harness.command)}
+                >
                   {commandLine(harness.command)}
                 </code>
               </div>
@@ -470,9 +480,9 @@ export function HarnessCard({ harness }: { harness: Harness }) {
             {!local && !!harness.env_names?.length && (
               <div className="flex items-center gap-2 text-caption">
                 <span className="text-fg-muted">Environment</span>
-                <code className="selectable truncate font-mono text-fg-muted">
+                <span className="selectable truncate text-fg-muted" title={harness.env_names.join(", ")}>
                   {harness.env_names.join(", ")}
-                </code>
+                </span>
               </div>
             )}
             <ul className="grid grid-cols-2 gap-x-4 gap-y-1">

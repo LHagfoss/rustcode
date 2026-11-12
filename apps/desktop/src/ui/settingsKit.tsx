@@ -37,6 +37,7 @@ import {
   useState,
 } from "react";
 import type { Json, JsonObject } from "../acp/jsonrpc";
+import { displayPath } from "../acp/types";
 import {
   beginPageRead,
   cachedPage,
@@ -481,6 +482,57 @@ export function Chip({
     >
       {children}
     </span>
+  );
+}
+
+/** One short literal the user may copy (a path, command, id or version), inline in the normal text around it. */
+export function Literal({ children, title }: { children: ReactNode; title?: string }) {
+  return (
+    <span title={title} className="selectable font-mono">
+      {children}
+    </span>
+  );
+}
+
+/** A folder or file as people read it: shortened (`~/code/app`) with the full path on hover. */
+export function PathText({ path, className }: { path: string; className?: string }) {
+  const short = displayPath(path);
+  return (
+    <span
+      title={short === path ? undefined : path}
+      className={cx("selectable min-w-0 truncate font-mono", className)}
+    >
+      {short}
+    </span>
+  );
+}
+
+/**
+ * A failure as a plain sentence first, then the raw technical text folded under "Details" in
+ * monospace, so a long error never fills the page with code.
+ */
+export function ErrorDetails({
+  summary,
+  detail,
+  className,
+}: {
+  summary: string;
+  detail?: string | null;
+  className?: string;
+}) {
+  const raw = detail?.trim();
+  return (
+    <div className={cx("selectable text-callout", className)}>
+      <p className="m-0">{summary}</p>
+      {raw && raw !== summary && (
+        <details className="pt-0.5 text-caption text-fg-muted">
+          <summary className="w-fit cursor-pointer select-none hover:text-fg">Details</summary>
+          <pre className="m-0 mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-code-bg p-2 font-mono text-caption">
+            {raw}
+          </pre>
+        </details>
+      )}
+    </div>
   );
 }
 

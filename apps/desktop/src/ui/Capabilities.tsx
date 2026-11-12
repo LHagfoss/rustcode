@@ -25,7 +25,17 @@ import { machineRequest, useLoadScopeSettings, useScope } from "../state/setting
 import { askConfirm, errorText, toast, useApp } from "../state/store";
 import { cardInset, cx, noTextHelpers, Spinner, Switch, Tooltip } from "./primitives";
 import { SettingsScopeBar } from "./SettingsScope";
-import { Action, fieldClass, Group, Loading, Row, SectionTitle, Select } from "./settingsKit";
+import {
+  Action,
+  ErrorDetails,
+  fieldClass,
+  Group,
+  Loading,
+  PathText,
+  Row,
+  SectionTitle,
+  Select,
+} from "./settingsKit";
 
 interface Skill {
   name: string;
@@ -608,30 +618,28 @@ function McpRow({
         <div className="rc-expand flex flex-col gap-3 px-4 pb-3 pl-10">
           <dl className="grid grid-cols-[88px_1fr] gap-x-3 gap-y-1 text-callout">
             <dt className="text-fg-faint">Command</dt>
-            <dd className="selectable m-0 truncate font-mono text-fg-muted">{s.target}</dd>
+            <dd className="selectable m-0 truncate font-mono text-fg-muted" title={s.target}>
+              {s.target}
+            </dd>
             <dt className="text-fg-faint">Scope</dt>
             <dd className="m-0 text-fg-muted">{s.scope}</dd>
             {(s.envKeys.length > 0 || s.headerKeys.length > 0) && (
               <>
                 <dt className="text-fg-faint">Set here</dt>
-                <dd className="m-0 font-mono text-caption text-fg-muted">
-                  {[...s.envKeys, ...s.headerKeys].join(", ")} — values stay on this machine
+                <dd className="m-0 text-fg-muted">
+                  {[...s.envKeys, ...s.headerKeys].join(", ")}. Values stay on this machine.
                 </dd>
               </>
             )}
             {s.tools.length > 0 && (
               <>
                 <dt className="text-fg-faint">Tools</dt>
-                <dd className="selectable m-0 font-mono text-caption leading-[16px] text-fg-muted">
-                  {s.tools.join(", ")}
-                </dd>
+                <dd className="selectable m-0 text-fg-muted">{s.tools.join(", ")}</dd>
               </>
             )}
           </dl>
           {s.error && (
-            <pre className="selectable m-0 rounded-md bg-code-bg p-2 font-mono text-caption whitespace-pre-wrap text-danger">
-              {s.error}
-            </pre>
+            <ErrorDetails className="text-danger" summary="This server could not start." detail={s.error} />
           )}
           <div>
             <div className="mb-1 text-caption text-fg-faint">Log</div>
@@ -784,7 +792,7 @@ function SkillsSection({
               subtitle={
                 <>
                   {s.description}
-                  {s.path && <span className="block truncate font-mono text-fg-faint">{s.path}</span>}
+                  {s.path && <PathText path={s.path} className="block text-fg-faint" />}
                 </>
               }
             >

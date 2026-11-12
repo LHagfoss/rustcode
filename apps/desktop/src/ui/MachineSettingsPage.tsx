@@ -49,7 +49,7 @@ import { LOCAL_HOST } from "../state/threadKeys";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachineIdentityEditor } from "./MachineProfile";
 import { cx, Switch } from "./primitives";
-import { Action, Chip, Group, Row, SectionTitle } from "./settingsKit";
+import { Action, Chip, ErrorDetails, Group, Row, SectionTitle } from "./settingsKit";
 import { SYNC_COLUMNS, syncRows } from "./syncRows";
 
 /** One machine's name, state and controls. */
@@ -244,7 +244,15 @@ function Harnesses({ machine }: { machine: Machine }) {
         <Row title="Reading harnesses…" subtitle="Asking that machine what it can run." />
       )}
       {harness.error && harnesses.length === 0 && (
-        <Row title="Could not read the harnesses" subtitle={harness.error} />
+        <Row
+          title="Could not read the harnesses"
+          subtitle={
+            <ErrorDetails
+              summary="That machine did not answer the request for its harnesses."
+              detail={harness.error}
+            />
+          }
+        />
       )}
       {!harness.loading && !harness.error && harnesses.length === 0 && (
         <Row title="No harnesses listed" subtitle="That machine reported none." />

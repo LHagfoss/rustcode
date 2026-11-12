@@ -411,8 +411,12 @@ function DiscoveredRow({ found, local }: { found: DiscoveredMachine; local: stri
       subtitle={
         <>
           <span className="block">{facts.filter(Boolean).join(" · ")}</span>
-          <span className="block font-mono">
-            {found.address ?? "It announced no address this computer can reach."}
+          <span className="block">
+            {found.address ? (
+              <span className="selectable font-mono">{found.address}</span>
+            ) : (
+              "It announced no address this computer can reach."
+            )}
           </span>
           {skew && <span className="mt-1 block text-warning">{skew}</span>}
           {found.hint && <span className="mt-1 block">{found.hint}</span>}
