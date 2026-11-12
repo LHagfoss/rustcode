@@ -369,6 +369,47 @@ is. On Windows stopping a server is a hard kill (no signal reaches a process
 without a window), so harness processes it started can outlive it until they
 end themselves.
 
+### Staying up to date
+
+A server a service manager runs keeps itself up to date, so a machine nobody
+sits at (a PC running `rustcode server` and `rustcode remote serve` in the
+background) does not stay on the version it was installed with. About every
+30 minutes (spread by up to 10% so paired machines do not all ask at the same
+second) it looks for a newer **stable** release. When it finds one it:
+
+1. waits until no turn is running (a turn that asks the user something is a
+   running turn, so nothing waits on a person either),
+2. installs it as `rustcode --update` does: the release archive is checked
+   against the release's `SHA256SUMS`, and a Homebrew install goes through
+   `brew`,
+3. restarts onto it with `rustcode server restart --when-idle`, started as a
+   detached helper so the restart is safe from inside the server.
+
+The remote gateway comes back on the new version too: the restarted server
+replaces a gateway older than itself, the same way `remote start` does.
+
+Every step is written to the server log (`rustcode server logs`) with the
+prefix `auto-update`: found, waiting for no turn to run, installing, installed,
+restarting. A failure (no network, a bad checksum, a replace that is refused) is
+logged and retried after a pause that doubles with each failure, up to six
+hours; a release that is already installed is not downloaded again, only the
+restart is retried. The server never installs a prerelease, and a development
+build or a prerelease build never updates itself. A server started by the app or
+by a terminal is not updated by this; the app has its own setting for that
+(Settings › About).
+
+It is on by default. To turn it off, set in the machine's `config.toml` (user
+configuration only; a project file cannot change it):
+
+```toml
+[server]
+auto_update = false
+```
+
+The server reads it at each look, so no restart is needed. The app does not show
+this setting for a paired machine yet: it is not part of what a machine reports
+to the app today.
+
 ### Logs
 
 The server writes its log to `<config dir>/logs/server.log` (everything the

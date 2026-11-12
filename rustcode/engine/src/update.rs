@@ -31,6 +31,10 @@ const FORMULA_URLS: [&str; 2] = [
 struct GithubRelease {
     tag_name: String,
     #[serde(default)]
+    prerelease: bool,
+    #[serde(default)]
+    draft: bool,
+    #[serde(default)]
     assets: Vec<GithubAsset>,
 }
 
@@ -77,7 +81,12 @@ async fn fetch_github_latest(client: &reqwest::Client) -> Option<(Version, Strin
 
     if resp.status().is_success() {
         let release = resp.json::<GithubRelease>().await.ok()?;
-        let version = parse_semver(&release.tag_name)?;
+        // `releases/latest` never answers a prerelease; a mirror or a changed
+        // API must not make a beta the "latest" that machines install.
+        if release.prerelease || release.draft {
+            return None;
+        }
+        let version = stable_version(&release.tag_name)?;
         let target_name = target_asset_name()?;
         let download_url = release
             .assets
@@ -87,6 +96,23 @@ async fn fetch_github_latest(client: &reqwest::Client) -> Option<(Version, Strin
         return Some((version, download_url));
     }
     None
+}
+
+/// The version of a stable release tag, `None` for a prerelease (`v1.2.3-beta.1`)
+/// or anything that is not a version. `parse_semver` keeps only the digits of
+/// `3-beta`, which would make a beta look like its stable release.
+pub fn stable_version(tag: &str) -> Option<Version> {
+    let tag = tag.trim().trim_start_matches('v');
+    if tag.contains(['-', '+']) {
+        return None;
+    }
+    parse_semver(tag)
+}
+
+/// Whether this binary is a prerelease build (`1.31.4-beta.1`), which never
+/// updates itself to a stable release behind its channel's back.
+pub fn current_is_prerelease() -> bool {
+    stable_version(env!("CARGO_PKG_VERSION")).is_none()
 }
 
 /// Extract formula version from raw Ruby formula content.
@@ -524,6 +550,15 @@ mod tests {
               sha256 "deadbeef1234"
         "#;
         assert_eq!(parse_formula_version(rb), Some((0, 9, 0)));
+    }
+
+    #[test]
+    fn a_prerelease_tag_is_not_a_stable_version() {
+        assert_eq!(stable_version("v1.31.4"), Some((1, 31, 4)));
+        assert_eq!(stable_version("1.31.4"), Some((1, 31, 4)));
+        assert_eq!(stable_version("v1.31.4-beta.1"), None);
+        assert_eq!(stable_version("v1.31.4+build.5"), None);
+        assert_eq!(stable_version("nightly"), None);
     }
 
     #[test]
