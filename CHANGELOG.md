@@ -1,3 +1,7 @@
+## [v1.31.3](https://github.com/LHagfoss/rustcode/releases/tag/v1.31.3) - 2026-11-12
+
+### Fixes
+- A thread waiting on background work says it will continue on its own when that work finishes. (#3576)
 ## [v1.31.2](https://github.com/LHagfoss/rustcode/releases/tag/v1.31.2) - 2026-11-12
 
 ### Fixes
