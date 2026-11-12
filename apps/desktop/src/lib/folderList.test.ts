@@ -259,6 +259,22 @@ describe("Windows folders", () => {
     ).toEqual([{ path: repo, name: "app" }]);
   });
 
+  test("one folder is one row with or without the extended-length prefix", () => {
+    const repo = "C:\\Users\\ada\\code\\app";
+    expect(folderRows([{ cwd: `\\\\?\\${repo}` }, { cwd: repo }])).toEqual([{ path: repo, name: "app" }]);
+  });
+
+  test("RustCode's own install folder is not a project", () => {
+    const repo = "C:\\Users\\ada\\code\\app";
+    expect(
+      folderRows([
+        { cwd: "\\\\?\\C:\\Users\\ada\\AppData\\Local\\RustCode" },
+        { cwd: "C:\\Users\\ada\\AppData\\Local\\RustCode" },
+        { cwd: repo },
+      ]),
+    ).toEqual([{ path: repo, name: "app" }]);
+  });
+
   test("nests AppData worktrees beneath their repo without worktree metadata", () => {
     const repo = "C:\\Users\\ada\\code\\app";
     const cut = "C:\\Users\\ada\\AppData\\Roaming\\rustcode\\worktrees\\app\\fix-folder";

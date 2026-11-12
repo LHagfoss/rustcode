@@ -23,6 +23,7 @@ import {
 import {
   connectionFor,
   createSession,
+  HOME_FOLDER,
   harnessesOn,
   loadMachineHarnesses,
   newThreadChoice,
@@ -166,7 +167,7 @@ describe("the default Run on", () => {
     startNewThread();
     expect(useApp.getState().newThreadHost).toBe(LOCAL_HOST);
     // Neither matched by remote nor trusted as this computer's: nothing, not the Studio's folder.
-    expect(useApp.getState().projectCwd).toBe("");
+    expect(useApp.getState().projectCwd).toBe(HOME_FOLDER);
   });
 
   test("a machine worktree folder from New Thread Here is not kept by a thread here", () => {
@@ -178,7 +179,7 @@ describe("the default Run on", () => {
     expect(useApp.getState().projectCwd).toBe(worktree);
     startNewThread();
     expect(useApp.getState().newThreadHost).toBe(LOCAL_HOST);
-    expect(useApp.getState().projectCwd).toBe("");
+    expect(useApp.getState().projectCwd).toBe(HOME_FOLDER);
   });
 
   test("a machine that does not answer rolls Run on back without its folder", async () => {

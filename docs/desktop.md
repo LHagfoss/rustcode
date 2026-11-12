@@ -194,7 +194,11 @@ there by path, then by git remote (`_meta.rustcode.remote`, normalized so
 `git@…` and `https://…` compare equal), then by folder name, and otherwise the
 composer offers that machine's most recent project and its other folders from
 its thread list ("Choose Folder…" stays this computer's, since no code here can
-browse a machine's disk). An engine that does not report a remote falls back to
+browse a machine's disk). The folder list shows each folder once, without
+Windows' `\\?\` prefix, and never RustCode's own data or install folder. With
+no folder chosen and none to go on, a new thread starts in that machine's home
+folder (the composer shows *Home folder*; `session/new` is sent no folder,
+which the engine resolves to its home). An engine that does not report a remote falls back to
 the folder name; the mock's Studio reports one. `session/new` is sent over the
 machine's connection with its folder and harness, and the thread is keyed with
 its host, so it appears in the list at once; a thread created
