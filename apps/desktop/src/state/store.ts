@@ -165,6 +165,7 @@ import {
   orchestrationCallDropped,
   queuedLinkDropped,
   reconcileLinks,
+  releaseLimitWaitsFrom,
   requeueUnreadSteers,
   resetWaits,
   restoreQueuedThreads,
@@ -3296,6 +3297,8 @@ export function setArchived(id: string, on: boolean) {
   } else delete archived[id];
   set({ archived });
   store(STORAGE.archived, JSON.stringify(archived));
+  // Delegates waiting out a usage limit for this thread stop waiting for it.
+  if (on) releaseLimitWaitsFrom(id);
 
   if (on && get().selectedId === id) startNewThread();
 }
@@ -4566,6 +4569,8 @@ export async function runPrompt(
       outcome,
       failure,
       get().threads[id]?.items.slice(startIndex) ?? [],
+      // Stopped on a limit or an overload again: the parent heard it once and waits for the end.
+      !!waiting,
     );
   // Every finished turn of a thread matters to a parent waiting on it: a middle thread's real
   // answer is the one after the work it started (state/host.ts threadTurnEnded).
@@ -7386,6 +7391,18 @@ function storeInternetWaits(next: Record<string, InternetWait>) {
 }
 
 /** The user's call, or something they did that makes the wait moot: no turn goes out for it. */
+/**
+ * A parent let go of a link a thread's wait holds (the user stopped or archived it): the wait keeps
+ * the links of other parents, and ends with the last one.
+ */
+export function releaseLimitWaitLink(thread: string, link: string) {
+  const wait = get().limitWaits[thread];
+  if (!wait) return;
+  const rest = (wait.links ?? []).filter((x) => x !== link);
+  if (rest.length) storeLimitWaits({ ...get().limitWaits, [thread]: { ...wait, links: rest } });
+  else dropLimitWait(thread);
+}
+
 export function dropLimitWait(id: string) {
   const { [id]: gone, ...rest } = get().limitWaits;
   if (gone) storeLimitWaits(rest);
@@ -7529,6 +7546,8 @@ function networkUp(): boolean {
 }
 
 let continuing = false;
+/** The threads a restart is about to resume (`resumeInterrupted`): their limit wait is that turn's to settle. */
+const resuming = new Set<string>();
 
 /** Each thread whose limit or overload has passed carries on, unless it now runs on something else. */
 export async function continueDueThreads(now = Date.now()): Promise<void> {
@@ -7540,6 +7559,8 @@ export async function continueDueThreads(now = Date.now()): Promise<void> {
         if (get().sessionsLoaded) dropLimitWait(id);
         continue;
       }
+      // A turn the restart cut short is sent its own resume, which ends this wait: never both.
+      if (resuming.has(id)) continue;
       const holds = () => {
         const s = get();
         return waitHolds(wait, { harness: harnessOf(s, id), account: accountOn(s, id) });
@@ -7710,6 +7731,17 @@ async function resumeInterrupted(ids: string[]): Promise<void> {
   lastRunning = "";
   if (!get().resumeAfterRestart || !ids.length) return;
   const known = new Set(get().sessions.map((x) => x.id));
+  // Marked before the first await: the limit waits are checked at the same moment, and a thread
+  // whose continue was cut short by the restart would otherwise be sent two turns.
+  for (const id of ids) if (known.has(id)) resuming.add(id);
+  try {
+    await resumeAll(ids, known);
+  } finally {
+    resuming.clear();
+  }
+}
+
+async function resumeAll(ids: string[], known: ReadonlySet<string>): Promise<void> {
   let started = 0;
   for (const id of ids) {
     if (started >= RESUME_MAX) break;

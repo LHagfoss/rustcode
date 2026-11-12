@@ -2140,8 +2140,35 @@ describe("a thread that carries on after a usage limit", () => {
     expect(reopened.answer).toBeUndefined();
     expect(reopened.error).toBeUndefined();
     expect(reopened.settledAt).toBeUndefined();
-    expect(reopened.notifiedAt).toBeUndefined();
+    // The parent heard the stop once: it is told again only when the thread settles for good.
+    expect(reopened.notifiedAt).toBe(3);
     expect(reopened.events?.at(-1)?.kind).toBe("working");
+  });
+
+  test("a link whose parent was archived or stopped is not reopened", () => {
+    const base = book([stopped("parent/1"), stopped("other/1", { orchestrator: "other", createdAt: 2 })]);
+    const after = reopenLinks(base, "child", ["parent/1", "other/1"], 9_000, (o) => o === "parent");
+    expect(after.links.map((l) => l.state)).toEqual(["failed", "working"]);
+  });
+
+  test("a reopened link is silent while it works or fails again heard, and wakes once settled for good", () => {
+    const wakes = (links: Link[]) =>
+      wakesDue(book(links), {
+        states: {},
+        pending: {},
+        waiting: {},
+        threads: {
+          parent: { title: "Parent", running: false },
+          child: { title: "Child", running: false },
+        },
+        now: 100_000,
+      }).length;
+    const reopened = reopenLinks(book([stopped("parent/1")]), "child", ["parent/1"], 9_000).links[0]!;
+    expect(wakes([reopened])).toBe(0);
+    // It fails on the limit again with a wait armed: settled, but still heard.
+    expect(wakes([{ ...reopened, state: "failed", settledAt: 10 }])).toBe(0);
+    // It settles for good (`linksFinished` without a wait): the parent is told.
+    expect(wakes([{ ...reopened, state: "done", settledAt: 10, notifiedAt: undefined }])).toBe(1);
   });
 
   test("a stopped link, a link to another thread and a newer link are left alone", () => {

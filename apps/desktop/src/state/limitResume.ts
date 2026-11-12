@@ -102,14 +102,15 @@ function wallClock(
 
 /** `2:50pm`, `3pm`, `14:50`, with `Nov 8, ` or `Nov 8 at ` before it. Null for anything else. */
 function parseReset(text: string, now: number, zone?: string): number | null {
-  const m = /^(?:([a-z]{3})[a-z]*\.?\s+(\d{1,2})(?:,|\s+at)?\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i.exec(
-    text.trim(),
-  );
+  const m =
+    /^(?:([a-z]{3})[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?(?:,|\s+at)?\s+(?:(\d{4}),?\s+(?:at\s+)?)?)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i.exec(
+      text.trim(),
+    );
   if (!m) return null;
-  const hour12 = Number(m[3]);
-  const minute = m[4] ? Number(m[4]) : 0;
-  const meridiem = m[5]?.toLowerCase();
-  if (minute > 59 || hour12 > 23 || (!meridiem && !m[4])) return null;
+  const hour12 = Number(m[4]);
+  const minute = m[5] ? Number(m[5]) : 0;
+  const meridiem = m[6]?.toLowerCase();
+  if (minute > 59 || hour12 > 23 || (!meridiem && !m[5])) return null;
   if (meridiem && (hour12 < 1 || hour12 > 12)) return null;
   const hour = meridiem ? (hour12 % 12) + (meridiem === "pm" ? 12 : 0) : hour12;
   let timeZone = zone;
@@ -124,12 +125,12 @@ function parseReset(text: string, now: number, zone?: string): number | null {
   if (m[1]) {
     const month = MONTHS.indexOf(m[1].toLowerCase()) + 1;
     if (!month) return null;
-    const dated = { year: today.year, month, day: Number(m[2]), hour, minute };
+    const dated = { year: m[3] ? Number(m[3]) : today.year, month, day: Number(m[2]), hour, minute };
     const at = wallClock(dated, timeZone);
     if (at > now) return at;
     return now - at < JUST_PASSED_MS
       ? now + RETRY_SOON_MS
-      : wallClock({ ...dated, year: today.year + 1 }, timeZone);
+      : wallClock({ ...dated, year: dated.year + 1 }, timeZone);
   }
   const at = wallClock({ year: today.year, month: today.month, day: today.day, hour, minute }, timeZone);
   if (at > now) return at;
@@ -182,7 +183,44 @@ function limitLines(text: string | undefined): string[] | null {
   });
 }
 
+// Codex: `You've hit your usage limit. Upgrade to Pro (…) to purchase more credits or try again at
+// 3:47 PM.`, or `… Try again in 3 days 2 hours 5 minutes.` The time is the machine's own clock.
+const SAYS_CODEX_LIMIT =
+  /^you(?:'|’)?ve hit your usage limit\b.{0,240}?\btry again (at|in) (.{1,60}?)\s*\.?$/i;
+// Gemini CLI: `You have exhausted your capacity on this model. Your quota will reset after 3h42m18s.`
+const SAYS_GEMINI_LIMIT =
+  /^(?:you have exhausted your capacity on this model\.?\s*)?your quota will reset after (.{1,60}?)\s*\.?$/i;
+const DURATION_UNIT_MS: Record<string, number> = {
+  d: 86_400_000,
+  h: 3_600_000,
+  m: 60_000,
+  s: 1_000,
+};
+
+/** `3h42m18s`, `54s`, `3 days 2 hours 5 minutes`, as milliseconds; null for anything else. */
+function parseDuration(text: string): number | null {
+  const unit = /(\d+(?:\.\d+)?)\s*(days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])/gi;
+  let total = 0;
+  const rest = text.replace(unit, (_, amount: string, name: string) => {
+    total += Number(amount) * DURATION_UNIT_MS[name[0]!.toLowerCase()]!;
+    return "";
+  });
+  return total > 0 && /^[\s,]*(?:and[\s,]*)*$/i.test(rest) ? Math.round(total) : null;
+}
+
 function lineReset(said: string, now: number, windows: readonly UsageWindow[]): number | null {
+  if (said.length > 300) return null;
+  const codex = SAYS_CODEX_LIMIT.exec(said);
+  if (codex) {
+    if (codex[1]!.toLowerCase() === "at") return parseReset(codex[2]!, now);
+    const wait = parseDuration(codex[2]!);
+    return wait === null ? null : now + wait;
+  }
+  const gemini = SAYS_GEMINI_LIMIT.exec(said);
+  if (gemini) {
+    const wait = parseDuration(gemini[1]!);
+    return wait === null ? null : now + wait;
+  }
   if (said.length > 200) return null;
   const stated = SAYS_RESET.exec(said);
   if (stated) return parseReset(stated[1]!, now, stated[2]);

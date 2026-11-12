@@ -5246,6 +5246,81 @@ describe("a turn that stopped on something other than a limit", () => {
     storage.done();
   });
 
+  /** A delegate whose first turn ended on the limit: its link failed, its wait is armed. */
+  const stoppedDelegate = async () => {
+    const ready = await readyWithFailingTurns();
+    const { transport, id } = ready;
+    const parent = useApp.getState().sessions.find((x) => x.id !== id)!.id;
+    const link: Link = {
+      id: `${parent}/1`,
+      orchestrator: parent,
+      target: id,
+      orchestratorTitle: "Parent",
+      targetTitle: "Child",
+      message: "do it",
+      state: "working",
+      createdAt: Date.now(),
+    };
+    useApp.setState({ links: { ...emptyBook(), links: [link], counters: { [parent]: 1 } } });
+    const linkOf = () => useApp.getState().links.links.find((l) => l.id === link.id)!;
+    transport.failure =
+      'Internal error: You\'ve hit your 5-hour limit · resets 2:40am (Europe/Oslo): {"errorKind":"rate_limit"}';
+    await runPrompt(id, "do the thing", undefined, { link: link.id });
+    return { ...ready, parent, link, linkOf };
+  };
+
+  test("a delegate that hits the limit again is not announced again until it settles", async () => {
+    const { continueDueThreads } = await import("./store");
+    const { storage, transport, id, linkOf, sent } = await stoppedDelegate();
+    // The parent heard the first stop.
+    useApp.setState((s) => ({
+      links: { ...s.links, links: s.links.links.map((l) => ({ ...l, notifiedAt: 123 })) },
+    }));
+    const due = () => {
+      const wait = useApp.getState().limitWaits[id]!;
+      useApp.setState({ limitWaits: { [id]: { ...wait, until: Date.now() - 3 * 86_400_000 } } });
+    };
+
+    // The retry hits the limit again: the link fails again, heard, and a second wait is armed.
+    due();
+    const turns = sent().length;
+    await continueDueThreads();
+    await until(() => sent().length > turns && linkOf().state === "failed");
+    expect(linkOf().notifiedAt).toBe(123);
+    expect(useApp.getState().limitWaits[id]).toMatchObject({ attempts: 2 });
+
+    // The next one gets through: the link settles and the parent is owed the answer.
+    transport.failure = null;
+    due();
+    const before = sent().length;
+    await continueDueThreads();
+    await until(() => sent().length > before);
+    await until(() => (useApp.getState().threads[id]?.permissions.length ?? 0) > 0);
+    const ask = useApp.getState().threads[id]!.permissions[0]!;
+    answerPermission(ask, ask.options.find((o) => o.kind === "allow_once")!);
+    await until(() => linkOf().state === "done", 4000);
+    expect(linkOf().notifiedAt).toBeUndefined();
+    storage.done();
+  });
+
+  test("stopping the parent lets go of a delegate's wait and its failed link", async () => {
+    const { stopLinksFrom } = await import("./host");
+    const { storage, id, parent, linkOf } = await stoppedDelegate();
+    expect(useApp.getState().limitWaits[id]?.links).toEqual([linkOf().id]);
+    await stopLinksFrom(parent);
+    expect(linkOf().state).toBe("cancelled");
+    expect(useApp.getState().limitWaits[id]).toBeUndefined();
+    storage.done();
+  });
+
+  test("archiving the parent lets go of them too", async () => {
+    const { storage, id, parent, linkOf } = await stoppedDelegate();
+    setArchived(parent, true);
+    expect(linkOf().state).toBe("cancelled");
+    expect(useApp.getState().limitWaits[id]).toBeUndefined();
+    storage.done();
+  });
+
   test("a harness's name in front of the limit still waits for the reset", async () => {
     const { storage, transport, id } = await readyWithFailingTurns();
     transport.failure = "Claude Code: You've hit your 5-hour limit · resets 2:40am (Europe/Oslo)";
