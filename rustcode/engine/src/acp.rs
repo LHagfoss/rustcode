@@ -3902,6 +3902,17 @@ async fn serve_connection(
                 let server = server.clone();
                 async move |request: PromptRequest, responder, connection| {
                     let session_id = request.session_id.to_string();
+                    // The access the client runs this thread at, kept where the
+                    // engine reads it with no app attached (orchestration/local_threads.rs).
+                    if let Some(access) = request
+                        .meta
+                        .as_ref()
+                        .and_then(|meta| meta.get("rustcode"))
+                        .and_then(|rustcode| rustcode.get("access"))
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        crate::config::save_session_access(&session_id, access);
+                    }
                     if let Some(external) = harnesses::get(&server.external, &session_id).await {
                         // The access level the client runs the thread at: a harness that
                         // sandboxes its own shell leaves the sandbox for Full access.

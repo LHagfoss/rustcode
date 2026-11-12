@@ -24,6 +24,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use rusqlite::limits::Limit;
@@ -830,6 +831,252 @@ fn kept_fan_outs(book: &serde_json::Map<String, Value>, links: &[Value]) -> Vec<
     out
 }
 
+// ------------------------------------------------- links the engine runs
+
+/// Links whose turn this process is running right now (`start_session`,
+/// `message_session` and `fan_out` with no app attached,
+/// `orchestration/local_threads.rs`). They carry `"engine": true` in the book,
+/// and while one is live the app's whole-book save cannot take it over: the
+/// app that attaches mid-turn did not start it and must not interrupt it.
+static ENGINE_LIVE: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+
+fn engine_live() -> std::sync::MutexGuard<'static, HashSet<String>> {
+    ENGINE_LIVE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
+/// This process now runs the turn `link` waits on.
+pub fn engine_link_started(link: &str) {
+    engine_live().insert(link.to_owned());
+}
+
+/// That turn ended (or could not start): the link is settled in the book.
+pub fn engine_link_ended(link: &str) {
+    engine_live().remove(link);
+}
+
+/// The links this process is running a turn for.
+pub fn engine_live_links() -> Vec<String> {
+    let mut live: Vec<String> = engine_live().iter().cloned().collect();
+    live.sort();
+    live
+}
+
+fn is_final_link(state: Option<&str>) -> bool {
+    matches!(state, Some("done" | "failed" | "cancelled"))
+}
+
+fn link_id(link: &Value) -> Option<&str> {
+    link.get("id").and_then(Value::as_str)
+}
+
+/// The app's whole-book save, kept from undoing what the engine wrote to a
+/// link it runs: a live one stays as the engine has it (the app's copy of it is
+/// from before the turn ended, or `interrupted` because the app attached
+/// mid-turn), and a settled one is not taken back to a state that is not
+/// final. A live link the app's copy lacks (it loaded the book before the
+/// engine opened the link) is kept too.
+fn protect_engine_links(
+    mut incoming: Vec<Value>,
+    stored: &[Value],
+    live: &HashSet<String>,
+) -> Vec<Value> {
+    for kept in stored {
+        let Some(id) = link_id(kept) else {
+            continue;
+        };
+        if kept.get("engine").and_then(Value::as_bool) != Some(true) {
+            continue;
+        }
+        let state = kept.get("state").and_then(Value::as_str);
+        let position = incoming.iter().position(|link| link_id(link) == Some(id));
+        match position {
+            Some(at) => {
+                let theirs = incoming[at].get("state").and_then(Value::as_str);
+                let settled_here = is_final_link(state) && !is_final_link(theirs);
+                if live.contains(id) || settled_here {
+                    incoming[at] = kept.clone();
+                }
+            }
+            None if live.contains(id) => incoming.push(kept.clone()),
+            None => {}
+        }
+    }
+    incoming
+}
+
+/// A counter only goes up: the larger of the app's and the store's, so a link
+/// id the engine opened is never handed out again.
+fn merge_counters(incoming: Option<&Value>, stored: &Value) -> Value {
+    let mut out = incoming
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if let Some(stored) = stored.as_object() {
+        for (who, count) in stored {
+            let theirs = out.get(who).and_then(Value::as_u64).unwrap_or(0);
+            let ours = count.as_u64().unwrap_or(0);
+            out.insert(who.clone(), json!(theirs.max(ours)));
+        }
+    }
+    Value::Object(out)
+}
+
+fn read_links(transaction: &Transaction<'_>) -> Result<Vec<Value>, String> {
+    let mut statement = transaction
+        .prepare_cached("SELECT body FROM thread_links ORDER BY started_at, id")
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?;
+    let mut links = Vec::new();
+    for body in rows {
+        let body = body.map_err(|error| error.to_string())?;
+        if let Some(link) = serde_json::from_str::<Value>(&body)
+            .ok()
+            .filter(Value::is_object)
+        {
+            links.push(link);
+        }
+    }
+    Ok(links)
+}
+
+fn read_state(transaction: &Transaction<'_>, key: &str) -> Result<Value, String> {
+    let body: Option<String> = transaction
+        .query_row(
+            "SELECT body FROM orchestration_state WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    Ok(body
+        .and_then(|body| serde_json::from_str::<Value>(&body).ok())
+        .unwrap_or_else(|| empty_state(key)))
+}
+
+fn write_state(transaction: &Transaction<'_>, key: &str, value: &Value) -> Result<(), String> {
+    transaction
+        .execute(
+            "INSERT OR REPLACE INTO orchestration_state (key, body) VALUES (?1, ?2)",
+            params![key, value.to_string()],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// One link's row, as `save_link_book_at` writes it.
+fn write_link(transaction: &Transaction<'_>, link: &Value) -> Result<(), String> {
+    let Some(id) = link_id(link) else {
+        return Err("a link needs an id".to_owned());
+    };
+    transaction
+        .execute(
+            "INSERT OR REPLACE INTO thread_links
+                (id, orchestrator, target, state, started_at, settled_at, harness, files_changed, body)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                id,
+                link.get("orchestrator").and_then(Value::as_str),
+                link.get("target").and_then(Value::as_str),
+                link.get("state").and_then(Value::as_str),
+                link.get("createdAt").and_then(Value::as_i64),
+                link.get("settledAt").and_then(Value::as_i64),
+                link.get("harness").and_then(Value::as_str),
+                link.get("filesChanged").and_then(Value::as_i64),
+                link.to_string(),
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn immediate(connection: &Connection) -> Result<Transaction<'_>, String> {
+    Transaction::new_unchecked(connection, TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())
+}
+
+/// Open a link for `orchestrator` in one transaction: take its next counter
+/// value, let `make` build the link from it, and add the link. Nothing but this
+/// link is written, so the app's links and grants are never read back and
+/// replaced.
+pub fn open_link(orchestrator: &str, make: impl FnOnce(u64) -> Value) -> Result<Value, String> {
+    let path = data_path().ok_or_else(|| "no config directory".to_owned())?;
+    open_link_at(&path, orchestrator, make)
+}
+
+/// [`open_link`] against one store file.
+pub fn open_link_at(
+    path: &Path,
+    orchestrator: &str,
+    make: impl FnOnce(u64) -> Value,
+) -> Result<Value, String> {
+    let connection = open(path)?;
+    let transaction = immediate(&connection)?;
+    let mut counters = read_state(&transaction, "counters")?;
+    let next = counters
+        .get(orchestrator)
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        + 1;
+    counters[orchestrator] = json!(next);
+    let link = make(next);
+    write_link(&transaction, &link)?;
+    write_state(&transaction, "counters", &counters)?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(link)
+}
+
+/// Change one link in place, in one transaction: `change` gets the stored link
+/// and answers the new one. False when no such link is stored.
+pub fn change_link(id: &str, change: impl FnOnce(Value) -> Value) -> Result<bool, String> {
+    let path = data_path().ok_or_else(|| "no config directory".to_owned())?;
+    change_link_at(&path, id, change)
+}
+
+/// [`change_link`] against one store file.
+pub fn change_link_at(
+    path: &Path,
+    id: &str,
+    change: impl FnOnce(Value) -> Value,
+) -> Result<bool, String> {
+    let connection = open(path)?;
+    let transaction = immediate(&connection)?;
+    let body: Option<String> = transaction
+        .query_row(
+            "SELECT body FROM thread_links WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let Some(link) = body
+        .and_then(|body| serde_json::from_str::<Value>(&body).ok())
+        .filter(Value::is_object)
+    else {
+        return Ok(false);
+    };
+    write_link(&transaction, &change(link))?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(true)
+}
+
+/// Add one fan-out group to the book, in one transaction.
+pub fn add_fan_out(group: Value) -> Result<(), String> {
+    let path = data_path().ok_or_else(|| "no config directory".to_owned())?;
+    let connection = open(&path)?;
+    let transaction = immediate(&connection)?;
+    let mut groups = read_state(&transaction, "fanOuts")?;
+    match groups.as_array_mut() {
+        Some(list) => list.push(group),
+        None => groups = json!([group]),
+    }
+    write_state(&transaction, "fanOuts", &groups)?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
 /// Saves the app's link book (`LinkBook` in `state/orchestration.ts`): the
 /// links in `thread_links`, grants, counters and fan-outs in
 /// `orchestration_state`. One transaction replaces the whole book, so a second
@@ -837,7 +1084,9 @@ fn kept_fan_outs(book: &serde_json::Map<String, Value>, links: &[Value]) -> Vec<
 /// whole record, so a field this release does not know survives a round trip.
 ///
 /// The book is bounded here, not trusted: the same kept links and fan-outs the
-/// app prunes to.
+/// app prunes to. And it is merged, not trusted blindly, with what the engine
+/// itself wrote (`protect_engine_links`, `merge_counters`): the app's copy of a
+/// link the engine runs, or of a counter the engine advanced, may be older.
 pub fn save_link_book(book: &Value) -> Result<(), String> {
     let path = data_path().ok_or_else(|| "no config directory".to_owned())?;
     save_link_book_at(&path, book)
@@ -848,61 +1097,64 @@ pub fn save_link_book_at(path: &Path, book: &Value) -> Result<(), String> {
     let object = book
         .as_object()
         .ok_or_else(|| "the link book must be a JSON object".to_owned())?;
-    let links = kept_links(
-        object
+    let connection = open(path)?;
+    // Read and replace under one write lock: the engine's own writes wait.
+    let transaction = immediate(&connection)?;
+    let stored_links = read_links(&transaction)?;
+    let stored_counters = read_state(&transaction, "counters")?;
+    let live = engine_live().clone();
+    let incoming = object
+        .get("links")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let protected = protect_engine_links(incoming, &stored_links, &live);
+    let links = kept_links(&protected);
+    let mut book_state = object.clone();
+    // A fan-out of a link the engine runs is kept with it.
+    let mut fan_outs: Vec<Value> = object
+        .get("fanOuts")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let stored_fan_outs = read_state(&transaction, "fanOuts")?;
+    for group in stored_fan_outs
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    {
+        let known = fan_outs
+            .iter()
+            .any(|seen| seen.get("id") == group.get("id"));
+        let runs_live = group
             .get("links")
             .and_then(Value::as_array)
-            .map(Vec::as_slice)
-            .unwrap_or_default(),
-    );
-    let fan_outs = kept_fan_outs(object, &links);
-    let connection = open(path)?;
-    let transaction = connection
-        .unchecked_transaction()
-        .map_err(|error| error.to_string())?;
+            .is_some_and(|ids| {
+                ids.iter()
+                    .filter_map(Value::as_str)
+                    .any(|id| live.contains(id))
+            });
+        if !known && runs_live {
+            fan_outs.push(group.clone());
+        }
+    }
+    book_state.insert("fanOuts".to_owned(), Value::Array(fan_outs));
+    let fan_outs = kept_fan_outs(&book_state, &links);
     transaction
         .execute("DELETE FROM thread_links", [])
         .map_err(|error| error.to_string())?;
-    {
-        let mut insert = transaction
-            .prepare_cached(
-                "INSERT OR REPLACE INTO thread_links
-                    (id, orchestrator, target, state, started_at, settled_at, harness, files_changed, body)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            )
-            .map_err(|error| error.to_string())?;
-        for link in &links {
-            let Some(id) = link.get("id").and_then(Value::as_str) else {
-                continue;
-            };
-            let body = link.to_string();
-            insert
-                .execute(params![
-                    id,
-                    link.get("orchestrator").and_then(Value::as_str),
-                    link.get("target").and_then(Value::as_str),
-                    link.get("state").and_then(Value::as_str),
-                    link.get("createdAt").and_then(Value::as_i64),
-                    link.get("settledAt").and_then(Value::as_i64),
-                    link.get("harness").and_then(Value::as_str),
-                    link.get("filesChanged").and_then(Value::as_i64),
-                    body,
-                ])
-                .map_err(|error| error.to_string())?;
+    for link in &links {
+        if link_id(link).is_some() {
+            write_link(&transaction, link)?;
         }
     }
     for key in BOOK_STATE_KEYS {
-        let value = if key == "fanOuts" {
-            Value::Array(fan_outs.clone())
-        } else {
-            object.get(key).cloned().unwrap_or_else(|| empty_state(key))
+        let value = match key {
+            "fanOuts" => Value::Array(fan_outs.clone()),
+            "counters" => merge_counters(object.get("counters"), &stored_counters),
+            _ => object.get(key).cloned().unwrap_or_else(|| empty_state(key)),
         };
-        transaction
-            .execute(
-                "INSERT OR REPLACE INTO orchestration_state (key, body) VALUES (?1, ?2)",
-                params![key, value.to_string()],
-            )
-            .map_err(|error| error.to_string())?;
+        write_state(&transaction, key, &value)?;
     }
     transaction.commit().map_err(|error| error.to_string())
 }
@@ -971,7 +1223,9 @@ pub fn load_link_book_at(path: &Path) -> Result<Value, String> {
             object.insert(key.to_owned(), value);
         }
     }
-    Ok(json!({ "stored": stored, "book": book }))
+    // The links this process runs a turn for: the app that loads the book must
+    // not take them for severed ones and interrupt them.
+    Ok(json!({ "stored": stored, "book": book, "engineLive": engine_live_links() }))
 }
 
 // ------------------------------------------------------------- command receipts
@@ -3807,6 +4061,122 @@ mod tests {
                 "createdAt": 1_762_000_000_000i64,
             }],
         })
+    }
+
+    fn engine_link(id: &str, orchestrator: &str, state: &str) -> Value {
+        json!({
+            "id": id,
+            "orchestrator": orchestrator,
+            "target": "delegate",
+            "state": state,
+            "engine": true,
+            "createdAt": 1_762_000_000_000i64,
+        })
+    }
+
+    #[test]
+    fn the_apps_save_cannot_undo_a_link_the_engine_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let caller = "caller-live-link";
+        let opened = open_link_at(&path, caller, |n| {
+            engine_link(&format!("{caller}/{n}"), caller, "working")
+        })
+        .unwrap();
+        let id = opened["id"].as_str().unwrap().to_owned();
+        assert_eq!(id, format!("{caller}/1"));
+        engine_link_started(&id);
+
+        // An app that attached mid-turn interrupts the link in its copy and
+        // saves a book that never saw the counter move.
+        let mut mine = engine_link(&id, caller, "interrupted");
+        mine["answer"] = json!("stale");
+        save_link_book_at(
+            &path,
+            &json!({ "links": [mine], "grants": {}, "counters": {}, "fanOuts": [] }),
+        )
+        .unwrap();
+        let loaded = load_link_book_at(&path).unwrap();
+        assert_eq!(loaded["book"]["links"][0]["state"], json!("working"));
+        assert!(loaded["book"]["links"][0].get("answer").is_none());
+        assert_eq!(loaded["book"]["counters"][caller], json!(1));
+
+        // A book saved before the engine opened the link keeps it too.
+        save_link_book_at(&path, &book_json()).unwrap();
+        let loaded = load_link_book_at(&path).unwrap();
+        let ids: Vec<&str> = loaded["book"]["links"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|link| link["id"].as_str())
+            .collect();
+        assert!(ids.contains(&id.as_str()), "{ids:?}");
+
+        // The turn ends: the engine settles the link, and the app's older
+        // copy no longer takes it back.
+        assert!(
+            change_link_at(&path, &id, |mut link| {
+                link["state"] = json!("done");
+                link["answer"] = json!("finished");
+                link
+            })
+            .unwrap()
+        );
+        engine_link_ended(&id);
+        save_link_book_at(
+            &path,
+            &json!({
+                "links": [engine_link(&id, caller, "interrupted")],
+                "grants": {}, "counters": {}, "fanOuts": [],
+            }),
+        )
+        .unwrap();
+        let loaded = load_link_book_at(&path).unwrap();
+        assert_eq!(loaded["book"]["links"][0]["state"], json!("done"));
+        assert_eq!(loaded["book"]["links"][0]["answer"], json!("finished"));
+    }
+
+    #[test]
+    fn a_link_the_engine_lost_to_a_restart_is_the_apps_to_interrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let caller = "caller-dead-engine";
+        open_link_at(&path, caller, |n| {
+            engine_link(&format!("{caller}/{n}"), caller, "working")
+        })
+        .unwrap();
+        // Never marked live in this process: its engine is gone.
+        save_link_book_at(
+            &path,
+            &json!({
+                "links": [engine_link(&format!("{caller}/1"), caller, "interrupted")],
+                "grants": {}, "counters": {}, "fanOuts": [],
+            }),
+        )
+        .unwrap();
+        let loaded = load_link_book_at(&path).unwrap();
+        assert_eq!(loaded["book"]["links"][0]["state"], json!("interrupted"));
+    }
+
+    #[test]
+    fn two_openers_never_share_a_link_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let first = open_link_at(&path, "same", |n| {
+            engine_link(&format!("same/{n}"), "same", "done")
+        })
+        .unwrap();
+        // The app saves a counter that is behind; the next id still moves on.
+        save_link_book_at(
+            &path,
+            &json!({ "links": [], "grants": {}, "counters": { "same": 0 }, "fanOuts": [] }),
+        )
+        .unwrap();
+        let second = open_link_at(&path, "same", |n| {
+            engine_link(&format!("same/{n}"), "same", "done")
+        })
+        .unwrap();
+        assert_ne!(first["id"], second["id"]);
     }
 
     #[test]

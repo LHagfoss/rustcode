@@ -328,14 +328,60 @@ export async function syncLinkBook(): Promise<void> {
     if (mine.links.length || Object.keys(mine.grants).length || mine.fanOuts.length) await flushSave();
     return;
   }
-  // Both copies are from before this connect: nothing left active resumes.
+  // Both copies are from before this connect: nothing left active resumes,
+  // except a link the engine itself is running the turn of. It started with no
+  // app attached and its turn goes on; the engine settles it in the store.
+  const engineLive = new Set(
+    Array.isArray(answer.engineLive)
+      ? answer.engineLive.filter((id): id is string => typeof id === "string")
+      : [],
+  );
   const now = Date.now();
-  const merged = interruptActive(mergeBooks(interruptActive(shared, now), book()), now);
+  const merged = interruptActive(
+    mergeBooks(interruptActive(shared, now, engineLive), book()),
+    now,
+    engineLive,
+  );
   useApp.setState({ links: prune(merged) });
   keepLocally(prune(merged));
-  savedText = text(interruptActive(shared, now));
+  savedText = text(interruptActive(shared, now, engineLive));
   // A link this window started while the store was answering is new to it.
-  if (text(prune(merged)) !== text(prune(interruptActive(shared, now)))) scheduleSave();
+  if (text(prune(merged)) !== text(prune(interruptActive(shared, now, engineLive)))) scheduleSave();
+  if (engineLive.size) watchEngineLinks();
+}
+
+/** How often the store is read for a link the engine runs, until it settles. */
+const ENGINE_LINK_CHECK_MS = 3000;
+let engineWatch: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * A link the engine runs the turn of settles in the store, not here: read the
+ * store while one is active, and take what settled (a settled record beats one
+ * that did not, as `mergeBooks` decides).
+ */
+function watchEngineLinks() {
+  if (engineWatch !== undefined) return;
+  const check = async () => {
+    engineWatch = undefined;
+    if (!book().links.some((l) => l.engine === true && isActive(l.state))) return;
+    try {
+      const answer = await request<JsonObject>(Method.dataLinksLoad, {}, 10_000);
+      const shared = parseBook(answer.book);
+      if (shared) {
+        const next = prune(mergeBooks(shared, book()));
+        if (text(next) !== text(book())) {
+          useApp.setState({ links: next });
+          keepLocally(next);
+        }
+      }
+    } catch (error) {
+      console.error("the link book was not read from the data store", error);
+    }
+    if (book().links.some((l) => l.engine === true && isActive(l.state))) {
+      engineWatch = setTimeout(check, ENGINE_LINK_CHECK_MS);
+    }
+  };
+  engineWatch = setTimeout(check, ENGINE_LINK_CHECK_MS);
 }
 
 function setBook(fn: (book: LinkBook) => LinkBook) {

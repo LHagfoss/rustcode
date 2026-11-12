@@ -337,13 +337,36 @@ What it does not do, and says so by name:
 - **Attachments.** `message_session` with `attachments` needs the app.
 - **A thread open elsewhere.** A thread open in another RustCode process is not
   opened a second time: the answer says to open the app or close it there.
-- **Per-thread access (known gap).** The access the engine reads for the caller
-  is its own `/yolo` flag, else Settings › General › Default access. A mode the
-  app narrowed one thread to (Ask under a Full default) is app-only state in
-  the app's store (`permissionModes`); the engine persists only the Full flag,
-  so such a thread is treated by the default. This applies to the Ask check on
-  reads (`list_sessions`, `read_session` refuse Ask) and to the Full check
-  above. Persisting the per-thread mode in the thread record would close it.
+- **Per-thread access.** The engine keeps the access each prompt carries
+  (`_meta.rustcode.access`: `ask`, `edits`, `full`) beside the thread
+  (`config::save_session_access`), and reads it for the caller and for a
+  message's target. Only a thread no client has prompted since this was kept
+  falls back to its own `/yolo` flag, else Settings › General › Default access
+  — and so a thread the app narrowed to Ask under a Full default can read as
+  Full until its next prompt. A missing or unknown setting reads as Ask.
+- **Targets run at their own access.** A `message_session` turn runs at the
+  target's access, never above it. A target at Ask is refused ("needs the
+  RustCode app open"): nobody is here to approve its tools. At Auto-edit the
+  turn runs, and a permission it asks for is denied; at Full it is allowed
+  once, never as a standing rule.
+- **Messaging rules.** As in the app: a thread cannot message itself, a
+  thread above it (a loop) or one another thread is already working with
+  (`target_linked`); a follow-up to a thread it already works with takes no
+  new slot; delegation is two levels deep. There is no queue without the app:
+  a message to a thread that is working is refused as `busy`, unless it
+  carries `steer: true`, which joins the running turn (if the steer is not
+  taken, nothing is sent as a new message either). `fan_out` takes 2 to 4
+  harnesses. Calls that open links run one at a time, so parallel calls cannot
+  overshoot the limits.
+- **Who owns the link.** A link the engine opens carries `engine: true`, and
+  the engine settles it in the store with a write of that link alone
+  (`data_store::open_link`, `change_link`), never a read-and-replace of the
+  whole book. While its turn runs, the app that attaches does not interrupt it
+  (`_rustcode/data/links/load` answers `engineLive`, and `syncLinkBook` skips
+  those), and the app's whole-book save cannot replace it or move a counter
+  back (`docs/data-store.md`). The app reads the store every few seconds while
+  one is active and takes what settled. If the engine dies mid-turn the link is
+  no longer live, and the next app that connects interrupts it like any other.
 
 Management and merge tools (`update_session`, `configure_session`,
 `transfer_session`, `interrupt_session`, `merge_when_green`, `cleanup_worktree`,

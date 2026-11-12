@@ -23,7 +23,7 @@
 //! access).
 
 use std::path::PathBuf;
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{
@@ -54,6 +54,14 @@ const MAX_DEPTH: usize = 2;
 const MAX_LINK_EVENTS: usize = 12;
 /// The preview a `message_session` answer carries.
 const PREVIEW_CHARS: usize = 200;
+
+/// The calls that open a link run one at a time, as the app's `withLinkGate`
+/// does: each checks the slots and only then records its link, so two calls
+/// arriving together would both see the same free slot.
+fn link_gate() -> &'static tokio::sync::Mutex<()> {
+    static GATE: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
+    &GATE
+}
 
 /// What a delegate is asked to end with, word for word as the app asks it.
 const DELEGATE_REPORT: &str = "When you finish, end with a short report for the orchestrator, at most about 12 lines: the outcome, the branch and pull request, the checks you ran and their result, and anything left open. No code, diffs or logs in it; it reads your thread if it needs more.";
@@ -95,6 +103,15 @@ enum Access {
 }
 
 impl Access {
+    /// The word a prompt's `_meta.rustcode.access` carries.
+    fn meta(self) -> &'static str {
+        match self {
+            Self::Ask => "ask",
+            Self::Edits => "edits",
+            Self::Full => "full",
+        }
+    }
+
     fn label(self) -> &'static str {
         match self {
             Self::Ask => "Ask",
@@ -104,11 +121,23 @@ impl Access {
     }
 }
 
-/// The access a thread runs at, from the record the engine keeps: its own
-/// `/yolo`, else Settings › General › Default access, which the app seeds into
-/// `settings.json`. A per-thread mode the app narrowed the thread to is
-/// app-only state the engine cannot read; `docs/orchestrator.md` says so.
+/// The access a thread runs at, from the records the engine keeps: the access
+/// of its last prompt (`config::save_session_access`), else its own `/yolo`,
+/// else Settings › General › Default access, which the app seeds into
+/// `settings.json`. A thread no client has prompted since the engine began
+/// keeping the access falls back to the last two, which is the gap
+/// `docs/orchestrator.md` names.
 fn access_of(session_id: &str) -> Access {
+    // What a client last ran the thread at: the app sends it with every
+    // prompt and the engine keeps it, so a thread narrowed to Ask under a Full
+    // default reads as Ask here too.
+    if let Some(saved) = crate::config::load_session_access(session_id) {
+        return match saved.as_str() {
+            "full" => Access::Full,
+            "edits" => Access::Edits,
+            _ => Access::Ask,
+        };
+    }
     let full = crate::config::load_session_yolo(session_id)
         .unwrap_or_else(|| crate::config::load_config().2.yolo);
     if full {
@@ -163,6 +192,80 @@ fn chain_refusal(caller: &str) -> bool {
     depth >= MAX_DEPTH
 }
 
+/// The links in the book that point at `target`, from any thread but `caller`,
+/// and the threads above `caller`: the app's `checkMessage` rules. A thread
+/// another one is working with is not messaged from a second one, and a thread
+/// that already works for the caller's own ancestors is not messaged by the
+/// ancestor's delegate (the loop).
+fn loop_or_linked(
+    caller: &str,
+    target: &str,
+    target_meta: &crate::config::SessionMeta,
+) -> Option<Value> {
+    let book = link_book();
+    let links = book
+        .get("links")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let field = |link: &Value, key: &str| link.get(key).and_then(Value::as_str).map(str::to_owned);
+    // Everything above the caller: who started it, by the link book and by the
+    // thread's own record.
+    let mut above: Vec<String> = Vec::new();
+    let mut frontier = vec![caller.to_owned()];
+    while let Some(current) = frontier.pop() {
+        let mut parents: Vec<String> = links
+            .iter()
+            .filter(|link| field(link, "target").as_deref() == Some(current.as_str()))
+            .filter_map(|link| field(link, "orchestrator"))
+            .collect();
+        if let Some(parent) =
+            crate::config::load_session_parent(&current).and_then(|parent| parent.id)
+        {
+            parents.push(parent);
+        }
+        for parent in parents {
+            if !above.contains(&parent) && above.len() < 64 {
+                above.push(parent.clone());
+                frontier.push(parent);
+            }
+        }
+    }
+    if above.iter().any(|ancestor| ancestor == target) {
+        let name = crate::config::load_session_title(target)
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| target_meta.title.clone());
+        return Some(not_allowed(format!(
+            "“{name}” already works for this thread: messaging it would close a loop"
+        )));
+    }
+    let linked = links.iter().any(|link| {
+        field(link, "target").as_deref() == Some(target)
+            && field(link, "orchestrator").as_deref() != Some(caller)
+            && is_active(link.get("state").and_then(Value::as_str).unwrap_or(""))
+    });
+    linked.then(|| {
+        error(
+            "target_linked",
+            "another thread is already working with that one",
+        )
+    })
+}
+
+/// Whether `caller` has a live link to `target` already.
+fn has_active_link(caller: &str, target: &str) -> bool {
+    link_book()
+        .get("links")
+        .and_then(Value::as_array)
+        .is_some_and(|links| {
+            links.iter().any(|link| {
+                link.get("orchestrator").and_then(Value::as_str) == Some(caller)
+                    && link.get("target").and_then(Value::as_str) == Some(target)
+                    && is_active(link.get("state").and_then(Value::as_str).unwrap_or(""))
+            })
+        })
+}
+
 // ------------------------------------------------------------ the calls
 
 /// One thread this call starts.
@@ -202,6 +305,7 @@ pub(crate) async fn start(caller: &str, args: &Value) -> Value {
     if let Err(refusal) = delegation(caller, "start_session") {
         return refusal;
     }
+    let _gate = link_gate().lock().await;
     match start_one(caller, &ask_of(args)).await {
         Ok(answer) => answer,
         Err(refusal) => refusal,
@@ -224,7 +328,19 @@ pub(crate) async fn fan_out(caller: &str, args: &Value) -> Value {
     let Some(entries) = args.get("harnesses").and_then(Value::as_array) else {
         return error("invalid", "harnesses is required");
     };
+    if !(super::MIN_FAN_OUT..=super::MAX_FAN_OUT).contains(&entries.len()) {
+        return error(
+            "invalid",
+            format!(
+                "fan_out takes {} to {} harnesses, and this call names {}; use start_session for one",
+                super::MIN_FAN_OUT,
+                super::MAX_FAN_OUT,
+                entries.len()
+            ),
+        );
+    }
     let base = ask_of(args);
+    let _gate = link_gate().lock().await;
     if let Some(refusal) = slot_refusal(caller, entries.len() as u64) {
         return refusal;
     }
@@ -343,7 +459,7 @@ async fn start_one(caller: &str, ask: &Ask<'_>) -> Result<Value, Value> {
         _ => {}
     }
 
-    let engine = Engine::open().await?;
+    let engine = Engine::open(Access::Full).await?;
     let mut request = NewSessionRequest::new(PathBuf::from(&project));
     request.meta = Some(Map::from_iter([(
         "rustcode".to_owned(),
@@ -447,6 +563,22 @@ pub(crate) async fn message(caller: &str, args: &Value) -> Value {
             "that thread is in another project, and one this thread did not start; messaging across projects is off. Turn on “Let agents read threads in other projects” in Settings › Harnesses, or open the RustCode app to approve it. Nothing was sent.",
         );
     }
+    // The message runs a turn on the target at the target's own access, never
+    // above it. At Ask nobody is here to approve its tools.
+    let target_access = access_of(target);
+    if target_access == Access::Ask {
+        return needs_app(
+            "message_session to a thread that runs at Ask (its turn would stop at every tool)",
+        );
+    }
+    if chain_refusal(caller) {
+        return not_allowed(format!(
+            "delegation goes {MAX_DEPTH} levels deep; this thread is at the bottom of one and cannot message another"
+        ));
+    }
+    if let Some(refusal) = loop_or_linked(caller, target, &meta) {
+        return refusal;
+    }
     let caller_title = crate::config::load_session_title(caller).unwrap_or_default();
     let text = args.get("message").and_then(Value::as_str).unwrap_or("");
 
@@ -461,7 +593,7 @@ pub(crate) async fn message(caller: &str, args: &Value) -> Value {
         ));
     }
 
-    let engine = match Engine::open().await {
+    let engine = match Engine::open(target_access).await {
         Ok(engine) => engine,
         Err(refusal) => return refusal,
     };
@@ -480,14 +612,36 @@ pub(crate) async fn message(caller: &str, args: &Value) -> Value {
             "that thread could not be opened in this engine without the app ({message}); open the RustCode app and retry. Nothing was sent."
         ));
     }
-    if args.get("steer").and_then(Value::as_bool) == Some(true)
-        && engine.steer(target, text).await == Ok(true)
-    {
-        // A steer joins the turn already running: the app makes no new link
-        // for it, and the one the caller already waits on settles with it.
-        return json!({ "session_id": target, "steered": true });
+    // One turn at a time: with no queue here, a message to a thread that is
+    // working joins its turn (`steer`) or is refused, never started beside it.
+    if crate::thread_status::is_running(target) {
+        if args.get("steer").and_then(Value::as_bool) == Some(true) {
+            return match engine.steer(target, text).await {
+                // A steer joins the turn already running: the app makes no new
+                // link for it, and the one the caller already waits on settles with it.
+                Ok(true) => json!({ "session_id": target, "steered": true }),
+                Ok(false) => error(
+                    "busy",
+                    "that thread's turn did not take a steer (it may be waiting on the user); wait_session on it, or retry. Nothing was sent.",
+                ),
+                Err(reason) => error(
+                    "busy",
+                    format!(
+                        "the steer did not reach that thread's turn ({reason}); it was not sent as a new message either. Retry."
+                    ),
+                ),
+            };
+        }
+        return error(
+            "busy",
+            "that thread is working on a turn; send the message with steer true to join it, or wait_session on it first. Nothing was sent.",
+        );
     }
-    if let Some(refusal) = slot_refusal(caller, 1) {
+    let _gate = link_gate().lock().await;
+    // A follow-up to a thread this one already works with takes no new slot.
+    if !has_active_link(caller, target)
+        && let Some(refusal) = slot_refusal(caller, 1)
+    {
         return refusal;
     }
     let harness = crate::harness::store::load(target)
@@ -570,6 +724,8 @@ fn settle(link: &str, target: &str, outcome: Result<StopReason, String>) {
         }),
     };
     update_link(link, change);
+    // The turn is over and the book says so: the app owns the link again.
+    crate::data_store::engine_link_ended(link);
 }
 
 fn worked_ms(link: &str, at: i64) -> i64 {
@@ -593,13 +749,6 @@ fn is_active(state: &str) -> bool {
     matches!(state, "queued" | "working" | "needs_user")
 }
 
-/// The link book is read and written under one lock, so two turns that finish
-/// at once cannot lose each other's link.
-fn book_lock() -> &'static Mutex<()> {
-    static LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-    &LOCK
-}
-
 fn empty_book() -> Value {
     json!({ "links": [], "grants": {}, "counters": {}, "fanOuts": [] })
 }
@@ -613,27 +762,16 @@ fn link_book() -> Value {
         .unwrap_or_else(empty_book)
 }
 
-fn save_book(book: &Value) -> Result<(), String> {
-    crate::data_store::save_link_book(book)
-}
-
+/// Change one link in the store, in one transaction of its own: the engine
+/// never reads the whole book and writes it back, so it cannot undo what the
+/// app saved meanwhile, and the app's whole-book save cannot undo this
+/// (`data_store::save_link_book`).
 fn update_link(id: &str, change: Value) {
-    let _guard = book_lock()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let mut book = link_book();
-    let Some(links) = book.get_mut("links").and_then(Value::as_array_mut) else {
-        return;
-    };
-    let Some(row) = links
-        .iter_mut()
-        .find(|row| row.get("id").and_then(Value::as_str) == Some(id))
-    else {
-        return;
-    };
-    *row = link_after(row.clone(), &change, now());
-    if let Err(reason) = save_book(&book) {
-        crate::dbg_log!("local orchestration: the link book was not saved: {reason}");
+    let at = now();
+    match crate::data_store::change_link(id, |link| link_after(link, &change, at)) {
+        Ok(true) => {}
+        Ok(false) => crate::dbg_log!("local orchestration: link {id} is no longer in the book"),
+        Err(reason) => crate::dbg_log!("local orchestration: link {id} was not saved: {reason}"),
     }
 }
 
@@ -695,7 +833,9 @@ fn note_event(link: &mut Value, kind: &str, at: i64, detail: Option<String>) {
     link["events"] = Value::Array(events);
 }
 
-/// Record a link to `target` in the app's book and answer its id.
+/// Record a link to `target` in the app's book and answer its id. The link
+/// carries `"engine": true` and is live in this process until its turn ends:
+/// an app that attaches meanwhile neither interrupts it nor saves over it.
 #[allow(clippy::too_many_arguments)]
 fn record_link(
     caller: &str,
@@ -710,64 +850,60 @@ fn record_link(
     fan_out: Option<&str>,
     started: bool,
 ) -> Result<String, String> {
-    let _guard = book_lock()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let mut book = link_book();
     let at = now();
-    let counter = book
-        .get("counters")
-        .and_then(|counters| counters.get(caller))
-        .and_then(Value::as_u64)
-        .unwrap_or(0)
-        + 1;
-    book["counters"][caller] = json!(counter);
-    let id = format!("{caller}/{counter}");
-    let mut link = json!({
-        "id": id,
-        "orchestrator": caller,
-        "target": target,
-        "orchestratorTitle": caller_title,
-        "targetTitle": target_title,
-        "message": message,
-        "state": "working",
-        "started": started,
-        "harness": harness,
-        "harnessName": harness_name,
-        "createdAt": at,
-        "startedAt": at,
-    });
-    if let Some(model) = model {
-        link["model"] = json!(model);
-    }
-    if let Some(account) = account {
-        link["account"] = json!(account);
-    }
-    if let Some(fan_out) = fan_out {
-        link["fanOut"] = json!(fan_out);
-    }
-    let meta = [harness_name, model.unwrap_or("")]
-        .iter()
-        .filter(|part| !part.is_empty())
-        .copied()
-        .collect::<Vec<_>>()
-        .join(" · ");
-    let kind = if started { "started" } else { "message" };
-    note_event(&mut link, kind, at, (!meta.is_empty()).then_some(meta));
-    note_event(&mut link, "working", at, None);
-    let Some(links) = book.get_mut("links").and_then(Value::as_array_mut) else {
-        return Err("the link book is not readable".to_owned());
-    };
-    links.push(link);
-    save_book(&book)?;
-    Ok(id)
+    let marked = std::cell::RefCell::new(None::<String>);
+    let link = crate::data_store::open_link(caller, |counter| {
+        let id = format!("{caller}/{counter}");
+        let mut link = json!({
+            "id": id,
+            "orchestrator": caller,
+            "target": target,
+            "orchestratorTitle": caller_title,
+            "targetTitle": target_title,
+            "message": message,
+            "state": "working",
+            "started": started,
+            "engine": true,
+            "harness": harness,
+            "harnessName": harness_name,
+            "createdAt": at,
+            "startedAt": at,
+        });
+        if let Some(model) = model {
+            link["model"] = json!(model);
+        }
+        if let Some(account) = account {
+            link["account"] = json!(account);
+        }
+        if let Some(fan_out) = fan_out {
+            link["fanOut"] = json!(fan_out);
+        }
+        let meta = [harness_name, model.unwrap_or("")]
+            .iter()
+            .filter(|part| !part.is_empty())
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" · ");
+        let kind = if started { "started" } else { "message" };
+        note_event(&mut link, kind, at, (!meta.is_empty()).then_some(meta));
+        note_event(&mut link, "working", at, None);
+        // Live before it is stored, so no save of the book can see it unowned.
+        crate::data_store::engine_link_started(&id);
+        *marked.borrow_mut() = Some(id);
+        link
+    })
+    .inspect_err(|_| {
+        if let Some(id) = marked.borrow().as_deref() {
+            crate::data_store::engine_link_ended(id);
+        }
+    })?;
+    link.get("id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| "the link has no id".to_owned())
 }
 
 fn record_fan_out(caller: &str, fan_id: &str, title: &str, prompt: &str, links: &[String]) {
-    let _guard = book_lock()
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let mut book = link_book();
     let group = json!({
         "id": fan_id,
         "orchestrator": caller,
@@ -776,11 +912,7 @@ fn record_fan_out(caller: &str, fan_id: &str, title: &str, prompt: &str, links: 
         "links": links,
         "createdAt": now(),
     });
-    match book.get_mut("fanOuts").and_then(Value::as_array_mut) {
-        Some(groups) => groups.push(group),
-        None => book["fanOuts"] = json!([group]),
-    }
-    if let Err(reason) = save_book(&book) {
+    if let Err(reason) = crate::data_store::add_fan_out(group) {
         crate::dbg_log!("local orchestration: the fan-out was not saved: {reason}");
     }
 }
@@ -1058,6 +1190,8 @@ fn endpoint() -> Result<String, Value> {
 /// A connection to this engine's own ACP endpoint: what the app would use.
 struct Engine {
     connection: ConnectionTo<Agent>,
+    /// The access its turns run at, which decides how it answers a permission.
+    access: Access,
     close: Option<oneshot::Sender<()>>,
 }
 
@@ -1070,7 +1204,7 @@ impl Drop for Engine {
 }
 
 impl Engine {
-    async fn open() -> Result<Self, Value> {
+    async fn open(access: Access) -> Result<Self, Value> {
         let endpoint = endpoint()?;
         let stream =
             tokio::time::timeout(CONNECT_TIMEOUT, crate::server::listen::connect(&endpoint))
@@ -1094,7 +1228,7 @@ impl Engine {
                 .builder()
                 .on_receive_request(
                     async |request: RequestPermissionRequest, responder, _connection| {
-                        responder.respond(answer_permission(&request))
+                        responder.respond(answer_permission(&request, access))
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
@@ -1122,6 +1256,7 @@ impl Engine {
             .map_err(|_| unavailable("the engine's local endpoint closed while connecting"))?;
         let engine = Self {
             connection,
+            access,
             close: Some(close),
         };
         engine
@@ -1174,7 +1309,7 @@ impl Engine {
         )
         .meta(Map::from_iter([(
             "rustcode".to_owned(),
-            json!({ "access": "full" }),
+            json!({ "access": self.access.meta() }),
         )]));
         match self.connection.send_request(request).block_task().await {
             Ok(response) => Ok(response.stop_reason),
@@ -1183,10 +1318,15 @@ impl Engine {
     }
 }
 
-/// The answer to a permission request as Full access gives it: allow, and
-/// name the option. A question (`ask_question`) is the model asking the user,
-/// so it is cancelled instead of answered in the user's place.
-fn answer_permission(request: &RequestPermissionRequest) -> RequestPermissionResponse {
+/// The answer to a permission request with nobody to ask. At Full access it
+/// allows (once, never "always": nothing here may add a standing rule to the
+/// user's settings); at any lower access it denies, because Full is the only
+/// level that would not have asked. A question (`ask_question`) is the model
+/// asking the user, so it is cancelled instead of answered in the user's place.
+fn answer_permission(
+    request: &RequestPermissionRequest,
+    access: Access,
+) -> RequestPermissionResponse {
     use agent_client_protocol::schema::v1::PermissionOptionKind;
     let is_question = request
         .meta
@@ -1198,16 +1338,13 @@ fn answer_permission(request: &RequestPermissionRequest) -> RequestPermissionRes
     if is_question {
         return RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled);
     }
-    let option = request
-        .options
-        .iter()
-        .find(|option| option.kind == PermissionOptionKind::AllowAlways)
-        .or_else(|| {
-            request
-                .options
-                .iter()
-                .find(|option| option.kind == PermissionOptionKind::AllowOnce)
-        });
+    let find =
+        |kind: PermissionOptionKind| request.options.iter().find(|option| option.kind == kind);
+    let option = if access == Access::Full {
+        find(PermissionOptionKind::AllowOnce).or_else(|| find(PermissionOptionKind::AllowAlways))
+    } else {
+        find(PermissionOptionKind::RejectOnce)
+    };
     match option {
         Some(option) => RequestPermissionResponse::new(RequestPermissionOutcome::Selected(
             SelectedPermissionOutcome::new(option.option_id.clone()),
@@ -1522,6 +1659,55 @@ mod tests {
             crate::config::get_active_session_dir(&caller).map(|dir| std::fs::remove_dir_all(dir));
     }
 
+    #[tokio::test]
+    async fn a_message_to_a_thread_that_runs_at_ask_is_refused_not_raised_to_full() {
+        let mine = tempfile::tempdir().unwrap();
+        let caller = test_thread(mine.path());
+        crate::config::save_session_yolo(&caller, true);
+        let target = test_thread(mine.path());
+        // The app's last prompt to the target said Ask, whatever the default is.
+        crate::config::save_session_access(&target, "ask");
+        assert_eq!(access_of(&target), Access::Ask);
+        let before = link_book()["links"].as_array().map(Vec::len);
+        let answer = message(&caller, &json!({"session_id": target, "message": "hi"})).await;
+        assert_eq!(answer["error"]["code"], json!("unavailable"), "{answer}");
+        assert!(
+            answer["error"]["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("Ask"),
+            "{answer}"
+        );
+        assert_eq!(link_book()["links"].as_array().map(Vec::len), before);
+        for id in [&caller, &target] {
+            let _ =
+                crate::config::get_active_session_dir(id).map(|dir| std::fs::remove_dir_all(dir));
+        }
+    }
+
+    #[test]
+    fn a_permission_is_allowed_once_at_full_and_denied_below() {
+        use agent_client_protocol::schema::v1::{
+            PermissionOption, PermissionOptionKind, ToolCallUpdate, ToolCallUpdateFields,
+        };
+        let request = RequestPermissionRequest::new(
+            "s",
+            ToolCallUpdate::new("t", ToolCallUpdateFields::new()),
+            vec![
+                PermissionOption::new("always", "always", PermissionOptionKind::AllowAlways),
+                PermissionOption::new("once", "once", PermissionOptionKind::AllowOnce),
+                PermissionOption::new("no", "no", PermissionOptionKind::RejectOnce),
+            ],
+        );
+        let chosen = |access| match answer_permission(&request, access).outcome {
+            RequestPermissionOutcome::Selected(selected) => selected.option_id.to_string(),
+            other => format!("{other:?}"),
+        };
+        assert_eq!(chosen(Access::Full), "once");
+        assert_eq!(chosen(Access::Edits), "no");
+        assert_eq!(chosen(Access::Ask), "no");
+    }
+
     #[test]
     fn a_finished_link_is_not_counted_against_the_slots() {
         let book = json!({
@@ -1599,11 +1785,11 @@ mod tests {
             json!({ "kind": "question" }),
         )]));
         assert_eq!(
-            answer_permission(&question).outcome,
+            answer_permission(&question, Access::Full).outcome,
             RequestPermissionOutcome::Cancelled
         );
         assert!(matches!(
-            answer_permission(&request).outcome,
+            answer_permission(&request, Access::Full).outcome,
             RequestPermissionOutcome::Selected(_)
         ));
     }
