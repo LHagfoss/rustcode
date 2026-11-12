@@ -773,21 +773,34 @@ async fn racing_routes_present_the_refresh_token_once() {
 }
 
 /// The app, a CLI run and the server each hold a token store and a connector
-/// of their own. Refreshing at the same moment, the second waits for the first
-/// and presents the token it stored, instead of replaying the one they both
-/// read and revoking the pairing (B4).
+/// of their own. The CLI read the refresh token before the app rotated and
+/// acknowledged it; presenting that token now would be a replay that revokes
+/// the pairing (B4). Under the presentation lock it reads the store again and
+/// presents the token the app stored.
 #[tokio::test]
-async fn two_processes_refreshing_at_once_do_not_replay_each_other() {
+async fn two_processes_refreshing_do_not_replay_each_other() {
     let host = Host::start().await;
     let config = tempfile::tempdir_in("/tmp").unwrap();
     let app = Connector::new(config.path(), ClientKind::Desktop).unwrap();
     let (machine, app_tokens, paired) = pair(&host, &app, config.path()).await;
     drop(paired);
-    // Opened after the pairing, as a CLI run is: it read the same refresh token.
     let cli = Connector::new(config.path(), ClientKind::Cli).unwrap();
-    let cli_tokens = TokenStore::in_file(config.path()).unwrap();
-    for _ in 0..4 {
-        // No access token on either side: each presents the refresh token.
+    for _ in 0..3 {
+        // Opened now, as a CLI run is: it holds the token stored so far.
+        let cli_tokens = TokenStore::in_file(config.path()).unwrap();
+        // The app refreshes, stores and acknowledges first.
+        app_tokens.forget_access(&machine.host_id);
+        drop(
+            app.connect(&machine, &app_tokens)
+                .await
+                .expect("the app connects"),
+        );
+        drop(
+            cli.connect(&machine, &cli_tokens)
+                .await
+                .expect("the CLI connects with the token the app stored"),
+        );
+        // And both at once.
         app_tokens.forget_access(&machine.host_id);
         cli_tokens.forget_access(&machine.host_id);
         let (from_app, from_cli) = tokio::join!(
@@ -795,7 +808,7 @@ async fn two_processes_refreshing_at_once_do_not_replay_each_other() {
             cli.connect(&machine, &cli_tokens),
         );
         drop(from_app.expect("the app connects"));
-        drop(from_cli.expect("the CLI connects, with the token the app stored"));
+        drop(from_cli.expect("the CLI connects"));
     }
     // A replay would have removed the pairing at the machine.
     assert_eq!(host.lifecycle.devices().unwrap().len(), 1);
