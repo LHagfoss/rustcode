@@ -21,6 +21,11 @@ export interface LimitWait {
   attempts: number;
   /** What stopped the turn; absent is a limit (a wait saved before overloads existed). */
   reason?: StopReason;
+  /**
+   * The links (a parent's delegations) the stopped turn answered: the stop settled them as failed,
+   * and the turn that continues reopens them and answers again.
+   */
+  links?: string[];
 }
 
 /** What the thread is told when it continues. */
@@ -141,8 +146,45 @@ export function limitReset(
   now: number,
   windows: readonly UsageWindow[] = [],
 ): number | null {
+  const lines = limitLines(text);
+  if (!lines) return null;
+  // A message of several paragraphs says one thing when each paragraph says the same limit.
+  let reset: number | null = null;
+  for (const line of lines) {
+    const at = lineReset(line, now, windows);
+    if (at === null) return null;
+    reset = reset === null ? at : Math.max(reset, at);
+  }
+  return reset;
+}
+
+// What a harness wraps a limit in: `Internal error: <the limit>: {"errorKind":"rate_limit"}`, or its name.
+const ERROR_PREFIX =
+  /^(?:internal error|error|claude code|codex|gemini(?: cli)?|opencode|pi|rustcode)\s*:\s*/i;
+const JSON_TAIL = /\s*:?\s*\{[^{}\n]*\}$/;
+
+/**
+ * The lines of a message that is only a usage limit, said once or more: each line with the
+ * `Internal error:` prefix and the JSON tail of an error taken off. Null for anything with a
+ * line that says something else, so a reply that talks about limits never matches.
+ */
+function limitLines(text: string | undefined): string[] | null {
   const said = text?.trim();
-  if (!said || said.length > 200) return null;
+  if (!said || said.length > 2_000) return null;
+  const lines = said
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length || lines.length > 6) return null;
+  return lines.map((line) => {
+    const unwrapped = line.replace(ERROR_PREFIX, "").replace(ERROR_PREFIX, "");
+    // The tail goes only from a line that is an error: a plain reply keeps every word it said.
+    return unwrapped === line ? line : unwrapped.replace(JSON_TAIL, "").trim();
+  });
+}
+
+function lineReset(said: string, now: number, windows: readonly UsageWindow[]): number | null {
+  if (said.length > 200) return null;
   const stated = SAYS_RESET.exec(said);
   if (stated) return parseReset(stated[1]!, now, stated[2]);
   if (!SAYS_ONLY_LIMIT.test(said)) return null;

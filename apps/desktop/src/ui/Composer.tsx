@@ -1813,7 +1813,7 @@ function LimitWaitRow({ threadId }: { threadId: string }) {
     : wait?.reason === "overload"
       ? `The provider was overloaded — trying again at ${limitTime(wait.until)}`
       : wait
-        ? `Continues when the limit resets, at ${limitTime(wait.until)}`
+        ? `Waiting for the limit to reset (${limitTime(wait.until)})`
         : "";
   return (
     <div className="flex items-center gap-1.5 px-5 pt-2 text-caption text-fg-muted">

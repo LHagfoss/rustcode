@@ -63,6 +63,32 @@ describe("a turn that ended on a limit", () => {
     }
   });
 
+  test("reads the limit Claude Code ended five delegates on, as the answer and as the error", () => {
+    // 2026-11-12 00:30 in Oslo; the reset is 02:40 the same night (UTC+1).
+    const night = Date.UTC(2026, 10, 11, 23, 30);
+    const reset = Date.UTC(2026, 10, 12, 1, 40);
+    const said = "You've hit your 5-hour limit · resets 2:40am (Europe/Oslo)";
+    const error = `Internal error: ${said}: {"errorKind":"rate_limit"}`;
+    expect(limitReset(said, night)).toBe(reset);
+    // The error a failed turn carries.
+    expect(limitReset(error, night)).toBe(reset);
+    // Both paragraphs, as the link's answer shows them.
+    expect(limitReset(`${said}\n\n${error}`, night)).toBe(reset);
+    // The engine's reason without its generic prefix still has the JSON tail.
+    expect(limitReset(`${said}: {"errorKind":"rate_limit"}`, night)).toBe(reset);
+  });
+
+  test("a multi-paragraph reply that says anything else is not a limit", () => {
+    const said = "You've hit your 5-hour limit · resets 2:40am (Europe/Oslo)";
+    for (const text of [
+      `${said}\n\nInternal error: the disk is full: {"errorKind":"io"}`,
+      `Here is what I did.\n\n${said}`,
+      `Internal error: Done. The tests pass: {"errorKind":"rate_limit"}`,
+    ]) {
+      expect(limitReset(text, NOW)).toBeNull();
+    }
+  });
+
   test("a limit with no time takes the latest full window of the plan", () => {
     const windows = [
       { usedPercent: 100, resetsAt: NOW + 1000 },

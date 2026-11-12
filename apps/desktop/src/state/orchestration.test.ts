@@ -68,6 +68,7 @@ import {
   type RuleThread,
   reachesThread,
   renderRead,
+  reopenLinks,
   restateLinks,
   STALL_NOTICE_MS,
   sameProject,
@@ -2111,5 +2112,43 @@ describe("keeping an orchestrator's context small", () => {
   test("waits twenty minutes when no timeout is given", () => {
     const call = parseCall({ tool: "wait_session", args: { link_id: "a/1" } });
     expect(call).toMatchObject({ tool: "wait_session", timeoutMs: 20 * 60 * 1000 });
+  });
+});
+
+describe("a thread that carries on after a usage limit", () => {
+  const stopped = (id: string, over: Partial<Link> = {}): Link => ({
+    ...link("parent", "child", "failed"),
+    id,
+    createdAt: 1,
+    answer: "You've hit your 5-hour limit · resets 2:40am (Europe/Oslo)",
+    error: `Internal error: You've hit your 5-hour limit · resets 2:40am (Europe/Oslo): {"errorKind":"rate_limit"}`,
+    settledAt: 2,
+    notifiedAt: 3,
+    workedMs: 500,
+    ...over,
+  });
+
+  test("the failed link works again and the parent is owed the new answer", () => {
+    const after = reopenLinks(book([stopped("parent/1")]), "child", ["parent/1"], 9_000);
+    const reopened = after.links[0]!;
+    expect(reopened.state).toBe("working");
+    expect(reopened.startedAt).toBe(9_000);
+    expect(reopened.answer).toBeUndefined();
+    expect(reopened.error).toBeUndefined();
+    expect(reopened.settledAt).toBeUndefined();
+    expect(reopened.notifiedAt).toBeUndefined();
+    expect(reopened.events?.at(-1)?.kind).toBe("working");
+  });
+
+  test("a stopped link, a link to another thread and a newer link are left alone", () => {
+    const base = book([
+      stopped("parent/1", { state: "cancelled" }),
+      stopped("parent/2", { target: "other" }),
+      stopped("parent/3"),
+      stopped("parent/4", { createdAt: 5 }),
+    ]);
+    const after = reopenLinks(base, "child", ["parent/1", "parent/2", "parent/3"], 9_000);
+    expect(after.links.map((l) => l.state)).toEqual(["cancelled", "failed", "failed", "failed"]);
+    expect(after).toBe(base);
   });
 });
