@@ -143,11 +143,11 @@ describe("mock machines", () => {
     expect(found[2]!.routeKind).toBe("netbird");
   });
 
-  test("removing a machine takes it out of the list, and main moves to the one asked for", async () => {
+  test("removing a machine takes it out of the list", async () => {
     const transport = new MockTransport();
-    await call(transport, "machines_set_main", { id: "gw-7c1d9e4f2a8b6d30" });
     let saved = (await call(transport, "machines_list")) as JsonObject[];
-    expect(saved[0]!.main).toBe(true);
+    expect(saved).toHaveLength(1);
+    expect(saved[0]!.main).toBeUndefined();
     await call(transport, "machines_remove", { id: "gw-7c1d9e4f2a8b6d30" });
     saved = (await call(transport, "machines_list")) as JsonObject[];
     expect(saved).toEqual([]);

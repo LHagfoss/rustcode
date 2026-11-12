@@ -70,7 +70,6 @@ pub fn run() {
             machines::machines_pair,
             machines::machines_cancel,
             machines::machines_remove,
-            machines::machines_set_main,
             machines::machines_set_paused,
             machines::machines_set_display_name,
             machines::machines_set_icon,
