@@ -405,9 +405,9 @@ is a retry that gets the same tokens back, so a lost acknowledgement never
 locks it out and a copy of the previous token cannot rotate the device's token
 away; after a gateway restart such a retry is a replay. A client acknowledges a
 rotation once it has stored the new token; the phone app's client change
-belongs to its repository. A family that has rotated more tokens than the host
-keeps history for (1024) is revoked rather than letting an old token be
-answered as a wrong one.
+belongs to its repository. The host recognizes the 1024 tokens a family
+retired most recently as replays; an older one is refused like a wrong token,
+so no number of rotations ends a pairing.
 
 A device that does not ask for rotation keeps the static token, and its
 pairing lasts 30 days. Within them the device reconnects on its own, with no

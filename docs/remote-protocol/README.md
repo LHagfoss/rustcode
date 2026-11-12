@@ -256,12 +256,11 @@ reconnect <15m  → authenticate {device_id, access_token: A2}
   answer, and both are accepted. Keep the answer from the route that stays up;
   it is the same on every route.
 - The host stores digests only: the current refresh token, the previous one
-  until it is acknowledged, and a 64-bit fingerprint of every refresh token it
-  retired, so any token it issued is recognized as a replay rather than answered
-  as a wrong one. A family that retires more than 1024 tokens is revoked instead
-  of forgetting one: its connections close with `revoked`, the device is refused
-  (`unauthorized` with the pairing gone) and the owner sees
-  `remote.pairing_retired`. The access token's digest stays in memory and never
+  until it is acknowledged, and a 64-bit fingerprint of each of the 1024 refresh
+  tokens it retired most recently, so any of them is recognized as a replay
+  rather than answered as a wrong one. Older fingerprints are dropped, never the
+  pairing: a token older than that is refused as `unauthorized` and the family
+  stays, so a pairing lasts any number of rotations. The access token's digest stays in memory and never
   reaches disk, so after a gateway restart an access token answers
   `access_expired` and the refresh token reconnects as usual: the pairing
   survives.
