@@ -1476,6 +1476,12 @@ impl AppState {
     /// Record the current YOLO setting with the active session.
     pub fn record_auto_confirm(&self) {
         crate::config::save_session_yolo(&self.active_session_id, self.auto_confirm);
+        // The access the orchestration tools read (`orchestration/local_threads.rs`)
+        // follows the switch: YOLO is Full access, and off is the safe side of it.
+        crate::config::save_session_access(
+            &self.active_session_id,
+            if self.auto_confirm { "full" } else { "ask" },
+        );
     }
 
     /// Start YOLO as recorded for the active session, or as the user's

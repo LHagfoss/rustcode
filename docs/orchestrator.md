@@ -303,15 +303,89 @@ the engine answers the ones that need no approval itself
 | `list_harnesses` | The engine's own `_rustcode/harnesses` snapshot, with the model cap and `model`/`harness` filters. |
 | `list_machines` | This computer and the machines in `machines.json`; a saved machine's `state` is `unknown`, because the app owns the live connections, and `probe: true` is answered with `probed: false`: each route shows the last test the app saved. |
 | `thread_status` | Status, project, worktree and branch from the thread and link records; pull requests and checks are the app's to read, and the answer says so. |
-| `wait_session` | The link book the app saves; `needs_user` settles the wait so the caller sees the question. Nothing advances a working link while the app is closed, so a wait can time out where an open app would have answered. |
+| `wait_session` | The link book the app saves; `needs_user` settles the wait so the caller sees the question. Nothing advances a link the app started while the app is closed, so a wait can time out where an open app would have answered; a link the engine started itself settles when its turn ends. |
+| `thread_status` with a `session_id` | The same reach a read needs: a thread in the caller's project, one the caller started, or any thread when "Let agents read threads in other projects" is on (the app's `checkManage`); otherwise `not_allowed`. |
+| `start_session`, `fan_out` | The engine starts the thread itself (below), only when the caller runs at Full access. |
+| `message_session` (incl. `steer`) | The engine opens the target thread and runs the message as its next turn (below), only at Full access, and only for a thread the caller reaches (same rule as `thread_status`). |
 
-`start_session`, `message_session`, `fan_out`, and every management or merge
-tool still need the app: with no app they are listed, and a call answers
-`{"error": {"code": "unavailable", "message": "… needs the RustCode app open
-to approve and run it …"}}` instead of "unknown tool". A thread that is on
-Full access does not change that yet: the server has no way to start or
-message a thread without the app's host, so the answer names the app rather
-than acting without the approval it would have asked for.
+`start_session`, `message_session` and `fan_out` open a loopback ACP connection
+to the endpoint this same engine published (`run/engine.json`) and send the
+same `session/new` and `session/prompt` the app sends
+(`rustcode/engine/src/orchestration/local_threads.rs`), so the new thread is an
+ordinary engine thread on any harness: it is saved in the store, listed by
+`session/list`, announced to every connected client that lists threads
+(`_rustcode/threads/created`: the engine announces every `session/new`, whoever
+asked for it) and opens in the app later like any other.
+The link is written to the same link book the app saves, and the turn that
+ends it runs in the engine, so `wait_session` settles it (`done` with the
+reply, `cancelled`, or `failed`) with no app to update it. Slots follow the
+app's settings (delegates per thread, delegates in total), delegation goes two
+levels deep, and `harness`, `model`, `effort`, `account`, `title`, `project`,
+`worktree` (default true for a git project) and `standalone` mean what they
+mean in the app. A `standalone` thread has no link and nothing comes back.
+
+What it does not do, and says so by name:
+
+- **Access.** With no app there is no card to ask on, so these three proceed
+  only when the caller runs at Full access; anything less answers
+  `unavailable`: "needs Full access … the RustCode app is not attached to ask".
+  The new thread runs at Full access too, and any permission request it makes
+  is allowed by the engine; a question to the user (`ask_question`) is
+  cancelled, not answered in the user's place.
+- **Another machine.** A `machine` that is not this computer is refused;
+  server-to-server delegation is not built.
+- **Attachments.** `message_session` with `attachments` needs the app.
+- **A thread open elsewhere.** A thread open in another RustCode process is not
+  opened a second time: the answer says to open the app or close it there.
+- **Per-thread access.** The engine keeps the access each prompt carries
+  (`_meta.rustcode.access`: `ask`, `edits`, `full`) beside the thread
+  (`config::save_session_access`), and reads it for the caller and for a
+  message's target. `/yolo` in a terminal or
+  a paired device writes the same record (on is Full, off is Ask). Only a thread
+  no client has prompted since this was kept falls back to its own `/yolo` flag, else Settings › General › Default access
+  — and so a thread the app narrowed to Ask under a Full default can read as
+  Full until its next prompt. A missing or unknown setting reads as Ask.
+- **Targets run at their own access.** A `message_session` turn runs at the
+  target's access, never above it. A target at Ask is refused ("needs the
+  RustCode app open"): nobody is here to approve its tools. At Auto-edit the
+  turn runs, and a permission it asks for is denied; at Full it is allowed
+  once, never as a standing rule.
+- **Messaging rules.** As in the app: a thread cannot message itself, a
+  thread above it (a loop) or one another thread is already working with
+  (`target_linked`); a follow-up to a thread it already works with takes no
+  new slot; delegation is two levels deep. There is no queue without the app:
+  a message to a thread that is working is refused as `busy`, unless it
+  carries `steer: true`, which joins the running turn (if the steer is not
+  taken, nothing is sent as a new message either). `fan_out` takes 2 to 4
+  harnesses. Calls that open links check the slots and hold them (a reservation)
+  one at a time, and start their threads outside that lock, so parallel calls
+  cannot overshoot the limits and one slow harness start blocks no other call.
+- **Who owns the link.** A link the engine opens carries `engine: true`, and
+  the engine settles it in the store with a write of that link alone
+  (`data_store::open_link`, `change_link`), never a read-and-replace of the
+  whole book. While its turn runs, the app that attaches does not interrupt it
+  (`_rustcode/data/links/load` answers `engineLive`, and `syncLinkBook` skips
+  those), and the app's whole-book save cannot replace it or move a counter
+  back (`docs/data-store.md`). The app reads the store every few seconds while
+  one is active and takes what settled. Each link names the process that opened it (`engineOwner`),
+  and that engine stamps it (`engineBeat`) every 10 seconds. A link is running
+  if the process holds it in its live set, or if anyone stamped it in the last
+  45 seconds — so the app's engine and the background server, which share one
+  store, never interrupt each other's links, and `engineLive` lists the links
+  running in either. Only a link no engine has stamped for 45 seconds is
+  interrupted, by the next reader (the engine at start, any read of the book,
+  so `wait_session` and the slot count never see it as working, or the app).
+  After a sleep or a clock jump (the wall clock moves further than the
+  monotonic one) nothing is swept for 25 seconds, until every engine has
+  stamped again. A settled engine link stays in the book even when
+  a stale app copy never saw it.
+
+Management and merge tools (`update_session`, `configure_session`,
+`transfer_session`, `interrupt_session`, `merge_when_green`, `cleanup_worktree`,
+`handoff_worktree` and the rest) still need the app: with no app they are
+listed, and a call answers `{"error": {"code": "unavailable", "message": "…
+needs the RustCode app open to approve and run it …"}}` instead of "unknown
+tool".
 
 The app stays first whenever one is attached, including by reconnecting to a
 running server. A thread registered locally keeps its running

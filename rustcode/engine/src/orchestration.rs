@@ -24,6 +24,7 @@ use crate::tools::{ToolErrorKind, ToolExecutionOutput};
 
 pub mod hub;
 pub mod local;
+mod local_threads;
 pub mod mcp_server;
 
 pub const METHOD: &str = "_rustcode/orchestration";
