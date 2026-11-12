@@ -18,7 +18,6 @@ import {
   rangeRows,
   rowIdOf,
   rowKeyAction,
-  rowMeta,
   rowStatus,
   SHELF_DEFAULT_OPEN,
   sectionLabelled,
@@ -637,50 +636,5 @@ describe("the order a section keeps", () => {
     const sorted = sortSection("threads", list, (r) => r.at);
     expect(sorted).toEqual([list[0]!, list[1]!]);
     expect(sorted).not.toBe(list);
-  });
-});
-
-describe("where a row puts what it has besides its title", () => {
-  const meta = (over: Partial<Parameters<typeof rowMeta>[0]>) => rowMeta({ layout: "compact", ...over });
-  const diff = { added: 1, removed: 0 };
-
-  test("a branch or a pull request is worth a second line, whatever the layout", () => {
-    for (const layout of ["compact", "comfortable"] as const) {
-      expect(meta({ layout, branch: true })).toBe("line");
-      expect(meta({ layout, pull: true })).toBe("line");
-    }
-  });
-
-  test("a stack of delegates alone rides in the trailing slot, so spawning one adds no line", () => {
-    for (const layout of ["compact", "comfortable"] as const) {
-      expect(meta({ layout, stack: true })).toBe("trailing");
-      expect(meta({ layout, stack: true, harness: true, diff })).toBe("trailing");
-    }
-    expect(meta({ stack: true, branch: true })).toBe("line");
-  });
-
-  test("a diff alone is never a line of its own, whatever the layout", () => {
-    expect(meta({ diff })).toBe("trailing");
-    expect(meta({ diff, branch: true })).toBe("line");
-    // The card puts it at the end of its title line, so a card is two lines unless it has a branch.
-    expect(meta({ diff, layout: "comfortable" })).toBe("trailing");
-  });
-
-  test("the harness mark alone rides in the trailing slot beside the state, never a line", () => {
-    // One 12px glyph at the right edge of a second line reads as the state's icon wrapping.
-    for (const layout of ["compact", "comfortable"] as const) {
-      expect(meta({ layout, harness: true })).toBe("trailing");
-    }
-    expect(meta({ harness: true, diff })).toBe("trailing");
-    // It earns the line when the line already holds something that does.
-    expect(meta({ harness: true, branch: true })).toBe("line");
-    expect(meta({ harness: true, pull: true })).toBe("line");
-  });
-
-  test("nothing to say is no line at all, so the mark is never alone on one", () => {
-    expect(meta({})).toBe("none");
-    expect(meta({ diff: null })).toBe("none");
-    expect(meta({ harness: false, diff: null })).toBe("none");
-    expect(meta({ layout: "comfortable" })).toBe("none");
   });
 });

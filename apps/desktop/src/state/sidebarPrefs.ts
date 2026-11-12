@@ -2,19 +2,9 @@
 // shelves are open), kept in localStorage and shared: the sidebar draws from them and ⌘K changes
 // them (ui/CommandPalette.tsx), so both read one store rather than two copies of a flag.
 
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
-
-/**
- * How a thread row is drawn: `comfortable` is the two-line row with room for the project's mark,
- * its title and the branch under it; `compact` has a title line and a quiet details line.
- */
-export type RowLayout = "compact" | "comfortable";
-
-/** The roomy two-line rows by default; Compact is the opt-in under Settings › Appearance. */
-export const DEFAULT_ROW_LAYOUT: RowLayout = "comfortable";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 
 export const PREF = {
-  rowLayout: "rustcode.sidebar.rowLayout",
   groupByProject: "rustcode.sidebar.groupByProject",
   workingSection: "rustcode.sidebar.workingSection",
   onlyProject: "rustcode.sidebar.onlyProject",
@@ -47,18 +37,6 @@ export function readPref<T>(key: string, initial: T): T {
   return parse(rawPref(key), initial);
 }
 
-/**
- * The row layout a stored value means, including the two an earlier release retired: `current`
- * (the meta line above the title) and `title-first` (the title above it) were both two-line rows,
- * and only a user who picked one in Settings ever wrote them, so both keep that row as
- * `comfortable`. A store with no value at all was never chosen, and takes the roomy default.
- */
-export function rowLayoutOf(stored: unknown): RowLayout {
-  if (stored === "compact" || stored === "comfortable") return stored;
-  if (stored === "current" || stored === "title-first") return "comfortable";
-  return DEFAULT_ROW_LAYOUT;
-}
-
 export function writePref<T>(key: string, value: T): void {
   const raw = JSON.stringify(value);
   try {
@@ -86,23 +64,4 @@ export function usePref<T>(key: string, initial: T) {
   const value = useMemo(() => parse(raw, initial), [raw, initial]);
   const set = useCallback((next: T) => writePref(key, next), [key]);
   return [value, set] as const;
-}
-
-/** The migration has run: every row reads this hook, and the store is written back once. */
-let migratedRowLayout = false;
-
-/**
- * The sidebar's row layout, read through the migration above, and written back once so a store
- * still holding `current` or `title-first` is left in a value this release understands.
- */
-export function useRowLayout(): readonly [RowLayout, (next: RowLayout) => void] {
-  const [stored, setStored] = usePref<unknown>(PREF.rowLayout, DEFAULT_ROW_LAYOUT);
-  const layout = rowLayoutOf(stored);
-  useEffect(() => {
-    if (migratedRowLayout) return;
-    migratedRowLayout = true;
-    if (stored !== layout) writePref(PREF.rowLayout, layout);
-  }, [stored, layout]);
-  const set = useCallback((next: RowLayout) => setStored(next), [setStored]);
-  return [layout, set] as const;
 }

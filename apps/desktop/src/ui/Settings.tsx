@@ -80,7 +80,6 @@ import {
   useScopedDefaultHarness,
   useScopedSetting,
 } from "../state/settingsScope";
-import { useRowLayout } from "../state/sidebarPrefs";
 import {
   APP_VERSION,
   createTheme,
@@ -1041,7 +1040,6 @@ function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
 }
 
 function AppearancePage() {
-  const [rowLayout, setRowLayout] = useRowLayout();
   const mode = useApp((s) => s.theme);
   const roundedFont = useApp((s) => s.roundedFont);
   const animateStreaming = useApp((s) => s.animateStreaming);
@@ -1059,22 +1057,6 @@ function AppearancePage() {
       : "~/.config/rustcode/themes";
   return (
     <>
-      <Group title="Sidebar">
-        <Row
-          title="Thread row layout"
-          subtitle="Comfortable puts the branch and the counts under the title; Compact is one line per thread, with a second only for a branch, a diff or a pull request."
-        >
-          <Choice
-            label="Thread row layout"
-            value={rowLayout}
-            onChange={setRowLayout}
-            options={[
-              { value: "compact", label: "Compact" },
-              { value: "comfortable", label: "Comfortable" },
-            ]}
-          />
-        </Row>
-      </Group>
       <Group title="Mode">
         <Row
           title="Light or dark"
