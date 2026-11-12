@@ -38,6 +38,9 @@ interface Measurable {
  * (docs/design.md › Composer). */
 const CARD_GAP = 8;
 
+/** The title row along the window's top: a panel's ceiling sits under it, never behind it. */
+const TITLE_ROW = 40;
+
 /** The room under the composer's strip a menu needs before it opens downward instead of up. */
 const FOOTER_ROOM = 280;
 
@@ -193,7 +196,12 @@ export function CardPopover({
           side={placed}
           align={align ?? aligned}
           sideOffset={CARD_GAP}
-          collisionPadding={surfaceCollisionPadding}
+          collisionPadding={{
+            top: TITLE_ROW + surfaceCollisionPadding,
+            right: surfaceCollisionPadding,
+            bottom: surfaceCollisionPadding,
+            left: surfaceCollisionPadding,
+          }}
           avoidCollisions={avoidCollisions}
           role={role}
           aria-label={label}

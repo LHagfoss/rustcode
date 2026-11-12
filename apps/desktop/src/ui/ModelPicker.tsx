@@ -481,7 +481,7 @@ function EffortPanel({
               role="radiogroup"
               aria-label="Account"
               data-menu-group=""
-              className="mx-1 mb-1 flex flex-wrap gap-0.5 rounded-2xl bg-fill p-0.5"
+              className="mb-1 grid grid-cols-[repeat(auto-fit,minmax(88px,1fr))] gap-0.5 rounded-2xl bg-fill p-0.5"
             >
               {accounts.map((chip, index) => {
                 const pressable = chipPressable(chip, accountsDisabled);
@@ -502,7 +502,7 @@ function EffortPanel({
                         if (chip.id !== undefined) onPickAccount(chip.id);
                       }}
                       className={cx(
-                        "flex h-6 min-w-0 max-w-full items-center gap-1 rounded-xl px-2 text-callout outline-none disabled:cursor-default focus-visible:bg-fill-strong",
+                        "flex h-6 min-w-0 items-center justify-center gap-1 rounded-xl px-2 text-callout outline-none disabled:cursor-default focus-visible:bg-fill-strong",
                         chip.selected ? "bg-knob text-knob-fg shadow-knob" : "text-fg-muted hover:text-fg",
                         !pressable && !chip.selected && "opacity-40",
                         chip.signedOut && "text-fg-faint",
@@ -510,7 +510,9 @@ function EffortPanel({
                       )}
                     >
                       <UserRound size={12} strokeWidth={1.75} className="shrink-0" />
-                      <span className="min-w-0 truncate">{chip.name}</span>
+                      <span title={chip.name} className="min-w-0 truncate">
+                        {chip.name}
+                      </span>
                     </button>
                   </Tooltip>
                 );
