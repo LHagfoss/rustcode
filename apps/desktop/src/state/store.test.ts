@@ -3820,7 +3820,10 @@ describe("which thread endings are announced", () => {
     state: "working" as const,
     createdAt: Date.now(),
   });
-  const stage = async (threads: Record<string, ReturnType<typeof live>>, links: ReturnType<typeof delegate>[] = []) => {
+  const stage = async (
+    threads: Record<string, ReturnType<typeof live>>,
+    links: ReturnType<typeof delegate>[] = [],
+  ) => {
     const { clearToasts } = await import("./store");
     clearToasts();
     useApp.setState({

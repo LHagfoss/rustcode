@@ -252,7 +252,10 @@ describe("which finishes are news", () => {
     const gate = createNotifyGate();
     const away = { enabled: true, backgroundOnly: true, windowFocused: false, onScreen: null };
     expect(
-      gate.take({ threadId: "a", kind: "question", key: "7", title: "Fix it", detail: "Which runner?" }, away),
+      gate.take(
+        { threadId: "a", kind: "question", key: "7", title: "Fix it", detail: "Which runner?" },
+        away,
+      ),
     ).not.toBeNull();
   });
 });
