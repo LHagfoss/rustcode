@@ -53,7 +53,6 @@ import {
   setLocalIdentity,
   setMachineDisplayName,
   setMachineIcon,
-  setMainMachine,
   stateLabel,
   stateTone,
   threadCount,
@@ -65,7 +64,7 @@ import {
 import { openMachineSettings, toast, useApp } from "../state/store";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachineIdentityEditor } from "./MachineProfile";
-import { cx, noTextHelpers, Spinner, Switch } from "./primitives";
+import { cx, noTextHelpers, Spinner } from "./primitives";
 import { Action, Chip, fieldClass, Group, Loading, Row } from "./settingsKit";
 
 /** How often the page asks the shell where the machines stand. */
@@ -263,7 +262,6 @@ export function MachineRow({
       }
       status={
         <>
-          {machine.main && "Main machine · "}
           {platform && `${platform} · `}
           {/* The state is the chip; this line says when and how much, not what. */}
           {machine.lastConnectedAt
@@ -295,14 +293,6 @@ export function MachineRow({
       <Action size="sm" onClick={() => openMachineSettings(machine.id)}>
         Machine settings
       </Action>
-      <span className="flex items-center gap-2">
-        <span className="text-caption text-fg-muted">Main machine</span>
-        <Switch
-          label={`Make ${name} the main machine`}
-          checked={machine.main}
-          onChange={(next) => next && void setMainMachine(machine)}
-        />
-      </span>
       <Action quiet size="sm" aria-label={`Remove ${name}`} onClick={() => removeMachine(machine)}>
         Remove
       </Action>

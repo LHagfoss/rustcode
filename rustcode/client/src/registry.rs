@@ -308,9 +308,6 @@ pub struct Machine {
     /// until the machine has been reached once.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_route: Option<String>,
-    /// The main machine: listed first, and the default **Run on**.
-    #[serde(default)]
-    pub main: bool,
     /// New threads are not started here from this app, though its threads
     /// still open and the connection stays up. A local choice, never sent.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -344,7 +341,6 @@ impl Machine {
             added_at: now,
             last_connected_at: None,
             last_route: None,
-            main: false,
             paused: false,
         }
     }
@@ -448,7 +444,7 @@ impl MachineRegistry {
         &self.path
     }
 
-    /// Oldest first, except the main machine, which is listed first.
+    /// Oldest first. Every machine is a peer, so none is listed ahead of the others.
     pub fn machines(&self) -> &[Machine] {
         &self.machines
     }
@@ -501,7 +497,7 @@ impl MachineRegistry {
 
     /// Insert a newly paired machine, or replace what a re-pairing learned
     /// about a saved one: the name, platform, device record and routes,
-    /// keeping when it was first added and whether it is the main machine.
+    /// keeping when it was first added.
     pub fn insert(&mut self, machine: Machine) -> Result<()> {
         self.mutate(|machines| {
             match machines
@@ -519,12 +515,7 @@ impl MachineRegistry {
                         existing.learn_route(route);
                     }
                 }
-                None => {
-                    let main = machines.is_empty();
-                    let mut machine = machine;
-                    machine.main = main;
-                    machines.push(machine);
-                }
+                None => machines.push(machine),
             }
             Ok(())
         })
@@ -541,13 +532,7 @@ impl MachineRegistry {
             else {
                 bail!("no saved machine has host id {host_id}");
             };
-            let removed = machines.remove(index);
-            if removed.main
-                && let Some(next) = machines.first_mut()
-            {
-                next.main = true;
-            }
-            Ok(removed)
+            Ok(machines.remove(index))
         })
     }
 
@@ -686,21 +671,6 @@ impl MachineRegistry {
         })
     }
 
-    /// Make `host_id` the main machine, so it is listed first and is the
-    /// default **Run on**.
-    pub fn set_main(&mut self, host_id: &str) -> Result<()> {
-        self.mutate(|machines| {
-            ensure!(
-                machines.iter().any(|machine| machine.host_id == host_id),
-                "no saved machine has that id"
-            );
-            for machine in machines.iter_mut() {
-                machine.main = machine.host_id == host_id;
-            }
-            Ok(())
-        })
-    }
-
     /// Pause or resume new threads on a machine. Its connection and its
     /// existing threads are untouched; only **Run on** refuses it.
     pub fn set_paused(&mut self, host_id: &str, paused: bool) -> Result<()> {
@@ -716,19 +686,10 @@ impl MachineRegistry {
         })
     }
 
-    pub fn main_machine(&self) -> Option<&Machine> {
-        self.machines.iter().find(|machine| machine.main)
-    }
-
-    /// Order the list the way it is shown: main machine first, then oldest.
+    /// The machines in the order they are shown: oldest first.
     pub fn ordered(&self) -> Vec<&Machine> {
         let mut machines: Vec<&Machine> = self.machines.iter().collect();
-        machines.sort_by(|left, right| {
-            right
-                .main
-                .cmp(&left.main)
-                .then(left.added_at.cmp(&right.added_at))
-        });
+        machines.sort_by_key(|machine| machine.added_at);
         machines
     }
 
@@ -907,9 +868,7 @@ mod tests {
             studio.routes,
             [Route::with_kind(RouteKind::Lan, "192.168.1.20:17879")]
         );
-        // The first machine saved is the main one, and its time is kept.
-        assert!(studio.main && studio.last_connected_at.is_none());
-        assert!(reloaded.main_machine().is_some());
+        assert!(studio.last_connected_at.is_none());
         assert_eq!(reloaded.path(), crate::config::machines_file(dir.path()));
     }
 
@@ -962,13 +921,15 @@ mod tests {
         let removed = store.remove("Studio").unwrap();
         assert_eq!(removed.host_id, "3f9a1c7e5b2d4086");
         assert_eq!(load(dir.path()).machines().len(), 1);
-        // The main flag moves to what is left.
-        assert!(store.machines()[0].main);
+        assert_eq!(store.machines()[0].name, "Laptop");
         assert!(store.remove("Studio").is_err());
     }
 
+    /// A file from when one machine was "main" still loads: the flag is read
+    /// and dropped, no machine is listed ahead of the others, and the next
+    /// write does not bring it back.
     #[test]
-    fn a_second_machine_is_not_main_and_main_can_move() {
+    fn an_old_main_flag_is_ignored_and_not_written_back() {
         let dir = tempfile::tempdir_in("/tmp").unwrap();
         let mut store = load(dir.path());
         store
@@ -977,17 +938,23 @@ mod tests {
         store
             .insert(machine("gw-b", "B", "10.0.0.3:17879"))
             .unwrap();
-        assert_eq!(store.main_machine().unwrap().name, "A");
-        store.set_main("gw-b").unwrap();
-        assert_eq!(store.main_machine().unwrap().name, "B");
+        let path = crate::config::machines_file(dir.path());
+        let mut stored: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        stored["machines"][0]["main"] = serde_json::json!(false);
+        stored["machines"][1]["main"] = serde_json::json!(true);
+        std::fs::write(&path, stored.to_string()).unwrap();
+        let mut old = load(dir.path());
         assert_eq!(
-            store
-                .ordered()
+            old.ordered()
                 .iter()
                 .map(|m| m.name.as_str())
                 .collect::<Vec<_>>(),
-            ["B", "A"]
+            ["A", "B"]
         );
+        old.set_paused("gw-a", true).unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(!written.contains("\"main\""), "{written}");
     }
 
     #[test]
