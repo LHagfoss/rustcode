@@ -356,7 +356,7 @@ pub fn log_path() -> io::Result<PathBuf> {
 /// that started it ends (an SSH session ends everything left in its job).
 /// `service` starts it as the background service's server (`--service`): the
 /// one a Windows `Run` entry starts at logon, which keeps itself up to date.
-pub(crate) fn start_in_background(program: &std::path::Path, service: bool) -> io::Result<()> {
+pub fn start_in_background(program: &std::path::Path, service: bool) -> io::Result<()> {
     let dir = run_dir()?;
     lock::ensure_private_dir(&dir)?;
     let log_path = log_path()?;

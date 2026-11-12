@@ -86,6 +86,11 @@ rustcode server logs -f     # the server's log
 rustcode server uninstall   # remove the service
 ```
 
+On a machine another one should reach, `rustcode up` does the install, switches
+remote access on and prints a connect code in one step; `rustcode machines
+add-ssh <host>` runs it over SSH from the other computer (`docs/remote.md` ›
+One command for a headless machine, › Connect over SSH).
+
 A restart run from a thread (a shell tool inside the server) would end its own
 caller when the server stops, so the command hands the stop and start to a
 detached helper (`restart --detached`, hidden) and returns at once; the helper's

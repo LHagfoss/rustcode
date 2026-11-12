@@ -656,6 +656,73 @@ it.
 - Like every pairing, the code crosses a LAN in clear text; an overlay
   (NetBird, Tailscale) encrypts it.
 
+### One command for a headless machine
+
+`rustcode up` makes the computer it runs on one another can pair with:
+
+1. installs (or repairs) the RustCode server as a background service from
+   login, as `rustcode server install` does, and restarts a server of an older
+   version when no turn is running (`--yes` restarts it anyway). On Linux it
+   tries `loginctl enable-linger` without sudo first; where that needs root,
+   the result says the `sudo` command to run. Where no service can be
+   installed (a container with no systemd user session), or with
+   `--no-service`, the server runs in the background until the computer
+   restarts, and the result says so;
+2. switches remote access on and waits for the gateway. With a server
+   running, the server starts the gateway itself (`remote/start-requested`,
+   which `rustcode remote stop` overrides): on Windows a command run over SSH
+   is in the SSH logon session, and a gateway started there would be out of
+   reach of the desktop and leave files only an administrator can open;
+3. creates a connect code and prints it, with the command to type on the
+   other computer.
+
+`--json` prints `{version, host_name, os, server, gateway, routes,
+connect_code, problems}` and keeps progress on standard error, for a script
+or `machines add-ssh`. Running it again is safe: an installed service is left
+as it is, a running gateway is reused, and a new code replaces the open one.
+
+### Connect over SSH
+
+For a computer this one already reaches with `ssh` (a Linux box, a VPS, a Mac,
+a Windows PC with OpenSSH), one step makes it a paired machine: Settings ›
+Machines › **Connect over SSH**, type `lars@box` or an alias from
+`~/.ssh/config`, **Connect**; or
+
+```bash
+rustcode machines add-ssh lars@box [--port 2222] [--identity ~/.ssh/key] [--yes | --no-install] [--json]
+```
+
+| Step | What runs | Fails with |
+| --- | --- | --- |
+| Signing in | `ssh … exit 0` | *SSH could not sign in to box without asking for a password or passphrase…* (`ssh-add`), an unknown or changed host key (*connect once in a terminal*), or *box did not answer over SSH* |
+| Checking RustCode | a POSIX login shell (`sh -l -s`) reports `uname` and every `rustcode` with its version (`~/.rustcode/bin` too); with no POSIX shell, Windows PowerShell does | *RustCode has no build for Linux on riscv64*, or no usable shell |
+| Installing RustCode X.Y.Z | only when it is missing or older than this computer's: this release's `install.sh --no-app --version X.Y.Z --bin-dir ~/.rustcode/bin` (or `install.ps1 -NoApp -Version X.Y.Z`) sent over SSH's standard input, checked against the release `SHA256SUMS` as always. The app's checkbox, `--yes` or the terminal prompt allow it; `--no-install` and a run with no terminal refuse | the installer's last line |
+| Starting its server | `rustcode up --yes --json` there | what `up` said |
+| Pairing | the connect code from that JSON, redeemed here over the routes it lists | *box is reachable over SSH, but not on RustCode's port (…). Put both computers on the same network or a VPN such as NetBird or Tailscale.* The open code is withdrawn there |
+
+- Every command uses this computer's own `ssh`, its config and agent, with
+  `BatchMode=yes`, `ConnectTimeout=10`, `ServerAliveInterval=15`,
+  `ServerAliveCountMax=3` and `ControlMaster=no`, so nothing waits for a
+  prompt; each step has its own time limit (ten minutes for the install).
+  Host key checking stays as configured.
+- The host is checked (no leading `-`, no whitespace or shell characters) and
+  passed after `--`. Scripts go on standard input or as an encoded PowerShell
+  command; the only words put in a remote command line are the version and the
+  path the remote reported, quoted for its shell.
+- **The pairing secret travels inside SSH only.** Afterwards the two talk over
+  the gateway's routes like any paired machines, so a host reachable over SSH
+  alone (a VPS with only a public address) cannot be paired yet: that needs
+  SSH as a route of its own.
+- Nothing is stopped or removed. To take the service off that computer:
+  `ssh box rustcode server uninstall`.
+- On Windows the server runs as the logon task in the user's desktop session,
+  so it starts once that user is signed in on the PC; `up` over SSH asks that
+  server to start the gateway rather than starting one in the SSH session.
+- `--json` prints one line per step change (`{"progress": {...}}`), then
+  `{"connected": {...}}` or `{"error": {"step", "kind", "message"}}`.
+  In the mock, a host containing `denied` or `novpn` shows the two common
+  failures.
+
 ### In the desktop app
 
 Settings › **Machines** is the same pairing without a terminal: *This Mac* (or
@@ -668,6 +735,7 @@ are all visible at once.
 
 | In the app | What it does |
 | --- | --- |
+| **Connect over SSH** | A host field and *Install or update RustCode there when needed* (on by default), then the steps of [Connect over SSH](#connect-over-ssh) ticking off, each with its detail, and the failed step's sentence. |
 | **Connect with a code** | *Create connect code* shows a code for another computer to pair with this one ([Connect codes](#connect-codes)); *Connect to another computer* takes a code or link created there, with an optional address for a short code that carries none. |
 | **Machines found** | The machines the Add sheet lists without an address typed, filled in when the page opens (*Look again* to repeat): Bonjour, the same browse as `machines discover`, for every machine whose record lists `caps=desktops`; and the *saved* machines whose handshake reported a NetBird, Tailscale or ZeroTier address, which no browse on the LAN can hear. One machine found both ways is one row, merged by its host id. Each row names the machine, its platform, the RustCode version it runs, the network its address is on (`LAN`, `NetBird`, `Tailscale`, `VPN`, `Public`) and the address. A machine not yet paired has *Ask to connect*; one already saved is *Saved*. When the local browse itself fails (a container or a network without multicast), the rows from the saved machines are still listed and the sheet says *Could not look for machines on this network* with the reason. |
 | **Machines found › Enter an address** | The `host:port` a machine is reached on when it is not announced (an overlay, or another subnet). The fallback, never the first step. |
@@ -1066,9 +1134,12 @@ access work as on the other systems. What differs:
   the app still runs it, answers "session is already active": a live session
   cannot be opened twice. Close the thread in the app and open it again.
 - No push notifications.
-- `rustcode machines` reaches a machine over its WebSocket only: no SSH route,
+- `rustcode machines` reaches a machine over its WebSocket only: no SSH route
+  (SSH only sets a machine up and pairs it, [Connect over SSH](#connect-over-ssh)),
   no relay, and a route list is not reordered or learned yet (steps 1.8 and
-  1.11 of the machine network plan).
+  1.11 of the machine network plan). Connect over SSH pairs one way: the other
+  computer does not list this one until it pairs back, and agents cannot start
+  it yet (no `connect_machine` tool).
 - Access is per host: a paired device sees every session open in a terminal.
   There are no per-session grants and no per-session opt-out.
 - Reachability from a real iPhone (local-network permission, NetBird routing)

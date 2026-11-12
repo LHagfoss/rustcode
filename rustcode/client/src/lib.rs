@@ -22,6 +22,8 @@
 //! - [`connect_code`]: the connect codes another computer's owner creates
 //!   there and this computer redeems.
 //! - [`discovery`]: Bonjour, for machines that take a desktop client.
+//! - [`ssh`]: connect over SSH: install RustCode on a computer this one
+//!   reaches with `ssh`, start its server and pair with it in one step.
 //! - [`protocol`]: the remote protocol v1 frames this client sends, mirrored
 //!   against the committed contract in `docs/remote-protocol/v1`.
 //!
@@ -36,6 +38,7 @@ pub mod protocol;
 pub mod reconnect;
 pub mod registry;
 pub mod routes;
+pub mod ssh;
 pub mod tokens;
 pub mod transport;
 

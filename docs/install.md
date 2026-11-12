@@ -70,6 +70,7 @@ Options (`curl … | bash -s -- <options>` on macOS and Linux):
 | `--no-cli` | `-NoCli` or `$env:RUSTCODE_NO_CLI = "1"` | app only |
 | `--deb` | | Linux: the `.deb` instead of the AppImage |
 | `--bin-dir DIR` | | CLI to `DIR` instead of `/usr/local/bin` or `~/.local/bin` |
+| `--version 1.31.4` or `$RUSTCODE_VERSION` | `-Version 1.31.4` or `$env:RUSTCODE_VERSION` | that release instead of the latest (`v` optional, a beta like `1.32.0-beta.2` too); a release that does not exist stops with its URL. `rustcode machines add-ssh` uses it to put the other computer on this one's version |
 
 ```bash
 curl -fsSL https://rustcode.lhagfoss.com/install.sh | bash -s -- --no-app

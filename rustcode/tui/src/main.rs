@@ -10,6 +10,7 @@ mod runtime;
 mod server_command;
 mod terminal_probe;
 mod ui;
+mod up;
 
 #[cfg(test)]
 mod test_isolation;

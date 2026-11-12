@@ -909,6 +909,14 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
+    if let Some(crate::cli::Commands::Up {
+        yes,
+        json,
+        no_service,
+    }) = cli_args.command.as_ref()
+    {
+        crate::up::run(*yes, *json, *no_service).await;
+    }
     if let Some(crate::cli::Commands::Remote { command }) = cli_args.command.as_ref() {
         run_remote_command(command).await?;
         return Ok(());

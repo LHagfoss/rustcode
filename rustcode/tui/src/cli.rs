@@ -213,6 +213,26 @@ pub enum Commands {
         allow_remote: bool,
     },
 
+    /// Make this computer one another can pair with, in one step: run the
+    /// server in the background from login, switch remote access on and
+    /// print a connect code
+    #[command(after_help = "Examples:
+  rustcode up                    # on a headless machine; type the code on the other one
+  rustcode up --yes --json       # for a script (`rustcode machines add-ssh` runs this)")]
+    Up {
+        /// Stop a server with turns running, to replace it with the service,
+        /// without asking
+        #[arg(short, long)]
+        yes: bool,
+        /// Print the result as JSON (progress goes to standard error)
+        #[arg(long)]
+        json: bool,
+        /// Run the server in the background until the computer restarts,
+        /// instead of installing it as a login service
+        #[arg(long)]
+        no_service: bool,
+    },
+
     /// Run the remote gateway that shares `/remote` sessions and manage paired devices
     Remote {
         #[command(subcommand)]
@@ -551,6 +571,42 @@ pub enum MachineCommands {
         /// Name to save the machine under (default: the name it reports)
         #[arg(long)]
         name: Option<String>,
+    },
+    /// Pair with a computer this one reaches over SSH, in one step: install
+    /// RustCode there at this version if it is missing or older, start its
+    /// server with `rustcode up`, and pair with the connect code it prints.
+    /// The code only travels inside SSH.
+    #[command(
+        name = "add-ssh",
+        after_help = "Examples:
+  rustcode machines add-ssh lars@box
+  rustcode machines add-ssh studio --yes          # an alias from ~/.ssh/config; install without asking
+  rustcode machines add-ssh admin@vps -p 2222 -i ~/.ssh/vps_ed25519
+
+SSH runs non-interactively (BatchMode): a key that needs a passphrase must be in
+the agent (`ssh-add`), and an unknown host key must be accepted once in a terminal."
+    )]
+    AddSsh {
+        /// `user@host`, or a `Host` alias from `~/.ssh/config`
+        target: String,
+        /// SSH port, when not the one the SSH config gives
+        #[arg(short, long)]
+        port: Option<u16>,
+        /// Private key to sign in with, when not the agent's or the config's
+        #[arg(short, long)]
+        identity: Option<std::path::PathBuf>,
+        /// Name to save the machine under (default: the name it reports)
+        #[arg(long)]
+        name: Option<String>,
+        /// Install or update RustCode there without asking
+        #[arg(short, long, conflicts_with = "no_install")]
+        yes: bool,
+        /// Never install: fail when RustCode there is missing or older
+        #[arg(long)]
+        no_install: bool,
+        /// Print each step and the result as JSON lines, for the app and agents
+        #[arg(long)]
+        json: bool,
     },
     /// List the machines on this network that take a desktop client
     Discover {
@@ -1393,6 +1449,31 @@ mod tests {
     }
 
     #[test]
+    fn parses_up() {
+        let up = |args: &[&str]| {
+            let mut all = vec!["rustcode", "up"];
+            all.extend_from_slice(args);
+            Cli::try_parse_from(all).unwrap().command
+        };
+        assert!(matches!(
+            up(&[]),
+            Some(Commands::Up {
+                yes: false,
+                json: false,
+                no_service: false
+            })
+        ));
+        assert!(matches!(
+            up(&["--yes", "--json", "--no-service"]),
+            Some(Commands::Up {
+                yes: true,
+                json: true,
+                no_service: true
+            })
+        ));
+    }
+
+    #[test]
     fn parses_machine_commands() {
         let machines = |args: &[&str]| {
             let mut all = vec!["rustcode", "machines"];
@@ -1410,6 +1491,28 @@ mod tests {
                 json: false
             }
         ));
+        match machines(&["add-ssh", "lars@box", "-p", "2222", "-i", "/k/id", "--yes"]).unwrap() {
+            MachineCommands::AddSsh {
+                target,
+                port,
+                identity,
+                yes,
+                no_install,
+                json,
+                name,
+            } => {
+                assert_eq!(target, "lars@box");
+                assert_eq!(port, Some(2222));
+                assert_eq!(identity, Some(std::path::PathBuf::from("/k/id")));
+                assert!(yes && !no_install && !json);
+                assert_eq!(name, None);
+            }
+            other => panic!("expected add-ssh, got {other:?}"),
+        }
+        assert!(
+            machines(&["add-ssh", "box", "--yes", "--no-install"]).is_err(),
+            "installing without asking and never installing conflict"
+        );
         assert!(matches!(
             machines(&["list", "--threads", "--json"]).unwrap(),
             MachineCommands::List {
