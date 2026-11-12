@@ -1006,8 +1006,14 @@ composer's keys stay outside the table.
 - **Continuing on their own** (`state/limitResume.ts`, `state/internetWait.ts`):
   a turn that ends on a plan's limit waits for the reset. Claude Code says it as
   a reply, not a failure (`You've hit your 5-hour limit · resets 2:50pm
-  (Europe/Oslo)`), so the whole reply must be that message; a harness that names
-  no time uses the plan's latest full window, and with neither there is no wait.
+  (Europe/Oslo)`), so the whole reply must be that message; the turn's error is
+  read the same way, with its `Internal error:` prefix and `{"errorKind":…}` tail
+  taken off (a delegate ended on exactly that), and a message of several
+  paragraphs counts when each one says the limit. A harness that names no time
+  uses the plan's latest full window, and with neither there is no wait. The wait
+  is saved with the links the stop settled as failed: the turn that continues
+  reopens them and settles them with its answer, and the check also runs when
+  the window gets focus after a sleep.
   A provider that was overloaded (HTTP 529/503, `overloaded_error`) is tried
   again after 30 s, 1 m, 2 m and 4 m, each with up to a quarter of it added at
   random so an account's threads do not wake together, and no fifth time. A turn
