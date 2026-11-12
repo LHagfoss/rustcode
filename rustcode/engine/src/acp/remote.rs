@@ -213,9 +213,10 @@ async fn run_remote_turns(session: Arc<RemoteSession>) {
             continue;
         }
         if !prompt.trim_start().starts_with('/') {
-            let update = SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(
-                TextContent::new(prompt.clone()),
-            )));
+            let update = SessionUpdate::UserMessageChunk(crate::message_origin::user_chunk(
+                prompt.clone(),
+                None,
+            ));
             let _ = session.clients.update(update);
         }
         let scheduled_turn = session.turns.schedule();
@@ -1987,9 +1988,9 @@ impl HarnessShare {
         let Some(clients) = &self.clients else {
             return;
         };
-        let _ = clients.update(SessionUpdate::UserMessageChunk(ContentChunk::new(
-            ContentBlock::Text(TextContent::new(text.to_owned())),
-        )));
+        let _ = clients.update(SessionUpdate::UserMessageChunk(
+            crate::message_origin::user_chunk(text.to_owned(), None),
+        ));
     }
 
     /// Run one prompt on the harness, as the app's own prompt does, and then

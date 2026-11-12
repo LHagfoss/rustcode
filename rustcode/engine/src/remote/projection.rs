@@ -511,8 +511,35 @@ fn project_messages(
             thought_tokens_estimated: message.thought_tokens.map(|_| true),
             completed_at: message.completed_at.clone(),
             turn: message.turn.as_ref().map(project_turn_timing),
+            origin: project_origin(message),
         })
         .collect()
+}
+
+/// Who sent `message`, for a user request; see [`crate::message_origin`].
+pub(super) fn project_origin(message: &crate::app::ChatMessage) -> Option<RemoteMessageOrigin> {
+    crate::message_origin::of_message(message).map(wire_origin)
+}
+
+/// Who sent the prompt a turn starts with.
+pub(super) fn prompt_origin(prompt: &str) -> RemoteMessageOrigin {
+    wire_origin(crate::message_origin::of_text(prompt))
+}
+
+fn wire_origin(origin: crate::message_origin::MessageOrigin) -> RemoteMessageOrigin {
+    RemoteMessageOrigin {
+        kind: origin.kind.as_str().to_owned(),
+        threads: origin
+            .threads
+            .into_iter()
+            .map(|thread| RemoteOriginThread {
+                session_id: thread.session_id,
+                title: thread.title,
+                status: thread.status,
+                link_id: thread.link_id,
+            })
+            .collect(),
+    }
 }
 
 pub(super) fn project_turn_timing(turn: &crate::app::TurnTiming) -> RemoteTurnTiming {
@@ -844,6 +871,7 @@ pub fn project_event(
                 .map(project_turn_timing)
                 .or_else(|| project_active_timing(state)),
             prompt: bound_text(prompt, limits.text_bytes, None),
+            origin: Some(prompt_origin(prompt)),
         }],
         AgentUiEvent::TextDelta { text } => vec![RemoteEvent::TextDelta {
             text: text.clone(),
@@ -1060,6 +1088,105 @@ mod tests {
     }
     use super::*;
     use crate::app::{AppStatus, ChatMessage, ToolConfirmation};
+
+    // #3516: a device is told who sent a user message, in the snapshot and
+    // in a history page alike, instead of reading it out of the wording.
+    #[test]
+    fn a_user_message_says_who_sent_it() {
+        let mut state = state_with_history(0, 0);
+        let wake = "Delegate finished: Review the rows\n\nFinished:\n\n- link_id parent-1/2 · done · “Review the rows” · Pi · session child-7 · 3 files changed\n  answer: Done.\n\n<!-- rustcode:wake -->";
+        for (role, content) in [
+            ("user", "Why does the parser test fail?"),
+            ("assistant", "Because of the empty input."),
+            (
+                "user",
+                "From thread “Ship the tree” (agent):\n\nReview the rules.",
+            ),
+            ("user", wake),
+            ("user", "<tool_result>ok</tool_result>"),
+            ("user", "Carry on.\n\n<!-- rustcode:continued -->"),
+        ] {
+            state.history.push(ChatMessage::new(role, content));
+        }
+        let snapshot = project_snapshot(&state, &context(), &ProjectionLimits::default());
+        let page = project_history_page(&state, &ProjectionLimits::default(), None, 10).unwrap();
+        assert_eq!(
+            snapshot.transcript, page.messages,
+            "one projection serves both"
+        );
+        let origins = page
+            .messages
+            .iter()
+            .map(|message| message.origin.as_ref().map(|origin| origin.kind.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            origins,
+            vec![
+                Some("user"),
+                None,
+                Some("agent"),
+                Some("delegate"),
+                None,
+                Some("system"),
+            ]
+        );
+        assert_eq!(
+            page.messages[2].origin.as_ref().unwrap().threads,
+            vec![RemoteOriginThread {
+                title: Some("Ship the tree".to_owned()),
+                ..RemoteOriginThread::default()
+            }]
+        );
+        assert_eq!(
+            page.messages[3].origin.as_ref().unwrap().threads,
+            vec![RemoteOriginThread {
+                session_id: Some("child-7".to_owned()),
+                title: Some("Review the rows".to_owned()),
+                status: Some("done".to_owned()),
+                link_id: Some("parent-1/2".to_owned()),
+            }]
+        );
+        // The text is what the host holds: a client that predates the field
+        // still finds the wake mark it looks for.
+        assert_eq!(page.messages[3].content.text, wake);
+        // On the wire: no key where there is no origin, no empty list.
+        let value = serde_json::to_value(&page.messages).unwrap();
+        assert_eq!(value[0]["origin"], serde_json::json!({ "kind": "user" }));
+        assert!(value[1].get("origin").is_none());
+    }
+
+    // The live event a device builds the message from says it too.
+    #[test]
+    fn a_turn_start_says_who_sent_its_prompt() {
+        let state = state_with_history(0, 0);
+        let origin_of = |prompt: &str| {
+            let started = project_event(
+                &state,
+                &AgentUiEvent::PromptStarted {
+                    prompt: prompt.to_owned(),
+                    timing: None,
+                },
+                &ProjectionLimits::default(),
+            );
+            match started.as_slice() {
+                [
+                    RemoteEvent::TurnStarted {
+                        origin: Some(origin),
+                        ..
+                    },
+                ] => origin.clone(),
+                other => panic!("expected a turn start with an origin: {other:?}"),
+            }
+        };
+        assert_eq!(origin_of("hello").kind, "user");
+        let delivered = origin_of("From thread “Parent” (agent):\n\ndo it");
+        assert_eq!(delivered.kind, "agent");
+        assert_eq!(delivered.threads[0].title.as_deref(), Some("Parent"));
+        assert_eq!(
+            origin_of("Delegate finished: x\n\n<!-- rustcode:wake -->").kind,
+            "delegate"
+        );
+    }
 
     #[test]
     fn a_projected_session_carries_the_parent_from_its_context() {

@@ -856,13 +856,10 @@ impl SessionClients {
     /// A turn starts: `base` history messages came before it. What it sends
     /// is kept, `prompt` first, until the returned guard drops.
     pub(crate) fn begin_turn(&self, base: usize, prompt: Option<String>) -> LiveTurn {
-        use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, TextContent};
         let updates = prompt
             .filter(|prompt| !prompt.is_empty())
             .map(|prompt| {
-                SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::Text(
-                    TextContent::new(prompt),
-                )))
+                SessionUpdate::UserMessageChunk(crate::message_origin::user_chunk(prompt, None))
             })
             .into_iter()
             .collect();

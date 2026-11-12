@@ -454,6 +454,14 @@ fn replay_history_updates_with_compaction(
                 }
                 updates.extend(replayed);
             }
+            // A user request says who sent it (`_meta.rustcode.origin`); a
+            // tool's result or attachment in the user role has no sender.
+            "user" if !message.content.is_empty() && message.is_user_request() => updates.push(
+                SessionUpdate::UserMessageChunk(crate::message_origin::user_chunk(
+                    message.content.clone(),
+                    streaming::message_time_meta(&message.timestamp),
+                )),
+            ),
             "user" if !message.content.is_empty() => {
                 let mut chunk = ContentChunk::new(ContentBlock::Text(TextContent::new(
                     message.content.clone(),
@@ -2171,11 +2179,10 @@ fn echo_prompt(
     if text.is_empty() {
         return;
     }
+    // The other clients did not write it: they are told who did.
     clients.update_others(
         sender,
-        SessionUpdate::UserMessageChunk(agent_client_protocol::schema::v1::ContentChunk::new(
-            ContentBlock::Text(agent_client_protocol::schema::v1::TextContent::new(text)),
-        )),
+        SessionUpdate::UserMessageChunk(crate::message_origin::user_chunk(text, None)),
     );
 }
 
@@ -5600,6 +5607,62 @@ mod tests {
                 serde_json::json!("2026-10-27T09:16:01.473007+01:00"),
                 serde_json::json!("2026-10-27T09:16:16.043688+01:00"),
             ]
+        );
+    }
+
+    // #3516: a replayed user message says who sent it, beside its time, and
+    // a tool's result in the user role says nothing.
+    #[test]
+    fn replayed_user_messages_carry_their_origin() {
+        let mut task = crate::app::ChatMessage::new(
+            "user",
+            "From thread “Ship the tree” (agent):\n\nReview the rules.",
+        );
+        task.timestamp = "2026-11-11T09:16:01+01:00".into();
+        let wake = crate::app::ChatMessage::new(
+            "user",
+            "Delegate finished: Review the rows\n\nFinished:\n\n- link_id parent-1/2 · done · “Review the rows” · session child-7\n  answer: Done.\n\n<!-- rustcode:wake -->",
+        );
+        let typed = crate::app::ChatMessage::new("user", "thanks");
+        let result = crate::app::ChatMessage::new("user", "<tool_result>ok</tool_result>");
+
+        let updates = replay_history_updates(&[task, wake, typed, result], None);
+
+        let metas = updates
+            .iter()
+            .map(|update| match update {
+                SessionUpdate::UserMessageChunk(chunk) => chunk.meta.clone(),
+                other => panic!("expected user messages: {other:?}"),
+            })
+            .collect::<Vec<_>>();
+        let origin =
+            |index: usize| metas[index].as_ref().expect("meta")["rustcode"]["origin"].clone();
+        assert_eq!(
+            origin(0),
+            serde_json::json!({ "kind": "agent", "threads": [{ "title": "Ship the tree" }] })
+        );
+        assert_eq!(
+            metas[0].as_ref().unwrap()["rustcode"]["at"],
+            "2026-11-11T09:16:01+01:00"
+        );
+        assert_eq!(
+            origin(1),
+            serde_json::json!({
+                "kind": "delegate",
+                "threads": [{
+                    "sessionId": "child-7",
+                    "title": "Review the rows",
+                    "status": "done",
+                    "linkId": "parent-1/2",
+                }]
+            })
+        );
+        assert_eq!(origin(2), serde_json::json!({ "kind": "user" }));
+        assert!(
+            metas[3]
+                .as_ref()
+                .is_none_or(|meta| meta["rustcode"].get("origin").is_none()),
+            "a tool result has no sender"
         );
     }
 
