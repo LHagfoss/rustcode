@@ -12,9 +12,10 @@ import { appPlatform, fileManagerName, primaryModifier, trashName } from "../lib
 // thread asks; the right ones hold the state (`Needs you`, `Working 2m`,
 // `Waiting`, `Failed`, `Done`, `Review`, the time it wakes, or its age —
 // state/sidebarRows.ts `rowStatus`), then the diff and pull request, then the
-// model and harness mark, or the agent stack. Hovering swaps the state for the row's actions.
+// model and harness mark (a count of running delegates sits beside the diff). Hovering swaps the state for the row's actions.
 
 import {
+  Bot,
   Check,
   ChevronDown,
   ChevronRight,
@@ -69,7 +70,7 @@ import { rowBranch } from "../lib/gitRef";
 import { formatBinding, listCommandFor } from "../lib/keys";
 import { openTerminalAt, openThreadLog, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
-import { liveSubagents, type StackAgent } from "../state/agentStack";
+import { delegateCount, liveSubagents, type StackAgent } from "../state/agentStack";
 import { type BranchRow, branchKindOf, branchRows } from "../state/branches";
 import { useCheckoutBranch } from "../state/checkoutBranch";
 import { type ChildInfo, childInfo } from "../state/children";
@@ -165,7 +166,6 @@ import {
 import { formatClock, idleSettled, shortAge } from "../state/thread";
 import { openChain, parentOf as parentOfThread, type SubRow, topLevel } from "../state/topLevel";
 import { useWaiting, useWaitingIds, waitingLabel, waitingTitle } from "../state/waiting";
-import { AgentStack } from "./AgentStack";
 import { CustomSnooze } from "./CustomSnooze";
 import { HarnessIcon } from "./HarnessIcon";
 import { NeedsYouRow } from "./Inbox";
@@ -746,6 +746,10 @@ const ThreadRow = memo(function ThreadRow({
     const own = liveSubagents(items, ownAgents, running, session.harness);
     return own.length ? [...own, ...(agents ?? [])] : agents;
   }, [items, ownAgents, running, session.harness, agents]);
+  const delegates = useMemo(
+    () => delegateCount(stack, (id) => harnesses?.harnesses.find((h) => h.id === id)?.name ?? id),
+    [stack, harnesses],
+  );
   // Done or Failed while you were elsewhere, until you open it.
   const fresh = !!finishedAt && !selected;
   const failed = !!failedAt && !selected;
@@ -972,6 +976,18 @@ const ThreadRow = memo(function ThreadRow({
                   )}
                 </span>
                 <span className={cx(ROW_RIGHT, "gap-1.5")}>
+                  {delegates && (
+                    <Tooltip label={delegates.title}>
+                      <span
+                        role="img"
+                        aria-label={delegates.title}
+                        className="flex shrink-0 items-center gap-0.5 text-fg-muted tabular"
+                      >
+                        <Bot size={11} />
+                        {delegates.count}
+                      </span>
+                    </Tooltip>
+                  )}
                   {diff && <DiffStat diff={diff} />}
                   {pull && <PullMark pull={pull} />}
                 </span>
@@ -1010,24 +1026,13 @@ const ThreadRow = memo(function ThreadRow({
                 </span>
                 {/* The harness's icon unless the section heading names it, then the model it runs. */}
                 <span className={cx(ROW_RIGHT, "text-sub text-fg-faint")}>
-                  {stack?.length ? (
-                    <AgentStack agents={stack} />
-                  ) : (
-                    <>
-                      {!grouped && external && (
-                        <HarnessIcon
-                          id={session.harness!}
-                          name={harness?.name}
-                          size={12}
-                          className="shrink-0"
-                        />
-                      )}
-                      {model && (
-                        <span className="min-w-0 max-w-[96px] truncate" title={model}>
-                          {model}
-                        </span>
-                      )}
-                    </>
+                  {!grouped && external && (
+                    <HarnessIcon id={session.harness!} name={harness?.name} size={12} className="shrink-0" />
+                  )}
+                  {model && (
+                    <span className="min-w-0 max-w-[96px] truncate" title={model}>
+                      {model}
+                    </span>
                   )}
                 </span>
               </span>

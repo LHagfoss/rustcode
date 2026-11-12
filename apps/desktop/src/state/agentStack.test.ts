@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   agentStack,
+  delegateCount,
   liveSubagents,
   STACK_VISIBLE,
   type StackAgent,
@@ -137,5 +138,29 @@ describe("a thread's own subagents", () => {
   test("other tools are not agents, and a turn that ended has none", () => {
     expect(liveSubagents([call("a", "in_progress", "Read")], [], true, "claude-code")).toEqual([]);
     expect(liveSubagents([call("a", "in_progress")], [], false, "claude-code")).toEqual([]);
+  });
+});
+
+describe("a row's delegate count", () => {
+  test("nothing running counts nothing", () => {
+    expect(delegateCount(undefined)).toBeUndefined();
+    expect(delegateCount([agent("d", "done")])).toBeUndefined();
+  });
+
+  test("names the running delegates by title, else by harness", () => {
+    const untitled: StackAgent = { id: "u", state: "working", harness: "claude-code" };
+    expect(
+      delegateCount([agent("a", "working"), untitled], (id) => (id === "claude-code" ? "Claude Code" : id)),
+    ).toEqual({
+      count: 2,
+      title: "2 delegates working: Thread a, Claude Code",
+    });
+  });
+
+  test("one delegate is singular, and what needs you is said", () => {
+    expect(delegateCount([agent("a", "working")])?.title).toBe("1 delegate working: Thread a");
+    expect(delegateCount([agent("a", "needs"), agent("b", "working")])?.title).toBe(
+      "2 delegates working (1 needs you): Thread a, Thread b",
+    );
   });
 });
