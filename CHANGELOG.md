@@ -1,3 +1,23 @@
+## [v1.31.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.31.1) - 2026-11-12
+
+### Fixes
+- A delegate started on another machine now shows under its parent thread, with the machine's name, and opening it scrolls to that row. (#3550)
+- Fix the model picker's effort and account panel running under the title row, and make its account segments fill the panel. (#3552)
+- Fix: the macOS top bar and traffic lights sit lower, on one centre line. (#3553)
+- The sidebar lists every machine's threads in one flat list, tagging threads from other machines with the machine's name, and Settings moves next to the sidebar toggle. (#3555)
+- Update remote thread status immediately while it saves. (#3556)
+- Show the branch on thread rows and keep their heights consistent. (#3557)
+- Align macOS window controls and move the sidebar controls to the right. (#3558)
+- Sidebar thread rows are all one height, with every detail always in the same place. Dragging a row now opens a gap where it will land and scrolls the list near its edges. (#3560)
+- The macOS installer signs RustCode.app with the local certificate, so Keychain stops asking for the password after each install. (#3559)
+- A thread that messaged another no longer comes back as "Waiting" when you work in that other thread yourself. (#3561)
+- Thread rows no longer cut off "Working", show the model, keep their height while renaming, and a dragged row is no longer clipped below the last row. (#3562)
+- Spend on the new thread page and in Statistics now includes a list-price estimate for turns whose harness reported no cost, covering more models. (#3563)
+- A settled thread stays in Settled while a thread it messaged is still working. (#3564)
+- A thread row without a git branch shows its folder on the third line instead of leaving it blank. (#3565)
+- New threads start in the home folder when no folder is chosen, and the folder menu no longer lists the same Windows folder twice or RustCode's install folder. (#3566)
+- Claude models show as Opus 5.5 and the like, every reply says how long it took, and repeated restart lines collapse into one. (#3568)
+- Threads on a Windows machine open again, and Repair Thread works on a paired computer. (#3567)
 ## [v1.31.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.31.0) - 2026-11-12
 
 ### Features
