@@ -6,8 +6,7 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 
 /**
  * How a thread row is drawn: `comfortable` is the two-line row with room for the project's mark,
- * its title and the branch under it; `compact` is one 32px line, with a quiet second line only
- * when the thread has a branch, a diff, a pull request or a stack to show.
+ * its title and the branch under it; `compact` has a title line and a quiet details line.
  */
 export type RowLayout = "compact" | "comfortable";
 
