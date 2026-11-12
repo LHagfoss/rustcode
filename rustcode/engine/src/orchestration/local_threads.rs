@@ -1272,7 +1272,10 @@ pub(super) fn test_thread(dir: &std::path::Path) -> String {
     );
     crate::config::save_session_history(
         &id,
-        &vec![crate::app::ChatMessage::new("user", "a test thread")],
+        &vec![
+            crate::app::ChatMessage::new("user", "a test thread"),
+            crate::app::ChatMessage::new("assistant", "ok"),
+        ],
     );
     crate::config::flush_history();
     id
