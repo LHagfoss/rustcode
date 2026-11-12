@@ -24,6 +24,26 @@ export interface OrderSection {
   limit?: number;
 }
 
+/**
+ * A row's place in the list. A thread is drawn once, so its key is its id; a delegate on another
+ * machine is drawn twice (under its open parent, and in its own machine's group), and the copy
+ * under the parent takes a key of its own, so the keyboard, the tab stop and the drag each know
+ * which one they are on.
+ */
+export function nestedKey(id: string): string {
+  return `nested:${id}`;
+}
+
+/** The thread a row key stands for. */
+export function rowIdOf(key: string): string {
+  return key.startsWith("nested:") ? key.slice("nested:".length) : key;
+}
+
+/** Whether a key is the copy drawn under a parent rather than the thread's own row. */
+export function isNestedKey(key: string): boolean {
+  return key.startsWith("nested:");
+}
+
 /** Every row the list draws, in the order it draws them: a shut section or group draws none. */
 export function visibleRows(sections: readonly OrderSection[]): string[] {
   const out: string[] = [];
@@ -54,6 +74,8 @@ export function contextRow(
   const seen = new Set<string>();
   let at: string | undefined = selectedId;
   while (at && !seen.has(at)) {
+    // The copy under its parent is where the thread was opened from: the keyboard stays there.
+    if (drawn.has(nestedKey(at))) return nestedKey(at);
     if (drawn.has(at)) return at;
     seen.add(at);
     at = parentOf.get(at);

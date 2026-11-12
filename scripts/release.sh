@@ -597,8 +597,30 @@ phase_update_lockfile() {
             die "Cargo.lock changed outside the intended workspace version entries:\n$unexpected"
         fi
         rm -f -- "$backup"
+
+        # The desktop shell is its own Cargo workspace and pins
+        # rustcode-client by path: bump that entry too, or its `--locked`
+        # CI job fails on every PR after the release. An unlocked metadata read
+        # bumps the path entry and keeps every other resolution.
+        local shell_manifest="$REPO_ROOT/$DESKTOP_SHELL_LOCK"
+        shell_manifest="${shell_manifest%Cargo.lock}Cargo.toml"
+        if ! cargo metadata --format-version 1 --manifest-path "$shell_manifest" >/dev/null; then
+            die "Cargo could not update $DESKTOP_SHELL_LOCK for the new client version."
+        fi
+        diff_output="$(git -C "$REPO_ROOT" diff --unified=0 -- "$DESKTOP_SHELL_LOCK" || true)"
+        unexpected="$(printf '%s\n' "$diff_output" |
+            grep -E '^[+-]' |
+            grep -vE '^(---|\+\+\+)' |
+            grep -vFx -- "-version = \"$CURRENT_VERSION\"" |
+            grep -vFx -- "+version = \"$VERSION\"" || true)"
+        if [[ -n "$unexpected" ]]; then
+            git -C "$REPO_ROOT" checkout -- "$DESKTOP_SHELL_LOCK"
+            die "$DESKTOP_SHELL_LOCK changed outside the rustcode-client version:\n$unexpected"
+        fi
     fi
 }
+
+DESKTOP_SHELL_LOCK="apps/desktop/src-tauri/Cargo.lock"
 
 format_changelog_notes() {
     local notes="$1"
@@ -716,7 +738,7 @@ To resume: fix the reported issues and re-run: scripts/release.sh --version $VER
 # Files the release is allowed to touch. Everything else must be committed
 # or stashed before releasing, and is never swept into the release commit.
 release_files() {
-    printf '%s\n' "Cargo.toml" "Cargo.lock" "CHANGELOG.md"
+    printf '%s\n' "Cargo.toml" "Cargo.lock" "CHANGELOG.md" "$DESKTOP_SHELL_LOCK"
     local crate_path
     while IFS= read -r crate_path; do
         [[ -z "$crate_path" ]] && continue

@@ -28,6 +28,7 @@ import {
   useState,
 } from "react";
 import { cx, menuItem, surfaceCollisionPadding, Tooltip } from "./primitives";
+import { TITLEBAR_HEIGHT } from "./Titlebar";
 
 /** Anything floating-ui can position against: here, the control that opens a panel. */
 interface Measurable {
@@ -193,7 +194,12 @@ export function CardPopover({
           side={placed}
           align={align ?? aligned}
           sideOffset={CARD_GAP}
-          collisionPadding={surfaceCollisionPadding}
+          collisionPadding={{
+            top: TITLEBAR_HEIGHT + surfaceCollisionPadding,
+            right: surfaceCollisionPadding,
+            bottom: surfaceCollisionPadding,
+            left: surfaceCollisionPadding,
+          }}
           avoidCollisions={avoidCollisions}
           role={role}
           aria-label={label}
