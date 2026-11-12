@@ -5233,8 +5233,13 @@ describe("a turn that stopped on something other than a limit", () => {
     await continueDueThreads();
     await until(() => sent().length > turns);
     expect(prompted(sent().at(-1)!)).toContain("usage limit that stopped your last turn has reset");
-    // The link is working again while the resume runs, and settles with its answer.
-    await until(() => linkOf().state === "done");
+    // The link is working again while the resume runs; the mock asks before it edits.
+    await until(() => (useApp.getState().threads[id]?.permissions.length ?? 0) > 0);
+    expect(linkOf().state).toBe("working");
+    const ask = useApp.getState().threads[id]!.permissions[0]!;
+    answerPermission(ask, ask.options.find((o) => o.kind === "allow_once")!);
+    // ... and it settles with the new answer.
+    await until(() => linkOf().state === "done", 4000);
     expect(linkOf().answer).not.toContain("hit your 5-hour limit");
     expect(linkOf().notifiedAt).toBeUndefined();
     expect(useApp.getState().limitWaits[id]).toBeUndefined();

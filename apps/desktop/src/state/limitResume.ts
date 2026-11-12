@@ -164,8 +164,8 @@ const ERROR_PREFIX =
 const JSON_TAIL = /\s*:?\s*\{[^{}\n]*\}$/;
 
 /**
- * The lines of a message that is only a usage limit, said once or more: each line with the
- * `Internal error:` prefix and the JSON tail of an error taken off. Null for anything with a
+ * The lines of a message that is only a usage limit, said once or more: each line with a
+ * harness or `Internal error:` prefix and the JSON tail of an error taken off. Null for anything with a
  * line that says something else, so a reply that talks about limits never matches.
  */
 function limitLines(text: string | undefined): string[] | null {
@@ -177,9 +177,8 @@ function limitLines(text: string | undefined): string[] | null {
     .filter(Boolean);
   if (!lines.length || lines.length > 6) return null;
   return lines.map((line) => {
-    const unwrapped = line.replace(ERROR_PREFIX, "").replace(ERROR_PREFIX, "");
-    // The tail goes only from a line that is an error: a plain reply keeps every word it said.
-    return unwrapped === line ? line : unwrapped.replace(JSON_TAIL, "").trim();
+    // Only a bare limit survives this: any other words left on the line fail its pattern.
+    return line.replace(ERROR_PREFIX, "").replace(ERROR_PREFIX, "").replace(JSON_TAIL, "").trim();
   });
 }
 
