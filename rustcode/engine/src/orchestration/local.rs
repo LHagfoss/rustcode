@@ -589,6 +589,42 @@ struct SavedProbe {
     at: Option<String>,
 }
 
+/// The gateway's port, which an address without one means.
+const GATEWAY_PORT: u16 = 17879;
+
+/// Whether two spellings name one endpoint: `studio.local:17879` and
+/// `studio.local`, `[fd00::1]:17879` and `fd00::1`. The engine does not link
+/// the client, so this is `rustcode-client`'s `registry::same_address`, which
+/// matches probes to routes in the app.
+fn same_address(left: &str, right: &str) -> bool {
+    left.eq_ignore_ascii_case(right) || endpoint(left) == endpoint(right)
+}
+
+/// An address's lowercase host and port, with the scheme and path dropped.
+fn endpoint(address: &str) -> (String, u16) {
+    let address = address.trim();
+    let address = address.split_once("://").map_or(address, |(_, rest)| rest);
+    let address = address.split('/').next().unwrap_or(address);
+    let (host, port) = if let Some(rest) = address.strip_prefix('[') {
+        let (host, after) = rest.split_once(']').unwrap_or((rest, ""));
+        (host, after.strip_prefix(':'))
+    } else {
+        match address.rsplit_once(':') {
+            Some((host, port))
+                if !host.contains(':') && port.chars().all(|c| c.is_ascii_digit()) =>
+            {
+                (host, Some(port))
+            }
+            _ => (address, None),
+        }
+    };
+    let port = port
+        .and_then(|port| port.parse::<u16>().ok())
+        .filter(|port| *port != 0)
+        .unwrap_or(GATEWAY_PORT);
+    (host.to_ascii_lowercase(), port)
+}
+
 impl SavedMachine {
     /// Each route with the last test of it, or `null` for one never tested.
     fn route_rows(&self) -> Vec<Value> {
@@ -598,7 +634,7 @@ impl SavedMachine {
                 let probe = self
                     .probes
                     .iter()
-                    .find(|probe| probe.address == route.address)
+                    .find(|probe| same_address(&probe.address, &route.address))
                     .map(|probe| {
                         let mut row = json!({"result": probe.outcome, "tested_at": probe.at});
                         if let Some(latency) = probe.latency_ms {
@@ -1082,14 +1118,17 @@ mod tests {
                 {"kind": "vpn", "address": "100.90.16.237:17879"}
             ],
             "probes": [
-                {"address": "192.168.1.20:17879", "outcome": "reachable", "latency_ms": 4, "at": "2026-11-12T10:00:00Z"}
+                {"address": "192.168.1.20", "outcome": "reachable", "latency_ms": 4, "at": "2026-11-12T10:00:00Z"}
             ]
         }))
         .unwrap();
         let rows = saved.route_rows();
         assert_eq!(rows[0]["probe"]["result"], "reachable");
         assert_eq!(rows[0]["probe"]["latency_ms"], 4);
+        // A probe saved under one spelling of the address still matches the route.
         assert!(rows[1]["probe"].is_null(), "an untested route says so");
+        assert!(same_address("[fd00::1]:17879", "FD00::1"));
+        assert!(!same_address("studio.local:9000", "studio.local"));
         assert_eq!(rows[1]["address"], "100.90.16.237:17879");
     }
 

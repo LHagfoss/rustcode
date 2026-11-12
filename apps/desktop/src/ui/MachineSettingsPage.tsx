@@ -200,7 +200,12 @@ function Routes({ machine }: { machine: Machine }) {
         <Row
           key={route.address}
           title={routeLabel(route)}
-          subtitle={route.probe?.detail ?? undefined}
+          subtitle={
+            route.probe?.detail ??
+            (route.kind === "public" && !route.probe
+              ? "Not tested: this app never sends a sign-in to a public address, so it never connects to one."
+              : undefined)
+          }
           status={
             <span className="tabular">
               {route.address}
