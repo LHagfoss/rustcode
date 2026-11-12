@@ -23,6 +23,7 @@ import {
   CircleCheck,
   CircleDashed,
   Clock,
+  CloudUpload,
   Copy,
   Ellipsis,
   Eye,
@@ -75,6 +76,7 @@ import { type BranchRow, branchKindOf, branchRows } from "../state/branches";
 import { useCheckoutBranch } from "../state/checkoutBranch";
 import { type ChildInfo, childInfo } from "../state/children";
 import { stateOf } from "../state/host";
+import { hasPendingChange, useOutbox } from "../state/machineOutbox";
 import {
   machineGlyph,
   machineName,
@@ -734,6 +736,8 @@ const ThreadRow = memo(function ThreadRow({
   const gitBranch = worktree?.branch || checkoutBranch;
   const harnesses = useApp((s) => s.harnesses);
   const pinned = useApp((s) => s.pinned.includes(session.id));
+  // A settle or pin made while its machine was away, waiting to be sent (state/machineOutbox.ts).
+  const unsynced = useOutbox((o) => hasPendingChange(o.byHost, session.id));
   const finishedAt = useApp((s) => s.finished[session.id]);
   const failedAt = useApp((s) => s.failed[session.id]);
   // What the thread's calls changed, from the diffs the app already read: a thread never opened
@@ -967,11 +971,18 @@ const ThreadRow = memo(function ThreadRow({
                   {place && (
                     <span
                       className="flex min-w-0 shrink items-center gap-1 text-fg-faint"
-                      title={`Runs on ${place.name}`}
+                      title={
+                        unsynced
+                          ? `Runs on ${place.name}. Your change syncs when ${place.name} is back.`
+                          : `Runs on ${place.name}`
+                      }
                     >
                       <span aria-hidden>·</span>
                       <DeviceGlyphIcon glyph={place.glyph} tint={place.tint} size={11} />
                       <span className="min-w-0 truncate">{place.name}</span>
+                      {unsynced && (
+                        <CloudUpload size={11} className="shrink-0" aria-label="Waiting to sync" />
+                      )}
                     </span>
                   )}
                 </span>
