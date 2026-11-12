@@ -4413,6 +4413,13 @@ describe("what an agent may do with the messages it queued", () => {
     await until(() => !useApp.getState().threads[target]?.running);
     expect(linkStates()).toEqual(["done", "done"]);
     expect(statusOf(useApp.getState(), target)).not.toBe("running");
+    // The parent has read both answers: no wake turn starts after the test, in the next one's threads.
+    useApp.setState((st) => ({
+      links: {
+        ...st.links,
+        links: st.links.links.map((l) => (steers.includes(l.id) ? { ...l, notifiedAt: Date.now() } : l)),
+      },
+    }));
   });
 
   test("steer queues for a harness without mid-turn input and its owner can manage it across projects", async () => {
