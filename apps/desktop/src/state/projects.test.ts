@@ -4,7 +4,14 @@
 
 import { describe, expect, test } from "bun:test";
 import type { SessionSummary } from "../acp/types";
-import { isRootFolder, matchProject, projectAt, projectsOn, remoteRepository } from "./projects";
+import {
+  isRootFolder,
+  matchProject,
+  projectAt,
+  projectByRepository,
+  projectsOn,
+  remoteRepository,
+} from "./projects";
 import { LOCAL_HOST } from "./threadKeys";
 
 const STUDIO = "gw-8e1f4b7a5c2d4e6f";
@@ -164,5 +171,67 @@ describe("the same project on another machine", () => {
   test("nothing when the machine has no such project", () => {
     expect(matchProject(local, [{ path: "/Users/lars/code/notes", name: "notes" }])).toBeUndefined();
     expect(matchProject(null, [{ path: "/Users/lars/code/notes", name: "notes" }])).toBeUndefined();
+  });
+});
+
+describe("a delegate's project on another machine (B6)", () => {
+  const repo = "github.com/lhagfoss/rustcode";
+  const at = (path: string, repository: string | null | undefined) => ({
+    path,
+    name: path.split("/").pop() ?? "",
+    repository,
+  });
+
+  test("is the checkout of the caller's repository, whatever its folder is called", () => {
+    const found = projectByRepository({ name: "rustcode", repository: repo }, [
+      at("/home/lars/code/website", "github.com/lhagfoss/website"),
+      at("/home/lars/src/rc", repo),
+    ]);
+    expect(found?.path).toBe("/home/lars/src/rc");
+  });
+
+  test("of two checkouts, the one named like the caller's, else the newest", () => {
+    const named = projectByRepository({ name: "rustcode", repository: repo }, [
+      at("/home/lars/rc-old", repo),
+      at("/home/lars/code/rustcode", repo),
+    ]);
+    expect(named?.path).toBe("/home/lars/code/rustcode");
+    const newest = projectByRepository({ name: "rustcode", repository: repo }, [
+      at("/home/lars/a", repo),
+      at("/home/lars/b", repo),
+    ]);
+    expect(newest?.path).toBe("/home/lars/a");
+  });
+
+  test("is never the machine's only or newest project when it is another repository", () => {
+    expect(
+      projectByRepository({ name: "rustcode", repository: repo }, [
+        at("/home/lars/code/website", "github.com/lhagfoss/website"),
+      ]),
+    ).toBeUndefined();
+    // A folder with the caller's name that is a checkout of something else is not it either.
+    expect(
+      projectByRepository({ name: "rustcode", repository: repo }, [
+        at("/home/lars/code/rustcode", "github.com/someone/rustcode"),
+      ]),
+    ).toBeUndefined();
+  });
+
+  test("a caller outside git goes by its folder's name, only to a folder outside git", () => {
+    expect(
+      projectByRepository({ name: "notes", repository: null }, [at("/home/lars/notes", null)])?.path,
+    ).toBe("/home/lars/notes");
+    expect(
+      projectByRepository({ name: "notes", repository: null }, [
+        at("/home/lars/notes", "github.com/x/notes"),
+      ]),
+    ).toBeUndefined();
+    // Two folders of that name are a question, not a pick.
+    expect(
+      projectByRepository({ name: "notes", repository: undefined }, [
+        at("/home/lars/notes", undefined),
+        at("/srv/notes", null),
+      ]),
+    ).toBeUndefined();
   });
 });

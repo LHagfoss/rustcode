@@ -301,7 +301,7 @@ the engine answers the ones that need no approval itself
 | --- | --- |
 | `list_sessions`, `read_session` | The same thread store the app reads, under the same project gate: `all_projects` and reading another project need the app's "Let agents read threads in other projects" setting, and an Ask-mode thread's read needs the app's approval card, so it is refused. `read_session` renders and pages its turns as the app does. |
 | `list_harnesses` | The engine's own `_rustcode/harnesses` snapshot, with the model cap and `model`/`harness` filters. |
-| `list_machines` | This computer and the machines in `machines.json`; a saved machine's `state` is `unknown`, because the app owns the live connections, and `probe: true` is answered with `probed: false`: each route shows the last test the app saved. |
+| `list_machines` | This computer and the machines in `machines.json`. The app owns the live connections, so each saved route is tested now with a TCP connect to its gateway port (no token is sent, 1.5 s per route, all at once) and the answer says `probed: true`: a machine with a route that answers is `reachable`, else `offline` with a `reason`. Reachable is not connected: acting there still needs the app. |
 | `thread_status` | Status, project, worktree and branch from the thread and link records; pull requests and checks are the app's to read, and the answer says so. |
 | `wait_session` | The link book the app saves; `needs_user` settles the wait so the caller sees the question. Nothing advances a link the app started while the app is closed, so a wait can time out where an open app would have answered; a link the engine started itself settles when its turn ends. |
 | `thread_status` with a `session_id` | The same reach a read needs: a thread in the caller's project, one the caller started, or any thread when "Let agents read threads in other projects" is on (the app's `checkManage`); otherwise `not_allowed`. |
@@ -1240,8 +1240,8 @@ is the follow-up (§10, phases 3.1 and 3.2).
 
 | Tool | With `machine` |
 | --- | --- |
-| `list_machines` | This computer (`current: true`) and each paired machine: `{ id, name, platform, state, route?, routes?, last_connected?, harnesses, projects }`. `routes` is each saved route, `{ kind, address, encrypted, probe }`, where `probe` is the last test (`{ result: reachable \| refused \| timeout \| unreachable, latency_ms?, tested_at }`) or `null`; `probe: true` tests every route first and the answer says `probed: true`. `harnesses` is that machine's list (`[{ id, name, available }]`). `projects` is its project names: the folders its threads really run in, never the home folder or root its engine lists for a thread that recorded none, and never two spellings of one folder (Windows' `\\?\` prefix is dropped, issue 3425) |
-| `start_session`, `fan_out` | Start on that machine, in its project. `harness`, `model`, `effort` and `account` are that machine's own (never this app's logins or remembered choices). `project` is an absolute path there; without it, the caller's path when the machine has it, else a folder with the same project name, else its only project, else its most recently used one; otherwise the error lists what it has, and a machine with none is refused with a hint to pass the path. A thread never starts in `/`, in the app's own data folder, or in the app's install folder (issues 3425, 3524). `title` reaches the thread that machine makes, in `session/new`'s `_meta.rustcode.title`, so it is named there and not from its first message |
+| `list_machines` | This computer (`current: true`) and each paired machine: `{ id, name, platform, version?, state, reason?, retry_in_secs?, route?, routes?, last_connected?, running_threads, pending_requests, harnesses, projects }` (v16 fields below). `routes` is each saved route, `{ kind, address, encrypted, probe }`, where `probe` is the last test (`{ result: reachable \| refused \| timeout \| unreachable, latency_ms?, tested_at }`) or `null`; `probe: true` tests every route first and the answer says `probed: true`. `harnesses` is that machine's list (`[{ id, name, available }]`). `projects` is its project names: the folders its threads really run in, never the home folder or root its engine lists for a thread that recorded none, and never two spellings of one folder (Windows' `\\?\` prefix is dropped, issue 3425) |
+| `start_session`, `fan_out` | Start on that machine, in its project. `harness`, `model`, `effort` and `account` are that machine's own (never this app's logins or remembered choices). `project` is an absolute path there; without it, the caller's path when the machine has it, else the project there that is a checkout of the caller's repository (v16, below); otherwise the error lists each project with its repository, and a machine with none is refused with a hint to pass the path or clone it. A thread never starts in `/`, in the app's own data folder, or in the app's install folder (issues 3425, 3524). `title` reaches the thread that machine makes, in `session/new`'s `_meta.rustcode.title`, so it is named there and not from its first message |
 | `list_harnesses` | That machine's harnesses, models and named accounts, without this app's plan numbers |
 | `list_projects`, `list_sessions` | That machine's projects or threads. Its folders are not this one's, so its threads are listed whether or not they share this project |
 | `read_session`, `message_session`, `interrupt_session` | On that machine's thread. A machine's threads are not narrowed to the caller's project: the user named the machine, and the approval card is the gate. A thread the caller started on a machine is reachable even when `machine` is omitted |
@@ -1279,11 +1279,11 @@ Limits of v1, and what is left:
 
 - The machine's own app need not run: the engine runs the threads. But this
   app must: with it closed nothing is answered.
-- `merge_when_green`, `cleanup_worktree`, `transfer_session`, `update_session`
-  and `configure_session` have no `machine` yet; they refuse a thread on
-  another machine with "runs on ‹machine›: do that there", and
-  `thread_status` for a remote thread reports its branch but no pull-request
-  checks (those are read by this app's `gh`, not that machine's folders).
+- `merge_when_green`, `cleanup_worktree`, `handoff_worktree`,
+  `transfer_session` and `organize_threads` have no `machine`; they refuse a
+  thread on another machine with "runs on ‹machine›: do that there". They act
+  on a checkout and a GitHub login that live on the other machine, and the
+  delegate there can run them itself. v16 (below) adds the rest.
 - A link's access mode (full vs only threads it starts) arrives with machine
   links (§8.1); until then every paired machine is at the user's own trust, as
   the rest of the multi-machine app is.
@@ -1294,6 +1294,64 @@ Limits of v1, and what is left:
 The app advertises 12 from `CAPABILITY_VERSION` (`state/orchestration.ts`);
 a v11 app keeps exactly the v11 set and `PROMPT_HINT_V11`, and this engine
 refuses `machine` from it rather than acting on the wrong computer.
+
+## Orchestration tools v16: the rest of the thread tools on another machine
+
+v16 adds no tool. It gives `machine` to `answer_request`, `manage_queue`,
+`search_sessions`, `read_activity`, `configure_session`, `update_session`,
+`worktree_status`, `list_worktrees`, `list_pull_requests`, `read_project` and
+`clone_project`, so an orchestrator here can delegate a whole task to another
+computer: start it in the right project, answer what it asks, manage what it
+queued, read its activity and worktree, and clone a repository there. Like
+v12, a v15 client never sees the field, and this engine refuses a call that
+carries one, rather than acting on this computer.
+
+| Tool | With `machine` (or an id that carries one) |
+| --- | --- |
+| `answer_request` | Answers that thread's approval or question on that machine's connection. The own-tree rule still holds (a thread below the caller in its link book); the project rule does not, since a remote thread is in none of this computer's projects. The card names the machine |
+| `manage_queue` | The caller's queued messages on that thread. The queue is this app's own record, so a machine that is away still has it |
+| `search_sessions` | That machine's threads, by title and by its own `_rustcode/threads/search` index, each with its project there |
+| `read_activity` | As v12, now with a bare id plus `machine` |
+| `configure_session`, `update_session` | That thread's model and effort; its pin, unread mark, status and snooze. `session_id` is required with a machine. A rename is refused: a thread's name lives on the computer that owns it |
+| `list_worktrees`, `worktree_status` | That machine's worktree threads; the git state is read by its engine (`_rustcode/worktrees/state`) and each pull request by its own `gh` |
+| `list_pull_requests` | The pull requests of the caller's project, read in that machine's checkout of the caller's repository, with its `gh` login |
+| `read_project` | That folder's git facts, read there |
+| `clone_project` | `git clone` there. `parent` is the call's, else the one folder that machine's projects share; with several it asks. The clone is remembered as one of that machine's projects, so the next start finds it by its repository. The grant is `project:clone@‹machine id›:‹url›` |
+
+`thread_status` also reads a remote delegate's pull request and checks with
+that machine's `gh` (`_rustcode/pulls/state`), instead of its branch only.
+
+**Which project a thread starts in.** With no `project`, `start_session` and
+`fan_out` on a machine take, in order: the caller's own path when the machine
+has it; the project there that is a checkout of the caller's repository (its
+`origin`, compared as `host/owner/repo` by `remoteRepository`, so
+`git@github.com:o/r.git` and `https://github.com/O/r` match), preferring the
+one named like the caller's folder and else the most recently used; and, for a
+caller outside git only, the one folder of the same name that is outside git
+too. Nothing else: never the machine's only or most recently used project,
+which could be an unrelated repository (B6 in the machine-connect audit). The
+refusal lists each project with its repository and suggests `clone_project`.
+Each folder's repository is read once per app run with `_rustcode/project/read`
+on that machine (a failed read is retried on the next call).
+
+**`list_machines` to choose by.** Each row now carries `version` (the
+RustCode version it last reported; this app's own for this computer), `state`
+(`connected`, `connecting`, `offline` or `revoked`) and, when it is not
+connected, `reason` (what Settings › Machines says, with its hint) and
+`retry_in_secs`; `running_threads` and `pending_requests` (what this app lists
+for it); `harnesses` with `default`, the first eight model ids
+(`omitted_models` counts the rest; `list_harnesses` with `machine` has them)
+and named `accounts` (`signed_out` when signed out), or `reason` for one that
+cannot run; and `projects` as `{ path, name, remote }`, where `remote` is the
+repository (`null` for a folder with no `origin`, absent when it could not be
+read; a machine that is not connected says what was read last).
+
+The gateway allows `_rustcode/threads/search`, `_rustcode/data/activity`,
+`_rustcode/project/read`, `_rustcode/project/clone` and
+`_rustcode/worktrees/state` from a paired desktop for these
+(`docs/remote.md` › Desktop ACP channel). A machine on an older RustCode
+refuses them: its search finds titles only, and the other calls answer that
+they could not be read there.
 
 ## Orchestration tools v14
 
@@ -1499,13 +1557,14 @@ can inject the server (unix), and in a thread's answer whether it did.
 engine does both); a thread's answer sets `checkpoints` to whether its cwd is
 in a git repository. `initialize` also advertises `_meta.rustcode.worktrees`,
 `checkpoints` and `threadStatus` (each `1`). The app advertises
-`_meta.rustcode.orchestration = 15` while threads may orchestrate
+`_meta.rustcode.orchestration = 16` while threads may orchestrate
 (`state/orchestration.ts` `CAPABILITY_VERSION`), and the newest client gets the
 v4 data-store tools, the v6 activity read, the v7 queue control, the v9
 delegate pull-request tools, v10's `answer_request` and `organize_threads`, the
 v11 project and scheduled-task tools, the v12 machine tools and the v13 worktree
-pair, plus the v14 mid-turn `steer` and the v15 standalone argument; v8 adds
-no tool, only its prompt hint.
+pair, plus the v14 mid-turn `steer`, the v15 standalone argument and the v16
+`machine` on the rest of the thread tools; v8 adds no tool, only its prompt
+hint.
 
 ## Keeping an orchestrator's context small
 
