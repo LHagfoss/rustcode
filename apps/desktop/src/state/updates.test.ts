@@ -1,9 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import type { UpdateInfo } from "../lib/updater";
 import {
+  type AutoInstallFacts,
+  anyThreadBusy,
+  autoInstallDecision,
   compareVersions,
   installProgress,
   isPrerelease,
   newerVersion,
+  readAutoInstall,
   readChannel,
   shouldShowWhatsNew,
   updateHint,
@@ -117,5 +122,85 @@ describe("the update row's hint", () => {
   test("a note from the shell replaces the default (the .deb asks for a password)", () => {
     const note = "Asks for your password to install the package";
     expect(updateHint({ ...info, installNote: note, channels: ["stable"] })).toBe(note);
+  });
+});
+
+describe("automatic install", () => {
+  const info = (over: Partial<UpdateInfo> = {}): UpdateInfo => ({
+    current: "1.31.3",
+    latest: "1.32.0",
+    available: true,
+    canInstall: true,
+    installNote: null,
+    development: false,
+    page: null,
+    channels: ["stable", "beta"],
+    channel: "stable",
+    ...over,
+  });
+  const facts = (over: Partial<AutoInstallFacts> = {}): AutoInstallFacts => ({
+    enabled: true,
+    development: false,
+    info: info(),
+    channel: "stable",
+    skipped: null,
+    installing: false,
+    busy: false,
+    ...over,
+  });
+
+  test("installs a newer release when enabled and no thread is working", () => {
+    expect(autoInstallDecision(facts())).toBe("install");
+  });
+
+  test("waits while a thread works, and installs once it is idle", () => {
+    expect(autoInstallDecision(facts({ busy: true }))).toBe("wait");
+    expect(autoInstallDecision(facts({ busy: false }))).toBe("install");
+  });
+
+  test("never installs in a development build", () => {
+    expect(autoInstallDecision(facts({ development: true }))).toBe("none");
+    expect(autoInstallDecision(facts({ info: info({ development: true }) }))).toBe("none");
+  });
+
+  test("does nothing when the setting is off", () => {
+    expect(autoInstallDecision(facts({ enabled: false }))).toBe("none");
+    expect(autoInstallDecision(facts({ enabled: false, busy: true }))).toBe("none");
+  });
+
+  test("a skipped beta stays skipped", () => {
+    const beta = info({ latest: "1.32.0-beta.2", channel: "beta" });
+    expect(autoInstallDecision(facts({ info: beta, channel: "beta" }))).toBe("install");
+    expect(autoInstallDecision(facts({ info: beta, channel: "beta", skipped: "1.32.0-beta.2" }))).toBe(
+      "none",
+    );
+    expect(
+      autoInstallDecision(
+        facts({ info: info({ available: false }), channel: "beta", skipped: "1.32.0-beta.2" }),
+      ),
+    ).toBe("none");
+  });
+
+  test("needs an offer from the selected channel that this copy can install", () => {
+    expect(autoInstallDecision(facts({ info: null }))).toBe("none");
+    expect(autoInstallDecision(facts({ info: info({ available: false }) }))).toBe("none");
+    expect(autoInstallDecision(facts({ info: info({ channel: "beta" }) }))).toBe("none");
+    expect(autoInstallDecision(facts({ info: info({ canInstall: false }) }))).toBe("none");
+    expect(autoInstallDecision(facts({ installing: true }))).toBe("none");
+  });
+
+  test("a running turn, background commands, an approval or a question count as work", () => {
+    const idle = { running: false, permissions: [] };
+    expect(anyThreadBusy({})).toBe(false);
+    expect(anyThreadBusy({ a: idle })).toBe(false);
+    expect(anyThreadBusy({ a: idle, b: { ...idle, running: true } })).toBe(true);
+    expect(anyThreadBusy({ a: { ...idle, waiting: 2 } })).toBe(true);
+    expect(anyThreadBusy({ a: { ...idle, permissions: [{}] } })).toBe(true);
+  });
+
+  test("the setting is on unless it was turned off", () => {
+    expect(readAutoInstall(null)).toBe(true);
+    expect(readAutoInstall("1")).toBe(true);
+    expect(readAutoInstall("0")).toBe(false);
   });
 });

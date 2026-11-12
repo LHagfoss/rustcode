@@ -1690,7 +1690,16 @@ and switching back to Stable never offers a downgrade (a beta is already newer
 than the release before it). On Beta the row reads **Update to
 1.21.0-beta.3**, with **Skip this beta** under it: that version is kept out of
 the row across restarts (`rustcode.skippedBeta`) and the next beta is offered
-as usual. **Update to X** installs in place on macOS, Linux (AppImage and
+as usual. **Install updates automatically** (Settings › About, on by default,
+`rustcode.autoInstallUpdates`) installs an offered release by itself once no
+thread is working: no running turn, no background command a turn waits on, no
+pending approval or question (`autoInstallDecision` in `state/updates.ts`).
+While something works it asks again every 10 seconds and never interrupts a
+turn; a skipped beta stays skipped, a dev build never installs, and an install
+that failed is left to the sidebar row. It shows *Updating to X…*, installs and
+reopens like **Update to X** does, so the app starts its bundled engine anew
+and, in a release build, its start-up catch-up restarts a background server
+onto the new binary with `rustcode server restart --when-idle`. **Update to X** installs in place on macOS, Linux (AppImage and
 `.deb`) and Windows; how depends on how this copy was installed
 (`Install` in `updater.rs`, decided from `$APPIMAGE`, the binary's path,
 `dpkg-query -S` and the files beside it). Every route first downloads the
