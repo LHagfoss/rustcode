@@ -138,6 +138,7 @@ import {
   reachesThread,
   reachOf,
   renderRead,
+  reopenLinks,
   restateLinks,
   sameProject,
   sameReach,
@@ -4910,6 +4911,17 @@ export function linksResumed(ids: readonly string[]): void {
         : link,
     ),
   }));
+}
+
+/**
+ * A thread carries on after the app waited out the stop that ended its turn (`store.ts`
+ * `continueDueThreads`): the links that stop settled work again and settle with the new turn.
+ */
+export function linksReopened(thread: string, ids: readonly string[]): void {
+  if (!ids.length) return;
+  const next = reopenLinks(book(), thread, ids, Date.now());
+  if (next === book()) return;
+  setBook(() => next);
 }
 
 /** The harness a settled link ran on, as the notice names it: its id and display name. */

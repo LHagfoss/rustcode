@@ -2223,6 +2223,41 @@ export function restateLinks(
 }
 
 /**
+ * The book after a thread carried on from a stop the app waited out (a usage limit, an
+ * overload): the links that stop settled as `failed` or `done` work again, with the clock
+ * set to now, and settle with the answer the new turn gives. The parent that was told the
+ * stop is told once more. A link the user stopped, a newer link to the same thread, or one
+ * that is not the thread's own is left alone.
+ */
+export function reopenLinks(book: LinkBook, thread: string, ids: readonly string[], now: number): LinkBook {
+  if (!ids.length) return book;
+  let changed = false;
+  const links = book.links.map((link) => {
+    if (!ids.includes(link.id) || link.target !== thread) return link;
+    if (link.state !== "failed" && link.state !== "done") return link;
+    if (book.links.some((other) => other.target === thread && other.createdAt > link.createdAt)) return link;
+    changed = true;
+    return advanceLink(
+      {
+        ...link,
+        answer: undefined,
+        error: undefined,
+        truncated: undefined,
+        settledAt: undefined,
+        notifiedAt: undefined,
+        answerChangedAt: undefined,
+        workedMs: undefined,
+        waitingSince: undefined,
+        waitedMs: undefined,
+      },
+      { state: "working", startedAt: now },
+      now,
+    );
+  });
+  return changed ? { ...book, links } : book;
+}
+
+/**
  * A mark a wait set when it handed a link over: the field it wrote, so the one
  * mark can be taken back when the call that handed it over turns out to be gone.
  */
