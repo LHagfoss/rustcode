@@ -15,6 +15,12 @@ class HangingShell implements Transport {
   }
 }
 
+class AnsweringShell extends HangingShell {
+  override call(): Promise<unknown> {
+    return Promise.resolve(["ok"]);
+  }
+}
+
 afterEach(() => setShellTransport(null));
 
 describe("shellCallWithin", () => {
@@ -25,7 +31,7 @@ describe("shellCallWithin", () => {
   });
 
   test("an answer in time is returned as it is", async () => {
-    setShellTransport({ ...new HangingShell(), call: async () => ["ok"] } as Transport);
+    setShellTransport(new AnsweringShell());
     expect(await shellCallWithin(1_000, "machines_list")).toEqual(["ok"]);
   });
 });
