@@ -659,6 +659,9 @@ composer's keys stay outside the table.
   row still counts the turns that reported no cost as unknown. Estimates are
   list prices, not necessarily what a subscription bills. **Cost by model**
   draws the same numbers as bars, and **Last 30 days** charts turns per day.
+  The new thread page's *Usage* and *This month* spend use the same rule,
+  read by model. A model id a router prefixes (`openrouter/openai/…`) is
+  priced as the model it names; a `-free` tier never is.
   The CLI's `rustcode usage` stays reported-only.
 - **Settings › Diagnostics.** Built in for debugging the RustCode server
   (the `rustcode --acp` process; "server" is its user-facing name,

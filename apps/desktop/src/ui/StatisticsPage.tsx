@@ -35,6 +35,7 @@ import {
   type CostTotals,
   costLine,
   costOf,
+  costOfRows,
   formatCost,
   PRICE_DATE,
   priceOf,
@@ -73,12 +74,8 @@ const NARROW_COLUMN = "@max-[36rem]/usage:hidden";
 
 const DEFAULT_PERIOD: StatsPeriod = "30d";
 
-/** The cost inputs of a report's rows: one model row each. */
-const rowInputs = (rows: readonly UsageRow[]): CostInput[] =>
-  rows.map((row) => ({ harness: row.harness, model: row.model, totals: row }));
-
 /** The cost of a set of rows, each row's reported number or its estimate. */
-const costsOf = (rows: readonly UsageRow[]): CostTotals => rollUpCosts(rowInputs(rows));
+const costsOf = costOfRows;
 
 const modelInput = (harness: string, model: ModelTotal): CostInput => ({
   harness,

@@ -30,8 +30,8 @@ import { parseUsageReport } from "../acp/rustcode";
 import { Method } from "../acp/types";
 import { openExternal } from "../lib/native";
 import { count } from "../lib/plural";
-import { daysAgo, sumRows, trend } from "../state/period";
-import { formatCost } from "../state/pricing";
+import { daysAgo, previousRows, sumRows, trend } from "../state/period";
+import { costLine, costOfRows, formatBestCost } from "../state/pricing";
 import { cachedPulls, loadPulls, pullState, pullsVersion, subscribePulls } from "../state/pulls";
 import { openSettings, selectThread, setPanel, useApp } from "../state/store";
 import { formatTokens, relativeAge } from "../state/thread";
@@ -202,11 +202,13 @@ function RecentThreadsCard({ project }: { project: string }) {
   );
 }
 
-function UsageCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
+function UsageCard({ rows, models, since }: { rows?: UsageRow[]; models?: UsageRow[]; since: string }) {
   const totals = useMemo(
     () => sumRows((rows ?? []).filter((row) => (row.day ?? "") >= since)),
     [rows, since],
   );
+  // The spend is read by model, so a harness that reports no cost (Codex) is priced at list price.
+  const cost = useMemo(() => (models ? costOfRows(models) : undefined), [models]);
   const tokens = (totals.input ?? 0) + (totals.output ?? 0);
   return (
     <Card label="Usage" icon={Gauge} span="lg:col-span-2">
@@ -228,8 +230,8 @@ function UsageCard({ rows, since }: { rows?: UsageRow[]; since: string }) {
             {formatTokens(tokens)}
             <span className="pl-1 font-normal text-caption text-fg-muted">tokens</span>
           </span>
-          <span className="truncate text-callout text-fg-muted tabular">
-            {totals.cost === undefined ? "spend not reported" : formatCost(totals.cost)}
+          <span className="truncate text-callout text-fg-muted tabular" title={cost && costLine(cost)}>
+            {cost?.usd === undefined ? "spend unknown" : formatBestCost(cost)}
           </span>
         </div>
       )}
@@ -362,9 +364,27 @@ function Metric({
   );
 }
 
-function ThisMonthCard({ rows }: { rows?: UsageRow[] }) {
-  const now = useMemo(() => new Date(), []);
-  const { since, previousSince } = useMemo(() => monthBounds(now), [now]);
+function ThisMonthCard({
+  rows,
+  month,
+  twoMonths,
+  since,
+  previousSince,
+}: {
+  rows?: UsageRow[];
+  /** By model since the month began, and since the month before began. */
+  month?: UsageRow[];
+  twoMonths?: UsageRow[];
+  since: string;
+  previousSince: string;
+}) {
+  const spend = useMemo(
+    () =>
+      month && twoMonths
+        ? { now: costOfRows(month), before: costOfRows(previousRows(twoMonths, month)) }
+        : undefined,
+    [month, twoMonths],
+  );
   const { thisMonth, lastMonth } = useMemo(() => {
     const of = (rows ?? []).filter((row): row is UsageRow & { day: string } => !!row.day);
     return {
@@ -393,12 +413,12 @@ function ThisMonthCard({ rows }: { rows?: UsageRow[] }) {
           />
           <Metric
             label="Spend"
-            value={formatCost(thisMonth.cost)}
-            title={thisMonth.cost === undefined ? "No harness reported a cost this month" : undefined}
+            value={spend ? formatBestCost(spend.now) : "…"}
+            title={spend && costLine(spend.now)}
             change={
-              thisMonth.cost === undefined || lastMonth.cost === undefined
+              spend?.now.usd === undefined || spend.before.usd === undefined
                 ? undefined
-                : trend(thisMonth.cost, lastMonth.cost)
+                : trend(spend.now.usd, spend.before.usd)
             }
           />
         </div>
@@ -410,14 +430,23 @@ function ThisMonthCard({ rows }: { rows?: UsageRow[] }) {
 
 /**
  * The cards under a new thread's composer. One day-by-day usage read covers the
- * activity heatmap, the usage card and this month's figures; the thread and pull
+ * activity heatmap and the turn and token counts; three reads by model price the spend, a
+ * harness's reported cost or the list-price estimate (`state/pricing.ts`); the thread and pull
  * lists come from what the sidebar already read.
  */
 export function NewThreadWidgets({ project }: { project: string }) {
   const since = useMemo(() => daysAgo(new Date(), HEATMAP_WEEKS * 7 - 1), []);
   const usageSince = useMemo(() => daysAgo(new Date(), USAGE_DAYS - 1), []);
+  const { since: monthSince, previousSince } = useMemo(() => monthBounds(new Date()), []);
   const days = useEngineData(Method.dataUsage, parseUsageReport, { groupBy: "day", since });
   const rows = days.data?.rows;
+  // Spend is read by model as well, where a list price can stand in for a cost no harness reported.
+  const recent = useEngineData(Method.dataUsage, parseUsageReport, { groupBy: "model", since: usageSince });
+  const month = useEngineData(Method.dataUsage, parseUsageReport, { groupBy: "model", since: monthSince });
+  const twoMonths = useEngineData(Method.dataUsage, parseUsageReport, {
+    groupBy: "model",
+    since: previousSince,
+  });
   return (
     <div
       // Below `lg` the cards are one row that scrolls sideways: five columns of a 240px card in a
@@ -430,9 +459,15 @@ export function NewThreadWidgets({ project }: { project: string }) {
     >
       <ActivityCard rows={rows} since={since} />
       <RecentThreadsCard project={project} />
-      <UsageCard rows={rows} since={usageSince} />
+      <UsageCard rows={rows} models={recent.data?.rows} since={usageSince} />
       <PullsCard project={project} />
-      <ThisMonthCard rows={rows} />
+      <ThisMonthCard
+        rows={rows}
+        month={month.data?.rows}
+        twoMonths={twoMonths.data?.rows}
+        since={monthSince}
+        previousSince={previousSince}
+      />
     </div>
   );
 }

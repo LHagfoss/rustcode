@@ -4,15 +4,17 @@
 // shapes are one row each, with the numbers the local store recorded.
 
 import { describe, expect, test } from "bun:test";
-import type { UsageCounts } from "../acp/rustcode";
+import type { UsageCounts, UsageRow } from "../acp/rustcode";
 import {
   addCost,
   bestCost,
   type CostInput,
   costLine,
   costOf,
+  costOfRows,
   emptyCost,
   estimateUsd,
+  formatBestCost,
   formatCost,
   normalize,
   PRICE_DATE,
@@ -122,7 +124,7 @@ describe("list prices", () => {
   });
 
   test("the table is dated", () => {
-    expect(PRICE_DATE).toBe("2026-11-06");
+    expect(PRICE_DATE).toBe("2026-11-12");
   });
 });
 
@@ -270,5 +272,43 @@ describe("a row's best known cost", () => {
       estimatedUsd: 1,
       unknownTurns: 3,
     });
+  });
+});
+
+describe("the models a harness names", () => {
+  test("Claude Code's aliases name the current models", () => {
+    expect(priceOf("fable")).toEqual(priceOf("claude-fable-5-2"));
+    expect(priceOf("claude-opus-5")?.output).toBe(25);
+    expect(priceOf("claude-sonnet-5.5")).toEqual(priceOf("claude-sonnet-5-5"));
+  });
+
+  test("a router's provider prefix prices the model it names", () => {
+    expect(priceOf("openrouter/openai/gpt-6.1-sol")).toEqual(priceOf("gpt-6.1-sol"));
+    expect(priceOf("opencode/gpt-6.1-sol")).toEqual(priceOf("gpt-6.1-sol"));
+  });
+
+  test("a free tier and an unknown model stay unpriced", () => {
+    expect(priceOf("opencode/deepseek-v4.1-flash-free")).toBeUndefined();
+    expect(priceOf("some/unknown-model")).toBeUndefined();
+  });
+});
+
+describe("a report's spend by model", () => {
+  test("a reported row and an estimated one add up, marked as an estimate", () => {
+    const row = (harness: string, model: string, over: Partial<UsageRow>): UsageRow => ({
+      ...emptyTotals(),
+      harness,
+      model,
+      turns: 1,
+      ...over,
+    });
+    const cost = costOfRows([
+      row("claude-code", "opus", { input: 10, output: 10, cost: 1 }),
+      row("codex", "gpt-6-luna", { input: 1_000_000, cached: 0, output: 0 }),
+    ]);
+    expect(cost.reportedUsd).toBe(1);
+    expect(cost.estimatedUsd).toBeCloseTo(0.1);
+    expect(formatBestCost(cost)).toBe("≈$1.10");
+    expect(formatBestCost(costOfRows([row("claude-code", "opus", { cost: 2 })]))).toBe("$2.00");
   });
 });

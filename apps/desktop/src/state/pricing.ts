@@ -26,10 +26,10 @@
 //
 // Pure (no React, no store), so the page and its tests share one answer.
 
-import type { UsageCounts } from "../acp/rustcode";
+import type { UsageCounts, UsageRow } from "../acp/rustcode";
 
 /** The day the prices below were last checked against the providers' list prices. */
-export const PRICE_DATE = "2026-11-06";
+export const PRICE_DATE = "2026-11-12";
 
 /** USD per million tokens. */
 export interface Price {
@@ -52,10 +52,16 @@ const price = (input: number, cacheRead: number, cacheWrite: number, output: num
  * model name; they are mapped below rather than priced twice.
  */
 const PRICES: Record<string, Price> = {
-  // Anthropic. Opus 5.5 and Sonnet 5 are what Claude Code runs on this Mac.
+  // Anthropic. A cache write is 1.25x the input rate (the 5-minute cache).
+  "claude-fable-5-2": price(8, 0.2, 10, 40),
+  "claude-fable-5-1": price(10, 1, 12.5, 50),
+  "claude-fable-5": price(10, 1, 12.5, 50),
   "claude-opus-5-5": price(4, 0.2, 5, 20),
+  "claude-opus-5": price(5, 0.5, 6.25, 25),
+  "claude-opus-4-8": price(5, 0.5, 6.25, 25),
+  "claude-sonnet-5-5": price(2, 0.1, 2.5, 10),
   "claude-sonnet-5": price(2, 0.2, 2.5, 10),
-  "claude-sonnet-5.5": price(2, 0.2, 2.5, 10),
+  "claude-haiku-5-5": price(0.1, 0.01, 0.125, 0.5),
   // OpenAI, as Codex and the built-in harness run them.
   "gpt-6-luna": price(0.1, 0.01, 0.125, 0.5),
   "gpt-6.1-terra": price(1, 0.05, 1.25, 5),
@@ -75,14 +81,26 @@ const PRICES: Record<string, Price> = {
 const ALIASES: Record<string, string> = {
   opus: "claude-opus-5-5",
   sonnet: "claude-sonnet-5",
+  fable: "claude-fable-5-2",
+  haiku: "claude-haiku-5-5",
+  "claude-sonnet-5.5": "claude-sonnet-5-5",
   "deepseek/flash": "deepseek/deepseek-v4.1-flash",
   "chatgpt/gpt-6-luna": "gpt-6-luna",
 };
 
-/** The price of a model the table knows, or undefined (never zero) for one it does not. */
+const known = (id: string): Price | undefined => PRICES[ALIASES[id] ?? id];
+
+/**
+ * The price of a model the table knows, or undefined (never zero) for one it does not. An id a
+ * router writes with its provider in front (`openrouter/openai/gpt-6.1-sol`, `opencode/…`) is
+ * priced as the model it names, at that model's list price; a free tier (`…-free`) never is.
+ */
 export function priceOf(model: string | undefined): Price | undefined {
   if (!model) return undefined;
-  return PRICES[ALIASES[model] ?? model];
+  const exact = known(model);
+  if (exact || model.endsWith("-free")) return exact;
+  const name = model.slice(model.lastIndexOf("/") + 1);
+  return name === model ? undefined : known(name);
 }
 
 /**
@@ -256,6 +274,17 @@ export function costOf(row: CostInput): CostTotals {
     return { usd: best.usd, estimatedUsd: best.usd, unknownTurns: 0 };
   }
   return { unknownTurns: row.totals.turns };
+}
+
+/** A usage report's model rows (`groupBy: "model"`), each its reported cost or its estimate. */
+export function costOfRows(rows: readonly UsageRow[]): CostTotals {
+  return rollUpCosts(rows.map((row) => ({ harness: row.harness, model: row.model, totals: row })));
+}
+
+/** A total as a figure: `≈` when any part of it is an estimate. */
+export function formatBestCost(cost: CostTotals): string {
+  if (cost.usd === undefined) return "unknown";
+  return `${cost.estimatedUsd !== undefined ? "≈" : ""}${formatCost(cost.usd)}`;
 }
 
 /**
