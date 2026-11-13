@@ -25,6 +25,7 @@ export const SECTION_KIND: Record<SettingsSection, SettingKind> = {
   connections: "machine",
   capabilities: "server",
   remote: "machine",
+  outside: "machine",
   machines: "machine",
   appearance: "app",
   keyboard: "app",

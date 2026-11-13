@@ -27,6 +27,7 @@ pub mod hub;
 pub mod local;
 pub(crate) mod local_threads;
 pub mod mcp_server;
+pub mod outside;
 pub mod presets;
 
 pub const METHOD: &str = "_rustcode/orchestration";

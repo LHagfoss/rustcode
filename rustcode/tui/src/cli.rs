@@ -275,6 +275,17 @@ pub enum Commands {
         token: Option<String>,
     },
 
+    /// Stdio MCP server that lets another app (Claude Desktop, Cursor, Codex)
+    /// use RustCode's threads with the scoped token made in Settings ›
+    /// Outside agents; the app starts it from the snippet RustCode shows
+    #[command(name = "mcp-connect")]
+    McpConnect {
+        /// The token RustCode showed when the app was connected. Normally set
+        /// in `RUSTCODE_MCP_TOKEN` instead, so it is not visible in `ps`.
+        #[arg(long)]
+        token: Option<String>,
+    },
+
     /// Claude Code `PreToolUse` hook that applies the project's command
     /// policy (`.rustcode/command-policy.toml`) to a Bash call read from
     /// stdin; started by Claude Code, not by hand
@@ -1772,6 +1783,20 @@ mod tests {
             cli.command,
             Some(Commands::McpOrchestrator { session, socket, token })
                 if session == "abc" && socket == std::path::Path::new("/tmp/o.sock") && token.as_deref() == Some("t")
+        ));
+    }
+
+    #[test]
+    fn mcp_connect_takes_its_token_from_the_flag_or_the_environment() {
+        let cli = Cli::try_parse_from(["rustcode", "mcp-connect"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::McpConnect { token: None })
+        ));
+        let cli = Cli::try_parse_from(["rustcode", "mcp-connect", "--token", "rcx_a_b"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::McpConnect { token }) if token.as_deref() == Some("rcx_a_b")
         ));
     }
 

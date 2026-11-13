@@ -37,6 +37,11 @@ pub struct CallRequest {
     pub tool: String,
     #[serde(default)]
     pub args: Value,
+    /// The call comes from an outside agent (`rustcode mcp-connect`), not from
+    /// a thread's harness: `token` is its own grant's, `session_id` is unused,
+    /// and the engine applies the grant's scope (`outside.rs`).
+    #[serde(default)]
+    pub outside: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,6 +104,20 @@ pub const TOOL_TIMEOUT_SECS: u64 = (if super::MAX_WAIT_MS > super::MAX_MERGE_WAI
 
 /// The name the server has in a harness's MCP list.
 pub const SERVER_NAME: &str = "rustcode";
+
+/// In `<config>/run/`: which socket the running engine's hub listens on.
+pub const PUBLISHED_FILE: &str = "orchestrator.json";
+
+/// The socket the running engine published, when there is one.
+pub fn published_socket() -> Option<PathBuf> {
+    let path = crate::config::get_config_dir()?
+        .join("run")
+        .join(PUBLISHED_FILE);
+    let body: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    body.get("socket")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+}
 
 impl Launch {
     pub fn new(command: PathBuf, session_id: &str, socket: &Path, token: &str) -> Self {
@@ -332,6 +351,11 @@ impl Hub {
         request: CallRequest,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> CallAnswer {
+        // An outside agent holds a grant of its own, not a thread's token: the
+        // gate checks it, its scope and the user's approval before anything runs.
+        if request.outside {
+            return super::outside::answer(request, cancel).await;
+        }
         let Some((client, version)) = self.authorize(&request) else {
             return CallAnswer::failure(
                 "error: RustCode did not accept this orchestrator's session or token. Nothing was sent.",
@@ -421,6 +445,7 @@ mod listen {
             let _ = std::fs::remove_file(&path);
             let listener = UnixListener::bind(&path)?;
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+            publish(&path);
             let hub = Arc::new(Self {
                 path,
                 sessions: StdMutex::new(HashMap::new()),
@@ -482,6 +507,24 @@ mod listen {
             let _ = write.write_all(&text).await;
             let _ = write.shutdown().await;
         }
+    }
+
+    /// Say where this engine's hub listens, for `rustcode mcp-connect`, which
+    /// starts outside any thread and so has no socket path handed to it. The
+    /// last engine to bind wins; a stale file only makes the bridge's connect
+    /// fail with a message that RustCode is not running.
+    fn publish(socket: &Path) {
+        let Some(dir) = socket.parent() else {
+            return;
+        };
+        let body = serde_json::json!({
+            "pid": std::process::id(),
+            "socket": socket.to_string_lossy(),
+        });
+        let _ = crate::service::write_private(
+            &dir.join(super::PUBLISHED_FILE),
+            body.to_string().as_bytes(),
+        );
     }
 
     /// Remove sockets of engines that are no longer running.
@@ -693,6 +736,7 @@ mod tests {
             token,
             tool: super::super::START_SESSION.to_owned(),
             args: json!({ "prompt": "go", "account": "work" }),
+            outside: false,
         };
         let token = hub.register("thread-1", Arc::new(Counted(Arc::clone(&asked))), 4);
         let refused = super::call(hub.path(), &request(token)).await;
@@ -725,6 +769,7 @@ mod tests {
             token: token.clone(),
             tool: tool.to_owned(),
             args,
+            outside: false,
         };
         let listed = super::call(hub.path(), &call(super::super::LIST_MACHINES, json!({}))).await;
         assert!(listed.success, "{}", listed.content);
@@ -770,6 +815,7 @@ mod tests {
                 token,
                 tool: super::super::LIST_SESSIONS.to_owned(),
                 args: json!({}),
+                outside: false,
             },
         )
         .await;

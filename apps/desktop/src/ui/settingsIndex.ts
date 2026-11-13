@@ -233,6 +233,29 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     title: "Held back threads",
     keywords: "not shared held back refused limit 32 most recently used why",
   },
+  // ------------------------------------------------------ Outside agents
+  {
+    section: "outside",
+    title: "Connected apps",
+    keywords:
+      "outside agents mcp claude desktop cursor codex connect token revoke access scope read-only delegate manage last used",
+  },
+  {
+    section: "outside",
+    title: "Connect an app",
+    keywords:
+      "outside agent mcp config snippet json toml token copy paste claude desktop cursor codex platform",
+  },
+  {
+    section: "outside",
+    title: "Waiting for you",
+    keywords: "approve approval allow decline ask outside agent change start message",
+  },
+  {
+    section: "outside",
+    title: "Recent activity",
+    keywords: "audit log outside agent calls tools denied declined history",
+  },
 
   // ------------------------------------------------------------ Environments
   {

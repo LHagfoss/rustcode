@@ -40,6 +40,8 @@ mod notifications;
 mod orchestration;
 pub use orchestration::hub::ORCHESTRATOR_TOKEN_ENV;
 pub use orchestration::mcp_server::run as run_mcp_orchestrator;
+pub use orchestration::mcp_server::run_outside as run_mcp_connect;
+pub use orchestration::outside::TOKEN_ENV as MCP_CONNECT_TOKEN_ENV;
 mod platform;
 pub mod preview;
 pub mod prompt_commands;

@@ -67,6 +67,10 @@ impl Forward for SocketForward {
 pub struct Identity {
     pub session_id: String,
     pub token: String,
+    /// An outside agent (`rustcode mcp-connect`): the token is its grant's, the
+    /// instructions and tool list come from the engine, and every call goes to
+    /// the engine's gate (`outside.rs`), which decides by the grant's scope.
+    pub outside: bool,
 }
 
 /// The tools the server lists, as MCP tool entries, for a client of
@@ -114,7 +118,11 @@ pub async fn run(session_id: String, socket: PathBuf, token: String) -> Result<(
     serve_every(
         tokio::io::stdin(),
         tokio::io::stdout(),
-        Identity { session_id, token },
+        Identity {
+            session_id,
+            token,
+            outside: false,
+        },
         Arc::new(SocketForward { socket }),
         orchestration,
         Offered { smart_ui, ask_user },
@@ -130,6 +138,35 @@ struct Offered {
     smart_ui: bool,
     /// `ask_user_question`, for a harness without a question tool (#3393).
     ask_user: bool,
+}
+
+/// Run `rustcode mcp-connect` on stdin/stdout: the orchestration tools for an
+/// app that is not a thread of RustCode (Claude Desktop, Cursor, Codex), under
+/// the grant its token belongs to. The engine decides what the token may do on
+/// every call; this only carries the bytes.
+pub async fn run_outside(token: String) -> Result<(), String> {
+    if token.trim().is_empty() {
+        return Err(format!(
+            "no token: set {} to the token RustCode showed when you connected this app (RustCode › Settings › Outside agents)",
+            super::outside::TOKEN_ENV
+        ));
+    }
+    let socket = super::hub::published_socket().ok_or_else(|| {
+        "RustCode is not running on this computer: open the RustCode app (or start `rustcode server run`) and try again".to_owned()
+    })?;
+    serve(
+        tokio::io::stdin(),
+        tokio::io::stdout(),
+        Identity {
+            session_id: String::new(),
+            token,
+            outside: true,
+        },
+        Arc::new(SocketForward { socket }),
+        super::VERSION,
+        false,
+    )
+    .await
 }
 
 /// Serve newline-delimited JSON-RPC from `input`, answering on `output`.
@@ -223,6 +260,54 @@ where
             continue;
         };
         match method.as_str() {
+            "initialize" if identity.outside => {
+                // The engine writes the instructions for this grant, so the
+                // app is told what it is, what RustCode is and what it may do.
+                let asked = params.get("protocolVersion").and_then(Value::as_str);
+                let version = asked
+                    .filter(|asked| PROTOCOL_VERSIONS.contains(asked))
+                    .unwrap_or(PROTOCOL_VERSIONS[0])
+                    .to_owned();
+                let sender = sender.clone();
+                let forward = Arc::clone(&forward);
+                let identity = identity.clone();
+                calls.spawn(async move {
+                    let instructions = control(
+                        forward.as_ref(),
+                        &identity,
+                        super::outside::CONTROL_INSTRUCTIONS,
+                    )
+                    .await;
+                    let _ = sender.send(result(
+                        id,
+                        json!({
+                            "protocolVersion": version,
+                            "capabilities": { "tools": {} },
+                            "serverInfo": {
+                                "name": "rustcode",
+                                "title": "RustCode",
+                                "version": env!("CARGO_PKG_VERSION"),
+                            },
+                            "instructions": instructions.unwrap_or_else(|reason| reason),
+                        }),
+                    ));
+                });
+            }
+            "tools/list" if identity.outside => {
+                let sender = sender.clone();
+                let forward = Arc::clone(&forward);
+                let identity = identity.clone();
+                calls.spawn(async move {
+                    let listed =
+                        control(forward.as_ref(), &identity, super::outside::CONTROL_TOOLS).await;
+                    let _ = match listed.and_then(|text| {
+                        serde_json::from_str::<Value>(&text).map_err(|e| e.to_string())
+                    }) {
+                        Ok(tools) => sender.send(result(id, json!({ "tools": tools }))),
+                        Err(reason) => sender.send(error(id, -32603, &reason)),
+                    };
+                });
+            }
             "initialize" => {
                 let asked = params.get("protocolVersion").and_then(Value::as_str);
                 let version = asked
@@ -334,6 +419,9 @@ async fn call(
 ) -> CallAnswer {
     let Offered { smart_ui, ask_user } = offered;
     let tool = params.get("name").and_then(Value::as_str).unwrap_or("");
+    if identity.outside {
+        return call_outside(forward, identity, tool, params).await;
+    }
     // The engine asks the user through the thread's own channel; checked
     // here first so a bad call is refused without leaving the harness.
     if tool == super::ask_user::TOOL_NAME {
@@ -356,6 +444,7 @@ async fn call(
                 token: identity.token.clone(),
                 tool: tool.to_owned(),
                 args,
+                outside: false,
             })
             .await;
     }
@@ -489,6 +578,7 @@ async fn call(
         token: identity.token.clone(),
         tool: tool.to_owned(),
         args,
+        outside: false,
     });
     let Some(limit) = limit else {
         return waiting.await;
@@ -496,6 +586,57 @@ async fn call(
     // The app answers a wait at its own deadline, but nothing makes it: a slow
     // or suspended app would leave the harness waiting until its own abort.
     // Dropping the forwarded call closes the socket, which ends it in the app.
+    match bounded(limit, waiting).await {
+        Some(answer) => answer,
+        None => CallAnswer {
+            success: true,
+            content: timed_out_answer(tool),
+        },
+    }
+}
+
+/// One of the engine's own requests that build the handshake.
+async fn control(forward: &dyn Forward, identity: &Identity, name: &str) -> Result<String, String> {
+    let answer = forward
+        .call(CallRequest {
+            session_id: String::new(),
+            token: identity.token.clone(),
+            tool: name.to_owned(),
+            args: json!({}),
+            outside: true,
+        })
+        .await;
+    if answer.success {
+        Ok(answer.content)
+    } else {
+        Err(answer.content)
+    }
+}
+
+/// A call from an outside agent: the engine checks the token, the scope and
+/// the user's approval, so nothing is decided here beyond a call that waits.
+async fn call_outside(
+    forward: &dyn Forward,
+    identity: &Identity,
+    tool: &str,
+    params: &Value,
+) -> CallAnswer {
+    let args = params
+        .get("arguments")
+        .cloned()
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
+    let limit = super::requested_wait(tool, &args).map(|wait| wait + super::WAIT_SERVER_GRACE);
+    let waiting = forward.call(CallRequest {
+        session_id: String::new(),
+        token: identity.token.clone(),
+        tool: tool.to_owned(),
+        args,
+        outside: true,
+    });
+    let Some(limit) = limit else {
+        return waiting.await;
+    };
     match bounded(limit, waiting).await {
         Some(answer) => answer,
         None => CallAnswer {
@@ -799,6 +940,7 @@ mod tests {
         let identity = Identity {
             session_id: "thread-1".into(),
             token,
+            outside: false,
         };
         let call = |id: i64, arguments: Value| {
             json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
@@ -914,6 +1056,7 @@ mod tests {
         let identity = || Identity {
             session_id: "thread-1".into(),
             token: "t".into(),
+            outside: false,
         };
         let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                           "params": {"name": crate::smart_ui::CHECK_TOOL_NAME,
@@ -944,6 +1087,7 @@ mod tests {
         let identity = || Identity {
             session_id: "thread-1".into(),
             token: "t".into(),
+            outside: false,
         };
         let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                           "params": {"name": crate::pull_watch::LINK_TOOL_NAME,
@@ -985,6 +1129,7 @@ mod tests {
             Identity {
                 session_id: "thread-1".into(),
                 token,
+                outside: false,
             },
             hub.path().to_owned(),
             &[
@@ -1055,6 +1200,7 @@ mod tests {
             Identity {
                 session_id: "thread-1".into(),
                 token,
+                outside: false,
             },
             hub.path().to_owned(),
             &[call],
@@ -1105,6 +1251,7 @@ mod tests {
             Identity {
                 session_id: "thread-1".into(),
                 token,
+                outside: false,
             },
             hub.path().to_owned(),
             &[call],
@@ -1135,6 +1282,7 @@ mod tests {
             Identity {
                 session_id: "thread-1".into(),
                 token,
+                outside: false,
             },
             hub.path().to_owned(),
             &[delegate, standalone],
@@ -1162,6 +1310,7 @@ mod tests {
                 Identity {
                     session_id: "thread-1".into(),
                     token,
+                    outside: false,
                 },
                 hub.path().to_owned(),
                 &[call],
@@ -1191,10 +1340,12 @@ mod tests {
             Identity {
                 session_id: "thread-1".into(),
                 token: "not-the-token".into(),
+                outside: false,
             },
             Identity {
                 session_id: "thread-2".into(),
                 token: token.clone(),
+                outside: false,
             },
         ] {
             let answers = exchange(identity, hub.path().to_owned(), &[call.clone()]).await;
@@ -1212,6 +1363,7 @@ mod tests {
             Identity {
                 session_id: "thread-1".into(),
                 token,
+                outside: false,
             },
             hub.path().to_owned(),
             &[call],
@@ -1263,6 +1415,7 @@ mod tests {
             Identity {
                 session_id: "thread-1".into(),
                 token: "t".into(),
+                outside: false,
             },
             Arc::new(Hanging {
                 started: Arc::clone(&started),
@@ -1342,6 +1495,7 @@ mod tests {
             Identity {
                 session_id: "thread-1".into(),
                 token: "t".into(),
+                outside: false,
             },
             Arc::new(app),
             super::super::VERSION,
@@ -1504,6 +1658,7 @@ mod tests {
             Identity {
                 session_id: "thread-1".into(),
                 token: "t".into(),
+                outside: false,
             },
             dir.path().join("missing.sock"),
             &[json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",

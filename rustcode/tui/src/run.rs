@@ -871,6 +871,19 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
+    // Started by another app (Claude Desktop, Cursor, Codex) from the snippet
+    // Settings › Outside agents gives: MCP on stdio, nothing else on stdout.
+    if let Some(crate::cli::Commands::McpConnect { token }) = cli_args.command.as_ref() {
+        let token = token
+            .clone()
+            .or_else(|| std::env::var(rustcode::MCP_CONNECT_TOKEN_ENV).ok())
+            .unwrap_or_default();
+        if let Err(error) = rustcode::run_mcp_connect(token).await {
+            eprintln!("rustcode mcp-connect: {error}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     // A `PreToolUse` hook of Claude Code: the hook call on stdin, the refusal
     // (if any) on stdout. It never fails the call itself.
     if matches!(

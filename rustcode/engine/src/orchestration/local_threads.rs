@@ -208,6 +208,16 @@ impl Access {
 /// keeping the access falls back to the last two, which is the gap
 /// `docs/orchestrator.md` names.
 fn access_of(session_id: &str) -> Access {
+    // An outside agent (`outside.rs`) has no thread: its grant says what it
+    // may do. Delegating needs Full here, which a delegate or manage grant is
+    // the owner's approval for; a read-only grant reads and nothing more.
+    if super::outside::is_caller(session_id) {
+        return match super::outside::scope_of_caller(session_id) {
+            Some(super::outside::Scope::ReadOnly) => Access::Edits,
+            Some(_) => Access::Full,
+            None => Access::Ask,
+        };
+    }
     // What a client last ran the thread at: the app sends it with every
     // prompt and the engine keeps it, so a thread narrowed to Ask under a Full
     // default reads as Ask here too.
@@ -501,12 +511,20 @@ async fn start_one(
             "delegation goes {MAX_DEPTH} levels deep; this thread is at the bottom of one and cannot start another"
         )));
     }
-    let caller_meta = crate::config::session_meta_by_id(caller)
-        .ok_or_else(|| failed("this thread's own record is missing"))?;
-    let caller_title = crate::config::load_session_title(caller)
-        .filter(|title| !title.trim().is_empty())
-        .unwrap_or_else(|| caller_meta.title.clone());
-    let project = project_for(caller, &caller_meta, ask.project)?;
+    // An outside agent has no thread record: it starts standalone threads in a
+    // project it names.
+    let outside = super::outside::is_caller(caller);
+    let caller_meta = crate::config::session_meta_by_id(caller);
+    if caller_meta.is_none() && !(outside && ask.standalone) {
+        return Err(failed("this thread's own record is missing"));
+    }
+    let caller_title = match caller_meta.as_ref() {
+        Some(meta) => crate::config::load_session_title(caller)
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| meta.title.clone()),
+        None => super::outside::name_of_caller(caller).unwrap_or_default(),
+    };
+    let project = project_for(caller, caller_meta.as_ref(), ask.project)?;
     let harness = harness_for(ask.harness)?;
     let model = model_for(&harness, ask.model)?;
     let account = account_for(&harness, ask.account)?;
@@ -552,7 +570,18 @@ async fn start_one(
         _ => {}
     }
 
-    let engine = Engine::open(Access::Full).await?;
+    // The work an outside agent starts runs at most at the ceiling its grant
+    // sets: Auto-edit for a delegate grant, so a command that needs approval is
+    // declined and nobody is asked, Full only for a manage grant.
+    let thread_access = if outside {
+        match super::outside::scope_of_caller(caller) {
+            Some(super::outside::Scope::Manage) => Access::Full,
+            _ => Access::Edits,
+        }
+    } else {
+        Access::Full
+    };
+    let engine = Engine::open(thread_access).await?;
     let mut request = NewSessionRequest::new(PathBuf::from(&project));
     request.meta = Some(Map::from_iter([(
         "rustcode".to_owned(),
@@ -571,7 +600,7 @@ async fn start_one(
         "title": title,
         "harness": harness.id,
         "harness_name": harness.name,
-        "access": "full",
+        "access": thread_access.meta(),
     });
     if let Some(model) = model.as_ref() {
         answer["model"] = json!(model);
@@ -676,7 +705,11 @@ pub(crate) async fn message(caller: &str, args: &Value) -> Value {
     if let Some(refusal) = loop_or_linked(caller, target, &meta) {
         return refusal;
     }
-    let caller_title = crate::config::load_session_title(caller).unwrap_or_default();
+    let caller_title = if super::outside::is_caller(caller) {
+        super::outside::name_of_caller(caller).unwrap_or_default()
+    } else {
+        crate::config::load_session_title(caller).unwrap_or_default()
+    };
     let text = args.get("message").and_then(Value::as_str).unwrap_or("");
 
     // A thread open in another RustCode process must not be opened again here:
@@ -1178,14 +1211,21 @@ fn now() -> i64 {
 /// before, as the app checks it.
 fn project_for(
     caller: &str,
-    meta: &crate::config::SessionMeta,
+    meta: Option<&crate::config::SessionMeta>,
     asked: Option<&str>,
 ) -> Result<String, Value> {
     let Some(asked) = asked.map(str::trim).filter(|asked| !asked.is_empty()) else {
-        return Ok(project_of(caller, meta));
+        return match meta {
+            Some(meta) => Ok(project_of(caller, meta)),
+            None => Err(not_allowed(
+                "name the project to start the thread in; whoami lists the ones RustCode knows",
+            )),
+        };
     };
     let asked = clean_path(asked);
-    if asked == project_of(caller, meta) || asked == reach_of(caller, meta) {
+    if let Some(meta) = meta
+        && (asked == project_of(caller, meta) || asked == reach_of(caller, meta))
+    {
         return Ok(asked);
     }
     let known = crate::config::list_sessions().iter().any(|row| {
