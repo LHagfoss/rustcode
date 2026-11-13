@@ -196,8 +196,10 @@ fn append_pending_steers(state: &mut AppState, turn_session_id: &str) {
     if state.active_session_id != turn_session_id {
         return;
     }
-    for text in state.take_steers_for_history(turn_session_id) {
-        state.history.push(ChatMessage::new("user", text));
+    for steer in state.take_steer_records_for_history(turn_session_id) {
+        let mut message = ChatMessage::new("user", steer.text);
+        message.origin = steer.origin;
+        state.history.push(message);
     }
 }
 
@@ -3033,6 +3035,16 @@ mod tests {
                 pending: 1,
             }
         );
+    }
+
+    #[test]
+    fn delivered_steer_keeps_its_structured_origin_in_history() {
+        let (mut state, session_id) = steerable_state();
+        assert!(state.queue_steer("review this".to_owned()));
+        let origin = serde_json::json!({"kind": "agent", "threads": [{"sessionId": "sender"}]});
+        state.pending_steers.last_mut().unwrap().origin = Some(origin.clone());
+        append_pending_steers(&mut state, &session_id);
+        assert_eq!(state.history.last().unwrap().origin.as_ref(), Some(&origin));
     }
 
     #[test]

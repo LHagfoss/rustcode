@@ -2809,7 +2809,13 @@ async fn serve_connection(
                     if images {
                         return responder.respond(serde_json::json!({ "accepted": false }));
                     }
-                    let answer = steer::accept(&mut *state.lock().await, &request.text);
+                    let mut state = state.lock().await;
+                    let answer = steer::accept(&mut state, &request.text);
+                    if answer.get("accepted").and_then(serde_json::Value::as_bool) == Some(true) {
+                        if let Some(steer) = state.pending_steers.last_mut() {
+                            steer.origin = request.meta.as_ref().and_then(|v| v.get("rustcode")).and_then(|v| v.get("origin")).cloned().filter(|v| crate::message_origin::from_meta(v).is_some());
+                        }
+                    }
                     responder.respond(answer)
                 }
             },
