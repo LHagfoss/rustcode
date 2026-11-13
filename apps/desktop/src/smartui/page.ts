@@ -363,6 +363,7 @@ export function runtimeScript(token: string, theme: PageTheme): string {
     if (event.source !== parent || !data || data.rc !== token) return;
     if (data.type === "focus-modality") {
       document.documentElement.toggleAttribute("data-keyboard-nav", data.keyboard === true);
+      tabFocus = data.tabFocus !== false;
       return;
     }
     if (data.type !== "theme") return;
@@ -376,7 +377,21 @@ export function runtimeScript(token: string, theme: PageTheme): string {
     document.documentElement.toggleAttribute("data-keyboard-nav", active);
     post({ type: "focus-modality", keyboard: active });
   };
-  window.addEventListener("keydown", (event) => { if (event.key === "Tab") setKeyboardNav(true); }, true);
+  // The app's "Tab moves focus between controls" (lib/focusModality.ts), sent with the modality.
+  // A bare Tab is cancelled with it off, except inside a form, as in the app.
+  let tabFocus = false;
+  window.addEventListener("keydown", (event) => {
+    if (event.key !== "Tab") return;
+    const bare = !event.ctrlKey && !event.metaKey && !event.altKey;
+    const target = event.target;
+    const inForm = target instanceof Element && !!target.closest("form");
+    if (!tabFocus && bare && !inForm) {
+      event.preventDefault();
+      setKeyboardNav(false);
+      return;
+    }
+    setKeyboardNav(true);
+  }, true);
   const pointer = () => setKeyboardNav(false);
   window.addEventListener("pointerdown", pointer, true);
   window.addEventListener("mousedown", pointer, true);

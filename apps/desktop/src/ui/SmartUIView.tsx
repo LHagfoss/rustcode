@@ -6,7 +6,7 @@
 import { Check, Code, Copy, Play, Square } from "lucide-react";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { isTauri } from "../acp/transport";
-import { KEYBOARD_NAV } from "../lib/focusModality";
+import { KEYBOARD_NAV, TAB_FOCUS_EVENT, tabMovesFocus } from "../lib/focusModality";
 import { openExternal } from "../lib/native";
 import { shellCall } from "../lib/shell";
 import { cssVar, isDark, onAppThemeChange } from "../lib/theme";
@@ -131,6 +131,7 @@ export function SmartUIView({
         rc: page.token,
         type: "focus-modality",
         keyboard: document.documentElement.hasAttribute(KEYBOARD_NAV),
+        tabFocus: tabMovesFocus(),
       },
       "*",
     );
@@ -144,8 +145,12 @@ export function SmartUIView({
       attributes: true,
       attributeFilter: [KEYBOARD_NAV],
     });
+    window.addEventListener(TAB_FOCUS_EVENT, syncFrameFocusModality);
     syncFrameFocusModality();
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener(TAB_FOCUS_EVENT, syncFrameFocusModality);
+    };
   }, [page, syncFrameFocusModality]);
   const autoRun = useRef(new AutoRun());
   // Each start or stop outdates a start still waiting on Chart.js or the shell.

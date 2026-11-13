@@ -11,8 +11,11 @@ const TAB_FOCUS = "rustcode.tabMovesFocus";
 export function tabMovesFocus(): boolean {
   return readFlag(TAB_FOCUS, false);
 }
+export const TAB_FOCUS_EVENT = "rustcode:tab-focus";
 export function setTabMovesFocus(value: boolean): void {
   writeFlag(TAB_FOCUS, value);
+  // Anything holding a copy of the setting (a Smart UI frame is its own document) re-reads it.
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(TAB_FOCUS_EVENT));
 }
 /** A bare Tab or Shift+Tab; Ctrl, Cmd and Alt with Tab belong to shortcuts and the system. */
 export function shouldBlockTab(
@@ -22,6 +25,22 @@ export function shouldBlockTab(
   modified = false,
 ): boolean {
   return key === "Tab" && !enabled && !protectedContext && !modified;
+}
+
+/** Where a bare Tab keeps working with the setting off: forms, menus, lists and alert-style dialogs. */
+const PROTECTED_CONTEXT =
+  'form, dialog, [role="dialog"], [role="alertdialog"], [aria-modal="true"], [role="menu"], [role="menuitem"], [role="listbox"], [data-radix-popper-content-wrapper]';
+
+/** A page-sized surface that is marked as a dialog for assistive tech (Settings, the side panel
+ *  sheet) but is browsed like the app, so the setting applies in it. */
+export const TAB_FREE_ATTR = "data-tab-free";
+
+/** Whether `element` sits in a context where Tab must keep moving focus. The nearest protected
+ *  ancestor decides: a form inside Settings is still a form, but Settings itself is not. */
+export function inProtectedContext(element: unknown): boolean {
+  if (typeof Element === "undefined" || !(element instanceof Element)) return false;
+  const nearest = element.closest(PROTECTED_CONTEXT);
+  return !!nearest && !nearest.hasAttribute(TAB_FREE_ATTR);
 }
 
 export const KEYBOARD_NAV = "data-keyboard-nav";
@@ -36,13 +55,7 @@ export function installFocusModality(
 ): () => void {
   const keyboard = (event: Event) => {
     const { key, ctrlKey, metaKey, altKey } = event as KeyboardEvent;
-    const element = event.target;
-    const protectedContext =
-      typeof Element !== "undefined" &&
-      element instanceof Element &&
-      !!element.closest(
-        'form, dialog, [role="dialog"], [role="alertdialog"], [aria-modal="true"], [role="menu"], [role="menuitem"], [role="listbox"], [data-radix-popper-content-wrapper]',
-      );
+    const protectedContext = inProtectedContext(event.target);
     if (shouldBlockTab(key, enabled(), protectedContext, ctrlKey || metaKey || altKey)) {
       event.preventDefault();
       root.removeAttribute(KEYBOARD_NAV);

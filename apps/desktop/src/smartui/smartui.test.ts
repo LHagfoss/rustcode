@@ -433,7 +433,11 @@ describe("smart ui", () => {
     expect(script).not.toContain("root.scrollHeight");
     expect(script).toContain("observer.observe(document.body)");
     expect(script).toContain('data.type === "focus-modality"');
-    expect(script).toContain('event.key === "Tab"');
+    expect(script).toContain('event.key !== "Tab"');
+    // The app's Tab setting reaches the frame with the modality, and a bare Tab is cancelled
+    // outside a form while it is off.
+    expect(script).toContain("tabFocus = data.tabFocus !== false");
+    expect(script).toContain("if (!tabFocus && bare && !inForm)");
     expect(script).toContain('addEventListener("pointerdown"');
     expect(script).not.toContain('window.addEventListener("blur"');
     expect(BASE_CSS).toContain(":root[data-keyboard-nav] :focus-visible");
