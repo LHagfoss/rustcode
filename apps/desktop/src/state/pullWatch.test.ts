@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { AcpConnection, type JsonObject } from "../acp/jsonrpc";
 import { deliverPullWatch, PULL_WATCHES, subscribePullWatches } from "./pullWatch";
 import { resetForTests, useApp, watchMachineConnection } from "./store";
-import { emptyThread } from "./thread";
+import { emptyThread, isContinueMessage, PULL_MARK, wakeLine } from "./thread";
 
 const watch = { sessionId: "pr-thread", number: 7, link: true };
 afterEach(() => resetForTests());
@@ -28,10 +28,11 @@ test("subscribes and claims events once across notifications and reconnects", as
   await deliverPullWatch(conn, { watch });
   await subscribePullWatches(conn);
   expect(calls[0]?.method).toBe(PULL_WATCHES);
-  expect(useApp.getState().threads[t.id]?.queue.map((q) => q.text)).toEqual([
-    "Pull request #7: CI failed",
-    "Pull request #7: Review requested",
-  ]);
+  // One message for the batch, marked as the app's: a notice row, never the user's own words.
+  const queued = useApp.getState().threads[t.id]?.queue.map((q) => q.text) ?? [];
+  expect(queued).toEqual([`Pull request #7: CI failed · Review requested\n\n${PULL_MARK}`]);
+  expect(isContinueMessage(queued[0] ?? "")).toBe(true);
+  expect(wakeLine(queued[0] ?? "")).toBe("Pull request #7: CI failed · Review requested");
   await deliverPullWatch(conn, { watch: { ...watch, link: false } });
   expect(calls).toHaveLength(5);
   conn.close("test finished");
@@ -75,7 +76,7 @@ test("watch notifications route to the linked thread on their own machine", asyn
   conn.receive(notification);
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(useApp.getState().threads[id]?.queue.map((row) => row.text)).toEqual([
-    "Pull request #7: Checks failed",
+    `Pull request #7: Checks failed\n\n${PULL_MARK}`,
   ]);
   expect(useApp.getState().threads[watch.sessionId]).toBeUndefined();
   conn.close("test finished");

@@ -1857,9 +1857,21 @@ fn start_pull_watching(clients: &clients::Clients) {
     let notify = clients.clone();
     tokio::spawn(async move {
         let mut lease = None;
+        let mut announced = std::collections::HashMap::new();
         loop {
             if lease.is_none() {
                 lease = store.lease();
+            }
+            if lease.is_none() {
+                // Another process checks GitHub and tells only its own
+                // clients: pass on what it found to this engine's.
+                for (watch, events) in crate::pull_watch::unannounced(&store.load(), &mut announced)
+                {
+                    notify.publish(
+                        clients::Topic::PullWatches,
+                        PullWatchNotification { watch, events },
+                    );
+                }
             }
             if lease.is_some() {
                 crate::pull_watch::check_due(&store, |watch, events| {
