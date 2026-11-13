@@ -4176,6 +4176,16 @@ export async function openSideChat(parentId: string, message: string): Promise<s
   }
 }
 
+/** Add a side-chat answer to its parent's editable draft. */
+export function sendSideChatToParent(id: string, answer: string): boolean {
+  const parent = sessionById(get(), id)?.parent;
+  if (parent?.relationship !== "side_chat" || !parent.id || !answer.trim()) return false;
+  const draft = get().drafts[parent.id] ?? "";
+  setDraft(parent.id, draft ? `${draft}\n\n${answer}` : answer);
+  toast("Added to the main thread draft", "success");
+  return true;
+}
+
 /**
  * ⌘⏎: hand the running turn a message to read after its current step, else send. What it does is
  * `sendDecision`'s answer for this message, the same one the composer's hint and the queued row's
