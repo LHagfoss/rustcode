@@ -7308,6 +7308,12 @@ mod tests {
             Some(crate::harness::BUILTIN_ID)
         );
 
+        // Status broadcasts for other threads can arrive before this thread's title.
+        server.clients.broadcast(SessionNotification::new(
+            "unrelated-thread",
+            SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title("Other thread")),
+        ));
+
         // A name the thread takes is in the list too: B does not have the session, and still hears.
         server
             .clients
@@ -7316,10 +7322,21 @@ mod tests {
                 SessionInfoUpdate::new().title("Named elsewhere"),
             ))
             .expect("a title");
-        let titled = tokio::time::timeout(std::time::Duration::from_secs(10), titles.recv())
-            .await
-            .expect("b is told the title")
-            .expect("a title");
+        let titled = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while let Some(notification) = titles.recv().await {
+                if notification.session_id.to_string() == session_id
+                    && matches!(
+                        &notification.update,
+                        SessionUpdate::SessionInfoUpdate(info) if info.title.is_value()
+                    )
+                {
+                    return notification;
+                }
+            }
+            panic!("title notification channel closed");
+        })
+        .await
+        .expect("b is told the title");
         assert_eq!(titled.session_id.to_string(), session_id);
         assert!(matches!(
             &titled.update,
