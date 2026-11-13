@@ -4555,6 +4555,21 @@ describe("a delegated thread's place in the sidebar", () => {
     expect(topLevel({ ...summary, parent: undefined }, [], listed)).toBe("shown");
   });
 
+  test("the session model is available at creation and follows configuration updates", async () => {
+    await ready();
+    const id = await createSession({ cwd: useApp.getState().projectCwd, harness: "rustcode" });
+    const thread = useApp.getState().threads[id]!;
+    const model = thread.configOptions.find((option) => option.id === "model")!;
+    expect(useApp.getState().sessions.find((session) => session.id === id)?.model).toBe(model.current);
+    updateThread(id, (current) => ({
+      ...current,
+      configOptions: current.configOptions.map((option) =>
+        option.id === "model" ? { ...option, current: "updated-model" } : option,
+      ),
+    }));
+    expect(useApp.getState().sessions.find((session) => session.id === id)?.model).toBe("updated-model");
+  });
+
   test("a thread a person starts has no parent, and keeps its row", async () => {
     await ready();
     const id = await createSession({ cwd: useApp.getState().projectCwd, harness: "rustcode" });
