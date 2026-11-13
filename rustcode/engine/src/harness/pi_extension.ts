@@ -17,6 +17,8 @@ export default async function (pi: any) {
   const token = take("RUSTCODE_ORCHESTRATOR_TOKEN");
   // The user has Smart UI on: the server also offers the block check.
   const smartUi = take("RUSTCODE_SMART_UI");
+  // Pi has no question tool of its own: the server also offers ask_user_question.
+  const askUser = take("RUSTCODE_ASK_USER");
   // Which orchestration tools this thread's client can answer.
   const orchestration = take("RUSTCODE_ORCHESTRATION_VERSION");
   if (!command || !token) return;
@@ -27,6 +29,7 @@ export default async function (pi: any) {
       ...process.env,
       RUSTCODE_ORCHESTRATOR_TOKEN: token,
       ...(smartUi ? { RUSTCODE_SMART_UI: smartUi } : {}),
+      ...(askUser ? { RUSTCODE_ASK_USER: askUser } : {}),
       ...(orchestration ? { RUSTCODE_ORCHESTRATION_VERSION: orchestration } : {}),
     },
   });

@@ -1138,7 +1138,7 @@ pub const QUERY_DATA: Tool = Tool {
     description: concat!(
         "Run one read-only SQL statement (SQLite) over what RustCode recorded, for questions thread_usage cannot answer: which tools fail, an exit code, a day's turns. Returns columns and rows, at most ",
         "1000 rows. Ask it when the user asks something about their own history. ",
-        "Tables: threads(id, title, project, harness, model, created_at); turns(thread_id, started_at, finished_at, harness, model, input_tokens, output_tokens, cost_usd, tool_calls, status, duration_ms, context_tokens, context_window, stop_reason); tool_calls(thread_id, turn_id, tool_name, success, exit_code, at, duration_ms, output_bytes, truncated, mcp_server, command_name, error_kind); compactions(thread_id, harness, model, at, duration_ms, trigger, mode, tokens_before, tokens_after, count, success, source), trigger is auto_context, manual, cache_expiry or harness_auto; thread_links(...); daily_usage, daily_compactions, tool_failure_rates and turn_latency_daily views; provider_requests(thread_id, started_at, status_code, error_kind, request_payload_json); harness_rpc_messages(thread_id, direction, method, at, latency_ms, payload_json); operational_events(thread_id, sequence, event_type, at, fields_json); store_meta internal. Structured rows are kept forever; raw payload bodies age out and are NULL unless captured. Tokens and cost_usd are NULL when unreported, never guessed. This tool needs \"Let agents read threads in other projects\" on, since SQL reads every project."
+        "Tables: threads(id, title, project, harness, model, created_at); turns(thread_id, started_at, finished_at, harness, model, input_tokens, output_tokens, cost_usd, tool_calls, status, duration_ms, context_tokens, context_window, stop_reason); approvals(thread_id, tool_name, decision); tool_calls(thread_id, turn_id, tool_name, success, exit_code, at, duration_ms, output_bytes, truncated, mcp_server, command_name, error_kind); compactions(thread_id, harness, model, at, duration_ms, trigger, mode, tokens_before, tokens_after, count, success, source), trigger is auto_context, manual, cache_expiry or harness_auto; thread_links(...); daily_usage, daily_compactions, tool_failure_rates and turn_latency_daily views; provider_requests(thread_id, started_at, status_code, error_kind, request_payload_json); harness_rpc_messages(thread_id, direction, method, at, latency_ms, payload_json); operational_events(thread_id, sequence, event_type, at, fields_json); store_meta internal. Structured rows are kept forever; raw payload bodies are NULL unless captured. Tokens and cost_usd are NULL when unreported, never guessed. This tool needs \"Let agents read threads in other projects\" on, since SQL reads every project."
     ),
     arguments: r#"{"sql": "SELECT tool_name, COUNT(*) FROM tool_calls WHERE success = 0 GROUP BY 1 ORDER BY 2 DESC", "limit": 50}"#,
     handler: orchestration_unavailable,
@@ -1245,6 +1245,28 @@ pub const SMART_UI_CHECK: Tool = Tool {
     capabilities: &[],
     safety: ToolSafety::ReadOnly,
 };
+
+/// A multiple-choice question for an external harness with no question tool
+/// of its own (#3393). Offered through the `rustcode` MCP server only to such
+/// a harness; the engine's hub asks it (`orchestration/ask_user.rs`). A
+/// RustCode thread asks with `ask_question` instead.
+pub const ASK_USER_QUESTION: Tool = Tool {
+    name: crate::orchestration::ask_user::TOOL_NAME,
+    description: "Stop and ask the user 1 to 4 multiple-choice questions when a decision is theirs to make, instead of guessing or asking in prose. Each question has 2 to 4 options with a label and a description; set multi_select to let them pick several. Do not add an 'Other' option: the app offers a free-text answer itself. Blocks until they answer and returns {\"answers\": [{\"question\", \"selected\": [labels], \"text\"?}]}; if they dismiss it, continue on your own judgement.",
+    arguments: r#"{"questions": [{"header": "Data source", "question": "Where should the version data come from?", "options": [{"label": "CHANGELOG.md", "description": "Curated release notes"}, {"label": "Releases API", "description": "Live GitHub data"}], "multi_select": false}]}"#,
+    handler: ask_user_question_unavailable,
+    requires_confirmation: false,
+    schema: crate::orchestration::ask_user::schema,
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+fn ask_user_question_unavailable(_args: &Value) -> Result<String, String> {
+    Err(
+        "error: ask_user_question is answered by the rustcode MCP server; use ask_question here"
+            .to_owned(),
+    )
+}
 
 fn smart_ui_check_unavailable(_args: &Value) -> Result<String, String> {
     Err(

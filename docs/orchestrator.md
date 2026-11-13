@@ -1520,6 +1520,24 @@ works on a thread whose client never advertised Smart UI at all; the engine and
 the harness pay one tool description for it. It does not run the page, so it
 returns no script errors, height or screenshot (`docs/smart-ui.md`).
 
+A harness with no question tool of its own (Pi, OpenCode, Gemini CLI, a custom
+ACP agent; `harness::needs_question_tool`) also gets **`ask_user_question`**
+(`orchestration/ask_user.rs`, #3393), through `RUSTCODE_ASK_USER=1` in the same
+environment. Claude Code (`AskUserQuestion`), Codex (`request_user_input`) and
+the built-in harness (`ask_question`) never see it. A call carries 1 to 4
+questions, each with 2 to 4 options (`label`, `description`), `multi_select`
+and an optional `header`; the app adds the free-text answer itself, so the
+agent does not list an "Other". The server checks the call and forwards it to
+the hub, and the hub asks it through the thread's own permission channel as the
+same question card Codex's `request_user_input` uses (`docs/acp.md`,
+"Questions"). The thread reads "Needs you" and the question is in
+`list_pending_requests` like any other. The agent gets
+`{"answers": [{"question", "selected": [labels], "text"?}]}`. If the user
+dismisses a question the call fails with a message to continue on its own
+judgement and say which choice it made. A question sets no time limit of its own: it waits until the
+user answers or the harness gives up the call, and cancelling the call or the
+turn withdraws it.
+
 Every thread that has the server also gets **`manage_pull_links`**
 ([Linked pull requests](#linked-pull-requests)), answered by the server
 itself out of the watch store, for the same reason: it needs no client and no

@@ -34,8 +34,9 @@ payload only when the user turns payload capture on ("Captured payloads").
 
 | object | holds |
 | --- | --- |
-| `threads` | one row per thread: `id`, `title`, `project`, `cwd`, `harness`, `model`, `effort`, `parent_id`, `parent_title`, `created_at`, `updated_at` |
-| `turns` | one row per turn: `thread_id`, `started_at`, `finished_at`, `harness`, `model`, `input_tokens`, `output_tokens`, `cached_tokens`, `cache_write_tokens`, `cost_usd`, `tool_calls`, `status`, `duration_ms`, `time_to_first_token_ms`, `model_time_ms`, `tool_time_ms`, `context_tokens`, `context_window`, `stop_reason`, unique on `(thread_id, started_at)` |
+| `threads` | one row per thread: `id`, `title`, `project`, `cwd`, `harness`, `model`, `effort`, `parent_id`, `parent_title`, `created_at`, `updated_at`, and (migration 9) `account`, `machine`, `created_with_version`, `branch`, `final_commit`, `pull_request`, `pull_request_state`, `settled_at` |
+| `turns` | one row per turn: `thread_id`, `started_at`, `finished_at`, `harness`, `model`, `input_tokens`, `output_tokens`, `cached_tokens`, `cache_write_tokens`, `cost_usd`, `tool_calls`, `status`, `duration_ms`, `time_to_first_token_ms`, `model_time_ms`, `tool_time_ms`, `context_tokens`, `context_window`, `stop_reason`, and (migration 9) `effort`, `account`, `machine`, `rustcode_version`, `diff_files`, `diff_added`, `diff_removed`, unique on `(thread_id, started_at)` |
+| `approvals` | one row per approval a user was asked for: `thread_id`, `source` (`builtin`, `subagent`, `harness`), `tool_name`, `requested_at`, `decided_at`, `wait_ms`, `decision` (`allow_once`, `allow_hour`, `allow_always`, `reject`, `cancelled`, or the option kind a harness offered) |
 | `tool_calls` | one row per finished tool call: `thread_id`, `turn_id`, `tool_name`, `success`, `exit_code`, `at`, `started_at`, `duration_ms`, `output_bytes`, `truncated`, `mcp_server`, `command_name`, `error_kind` |
 | `compactions` | one row per history compaction, from any harness: `thread_id`, `turn_id`, `harness`, `model`, `at`, `duration_ms`, `trigger`, `mode`, `tokens_before`, `tokens_after`, `messages_before`, `messages_after`, `idle_secs_before`, `count`, `success`, `error_kind`, `external_id`, `source` |
 | `daily_usage` | a view over `turns`: `day`, `harness`, `model`, summed tokens, `cost_usd` and turn count |
@@ -57,40 +58,76 @@ currency is not converted. Timestamps are RFC 3339 in UTC. Migrations are number
 names, like the thread index: a recorded name that does not match refuses to
 open instead of skipping a step.
 
-## Structured rows grow forever, payloads do not
+## Nothing is deleted by default
 
-The store is a record of what happened, so the small structured rows are kept:
-`threads`, `turns`, `tool_calls`, `compactions`, `operational_events`,
-`thread_links` and the usage cursors are never deleted by the retention pass.
-They are bytes to a few hundred bytes each.
+The store is a record of what happened, and so are the thread folders.
+RustCode keeps them as long as the disk allows, so later questions have data
+to answer them:
 
-Only the raw protocol payloads are bulky, and only they are pruned:
+- **Settling is a status.** `rustcode threads settle` and the app's Settled
+  mark write `status.json` (and `threads.settled_at` here). They never delete
+  `history.json`, `logs/`, `performance.json`, usage rows or tool-call rows.
+  Removing a worktree on cleanup is fine, since the code is in git, but first
+  records the thread's `branch` and `final_commit`; the pull request watch adds
+  `pull_request`, `pull_request_state` and, once merged, the merged head as
+  `final_commit`.
+- **Thread folders are never pruned.** Saving a conversation used to drop all
+  but the 30 newest archived threads; it no longer does.
+- **Logs are compressed, not deleted.** A thread's `debug.log` that rotates
+  keeps the previous segment as `debug.log.gz`, and when the plain logs of
+  inactive threads pass 240 MiB in total the oldest are gzipped
+  (`debug.log.gz`, `debug.log.1.gz`, numbered when one already exists). An
+  active thread's log is never touched. Each live `debug.log` is still capped
+  at 50 MiB; that cap rotates it, it does not discard it.
+- **Structured rows** (`threads`, `turns`, `tool_calls`, `approvals`,
+  `compactions`, `operational_events`, `thread_links`, usage cursors) are never
+  deleted by any pass.
+- **Raw protocol payloads** are kept under the default
+  `telemetry_retention = "forever"`. Only streaming output chunks (text the
+  thread already holds) lose their body, and the folded row's counts stay.
+  Setting `telemetry_retention` to a number of days opts in to the older
+  policy: payloads over 7 days old are cleared, raw `provider_requests` and
+  `harness_rpc_messages` rows older than that number of days are deleted, and
+  payloads are held under 256 MiB by dropping the oldest first.
+- **Command receipts** are the one short-lived table: they age out after 7
+  days (newest 10,000 kept) because they exist to make a retry safe, not to
+  keep history.
+- `tool_output/` and `attachments/` are only touched by the explicit
+  `rustcode storage clean` command, which moves files to `storage/removed`
+  first and shows its plan before it does.
 
-- streaming output (`*/outputDelta`, `agent_message_chunk`,
-  `agent_thought_chunk`, `user_message_chunk`) is folded per flush window
-  into one row carrying only its counts (`coalesced`, `update`, `bytes`). A
-  raw chunk body over 512 bytes is dropped on every pass; the folded row's
-  counts stay;
-- repeated status pings (`account/rateLimits/updated`,
-  `mcpServer/startupStatus/updated`) keep their metadata row and lose their
-  body on every pass;
-- other raw payload bodies older than 7 days are set to `NULL`, and the
-  metadata row (`method`, `at`, `latency_ms`, `byte_size`) stays;
-- the raw payloads are held under a 256 MiB budget by dropping the oldest
-  first, then the oldest raw rows;
-- `telemetry_retention` in `config.toml` is `forever` by default. A number of
-  days deletes raw `provider_requests` and `harness_rpc_messages` rows older
-  than that; it never deletes a structured row.
+`rustcode data stats` prints each table's row count and size, so growth can be
+watched. Raw rows are one per protocol frame, with a folded streaming row per
+flush window and chunk kind; a busy machine adds a few megabytes a day.
 
-So the payload side is bounded (7 days, under 256 MiB), while the row count
-keeps growing: structured rows are one per turn, tool call, compaction or
-operational event, and raw rows are one per protocol frame, with a folded
-streaming row per flush window and chunk kind instead of one per token. Under
-`forever` nothing deletes those raw rows, so a busy machine still adds
-tens of thousands of them a day (a few megabytes). A number of days in
-`telemetry_retention` bounds that, and structured history stays either way.
-`rustcode data stats` prints each table's row count and size, so the growth
-can be watched and the raw window set from it.
+## What a thread and turn record
+
+Migration 9 is additive: nullable columns and one table, no existing column,
+row or view changes. Every value is `NULL` until something records it, never a
+guess.
+
+| where | column | meaning |
+| --- | --- | --- |
+| `turns` | `effort`, `account` | the reasoning effort and named harness account the turn ran with |
+| `turns` | `machine`, `rustcode_version` | the host name and RustCode version that wrote the turn |
+| `turns` | `diff_files`, `diff_added`, `diff_removed` | uncommitted changes in the thread's checkout when the turn ended (`git diff --numstat HEAD`; a binary file counts as a file with no lines). NULL outside a git checkout. After a commit the next turn reads 0 |
+| `threads` | `account`, `machine`, `created_with_version` | latest account; first machine and RustCode version seen |
+| `threads` | `branch`, `final_commit` | recorded when the worktree is cleaned up |
+| `threads` | `pull_request`, `pull_request_state` | the pull request URL and `open`/`closed`/`merged`, from the pull request watch |
+| `threads` | `settled_at` | when the thread was settled; NULL again if it is put back to active |
+| `approvals` | all | tool name (a harness approval records only the tool kind such as `execute`) and decision; never the command, path or arguments |
+
+Already stored per turn and tool call, unchanged: model, harness, tokens, cost
+as the harness reported it, context tokens and window, stop reason, durations,
+and per tool call the duration, exit code, error kind and truncation.
+
+```sql
+-- what a settled thread ended as
+SELECT id, title, branch, final_commit, pull_request, settled_at
+FROM threads WHERE settled_at IS NOT NULL;
+-- how long approvals take, by decision
+SELECT decision, COUNT(*), AVG(wait_ms) FROM approvals GROUP BY 1;
+```
 
 ## Compactions
 
@@ -148,6 +185,75 @@ The app asks through `_rustcode/data/links/load` and
 `_rustcode/data/links/save` (`engine/src/acp/data.rs`); an engine without them
 answers `unknown method`, and the app keeps its local copy as before.
 
+## Thread mirror
+
+Beside the store, not in it: `~/.config/rustcode/mirror/` is this computer's
+own copy of the threads it reads from other environments (paired machines;
+`docs/terminology.md` › Environment = machine). The app already keeps a small
+copy in its web view's storage so an offline machine still draws
+(`docs/desktop.md` › Several machines); that copy is capped (200 threads per
+machine, transcripts of threads opened in the last 30 days, 2 MB in all) and a
+wiped web view or a reinstall takes it away. The mirror is the durable one.
+
+```text
+mirror/settings.json              the switch and the project opt-outs
+mirror/<machine id>/index.json    one entry per thread the machine listed
+mirror/<machine id>/threads/<id>.json   the transcript last read from it
+```
+
+- **The origin owns the thread.** The mirror is written only from what the
+  machine reported to this computer, never edited here, never sent back, and
+  read-only in the app (a mirrored thread opens like one on an offline machine:
+  *Runs on ‹environment›*, composer disabled). It never moves, changes or deletes
+  the original, and it never deletes a mirrored thread either: a thread the
+  machine stops listing (deleted there, or the machine wiped) stays.
+- **Conflict-free.** A machine is the only writer of its own folder, and writes
+  commute. An incoming row replaces the stored one only when it is at least as
+  new by the origin's own `updatedAt` (a tie breaks on the row's JSON, so the
+  order is total); an incoming transcript replaces the stored one only when its
+  `revision` (the time the app read it) is not older. Replaying a read, or
+  applying reads in any order, leaves the same files. Two machines never share a
+  folder, so the same thread id on two machines cannot collide.
+- **Incremental and throttled.** The app sends a machine's list at most every
+  five seconds while it changes (only while the machine answers: the rows of an
+  away machine are this computer's own copy, not something it said), and a
+  thread's transcript at most every two seconds while it changes. The engine
+  skips a row that did not change and a transcript whose sha256 fingerprint is
+  the stored one, so a repeated read writes nothing. A transcript over 32 MiB
+  is not mirrored, and the previous copy stays. Files are written to a
+  temporary file and renamed; an `index.json` that cannot be read is kept as
+  `index.json.broken` before the next write, so nothing is overwritten blind.
+- **What is in a transcript.** The conversation the app drew from the machine
+  (messages, tool calls with their output), without attachment bytes. It is not
+  the machine's `history.json` byte for byte; it is what a client can read over
+  the connection today (see "Not yet" below).
+- **Settings › Environments › Thread copies** holds the switch (on by default)
+  and **Projects left out**, one folder per line. A thread whose folder is
+  one of those, or inside one, is not copied (matched by path components,
+  case-insensitively). Turning the switch off stops new copies; what was
+  already copied stays and stays readable. Removing an environment forgets its
+  pairing and keeps its mirror (delete `mirror/<machine id>` to drop it).
+- **Metadata only is not promised here.** Unlike `data.sqlite`, the mirror holds
+  message text, because a copy of a conversation is the point. Treat the folder
+  as private as `threads/`.
+
+The app drives it through `_rustcode/mirror` on its own engine
+(`engine/src/acp/mirror.rs`, `apps/desktop/src/state/machineMirror.ts`), one
+method with an `action`: `status`, `setSettings` (`enabled`, `excludedProjects`),
+`putList` (`host`, `sessions`), `putTranscript` (`host`, `id`, `cwd`,
+`revision`, `transcript`), `list` (optional `host`) and `transcript` (`host`,
+`id`). A write while the switch is off is refused with "thread mirroring is
+off"; reads always work. An older engine answers `unknown method` and the app
+keeps its web-view copy as before.
+
+Not yet: replicating a machine's raw `history.json`, `performance.json` and
+usage rows (the remote protocol has no call that reads them; the mirror holds
+what `session/load` replays); mirroring from a computer that has no app or
+terminal client paired with the others (every computer mirrors the machines it
+is paired with, so a fleet where each pair is paired both ways holds every copy
+on every computer); a "Continue here as a fork" action on a mirrored thread;
+and a sidebar filter by environment.
+
 ## Command receipts
 
 An orchestration call that can start a thread or deliver a message
@@ -172,7 +278,7 @@ starting or delivering a second time.
   limit) or a failure records nothing, so a corrected call may use the key.
 
 Receipts age out after 7 days and the newest 10,000 are kept, pruned by the
-same hourly pass as the telemetry tables.
+same hourly pass as the telemetry tables (the one table that is not kept).
 
 ## Request and protocol telemetry
 
@@ -264,7 +370,7 @@ Metadata is always recorded; payloads are opt-in, and off by default:
 
 `telemetry_retention` (default `"forever"`, or a number of days) is separate
 from those two: it only bounds raw protocol rows, never structured rows
-("Structured rows grow forever, payloads do not"). It is global only.
+("Nothing is deleted by default"). It is global only.
 
 `debug_verbose_network_logging` is a separate flag for `debug.log` output and
 does not turn any of this on. Project configuration cannot enable either key:
@@ -303,20 +409,21 @@ insert, so a mistake cannot write past the cap.
 
 A pass runs at most once an hour, from the store's open path: every writer
 opens the store. Structured rows are never deleted; see
-"Structured rows grow forever, payloads do not" above for the policy, and
+"Nothing is deleted by default" above for the policy, and
 `telemetry_retention` in `config.toml` for the raw-row window.
 
 - streaming-delta bodies and status-ping payloads are dropped on every pass;
-- payload columns of raw rows older than 7 days are set to `NULL`, and the
-  metadata row stays;
-- when `telemetry_retention` is a number of days, raw protocol rows older
-  than that are deleted; the default `forever` keeps them;
+- only when `telemetry_retention` is a number of days: payload columns of raw
+  rows older than 7 days are set to `NULL` (the metadata row stays) and raw
+  protocol rows older than that number of days are deleted; the default
+  `forever` does neither;
 - command receipts older than 7 days are deleted, then the oldest until at
   most 10,000 are left: they exist to make a retry safe for a while, not to
   keep history (`COMMAND_RECEIPT_RETENTION_DAYS`, `COMMAND_RECEIPT_MAX_ROWS`);
-- if the raw tables hold more than 256 MiB of payload together (estimated as
-  the summed length of the payload columns), payloads are dropped first and
-  the oldest raw rows only after that;
+- only when `telemetry_retention` is a number of days: if the raw tables hold
+  more than 256 MiB of payload together (estimated as the summed length of the
+  payload columns), payloads are dropped first and the oldest raw rows only
+  after that;
 - the WAL is checkpointed (`PRAGMA wal_checkpoint(TRUNCATE)`), and freed pages
   are reclaimed with `PRAGMA incremental_vacuum` only when the database already
   vacuums incrementally — turning that on for an existing file needs a full

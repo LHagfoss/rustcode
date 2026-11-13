@@ -5,7 +5,8 @@
 // This computer first — the RustCode server the app starts itself — then every other computer the
 // app is paired with, each with a live status (online, connecting, offline), the address and route
 // it is reached over, the RustCode version it runs and its recovery action (Connect, Reconnect, Pair
-// again), a rename and Remove. "Add environment" opens one dialog with every way in
+// again), a rename (shared across the fleet, `state/fleet.ts`) and Remove. Computers only known
+// through a paired one are listed read-only below them, with a Pair button. "Add environment" opens one dialog with every way in
 // (`ui/AddEnvironmentDialog.tsx`): a connect code, SSH, or an address on the same network or a
 // tailnet; the new-thread selector (`ui/EnvironmentSelector.tsx`) can open it too.
 //
@@ -23,6 +24,7 @@ import { Plus, RefreshCw, Server, SquareTerminal } from "lucide-react";
 import { useEffect, useState } from "react";
 import { currentPlatform } from "../lib/platform";
 import { hasShell } from "../lib/shell";
+import { knownOnly, useFleet, viaName } from "../state/fleet";
 import {
   askInstallServer,
   askMachine,
@@ -58,15 +60,18 @@ import { openMachineSettings, useApp } from "../state/store";
 import { AddEnvironmentDialog } from "./AddEnvironmentDialog";
 import {
   environmentAddress,
+  environmentOutdated,
   environmentRecovery,
   environmentRoute,
   environmentStatus,
+  knownEnvironment,
   recoveryLabel,
 } from "./environments";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachineIdentityEditor } from "./MachineProfile";
 import { Spinner } from "./primitives";
 import { Action, Chip, Group, Loading, Row } from "./settingsKit";
+import { ThreadMirrorGroup } from "./ThreadMirrorGroup";
 
 /** How often the page asks the shell where the environments stand. */
 const POLL_MS = 3000;
@@ -131,6 +136,7 @@ export function MachinesPage() {
             local={local}
           />
         ))}
+        <KnownEnvironments now={now} local={local} />
         {machines.length === 0 && <NoEnvironments />}
         {adding && !addOpen && (
           <Row
@@ -142,6 +148,8 @@ export function MachinesPage() {
           </Row>
         )}
       </Group>
+
+      {machines.length > 0 && <ThreadMirrorGroup />}
 
       <AddEnvironmentDialog open={addOpen} onOpenChange={setAddEnvironmentOpen} local={local} />
     </>
@@ -233,6 +241,47 @@ function ThisComputer() {
   );
 }
 
+/**
+ * Computers the paired ones are paired with, which this computer is not: listed read-only, with
+ * who told us, so the fleet is visible from any one computer. Knowing one is not access to it; it
+ * is paired on its own, with **Pair** (`state/fleet.ts`).
+ */
+function KnownEnvironments({ now, local }: { now: number; local: string | null }) {
+  const machines = useMachines((s) => s.machines);
+  const entries = useFleet((s) => s.entries);
+  const known = knownOnly(entries, machines);
+  return (
+    <>
+      {known.map((entry) => {
+        const row = knownEnvironment(entry, viaName(entry, machines, entries), local, now);
+        return (
+          <Row
+            key={row.id}
+            title={
+              <>
+                <DeviceGlyphIcon glyph={platformIcon(row.platform)} size={16} />
+                {row.name}
+                {row.outdated && <Chip tone="warn">Outdated</Chip>}
+              </>
+            }
+            subtitle={
+              row.via
+                ? `Known through ${row.via}. Not paired on this computer.`
+                : "Not paired on this computer."
+            }
+            status={row.facts.join(" · ")}
+            badge={<Chip tone="idle">Not paired</Chip>}
+          >
+            <Action onClick={() => setAddEnvironmentOpen(true)}>
+              <Plus size={12} /> Pair
+            </Action>
+          </Row>
+        );
+      })}
+    </>
+  );
+}
+
 function NoEnvironments() {
   return (
     <Row
@@ -262,6 +311,7 @@ export function MachineRow({
   const platform = platformName(machine.platform);
   const threads = threadLabel(count);
   const skew = versionSkew(machine.version, local, machine.platform);
+  const outdated = environmentOutdated(machine.version, local);
   const hint = machine.hint;
   const name = machineName(machine);
   const status = environmentStatus(machine);
@@ -293,6 +343,7 @@ export function MachineRow({
           />
           <DeviceGlyphIcon glyph={machineGlyph(machine)} tint={machineTint(machine)} size={16} />
           {name}
+          {outdated && <Chip tone="warn">Outdated</Chip>}
         </>
       }
       subtitle={

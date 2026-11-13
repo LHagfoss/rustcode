@@ -4,6 +4,7 @@ import {
   type AutoInstallFacts,
   anyThreadBusy,
   autoInstallDecision,
+  autoRetryDelay,
   compareVersions,
   installProgress,
   isPrerelease,
@@ -202,5 +203,14 @@ describe("automatic install", () => {
     expect(readAutoInstall(null)).toBe(true);
     expect(readAutoInstall("1")).toBe(true);
     expect(readAutoInstall("0")).toBe(false);
+  });
+});
+
+describe("automatic install retries", () => {
+  test("a failed install waits 1, 5 and 15 minutes, then leaves it to the sidebar row", () => {
+    expect(autoRetryDelay(1)).toBe(60_000);
+    expect(autoRetryDelay(2)).toBe(5 * 60_000);
+    expect(autoRetryDelay(3)).toBe(15 * 60_000);
+    expect(autoRetryDelay(4)).toBeNull();
   });
 });

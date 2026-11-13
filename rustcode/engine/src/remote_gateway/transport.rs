@@ -60,25 +60,11 @@ pub(super) async fn serve_connection(
         _ = shared.shutdown.cancelled() => return,
         upgraded = tokio::time::timeout_at(
             deadline,
-            accept_hdr_async_with_config(socket, refuse_browsers, Some(config)),
+            upgrade(&shared, socket, &slot, config),
         ) => upgraded,
     };
     let mut socket = match upgraded {
-        Ok(Ok(socket)) => socket,
-        Ok(Err(WsError::Http(response))) => {
-            // The upgrade is refused before any frame, so the device is told
-            // nothing. A native app built before it sent the native app origin
-            // is refused exactly like a browser page, and its owner has no way
-            // to learn that from the connection itself.
-            if response.status() == StatusCode::FORBIDDEN {
-                shared.record_refusal(
-                    slot.ip(),
-                    RefusalReason::UnexpectedOrigin,
-                    &DeviceHint::default(),
-                );
-            }
-            return;
-        }
+        Ok(Some(socket)) => socket,
         _ => return,
     };
     let first = tokio::select! {
@@ -162,6 +148,50 @@ pub(super) async fn serve_connection(
     }
     session(&shared, socket, connection, sink, queue, thread_names).await;
 }
+
+/// Upgrade a TCP connection to a WebSocket, keeping the refusals its owner can
+/// act on. `None` when the connection is over.
+async fn upgrade(
+    shared: &Shared,
+    socket: TcpStream,
+    slot: &UnauthenticatedSlot,
+    config: WebSocketConfig,
+) -> Option<Socket> {
+    // A TLS record starts with the handshake content type, which no HTTP
+    // request line does. A phone dialing `wss://` at this plain gateway
+    // otherwise looks like a connection that went nowhere, and its owner has no
+    // way to learn that from the host.
+    let mut first = [0u8; 1];
+    if matches!(socket.peek(&mut first).await, Ok(1)) && first[0] == TLS_HANDSHAKE_RECORD {
+        shared.record_refusal(
+            slot.ip(),
+            RefusalReason::SecureConnection,
+            &DeviceHint::default(),
+        );
+        return None;
+    }
+    match accept_hdr_async_with_config(socket, refuse_browsers, Some(config)).await {
+        Ok(socket) => Some(socket),
+        Err(WsError::Http(response)) => {
+            // The upgrade is refused before any frame, so the device is told
+            // nothing. A native app built before it sent the native app origin
+            // is refused exactly like a browser page, and its owner has no way
+            // to learn that from the connection itself.
+            if response.status() == StatusCode::FORBIDDEN {
+                shared.record_refusal(
+                    slot.ip(),
+                    RefusalReason::UnexpectedOrigin,
+                    &DeviceHint::default(),
+                );
+            }
+            None
+        }
+        Err(_) => None,
+    }
+}
+
+/// The first byte of a TLS handshake record (`ClientHello`).
+const TLS_HANDSHAKE_RECORD: u8 = 0x16;
 
 /// The one `Origin` a native app may send. React Native always adds one to a
 /// WebSocket upgrade and lets the caller replace it, so the phone app sends

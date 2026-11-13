@@ -298,9 +298,52 @@ impl ClientSink for AcpClientSink {
         request.session_id = self.clients.session_id().to_owned().into();
         let clients = self.clients.clone();
         let waiting = crate::thread_status::waiting(clients.session_id());
+        // What kind of tool is asking and what each option means, never the
+        // call's title or arguments, which can hold a command or a path.
+        let tool_kind = request
+            .tool_call
+            .fields
+            .kind
+            .as_ref()
+            .map(|kind| format!("{kind:?}").to_lowercase());
+        let option_kinds: Vec<(String, String)> = request
+            .options
+            .iter()
+            .map(|option| {
+                (
+                    option.option_id.0.to_string(),
+                    format!("{:?}", option.kind).to_lowercase(),
+                )
+            })
+            .collect();
         Box::pin(async move {
             let _waiting = waiting;
-            match clients.request(None, request).await {
+            let started = std::time::Instant::now();
+            let asked = chrono::Utc::now();
+            let answer = clients.request(None, request).await;
+            let decision = match &answer {
+                Ok(response) => match &response.outcome {
+                    RequestPermissionOutcome::Selected(selected) => option_kinds
+                        .iter()
+                        .find(|(id, _)| id.as_str() == selected.option_id.0.as_ref())
+                        .map_or_else(|| "selected".to_owned(), |(_, kind)| kind.clone()),
+                    _ => "cancelled".to_owned(),
+                },
+                Err(_) => "cancelled".to_owned(),
+            };
+            let stamp = |at: chrono::DateTime<chrono::Utc>| {
+                at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+            };
+            crate::data_store::record_approval(&crate::data_store::ApprovalRow {
+                thread_id: clients.session_id().to_owned(),
+                source: "harness".to_owned(),
+                tool_name: tool_kind,
+                requested_at: stamp(asked),
+                decided_at: Some(stamp(chrono::Utc::now())),
+                wait_ms: Some(started.elapsed().as_millis() as i64),
+                decision,
+            });
+            match answer {
                 Ok(response) => response,
                 Err(error) => {
                     crate::dbg_log!("harness permission request failed: {error}");
@@ -423,6 +466,9 @@ async fn attach_orchestrator(
     if !harness::capabilities(&session.harness).orchestration {
         return false;
     }
+    // A harness without its own question tool also gets `ask_user_question`,
+    // asked through this thread's permission channel (#3393).
+    let ask_user = harness::needs_question_tool(&session.harness);
     // No app hosts the tools: this engine answers the reads itself and names
     // the app for the calls that need it (#3422). An app that turned them off
     // still turns them off, so nothing is attached then.
@@ -436,9 +482,7 @@ async fn attach_orchestrator(
             smart_ui,
         )
         .await;
-        let attached = launch.is_some();
-        session.set_orchestrator(launch);
-        return attached;
+        return set_launch(session, launch, ask_user).await;
     }
     if orchestration < 2 {
         return false;
@@ -448,6 +492,20 @@ async fn attach_orchestrator(
     };
     let launch =
         crate::orchestration::hub::launch_for(&session.id, client, orchestration, smart_ui).await;
+    set_launch(session, launch, ask_user).await
+}
+
+/// Start the thread's orchestration server with `launch`, offering
+/// `ask_user_question` when `ask_user`. Whether there is a server.
+async fn set_launch(
+    session: &ExternalSession,
+    launch: Option<crate::orchestration::hub::Launch>,
+    ask_user: bool,
+) -> bool {
+    let ask_user = ask_user
+        && launch.is_some()
+        && crate::orchestration::hub::set_questions(&session.id, session.question_asker()).await;
+    let launch = launch.map(|launch| launch.with_ask_user(ask_user));
     let attached = launch.is_some();
     session.set_orchestrator(launch);
     attached
