@@ -199,10 +199,9 @@ pub async fn view(cwd: &Path, number: u64) -> Result<PullDetail, PullError> {
     let number = number.to_string();
     // `{owner}/{repo}` is the repository `gh pr view` reads in this folder.
     let endpoint = format!("repos/{{owner}}/{{repo}}/pulls/{number}/comments");
-    let (value, lines) = tokio::join!(
-        gh_json(cwd, &["pr", "view", &number, "--json", VIEW_FIELDS]),
-        gh(cwd, &["api", "--paginate", "--jq", ".[]", &endpoint], None),
-    );
+    let view_args = ["pr", "view", &number, "--json", VIEW_FIELDS];
+    let comment_args = ["api", "--paginate", "--jq", ".[]", &endpoint];
+    let (value, lines) = tokio::join!(gh_json(cwd, &view_args), gh(cwd, &comment_args, None),);
     let mut detail = detail(&value?).ok_or_else(|| PullError {
         code: "failed",
         message: "gh answered without a pull request".to_owned(),
