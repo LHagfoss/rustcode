@@ -1117,7 +1117,7 @@ fn tool_update_for(item: &Value) -> Option<ToolCallUpdate> {
                 .content(vec![ToolCallContent::from(ContentBlock::Text(
                     TextContent::new(output.clone()),
                 ))])
-                .raw_output(json!({"exitCode": exit_code, "output": output, "status": status}));
+                .raw_output(json!({"exitCode": exit_code, "output": output, "status": status, "durationMs": item.get("durationMs")}));
         }
         "fileChange" => {
             let diffs = item

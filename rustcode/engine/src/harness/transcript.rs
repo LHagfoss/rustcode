@@ -46,12 +46,15 @@ struct ToolSlot {
     call: usize,
     /// The `tool` message holding its result.
     result: usize,
+    started: Option<(std::time::Instant, chrono::DateTime<chrono::Utc>)>,
 }
 
 #[derive(Default)]
 pub(crate) struct Transcript {
     pub history: Vec<ChatMessage>,
     reply: String,
+    live: bool,
+    pub tool_metrics: HashMap<usize, (String, i64)>,
     thought: String,
     /// Tool call id → where its two messages are.
     tools: HashMap<String, ToolSlot>,
@@ -162,6 +165,9 @@ impl Transcript {
             ToolSlot {
                 call,
                 result: self.history.len() - 1,
+                started: self
+                    .live
+                    .then(|| (std::time::Instant::now(), chrono::Utc::now())),
             },
         );
     }
@@ -181,6 +187,22 @@ impl Transcript {
             if let Some(input) = &fields.raw_input {
                 reference.arguments = input.to_string();
             }
+        }
+        if matches!(
+            fields.status,
+            Some(ToolCallStatus::Completed | ToolCallStatus::Failed)
+        ) && !self.tool_metrics.contains_key(&slot.result)
+            && let Some((started, at)) = slot.started
+        {
+            let duration = fields
+                .raw_output
+                .as_ref()
+                .and_then(|output| output.get("durationMs"))
+                .and_then(Value::as_i64)
+                .filter(|duration| *duration >= 0)
+                .unwrap_or_else(|| started.elapsed().as_millis().min(i64::MAX as u128) as i64);
+            self.tool_metrics
+                .insert(slot.result, (at.to_rfc3339(), duration));
         }
         // The output, from wherever this harness delivers it.
         let snapshot = fields
@@ -214,6 +236,12 @@ impl Transcript {
             message.content = text;
         }
         let record = message.tool_result.get_or_insert_with(Default::default);
+        if let Some(command) = fields.raw_input.as_ref().and_then(|input| {
+            crate::command_guard::requested_command(input)
+                .or_else(|| input.get("cmd").and_then(Value::as_str).map(str::to_owned))
+        }) {
+            record.command = Some(command);
+        }
         if let Some(kind) = fields.kind {
             record.tool_name = kind_name(kind);
         }
@@ -253,14 +281,19 @@ impl Transcript {
     }
 
     pub(crate) fn push_user(&mut self, text: &str) {
+        if !self.live {
+            self.tool_metrics.clear();
+        }
         self.end_reply();
         self.plan = None;
+        self.live = true;
         self.history.push(ChatMessage::new("user", text.to_owned()));
     }
 
     /// The turn ended: record its text, and a call that never finished as
     /// failed, so a replay shows no card still running.
     pub(crate) fn end_reply(&mut self) {
+        self.live = false;
         if let Some(reply) = self.take_reply() {
             self.history.push(reply);
         }
@@ -593,6 +626,80 @@ pub(crate) fn replay(history: &[ChatMessage], cwd: Option<&std::path::Path>) -> 
 mod tests {
     use super::*;
     use agent_client_protocol::schema::v1::ToolCallUpdate;
+
+    #[test]
+    fn live_tool_metrics_keep_first_terminal_and_command() {
+        let mut transcript = Transcript::default();
+        transcript.push_user("go");
+        transcript.observe(&SessionUpdate::ToolCall(
+            ToolCall::new("t", "Run command")
+                .kind(ToolKind::Execute)
+                .raw_input(serde_json::json!({"command": "nice -n 10 cargo check"}))
+                .status(ToolCallStatus::InProgress),
+        ));
+        let finish = SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            "t",
+            ToolCallUpdateFields::new()
+                .status(ToolCallStatus::Completed)
+                .raw_output(serde_json::json!({"durationMs": 1234})),
+        ));
+        transcript.observe(&finish);
+        let metrics = transcript.tool_metrics.clone();
+        transcript.observe(&SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            "t",
+            ToolCallUpdateFields::new()
+                .status(ToolCallStatus::Completed)
+                .raw_output(serde_json::json!({"durationMs": 9999})),
+        )));
+        assert_eq!(transcript.tool_metrics, metrics);
+        assert_eq!(metrics.values().next().unwrap().1, 1234);
+        let record = transcript
+            .history
+            .last()
+            .unwrap()
+            .tool_result
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            record
+                .command
+                .as_deref()
+                .and_then(crate::command_guard::command_name)
+                .as_deref(),
+            Some("cargo")
+        );
+        transcript.end_reply();
+        assert_eq!(transcript.tool_metrics, metrics);
+    }
+
+    #[test]
+    fn acp_failure_measures_elapsed_time() {
+        let mut transcript = Transcript::default();
+        transcript.push_user("go");
+        transcript.observe(&SessionUpdate::ToolCall(
+            ToolCall::new("t", "Run command").status(ToolCallStatus::InProgress),
+        ));
+        let slot = transcript.tools.get_mut("t").unwrap();
+        slot.started.as_mut().unwrap().0 -= std::time::Duration::from_millis(250);
+        transcript.observe(&SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            "t",
+            ToolCallUpdateFields::new().status(ToolCallStatus::Failed),
+        )));
+        assert!(transcript.tool_metrics.values().next().unwrap().1 >= 250);
+    }
+
+    #[test]
+    fn replay_does_not_measure_tools() {
+        let mut transcript = Transcript::default();
+        transcript.observe(&SessionUpdate::ToolCall(
+            ToolCall::new("old", "Read").status(ToolCallStatus::InProgress),
+        ));
+        transcript.observe(&SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            "old",
+            ToolCallUpdateFields::new().status(ToolCallStatus::Failed),
+        )));
+        assert!(transcript.tool_metrics.is_empty());
+    }
 
     #[test]
     fn a_call_still_running_when_the_turn_ends_replays_as_failed() {
