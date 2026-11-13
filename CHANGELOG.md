@@ -1,3 +1,7 @@
+## [v1.34.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.34.1) - 2026-11-13
+
+### Fixes
+- Fix Claude Code threads failing to start with an ENOENT error in projects with command policies. (#3662)
 ## [v1.34.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.34.0) - 2026-11-13
 
 ### Features
