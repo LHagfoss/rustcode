@@ -1190,8 +1190,7 @@ export interface RuleThread {
 // Windows' verbatim prefix goes too (`plainPath`): it is a Win32 detail, not part of the folder, and
 // keeping it made one project two (issue 3425).
 export const cleanProjectPath = (path: string) =>
-  plainPath(path)
-    .replace(/\/+$/, "")
+  (plainPath(path).replace(/\/+$/, "") || (path.startsWith("/") ? "/" : ""))
     .replace(/\/\.\//g, "/")
     .replace(/^\/private(?=\/(?:tmp|var|etc)(?:\/|$))/, "");
 

@@ -439,6 +439,18 @@ pub(crate) fn offline_config_options(
     options
 }
 
+/// Put RustCode's own `text` (a handoff's context, a setup reminder) at the
+/// head of a prompt, but never in front of a slash command: an ACP harness
+/// reads a command only in the prompt's first text block (`claude-agent-acp`
+/// runs `/skill …` as the skill), so the command keeps that place (#3604).
+pub(crate) fn prepend_text(prompt: &mut Vec<ContentBlock>, text: String) {
+    let at = match prompt.first() {
+        Some(ContentBlock::Text(first)) if first.text.trim_start().starts_with('/') => 1,
+        _ => 0,
+    };
+    prompt.insert(at, ContentBlock::Text(TextContent::new(text)));
+}
+
 /// The text a recorded user message keeps of a prompt.
 pub(crate) fn prompt_text(prompt: &[ContentBlock]) -> String {
     let mut parts = Vec::new();
@@ -1045,6 +1057,17 @@ impl ExternalSession {
             .client_display
             .lock()
             .unwrap_or_else(|error| error.into_inner());
+        // Read when the process starts, so a thread the idle reaper stopped
+        // picks up a toggle made in the meantime; a running process keeps
+        // the note it got (`docs/harnesses.md`). A named login names the
+        // skills root it reads, so the note leaves only that one out.
+        let skills_note = crate::skills::harness_skills_note(
+            &self.harness.id,
+            account
+                .as_ref()
+                .map(|account| account.resolved_dir())
+                .as_deref(),
+        );
         Ok(StartOptions {
             resume: record.native_session_id.clone(),
             account,
@@ -1056,10 +1079,7 @@ impl ExternalSession {
             // The caller adds the workspace's servers; a test wants none.
             mcp: Vec::new(),
             thread_id: Some(self.id.clone()),
-            // Read when the process starts, so a thread the idle reaper stopped
-            // picks up a toggle made in the meantime; a running process keeps
-            // the note it got (`docs/harnesses.md`).
-            skills_note: crate::skills::harness_skills_note(&self.harness.id),
+            skills_note,
         })
     }
 
@@ -1619,7 +1639,7 @@ impl ExternalSession {
         let mut prompt = prompt;
         let handed = handoff.is_some();
         if let Some(context) = handoff {
-            prompt.insert(0, ContentBlock::Text(TextContent::new(context)));
+            prepend_text(&mut prompt, context);
         }
         // Nothing a finished turn left running still counts against this one.
         self.progress.begin_turn();
@@ -2232,6 +2252,39 @@ mod removed_account_tests {
 #[cfg(test)]
 #[path = "reap_tests.rs"]
 mod reap_tests;
+
+#[cfg(test)]
+mod prepend_tests {
+    use super::*;
+
+    fn texts(prompt: &[ContentBlock]) -> Vec<&str> {
+        prompt
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_slash_command_stays_the_first_block_of_the_prompt() {
+        let mut prompt = vec![ContentBlock::Text(TextContent::new("/deploy to staging"))];
+        prepend_text(&mut prompt, "context".into());
+        assert_eq!(texts(&prompt), ["/deploy to staging", "context"]);
+    }
+
+    #[test]
+    fn other_text_comes_after_rustcodes_own() {
+        let mut prompt = vec![ContentBlock::Text(TextContent::new("use deploy please"))];
+        prepend_text(&mut prompt, "context".into());
+        assert_eq!(texts(&prompt), ["context", "use deploy please"]);
+
+        let mut empty = Vec::new();
+        prepend_text(&mut empty, "context".into());
+        assert_eq!(texts(&empty), ["context"]);
+    }
+}
 
 #[cfg(test)]
 mod live_usage_tests {

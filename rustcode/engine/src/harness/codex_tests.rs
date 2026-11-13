@@ -1251,6 +1251,35 @@ fn a_subagents_turn_ending_finishes_its_row_and_not_the_thread_turn() {
 }
 
 #[test]
+fn unknown_child_completion_does_not_finish_the_root_turn() {
+    let state = Mutex::new(State {
+        codex_thread_id: Some("root".into()),
+        ..State::default()
+    });
+    let (waiter, mut answer) = oneshot::channel();
+    lock(&state).waiter = Some(waiter);
+    let child = json!({"threadId": "child", "turn": {"id": "child-turn", "rootTurnId": "root-turn", "status": "completed"}});
+    assert!(
+        notified(
+            &state,
+            "item/agentMessage/delta",
+            json!({"threadId": "child", "itemId": "msg", "delta": "child reply"})
+        )
+        .is_empty()
+    );
+    settle(
+        &state,
+        "error",
+        &json!({"threadId": "child", "error": {"message": "child failed"}}),
+    );
+    settle(&state, "turn/completed", &child);
+    assert!(answer.try_recv().is_err());
+    let root = json!({"threadId": "root", "turn": {"id": "root-turn", "status": "completed"}});
+    settle(&state, "turn/completed", &root);
+    assert!(matches!(answer.try_recv(), Ok(TurnEnd::Completed)));
+}
+
+#[test]
 fn a_collab_call_without_agents_keeps_its_step() {
     let state = Mutex::new(State::default());
     let list = json!({"type": "collabAgentToolCall", "id": "c5", "tool": "listAgents",

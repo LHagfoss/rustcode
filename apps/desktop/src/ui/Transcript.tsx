@@ -49,6 +49,7 @@ import {
   RESUME_TEXT,
   rewindCheckpoint,
   shortcutFor,
+  spokenTitleOf,
   steeringOf,
   turnState,
   useApp,
@@ -512,6 +513,7 @@ export function Transcript({
   const childRequests = useChildRequests(thread.id);
   // The branches as a string, so a status change elsewhere in the list does not rebuild the rows.
   const branchKey = useApp((s) => JSON.stringify(branchesOf(s.sessions, thread.id)));
+  const spokenTitle = useApp((s) => spokenTitleOf(s, thread.id));
   const branches = useMemo<Branch[]>(() => JSON.parse(branchKey), [branchKey]);
   const started = useMemo(
     () =>
@@ -1256,7 +1258,10 @@ export function Transcript({
         onWheel={onWheel}
         className="h-full overflow-y-auto overscroll-contain px-3 [overflow-anchor:none] [scrollbar-gutter:stable_both-edges] sm:px-12"
         role="log"
-        aria-label="Transcript"
+        // Named for its thread, and silent as it streams: the turn's moments are announced once
+        // each (`state/announceThreads.ts`), never every token or tool call a log would read out.
+        aria-label={spokenTitle}
+        aria-live="off"
         aria-busy={thread.running}
       >
         <div ref={innerRef} className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>

@@ -304,3 +304,12 @@ describe("Windows folders", () => {
     expect(middleEllipsis("\\\\server\\share\\code\\rustcode", 20)).toBe("\\\\server…\\rustcode");
   });
 });
+
+test("includes explicitly registered projects with no threads, including places", () => {
+  const rows = folderRows([
+    { cwd: "/", registered: true },
+    { cwd: "/code/new", registered: true },
+  ]);
+  expect(rows.map((row) => row.path)).toContain("/");
+  expect(rows.map((row) => row.path)).toContain("/code/new");
+});

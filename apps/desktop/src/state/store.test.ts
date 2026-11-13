@@ -35,6 +35,7 @@ import { QUEUE_REASON } from "./queue";
 import {
   type AppState,
   addHarnessAccount,
+  advertisedCommands,
   agentHistory,
   answerConnectRequest,
   answerPermission,
@@ -5238,6 +5239,37 @@ describe("continuing after a limit", () => {
     await continueDueThreads();
   });
 
+  test("a thread missing from a capped list keeps its wait; one missing from a whole list is gone", async () => {
+    const { connect, continueDueThreads, continueInternetThreads, threadIsGone } = await import("./store");
+    resetForTests();
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessionsLoaded);
+    const later = { until: Date.now() + 3_600_000, harness: "claude-code", account: null, attempts: 1 };
+    const net = { since: Date.now(), attempts: 0, harness: "claude-code", account: null };
+    // The list stopped at its page cap: the thread may be past it, so nothing waiting on it is dropped.
+    useApp.setState({
+      sessionsCapped: true,
+      limitWaits: { "past-the-cap": later },
+      internetWaits: { "past-the-cap": net },
+    });
+    expect(threadIsGone("past-the-cap")).toBe(false);
+    await continueDueThreads();
+    await continueInternetThreads();
+    expect(useApp.getState().limitWaits["past-the-cap"]).toBeDefined();
+    expect(useApp.getState().internetWaits["past-the-cap"]).toBeDefined();
+    // A paired machine that has not listed its threads yet says nothing about them either.
+    expect(threadIsGone("machine-x/abc")).toBe(false);
+    // A list that came in whole is the truth: the thread is gone and its waits go with it.
+    useApp.setState({ sessionsCapped: false });
+    expect(threadIsGone("past-the-cap")).toBe(true);
+    expect(threadIsGone("mock-thread-1")).toBe(false);
+    await continueDueThreads();
+    await continueInternetThreads();
+    expect(useApp.getState().limitWaits).toEqual({});
+    expect(useApp.getState().internetWaits).toEqual({});
+    resetForTests();
+  });
+
   test("a thread waiting for the internet is cancelled and cleared the same way", async () => {
     const { continueInternetThreads, dropInternetWait, setContinueAfterLimit } = await import("./store");
     const wait = { since: Date.now(), attempts: 0, harness: "claude-code", account: null };
@@ -6056,5 +6088,30 @@ describe("a thread whose record names another folder", () => {
     );
     expect(await openThread(target)).toBeNull();
     expect(transport.count(Method.sessionRepair)).toBe(0);
+  });
+});
+
+describe("advertisedCommands", () => {
+  const claude = (name: string) => ({
+    name,
+    description: "",
+    takesArguments: true,
+    report: false,
+    action: "execute",
+  });
+  const base = {
+    threads: { t1: { harness: { id: "claude-code" } } },
+    sessions: [],
+    newThread: null,
+    harnesses: null,
+    harnessCommands: { "claude-code": [claude("/remembered")] },
+    sessionCommands: {},
+  } as unknown as Parameters<typeof advertisedCommands>[0];
+
+  test("a thread's session list wins, else its harness's last list (#3604)", () => {
+    expect(advertisedCommands(base, "t1")?.map((c) => c.name)).toEqual(["/remembered"]);
+    const advertised = { ...base, sessionCommands: { t1: [claude("/deploy")] } };
+    expect(advertisedCommands(advertised, "t1")?.map((c) => c.name)).toEqual(["/deploy"]);
+    expect(advertisedCommands({ ...base, harnessCommands: {} }, "t1")).toBeUndefined();
   });
 });

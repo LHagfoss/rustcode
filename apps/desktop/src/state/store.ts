@@ -72,11 +72,13 @@ import {
   parseWorktreeList,
   type RestoreAnswer,
   removeRefusal,
+  STATUS_LABEL,
   statusInUpdate,
   type ThreadStatus,
   V2Method,
   type Worktree,
 } from "../acp/v2";
+import { announce, mountAnnouncer } from "../lib/announce";
 import { approvalSubject, optionScope, resolvedLine } from "../lib/approval";
 import { CHAT_WIDTH_DEFAULT, type ChatWidth, parseChatWidth } from "../lib/chatWidth";
 import { capServerLogLine } from "../lib/diagnostics";
@@ -95,6 +97,15 @@ import { trashName } from "../lib/platform";
 import { setShellTransport, shellCall } from "../lib/shell";
 import { BUILTIN_THEMES, parseThemes, ThemeMethod, type ThemesSnapshot } from "../lib/themes";
 import { titleFrom } from "../lib/title";
+import {
+  applyWindowTitle,
+  momentOf,
+  spokenTitle,
+  type ThreadMoment,
+  threadAnnouncement,
+  windowStatus,
+  windowTitle,
+} from "./announceThreads";
 import { type Attempt, splitAtTurn, transcriptTurns } from "./attempts";
 import {
   type AutoCompactMode,
@@ -215,7 +226,14 @@ import {
   storedStatus,
   useOutbox,
 } from "./machineOutbox";
-import { finishIsNews, type NotifyEvent, notifyThread, startNotifications, wakeEvent } from "./notify";
+import {
+  finishIsNews,
+  type NotifyEvent,
+  notifyThread,
+  startNotifications,
+  wakeEvent,
+  warmingUp,
+} from "./notify";
 import {
   CAPABILITY_VERSION,
   DEFAULT_DELEGATES_PER_THREAD,
@@ -259,6 +277,7 @@ import {
   SCHEDULED_KEY,
   type ScheduleBook,
   type ScheduledMessage,
+  type ScheduleRefusal,
   scheduledCount,
   withoutScheduled,
 } from "./schedule";
@@ -2251,9 +2270,36 @@ export function threadCreated(params: unknown) {
   });
 }
 
+/**
+ * The computers whose own thread list came in whole this run: this one (LOCAL_HOST) once
+ * `refreshSessions` read every page, a paired machine once `machines.ts` `readThreads` did. Only
+ * there does a thread missing from the list mean it is gone.
+ */
+const wholeLists = new Set<string>();
+
+/** A computer's list came in (`whole` when it was every page), or it can no longer be trusted. */
+export function noteThreadList(host: string, whole: boolean): void {
+  if (whole) wholeLists.add(host);
+  else wholeLists.delete(host);
+}
+
+/**
+ * Whether a thread no longer exists: its computer listed every thread it has and this one was not
+ * among them. A list that stopped at its page cap, a machine that has not answered yet, or a read
+ * that failed is not news that it is gone, so what waits on the thread keeps waiting.
+ */
+export function threadIsGone(id: string): boolean {
+  const s = get();
+  if (s.sessions.some((x) => x.id === id)) return false;
+  const host = isRemoteThread(id) ? splitThreadKey(id).host : LOCAL_HOST;
+  if (host === LOCAL_HOST && (!s.sessionsLoaded || s.sessionsCapped)) return false;
+  return wholeLists.has(host);
+}
+
 export async function refreshSessions(): Promise<void> {
   const conn = connection;
   if (!conn || !get().agent?.listSessions) {
+    noteThreadList(LOCAL_HOST, false);
     set({ sessionsLoaded: true, sessionsCapped: false });
     return;
   }
@@ -2290,6 +2336,7 @@ export async function refreshSessions(): Promise<void> {
       // Another machine's threads are listed by that machine (state/machines.ts), kept as they are.
       const remote = s.sessions.filter((x) => x.host);
       const sessions = byActivity([...started, ...all, ...remote]);
+      noteThreadList(LOCAL_HOST, !capped);
       return {
         sessions,
         sessionsLoaded: true,
@@ -3818,18 +3865,18 @@ export function restoreScheduled(): void {
 }
 
 /**
- * Schedule the composer's message for `due`. Null when there is nothing to send, the app is not
- * connected, or the message is too big to keep; the composer keeps its text then.
+ * Schedule the composer's message for `due`: the message, or why it could not be (the composer
+ * keeps its text and attachments then, and says so). Not connected is `offline`.
  */
 export function scheduleMessage(
   threadId: string,
   text: string,
   extras: ComposeExtras,
   due: number,
-): ScheduledMessage | null {
-  if (get().status !== "ready") return null;
-  if (!text.trim() && !hasExtras(extras)) return null;
-  if (!(due > Date.now())) return null;
+): ScheduledMessage | { refused: ScheduleRefusal | "offline" } {
+  if (get().status !== "ready") return { refused: "offline" };
+  if (!text.trim() && !hasExtras(extras)) return { refused: "empty" };
+  if (!(due > Date.now())) return { refused: "time" };
   const item: ScheduledMessage = {
     id: localId("scheduled"),
     text,
@@ -3837,8 +3884,8 @@ export function scheduleMessage(
     ...(carriesExtras(extras) ? { extras } : {}),
   };
   const next = addScheduled(get().scheduled, threadId, item);
-  if (!next) return null;
-  writeScheduled(next);
+  if ("refused" in next) return next;
+  writeScheduled(next.book);
   return item;
 }
 
@@ -3871,8 +3918,7 @@ export async function sendScheduledNow(threadId: string, id: string): Promise<bo
  * yet — while a thread that no longer exists is `gone` and one the user deleted meanwhile is too.
  */
 async function deliverScheduled(threadId: string, item: ScheduledMessage): Promise<"sent" | "gone" | "wait"> {
-  const s = get();
-  if (s.sessionsLoaded && !s.sessions.some((session) => session.id === threadId)) {
+  if (threadIsGone(threadId)) {
     toast("That thread is gone, so its scheduled message was dropped.", "error");
     return "gone";
   }
@@ -4323,6 +4369,7 @@ export async function steer(
           images: conditions.images,
           builtin: conditions.builtin,
           cwd: thread?.cwd ?? "",
+          advertised: advertisedCommands(get(), id),
         })
       : undefined;
   try {
@@ -4867,6 +4914,7 @@ export async function runPrompt(
     images: acceptsImages(thread),
     builtin: harness?.builtin ?? true,
     cwd: thread?.cwd ?? "",
+    advertised: advertisedCommands(get(), id),
   });
   // A new prompt starts a new report, if it is one.
   if (get().report?.threadId === id) set({ report: null });
@@ -7048,6 +7096,24 @@ export function commandsFor(s: CommandsSource, threadId?: string | null): SlashC
   });
 }
 
+/**
+ * The commands a thread's harness advertised itself: its session's own list, or before the session
+ * has advertised, the harness's last list. `promptBlocks` sends a catalog skill one of them names as
+ * the harness's own `/name` command.
+ */
+export function advertisedCommands(
+  s: Pick<
+    CommandsSource,
+    "threads" | "sessions" | "newThread" | "harnesses" | "harnessCommands" | "sessionCommands"
+  >,
+  threadId: string,
+): SlashCommand[] | undefined {
+  const own = s.sessionCommands[threadId];
+  if (own) return own;
+  const harness = harnessOf(s, threadId);
+  return harness ? s.harnessCommands[harness] : undefined;
+}
+
 /** How often the app asks for every plan while its window is visible. */
 export const PLAN_CACHE_POLL_MS = 180_000;
 
@@ -7685,6 +7751,7 @@ export async function revokeRemoteDevice(id: string): Promise<void> {
 
 /** Test hook: reset to a clean slate. */
 export function resetForTests() {
+  wholeLists.clear();
   // A machine's channel and its threads are process-global too: one test file's MockMachine must
   // not answer the next one's `openThread` (machinesThreads.test.ts › findings 1).
   resetMachinesForTests();
@@ -7995,10 +8062,13 @@ export async function continueDueThreads(now = Date.now()): Promise<void> {
   continuing = true;
   try {
     for (const [id, wait] of Object.entries(get().limitWaits)) {
-      if (!get().sessions.some((x) => x.id === id) || get().archived[id]) {
-        if (get().sessionsLoaded) dropLimitWait(id);
+      // A thread missing from a list that is not whole keeps its wait: it may be past the cap.
+      if (threadIsGone(id) || get().archived[id]) {
+        dropLimitWait(id);
         continue;
       }
+      // Past the cap and not open: its harness and login cannot be read yet, so it waits as it is.
+      if (!get().sessions.some((x) => x.id === id) && !get().threads[id]) continue;
       // A turn the restart cut short is sent its own resume, which ends this wait: never both.
       if (resuming.has(id)) continue;
       const holds = () => {
@@ -8050,10 +8120,12 @@ export async function continueInternetThreads(now = Date.now()): Promise<void> {
   continuingNet = true;
   try {
     for (const [id, wait] of Object.entries(get().internetWaits)) {
-      if (!get().sessions.some((x) => x.id === id) || get().archived[id]) {
-        if (get().sessionsLoaded) dropInternetWait(id);
+      if (threadIsGone(id) || get().archived[id]) {
+        dropInternetWait(id);
         continue;
       }
+      // Past the cap and not open: its harness and login cannot be read yet, so it waits as it is.
+      if (!get().sessions.some((x) => x.id === id) && !get().threads[id]) continue;
       const holds = () => {
         const s = get();
         return internetHolds(wait, { harness: harnessOf(s, id), account: accountOn(s, id) });
@@ -8149,6 +8221,51 @@ useApp.subscribe((s) => {
 // What follows the app rather than a moment in it: the Dock badge, and a click on a notification
 // opening its thread (state/notify.ts).
 startNotifications({ get: () => useApp.getState(), subscribe: useApp.subscribe, open: selectThread });
+
+/** A thread's name as a screen reader and the window's title say it (`state/announceThreads.ts`). */
+export function spokenTitleOf(s: AppState, id: string): string {
+  return spokenTitle(sessionById(s, id)?.title, s.threads[id]?.title);
+}
+
+// What a screen reader hears without reading the transcript (issue 3609): the window's title names
+// the open thread and its status, and a thread's major moments are announced once each. The open
+// thread says them all; one in the background only what needs the user, and not while it sleeps.
+let moments = new Map<string, ThreadMoment>();
+let windowTitleShown = "";
+function announceThreads(s: AppState, prev?: AppState) {
+  const selected = s.selectedId;
+  // Review and Settled are the list's own words; the rest the thread's moment says more precisely.
+  const listed = selected ? statusOf(s, selected) : "idle";
+  const title = selected
+    ? windowTitle(
+        spokenTitleOf(s, selected),
+        windowStatus(
+          momentOf(s.threads[selected], s.failed[selected]),
+          listed === "review" || listed === "done" ? STATUS_LABEL[listed] : undefined,
+        ),
+      )
+    : windowTitle(undefined);
+  if (title !== windowTitleShown) {
+    windowTitleShown = title;
+    applyWindowTitle(title);
+  }
+  if (prev && s.threads === prev.threads && s.failed === prev.failed) return;
+  const next = new Map<string, ThreadMoment>();
+  const quiet = warmingUp();
+  for (const id of new Set([...Object.keys(s.threads), ...Object.keys(s.failed)])) {
+    const moment = momentOf(s.threads[id], s.failed[id]);
+    next.set(id, moment);
+    if (quiet) continue;
+    const active = id === selected;
+    if (!active && id in s.snoozed) continue;
+    const said = threadAnnouncement(spokenTitleOf(s, id), moments.get(id), moment, active);
+    if (said) announce(said.text, { assertive: said.assertive });
+  }
+  moments = next;
+}
+mountAnnouncer();
+announceThreads(useApp.getState());
+useApp.subscribe(announceThreads);
 
 /** The threads a restart cut off: the saved list, plus any this app still showed running. */
 function interruptedThreads(): string[] {

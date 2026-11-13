@@ -1,20 +1,23 @@
 // Pull requests, after PullRequestsView.swift: the project's pull requests
 // (`_rustcode/pulls`), one in full (`/view`), and a review the user writes
 // and submits (`/review`). Read-only otherwise: nothing here checks out,
-// merges or comments on its own.
+// merges or comments on its own. Picked review feedback goes into the
+// thread's composer as a draft; it is never sent from here.
 
 import {
   ArrowLeft,
   CircleCheck,
   CircleDashed,
+  CirclePlus,
   CircleX,
   ExternalLink,
   GitPullRequest,
   RefreshCw,
 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { JsonObject } from "../acp/jsonrpc";
 import {
+  type PullDetail,
   type PullError,
   type PullRequest,
   parsePullError,
@@ -24,6 +27,15 @@ import {
 import { Method } from "../acp/types";
 import { useIntentRest } from "../lib/intent";
 import { openExternal } from "../lib/native";
+import { count } from "../lib/plural";
+import {
+  appendToDraft,
+  type FeedbackItem,
+  feedbackItems,
+  feedbackLocation,
+  formatReviewFeedback,
+  keepSelected,
+} from "../lib/reviewFeedback";
 import {
   PULL_LIMIT,
   type PullListState,
@@ -37,7 +49,17 @@ import { openSettings, request, setDraft, setPanel, startNewThread, toast, useAp
 import { relativeAge } from "../state/thread";
 import { splitThreadKey } from "../state/threadKeys";
 import { Markdown } from "./Markdown";
-import { Cluster, ClusterButton, cx, noTextHelpers, Pill, Segments, Skeleton, Spinner } from "./primitives";
+import {
+  Callout,
+  Cluster,
+  ClusterButton,
+  cx,
+  noTextHelpers,
+  Pill,
+  Segments,
+  Skeleton,
+  Spinner,
+} from "./primitives";
 
 /**
  * Reads a row's detail when the pointer or focus rests on it, so the click has
@@ -170,6 +192,131 @@ function ReviewForm({ cwd, pull, onDone }: { cwd: string; pull: PullRequest; onD
   );
 }
 
+/**
+ * Puts `items` into the open thread's composer, after what it already holds,
+ * and puts the caret at its end. The user reads, edits and sends it.
+ */
+function addFeedbackToThread(items: readonly FeedbackItem[], pull: PullRequest) {
+  if (items.length === 0) return;
+  const key = useApp.getState().selectedId ?? "new";
+  const draft = useApp.getState().drafts[key] ?? "";
+  setDraft(key, appendToDraft(draft, formatReviewFeedback(items, pull)));
+  requestAnimationFrame(() => {
+    const field = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]');
+    if (!field) return;
+    field.focus();
+    field.setSelectionRange(field.value.length, field.value.length);
+  });
+  toast(`Added ${count(items.length, "comment")} to the composer`, "success");
+}
+
+function FeedbackCard({
+  item,
+  checked,
+  onToggle,
+  onAdd,
+}: {
+  item: FeedbackItem;
+  checked: boolean;
+  onToggle: (next: boolean) => void;
+  onAdd: () => void;
+}) {
+  const where = feedbackLocation(item);
+  return (
+    <div className="group rounded-md bg-fill-subtle p-2">
+      <div className="mb-1 flex items-center gap-2 text-caption text-fg-muted">
+        <input
+          type="checkbox"
+          className="shrink-0 accent-[var(--rc-accent)]"
+          checked={checked}
+          onChange={(e) => onToggle(e.target.checked)}
+          aria-label={`Pick ${item.author || "this"} comment`}
+        />
+        <span className="min-w-0 flex-1 truncate">
+          <b className="text-fg">{item.author || "Deleted user"}</b>{" "}
+          {item.kind === "line" ? (item.reply ? "replied" : "commented") : item.kind.replace(/_/g, " ")}
+          {where && (
+            <>
+              {" on "}
+              <span className="font-mono">{where}</span>
+            </>
+          )}
+          {item.at !== undefined && <> · {relativeAge(item.at)}</>}
+        </span>
+        {item.outdated && (
+          <span className="shrink-0 text-warning" title="The code has changed since this comment">
+            Outdated
+          </span>
+        )}
+        <Pill size="sm" quiet onClick={onAdd} title="Add to the thread's composer">
+          <CirclePlus size={11} /> Add to thread
+        </Pill>
+      </div>
+      <Markdown text={item.body} className="text-callout" />
+    </div>
+  );
+}
+
+/** The review feedback the user can pick: line comments, then reviews and comments that say something. */
+function FeedbackSection({ detail, pull }: { detail: PullDetail; pull: PullRequest }) {
+  const items = useMemo(() => feedbackItems(detail), [detail]);
+  const [picked, setPicked] = useState<Set<string>>(() => new Set());
+  // A refresh drops picks whose comment is gone (deleted, or a different pull request).
+  useEffect(() => setPicked((now) => (now.size ? keepSelected(now, items) : now)), [items]);
+  const silent = detail.activity.filter((a) => !a.body.trim());
+  const toggle = (key: string, on: boolean) =>
+    setPicked((now) => {
+      const next = new Set(now);
+      if (on) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  const chosen = items.filter((item) => picked.has(item.key));
+  return (
+    <section className="mt-3 flex flex-col gap-2">
+      <h3 className="font-semibold text-caption text-fg-muted">Review feedback</h3>
+      {detail.reviewCommentsError && (
+        <Callout tone="warning">Line comments could not be read: {detail.reviewCommentsError}</Callout>
+      )}
+      {items.length === 0 && !detail.reviewCommentsError && (
+        <p className="text-callout text-fg-muted">No review comments yet.</p>
+      )}
+      {items.map((item) => (
+        <FeedbackCard
+          key={item.key}
+          item={item}
+          checked={picked.has(item.key)}
+          onToggle={(on) => toggle(item.key, on)}
+          onAdd={() => addFeedbackToThread([item], pull)}
+        />
+      ))}
+      {silent.map((a, i) => (
+        <div key={i} className="px-2 text-caption text-fg-muted">
+          <b className="text-fg">{a.author}</b> {a.kind.replace(/_/g, " ").toLowerCase()}
+          {a.at !== undefined && <> · {relativeAge(a.at)}</>}
+        </div>
+      ))}
+      {chosen.length > 0 && (
+        <div className="sticky bottom-0 flex items-center gap-2 rounded-lg bg-surface p-2 shadow-1">
+          <span className="flex-1 text-callout text-fg-muted">{count(chosen.length, "comment")} picked</span>
+          <Pill quiet onClick={() => setPicked(new Set())}>
+            Clear
+          </Pill>
+          <Pill
+            prominent
+            onClick={() => {
+              addFeedbackToThread(chosen, pull);
+              setPicked(new Set());
+            }}
+          >
+            Add to thread
+          </Pill>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function PullView({
   cwd,
   host,
@@ -282,20 +429,7 @@ function PullView({
               ))}
             </section>
           )}
-          {detail.activity.length > 0 && (
-            <section className="mt-3 flex flex-col gap-2">
-              <h3 className="font-semibold text-caption text-fg-muted">Activity</h3>
-              {detail.activity.map((a, i) => (
-                <div key={i} className="rounded-md bg-fill-subtle p-2">
-                  <div className="mb-1 text-caption text-fg-muted">
-                    <b className="text-fg">{a.author}</b> {a.kind.replace(/_/g, " ").toLowerCase()} ·{" "}
-                    {relativeAge(a.at)}
-                  </div>
-                  {a.body && <Markdown text={a.body} className="text-callout" />}
-                </div>
-              ))}
-            </section>
-          )}
+          <FeedbackSection detail={detail} pull={summary ?? detail} />
         </>
       )}
     </div>
