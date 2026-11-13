@@ -59,6 +59,14 @@ import { LINK_PREVIEWS_DEFAULT, linkPreviewsEnabled, setLinkPreviews } from "../
 import { openExternal, pickFolder, revealPath } from "../lib/native";
 import { NEXT_PROMPT_DEFAULT, nextPromptEnabled, setNextPrompt } from "../lib/nextPrompt";
 import { hasShell } from "../lib/shell";
+import {
+  commandIn,
+  loadSystemSetup,
+  runSystemSetup,
+  type SetupStep,
+  setupChip,
+  systemSetupAvailable,
+} from "../lib/systemSetup";
 import { BUILTIN_THEMES, cssName, type Theme, TOKENS } from "../lib/themes";
 import { canUpdate } from "../lib/updater";
 import { AUTO_COMPACT_DEFAULT_THRESHOLD, AUTO_COMPACT_MODES } from "../state/autoCompact";
@@ -1538,10 +1546,88 @@ function AdvancedPage() {
 
 function AboutPage() {
   return (
-    <Group title="Version" footer="RustCode is open source; its licences ship in each release.">
-      <AppVersion />
-      <UpdateChannelRow />
-      <AutoInstallRow />
+    <>
+      <Group title="Version" footer="RustCode is open source; its licences ship in each release.">
+        <AppVersion />
+        <UpdateChannelRow />
+        <AutoInstallRow />
+      </Group>
+      <SystemSetupGroup />
+    </>
+  );
+}
+
+/**
+ * Settings › About › System setup: the per-OS steps (PATH, quarantine, launcher
+ * entry, the background server), each with what it found. The automatic ones
+ * ran after the install or the last update; Run again checks a step and fixes
+ * only what is missing. A step that needs an administrator or a shell-profile
+ * edit shows its command to copy instead of running it.
+ */
+function SystemSetupGroup() {
+  const [steps, setSteps] = useState<SetupStep[] | null>(null);
+  const [running, setRunning] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!systemSetupAvailable()) return;
+    loadSystemSetup().then(setSteps, (e) => setError(errorText(e)));
+  }, []);
+  if (!systemSetupAvailable()) return null;
+  const run = async (step?: string) => {
+    setRunning(step ?? "all");
+    setError(null);
+    try {
+      setSteps(await runSystemSetup(step));
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setRunning(null);
+    }
+  };
+  return (
+    <Group
+      title="System setup"
+      footer={
+        error ?? "Runs after an install or an update. RustCode never asks for an administrator silently."
+      }
+      action={
+        <Action disabled={running !== null} onClick={() => void run()}>
+          {running === "all" ? <Spinner size={12} /> : null}
+          Run again
+        </Action>
+      }
+    >
+      {steps === null ? (
+        <Row title="Checking…" subtitle={error ?? undefined} />
+      ) : (
+        steps.map((step) => {
+          const chip = setupChip(step.status);
+          const command = step.status === "needs-you" ? commandIn(step.message) : null;
+          return (
+            <Row
+              key={step.id}
+              title={step.title}
+              subtitle={step.about}
+              status={step.message}
+              badge={<Chip tone={chip.tone}>{chip.label}</Chip>}
+            >
+              {command && (
+                <Action
+                  onClick={() =>
+                    void navigator.clipboard.writeText(command).then(() => toast("Command copied"))
+                  }
+                >
+                  Copy command
+                </Action>
+              )}
+              <Action disabled={running !== null} onClick={() => void run(step.id)}>
+                {running === step.id ? <Spinner size={12} /> : null}
+                {step.auto ? "Run again" : step.status === "done" ? "Check again" : "Set up"}
+              </Action>
+            </Row>
+          );
+        })
+      )}
     </Group>
   );
 }
