@@ -170,6 +170,8 @@ function localValues(): Record<ServerSettingKey, Json> {
     "read-across-projects": state.readAcrossProjects,
     // Only ever kept on the server: there is no app-side copy to migrate.
     "delegate-presets": [],
+    "limit-fallback": state.limitFallback,
+    "limit-fallback-map": state.limitFallbackMap as unknown as Json,
   };
 }
 
@@ -291,6 +293,9 @@ function applyLocalSettings(values: Record<string, Json | undefined>): void {
     if (perThread !== undefined) store.setThreadLimit(perThread);
     const readAcross = bool("read-across-projects");
     if (readAcross !== undefined) store.setReadAcrossProjects(readAcross);
+    const fallback = bool("limit-fallback");
+    if (fallback !== undefined) store.setLimitFallback(fallback);
+    if (Array.isArray(values["limit-fallback-map"])) store.setLimitFallbackMap(values["limit-fallback-map"]);
   });
 }
 

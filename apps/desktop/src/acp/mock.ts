@@ -2106,6 +2106,8 @@ export class MockEngine {
     "delegates-per-thread": 4,
     "read-across-projects": true,
     "delegate-presets": [],
+    "limit-fallback": false,
+    "limit-fallback-map": [],
   };
   /** The payload-capture switches (docs/data-store.md › Captured payloads), off as `config.toml` defaults them. */
   private payloadCapture = { providerPayloads: false, harnessRpcPayloads: false };
@@ -5484,6 +5486,8 @@ export class MockMachine {
       "delegates-per-thread": studio ? 4 : 6,
       "read-across-projects": true,
       "delegate-presets": [],
+      "limit-fallback": false,
+      "limit-fallback-map": [],
     };
     this.skills = [
       {

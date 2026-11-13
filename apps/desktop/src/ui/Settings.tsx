@@ -125,6 +125,7 @@ import { DelegatePresetsGroup } from "./DelegatePresets";
 import { DiagnosticsPage } from "./DiagnosticsPage";
 import { DefaultsForm, HarnessList, useAutoDetect } from "./Harnesses";
 import { HeaderButtonsSetting } from "./HeaderButtonsSetting";
+import { LimitFallbackGroup } from "./LimitFallback";
 import { MachineSettingsPage } from "./MachineSettingsPage";
 import { MachinesPage } from "./MachinesPage";
 import { NewThreadBanner } from "./NewThreadBanner";
@@ -692,6 +693,7 @@ function AgentsPage() {
       </Group>
       <OrchestrationGroup />
       <DelegatePresetsGroup />
+      <LimitFallbackGroup />
     </>
   );
 }

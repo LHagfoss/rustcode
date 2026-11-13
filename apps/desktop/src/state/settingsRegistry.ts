@@ -108,7 +108,9 @@ export type ServerSettingKey =
   | "delegates-total"
   | "delegates-per-thread"
   | "read-across-projects"
-  | "delegate-presets";
+  | "delegate-presets"
+  | "limit-fallback"
+  | "limit-fallback-map";
 
 export interface ServerSettingSpec {
   key: ServerSettingKey;
@@ -158,6 +160,8 @@ export const SERVER_SETTINGS: readonly ServerSettingSpec[] = [
     default: true,
   },
   { key: "delegate-presets", label: "Delegate presets", type: "list", default: [] },
+  { key: "limit-fallback", label: "Switch a delegate at a limit", type: "boolean", default: false },
+  { key: "limit-fallback-map", label: "Limit fallback models", type: "list", default: [] },
 ];
 
 export const SERVER_SETTING_KEYS: readonly ServerSettingKey[] = SERVER_SETTINGS.map((s) => s.key);

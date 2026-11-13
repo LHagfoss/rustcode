@@ -57,6 +57,8 @@ fn registry() -> &'static [(&'static str, SettingType, Value)] {
             ("delegates-per-thread", SettingType::Number, json!(4)),
             ("read-across-projects", SettingType::Boolean, json!(true)),
             ("delegate-presets", SettingType::List, json!([])),
+            ("limit-fallback", SettingType::Boolean, json!(false)),
+            ("limit-fallback-map", SettingType::List, json!([])),
         ]
     })
 }

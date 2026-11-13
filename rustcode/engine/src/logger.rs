@@ -1175,6 +1175,16 @@ const ALLOWED_EVENT_FIELDS: &[(&str, &[&str])] = &[
         "subagent.finish",
         &["agent_id", "status", "reason", "rounds"],
     ),
+    (
+        "thread.limit_switch",
+        &[
+            "from_harness",
+            "from_model",
+            "to_harness",
+            "to_model",
+            "reason",
+        ],
+    ),
 ];
 
 /// The safe projection of one operational event, or `None` when the event is

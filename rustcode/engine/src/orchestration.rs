@@ -1340,7 +1340,10 @@ pub(crate) fn with_preset(name: &str, args: &Value) -> Result<Option<Value>, Too
 
 /// `list_harnesses` ends with the saved delegate presets, so an agent learns
 /// the names it can pass as `preset`.
-pub(crate) fn with_preset_listing(name: &str, mut output: ToolExecutionOutput) -> ToolExecutionOutput {
+pub(crate) fn with_preset_listing(
+    name: &str,
+    mut output: ToolExecutionOutput,
+) -> ToolExecutionOutput {
     if name == LIST_HARNESSES
         && output.success
         && let Some(listing) = presets::listing(&presets::saved())

@@ -601,6 +601,39 @@ setting (`ui/DelegatePresets.tsx`, `state/delegatePresets.ts`).
 - `list_harnesses` ends with the saved presets, by name and what each sets, so
   an agent learns what it can pass.
 
+### Switching a delegate at a limit
+
+By default a delegate that stops on a subscription limit waits for the reset
+and carries on (Settings › General › Continue threads on their own,
+`state/limitResume.ts`). With the opt-in `limit-fallback` server setting
+(Settings › Harnesses › Switch a delegate at a limit, #3392) it instead goes on
+at once on the other provider, at the same tier, from a table the user keeps.
+
+- The table is the `limit-fallback-map` server setting, a list of
+  `{ from: { harness, model? }, to: { harness, model?, effort?, account? } }`,
+  empty by default. A row's `from.model` matches part of the thread's model id or
+  name, without regard to case, and beats a row for the harness alone; the
+  harnesses of a row must differ (moving between the user's own accounts of one
+  harness stays manual). The reading and checking live in
+  `state/limitFallback.ts`.
+- Only a plan limit, not an overload or a network stop, and only a delegate
+  (a thread another one drives, that the user has not written in) on this
+  computer. The thread must have a row for what it ran on, and the target must
+  be an installed harness; otherwise it waits for the reset as before.
+- The app does it as `transfer_session` does, with `_rustcode/session/harness`
+  and the mapped model, effort and account (the target harness's usual account
+  when the row names none), then sends the thread the turn's continuation. The
+  links the stop settled are reopened and answered by that turn, exactly as
+  after a reset (`switchOnLimit` in `state/store.ts`). A thread never goes back
+  to a harness it already left on a limit, so two providers at their limits do
+  not trade it; the one it ends on waits for its reset.
+- The thread shows the harness divider the engine writes and a notice, “Moved to
+  Codex · gpt-5.5 because Claude Code hit its usage limit.”, and the engine
+  records a `thread.limit_switch` event (`from_harness`, `from_model`,
+  `to_harness`, `to_model`, `reason`) that `read_activity` returns
+  (`docs/data-store.md`). `_rustcode/session/harness` takes the optional
+  `reason: "limit"` for it.
+
 ### Forks and side chats
 
 The parent record carries a `relationship`: `delegate` (an agent started the

@@ -239,6 +239,7 @@ fields listed; every other event and field stays in `debug.log`:
 | `harness.turn_silent` | `harness`, `native_session_id`, `timeout_ms` |
 | `subagent.spawn` | `agent_id`, `parent_id`, `agent_type`, `context_inheritance`, `inherited_messages` |
 | `subagent.finish` | `agent_id`, `status`, `reason`, `rounds` |
+| `thread.limit_switch` | `from_harness`, `from_model`, `to_harness`, `to_model`, `reason` (a delegate moved to another provider at a usage limit, #3392) |
 
 Numbers and booleans are kept as they are, strings are clipped to 96
 characters, and an allowlisted object keeps its scalar members only — arrays

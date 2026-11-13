@@ -99,7 +99,11 @@ pub(crate) fn expand_with(presets: &[Preset], name: &str, args: &Value) -> Resul
                 object.insert("worktree".to_owned(), Value::Bool(worktree));
             }
         }
-        if let Some(access) = preset.access.as_deref().map(str::trim).filter(|a| !a.is_empty())
+        if let Some(access) = preset
+            .access
+            .as_deref()
+            .map(str::trim)
+            .filter(|a| !a.is_empty())
             && unset(object.get("access"))
         {
             object.insert("access".to_owned(), Value::String(access.to_owned()));
@@ -322,8 +326,14 @@ mod tests {
         let out = expand_with(&presets(), super::super::FAN_OUT, &args).unwrap();
         assert_eq!(out["prompt"], "Read AGENTS.md first.\n\ncompare");
         assert_eq!(out["access"], "edits");
-        assert!(out.get("worktree").is_none(), "every fan_out thread has a worktree");
-        assert!(out.get("harness").is_none(), "fan_out has no top-level harness");
+        assert!(
+            out.get("worktree").is_none(),
+            "every fan_out thread has a worktree"
+        );
+        assert!(
+            out.get("harness").is_none(),
+            "fan_out has no top-level harness"
+        );
         assert_eq!(
             out["harnesses"],
             json!([
@@ -332,7 +342,8 @@ mod tests {
                 { "harness": "claude-code" },
             ])
         );
-        let bad = json!({ "prompt": "x", "harnesses": [{ "preset": "nope" }, { "harness": "pi" }] });
+        let bad =
+            json!({ "prompt": "x", "harnesses": [{ "preset": "nope" }, { "harness": "pi" }] });
         assert!(expand_with(&presets(), super::super::FAN_OUT, &bad).is_err());
     }
 
@@ -340,14 +351,20 @@ mod tests {
     fn only_a_call_that_names_a_preset_is_expanded() {
         let plain = json!({ "prompt": "x", "harness": "pi" });
         assert_eq!(expand(super::super::START_SESSION, &plain), Ok(None));
-        assert_eq!(expand(super::super::MESSAGE_SESSION, &json!({ "preset": "x" })), Ok(None));
+        assert_eq!(
+            expand(super::super::MESSAGE_SESSION, &json!({ "preset": "x" })),
+            Ok(None)
+        );
     }
 
     #[test]
     fn the_listing_names_each_preset_and_what_it_sets() {
         let text = listing(&presets()).unwrap();
         assert!(text.contains("- Pi flash: harness pi, model deepseek/deepseek-flash, effort high, access edits, worktree true, with instructions"), "{text}");
-        assert!(text.contains("- codex: harness codex, account work"), "{text}");
+        assert!(
+            text.contains("- codex: harness codex, account work"),
+            "{text}"
+        );
         assert!(!text.contains("nameless"));
         assert_eq!(listing(&[]), None);
     }

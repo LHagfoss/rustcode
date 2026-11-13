@@ -97,6 +97,10 @@ pub(crate) struct SwitchHarnessRequest {
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
+    /// Why the client moves the thread, for its activity: `limit` when it
+    /// continues a delegate on another provider at a usage limit (#3392).
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 /// Add a named account: a config directory of its own.
@@ -709,6 +713,7 @@ pub(crate) async fn switch(
     remote: &super::remote::RemoteManager,
 ) -> Result<Value, agent_client_protocol::Error> {
     let session_id = request.session_id.clone();
+    let reason = request.reason.clone();
     let to = request.harness.trim().to_owned();
     if to == harness::BUILTIN_ID {
         return Err(failure(
@@ -777,6 +782,7 @@ pub(crate) async fn switch(
         &entries,
         &harness::learned_for(&to).models.unwrap_or_default(),
     );
+    let from_model = record.model.clone();
     record.harness = to.clone();
     record.account = account.as_ref().map(|account| account.id.clone());
     record.native_session_id = None;
@@ -800,6 +806,19 @@ pub(crate) async fn switch(
     );
     let divider = harness::handoff::divider(&marker);
     history.push(marker);
+    if reason.as_deref() == Some("limit") {
+        crate::logger::operational_event(
+            "thread.limit_switch",
+            serde_json::json!({
+                "session_id": session_id,
+                "from_harness": from,
+                "from_model": from_model,
+                "to_harness": to,
+                "to_model": record.model,
+                "reason": "limit",
+            }),
+        );
+    }
 
     let clients = peer.attach(&session_id);
     let sink = remote.wrap_sink(Arc::new(AcpClientSink::new(clients.clone())), &session_id);
