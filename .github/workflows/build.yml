@@ -329,6 +329,16 @@ jobs:
                   bun run bundle:app --bundles ${{ matrix.bundles }}
                   bun scripts/release-assets.ts ../../desktop-assets
 
+            - name: Package Linux system-WebKitGTK archive
+              if: runner.os == 'Linux'
+              shell: bash
+              run: |
+                  version=$(bun -p 'require("./apps/desktop/src-tauri/gen-version/tauri.conf.json").version')
+                  mkdir -p linux-tarball
+                  dpkg-deb -x "desktop-assets/RustCode-${version}-linux-x86_64.deb" linux-tarball
+                  tar czf "desktop-assets/RustCode-${version}-linux-x86_64.tar.gz" -C linux-tarball .
+                  test "$(stat -c %s "desktop-assets/RustCode-${version}-linux-x86_64.tar.gz")" -lt 50000000
+
             - name: Upload installer artifact
               uses: actions/upload-artifact@v7
               with:
@@ -443,6 +453,7 @@ jobs:
                   files=(
                       "RustCode-${version}-linux-x86_64.AppImage"
                       "RustCode-${version}-linux-x86_64.deb"
+                      "RustCode-${version}-linux-x86_64.tar.gz"
                       "RustCode-${version}-macos-aarch64.app.zip"
                       "RustCode-${version}-windows-x64-setup.exe"
                       rustcode-linux-aarch64.tar.gz
@@ -467,4 +478,5 @@ jobs:
                       rustcode-linux-aarch64.tar.gz rustcode-linux-x86_64.tar.gz \
                       rustcode-windows-x86_64.zip \
                       "RustCode-${TAG#v}-windows-x64-setup.exe" \
-                      "RustCode-${TAG#v}-linux-x86_64.AppImage" "RustCode-${TAG#v}-linux-x86_64.deb"
+                      "RustCode-${TAG#v}-linux-x86_64.AppImage" "RustCode-${TAG#v}-linux-x86_64.deb" \
+                      "RustCode-${TAG#v}-linux-x86_64.tar.gz"

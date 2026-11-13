@@ -11,6 +11,8 @@
 //! - Linux AppImage (`$APPIMAGE`): the new AppImage is written next to the
 //!   running one, made executable and renamed over it, then launched once this
 //!   process has quit. No root needed.
+//! - Linux tarball: replaces both binaries in a writable `usr/bin` folder
+//!   using the system WebKitGTK, then reopens.
 //! - Linux `.deb` (a dpkg-owned binary under `/usr`): the package is saved in
 //!   a private temp directory and installed with `pkexec apt-get install -y`
 //!   (`pkexec dpkg -i` without apt-get), then the app reopens.
@@ -19,7 +21,7 @@
 //!   /R`: no UI, keep the install, start the app again), and this process
 //!   quits so the installer can replace its files.
 //!
-//! Any other copy (a tarball, Flatpak, a folder it cannot write) reports the
+//! Any other copy (Flatpak, a folder it cannot write) reports the
 //! release and opens its page instead.
 //!
 //! The channel is Stable or Beta (Settings › About). Stable reads the tag that
@@ -269,6 +271,8 @@ enum Package {
     MacApp,
     /// `RustCode-<ver>-linux-x86_64.AppImage`
     AppImage,
+    /// Linux archive using system WebKitGTK.
+    Tarball,
     /// `RustCode-<ver>-linux-x86_64.deb`
     Deb,
     /// `RustCode-<ver>-windows-x64-setup.exe` (NSIS)
@@ -286,6 +290,7 @@ impl Package {
             Package::AppImage => {
                 x86_64.then(|| format!("RustCode-{version}-linux-x86_64.AppImage"))
             }
+            Package::Tarball => x86_64.then(|| format!("RustCode-{version}-linux-x86_64.tar.gz")),
             Package::Deb => x86_64.then(|| format!("RustCode-{version}-linux-x86_64.deb")),
             Package::WindowsSetup => {
                 x86_64.then(|| format!("RustCode-{version}-windows-x64-setup.exe"))
@@ -355,13 +360,15 @@ enum Install {
     MacApp(PathBuf),
     /// The AppImage file at this path, in a folder it may write.
     AppImage(PathBuf),
+    /// The desktop binary in a user-owned archive installation.
+    Tarball(PathBuf),
     /// A dpkg-owned install; the path is the binary to start again.
     Deb(PathBuf),
     /// An NSIS install.
     Windows,
     /// A bundle or AppImage whose folder cannot be written: no in-place update.
     ReadOnly(PathBuf),
-    /// Anything else (a tarball, Flatpak, a dev build): the release page.
+    /// Anything else (Flatpak, a dev build): the release page.
     Manual,
 }
 
@@ -370,6 +377,7 @@ impl Install {
         match self {
             Install::MacApp(_) => Some(Package::MacApp),
             Install::AppImage(_) => Some(Package::AppImage),
+            Install::Tarball(_) => Some(Package::Tarball),
             Install::Deb(_) => Some(Package::Deb),
             Install::Windows => Some(Package::WindowsSetup),
             Install::ReadOnly(_) | Install::Manual => None,
@@ -421,6 +429,14 @@ fn classify(host: &Host) -> Install {
                 Some(exe) if !host.sandboxed && host.dpkg_owned && exe.starts_with("/usr/") => {
                     Install::Deb(exe.clone())
                 }
+                Some(exe)
+                    if !host.sandboxed
+                        && !host.dpkg_owned
+                        && !exe.starts_with("/usr/")
+                        && exe.ends_with("usr/bin/rustcode-desktop") =>
+                {
+                    in_place(exe).unwrap_or_else(|| Install::Tarball(exe.clone()))
+                }
                 _ => Install::Manual,
             }
         }
@@ -456,7 +472,7 @@ impl Host {
         let folder_writable = if os == Os::Mac {
             bundle.as_deref()
         } else {
-            appimage.as_deref()
+            appimage.as_deref().or(exe.as_deref())
         }
         .and_then(Path::parent)
         .is_some_and(writable);
@@ -952,6 +968,9 @@ fn install_package(
         }
         Install::AppImage(target) => replace_appimage(target, bytes)
             .and_then(|()| relaunch_after_exit(target, &APPIMAGE_ENV)),
+        Install::Tarball(exe) => {
+            replace_tarball(exe, bytes, &work).and_then(|()| relaunch_after_exit(exe, &[]))
+        }
         Install::Deb(exe) => std::fs::write(work.join(asset), bytes)
             .map_err(|e| e.to_string())
             .and_then(|()| install_deb(&work.join(asset)))
@@ -1002,6 +1021,36 @@ fn private_dir() -> Result<PathBuf, String> {
         }
     }
     Err("Could not make a folder for the update.".into())
+}
+
+/// Extract only the two known binary entries into memory, never archive paths
+/// into the installation. Validate both before replacing either running binary.
+fn replace_tarball(exe: &Path, bytes: &[u8], work: &Path) -> Result<(), String> {
+    let archive = work.join("update.tar.gz");
+    std::fs::write(&archive, bytes).map_err(|e| e.to_string())?;
+    let extract = |name: &str| -> Result<Vec<u8>, String> {
+        let output = crate::process::command("tar")
+            .args(["-xOzf"])
+            .arg(&archive)
+            .arg(format!("./usr/bin/{name}"))
+            .output()
+            .map_err(|e| format!("Could not read the update archive: {e}"))?;
+        if !output.status.success() || output.stdout.is_empty() {
+            return Err(format!("The update archive is missing {name}"));
+        }
+        Ok(output.stdout)
+    };
+    let desktop = extract("rustcode-desktop")?;
+    let engine = extract("rustcode")?;
+    let engine_path = exe.with_file_name("rustcode");
+    let previous = std::fs::read(&engine_path).map_err(|e| e.to_string())?;
+    replace_appimage(&engine_path, &engine)?;
+    if let Err(error) = replace_appimage(exe, &desktop) {
+        replace_appimage(&engine_path, &previous)
+            .map_err(|rollback| format!("{error}; restoring the engine also failed: {rollback}"))?;
+        return Err(error);
+    }
+    Ok(())
 }
 
 /// Writes the new AppImage next to the running one and renames it over that
@@ -1917,6 +1966,77 @@ mod tests {
         assert_eq!(owned(|h| h.exe = None), Install::Manual);
         // No Linux app ships for arm.
         assert_eq!(owned(|h| h.arch = "aarch64"), Install::Manual);
+    }
+
+    #[test]
+    fn a_linux_tarball_selects_the_archive_and_respects_install_boundaries() {
+        let exe = PathBuf::from("/home/me/RustCode/usr/bin/rustcode-desktop");
+        let mut linux = Host {
+            exe: Some(exe.clone()),
+            ..host(Os::Linux)
+        };
+        assert_eq!(classify(&linux), Install::Tarball(exe));
+        assert_eq!(
+            classify(&linux)
+                .package()
+                .unwrap()
+                .asset("1.2.3", "x86_64")
+                .unwrap(),
+            "RustCode-1.2.3-linux-x86_64.tar.gz"
+        );
+        linux.folder_writable = false;
+        assert!(matches!(classify(&linux), Install::ReadOnly(_)));
+        linux.sandboxed = true;
+        assert_eq!(classify(&linux), Install::Manual);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_tarball_updates_both_binaries_and_rejects_an_incomplete_archive() {
+        let dir = scratch("tarball");
+        let source = dir.join("source");
+        std::fs::create_dir_all(source.join("usr/bin")).unwrap();
+        std::fs::write(source.join("usr/bin/rustcode"), b"new engine").unwrap();
+        std::fs::write(source.join("usr/bin/rustcode-desktop"), b"new desktop").unwrap();
+        let archive = dir.join("release.tar.gz");
+        assert!(crate::process::command("tar")
+            .arg("-czf")
+            .arg(&archive)
+            .arg("-C")
+            .arg(&source)
+            .arg(".")
+            .status()
+            .unwrap()
+            .success());
+        let target = dir.join("install/usr/bin");
+        std::fs::create_dir_all(&target).unwrap();
+        let exe = target.join("rustcode-desktop");
+        std::fs::write(&exe, b"old desktop").unwrap();
+        std::fs::write(target.join("rustcode"), b"old engine").unwrap();
+        replace_tarball(&exe, &std::fs::read(&archive).unwrap(), &dir).unwrap();
+        assert_eq!(std::fs::read(&exe).unwrap(), b"new desktop");
+        assert_eq!(
+            std::fs::read(target.join("rustcode")).unwrap(),
+            b"new engine"
+        );
+        std::fs::remove_file(source.join("usr/bin/rustcode")).unwrap();
+        assert!(crate::process::command("tar")
+            .arg("-czf")
+            .arg(&archive)
+            .arg("-C")
+            .arg(&source)
+            .arg(".")
+            .status()
+            .unwrap()
+            .success());
+        assert!(replace_tarball(&exe, &std::fs::read(&archive).unwrap(), &dir).is_err());
+        assert_eq!(
+            std::fs::read(target.join("rustcode")).unwrap(),
+            b"new engine"
+        );
+        assert!(replace_tarball(&exe, b"invalid archive", &dir).is_err());
+        assert_eq!(std::fs::read(&exe).unwrap(), b"new desktop");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

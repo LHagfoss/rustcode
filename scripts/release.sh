@@ -1111,6 +1111,7 @@ phase_verify_release() {
         "RustCode-$VERSION-windows-x64-setup.exe"
         "RustCode-$VERSION-linux-x86_64.AppImage"
         "RustCode-$VERSION-linux-x86_64.deb"
+        "RustCode-$VERSION-linux-x86_64.tar.gz"
         "rustcode-windows-x86_64.zip"
         "SHA256SUMS"
     )
