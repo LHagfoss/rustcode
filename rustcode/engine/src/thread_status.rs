@@ -256,6 +256,8 @@ pub(crate) fn set(session_id: &str, status: &str) -> Result<(), String> {
     let status = Status::storable(status)
         .ok_or_else(|| format!("status must be review, done or idle, not '{status}'"))?;
     store(session_id, status)?;
+    // A timestamp on the thread's row; settling never removes anything.
+    crate::data_store::record_thread_settled(session_id, status == Status::Done);
     if status == Status::Done {
         crate::orchestration::local_threads::clear_waiting_links(session_id);
     }
@@ -494,6 +496,34 @@ mod tests {
             crate::config::set_session_status("ffffffff-ffff-7fff-8fff-ffffffffffff", "done")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn settling_a_thread_keeps_everything_it_recorded() {
+        let id = crate::config::create_detached_session();
+        let dir = crate::config::get_active_session_dir(&id).expect("session dir");
+        let files = [
+            ("history.json", r#"[{"role":"user","content":"hi"}]"#),
+            ("performance.json", r#"{"turns":[]}"#),
+            ("logs/debug.log", "line\n"),
+            ("logs/debug.log.1", "older line\n"),
+        ];
+        for (name, body) in files {
+            let path = dir.join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body).unwrap();
+        }
+        crate::config::set_session_status(&id, "done").expect("settle");
+        assert_eq!(current(&id), Status::Done);
+        for (name, body) in files {
+            assert_eq!(
+                std::fs::read_to_string(dir.join(name)).unwrap(),
+                body,
+                "{name} survives settling"
+            );
+        }
+        // Settled is a status, not a removal: the thread is still listed.
+        assert!(crate::config::session_ids().contains(&id));
     }
 
     #[test]
