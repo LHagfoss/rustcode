@@ -49,6 +49,7 @@ payload only when the user turns payload capture on ("Captured payloads").
 | `operational_events` | one row per allowlisted event: `thread_id`, `turn_id`, `sequence`, `event_type`, `at`, `fields_json`, `original_bytes`, `captured_bytes`, `payload_truncated`, `redaction_version` |
 | `command_receipts` | one row per orchestration call made with a retry key: `caller` (the calling thread), `client_request_id`, `action` (the tool), `args_hash`, `result_json`, `created_at`, keyed on `(caller, client_request_id)` |
 | `usage_cursors` | one row per thread, harness and session series (the harness's native session id and its account): the last cumulative session total that series reported (`input_tokens`, `output_tokens`, `cached_tokens`, `cache_write_tokens`, `cost_usd`) and `updated_at` |
+| `outside_agent_calls` | one row per tool call an outside agent made through `rustcode mcp-connect` (`docs/mcp-outside-agents.md`): `at`, `client_id`, `client_name`, `platform`, `scope`, `tool`, `outcome` (`ok`, `error`, `denied`, `declined`, `unavailable`), `duration_ms`, `detail` (a short reason, never an argument); kept 90 days |
 | `store_meta` | internal bookkeeping, such as whether the one-time backfill ran |
 
 Tokens and cost are `NULL` when a harness did not report them, and are never

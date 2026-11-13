@@ -12,6 +12,7 @@ import { ConnectRequests } from "./ui/ConnectRequests";
 import { Inbox } from "./ui/Inbox";
 import { Lightbox } from "./ui/Lightbox";
 import { GrantDialog } from "./ui/Links";
+import { OutsideApprovals } from "./ui/OutsideApprovals";
 import { Pill } from "./ui/primitives";
 // Eager, not lazy: the first ⌘, must not wait for a chunk (it showed an empty pane for frames).
 import { Settings } from "./ui/Settings";
@@ -207,6 +208,7 @@ export function App() {
       <GrantDialog />
       <Toaster />
       <ConnectRequests />
+      <OutsideApprovals />
       <WhatsNewDialog />
       <Lightbox />
     </Tooltip.Provider>

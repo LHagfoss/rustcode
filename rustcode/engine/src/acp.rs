@@ -5,11 +5,12 @@ mod commands;
 mod config;
 mod connections;
 mod cursor;
-mod data;
+pub(crate) mod data;
 mod edit_diff;
 mod harnesses;
 mod hosted;
 mod mcp_app;
+mod outside;
 mod permissions;
 mod presence;
 mod preview;
@@ -2147,6 +2148,9 @@ impl AcpEngine {
         // Links an earlier engine was running when it died are not running now.
         tokio::task::spawn_blocking(crate::data_store::interrupt_orphaned_links);
         let server = AcpServer::new(auto_approve)?;
+        // Apps connected through `rustcode mcp-connect` find this engine by its
+        // hub, so it listens from the start when any are connected.
+        tokio::spawn(crate::orchestration::outside::bind_hub_when_connected());
         // Linked pull requests from before a restart carry on from here, and
         // one made by a tool during this run is picked up on the next round
         // (#3369). Without this a link would be stored and never checked.
@@ -2534,6 +2538,71 @@ async fn serve_connection(
             async move |_request: commands::CommandsRequest, responder, connection| {
                 connection.spawn(async move {
                     match commands::catalog_update() {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: outside::OutsideListRequest, responder, connection| {
+                connection.spawn(async move {
+                    match outside::list(request).await {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: outside::OutsideCreateRequest, responder, connection| {
+                connection.spawn(async move {
+                    match outside::create(request).await {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::invalid_params().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: outside::OutsideUpdateRequest, responder, connection| {
+                connection.spawn(async move {
+                    match outside::update(request) {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::invalid_params().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: outside::OutsideRevokeRequest, responder, connection| {
+                connection.spawn(async move {
+                    match outside::revoke(request) {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: outside::OutsideAnswerRequest, responder, connection| {
+                connection.spawn(async move {
+                    match outside::answer(request) {
                         Ok(answer) => responder.respond(answer),
                         Err(error) => responder
                             .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),

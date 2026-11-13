@@ -1488,6 +1488,8 @@ that never comes. `PROMPT_HINT_V15` teaches it to a v15 orchestrator.
 
 ## External harnesses as orchestrators
 
+Apps that are not threads of RustCode (Claude Desktop, Cursor, Codex) use the tools through their own scoped token: see `docs/mcp-outside-agents.md`.
+
 Built (`rustcode/engine/src/orchestration/{hub,mcp_server}.rs`). When the
 client advertises orchestration `>= 2`, an external harness thread gets the
 same tools through an MCP server the engine injects into its session:

@@ -24,6 +24,7 @@ import {
   Layers,
   MessageSquare,
   Palette,
+  Plug,
   Plus,
   RotateCcw,
   Search,
@@ -127,6 +128,7 @@ import { HeaderButtonsSetting } from "./HeaderButtonsSetting";
 import { MachineSettingsPage } from "./MachineSettingsPage";
 import { MachinesPage } from "./MachinesPage";
 import { NewThreadBanner } from "./NewThreadBanner";
+import { OutsideAgentsPage } from "./OutsideAgentsPage";
 import { ChromeButton, cx, Kbd, noTextHelpers, Spinner, Switch } from "./primitives";
 import { RemoteAccessPage } from "./RemoteAccessPage";
 import { ScopedHarnessList } from "./ScopedHarnesses";
@@ -175,6 +177,7 @@ const NAV: { heading?: string; pages: Page[] }[] = [
       { id: "connections", label: "Connections", icon: KeyRound },
       { id: "capabilities", label: "Capabilities", icon: Blocks },
       { id: "remote", label: "Remote access", icon: Smartphone },
+      { id: "outside", label: "Outside agents", icon: Plug },
       { id: "machines", label: "Environments", icon: Laptop },
     ],
   },
@@ -1807,6 +1810,7 @@ export function Settings() {
                   {section === "connections" && <ConnectionsPage />}
                   {section === "capabilities" && <CapabilitiesPage />}
                   {section === "remote" && <RemoteAccessPage />}
+                  {section === "outside" && <OutsideAgentsPage />}
                   {section === "machines" &&
                     (machine ? <MachineSettingsPage id={machine} /> : <MachinesPage />)}
                   {section === "appearance" && <AppearancePage />}

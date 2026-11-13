@@ -306,6 +306,24 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "tool_calls_turn_index",
         "CREATE INDEX IF NOT EXISTS tool_calls_turn ON tool_calls(turn_id);",
     ),
+    (
+        9,
+        "outside_agent_calls",
+        "CREATE TABLE outside_agent_calls (
+        id INTEGER PRIMARY KEY,
+        at TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        client_name TEXT NOT NULL,
+        platform TEXT,
+        scope TEXT NOT NULL,
+        tool TEXT NOT NULL,
+        outcome TEXT NOT NULL,
+        duration_ms INTEGER,
+        detail TEXT
+    );
+    CREATE INDEX outside_agent_calls_at ON outside_agent_calls(at);
+    CREATE INDEX outside_agent_calls_client ON outside_agent_calls(client_id, at);",
+    ),
 ];
 
 /// One turn's token totals. Each is optional: a harness that reports no count
@@ -1581,6 +1599,119 @@ fn prune_receipts(connection: &Connection, days: i64, max_rows: i64) -> Result<u
         )
         .map_err(|error| error.to_string())?;
     Ok(deleted)
+}
+
+/// How long the audit of outside-agent calls is kept.
+pub const OUTSIDE_AGENT_CALL_RETENTION_DAYS: i64 = 90;
+
+/// The longest `detail` an audit row keeps: a reason, never an argument.
+const MAX_OUTSIDE_DETAIL_CHARS: usize = 200;
+
+/// One tool call an outside agent made (`docs/mcp-outside-agents.md`). Only
+/// who, what and how it ended: arguments and answers are never stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutsideCallRow {
+    pub client_id: String,
+    pub client_name: String,
+    pub platform: Option<String>,
+    pub scope: String,
+    pub tool: String,
+    /// `ok`, `error`, `denied` (the grant's scope does not allow it),
+    /// `declined` (the user said no in the app) or `unavailable`.
+    pub outcome: String,
+    pub duration_ms: Option<i64>,
+    pub detail: Option<String>,
+}
+
+/// [`record_outside_call`] against one store file, so a test can use a temporary one.
+pub fn record_outside_call_at(path: &Path, row: &OutsideCallRow) -> Result<(), String> {
+    let connection = open(path)?;
+    if row.client_id.trim().is_empty() || row.tool.trim().is_empty() {
+        return Err("an outside-agent call needs a client and a tool".to_owned());
+    }
+    let at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let detail: Option<String> = row
+        .detail
+        .as_ref()
+        .map(|detail| detail.chars().take(MAX_OUTSIDE_DETAIL_CHARS).collect());
+    connection
+        .execute(
+            "INSERT INTO outside_agent_calls
+                (at, client_id, client_name, platform, scope, tool, outcome, duration_ms, detail)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                at,
+                row.client_id,
+                row.client_name,
+                row.platform,
+                row.scope,
+                row.tool,
+                row.outcome,
+                row.duration_ms,
+                detail,
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// Records an outside agent's call in the store this machine uses. A failure
+/// is logged: the call already happened, and the audit must not change its answer.
+pub fn record_outside_call(row: &OutsideCallRow) {
+    let Some(path) = data_path() else {
+        return;
+    };
+    if let Err(error) = record_outside_call_at(&path, row) {
+        crate::dbg_log!("data store: outside-agent call not recorded: {error}");
+    }
+}
+
+/// The newest outside-agent calls, newest first, optionally of one client.
+pub fn recent_outside_calls_at(
+    path: &Path,
+    client_id: Option<&str>,
+    limit: u32,
+) -> Result<Vec<Value>, String> {
+    let connection = open(path)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT at, client_id, client_name, scope, tool, outcome, duration_ms, detail
+             FROM outside_agent_calls
+             WHERE (?1 IS NULL OR client_id = ?1)
+             ORDER BY id DESC LIMIT ?2",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map(params![client_id, limit], |row| {
+            Ok(json!({
+                "at": row.get::<_, String>(0)?,
+                "clientId": row.get::<_, String>(1)?,
+                "clientName": row.get::<_, String>(2)?,
+                "scope": row.get::<_, String>(3)?,
+                "tool": row.get::<_, String>(4)?,
+                "outcome": row.get::<_, String>(5)?,
+                "durationMs": row.get::<_, Option<i64>>(6)?,
+                "detail": row.get::<_, Option<String>>(7)?,
+            }))
+        })
+        .map_err(|error| error.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+/// [`recent_outside_calls_at`] against the store this machine uses.
+pub fn recent_outside_calls(client_id: Option<&str>, limit: u32) -> Vec<Value> {
+    data_path()
+        .and_then(|path| recent_outside_calls_at(&path, client_id, limit).ok())
+        .unwrap_or_default()
+}
+
+/// Drops audit rows past [`OUTSIDE_AGENT_CALL_RETENTION_DAYS`].
+fn prune_outside_calls(connection: &Connection) -> Result<usize, String> {
+    let cutoff = rfc3339_days_ago(chrono::Utc::now(), OUTSIDE_AGENT_CALL_RETENTION_DAYS);
+    connection
+        .execute("DELETE FROM outside_agent_calls WHERE at < ?1", [cutoff])
+        .map_err(|error| error.to_string())
 }
 
 /// Records a turn (and its tool calls) in the store; a failure is logged and
@@ -3160,6 +3291,7 @@ fn prune_with(
         COMMAND_RECEIPT_RETENTION_DAYS,
         COMMAND_RECEIPT_MAX_ROWS,
     )?;
+    report.rows_deleted += prune_outside_calls(connection)?;
     trim_to_budget(connection, max_bytes, &mut report)?;
     report.bytes_after = telemetry_bytes(connection)?;
     compact(connection);
@@ -6749,5 +6881,75 @@ mod tests {
                 .collect();
         keys.sort();
         assert_eq!(keys, ["k2", "k3"], "the newest two stay");
+    }
+
+    fn outside_call(client: &str, tool: &str, outcome: &str) -> OutsideCallRow {
+        OutsideCallRow {
+            client_id: client.to_owned(),
+            client_name: "Cursor".to_owned(),
+            platform: Some("cursor".to_owned()),
+            scope: "read_only".to_owned(),
+            tool: tool.to_owned(),
+            outcome: outcome.to_owned(),
+            duration_ms: Some(12),
+            detail: Some("x".repeat(500)),
+        }
+    }
+
+    #[test]
+    fn outside_agent_calls_are_recorded_with_who_what_and_outcome_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data.sqlite");
+        record_outside_call_at(&path, &outside_call("c1", "list_sessions", "ok")).unwrap();
+        record_outside_call_at(&path, &outside_call("c2", "start_session", "denied")).unwrap();
+        assert!(record_outside_call_at(&path, &outside_call("", "list_sessions", "ok")).is_err());
+
+        let all = recent_outside_calls_at(&path, None, 10).unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0]["tool"], "start_session", "newest first");
+        assert_eq!(all[0]["outcome"], "denied");
+        assert_eq!(
+            all[0]["detail"].as_str().unwrap().chars().count(),
+            MAX_OUTSIDE_DETAIL_CHARS,
+            "a reason is cut, never stored whole"
+        );
+        let one = recent_outside_calls_at(&path, Some("c1"), 10).unwrap();
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0]["clientName"], "Cursor");
+        // The table has no column that could hold arguments or an answer.
+        let connection = open(&path).unwrap();
+        let mut statement = connection
+            .prepare("SELECT name FROM pragma_table_info('outside_agent_calls')")
+            .unwrap();
+        let columns: Vec<String> = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(
+            columns
+                .iter()
+                .all(|name| !["args", "arguments", "result", "answer"]
+                    .iter()
+                    .any(|bad| name.contains(bad))),
+            "{columns:?}"
+        );
+    }
+
+    #[test]
+    fn outside_agent_calls_past_the_retention_window_are_pruned() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data.sqlite");
+        let connection = open(&path).unwrap();
+        record_outside_call_at(&path, &outside_call("c1", "list_sessions", "ok")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO outside_agent_calls (at, client_id, client_name, scope, tool, outcome)
+                 VALUES ('2020-01-01T00:00:00.000Z', 'old', 'Old', 'read_only', 'list_sessions', 'ok')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(prune_outside_calls(&connection).unwrap(), 1);
+        assert_eq!(count_rows(&path, "outside_agent_calls"), 1);
     }
 }

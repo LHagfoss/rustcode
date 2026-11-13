@@ -26,6 +26,7 @@ pub mod hub;
 pub mod local;
 pub(crate) mod local_threads;
 pub mod mcp_server;
+pub mod outside;
 
 pub const METHOD: &str = "_rustcode/orchestration";
 /// Told to the client when a call was dropped before its answer arrived: the

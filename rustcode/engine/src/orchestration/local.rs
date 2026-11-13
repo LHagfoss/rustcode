@@ -145,7 +145,7 @@ pub(super) fn local_machine(args: &Value) -> Result<(), Value> {
 /// The app's "Let agents read threads in other projects" setting, which it
 /// seeds into `<config>/settings.json`. On unless the machine says otherwise,
 /// as the registry default is.
-fn read_across_projects() -> bool {
+pub(super) fn read_across_projects() -> bool {
     crate::acp::settings::value("read-across-projects")
         .and_then(|value| value.as_bool())
         .unwrap_or(true)
