@@ -141,7 +141,7 @@ export function WhatsNewDialog() {
           >
             <Notes whatsNew={shown} page={page} />
           </div>
-          <div className="flex items-center gap-2 border-border border-t px-5 py-3">
+          <div className="rule-t [--rc-rule-inset:1.25rem] flex items-center gap-2 px-5 py-3">
             <Pill onClick={() => openExternal(page)}>Release page</Pill>
             <span className="flex-1" />
             <Pill prominent onClick={closeWhatsNew}>
