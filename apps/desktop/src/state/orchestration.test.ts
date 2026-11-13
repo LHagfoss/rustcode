@@ -9,6 +9,7 @@ import {
   validBranch,
 } from "../acp/v2";
 import {
+  ALL_ANSWER_CHARS,
   activeDelegates,
   activeDescendants,
   activityOf,
@@ -21,6 +22,7 @@ import {
   checkQueryData,
   checkStart,
   contextNote,
+  cutForAll,
   DEFAULT_ACTIVITY_ITEMS,
   DEFAULT_DELEGATE_LIMITS,
   DEFAULT_DELEGATES_PER_THREAD,
@@ -2150,6 +2152,26 @@ describe("answering with the slots and the child's activity", () => {
       activity: running,
     });
     expect(stalled).toMatchObject({ stalled: true, idle_ms: STALL_NOTICE_MS });
+  });
+
+  test("a wave's answer cuts each long answer and says so", () => {
+    const long = "é".repeat(ALL_ANSWER_CHARS + 10);
+    const cut = cutForAll({ link_id: "a/1", answer: long });
+    expect([...(cut.answer as string)].length).toBe(ALL_ANSWER_CHARS);
+    expect(cut.answer_truncated).toBe(true);
+    expect(cutForAll({ link_id: "a/2", answer: "done" })).toEqual({ link_id: "a/2", answer: "done" });
+    expect(cutForAll({ link_id: "a/3" })).toEqual({ link_id: "a/3" });
+  });
+
+  test("wait_session takes all only when it is true", () => {
+    expect(parseCall({ tool: "wait_session", args: { link_ids: ["a/1", "a/2"], all: true } })).toMatchObject({
+      tool: "wait_session",
+      links: ["a/1", "a/2"],
+      all: true,
+    });
+    expect(parseCall({ tool: "wait_session", args: { link_ids: ["a/1"], all: "yes" } })).not.toHaveProperty(
+      "all",
+    );
   });
 
   test("a cut answer says so and names the thread whose read_session has the rest", () => {

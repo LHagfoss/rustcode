@@ -348,8 +348,8 @@ pub const MESSAGE_SESSION: Tool = Tool {
 
 pub const WAIT_SESSION: Tool = Tool {
     name: crate::orchestration::WAIT_SESSION,
-    description: "Wait for the turn message_session started and return its status and final answer (at most 8 KiB); with link_ids, the first to finish. Waits at most 25 minutes per call; call again to keep waiting. needs_user means that thread waits for the user. When the answer was cut, it says answer_truncated: true and gives the session_id: read the rest with read_session, which pages. The app also wakes this thread when its children finish or ask, so call this when you need an answer now; do not poll with sleeps. A timeout says how long each child has been idle (idle_ms), its last tool and its turns.",
-    arguments: r#"{"link_ids": ["from start_session or message_session"], "timeout_ms": 1200000}"#,
+    description: "Wait for the turn message_session started and return its status and final answer (at most 8 KiB); with link_ids, the first to finish, or with all: true every one of them in one answer once all have settled (or one needs the user), each answer cut to 2 KiB. Waits at most 25 minutes per call; call again to keep waiting. needs_user means that thread waits for the user. When the answer was cut, it says answer_truncated: true and gives the session_id: read the rest with read_session, which pages. The app also wakes this thread when its children finish or ask, so call this when you need an answer now; do not poll with sleeps. A timeout says how long each child has been idle (idle_ms), its last tool and its turns.",
+    arguments: r#"{"link_ids": ["from start_session or message_session"], "all": true, "timeout_ms": 1200000}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
     schema: || {
@@ -358,6 +358,7 @@ pub const WAIT_SESSION: Tool = Tool {
             "properties": {
                 "link_id": {"type": "string"},
                 "link_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+                "all": {"type": "boolean", "default": false},
                 "machine": {"type": "string"},
                 "timeout_ms": {"type": "integer", "minimum": 1, "maximum": crate::orchestration::MAX_WAIT_MS, "default": crate::orchestration::DEFAULT_WAIT_MS}
             },

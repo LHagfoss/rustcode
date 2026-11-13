@@ -90,6 +90,7 @@ import {
   checkStart,
   cleanProjectPath,
   contextNote,
+  cutForAll,
   type DelegateLimits,
   delegated,
   delivered,
@@ -1846,7 +1847,7 @@ async function perform(
           return failureJson(failure("invalid", `${said}, not on ${named.name}`));
         }
       }
-      const answer = await wait(caller.id, call.links, call.timeoutMs, call.callId);
+      const answer = await wait(caller.id, call.links, call.timeoutMs, call.callId, call.all === true);
       if (answer.error) return answer;
       const at = waitMachine(links);
       return at ? { ...answer, ...machineFields(at) } : answer;
@@ -4965,6 +4966,7 @@ async function wait(
   ids: string[],
   timeoutMs: number,
   callId?: string,
+  all = false,
 ): Promise<JsonObject> {
   const mine = [...new Set(ids)].filter(
     (id) => book().links.find((l) => l.id === id)?.orchestrator === callerId,
@@ -5026,12 +5028,15 @@ async function wait(
   // The link's answer is out with this reply: no wake may repeat it. A link whose state goes out
   // with a timeout is handed over the same way, so a child that settles just as the wait gives up
   // does not come back a second time as a wake.
-  const hand = (link: Link, shown = shownOf(link)) => {
+  const handOne = (link: Link, shown = shownOf(link)) => {
     if (shown === "done" || shown === "failed" || shown === "needs_user") {
       me.handed.push(markHeard(link, shown, Date.now()));
     }
-    return { links: [result(link, shown)] };
+    return result(link, shown);
   };
+  const hand = (link: Link, shown = shownOf(link)) => ({ links: [handOne(link, shown)] });
+  /** A wave's answer: every ready link in one reply, each answer cut to {@link ALL_ANSWER_CHARS}. */
+  const handAll = (ready: Link[]) => ({ links: ready.map((link) => cutForAll(handOne(link))) });
   /** The pause before looking again, cut short when the wait ends early. */
   const rest = () => {
     if (me.ended) return Promise.resolve();
@@ -5055,6 +5060,9 @@ async function wait(
       // will read this answer, and holding the links back would keep their wakes from arriving.
       // A thread the app holds no state for keeps waiting: it cannot tell whether a turn runs.
       const caller = s.threads[callerId];
+      const ready: Link[] = [];
+      let pending = false;
+      let asking = false;
       if (caller && !caller.running) {
         return {
           status: "timeout",
@@ -5077,16 +5085,28 @@ async function wait(
               error: REASON_THREAD_GONE,
             }),
           );
+          // Failed now: the next look hands it over with the rest.
+          pending = true;
           continue;
         }
         const now = stateOf(s, link);
         if (now === "done" || now === "failed") {
           // Settled, but it works on: the answer is the one after its subtree is quiet.
-          if (subtreeQuiet(link.target)) return hand(link);
+          if (subtreeQuiet(link.target)) {
+            if (!all) return hand(link);
+            ready.push(link);
+          } else pending = true;
           continue;
         }
-        if (!isActive(now) || now === "needs_user") return hand(link);
+        if (!isActive(now) || now === "needs_user") {
+          if (!all) return hand(link);
+          ready.push(link);
+          asking ||= now === "needs_user";
+        } else pending = true;
       }
+      // With `all`, one answer for the whole wave: once every link is ready, or sooner when one
+      // waits for the user, who may be needed before the rest can finish.
+      if (all && ready.length && (asking || !pending)) return handAll(ready);
       if (Date.now() >= deadline) {
         return {
           status: "timeout",

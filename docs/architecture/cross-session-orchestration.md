@@ -222,8 +222,11 @@ Decisions:
   further turns queue, and waiting yields the orchestrator's slot as
   `wait_agent` does.
 - `wait_session` accepts one `link_id` or several (first to finish wins),
-  default timeout 60 s, maximum 1 h, and wakes on completion, a question or an
-  approval waiting in the target.
+  default timeout 20 min, maximum 25 min, and wakes on completion, a question
+  or an approval waiting in the target. With `all: true` it waits for every
+  link and answers once with all of them (each answer cut to 2 KiB), or sooner
+  when one waits for the user: a wave of delegates costs the orchestrator one
+  turn instead of one per delegate.
 - A wait and a wake never both carry the same link. The wait marks what it hands
   back as heard — including a link that settles just as the wait times out — and
   a settled link that a newer link from the same parent to the same target
