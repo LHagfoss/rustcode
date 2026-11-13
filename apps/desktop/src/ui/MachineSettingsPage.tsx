@@ -12,7 +12,7 @@
 import { ArrowLeft, RefreshCw, Trash2, Unplug } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Harness } from "../acp/types";
-import { devicePlatform, deviceRoute, deviceStatus, versionLine } from "../state/deviceRows";
+import { devicePlatform, deviceRoute, deviceStatus, machineAccess, versionLine } from "../state/deviceRows";
 import { accountState } from "../state/harness";
 import {
   disconnectMachine,
@@ -44,7 +44,7 @@ import {
   useServerValues,
   useSettingsScope,
 } from "../state/settingsScope";
-import { openSettings } from "../state/store";
+import { openSettings, revokeRemoteDevice, useApp } from "../state/store";
 import { LOCAL_HOST } from "../state/threadKeys";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachineIdentityEditor } from "./MachineProfile";
@@ -160,10 +160,35 @@ function MachineSettings({ machine }: { machine: Machine }) {
         </Row>
       </Group>
 
+      <Access machine={machine} />
       <Routes machine={machine} />
       <Harnesses machine={machine} />
       <WhatSyncs machine={machine} online={online} />
     </>
+  );
+}
+
+/** Which computer may reach which: each direction on its own, with its own way to end it. */
+function Access({ machine }: { machine: Machine }) {
+  const devices = useApp((state) => state.remote?.devices);
+  const access = machineAccess(machine, devices ?? []);
+  return (
+    <Group
+      title={`Access · ${access.label}`}
+      footer="The two directions are separate pairings. Ending one leaves the other as it is."
+    >
+      <Row title="This computer reaches it" subtitle={access.outboundText}>
+        <Chip tone={access.outbound ? "ok" : "bad"}>{access.outbound ? "Allowed" : "Ended"}</Chip>
+      </Row>
+      <Row title="It reaches this computer" subtitle={access.inboundText}>
+        <Chip tone={access.inbound ? "ok" : "idle"}>{access.inbound ? "Allowed" : "Not allowed"}</Chip>
+        {access.inbound && (
+          <Action size="sm" danger onClick={() => void revokeRemoteDevice(access.inbound!.id)}>
+            Revoke
+          </Action>
+        )}
+      </Row>
+    </Group>
   );
 }
 

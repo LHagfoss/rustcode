@@ -421,12 +421,14 @@ function OfferView({ offer, now }: { offer: ConnectOffer; now: number }) {
 function SshPane() {
   const run = useMachines((s) => s.ssh);
   const error = useMachines((s) => s.sshError);
+  const notice = useMachines((s) => s.sshNotice);
   const [target, setTarget] = useState("");
   const [allowInstall, setAllowInstall] = useState(true);
+  const [mutual, setMutual] = useState(false);
   const running = run?.running === true;
   const connect = () => {
     if (running || !target.trim()) return;
-    void connectOverSsh(target, allowInstall).then((paired) => {
+    void connectOverSsh(target, allowInstall, mutual).then((paired) => {
       if (paired) setTarget("");
     });
   };
@@ -464,7 +466,15 @@ function SshPane() {
           Install or update RustCode there when needed (in ~/.rustcode/bin, with a background service)
         </label>
       </Field>
-      {run && <ProgressSteps steps={sshProgress(run.steps, running)} label="Connect over SSH progress" />}
+      <AccessChoice mutual={mutual} disabled={running} host={sshHost(target)} onChange={setMutual} />
+      {run && (
+        <ProgressSteps steps={sshProgress(run.steps, running, mutual)} label="Connect over SSH progress" />
+      )}
+      {notice && !running && (
+        <p role="status" className="m-0 text-callout text-warning leading-normal">
+          {notice}
+        </p>
+      )}
       {error && !running && <Failure method="ssh" error={error} onRetry={connect} onClose={dismissSsh} />}
       <p className="m-0 text-caption text-fg-muted leading-normal">
         A key with a passphrase must be in the agent (ssh-add), and a new host key must be accepted once in a
@@ -472,6 +482,48 @@ function SshPane() {
         NetBird or Tailscale).
       </p>
     </div>
+  );
+}
+
+/** The host part of `lars@box`, for the sentences about it. */
+function sshHost(target: string): string {
+  const typed = target.trim();
+  return (typed.includes("@") ? typed.slice(typed.lastIndexOf("@") + 1) : typed) || "that computer";
+}
+
+/**
+ * Which computer may reach which: this one reaches the host (always), and the host may reach this
+ * one too, if allowed here. Both are stated so neither is a surprise.
+ */
+export function AccessChoice({
+  mutual,
+  host,
+  disabled,
+  onChange,
+}: {
+  mutual: boolean;
+  host: string;
+  disabled?: boolean;
+  onChange: (mutual: boolean) => void;
+}) {
+  return (
+    <fieldset className="m-0 flex flex-col gap-1.5 border-0 p-0" disabled={disabled}>
+      <legend className="p-0 pb-1 text-callout font-medium text-fg">Who can reach whom</legend>
+      <label className="flex items-start gap-2 text-callout text-fg-muted">
+        <input type="radio" name="ssh-access" checked={!mutual} onChange={() => onChange(false)} />
+        <span>
+          <b className="font-medium text-fg">One way:</b> this computer can see and run threads on {host}.{" "}
+          {host} cannot reach this computer.
+        </span>
+      </label>
+      <label className="flex items-start gap-2 text-callout text-fg-muted">
+        <input type="radio" name="ssh-access" checked={mutual} onChange={() => onChange(true)} />
+        <span>
+          <b className="font-medium text-fg">Both ways:</b> {host} can also see and run all threads on this
+          computer. Each side is revoked on its own, here under Environments and there under Remote access.
+        </span>
+      </label>
+    </fieldset>
   );
 }
 

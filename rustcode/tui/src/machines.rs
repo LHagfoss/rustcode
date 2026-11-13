@@ -96,6 +96,8 @@ pub async fn run(command: &MachineCommands) -> Result<()> {
             name,
             yes,
             no_install,
+            mutual,
+            one_way,
             json,
         } => {
             let target = rustcode_client::ssh::SshTarget::parse(target, *port, identity.clone())?;
@@ -110,6 +112,7 @@ pub async fn run(command: &MachineCommands) -> Result<()> {
                 } else {
                     InstallChoice::Ask
                 },
+                access_choice(*mutual, *one_way),
                 *json,
             )
             .await
@@ -607,13 +610,102 @@ enum InstallChoice {
     Ask,
 }
 
+/// Which computer may reach which after `add-ssh`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum AccessChoice {
+    /// This computer reaches that one, and not the other way round.
+    OneWay,
+    /// Both: that computer pairs back with a code created here.
+    Mutual,
+    /// Ask at a terminal; one way without one.
+    Ask,
+}
+
+fn access_choice(mutual: bool, one_way: bool) -> AccessChoice {
+    if mutual {
+        AccessChoice::Mutual
+    } else if one_way {
+        AccessChoice::OneWay
+    } else {
+        AccessChoice::Ask
+    }
+}
+
+/// Ask a yes/no question on the terminal; no is the answer without one.
+fn confirm(question: &str) -> bool {
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() {
+        return false;
+    }
+    eprint!("{question}");
+    let _ = std::io::stderr().flush();
+    let mut answer = String::new();
+    let read = std::io::stdin()
+        .lock()
+        .take(16)
+        .read_line(&mut answer)
+        .is_ok();
+    read && matches!(answer.trim(), "y" | "Y" | "yes" | "Yes")
+}
+
+/// Let the computer just paired reach this one: create a connect code here and
+/// have that computer redeem it over SSH. Failing leaves the one-way pairing
+/// as it is and withdraws the code; the returned failure says what to do.
+async fn pair_back(
+    config_dir: &std::path::Path,
+    target: &rustcode_client::ssh::SshTarget,
+    progress: &mut (dyn FnMut(rustcode_client::ssh::Progress) + Send),
+) -> std::result::Result<(), rustcode_client::ssh::SshFailure> {
+    use rustcode_client::ssh::{FailureKind, SshFailure, Step};
+    let failed = |kind, message: String| SshFailure {
+        step: Step::PairBack,
+        kind,
+        message,
+    };
+    let lifecycle = rustcode::remote_gateway::lifecycle::RemoteLifecycle::new(config_dir);
+    rustcode::remote_gateway::service::enable_for_host()
+        .await
+        .map_err(|error| {
+            failed(
+                FailureKind::StartFailed,
+                format!("Remote access could not be switched on here, so {} cannot connect back: {error:#}", target.host()),
+            )
+        })?;
+    let offer = lifecycle.machine_offer().await.map_err(|error| {
+        failed(
+            FailureKind::StartFailed,
+            format!("This computer could not create a connect code: {error:#}"),
+        )
+    })?;
+    if offer.loopback_only {
+        let _ = lifecycle.cancel_machine_offer().await;
+        return Err(failed(
+            FailureKind::NoRoute,
+            format!(
+                "Remote access on this computer listens here only (`remote.bind`), so {} cannot reach it. Set `remote.bind` to `auto` and try again.",
+                target.host()
+            ),
+        ));
+    }
+    let result = rustcode_client::ssh::pair_back(target, offer.link.expose(), progress).await;
+    if let Err(error) = result {
+        let _ = lifecycle.cancel_machine_offer().await;
+        return Err(error
+            .downcast::<SshFailure>()
+            .unwrap_or_else(|error| failed(FailureKind::Other, format!("{error:#}"))));
+    }
+    Ok(())
+}
+
 /// Connect over SSH (`rustcode_client::ssh`): sign in, check, install when
-/// needed, `rustcode up` there, then pair and save here.
+/// needed, `rustcode up` there, then pair and save here. With mutual access
+/// that computer pairs back afterwards.
 async fn add_ssh(
     config_dir: &std::path::Path,
     target: &rustcode_client::ssh::SshTarget,
     name: Option<String>,
     install: InstallChoice,
+    access: AccessChoice,
     json: bool,
 ) -> Result<()> {
     use rustcode_client::ssh::{self, StepState};
@@ -698,6 +790,21 @@ async fn add_ssh(
         name,
     )
     .await?;
+    let mutual = match access {
+        AccessChoice::Mutual => true,
+        AccessChoice::OneWay => false,
+        AccessChoice::Ask => {
+            !json
+                && confirm(&format!(
+                    "Let {host} reach this computer too? It could see and run all threads here; you can revoke it under `rustcode remote devices`. [y/N] "
+                ))
+        }
+    };
+    let back = if mutual {
+        Some(pair_back(config_dir, target, &mut progress).await)
+    } else {
+        None
+    };
     if json {
         println!(
             "{}",
@@ -709,6 +816,8 @@ async fn add_ssh(
                     "version": connected.report.version,
                     "server": connected.report.server.mode,
                     "problems": connected.report.problems,
+                    "access": access_summary(back.as_ref()),
+                    "mutual_error": back.as_ref().and_then(|back| back.as_ref().err()),
                 }
             })
         );
@@ -724,6 +833,19 @@ async fn add_ssh(
         machine.host_id,
         machine.name
     );
+    match &back {
+        None => println!(
+            "{host} cannot reach this computer: pairing is one way. `rustcode machines add-ssh {} --mutual` (or `rustcode machines code` here and `rustcode machines connect` there) lets it.",
+            target.destination
+        ),
+        Some(Ok(())) => println!(
+            "{host} can reach this computer too. Each side revokes its own: `rustcode machines remove` here, `rustcode remote revoke` for {host}'s access to this computer."
+        ),
+        Some(Err(failed)) => println!(
+            "{host} could not connect back, so pairing stays one way: {}",
+            failed.message
+        ),
+    }
     if connected.report.server.mode != "service" {
         println!(
             "Its server runs until {host} restarts; `rustcode up` there makes it start at login."
@@ -737,6 +859,17 @@ async fn add_ssh(
         target.destination
     );
     Ok(())
+}
+
+/// The access direction a connection over SSH ended with, as a script reads
+/// it: `mutual`, or `one_way` (also when pairing back failed).
+fn access_summary(
+    back: Option<&std::result::Result<(), rustcode_client::ssh::SshFailure>>,
+) -> &'static str {
+    match back {
+        Some(Ok(())) => "mutual",
+        _ => "one_way",
+    }
 }
 
 /// Read the eight-digit code the machine shows, for a person at a terminal.
@@ -868,6 +1001,25 @@ fn remove(config_dir: &std::path::Path, selector: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn access_is_one_way_unless_both_ways_is_chosen_or_agreed_to() {
+        assert_eq!(access_choice(true, false), AccessChoice::Mutual);
+        assert_eq!(access_choice(false, true), AccessChoice::OneWay);
+        assert_eq!(access_choice(false, false), AccessChoice::Ask);
+        assert_eq!(access_summary(None), "one_way");
+        assert_eq!(access_summary(Some(&Ok(()))), "mutual");
+        let failed = rustcode_client::ssh::SshFailure {
+            step: rustcode_client::ssh::Step::PairBack,
+            kind: rustcode_client::ssh::FailureKind::NoRoute,
+            message: "box could not reach this computer".into(),
+        };
+        assert_eq!(
+            access_summary(Some(&Err(failed))),
+            "one_way",
+            "a failed pair back leaves the pairing one way"
+        );
+    }
 
     #[test]
     fn a_table_pads_columns_and_leaves_no_trailing_spaces() {

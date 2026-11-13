@@ -201,3 +201,25 @@ curl -fsSL https://rustcode.lhagfoss.com/install.sh | bash
 The installer verifies the downloaded archive with the release SHA256 manifest
 before replacing the existing binary. Homebrew installations should instead
 continue to use `brew upgrade rustcode`.
+
+### Arch Linux: system WebKitGTK
+
+For smaller downloads (under 50 MB), install the system web view with
+`sudo pacman -S webkit2gtk-4.1`. Download
+`RustCode-<ver>-linux-x86_64.tar.gz` and `SHA256SUMS` from the same release,
+then verify the archive with `sha256sum --ignore-missing -c SHA256SUMS`.
+Unpack it into a folder you own:
+
+```sh
+mkdir -p ~/Applications/RustCode
+tar xzf RustCode-<ver>-linux-x86_64.tar.gz -C ~/Applications/RustCode
+~/Applications/RustCode/usr/bin/rustcode-desktop
+```
+
+Keep both binaries together in `usr/bin`. The archive also includes the desktop
+entry and icons under `usr/share`; to add a menu entry, copy these into
+`~/.local/share`, changing the desktop entry's `Exec` to the absolute path of
+`usr/bin/rustcode-desktop` in your installation.
+The app's **Update to X** button verifies and downloads the tarball, replaces
+both binaries and reopens without root. The install folder must stay writable.
+Use the AppImage instead on systems without WebKitGTK 4.1.

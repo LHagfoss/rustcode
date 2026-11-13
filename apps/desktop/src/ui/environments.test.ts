@@ -161,6 +161,22 @@ describe("add environment progress", () => {
     expect(failed[1]?.detail).toBeNull();
     expect(sshProgress([], false)).toEqual([]);
   });
+
+  test("ssh lists the pair back step only for mutual access, or once it has run", () => {
+    const first: SshStep[] = [{ step: "sign_in", state: "done", label: "Signed in" }];
+    expect(sshProgress(first, true).map((step) => step.key)).not.toContain("pair_back");
+    const mutual = sshProgress(first, true, true).map((step) => step.key);
+    expect(mutual.at(-1)).toBe("pair_back");
+    const ran: SshStep[] = [
+      { step: "pair", state: "done", label: "Paired" },
+      { step: "pair_back", state: "failed", label: "Letting box reach this computer", detail: "no route" },
+    ];
+    const failed = sshProgress(ran, false);
+    expect(failed.map((step) => [step.key, step.state])).toEqual([
+      ["pair", "done"],
+      ["pair_back", "failed"],
+    ]);
+  });
 });
 
 describe("failures", () => {

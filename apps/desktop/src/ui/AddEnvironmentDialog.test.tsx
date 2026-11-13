@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { CodeInput, ProgressSteps } from "./AddEnvironmentDialog";
+import { AccessChoice, CodeInput, ProgressSteps } from "./AddEnvironmentDialog";
 import type { ProgressStep } from "./environments";
 
 describe("the add environment steps", () => {
@@ -34,5 +34,18 @@ describe("the digit boxes", () => {
     expect(html).toContain('aria-label="Digit 1 of 4"');
     expect(html).toContain('value="1"');
     expect(html).toContain('value="2"');
+  });
+});
+
+describe("the access choice", () => {
+  test("says which computer can reach which, and defaults to the stated one", () => {
+    const one = renderToStaticMarkup(<AccessChoice mutual={false} host="box" onChange={() => undefined} />);
+    expect(one).toContain("One way:");
+    expect(one).toContain("box cannot reach this computer");
+    expect(one).toContain("Both ways:");
+    expect(one.match(/checked=""/g)?.length).toBe(1);
+    const both = renderToStaticMarkup(<AccessChoice mutual host="box" onChange={() => undefined} />);
+    expect(both).toContain("box can also see and run all threads on this");
+    expect(both.indexOf('checked=""')).toBeGreaterThan(both.indexOf("Both ways") - 120);
   });
 });

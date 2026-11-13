@@ -739,8 +739,12 @@ Machines › **Connect over SSH**, type `lars@box` or an alias from
 `~/.ssh/config`, **Connect**; or
 
 ```bash
-rustcode machines add-ssh lars@box [--port 2222] [--identity ~/.ssh/key] [--yes | --no-install] [--json]
+rustcode machines add-ssh lars@box [--port 2222] [--identity ~/.ssh/key] [--yes | --no-install] [--mutual | --one-way] [--json]
 ```
+
+By default this pairs **one way**: this computer can see and run threads on
+`box`, and `box` cannot reach this computer. Choose **both ways** to let `box`
+reach this one too ([Mutual access](#mutual-access)).
 
 | Step | What runs | Fails with |
 | --- | --- | --- |
@@ -773,6 +777,53 @@ rustcode machines add-ssh lars@box [--port 2222] [--identity ~/.ssh/key] [--yes 
   In the mock, a host containing `denied` or `novpn` shows the two common
   failures.
 
+#### Mutual access
+
+Pairing grants access in one direction: the computer that redeems a connect
+code can reach the computer that created it. Connect over SSH can grant the
+other direction as well, in the same step, so nobody repeats an opaque pairing
+by hand: Add environment › SSH › **Both ways**, or `--mutual`.
+
+| Choice | This computer reaches `box` | `box` reaches this computer |
+| --- | --- | --- |
+| **One way** (default) | yes | no |
+| **Both ways** | yes | yes |
+
+- **Consent.** Choosing *Both ways* here is this computer's consent: it creates
+  a fresh connect code, which pairs `box` as a `desktop` device with ACP
+  access, as any code does ([Connect codes](#connect-codes)). The SSH sign-in
+  that `box` already accepted is `box`'s consent: its own user's
+  `rustcode machines connect` redeems the code there and stores the token in
+  its own credential store. In a terminal with neither flag, `add-ssh` asks
+  *Let box reach this computer too?*; with `--json` or no terminal the answer
+  is one way.
+- **How.** After the one-way pairing is saved, a sixth step, *Letting box reach
+  this computer* (`pair_back`), creates the code here and runs
+  `rustcode machines connect <link>` over SSH on `box`. The code lives ten
+  minutes and works once; it is withdrawn when the step fails.
+- **Two pairings.** Each direction is its own pairing with its own token:
+  `box` is a saved environment here, and `box` is a paired device on this
+  computer (under Settings › Remote access › Paired devices and
+  `rustcode remote devices`). Ending one never ends the other: *Forget* on the
+  environment (or `rustcode machines remove`) ends this computer's access to
+  `box`; *Revoke* on the device (or `rustcode remote revoke`) ends `box`'s
+  access to this computer. Settings › Environments › ‹box› › **Access** shows
+  both with their own button; a device counts as `box` when its `hostId` is
+  the environment's id.
+- **When it cannot.** The one-way pairing is already saved and stays; the page
+  and `--json` (`mutual_error`, `access: "one_way"`) say why and what to do:
+  - `box` is offline or SSH no longer signs in: the SSH sentence of that step
+    (*SSH could not sign in…*, *box did not answer over SSH*).
+  - `box` runs a RustCode too old to know `machines connect`: *RustCode X on
+    box is too old to connect back. Update it there, then try again.*
+  - `box` cannot reach this computer's gateway: *box could not reach this
+    computer on RustCode's port…*, naming the addresses; or remote access here
+    listens on this computer only (`remote.bind`).
+  - `box` refused or could not store the pairing (a locked credential store):
+    what `rustcode machines connect` printed there.
+  To retry only this direction, create a code here (`rustcode machines code
+  --link`) and redeem it there (`ssh box rustcode machines connect <link>`).
+
 ### In the desktop app
 
 Settings › **Environments** is the same pairing without a terminal: *This Mac* (or
@@ -789,7 +840,8 @@ are all visible at once.
 
 | In the app | What it does |
 | --- | --- |
-| **Add environment › SSH** | A host field and *Install or update RustCode there when needed* (on by default), then the steps of [Connect over SSH](#connect-over-ssh) ticking off, each with its detail, and the failed step's sentence. |
+| **Add environment › SSH** | A host field and *Install or update RustCode there when needed* (on by default), *Who can reach whom* (*One way*, the default: this computer reaches the host and not the other way round; *Both ways*: the host also sees and runs all threads on this computer), then the steps of [Connect over SSH](#connect-over-ssh) ticking off, each with its detail, and the failed step's sentence. A second direction that fails leaves the connection one way and says why under the steps. |
+| **Environments › ‹environment› › Access** | The direction in the title (*Both ways*, *This computer → it*, *It → this computer*), then one row per direction: whether this computer reaches the environment (*Allowed* or *Ended*, removed with Forget) and whether the environment reaches this computer (*Allowed* with **Revoke**, or *Not allowed* with how to allow it). |
 | **Add environment › Connect code** | *Create connect code* shows a code for another computer to pair with this one ([Connect codes](#connect-codes)); *I have a code* takes a code or link created there, with an optional address for a short code that carries none. |
 | **Add environment › Address › Found on this network** | The machines the Add sheet lists without an address typed, filled in when the page opens (*Look again* to repeat): Bonjour, the same browse as `machines discover`, for every machine whose record lists `caps=desktops`; and the *saved* machines whose handshake reported a NetBird, Tailscale or ZeroTier address, which no browse on the LAN can hear. One machine found both ways is one row, merged by its host id. Each row names the machine, its platform, the RustCode version it runs, the network its address is on (`LAN`, `NetBird`, `Tailscale`, `VPN`, `Public`) and the address. A machine not yet paired has *Ask to connect*; one already saved is *Saved*. When the local browse itself fails (a container or a network without multicast), the rows from the saved machines are still listed and the sheet says *Could not look for machines on this network* with the reason. |
 | **Add environment › Address › Enter an address** | The `host:port` a machine is reached on when it is not announced (an overlay, or another subnet). The fallback, never the first step. |
@@ -1191,9 +1243,10 @@ access work as on the other systems. What differs:
 - `rustcode machines` reaches a machine over its WebSocket only: no SSH route
   (SSH only sets a machine up and pairs it, [Connect over SSH](#connect-over-ssh)),
   no relay, and a route list is not reordered or learned yet (steps 1.8 and
-  1.11 of the machine network plan). Connect over SSH pairs one way: the other
-  computer does not list this one until it pairs back, and agents cannot start
-  it yet (no `connect_machine` tool).
+  1.11 of the machine network plan). Connect over SSH pairs one way unless *Both ways* is chosen
+  ([Mutual access](#mutual-access)); a connect code or an address request
+  still pairs one way, and agents cannot start a pairing yet (no
+  `connect_machine` tool).
 - Access is per host: a paired device sees every session open in a terminal.
   There are no per-session grants and no per-session opt-out.
 - Reachability from a real iPhone (local-network permission, NetBird routing)

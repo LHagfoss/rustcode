@@ -12,6 +12,9 @@
 //! 4. **Start**: `rustcode up --yes --json` there: the server as a service,
 //!    remote access on, and a connect code in the JSON it prints.
 //! 5. **Pair**: redeem that code here over the routes it lists.
+//! 6. **Pair back** (only when asked for mutual access): the other computer
+//!    redeems a connect code created here, so each computer can reach the
+//!    other and each side holds its own, separately revocable pairing.
 //!
 //! The connect code only ever travels inside SSH. Every command uses the
 //! user's own `ssh` binary, configuration and agent, with `BatchMode=yes`,
@@ -56,6 +59,7 @@ const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(30);
 const CHECK_TIMEOUT: Duration = Duration::from_secs(45);
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(600);
 const START_TIMEOUT: Duration = Duration::from_secs(180);
+const PAIR_BACK_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// A computer to reach with `ssh`: `user@host` or a `Host` alias from
 /// `~/.ssh/config`.
@@ -138,6 +142,9 @@ pub enum Step {
     Install,
     Start,
     Pair,
+    /// Mutual access: the other computer redeems a connect code created here,
+    /// so it can reach this computer too.
+    PairBack,
 }
 
 impl Step {
@@ -149,6 +156,7 @@ impl Step {
             Self::Install => format!("Installing RustCode {VERSION} on {host}"),
             Self::Start => format!("Starting the server on {host}"),
             Self::Pair => format!("Pairing with {host}"),
+            Self::PairBack => format!("Letting {host} reach this computer"),
         }
     }
 }
@@ -970,6 +978,133 @@ async fn pair(
     }
 }
 
+/// The last step of mutual access: have `target` redeem `link`, a connect
+/// code created on this computer, with `rustcode machines connect` there.
+/// This computer's gateway then lists that computer as a paired device of its
+/// own, apart from the pairing the caller already saved, and each side
+/// revokes its own.
+///
+/// The caller creates `link` just before, so it is fresh (a code lasts ten
+/// minutes), and withdraws it when this fails. A failure is an [`SshFailure`]
+/// on [`Step::PairBack`] that says what to do; the one-way pairing is not
+/// affected by it.
+pub async fn pair_back(
+    target: &SshTarget,
+    link: &str,
+    progress: &mut (dyn FnMut(Progress) + Send),
+) -> Result<()> {
+    let host = target.host().to_owned();
+    let mut report = |state: StepState, detail: Option<String>| {
+        progress(Progress {
+            step: Step::PairBack,
+            state,
+            label: Step::PairBack.label(&host),
+            detail,
+        });
+    };
+    report(StepState::Running, None);
+    let result = async {
+        crate::connect_code::parse(link).map_err(|error| {
+            failure(
+                Step::PairBack,
+                FailureKind::Other,
+                format!("This computer's connect code could not be read ({error:#})."),
+            )
+        })?;
+        let probe = check(target)
+            .await
+            .map_err(|error| match error.downcast::<SshFailure>() {
+                Ok(mut failed) => {
+                    failed.step = Step::PairBack;
+                    anyhow::Error::new(failed)
+                }
+                Err(error) => error,
+            })?;
+        let Some(installed) = probe.installed else {
+            return Err(failure(
+                Step::PairBack,
+                FailureKind::InstallRefused,
+                format!("RustCode is not installed on {host}. Install it there, then try again."),
+            ));
+        };
+        let quoted = match probe.os {
+            RemoteOs::Windows => ps_quote(link),
+            _ => sh_quote(link),
+        };
+        let (remote, input) = remote_rustcode(
+            probe.os,
+            &installed.path,
+            &format!("machines connect {quoted}"),
+        );
+        let output = ssh_step(
+            Step::PairBack,
+            target,
+            &remote,
+            input.as_deref(),
+            PAIR_BACK_TIMEOUT,
+        )
+        .await?;
+        if output.status != Some(0) {
+            let (kind, message) =
+                classify_pair_back_failure(&host, &installed.version, &output.stderr);
+            return Err(failure(Step::PairBack, kind, message));
+        }
+        Ok(())
+    }
+    .await;
+    match &result {
+        Ok(()) => report(StepState::Done, None),
+        Err(error) => {
+            if let Some(failed) = error.downcast_ref::<SshFailure>() {
+                report(StepState::Failed, Some(failed.message.clone()));
+            }
+        }
+    }
+    result
+}
+
+/// What a failed `rustcode machines connect` on the other computer means for
+/// the person: too old to know the command, this computer unreachable from
+/// there, or something else it said.
+pub fn classify_pair_back_failure(
+    host: &str,
+    remote_version: &str,
+    stderr: &str,
+) -> (FailureKind, String) {
+    let said = last_line(stderr);
+    if stderr.contains("unrecognized subcommand") {
+        return (
+            FailureKind::Unsupported,
+            format!(
+                "RustCode {remote_version} on {host} is too old to connect back. Update it there, then try again."
+            ),
+        );
+    }
+    if said.contains("could not reach") {
+        return (
+            FailureKind::NoRoute,
+            format!(
+                "{host} could not reach this computer on RustCode's port: {}. Put both computers on the same network or a VPN such as NetBird or Tailscale, and check that nothing blocks the port here.",
+                said.trim_start_matches("Error: ")
+                    .trim_start_matches("rustcode: ")
+            ),
+        );
+    }
+    if said.is_empty() {
+        return (
+            FailureKind::Other,
+            format!("{host} did not accept this computer's connect code."),
+        );
+    }
+    (
+        FailureKind::Other,
+        format!(
+            "{host} could not connect back to this computer: {}",
+            said.trim_start_matches("Error: ")
+        ),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1150,5 +1285,59 @@ mod tests {
     fn the_installers_this_release_sends_can_install_a_named_version() {
         assert!(INSTALL_SH.contains("--version)"));
         assert!(INSTALL_PS1.contains("[string]$Version"));
+    }
+
+    #[test]
+    fn pairing_back_says_why_the_other_computer_could_not() {
+        let (kind, message) = classify_pair_back_failure(
+            "box",
+            "1.20.0",
+            "error: unrecognized subcommand 'connect'\n",
+        );
+        assert_eq!(kind, FailureKind::Unsupported);
+        assert!(
+            message.contains("1.20.0") && message.contains("Update"),
+            "{message}"
+        );
+        let (kind, message) = classify_pair_back_failure(
+            "box",
+            VERSION,
+            "Error: could not reach lars-mac: 192.168.1.5:17879 timed out\n",
+        );
+        assert_eq!(kind, FailureKind::NoRoute);
+        assert!(message.contains("192.168.1.5:17879"), "{message}");
+        assert!(message.contains("NetBird"), "{message}");
+        let (kind, message) =
+            classify_pair_back_failure("box", VERSION, "Error: keychain locked\n");
+        assert_eq!(kind, FailureKind::Other);
+        assert!(message.contains("keychain locked"), "{message}");
+        let (_, message) = classify_pair_back_failure("box", VERSION, "");
+        assert!(message.contains("did not accept"), "{message}");
+    }
+
+    #[test]
+    fn the_pair_back_step_is_named_after_the_direction_it_grants() {
+        assert_eq!(
+            Step::PairBack.label("box"),
+            "Letting box reach this computer"
+        );
+        assert_eq!(
+            serde_json::to_string(&Step::PairBack).unwrap(),
+            "\"pair_back\""
+        );
+    }
+
+    #[test]
+    fn the_link_is_quoted_for_the_shell_that_runs_it_there() {
+        let link = "rustcode://connect/eyJhIjoiYidc'x";
+        let (remote, input) = remote_rustcode(
+            RemoteOs::Linux,
+            "/x/rustcode",
+            &format!("machines connect {}", sh_quote(link)),
+        );
+        assert_eq!(remote, "sh -l -s");
+        let input = input.unwrap();
+        assert!(input.starts_with("exec '/x/rustcode' machines connect 'rustcode://"));
+        assert!(input.contains(r"'\''x"), "{input}");
     }
 }
