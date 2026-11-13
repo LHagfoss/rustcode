@@ -26,7 +26,6 @@ import {
   ListEnd,
   Paperclip,
   Pencil,
-  Plus,
   Shield,
   ShieldCheck,
   ShieldOff,
@@ -156,6 +155,7 @@ import { localId, shortAge, type ThreadState } from "../state/thread";
 import { LOCAL_HOST, splitThreadKey } from "../state/threadKeys";
 import { UsageMeter } from "./ComposerUsage";
 import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
+import { threadMachine } from "./composerFooterLayout";
 import { overFolderDrop } from "./folderDropTarget";
 import { HarnessIcon } from "./HarnessIcon";
 import { openLightbox } from "./Lightbox";
@@ -1849,6 +1849,7 @@ export const Composer = memo(function Composer({
       <div className="rc-composer-footer relative z-0 mx-3 -mt-2 flex items-center gap-4 px-2 pt-[14px] pb-1.5 text-callout text-fg-muted">
         <div className="flex min-w-0 items-center gap-1">
           {!thread && <RunOnMenu />}
+          {thread && <ThreadMachineChip host={host} />}
           <FolderMenu thread={thread} cwd={cwd} host={host} />
           {!thread && !newThreadHost && <WorktreeToggle draft={draft} compact={compact} />}
           {thread?.worktree && (
@@ -2184,6 +2185,37 @@ function RunOnMenu() {
 }
 
 /**
+ * Where an open thread runs, when that is a paired machine: its glyph and name before the folder,
+ * a quiet label rather than a button (the machine is fixed once a thread exists). A thread on this
+ * computer shows nothing, as in the sidebar. The name is the first label to give way under a
+ * container width, and the glyph keeps the name for assistive tech.
+ */
+function ThreadMachineChip({ host }: { host: string }) {
+  const machines = useMachines((s) => s.machines);
+  const there = threadMachine(host, machines);
+  if (!there) return null;
+  return (
+    <Tooltip side="bottom" label={there.title}>
+      <span
+        role="img"
+        aria-label={there.title}
+        className="flex h-7 min-w-0 shrink items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-callout text-fg-muted"
+      >
+        <span className="relative flex shrink-0">
+          <DeviceGlyphIcon glyph={there.glyph} tint={there.tint} size={14} />
+          {there.away && (
+            <span className="-right-0.5 -top-0.5 absolute size-1.5 rounded-full bg-warning ring-2 ring-[var(--rc-composer-footer-bg)]" />
+          )}
+        </span>
+        <span className="min-w-0 max-w-[160px] truncate @max-lg/composer:max-w-[96px] @max-md/composer:hidden">
+          {there.name}
+        </span>
+      </span>
+    </Tooltip>
+  );
+}
+
+/**
  * The folder button under the composer: the project picker (ui/ProjectPicker.tsx), which starts a
  * new thread in a project or moves the open thread to another one.
  */
@@ -2290,6 +2322,27 @@ export function PermissionMenu({ threadId, compact }: { threadId?: string; compa
   );
 }
 
+/**
+ * The + as one filled shape on a 16px grid: 2px arms, each 10px long, crossing at (8, 8). Every
+ * edge is a whole pixel, at 1x and (as whole device pixels) at 2x, and a single path means the
+ * crossing is painted once.
+ */
+function PlusMark() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      shapeRendering="crispEdges"
+      aria-hidden="true"
+      className="shrink-0"
+    >
+      <path d="M7 3h2v4h4v2H9v4H7V9H3V7h4z" />
+    </svg>
+  );
+}
+
 /** The + menu at the start of the composer's row, after the SwiftUI app's AddPanel. */
 function PlusMenu({
   onAttach,
@@ -2317,16 +2370,16 @@ function PlusMenu({
       className="min-w-[220px]"
       trigger={
         // The one button the message is added to: the send circle's own diameter with a 16px mark, so
-        // the row's two ends read as the row's two ends and sit on one line. `absoluteStrokeWidth`
-        // keeps that mark a true 2px instead of the 1.33px a 16px lucide would otherwise draw, and at
-        // this size the arms land on whole pixels: the cross stays a cross at 2x instead of reading
-        // as two soft, uneven strokes.
+        // the row's two ends read as the row's two ends and sit on one line. The mark is one filled
+        // outline on a whole-pixel grid (`PlusMark`), not two stroked lines: lucide's Plus draws two
+        // 24-unit strokes scaled to 16px, so their ends land on thirds of a pixel and the crossing
+        // is painted twice, which reads as "-|-" instead of one plus.
         <button
           type="button"
           aria-label="Attach and more"
           className="flex size-9 shrink-0 items-center justify-center rounded-full bg-fill-subtle text-fg hover:bg-fill active:bg-fill-strong data-[state=open]:bg-fill-strong sm:size-8"
         >
-          <Plus size={16} strokeWidth={2} absoluteStrokeWidth />
+          <PlusMark />
         </button>
       }
     >
