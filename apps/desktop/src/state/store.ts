@@ -264,7 +264,7 @@ import { autoAnswer, effectiveMode, type PermissionMode, parsePermissionMode } f
 import { NO_PAUSES, type PlanPauses, type PlansAsk, pausesAfter, plansAskFor, queueAsks } from "./plans";
 import { projectChoice } from "./projectBook";
 import { matchProject, projectAt, projectsOn } from "./projects";
-import { deliverPullWatch, PULL_WATCH, subscribePullWatches } from "./pullWatch";
+import { createdPull, deliverPullWatch, PULL_WATCH, subscribePullWatches } from "./pullWatch";
 import {
   nextQueued,
   QUEUE_REASON,
@@ -2313,6 +2313,28 @@ function onSessionUpdate(params: JsonObject) {
     }));
   }
   updateThread(sessionId, (t) => applyUpdate(t, update));
+  if (update.kind === "toolCallUpdate" || update.kind === "toolCall") {
+    const item = get().threads[sessionId]?.items.find(
+      (item) => item.kind === "tool" && item.id === update.id,
+    );
+    if (item?.kind === "tool" && item.status === "completed") {
+      const pull = createdPull(item.input, item.output ?? "");
+      const cwd = get().sessions.find((session) => session.id === sessionId)?.cwd;
+      if (pull && cwd)
+        void connectionForThread(sessionId)
+          ?.request(
+            "_rustcode/pulls/watch/start",
+            {
+              sessionId: splitThreadKey(sessionId).id,
+              cwd,
+              ...pull,
+              link: true,
+            },
+            60_000,
+          )
+          .catch(() => {});
+    }
+  }
 }
 
 // ---------------------------------------------------------------- sessions

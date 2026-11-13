@@ -1749,6 +1749,10 @@ pub(crate) struct PullWatchStartRequest {
     pub number: u64,
     #[serde(default)]
     pub interests: Option<crate::pull_watch::Interests>,
+    #[serde(default)]
+    pub link: bool,
+    #[serde(default)]
+    pub repo: String,
 }
 
 /// Stop watching; `remove` forgets the watch too. Answers `{watch}`, with
@@ -3846,13 +3850,18 @@ async fn serve_connection(
                 let Some(store) = crate::pull_watch::WatchStore::default_store() else {
                     return responder.respond(serde_json::json!({ "error": { "code": "failed", "message": "No config directory" } }));
                 };
-                let started = store.start(
+                let started = if request.link {
+                    match crate::pull_requests::watch_view_on(&request.cwd, &request.repo, request.number).await {
+                        Ok(value) => store.link(&request.session_id, &request.cwd, &request.repo, request.number, &value, chrono::Utc::now().timestamp()),
+                        Err(error) => Err(error.message),
+                    }
+                } else { store.start(
                     &request.session_id,
                     &request.cwd,
                     request.number,
                     request.interests.unwrap_or_default(),
                     chrono::Utc::now().timestamp(),
-                );
+                ) };
                 responder.respond(match started {
                     Ok(watch) => serde_json::json!({ "watch": watch }),
                     Err(message) => serde_json::json!({ "error": { "code": "failed", "message": message } }),

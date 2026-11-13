@@ -321,3 +321,14 @@ When an orchestrator thread hands work to other threads (`start_session`,
   `rustcode/engine/src/tools/{search,filesystem,exec,misc}.rs`, then add it
   to `TOOLS` in `rustcode/engine/src/tools/mod.rs`. No other tables need
   updating.
+
+## CI handoff
+
+After `gh pr create`, end the turn. The desktop links a successful create
+command’s PR URL and wakes the thread with check failures (including available
+log tails), recovery, conflicts or merge news. For an existing PR, use
+`manage_pull_links` with `action: "link"` first. Do not sleep-poll checks.
+To merge this thread’s current-branch PR, call `merge_when_green` with `number`.
+The user approves once; the call returns and RustCode delivers the outcome in
+a later turn. Keep delegate merges on `session_id`. A timeout or disconnected
+app is not proof of a merge: inspect the PR before retrying.

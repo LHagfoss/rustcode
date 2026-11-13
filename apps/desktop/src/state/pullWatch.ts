@@ -41,3 +41,12 @@ export async function deliverPullWatch(conn: AcpConnection, params: JsonObject, 
 export function pullNotice(number: number, said: string[]): string {
   return withPullMark(`Pull request #${number}: ${said.join(" · ")}`);
 }
+
+/** Only successful create commands opt a thread into automatic CI delivery. */
+export function createdPull(input: unknown, output: string): { repo: string; number: number } | undefined {
+  const command = JSON.stringify(input ?? "");
+  if (!/\bgh\s+pr\s+create\b/.test(command)) return;
+  const match = /https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)\b/.exec(output);
+  if (match && Number.isSafeInteger(Number(match[2])) && Number(match[2]) > 0)
+    return { repo: match[1] ?? "", number: Number(match[2]) };
+}

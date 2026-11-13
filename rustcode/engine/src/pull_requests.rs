@@ -296,7 +296,11 @@ async fn gh_json(cwd: &Path, args: &[&str]) -> Result<Value, PullError> {
 
 /// Run `gh` in `cwd`, `stdin` written to it when given, and return what it
 /// printed, or its error.
-async fn gh(cwd: &Path, args: &[&str], stdin: Option<Vec<u8>>) -> Result<Vec<u8>, PullError> {
+pub(crate) async fn gh(
+    cwd: &Path,
+    args: &[&str],
+    stdin: Option<Vec<u8>>,
+) -> Result<Vec<u8>, PullError> {
     use tokio::io::AsyncWriteExt;
     let mut command = crate::platform::tokio_command(crate::platform::resolve_bin("gh"));
     command

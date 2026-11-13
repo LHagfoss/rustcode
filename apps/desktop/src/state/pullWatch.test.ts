@@ -81,3 +81,16 @@ test("watch notifications route to the linked thread on their own machine", asyn
   expect(useApp.getState().threads[watch.sessionId]).toBeUndefined();
   conn.close("test finished");
 });
+
+import { createdPull } from "./pullWatch";
+
+test("only a create command's PR output opts into CI delivery", () => {
+  expect(
+    createdPull(
+      { command: "timeout 120 gh pr create --body-file /tmp/body" },
+      "https://github.com/o/r/pull/42\n",
+    ),
+  ).toEqual({ repo: "o/r", number: 42 });
+  expect(createdPull({ command: "gh pr view 42" }, "https://github.com/o/r/pull/42")).toBeUndefined();
+  expect(createdPull({ command: "gh pr create" }, "failed")).toBeUndefined();
+});
