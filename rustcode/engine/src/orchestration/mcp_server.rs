@@ -74,11 +74,20 @@ pub struct Identity {
 /// pull request link tool is listed for every client: this server answers it
 /// itself (#3369).
 pub fn tools(version: u8, smart_ui: bool) -> Vec<Value> {
+    tools_with(version, smart_ui, false)
+}
+
+/// [`tools`], with `ask_user_question` for a harness that has no question
+/// tool of its own (#3393).
+pub fn tools_with(version: u8, smart_ui: bool, ask_user: bool) -> Vec<Value> {
     let names = super::tool_names(version).into_iter().chain(
         // Answered by this server itself rather than by the client, so no
         // orchestration version gates it (#3369).
         std::iter::once(crate::pull_watch::LINK_TOOL_NAME)
-            .chain(smart_ui.then_some(crate::smart_ui::CHECK_TOOL_NAME)),
+            .chain(smart_ui.then_some(crate::smart_ui::CHECK_TOOL_NAME))
+            // Asked by the engine through the thread's own channel, not the
+            // client's orchestration request, so no version gates it either.
+            .chain(ask_user.then_some(super::ask_user::TOOL_NAME)),
     );
     names
         .filter_map(|name| crate::tools::TOOLS.iter().find(|tool| tool.name == name))
@@ -101,15 +110,26 @@ pub async fn run(session_id: String, socket: PathBuf, token: String) -> Result<(
         .and_then(|value| value.parse::<u8>().ok())
         .map_or(super::VERSION, |version| version.min(super::VERSION));
     let smart_ui = std::env::var(super::hub::SMART_UI_ENV).is_ok_and(|on| on == "1");
-    serve(
+    let ask_user = std::env::var(super::hub::ASK_USER_ENV).is_ok_and(|on| on == "1");
+    serve_every(
         tokio::io::stdin(),
         tokio::io::stdout(),
         Identity { session_id, token },
         Arc::new(SocketForward { socket }),
         orchestration,
-        smart_ui,
+        Offered { smart_ui, ask_user },
+        PROGRESS_INTERVAL,
     )
     .await
+}
+
+/// The tools a thread gets beyond its orchestration version's.
+#[derive(Debug, Clone, Copy, Default)]
+struct Offered {
+    /// `smart_ui_check`, when the user has Smart UI on.
+    smart_ui: bool,
+    /// `ask_user_question`, for a harness without a question tool (#3393).
+    ask_user: bool,
 }
 
 /// Serve newline-delimited JSON-RPC from `input`, answering on `output`.
@@ -132,7 +152,10 @@ where
         identity,
         forward,
         orchestration,
-        smart_ui,
+        Offered {
+            smart_ui,
+            ask_user: false,
+        },
         PROGRESS_INTERVAL,
     )
     .await
@@ -145,7 +168,7 @@ async fn serve_every<R, W>(
     identity: Identity,
     forward: Arc<dyn Forward>,
     orchestration: u8,
-    smart_ui: bool,
+    offered: Offered,
     // How often a pending call reports progress; 0 disables it.
     progress_every: Duration,
 ) -> Result<(), String>
@@ -225,7 +248,7 @@ where
             "tools/list" => {
                 let _ = sender.send(result(
                     id,
-                    json!({ "tools": tools(orchestration, smart_ui) }),
+                    json!({ "tools": tools_with(orchestration, offered.smart_ui, offered.ask_user) }),
                 ));
             }
             "tools/call" => {
@@ -252,13 +275,8 @@ where
                                 });
                         let tool = params.get("name").and_then(Value::as_str).unwrap_or("");
                         let message = progress_message(tool, &params);
-                        let waiting = call(
-                            forward.as_ref(),
-                            &identity,
-                            &params,
-                            orchestration,
-                            smart_ui,
-                        );
+                        let waiting =
+                            call(forward.as_ref(), &identity, &params, orchestration, offered);
                         tokio::pin!(waiting);
                         let answer = match ticker.as_mut() {
                             Some(ticker) => {
@@ -312,9 +330,35 @@ async fn call(
     identity: &Identity,
     params: &Value,
     version: u8,
-    smart_ui: bool,
+    offered: Offered,
 ) -> CallAnswer {
+    let Offered { smart_ui, ask_user } = offered;
     let tool = params.get("name").and_then(Value::as_str).unwrap_or("");
+    // The engine asks the user through the thread's own channel; checked
+    // here first so a bad call is refused without leaving the harness.
+    if tool == super::ask_user::TOOL_NAME {
+        if !ask_user {
+            return CallAnswer::failure(format!("error: unknown tool '{tool}'"));
+        }
+        let args = params
+            .get("arguments")
+            .cloned()
+            .filter(Value::is_object)
+            .unwrap_or_else(|| json!({}));
+        if let Err(reason) = super::ask_user::validate(&args) {
+            return CallAnswer::failure(format!(
+                "error: invalid {tool} call: {reason}. Nothing was asked."
+            ));
+        }
+        return forward
+            .call(CallRequest {
+                session_id: identity.session_id.clone(),
+                token: identity.token.clone(),
+                tool: tool.to_owned(),
+                args,
+            })
+            .await;
+    }
     // The block check is answered here: it needs no client and no thread, only
     // the user's Smart UI setting, and it forwards nothing.
     if tool == crate::smart_ui::CHECK_TOOL_NAME {
@@ -658,19 +702,34 @@ mod tests {
         orchestration: u8,
         smart_ui: bool,
     ) -> Vec<Value> {
+        let offered = Offered {
+            smart_ui,
+            ask_user: false,
+        };
+        exchange_offered(identity, socket, messages, orchestration, offered).await
+    }
+
+    async fn exchange_offered(
+        identity: Identity,
+        socket: PathBuf,
+        messages: &[Value],
+        orchestration: u8,
+        offered: Offered,
+    ) -> Vec<Value> {
         let expected = messages
             .iter()
             .filter(|message| message.get("id").is_some())
             .count();
         let (mut client, server_side) = tokio::io::duplex(64 * 1024);
         let (server_read, server_write) = tokio::io::split(server_side);
-        let server = tokio::spawn(serve(
+        let server = tokio::spawn(serve_every(
             server_read,
             server_write,
             identity,
             Arc::new(SocketForward { socket }),
             orchestration,
-            smart_ui,
+            offered,
+            PROGRESS_INTERVAL,
         ));
         let mut input = String::new();
         for message in messages {
@@ -689,6 +748,99 @@ mod tests {
         server.await.unwrap().unwrap();
         answers.sort_by_key(|answer| answer["id"].as_i64());
         answers
+    }
+
+    #[test]
+    fn the_question_tool_is_listed_only_for_a_harness_without_one() {
+        let names = |ask_user| {
+            tools_with(super::super::VERSION, false, ask_user)
+                .into_iter()
+                .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        };
+        let name = super::super::ask_user::TOOL_NAME.to_owned();
+        assert!(!names(false).contains(&name));
+        assert!(names(true).contains(&name));
+        let listed = tools_with(super::super::VERSION, false, true)
+            .into_iter()
+            .find(|tool| tool["name"] == super::super::ask_user::TOOL_NAME)
+            .unwrap();
+        assert_eq!(
+            listed["inputSchema"]["properties"]["questions"]["maxItems"],
+            4
+        );
+    }
+
+    /// A Pi thread's call goes through the server and the hub to the
+    /// thread's question channel, and the user's answer comes back to it;
+    /// a server without the tool refuses it, and a bad call never leaves.
+    #[tokio::test]
+    async fn a_question_reaches_the_thread_and_its_answer_comes_back() {
+        use agent_client_protocol::schema::v1::{
+            RequestPermissionOutcome, RequestPermissionResponse, SelectedPermissionOutcome,
+        };
+        let (_dir, hub) = hub().await;
+        let token = hub.register_local("thread-1", super::super::VERSION);
+        let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = Arc::clone(&asked);
+        assert!(hub.set_questions(
+            "thread-1",
+            Arc::new(move |request| {
+                seen.lock().unwrap().push(request);
+                Box::pin(async {
+                    Some(RequestPermissionResponse::new(
+                        RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+                            "question_option_1",
+                        )),
+                    ))
+                })
+            }),
+        ));
+        let identity = Identity {
+            session_id: "thread-1".into(),
+            token,
+        };
+        let call = |id: i64, arguments: Value| {
+            json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+                   "params": {"name": super::super::ask_user::TOOL_NAME, "arguments": arguments}})
+        };
+        let question = json!({"questions": [{"header": "Plan", "question": "Which plan?",
+            "options": [{"label": "Small", "description": "One file"},
+                        {"label": "Large", "description": "Everything"}]}]});
+        let offered = Offered {
+            smart_ui: false,
+            ask_user: true,
+        };
+        let answers = exchange_offered(
+            identity.clone(),
+            hub.path().to_owned(),
+            &[
+                call(1, question.clone()),
+                call(2, json!({"questions": [{"question": "Q?", "options": []}]})),
+            ],
+            super::super::VERSION,
+            offered,
+        )
+        .await;
+        assert_eq!(answers[0]["result"]["isError"], false, "{}", answers[0]);
+        let text = answers[0]["result"]["content"][0]["text"].as_str().unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(text).unwrap(),
+            json!({"answers": [{"question": "Which plan?", "selected": ["Large"]}]})
+        );
+        assert_eq!(answers[1]["result"]["isError"], true);
+        assert!(
+            answers[1]["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Nothing was asked")
+        );
+        assert_eq!(asked.lock().unwrap().len(), 1, "the bad call never left");
+
+        // A harness with its own question tool was never offered it.
+        let refused = exchange(identity, hub.path().to_owned(), &[call(3, question)]).await;
+        assert_eq!(refused[0]["result"]["isError"], true);
+        assert_eq!(asked.lock().unwrap().len(), 1);
     }
 
     #[test]
@@ -1193,7 +1345,7 @@ mod tests {
             },
             Arc::new(app),
             super::super::VERSION,
-            false,
+            Offered::default(),
             PROGRESS_INTERVAL,
         ));
         let call = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params});

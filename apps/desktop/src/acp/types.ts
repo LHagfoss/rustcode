@@ -54,6 +54,8 @@ export const Method = {
   /** The two payload-capture switches (`engine/src/acp/telemetry.rs`). */
   telemetry: "_rustcode/config/telemetry",
   telemetrySet: "_rustcode/config/telemetry/set",
+  /** The durable copy of other environments' threads (`engine/src/acp/mirror.rs`). */
+  mirror: "_rustcode/mirror",
   pullState: "_rustcode/pulls/state",
   pullMerge: "_rustcode/pulls/merge",
   /** Ends the merge started under a `mergeId` before it merges (its call was dropped). */

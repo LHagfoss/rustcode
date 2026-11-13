@@ -64,6 +64,9 @@ pub struct Launch {
     pub token: String,
     /// The user has Smart UI on, so the server also offers `smart_ui_check`.
     pub smart_ui: bool,
+    /// The harness has no question tool of its own, so the server also
+    /// offers `ask_user_question` (#3393).
+    pub ask_user: bool,
     /// The orchestration version the client advertises: which tools it can answer.
     pub version: u8,
 }
@@ -74,6 +77,10 @@ pub const ORCHESTRATOR_TOKEN_ENV: &str = "RUSTCODE_ORCHESTRATOR_TOKEN";
 /// Set to `1` when the thread's client runs Smart UI blocks: the server then
 /// also lists `smart_ui_check` (`smart_ui::CHECK_TOOL_NAME`).
 pub const SMART_UI_ENV: &str = "RUSTCODE_SMART_UI";
+
+/// Set to `1` for a harness with no question tool of its own: the server then
+/// also lists `ask_user_question` (`ask_user::TOOL_NAME`, #3393).
+pub const ASK_USER_ENV: &str = "RUSTCODE_ASK_USER";
 
 /// The orchestration version the thread's client advertises. The server lists
 /// that version's tools and instructions, so a client never sees a tool it
@@ -106,6 +113,7 @@ impl Launch {
             ],
             token: token.to_owned(),
             smart_ui: false,
+            ask_user: false,
             version: super::VERSION,
         }
     }
@@ -113,6 +121,12 @@ impl Launch {
     /// Also offer `smart_ui_check`, for a thread whose client runs Smart UI blocks.
     pub fn with_smart_ui(mut self, on: bool) -> Self {
         self.smart_ui = on;
+        self
+    }
+
+    /// Also offer `ask_user_question`, for a harness without a question tool.
+    pub fn with_ask_user(mut self, on: bool) -> Self {
+        self.ask_user = on;
         self
     }
 
@@ -130,6 +144,9 @@ impl Launch {
         ];
         if self.smart_ui {
             env.push((SMART_UI_ENV, "1".to_owned()));
+        }
+        if self.ask_user {
+            env.push((ASK_USER_ENV, "1".to_owned()));
         }
         env
     }
@@ -178,6 +195,9 @@ struct Registered {
     /// carries calls for one thread, so its version travels with its token and
     /// governs what the hub may forward, whatever the server in front assumes.
     version: u8,
+    /// How `ask_user_question` reaches the user: the thread's own permission
+    /// channel, set for a harness without a question tool (#3393).
+    questions: Option<super::ask_user::Asker>,
 }
 
 pub struct Hub {
@@ -256,9 +276,31 @@ impl Hub {
                 token: token.clone(),
                 client,
                 version: version.min(super::VERSION),
+                questions: None,
             },
         );
         token
+    }
+
+    /// Let `session_id` ask the user with `ask_user_question` through
+    /// `asker`. Whether the thread was registered.
+    pub fn set_questions(&self, session_id: &str, asker: super::ask_user::Asker) -> bool {
+        let mut sessions = self.lock();
+        let Some(registered) = sessions.get_mut(session_id) else {
+            return false;
+        };
+        registered.questions = Some(asker);
+        true
+    }
+
+    /// The thread's question channel for a call, when its session and token
+    /// match and it has one.
+    fn questions_for(&self, request: &CallRequest) -> Option<super::ask_user::Asker> {
+        let sessions = self.lock();
+        let registered = sessions.get(&request.session_id)?;
+        same_token(&registered.token, &request.token)
+            .then(|| registered.questions.clone())
+            .flatten()
     }
 
     pub fn unregister(&self, session_id: &str) {
@@ -295,31 +337,67 @@ impl Hub {
                 "error: RustCode did not accept this orchestrator's session or token. Nothing was sent.",
             );
         };
+        if request.tool == super::ask_user::TOOL_NAME {
+            return self.ask_user(&request, cancel).await;
+        }
         if !super::is_tool(&request.tool) {
             return CallAnswer::failure(format!(
                 "error: {} is not an orchestration tool",
                 request.tool
             ));
         }
-        let output = match client {
-            Some(client) => {
-                super::execute_versioned(
-                    Some(client),
-                    version,
-                    cancel,
-                    &request.tool,
-                    &request.args,
-                )
-                .await
-            }
-            None => {
-                super::local::answer(&request.session_id, cancel, &request.tool, &request.args)
-                    .await
+        let expanded = match super::with_preset(&request.tool, &request.args) {
+            Ok(expanded) => expanded,
+            Err(refusal) => {
+                return CallAnswer {
+                    success: refusal.success,
+                    content: refusal.content,
+                };
             }
         };
+        let args = expanded.as_ref().unwrap_or(&request.args);
+        let output = match client {
+            Some(client) => {
+                super::execute_versioned(Some(client), version, cancel, &request.tool, args).await
+            }
+            None => super::local::answer(&request.session_id, cancel, &request.tool, args).await,
+        };
+        let output = super::with_preset_listing(&request.tool, output);
         CallAnswer {
             success: output.success,
             content: output.content,
+        }
+    }
+}
+
+impl Hub {
+    /// `ask_user_question`: ask the thread's client and wait for the answer.
+    async fn ask_user(
+        &self,
+        request: &CallRequest,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> CallAnswer {
+        let Some(asker) = self.questions_for(request) else {
+            return CallAnswer::failure(format!(
+                "error: unknown tool '{}': this thread asks with its own question tool",
+                request.tool
+            ));
+        };
+        let prompts = match super::ask_user::validate(&request.args) {
+            Ok(prompts) => prompts,
+            Err(reason) => {
+                return CallAnswer::failure(format!(
+                    "error: invalid {} call: {reason}. Nothing was asked.",
+                    request.tool
+                ));
+            }
+        };
+        match super::ask_user::ask(&asker, &prompts, cancel).await {
+            Ok(content) => CallAnswer {
+                success: true,
+                content,
+            },
+            Err(content) => CallAnswer::failure(content),
         }
     }
 }
@@ -491,6 +569,23 @@ pub async fn launch_for(
     smart_ui: crate::app::SmartUi,
 ) -> Option<Launch> {
     launch_with(session_id, Some(client), version, smart_ui).await
+}
+
+/// Let a registered thread ask with `ask_user_question` through `asker`
+/// (#3393). `false` when no server was started for it.
+pub async fn set_questions(session_id: &str, asker: super::ask_user::Asker) -> bool {
+    #[cfg(unix)]
+    {
+        let Ok(hub) = shared().await else {
+            return false;
+        };
+        hub.set_questions(session_id, asker)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (session_id, asker);
+        false
+    }
 }
 
 /// [`launch_for`] for a thread whose app is not attached: the engine answers

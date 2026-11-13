@@ -107,12 +107,15 @@ export type ServerSettingKey =
   | "orchestration"
   | "delegates-total"
   | "delegates-per-thread"
-  | "read-across-projects";
+  | "read-across-projects"
+  | "delegate-presets"
+  | "limit-fallback"
+  | "limit-fallback-map";
 
 export interface ServerSettingSpec {
   key: ServerSettingKey;
   label: string;
-  type: "boolean" | "number" | "text";
+  type: "boolean" | "number" | "text" | "list";
   default: Json;
 }
 
@@ -156,6 +159,9 @@ export const SERVER_SETTINGS: readonly ServerSettingSpec[] = [
     type: "boolean",
     default: true,
   },
+  { key: "delegate-presets", label: "Delegate presets", type: "list", default: [] },
+  { key: "limit-fallback", label: "Switch a delegate at a limit", type: "boolean", default: false },
+  { key: "limit-fallback-map", label: "Limit fallback models", type: "list", default: [] },
 ];
 
 export const SERVER_SETTING_KEYS: readonly ServerSettingKey[] = SERVER_SETTINGS.map((s) => s.key);

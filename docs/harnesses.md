@@ -699,8 +699,13 @@ client activity for that long has its process stopped, and its next turn starts
 a new one that resumes the harness's own session (see *Process and safety
 rules*). `0` keeps every process running. `max_live_harnesses` caps how many
 harness processes run at once, 12 by default; above it the least recently used
-idle ones are stopped in the same way, `0` turns the cap off. Both are read on
-every reaper pass, a minute apart, so a change applies without a restart.
+idle ones are stopped in the same way, `0` turns the cap off. The cap alone
+stops only a process that has been idle for 30 minutes, unless the machine is
+short of memory (under 10% of it available, as the OS reports it on macOS,
+Linux and Windows): then the least recently used go at once, down to the cap.
+When the OS reports no memory total, the cap applies as it always did. Both
+settings are read on every reaper pass, a minute apart, so a change applies
+without a restart.
 
 Named accounts are chosen by hand. There is no pooling or rotation: a
 thread uses the account it was given until the user picks another, and
@@ -747,10 +752,15 @@ choices in its own storage instead.
   stay in `harness.json`, the client is told nothing, and the next message
   starts a new process that resumes that session exactly as one restarts
   after a dead harness. `max_live_harnesses` (12 by default) also stops the
-  least recently used idle processes when more than that run. It is reported
-  as `harness.reaped` and, on the next start, `harness.resumed` `[op]` events
-  in the thread's `logs/debug.log`; `[harness_defaults].idle_timeout_minutes`
-  and `max_live_harnesses` tune it, each `0` turning its half off.
+  least recently used idle processes when more than that run, but a process
+  idle for under 30 minutes is spared while the machine has memory to spare;
+  see the cap paragraph under `[harness_defaults]`. It is reported as
+  `harness.reaped` (with the reason `idle`, `memory` or `cap`, `idle_ms`,
+  `live`, the `pressure` reading and `work_in_flight`, whether a tool call the
+  last turn left open was cut off) and, on the next start, `harness.resumed`
+  `[op]` events in the thread's `logs/debug.log`;
+  `[harness_defaults].idle_timeout_minutes` and `max_live_harnesses` tune it,
+  each `0` turning its half off.
 - The child's stderr goes to the thread's `logs/debug.log` (lines prefixed
   `[harness <id>]`), never to the transcript.
 - The engine passes no RustCode credentials, provider keys or tokens to a

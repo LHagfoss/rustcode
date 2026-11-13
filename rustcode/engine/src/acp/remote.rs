@@ -1249,6 +1249,7 @@ async fn host_status() -> Value {
                 "lockedForSecs": pairing.locked_for_secs,
                 "challenge": pairing.challenge,
                 "lastChallenge": pairing.last_challenge,
+                "lastChallengeReached": pairing.last_challenge_reached,
             })),
             "sessions": status.sessions.as_ref().map(|sessions| sessions.len()).unwrap_or(0),
             // The connect code for another computer, apart from the

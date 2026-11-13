@@ -84,6 +84,10 @@ instructions for work in this repository.
     rebuild that after engine changes).
   - A UI-only change needs no cargo run, and a Rust-only one no `bun run
     check`, unless the change crosses the ACP boundary between them.
+- The shell rules in this section are enforced by RustCode's command guard
+  from `.rustcode/command-policy.toml` (`docs/command-guard.md`): a refused
+  command names the rule and the allowed alternative. Change a rule there, not
+  by working around it.
 - Keep build output bounded; `target/` once grew to 500 GB. Cargo never
   prunes it, and every feature set, profile and stale dependency version
   leaves artifacts behind.

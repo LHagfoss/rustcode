@@ -320,10 +320,19 @@ pub struct Machine {
     pub host_id: String,
     /// The name the machine reports, or the one given with `--name`.
     pub name: String,
-    /// A name only this app shows, in place of the reported one. Never sent
-    /// to the machine, so renaming one here does not rename it there.
+    /// The name this app shows, in place of the reported one. A rename is
+    /// shared across the fleet: it is stamped with [`Self::name_updated_at`]
+    /// and spread to the machine and to the others by the environment sync
+    /// (`docs/remote.md` › Environment names and the fleet), where the newest
+    /// rename wins. A name without a stamp was set before names were shared
+    /// and stays on this computer until it is renamed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    /// When `display_name` was last chosen, here or on another computer. It
+    /// is what the newest-rename-wins merge compares; `None` for a name
+    /// nobody has set since names became shared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_updated_at: Option<DateTime<Utc>>,
     /// The glyph this app draws for the machine, from its fixed icon set.
     /// `None` means the platform's own glyph.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -385,6 +394,7 @@ impl Machine {
             host_id: host_id.into(),
             name: name.into(),
             display_name: None,
+            name_updated_at: None,
             icon: None,
             icon_tint: None,
             platform: platform.into(),
@@ -704,10 +714,20 @@ impl MachineRegistry {
         })
     }
 
-    /// Set the name this app shows for a machine. A blank name clears it, so
-    /// the reported name is shown again. It never changes what the machine
-    /// calls itself, and pairing again keeps it.
+    /// Rename a machine, now. A blank name clears it, so the reported name is
+    /// shown again. The rename is stamped, so the environment sync carries it
+    /// to the machine and the rest of the fleet; pairing again keeps it.
     pub fn set_display_name(&mut self, host_id: &str, display_name: Option<&str>) -> Result<()> {
+        self.set_display_name_at(host_id, display_name, Utc::now())
+    }
+
+    /// [`Self::set_display_name`] at a given time.
+    pub fn set_display_name_at(
+        &mut self,
+        host_id: &str,
+        display_name: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> Result<()> {
         let display_name = display_name
             .map(str::trim)
             .filter(|name| !name.is_empty())
@@ -720,7 +740,39 @@ impl MachineRegistry {
                 bail!("no saved machine has host id {host_id}");
             };
             machine.display_name = display_name;
+            machine.name_updated_at = Some(now);
             Ok(())
+        })
+    }
+
+    /// Take the name the fleet agreed on for a machine, when it is newer than
+    /// the one saved. A name equal to the one the machine reports clears the
+    /// local name, so the row follows the machine again. Returns whether the
+    /// saved name changed. A machine this computer has not saved is ignored.
+    pub fn apply_fleet_name(
+        &mut self,
+        host_id: &str,
+        name: &str,
+        updated_at: DateTime<Utc>,
+    ) -> Result<bool> {
+        let name = name.trim().to_owned();
+        if name.is_empty() {
+            return Ok(false);
+        }
+        self.mutate(|machines| {
+            let Some(machine) = machines
+                .iter_mut()
+                .find(|machine| machine.host_id == host_id)
+            else {
+                return Ok(false);
+            };
+            let current = (machine.name_updated_at, machine.display().to_owned());
+            if (Some(updated_at), name.clone()) <= current {
+                return Ok(false);
+            }
+            machine.display_name = (name != machine.name).then_some(name);
+            machine.name_updated_at = Some(updated_at);
+            Ok(true)
         })
     }
 
@@ -1581,5 +1633,80 @@ mod tests {
         assert!(!same_address("studio.local", "studio.local:9000"));
         assert!(!same_address("studio.local", "laptop.local"));
         assert!(!same_address("10.0.0.2", "10.0.0.3"));
+    }
+
+    fn minutes(offset: i64) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-11-13T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc)
+            + chrono::Duration::minutes(offset)
+    }
+
+    #[test]
+    fn a_rename_is_stamped_and_the_fleets_newer_name_replaces_it() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let mut store = load(dir.path());
+        store
+            .insert(machine("gw-a", "studio.local", "10.0.0.2:17879"))
+            .unwrap();
+        store
+            .set_display_name_at("gw-a", Some("Desk"), minutes(5))
+            .unwrap();
+        let saved = load(dir.path());
+        assert_eq!(saved.machines()[0].name_updated_at, Some(minutes(5)));
+
+        // An older name from the fleet changes nothing; the same one neither.
+        let mut store = load(dir.path());
+        assert!(!store.apply_fleet_name("gw-a", "Old", minutes(1)).unwrap());
+        assert!(!store.apply_fleet_name("gw-a", "Desk", minutes(5)).unwrap());
+        assert_eq!(store.machines()[0].display(), "Desk");
+
+        // A newer one does, and keeps its stamp so it is not sent back as news.
+        assert!(
+            store
+                .apply_fleet_name("gw-a", "Mac Studio", minutes(9))
+                .unwrap()
+        );
+        let saved = load(dir.path());
+        assert_eq!(saved.machines()[0].display(), "Mac Studio");
+        assert_eq!(saved.machines()[0].name_updated_at, Some(minutes(9)));
+
+        // The name the machine reports clears the local one, so it is followed again.
+        let mut store = load(dir.path());
+        assert!(
+            store
+                .apply_fleet_name("gw-a", "studio.local", minutes(12))
+                .unwrap()
+        );
+        let saved = load(dir.path());
+        assert_eq!(saved.machines()[0].display_name, None);
+        assert_eq!(saved.machines()[0].name_updated_at, Some(minutes(12)));
+        // A machine this computer never paired with is not invented.
+        let mut store = load(dir.path());
+        assert!(
+            !store
+                .apply_fleet_name("gw-unknown", "X", minutes(20))
+                .unwrap()
+        );
+        assert_eq!(store.machines().len(), 1);
+    }
+
+    #[test]
+    fn a_name_saved_before_names_were_shared_has_no_stamp_and_any_rename_replaces_it() {
+        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        let path = crate::config::machines_file(dir.path());
+        std::fs::write(
+            &path,
+            br#"{"version": 1, "machines": [{"host_id": "gw-old", "name": "Studio", "display_name": "Desk", "platform": "macos", "routes": [{"kind": "lan", "address": "10.0.0.2:17879"}], "device_id": "device-1", "added_at": "2026-01-02T03:04:05Z"}]}"#,
+        )
+        .unwrap();
+        let mut store = load(dir.path());
+        assert_eq!(store.machines()[0].name_updated_at, None);
+        assert!(
+            store
+                .apply_fleet_name("gw-old", "Mac Studio", minutes(1))
+                .unwrap()
+        );
+        assert_eq!(store.machines()[0].display(), "Mac Studio");
     }
 }

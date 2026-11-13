@@ -59,6 +59,14 @@ import { LINK_PREVIEWS_DEFAULT, linkPreviewsEnabled, setLinkPreviews } from "../
 import { openExternal, pickFolder, revealPath } from "../lib/native";
 import { NEXT_PROMPT_DEFAULT, nextPromptEnabled, setNextPrompt } from "../lib/nextPrompt";
 import { hasShell } from "../lib/shell";
+import {
+  commandIn,
+  loadSystemSetup,
+  runSystemSetup,
+  type SetupStep,
+  setupChip,
+  systemSetupAvailable,
+} from "../lib/systemSetup";
 import { BUILTIN_THEMES, cssName, type Theme, TOKENS } from "../lib/themes";
 import { canUpdate } from "../lib/updater";
 import { AUTO_COMPACT_DEFAULT_THRESHOLD, AUTO_COMPACT_MODES } from "../state/autoCompact";
@@ -108,12 +116,12 @@ import {
   useApp,
 } from "../state/store";
 import {
-  applyUpdate,
   checkIfStale,
   checkNow,
   installProgress,
   loadChannels,
   offersUpdate,
+  requestUpdate,
   setAutoInstall,
   setUpdateChannel,
   showWhatsNew,
@@ -121,9 +129,11 @@ import {
 } from "../state/updates";
 import { AddHarnessForm } from "./AddHarness";
 import { CapabilitiesPage } from "./Capabilities";
+import { DelegatePresetsGroup } from "./DelegatePresets";
 import { DiagnosticsPage } from "./DiagnosticsPage";
 import { DefaultsForm, HarnessList, useAutoDetect } from "./Harnesses";
 import { HeaderButtonsSetting } from "./HeaderButtonsSetting";
+import { LimitFallbackGroup } from "./LimitFallback";
 import { MachineSettingsPage } from "./MachineSettingsPage";
 import { MachinesPage } from "./MachinesPage";
 import { NewThreadBanner } from "./NewThreadBanner";
@@ -690,6 +700,8 @@ function AgentsPage() {
         )}
       </Group>
       <OrchestrationGroup />
+      <DelegatePresetsGroup />
+      <LimitFallbackGroup />
     </>
   );
 }
@@ -1031,7 +1043,7 @@ function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
     }
   };
   return (
-    <div className="rc-expand flex flex-col gap-2 border-border border-t px-4 py-3">
+    <div className="rc-expand rule-t flex flex-col gap-2 px-4 py-3">
       <div className="flex items-center gap-2">
         <input
           autoFocus
@@ -1336,6 +1348,7 @@ function AppVersion() {
   const installing = useUpdates((s) => s.installing);
   const progress = useUpdates((s) => s.progress);
   const background = useUpdates((s) => s.error);
+  const waiting = useUpdates((s) => s.waiting);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const shellVersion = useUpdates((s) => s.version);
@@ -1357,7 +1370,7 @@ function AppVersion() {
     }
     setError(null);
     // One install path: the sidebar row shows the same progress when it is visible.
-    const failed = await applyUpdate();
+    const failed = await requestUpdate();
     if (failed) setError(failed);
   };
   const { fraction, step } = installProgress(progress);
@@ -1366,13 +1379,15 @@ function AppVersion() {
     ? failure
     : installing
       ? step
-      : info && !info.available
-        ? "RustCode is up to date."
-        : info?.development
-          ? "A development build; it does not update itself."
-          : offered
-            ? (info?.installNote ?? undefined)
-            : undefined;
+      : waiting
+        ? "Waiting for threads to finish, then reopens."
+        : info && !info.available
+          ? "RustCode is up to date."
+          : info?.development
+            ? "A development build; it does not update itself."
+            : offered
+              ? (info?.installNote ?? undefined)
+              : undefined;
   return (
     <Row
       title={`RustCode ${version}`}
@@ -1535,10 +1550,88 @@ function AdvancedPage() {
 
 function AboutPage() {
   return (
-    <Group title="Version" footer="RustCode is open source; its licences ship in each release.">
-      <AppVersion />
-      <UpdateChannelRow />
-      <AutoInstallRow />
+    <>
+      <Group title="Version" footer="RustCode is open source; its licences ship in each release.">
+        <AppVersion />
+        <UpdateChannelRow />
+        <AutoInstallRow />
+      </Group>
+      <SystemSetupGroup />
+    </>
+  );
+}
+
+/**
+ * Settings › About › System setup: the per-OS steps (PATH, quarantine, launcher
+ * entry, the background server), each with what it found. The automatic ones
+ * ran after the install or the last update; Run again checks a step and fixes
+ * only what is missing. A step that needs an administrator or a shell-profile
+ * edit shows its command to copy instead of running it.
+ */
+function SystemSetupGroup() {
+  const [steps, setSteps] = useState<SetupStep[] | null>(null);
+  const [running, setRunning] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!systemSetupAvailable()) return;
+    loadSystemSetup().then(setSteps, (e) => setError(errorText(e)));
+  }, []);
+  if (!systemSetupAvailable()) return null;
+  const run = async (step?: string) => {
+    setRunning(step ?? "all");
+    setError(null);
+    try {
+      setSteps(await runSystemSetup(step));
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setRunning(null);
+    }
+  };
+  return (
+    <Group
+      title="System setup"
+      footer={
+        error ?? "Runs after an install or an update. RustCode never asks for an administrator silently."
+      }
+      action={
+        <Action disabled={running !== null} onClick={() => void run()}>
+          {running === "all" ? <Spinner size={12} /> : null}
+          Run again
+        </Action>
+      }
+    >
+      {steps === null ? (
+        <Row title="Checking…" subtitle={error ?? undefined} />
+      ) : (
+        steps.map((step) => {
+          const chip = setupChip(step.status);
+          const command = step.status === "needs-you" ? commandIn(step.message) : null;
+          return (
+            <Row
+              key={step.id}
+              title={step.title}
+              subtitle={step.about}
+              status={step.message}
+              badge={<Chip tone={chip.tone}>{chip.label}</Chip>}
+            >
+              {command && (
+                <Action
+                  onClick={() =>
+                    void navigator.clipboard.writeText(command).then(() => toast("Command copied"))
+                  }
+                >
+                  Copy command
+                </Action>
+              )}
+              <Action disabled={running !== null} onClick={() => void run(step.id)}>
+                {running === step.id ? <Spinner size={12} /> : null}
+                {step.auto ? "Run again" : step.status === "done" ? "Check again" : "Set up"}
+              </Action>
+            </Row>
+          );
+        })
+      )}
     </Group>
   );
 }
@@ -1835,7 +1928,7 @@ export function Settings() {
 function PanelHeader({ label }: { label: string }) {
   const resets = useRowResets();
   return (
-    <header className="flex h-12 shrink-0 items-center gap-3 border-border border-b ps-4 pe-2">
+    <header className="rule-b flex h-12 shrink-0 items-center gap-3 ps-4 pe-2">
       <nav aria-label="Settings breadcrumb" className="min-w-0">
         <ol className="m-0 flex min-w-0 list-none items-center gap-2 p-0 text-body">
           <li className="shrink-0 font-medium text-fg-muted">Settings</li>

@@ -12,6 +12,7 @@ import {
   setSystemReduceTransparency,
   setUserReduceTransparency,
 } from "./lib/transparency";
+import { startFleetSync } from "./state/fleet";
 import { startMachines } from "./state/machines";
 import * as store from "./state/store";
 import { Recoverable } from "./ui/Recover";
@@ -71,6 +72,8 @@ if (!catalog)
     await store.connect(transport);
     // The other computers this app is paired with (Settings › Machines): their own supervisors.
     await startMachines();
+    // Names, versions and last-seen times of every computer the pairings reach (state/fleet.ts).
+    startFleetSync();
   });
 
 // `?queuePreview` in a dev browser with the mock: a thread's queue, for screenshots (state/queuePreview.ts).
