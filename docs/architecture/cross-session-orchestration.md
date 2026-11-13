@@ -53,6 +53,29 @@ threads carries out the calls, not an engine-side `SessionOrchestrator`.
   Per-link events and the badge are in the desktop app; the TUI and iOS keep the
   M1 surface.
 
+## Delegate account approval (#3619)
+
+Starting a thread on a harness with named accounts (including standalone
+starts and fan-out) requires user approval for its account, even at Full access. The existing approval card names
+the resolved login. “Allow for This Thread” persists only that caller's machine,
+harness and account in the link book; “Allow Once” authorizes only this call.
+Old broad start grants do not authorize accounts. A new login, including the
+default login, needs another approval; usage pressure and rate limits cannot
+supply it. With no app attached, a start without a matching saved account grant
+is refused with instructions to open the app and approve the login.
+
+Investigation: the initial user message in recorded thread
+`01a1d4d4dea3-700e-a1a3-43fa-43fabefec95a` at 13:14 Oslo on 2026-11-13
+requested Paral 2 for the Fable audit and subsequent Opus implementation. At
+13:28:41 the assistant announced: “New Opus threads go on Personal 1 (21%).”
+It cited Paral 2's 54% five-hour usage. There was no intervening user approval
+for that switch. This was both an instruction-following failure (the named
+account was ignored) and a missing product guard (Full access and broad start
+grants allowed spending on any login). The visible initial message does not
+establish a blanket prohibition for all unrelated work. RustCode does not parse
+natural-language account names into security policy: the account approval card
+is the explicit, durable authorization boundary.
+
 ## Problem
 
 Today an agent can coordinate work only inside its own session: it spawns

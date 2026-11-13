@@ -4167,6 +4167,30 @@ describe("what a delegated thread may do without asking", () => {
     expect(useApp.getState().threads[String(answer.session_id)]?.harness?.account).toBe("work");
   });
 
+  test("Full access and a saved account approval cannot authorize a fallback", async () => {
+    const parent = await ready();
+    setPermissionMode(parent, "full");
+    await addHarnessAccount("codex", "work", "Paral 2");
+    await addHarnessAccount("codex", "home", "Personal 1");
+    const startOn = (account: string) =>
+      answerOrchestration({
+        sessionId: parent,
+        tool: "start_session",
+        args: { prompt: "do it", harness: "codex", account },
+      });
+    const first = startOn("work");
+    await until(() => useApp.getState().grant !== null);
+    resolveGrant("always");
+    expect((await first).account).toBe("work");
+    const count = useApp.getState().links.links.length;
+    const fallback = startOn("home");
+    await until(() => useApp.getState().grant !== null);
+    expect(useApp.getState().grant?.harnesses).toEqual(["Codex · Personal 1 (home)"]);
+    resolveGrant("deny");
+    expect((await fallback).error).toMatchObject({ code: "denied" });
+    expect(useApp.getState().links.links).toHaveLength(count);
+  });
+
   test("fan_out runs one task on each login it names", async () => {
     const parent = await ready();
     await addHarnessAccount("codex", "work", "Work");

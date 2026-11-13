@@ -10,6 +10,7 @@ import {
 } from "../acp/v2";
 import {
   ALL_ANSWER_CHARS,
+  accountsNeedApproval,
   activeDelegates,
   activeDescendants,
   activityOf,
@@ -29,6 +30,7 @@ import {
   DEFAULT_DELEGATES_TOTAL,
   DEFAULT_MERGE_MS,
   DELEGATE_REPORT,
+  delegateAccountKey,
   delegated,
   delivered,
   depthOf,
@@ -2376,5 +2378,24 @@ describe("a thread that carries on after a usage limit", () => {
     const after = reopenLinks(base, "child", ["parent/1", "parent/2", "parent/3"], 9_000);
     expect(after.links.map((l) => l.state)).toEqual(["cancelled", "failed", "failed", "failed"]);
     expect(after).toBe(base);
+  });
+});
+
+describe("delegate account authority", () => {
+  test("a persistent start grant and Full access cannot authorize another login", () => {
+    const restricted = delegateAccountKey("local", "claude-code", "paral-2");
+    const fallback = delegateAccountKey("local", "claude-code", "personal-1");
+    const book = emptyBook();
+    book.grants.parent = ["start", restricted];
+    expect(accountsNeedApproval(book, "parent", [restricted])).toBe(false);
+    expect(accountsNeedApproval(book, "parent", [fallback])).toBe(true);
+    expect(accountsNeedApproval(book, "parent", [restricted, fallback])).toBe(true);
+    expect(accountsNeedApproval(book, "parent", [delegateAccountKey("local", "claude-code", null)])).toBe(
+      true,
+    );
+    expect(accountsNeedApproval(book, "child", [restricted])).toBe(true);
+    expect(
+      accountsNeedApproval(book, "parent", [delegateAccountKey("remote", "claude-code", "paral-2")]),
+    ).toBe(true);
   });
 });

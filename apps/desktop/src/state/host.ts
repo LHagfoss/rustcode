@@ -78,6 +78,7 @@ import {
 } from "./machines";
 import {
   type ApprovalChoice,
+  accountsNeedApproval,
   activeDescendants,
   activityOf,
   advanceLink,
@@ -92,6 +93,7 @@ import {
   contextNote,
   cutForAll,
   type DelegateLimits,
+  delegateAccountKey,
   delegated,
   delivered,
   emptyBook,
@@ -639,13 +641,15 @@ async function permitted(
   key: string,
   question: GrantAsk,
   call?: Droppable,
+  accountKeys: string[] = [],
 ): Promise<Failure | null> {
   if (call?.dropped) return droppedFailure();
-  if (hasGrant(book(), caller.id, key)) return null;
+  const needsAccountApproval = accountsNeedApproval(book(), caller.id, accountKeys);
+  if (!needsAccountApproval && hasGrant(book(), caller.id, key)) return null;
   // The thread's access level answers for the user where it already allows the work: the same
   // policy that answers the harness's own approvals, so a Full-access thread is not re-asked here.
   const mode = permissionModeOf(useApp.getState(), caller.id);
-  if (delegationAllowed(mode, question.kind)) {
+  if (!needsAccountApproval && delegationAllowed(mode, question.kind)) {
     // Not silent: the call's own row says the thread did it on its own, and why. A notice would
     // both name the caller (the reader is already in that thread) and split the run of calls.
     const why = modeLabel(mode);
@@ -674,7 +678,9 @@ async function permitted(
   // allows anything, nor is an "always" kept for a call nobody is waiting on.
   if (call?.dropped) return droppedFailure();
   if (choice === "deny") return failure("denied", `the user did not allow this thread to ${verb(question)}`);
-  if (choice === "always") setBook((b) => grant(b, caller.id, key));
+  if (choice === "always") {
+    setBook((b) => [key, ...accountKeys].reduce((next, allowed) => grant(next, caller.id, allowed), b));
+  }
   return null;
 }
 
@@ -1423,19 +1429,25 @@ async function startOnMachine(machine: MachineRef, caller: RuleThread, call: Sta
   const title = call.title ?? titleFrom(call.prompt, 60);
   const access = narrowed(standalone ? ownMode() : childMode(caller), call.access);
   const other = !sameProject(project, projectOf(caller));
-  const no = await permitted(caller, `start@${machine.id}${other ? `:${project}` : ""}`, {
-    kind: "start",
-    caller: caller.id,
-    callerTitle: caller.title,
-    target: title,
-    detail: call.prompt,
-    project: other ? project : undefined,
-    harnesses: [choiceLabel(harness.name, call.account ?? undefined, call.model, call.effort)],
-    access,
-    worktree: call.worktree ?? true,
-    machine: machine.name,
-    standalone: standalone || undefined,
-  });
+  const no = await permitted(
+    caller,
+    `start@${machine.id}${other ? `:${project}` : ""}`,
+    {
+      kind: "start",
+      caller: caller.id,
+      callerTitle: caller.title,
+      target: title,
+      detail: call.prompt,
+      project: other ? project : undefined,
+      harnesses: [choiceLabel(harness.name, call.account ?? undefined, call.model, call.effort)],
+      access,
+      worktree: call.worktree ?? true,
+      machine: machine.name,
+      standalone: standalone || undefined,
+    },
+    undefined,
+    harness.accounts?.length ? [delegateAccountKey(machine.id, harness.id, call.account ?? null)] : [],
+  );
   if (no) return failureJson(no);
   if (!standalone) {
     const again = checkStart(caller, book(), 1, delegateLimits());
@@ -1533,19 +1545,27 @@ async function fanOutOnMachine(
   const title = call.title ?? titleFrom(call.prompt, 60);
   const access = narrowed(standalone ? ownMode() : childMode(caller), call.access);
   const other = !sameProject(project, projectOf(caller));
-  const no = await permitted(caller, `start@${machine.id}${other ? `:${project}` : ""}`, {
-    kind: "fan_out",
-    caller: caller.id,
-    callerTitle: caller.title,
-    target: title,
-    detail: call.prompt,
-    project: other ? project : undefined,
-    harnesses: chosen.map((h) => choiceLabel(h.harness.name, h.account ?? undefined, h.model, h.effort)),
-    access,
-    worktree: true,
-    machine: machine.name,
-    standalone: standalone || undefined,
-  });
+  const no = await permitted(
+    caller,
+    `start@${machine.id}${other ? `:${project}` : ""}`,
+    {
+      kind: "fan_out",
+      caller: caller.id,
+      callerTitle: caller.title,
+      target: title,
+      detail: call.prompt,
+      project: other ? project : undefined,
+      harnesses: chosen.map((h) => choiceLabel(h.harness.name, h.account ?? undefined, h.model, h.effort)),
+      access,
+      worktree: true,
+      machine: machine.name,
+      standalone: standalone || undefined,
+    },
+    undefined,
+    chosen
+      .filter((h) => h.harness.accounts?.length)
+      .map((h) => delegateAccountKey(machine.id, h.harness.id, h.account ?? null)),
+  );
   if (no) return failureJson(no);
   if (!standalone) {
     const again = checkStart(caller, book(), chosen.length, delegateLimits());
@@ -4696,18 +4716,24 @@ async function startNow(caller: RuleThread, call: StartCall): Promise<JsonObject
   // Fixed before the user is asked, so the card says what the thread runs at and the thread gets
   // exactly that, however long the card waits.
   const access = narrowed(standalone ? ownMode() : childMode(caller), call.access);
-  const no = await permitted(caller, other ? `start:${project}` : "start", {
-    kind: "start",
-    caller: caller.id,
-    callerTitle: caller.title,
-    target: title,
-    detail: call.prompt,
-    project: other ? project : undefined,
-    harnesses: [choiceLabel(harness.name, accountLabelOf(harness, account), model, call.effort)],
-    access,
-    worktree: call.worktree ?? true,
-    standalone: standalone || undefined,
-  });
+  const no = await permitted(
+    caller,
+    other ? `start:${project}` : "start",
+    {
+      kind: "start",
+      caller: caller.id,
+      callerTitle: caller.title,
+      target: title,
+      detail: call.prompt,
+      project: other ? project : undefined,
+      harnesses: [choiceLabel(harness.name, accountLabelOf(harness, account), model, call.effort)],
+      access,
+      worktree: call.worktree ?? true,
+      standalone: standalone || undefined,
+    },
+    undefined,
+    harness.accounts?.length ? [delegateAccountKey("local", harness.id, account)] : [],
+  );
   if (no) return failureJson(no);
   if (!standalone) {
     const again = checkStart(caller, book(), 1, delegateLimits());
@@ -4805,20 +4831,28 @@ async function fanOutNow(caller: RuleThread, call: FanOutCall): Promise<JsonObje
   const title = call.title ?? titleFrom(call.prompt, 60);
   const access = narrowed(standalone ? ownMode() : childMode(caller), call.access);
   const other = !sameProject(project, projectOf(caller));
-  const no = await permitted(caller, other ? `start:${project}` : "start", {
-    kind: "fan_out",
-    caller: caller.id,
-    callerTitle: caller.title,
-    target: title,
-    detail: call.prompt,
-    project: other ? project : undefined,
-    harnesses: chosen.map((h) =>
-      choiceLabel(h.harness.name, accountLabelOf(h.harness, h.account), h.model, h.effort),
-    ),
-    access,
-    worktree: true,
-    standalone: standalone || undefined,
-  });
+  const no = await permitted(
+    caller,
+    other ? `start:${project}` : "start",
+    {
+      kind: "fan_out",
+      caller: caller.id,
+      callerTitle: caller.title,
+      target: title,
+      detail: call.prompt,
+      project: other ? project : undefined,
+      harnesses: chosen.map((h) =>
+        choiceLabel(h.harness.name, accountLabelOf(h.harness, h.account), h.model, h.effort),
+      ),
+      access,
+      worktree: true,
+      standalone: standalone || undefined,
+    },
+    undefined,
+    chosen
+      .filter((h) => h.harness.accounts?.length)
+      .map((h) => delegateAccountKey("local", h.harness.id, h.account)),
+  );
   if (no) return failureJson(no);
   if (!standalone) {
     const again = checkStart(caller, book(), chosen.length, delegateLimits());
