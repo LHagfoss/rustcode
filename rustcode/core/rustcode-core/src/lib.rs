@@ -370,6 +370,9 @@ pub fn is_tool_attachment(content: &str) -> bool {
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+    /// Structured origin supplied with the prompt, if available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<serde_json::Value>,
     /// Correlates assistant/tool phases and retains the footer on history reload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn: Option<TurnTiming>,
@@ -428,6 +431,7 @@ impl ChatMessage {
         Self {
             role: role.into(),
             content: content.into(),
+            origin: None,
             turn: None,
             token_usage: None,
             timestamp: current_timestamp(),

@@ -246,6 +246,7 @@ async fn run_remote_turns(session: Arc<RemoteSession>) {
             Arc::clone(&session.terminal_backlog),
             Arc::clone(&session.terminal_overflow),
             prompt,
+            None,
             session.clients.clone(),
             Arc::clone(&session.client),
             session.auto_approve,
@@ -796,9 +797,14 @@ impl RemoteManager {
 
     /// Note a prompt the app sent to a shared thread, so a device reading the
     /// transcript sees it (a harness does not echo the prompt back).
-    pub(crate) fn note_prompt(&self, session_id: &str, text: &str) {
+    pub(crate) fn note_prompt(
+        &self,
+        session_id: &str,
+        text: &str,
+        origin: Option<serde_json::Value>,
+    ) {
         if let Some(mirror) = self.mirror(session_id) {
-            mirror.note_prompt(text);
+            mirror.note_prompt_with_origin(text, origin);
         }
     }
 

@@ -50,7 +50,8 @@ export async function openPty(
     }
   }
   return {
-    write: (data) => void shellCall("pty_write", { id, data }).catch(() => undefined),
+    write: (data) =>
+      void shellCall("pty_write", { id, data }).catch((error) => onData(`\r\n[${String(error)}]\r\n`)),
     resize: (c, r) => void shellCall("pty_resize", { id, cols: c, rows: r }).catch(() => undefined),
     close: () => {
       stop();

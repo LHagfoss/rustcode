@@ -8,6 +8,7 @@
 import { create } from "zustand";
 import { openExternal } from "../lib/native";
 import { shellCall } from "../lib/shell";
+import { readStorage, writeStorage } from "../lib/storage";
 import {
   appVersion,
   canUpdate,
@@ -169,20 +170,12 @@ export function shouldShowWhatsNew(
 }
 
 function read(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
+  return readStorage(key);
 }
 
 function write(key: string, value: string | null) {
-  try {
-    if (value === null) localStorage.removeItem(key);
-    else localStorage.setItem(key, value);
-  } catch {
-    // Not kept in a private window.
-  }
+  // Not kept in a private window.
+  writeStorage(key, value);
 }
 
 /** On launch, from the app's own version (no network): What's New after an update. */

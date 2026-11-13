@@ -42,6 +42,7 @@ import {
 import { optionScope } from "../lib/approval";
 import { currentPlatform } from "../lib/platform";
 import { hasShell, shellCall } from "../lib/shell";
+import { readStorage, writeStorage } from "../lib/storage";
 import { childTitle, titleFrom } from "../lib/title";
 import {
   type AttachedFile,
@@ -132,6 +133,7 @@ import {
   pageOf,
   parseBook,
   parseCall,
+  parseDelivered,
   projectOf,
   prune,
   QUEUE_PREVIEW_CHARS,
@@ -232,6 +234,7 @@ import {
   steer,
   steeringOf,
   switchThreadHarness,
+  toast,
   togglePin,
   turnState,
   updateQueued,
@@ -263,7 +266,7 @@ const SAVE_DEBOUNCE_MS = 250;
  */
 export function loadBook(): LinkBook {
   try {
-    const raw = localStorage.getItem(BOOK_KEY);
+    const raw = readStorage(BOOK_KEY);
     if (!raw) return emptyBook();
     const parsed = JSON.parse(raw) as Partial<LinkBook>;
     return interruptActive({ ...emptyBook(), ...parsed });
@@ -282,11 +285,8 @@ const text = (book: LinkBook) => JSON.stringify(book);
 
 /** Stores a book, without a save: the first paint and the fallback for an old engine. */
 function keepLocally(book: LinkBook) {
-  try {
-    localStorage.setItem(BOOK_KEY, text(book));
-  } catch {
-    // Not persisted in a private window.
-  }
+  // Not persisted in a private window.
+  writeStorage(BOOK_KEY, text(book));
 }
 
 /** Writes the book to the store once the changes settle; only when it changed. */
@@ -1816,7 +1816,7 @@ async function perform(
       if (isFailure(machine)) return failureJson(machine);
       const target = scopedTarget(machine, call.target);
       if (isFailure(target)) return failureJson(target);
-      const answer = await message(caller, target, call.text, call.attachments, call.steer);
+      const answer = await message(caller, target, call.text, call.attachments, call.steer, call.wait);
       return answer.error ? answer : { ...answer, ...machineFields(machineOfThread(target)) };
     }
     case "manage_queue": {
@@ -2773,6 +2773,11 @@ async function listPullRequests(
     return failureJson(failure("target_unavailable", `pull requests could not be read: ${errorText(error)}`));
   }
   const error = parsePullError(result);
+  const unsupported = noProviderPullList(
+    error,
+    machine.host ? { ...machineFields(machine), project: cwd } : {},
+  );
+  if (unsupported) return unsupported;
   if (error) return failureJson(pullFailure(error));
   const pulls = parsePullList(result).pulls;
   // The answer also seeds the panel's header: a pull opened after the agent's
@@ -2788,6 +2793,13 @@ async function listPullRequests(
       ...(p.url ? { url: p.url } : {}),
     })),
   };
+}
+/** An unsupported remote is an empty list with an explanation, not a failed read. */
+export function noProviderPullList(
+  error: { code: string } | null | undefined,
+  machine: JsonObject,
+): JsonObject | null {
+  return error?.code === "no_provider" ? { ...machine, pull_requests: [], note: NO_PROVIDER_NOTE } : null;
 }
 /** What a read says when the project's remote is not on GitHub: no pull requests exist to read. */
 const NO_PROVIDER_NOTE = "no pull request provider for this remote";
@@ -3969,8 +3981,9 @@ function message(
   text: string,
   attachments: readonly string[] = [],
   steerNow = false,
+  wait = false,
 ): Promise<JsonObject> {
-  return withLinkGate(() => messageNow(caller, targetId, text, attachments, steerNow));
+  return withLinkGate(() => messageNow(caller, targetId, text, attachments, steerNow, wait));
 }
 
 /** Do not message a settled or archived thread. */
@@ -3991,13 +4004,15 @@ async function messageNow(
   text: string,
   attachments: readonly string[] = [],
   steerNow = false,
+  /** `wait: false` is one-way: no link, so the caller never shows Waiting and nothing comes back (issue 3544). */
+  wait = false,
 ): Promise<JsonObject> {
   const state = useApp.getState();
   const target = ruleThread(state, targetId);
   // A thread on another machine is not this app's project topic to check: the
   // user named that machine, and the card below is the gate.
   const remote = isRemoteThread(targetId);
-  const refused = checkMessage(caller, target, book(), false, false, delegateLimits(), remote);
+  const refused = checkMessage(caller, target, book(), false, false, delegateLimits(), remote, !wait);
   if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
   const unavailable = messageTargetRefusal(state, targetId);
   if (unavailable) return failureJson(unavailable);
@@ -4024,7 +4039,7 @@ async function messageNow(
   // The user took their time: look again.
   const afterPermission = useApp.getState();
   const current = ruleThread(afterPermission, targetId);
-  const again = checkMessage(caller, current, book(), false, false, delegateLimits(), remote);
+  const again = checkMessage(caller, current, book(), false, false, delegateLimits(), remote, !wait);
   if (again) return failureJson(again);
   const stopped = messageTargetRefusal(afterPermission, targetId);
   if (stopped) return failureJson(stopped);
@@ -4042,6 +4057,7 @@ async function messageNow(
     false,
     delegateLimits(),
     remote,
+    !wait,
   );
   if (noLongerReachable) return failureJson(noLongerReachable);
   const noLongerAvailable = messageTargetRefusal(afterOpen, targetId);
@@ -4055,32 +4071,40 @@ async function messageNow(
   const harnessName = session?.harness
     ? afterOpen.harnesses?.harnesses.find((h) => h.id === session.harness)?.name
     : undefined;
-  const id = addLink({
-    orchestrator: caller.id,
-    target: target.id,
-    orchestratorTitle: caller.title,
-    targetTitle: target.title,
-    message: text,
-    state: busy ? "queued" : "working",
-    harness: session?.harness,
-    harnessName,
-    model: session?.model,
-  });
+  const id = wait
+    ? addLink({
+        orchestrator: caller.id,
+        target: target.id,
+        orchestratorTitle: caller.title,
+        targetTitle: target.title,
+        message: text,
+        state: busy ? "queued" : "working",
+        harness: session?.harness,
+        harnessName,
+        model: session?.model,
+      })
+    : undefined;
+  // The sender's id (and the link it waits on) rides under the heading, so the target can tell two
+  // senders with the same title apart and the app links the sender's name (issue 3539).
+  const sent = delivered(text, caller.title, { session: caller.id, link: id });
   let delivery: "steered" | "queued" | "started";
   if (
     steerNow &&
     busy &&
     sendDecisionFor(thread, extras).action === "steer" &&
-    (await steer(target.id, delivered(text, caller.title), extras))
+    (await steer(target.id, sent, extras, caller.id, id))
   ) {
     delivery = "steered";
-    linkSteered(target.id, id, delivered(text, caller.title));
+    if (id) linkSteered(target.id, id, sent);
   } else {
-    deliver(target.id, delivered(text, caller.title), id, caller.id, extras);
-    delivery = useApp.getState().threads[target.id]?.queue.some((q) => q.link === id) ? "queued" : "started";
+    const before = new Set(useApp.getState().threads[target.id]?.queue.map((q) => q.id));
+    deliver(target.id, sent, id, caller.id, extras);
+    delivery = useApp.getState().threads[target.id]?.queue.some((q) => !before.has(q.id))
+      ? "queued"
+      : "started";
   }
   return {
-    link_id: id,
+    ...(id ? { link_id: id } : { return_to: "none" }),
     receipt: delivery,
     delivered: delivery,
     session_id: target.id,
@@ -4111,7 +4135,13 @@ function addLink(link: Omit<Link, "id" | "createdAt" | "events">): string {
 }
 
 /** After the turn the target runs, never into it: the same queue a typed message uses. */
-export function deliver(target: string, text: string, link: string, from: string, extras?: ComposeExtras) {
+export function deliver(
+  target: string,
+  text: string,
+  link: string | undefined,
+  from: string,
+  extras?: ComposeExtras,
+) {
   const thread = useApp.getState().threads[target];
   if (thread?.running) {
     // `from` is who queued it, so that thread can correct it while it waits (`manageQueue`).
@@ -4119,11 +4149,18 @@ export function deliver(target: string, text: string, link: string, from: string
       ...t,
       queue: [
         ...t.queue,
-        { id: localId("queued"), text, link, from, queuedAt: Date.now(), ...(extras ? { extras } : {}) },
+        {
+          id: localId("queued"),
+          text,
+          ...(link ? { link } : {}),
+          from,
+          queuedAt: Date.now(),
+          ...(extras ? { extras } : {}),
+        },
       ],
     }));
   } else {
-    void runPrompt(target, text, extras, { link });
+    void runPrompt(target, text, extras, { link, sender: from });
   }
 }
 
@@ -4146,8 +4183,8 @@ function goneFromQueue(queueId: string | undefined): Failure {
  * agent reads its own text back and an edit says only what it says (`manageQueue`).
  */
 function bodyOf(item: QueuedPrompt, from: string): string {
-  const said = delivered("", from);
-  return item.text.startsWith(said) ? item.text.slice(said.length) : item.text;
+  const said = parseDelivered(item.text);
+  return said && said.title === from ? said.body : item.text;
 }
 
 /** One queued message as `manage_queue` lists it: which one, what it says, and when it waits. */
@@ -4227,7 +4264,11 @@ async function manageQueue(caller: RuleThread, call: ManageQueueCall): Promise<J
     case "edit": {
       const text = (call.text ?? "").trim();
       // Delivered the way `message` delivered it, so the target still reads who asked.
-      updateQueued(target.id, again.id, delivered(text, caller.title));
+      updateQueued(
+        target.id,
+        again.id,
+        delivered(text, caller.title, { session: caller.id, ...(again.link ? { link: again.link } : {}) }),
+      );
       // The link card says what was sent, so it says the new text now.
       const link = again.link;
       if (link) setBook((b) => updateLink(b, link, { message: text }));
@@ -5022,22 +5063,15 @@ let watchingQueues = false;
 /** At most this many threads are opened at start-up for the queue each kept. */
 const RESTORE_MAX = 8;
 
-const storedQueues = (): string | null => {
-  try {
-    return localStorage.getItem(QUEUES_KEY);
-  } catch {
-    // No storage (a private window): the queue is this window's only, as before.
-    return null;
-  }
-};
+// No storage (a private window): the queue is this window's only, as before. A web view whose
+// storage is full keeps the queue in memory instead.
+function storedQueues(): string | null {
+  return readStorage(QUEUES_KEY);
+}
 
-const keepQueues = (text: string): void => {
-  try {
-    localStorage.setItem(QUEUES_KEY, text);
-  } catch {
-    // A web view whose storage is full keeps the queue in memory instead.
-  }
-};
+function keepQueues(text: string): void {
+  writeStorage(QUEUES_KEY, text);
+}
 
 /**
  * Takes the queues the last run left, and watches this one: called once at start-up, after the
@@ -5104,13 +5138,26 @@ function queuesChanged(state: AppState): void {
       restoredQueues.add(id);
       const rows = restorable(id, thread.queue);
       if (rows.length) {
+        // A row whose pictures were too big to keep came back as its text alone: the queue waits
+        // for the user rather than sending a message without what it was about.
+        const back = new Set(rows.map((item) => item.id));
+        const lost = pendingRows(loaded, id).some((row) => row.extrasLost && back.has(row.id));
         restoring = true;
         try {
-          updateThread(id, (t) => ({ ...t, queue: [...t.queue, ...rows] }));
+          updateThread(id, (t) => ({
+            ...t,
+            queue: [...t.queue, ...rows],
+            ...(lost ? { queueHeld: true } : {}),
+          }));
         } finally {
           restoring = false;
         }
-        drain.push(id);
+        if (lost) {
+          toast(
+            "A queued message lost its attachments in the restart, so its queue is held: check it, then Resume.",
+            "error",
+          );
+        } else drain.push(id);
       }
       watchedQueues.set(id, useApp.getState().threads[id]?.queue ?? thread.queue);
       continue;
@@ -5809,6 +5856,20 @@ export function reconcileLinks(now = Date.now()): void {
     const error = state.threads[link.target]?.error;
     linksFinished([link.id], link.target, error ? "failed" : "completed", error, []);
   }
+}
+
+/** Settling a sender abandons its outstanding links without stopping their targets. */
+export function clearWaitingLinks(ids: readonly string[]) {
+  const senders = new Set(ids);
+  const at = Date.now();
+  setBook((book) => ({
+    ...book,
+    links: book.links.map((link) =>
+      senders.has(link.orchestrator) && isActive(link.state)
+        ? advanceLink(link, { state: "cancelled", settledAt: at, notifiedAt: at }, at)
+        : link,
+    ),
+  }));
 }
 
 /** The threads whose work is being stopped right now: a cascade stops each one once. */

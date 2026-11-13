@@ -19,6 +19,7 @@ import { isTauri, MachineTransport } from "../acp/transport";
 import { initializeParams, Method, parseSessionList, type SessionSummary } from "../acp/types";
 import { currentPlatform } from "../lib/platform";
 import { hasShell, shellCall, shellCallWithin } from "../lib/shell";
+import { readStorage, writeStorage } from "../lib/storage";
 import { appVersion } from "../lib/updater";
 import { forgetMachineCache, forgetTranscript, loadThreadList, saveThreadList } from "./machineCache";
 import { forgetMachineOutbox, forgetThreadOutbox } from "./machineOutbox";
@@ -29,6 +30,7 @@ import {
   flushMachineOutbox,
   isTombstoned,
   keptUnlisted,
+  noteThreadList,
   request,
   settleKeptUnlisted,
   toast,
@@ -402,7 +404,7 @@ export function machineTint(machine: Pick<Machine, "iconTint">): MachineTint | n
 
 function readLocalIdentity(): MachineIdentity {
   try {
-    const raw = JSON.parse(localStorage.getItem(LOCAL_IDENTITY_KEY) ?? "null") as unknown;
+    const raw = JSON.parse(readStorage(LOCAL_IDENTITY_KEY) ?? "null") as unknown;
     const root = obj(raw);
     return {
       displayName: cleanMachineName(typeof root?.displayName === "string" ? root.displayName : null),
@@ -432,11 +434,8 @@ export function setLocalIdentity(patch: Partial<MachineIdentity>): void {
     icon: patch.icon === undefined ? current.icon : machineIconOf(patch.icon),
     tint: patch.tint === undefined ? current.tint : machineTintOf(patch.tint),
   };
-  try {
-    localStorage.setItem(LOCAL_IDENTITY_KEY, JSON.stringify(next));
-  } catch {
-    // A full or disabled store keeps the choice for this run only.
-  }
+  // A full or disabled store keeps the choice for this run only.
+  writeStorage(LOCAL_IDENTITY_KEY, JSON.stringify(next));
   useMachines.setState({ local: next });
 }
 
@@ -1130,6 +1129,8 @@ function detach(id: string): void {
   // to be sent to it.
   forgetMachineCache(id);
   forgetMachineOutbox(id);
+  // Nothing of it is listed any more, and that is the whole truth: what waited on its threads goes.
+  noteThreadList(id, true);
   const link = links.get(id);
   links.delete(id);
   if (!link) return;
@@ -1169,6 +1170,8 @@ async function readThreads(id: string, connection: AcpConnection, link?: Link): 
       if (!cursor) break;
     }
     if (connection.isClosed) return;
+    // A cursor left over is a list that stopped at its cap: a thread missing from it is not gone.
+    noteThreadList(id, !cursor);
     // Rows the app keeps that this read does not name yet stay: a snapshot from before a thread
     // was announced is not news that it is gone. The ones it names now need no keeping.
     // A thread trashed while this read was out is not news that it came back.

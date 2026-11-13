@@ -61,6 +61,8 @@ struct State {
     /// The RustCode thread this Codex thread runs for, so a compaction it
     /// reports can be stored against it.
     thread_id: Option<String>,
+    /// Codex’s thread id, distinct from RustCode’s id; child events name another thread.
+    codex_thread_id: Option<String>,
     models: Vec<CodexModel>,
     model: Option<String>,
     effort: Option<String>,
@@ -348,6 +350,7 @@ impl CodexAdapter {
             .to_owned();
         {
             let mut state = lock(&state);
+            state.codex_thread_id = Some(thread_id.clone());
             state.models = models;
             state.model = options
                 .model
@@ -891,7 +894,14 @@ fn agent_row_of_call(state: &Mutex<State>, params: &Value) -> Option<String> {
 /// Whether a notification belongs to one of Codex's own subagents rather than
 /// the thread: its turn ending is not the thread's turn ending.
 fn is_agent_thread(state: &Mutex<State>, params: &Value) -> bool {
-    str_field(params, "threadId").is_some_and(|thread| lock(state).collab.contains_key(thread))
+    str_field(params, "threadId").is_some_and(|thread| {
+        let state = lock(state);
+        state.collab.contains_key(thread)
+            || state
+                .codex_thread_id
+                .as_deref()
+                .is_some_and(|root| root != thread)
+    })
 }
 
 /// A tool call an agent made, marked with that agent's row so the client folds

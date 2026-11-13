@@ -5,7 +5,7 @@
 
 import { Check, ExternalLink, FileDiff, GitBranch } from "lucide-react";
 import { useEffect, useState } from "react";
-import { gitChanges } from "../lib/native";
+import { gitChangeSummary } from "../lib/native";
 import { keepFanOut, stateOf } from "../state/host";
 import { accountLabelOf } from "../state/logins";
 import { LINK_LABEL, type Link } from "../state/orchestration";
@@ -25,7 +25,7 @@ function useBranchStat(threadId: string, running: boolean) {
     const folder = wt?.path ?? cwd;
     if (!folder) return;
     let live = true;
-    void gitChanges(folder, wt?.base)
+    void gitChangeSummary(folder, wt?.base)
       .then((c) => {
         if (!live || !c) return;
         setStat({

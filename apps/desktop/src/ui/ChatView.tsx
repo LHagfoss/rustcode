@@ -73,6 +73,7 @@ import { NewThreadBanner } from "./NewThreadBanner";
 import { NEW_THREAD_WIDGETS_MIN_HEIGHT, NewThreadWidgets } from "./NewThreadWidgets";
 import { boundTips } from "./newThreadTips";
 import { ProjectMark } from "./ProjectMark";
+import { ProjectPicker, useMoveBlockedReason } from "./ProjectPicker";
 import {
   Callout,
   Cluster,
@@ -364,6 +365,8 @@ function Header({
     : undefined;
   const title = pending?.title ?? (thread ? (thread.title ?? listed ?? "New thread") : "New thread");
   const cwd = pending?.cwd ?? thread?.cwd ?? projectCwd;
+  const newThreadHost = useApp((s) => s.newThreadHost);
+  const moveBlocked = useMoveBlockedReason(pending ? undefined : thread);
   // The buttons the user keeps, in their order, with the panel's toggles last:
   // the panel is the last thing beside the chat, so its controls are the last
   // controls too, and "details" is the rightmost of them whatever order the
@@ -417,23 +420,31 @@ function Header({
       title={
         <>
           {cwd && (
-            <Tooltip
-              label={
-                thread?.running
-                  ? `${displayPath(cwd)} · stop the turn to change folder`
-                  : `${displayPath(cwd)} · change folder (${folderKey})`
+            // The app's own project picker (ui/ProjectPicker.tsx), the same panel as the folder
+            // button under the composer: it moves this thread to another project, or picks where
+            // a new one starts. ⌘O still opens the system's folder dialog.
+            <ProjectPicker
+              thread={pending ? undefined : thread}
+              cwd={cwd}
+              host={thread ? machineHost : newThreadHost}
+              side="bottom"
+              align="start"
+              tooltip={
+                moveBlocked
+                  ? `${displayPath(cwd)} · ${moveBlocked}`
+                  : `${displayPath(cwd)} · change project (${folderKey})`
               }
-            >
-              <button
-                type="button"
-                disabled={thread?.running}
-                onClick={() => void chooseFolder(false)}
-                className="-mx-1 flex max-w-[220px] shrink-0 items-center gap-1.5 rounded-sm px-1 text-body text-fg-muted enabled:hover:bg-fill-subtle enabled:hover:text-fg disabled:cursor-default"
-              >
-                <ProjectMark name={projectName(cwd)} />
-                <span className="min-w-0 truncate">{projectName(cwd)}</span>
-              </button>
-            </Tooltip>
+              trigger={
+                <button
+                  type="button"
+                  aria-label={`Project: ${projectName(cwd)}`}
+                  className="-mx-1 flex max-w-[220px] shrink-0 items-center gap-1.5 rounded-sm px-1 text-body text-fg-muted hover:bg-fill-subtle hover:text-fg data-[state=open]:bg-fill-subtle data-[state=open]:text-fg"
+                >
+                  <ProjectMark name={projectName(cwd)} />
+                  <span className="min-w-0 truncate">{projectName(cwd)}</span>
+                </button>
+              }
+            />
           )}
           {cwd && (
             <span aria-hidden className="text-body text-fg-faint">

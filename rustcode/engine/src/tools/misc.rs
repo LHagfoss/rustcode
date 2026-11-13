@@ -317,7 +317,7 @@ pub const LIST_SESSIONS: Tool = Tool {
 
 pub const MESSAGE_SESSION: Tool = Tool {
     name: crate::orchestration::MESSAGE_SESSION,
-    description: "Message a thread in any project. The user is asked once. Idle starts a turn; busy queues. steer: true delivers mid-turn if supported, else queues; delivered says steered, queued or started. Returns link_id for wait_session. Send the whole task and brief it fully, as start_session's description says.",
+    description: "Message a thread in any project. The user is asked once. Idle starts a turn; busy queues. steer: true delivers mid-turn if supported, else queues; delivered says steered, queued or started. By default sends one-way. return_to: me returns a link_id for wait_session and wakes you on reply. Send the whole task and brief it fully, as start_session's description says.",
     arguments: r#"{"session_id": "id from list_sessions", "message": "what to ask or do", "attachments": ["/abs/path/to/file"], "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -328,6 +328,7 @@ pub const MESSAGE_SESSION: Tool = Tool {
                 "session_id": {"type": "string", "minLength": 1},
                 "message": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_MESSAGE_BYTES},
                 "steer": {"type": "boolean"},
+                "return_to": {"type": "string", "enum": ["me", "none"], "default": "none", "description": "me waits for a reply; none sends one-way"},
                 "machine": {"type": "string"},
                 "attachments": {
                     "type": "array",

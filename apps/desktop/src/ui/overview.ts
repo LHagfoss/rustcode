@@ -5,6 +5,7 @@
 
 import type { PullRequest } from "../acp/rustcode";
 import type { FileDiff } from "../acp/types";
+import { readStorage, writeStorage } from "../lib/storage";
 import { rowTokens, usageDelta } from "../lib/trace";
 import { type DelegateNode, delegateTree } from "../state/delegates";
 import type { Link } from "../state/orchestration";
@@ -57,18 +58,15 @@ export const isFolded = (folded: readonly OverviewSection[], id: OverviewSection
 
 export function readFolded(): OverviewSection[] {
   try {
-    return parseFolded(localStorage.getItem(FOLDED_KEY));
+    return parseFolded(readStorage(FOLDED_KEY));
   } catch {
     return [...FOLDED_BY_DEFAULT];
   }
 }
 
 export function writeFolded(folded: readonly OverviewSection[]): void {
-  try {
-    localStorage.setItem(FOLDED_KEY, JSON.stringify(folded));
-  } catch {
-    // Not kept in a private window.
-  }
+  // Not kept in a private window.
+  writeStorage(FOLDED_KEY, JSON.stringify(folded));
 }
 
 /**
@@ -95,19 +93,12 @@ export type DeliverableMode = "grid" | "list";
 export const DELIVERABLE_MODE_KEY = "rustcode.overview.deliverables";
 
 export function readDeliverableMode(): DeliverableMode {
-  try {
-    return localStorage.getItem(DELIVERABLE_MODE_KEY) === "list" ? "list" : "grid";
-  } catch {
-    return "grid";
-  }
+  return readStorage(DELIVERABLE_MODE_KEY) === "list" ? "list" : "grid";
 }
 
 export function writeDeliverableMode(mode: DeliverableMode): void {
-  try {
-    localStorage.setItem(DELIVERABLE_MODE_KEY, mode);
-  } catch {
-    // Not kept in a private window.
-  }
+  // Not kept in a private window.
+  writeStorage(DELIVERABLE_MODE_KEY, mode);
 }
 
 /** A picture a reply shows, by the path the reply named. */

@@ -26,7 +26,7 @@ import { formatDuration, type QueuedPrompt, withWakeMark } from "./thread";
  * `configure_session`, `update_session`, `worktree_status`, `list_worktrees`,
  * `list_pull_requests`, `read_project`, `clone_project`).
  */
-export const CAPABILITY_VERSION = 16;
+export const CAPABILITY_VERSION = 17;
 /** The most of a child's answer `wait_session` carries; beyond it, `read_session` pages the rest. */
 export const MAX_BYTES = 8 * 1024;
 /** The longest prompt or message a thread may hand another one (32 KiB). */
@@ -504,6 +504,8 @@ export type Call =
       text: string;
       attachments: string[];
       steer?: boolean;
+      /** `false`: one-way, with no link and nothing delivered back. Waits when omitted. */
+      wait?: boolean;
       machine?: string;
     }
   /** `callId` is the engine's name for this call, so a dropped call can end its wait. */
@@ -986,12 +988,16 @@ export function parseCall(params: JsonObject): Call | Failure {
       if (args.steer !== undefined && typeof args.steer !== "boolean") {
         return failure("invalid", "steer must be a boolean");
       }
+      if (args.return_to != null && args.return_to !== "me" && args.return_to !== "none") {
+        return failure("invalid", "return_to must be me or none");
+      }
       return {
         tool: "message_session",
         target,
         text,
         attachments,
         ...(args.steer !== undefined ? { steer: args.steer } : {}),
+        wait: args.return_to === "me",
         ...machineField(args),
       };
     }
@@ -1184,8 +1190,7 @@ export interface RuleThread {
 // Windows' verbatim prefix goes too (`plainPath`): it is a Win32 detail, not part of the folder, and
 // keeping it made one project two (issue 3425).
 export const cleanProjectPath = (path: string) =>
-  plainPath(path)
-    .replace(/\/+$/, "")
+  (plainPath(path).replace(/\/+$/, "") || (path.startsWith("/") ? "/" : ""))
     .replace(/\/\.\//g, "/")
     .replace(/^\/private(?=\/(?:tmp|var|etc)(?:\/|$))/, "");
 
@@ -1285,6 +1290,8 @@ export function checkMessage(
   acrossProjects = false,
   limits: DelegateLimits = DEFAULT_DELEGATE_LIMITS,
   remote = false,
+  /** A one-way message (`wait: false`) opens no link, so it takes no slot. */
+  oneWay = false,
 ): Failure | null {
   if (!target) return failure("not_found", "no thread has that id; use list_sessions");
   if (target.id === caller.id)
@@ -1304,7 +1311,7 @@ export function checkMessage(
   // A message to a thread this caller already has a live link to is a follow-up:
   // it queues on that thread, so it never counts against a slot, this thread's
   // limit or the machine-wide total.
-  if (!hasActiveTo(book, caller.id, target.id)) {
+  if (!oneWay && !hasActiveTo(book, caller.id, target.id)) {
     const slots = slotRefusal(book, caller, 1, limits);
     if (slots) return slots;
   }
@@ -1361,8 +1368,44 @@ export function checkStart(
   return slotRefusal(book, caller, count, limits);
 }
 
-/** The message as the other thread receives it: who it is from, then the text. */
-export const delivered = (text: string, from: string) => `From thread “${from}” (agent):\n\n${text}`;
+/** Who sent a delivered message, by id: the sender's session, and the link it waits on if it does. */
+export interface DeliveredSender {
+  session: string;
+  link?: string;
+}
+
+/**
+ * The message as the other thread receives it: who it is from, then the text. With `sender`, the
+ * line under the heading names the sender's session (and link), so two senders with the same title
+ * are told apart; the heading line itself is unchanged, so older readers still find the title
+ * (`message_origin.rs` in the engine reads the same line).
+ */
+export const delivered = (text: string, from: string, sender?: DeliveredSender) => {
+  const ids = sender ? `\nsession ${sender.session}${sender.link ? ` · link_id ${sender.link}` : ""}` : "";
+  return `From thread “${from}” (agent):${ids}\n\n${text}`;
+};
+
+/** A delivered message read back: the sender's title and ids, and the text below them. */
+export interface DeliveredMessage {
+  title: string;
+  session?: string;
+  link?: string;
+  body: string;
+}
+
+const DELIVERED_HEAD = /^From thread “([^\n]*)” \(agent\):(?:\nsession (\S+)(?: · link_id (\S+))?)?\n\n/;
+
+/** `text` as `delivered` wrote it, or null for a message no other thread sent. */
+export function parseDelivered(text: string): DeliveredMessage | null {
+  const m = DELIVERED_HEAD.exec(text);
+  if (!m) return null;
+  return {
+    title: m[1] ?? "",
+    ...(m[2] ? { session: m[2] } : {}),
+    ...(m[3] ? { link: m[3] } : {}),
+    body: text.slice(m[0].length),
+  };
+}
 
 /**
  * What a delegate is asked to end with. Its final message is what `wait_session` hands the

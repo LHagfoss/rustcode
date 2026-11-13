@@ -3,6 +3,7 @@
 // browser (dev, mock) the root's CSS zoom stands in. The level is kept.
 
 import { isTauri } from "../acp/transport";
+import { readStorage, writeStorage } from "./storage";
 
 const KEY = "rustcode.zoom";
 export const ZOOM_MIN = 0.8;
@@ -15,11 +16,7 @@ export function clampZoom(level: number): number {
 }
 
 export function storedZoom(): number {
-  try {
-    return clampZoom(Number(localStorage.getItem(KEY) ?? 1));
-  } catch {
-    return 1;
-  }
+  return clampZoom(Number(readStorage(KEY) ?? 1));
 }
 
 async function apply(level: number): Promise<void> {
@@ -34,11 +31,8 @@ async function apply(level: number): Promise<void> {
 /** Sets the zoom level (clamped) and keeps it; answers the level now in force. */
 export async function setZoom(level: number): Promise<number> {
   const next = clampZoom(level);
-  try {
-    localStorage.setItem(KEY, String(next));
-  } catch {
-    // Not kept in a private window.
-  }
+  // Not kept in a private window.
+  writeStorage(KEY, String(next));
   await apply(next);
   return next;
 }

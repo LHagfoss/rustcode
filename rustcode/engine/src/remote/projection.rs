@@ -872,7 +872,13 @@ pub fn project_event(
                 .map(project_turn_timing)
                 .or_else(|| project_active_timing(state)),
             prompt: bound_text(prompt, limits.text_bytes, None),
-            origin: Some(prompt_origin(prompt)),
+            origin: state
+                .history
+                .iter()
+                .rev()
+                .find(|message| message.is_user_request() && message.content == *prompt)
+                .and_then(project_origin)
+                .or_else(|| Some(prompt_origin(prompt))),
         }],
         AgentUiEvent::TextDelta { text } => vec![RemoteEvent::TextDelta {
             text: text.clone(),

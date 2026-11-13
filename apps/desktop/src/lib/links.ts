@@ -1,9 +1,11 @@
 // Link metadata for chips: title, favicon (a data URL) and the page's colour,
 // read by the shell (`src-tauri/src/links.rs`), never by the webview. Cached
-// here for the session; the shell keeps its own memory and disk cache.
+// here for the session, up to MAX_CACHED pages (least recently used go first); the shell keeps its
+// own memory and disk cache.
 
 import { clip } from "./clip";
 import { hasShell, shellCall } from "./shell";
+import { readFlag, writeFlag } from "./storage";
 
 export interface LinkMeta {
   title?: string;
@@ -15,7 +17,29 @@ export interface LinkMeta {
 }
 
 const KEY = "rustcode.linkPreviews";
+/** Pages kept in this window: each can carry a favicon data URL, so the map is bounded. */
+export const MAX_CACHED = 500;
 const cache = new Map<string, LinkMeta | null>();
+
+/** A cached answer, made the most recently used. */
+function cached(url: string): LinkMeta | null | undefined {
+  if (!cache.has(url)) return undefined;
+  const meta = cache.get(url) ?? null;
+  cache.delete(url);
+  cache.set(url, meta);
+  return meta;
+}
+
+function remember(url: string, meta: LinkMeta | null) {
+  cache.delete(url);
+  cache.set(url, meta);
+  // A Map iterates in insertion order: the first key is the least recently used.
+  while (cache.size > MAX_CACHED) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+}
 const pending = new Map<string, Promise<LinkMeta | null>>();
 const waiting: (() => void)[] = [];
 let active = 0;
@@ -25,24 +49,16 @@ const MAX_ACTIVE = 4;
 export const LINK_PREVIEWS_DEFAULT = true;
 
 export function linkPreviewsEnabled(): boolean {
-  try {
-    const raw = localStorage.getItem(KEY);
-    return raw === null ? LINK_PREVIEWS_DEFAULT : raw === "1";
-  } catch {
-    return LINK_PREVIEWS_DEFAULT;
-  }
+  return readFlag(KEY, LINK_PREVIEWS_DEFAULT);
 }
 
 export function setLinkPreviews(on: boolean) {
-  try {
-    localStorage.setItem(KEY, on ? "1" : "0");
-  } catch {
-    // Not persisted in a private window.
-  }
+  // Not persisted in a private window.
+  writeFlag(KEY, on);
 }
 
 export function linkMetaCached(url: string): LinkMeta | null {
-  return cache.get(url) ?? null;
+  return cached(url) ?? null;
 }
 
 /** The site a URL points at, without a `www.` nobody reads. */
@@ -98,14 +114,15 @@ async function slot<T>(run: () => Promise<T>): Promise<T> {
 }
 
 export function loadLinkMeta(url: string): Promise<LinkMeta | null> {
-  if (cache.has(url)) return Promise.resolve(cache.get(url) ?? null);
+  const known = cached(url);
+  if (known !== undefined) return Promise.resolve(known);
   if (!linkPreviewsEnabled() || !hasShell() || !/^https?:\/\//i.test(url)) return Promise.resolve(null);
   const existing = pending.get(url);
   if (existing) return existing;
   const job = slot(() => shellCall<unknown>("link_meta", { url }))
     .then(sanitizeMeta, () => null)
     .then((meta) => {
-      cache.set(url, meta);
+      remember(url, meta);
       pending.delete(url);
       return meta;
     });
