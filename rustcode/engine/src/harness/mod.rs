@@ -100,10 +100,6 @@ pub(crate) struct Capabilities {
     /// The thread can start in its own git worktree (`session/new`
     /// `_meta.rustcode.worktree`); the engine prepares the cwd for any harness.
     pub worktree: bool,
-    /// The harness can stop and ask the user a multiple-choice question,
-    /// with its own tool or with the `ask_user_question` tool RustCode's MCP
-    /// server adds for one without (#3393).
-    pub questions: bool,
 }
 
 impl Capabilities {
@@ -142,7 +138,6 @@ impl Capabilities {
             orchestration: true,
             checkpoints: true,
             worktree: true,
-            questions: true,
         }
     }
 
@@ -184,10 +179,6 @@ impl Capabilities {
             orchestration: cfg!(unix),
             checkpoints: true,
             worktree: true,
-            // Codex has `request_user_input`; an ACP agent either has its own
-            // tool (`KnownHarness::native_questions`, set in `capabilities`)
-            // or gets ours with the orchestration server (`session_meta`).
-            questions: kind == HarnessKind::Codex,
         }
     }
 }
@@ -640,9 +631,6 @@ pub(crate) fn capabilities(harness: &ResolvedHarness) -> Capabilities {
         return Capabilities::builtin();
     }
     let mut capabilities = Capabilities::external(harness.kind);
-    if harness.known.is_some_and(|known| known.native_questions) {
-        capabilities.questions = true;
-    }
     let learned = learned_for(&harness.id);
     if let Some(resume) = learned.resume {
         capabilities.resume = resume;
@@ -694,9 +682,6 @@ pub(crate) fn session_meta(
 ) -> serde_json::Map<String, Value> {
     let mut capabilities = capabilities(harness);
     capabilities.orchestration = orchestration;
-    // A harness without its own question tool asks through the
-    // orchestration server's `ask_user_question` (#3393).
-    capabilities.questions |= orchestration && needs_question_tool(harness);
     serde_json::Map::from_iter([(
         "rustcode".to_owned(),
         json!({ "harness": { "id": harness.id, "capabilities": capabilities } }),
@@ -1450,18 +1435,6 @@ mod tests {
         ] {
             let harness = resolve(&entries, id).unwrap();
             assert_eq!(needs_question_tool(&harness), needs, "{id}");
-            // Every harness can ask once it has the server; one that needs
-            // the tool cannot without it.
-            let meta = session_meta(&harness, true);
-            assert_eq!(
-                meta["rustcode"]["harness"]["capabilities"]["questions"], true,
-                "{id}"
-            );
-            let without = session_meta(&harness, false);
-            assert_eq!(
-                without["rustcode"]["harness"]["capabilities"]["questions"], !needs,
-                "{id} without the orchestration server"
-            );
         }
     }
 
