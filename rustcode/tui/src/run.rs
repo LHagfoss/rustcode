@@ -871,6 +871,19 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
+    // A `PreToolUse` hook of Claude Code: the hook call on stdin, the refusal
+    // (if any) on stdout. It never fails the call itself.
+    if matches!(
+        cli_args.command.as_ref(),
+        Some(crate::cli::Commands::GuardCommand)
+    ) {
+        let mut input = String::new();
+        let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut input);
+        if let Some(response) = rustcode::command_guard::hook_response(&input) {
+            println!("{response}");
+        }
+        return Ok(());
+    }
     if let Some(crate::cli::Commands::Theme { command }) = cli_args.command.as_ref() {
         run_theme_command(command);
         return Ok(());
