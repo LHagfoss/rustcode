@@ -56,14 +56,29 @@ export interface GitChanges {
  * The working tree's uncommitted changes, from git in the Tauri shell (the
  * mock answers too). With `base`, everything since the branch left it.
  */
-export async function gitChanges(cwd: string, base?: string): Promise<GitChanges | null> {
+export async function gitChanges(
+  cwd: string,
+  base?: string,
+  options: { summary?: boolean } = {},
+): Promise<GitChanges | null> {
   if (!isTauri() && !hasShell()) return null;
+  const args: Record<string, unknown> = { cwd };
+  if (base) args.base = base;
+  if (options.summary) args.summary = true;
   try {
-    return await invoke<GitChanges>("git_changes", base ? { cwd, base } : { cwd });
+    return await invoke<GitChanges>("git_changes", args);
   } catch (error) {
     if (!isTauri() && /does not run|Unknown command/.test(String(error))) return null;
     throw error;
   }
+}
+
+/**
+ * The branch and per-file counts only, without the diff body: what a count or a branch name needs,
+ * read on every selection and turn end without sending up to 2 MB of diff over IPC.
+ */
+export function gitChangeSummary(cwd: string, base?: string): Promise<GitChanges | null> {
+  return gitChanges(cwd, base, { summary: true });
 }
 
 /** The project's files for `@` references; empty outside a git repository or the app. */

@@ -21,6 +21,9 @@ fn is_known_login_tool(tool: &str) -> bool {
 }
 
 const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
+/// An untracked file's lines are counted up to this size; a larger one counts as binary, so a
+/// stray log or build output is not read whole for a number.
+const MAX_COUNTED_BYTES: u64 = 1024 * 1024;
 
 fn absolute_dir(path: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(path);
@@ -247,6 +250,7 @@ fn login_line(command: &[String], env: &[(String, String)]) -> String {
 }
 
 #[derive(Serialize)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 pub struct FileChange {
     path: String,
     status: String,
@@ -306,11 +310,27 @@ pub fn project_files(cwd: String) -> Result<Vec<String>, String> {
         .collect())
 }
 
+/// An untracked file's line count, or None for a binary file, one over
+/// [`MAX_COUNTED_BYTES`] (checked before reading) or one that cannot be read.
+fn untracked_lines(path: &Path) -> Option<u64> {
+    if std::fs::metadata(path).ok()?.len() > MAX_COUNTED_BYTES {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    (!bytes.contains(&0)).then(|| bytes.iter().filter(|b| **b == b'\n').count() as u64)
+}
+
 /// Uncommitted changes against HEAD, plus untracked files. With `base`
 /// (a worktree's base commit or branch), everything since the branch left
-/// it: its commits and the working tree, against their merge base.
+/// it: its commits and the working tree, against their merge base. With
+/// `summary`, only the branch and the per-file counts: the diff body (up to
+/// 2 MB over IPC) is left out for a caller that shows counts alone.
 #[tauri::command(async)]
-pub fn git_changes(cwd: String, base: Option<String>) -> Result<GitChanges, String> {
+pub fn git_changes(
+    cwd: String,
+    base: Option<String>,
+    summary: Option<bool>,
+) -> Result<GitChanges, String> {
     let cwd = absolute_dir(&cwd)?;
     git(&cwd, &["rev-parse", "--is-inside-work-tree"])
         .map_err(|_| "This folder is not a git repository.".to_string())?;
@@ -372,10 +392,7 @@ pub fn git_changes(cwd: String, base: Option<String>) -> Result<GitChanges, Stri
         });
     }
     for path in git(&cwd, &["ls-files", "--others", "--exclude-standard"])?.lines() {
-        let lines = std::fs::read(cwd.join(path))
-            .ok()
-            .filter(|bytes| !bytes.contains(&0))
-            .map(|bytes| bytes.iter().filter(|b| **b == b'\n').count() as u64);
+        let lines = untracked_lines(&cwd.join(path));
         files.push(FileChange {
             path: path.to_string(),
             status: "U".into(),
@@ -383,6 +400,13 @@ pub fn git_changes(cwd: String, base: Option<String>) -> Result<GitChanges, Stri
             added: lines.unwrap_or(0),
             removed: 0,
             binary: lines.is_none(),
+        });
+    }
+    if summary == Some(true) {
+        return Ok(GitChanges {
+            branch,
+            files,
+            diff: String::new(),
         });
     }
     let mut diff = git(&cwd, &[&["diff", "--no-color", "-M"], base].concat())?;
@@ -1021,6 +1045,45 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_summary_counts_changes_without_the_diff_body() {
+        let dir = std::env::temp_dir().join(format!("rc-git-summary-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str]| {
+            assert!(crate::process::command("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        };
+        run(&["init", "-q"]);
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        run(&["add", "a.txt"]);
+        run(&["commit", "-q", "-m", "a"]);
+        std::fs::write(dir.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+        std::fs::write(dir.join("new.txt"), "x\ny\n").unwrap();
+        // Over the cap: not read, counted as binary.
+        let big = vec![b'\n'; (MAX_COUNTED_BYTES + 1) as usize];
+        std::fs::write(dir.join("big.log"), big).unwrap();
+        let cwd = dir.to_string_lossy().into_owned();
+        let full = git_changes(cwd.clone(), None, None).unwrap();
+        let summary = git_changes(cwd, None, Some(true)).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(full.diff.contains("+three"));
+        assert!(summary.diff.is_empty());
+        assert_eq!(summary.branch, full.branch);
+        assert_eq!(summary.files, full.files);
+        let file = |name: &str| summary.files.iter().find(|f| f.path == name).unwrap();
+        assert_eq!((file("a.txt").added, file("a.txt").removed), (2, 0));
+        assert_eq!(file("new.txt").added, 2);
+        assert!(file("big.log").binary);
+        assert_eq!(file("big.log").added, 0);
+    }
 
     #[test]
     fn path_kinds_tells_folders_from_files_and_missing_paths() {

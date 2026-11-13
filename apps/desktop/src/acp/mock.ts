@@ -6090,8 +6090,11 @@ export class MockTransport implements Transport {
     if (command === "thread_rename") return this.engine?.renameThread(String(args.id), String(args.title));
     if (command === "thread_trash") return this.engine?.trashThread(String(args.id));
     if (command === "project_files") return MOCK_PROJECT_FILES;
-    if (command === "git_changes")
-      return mockGitChanges(String(args.cwd), args.base ? String(args.base) : undefined);
+    if (command === "git_changes") {
+      const changes = mockGitChanges(String(args.cwd), args.base ? String(args.base) : undefined);
+      // The summary the panel's counts read leaves the diff body out, as the shell does.
+      return args.summary ? { ...changes, diff: "" } : changes;
+    }
     if (
       command === "reveal_path" ||
       command === "open_terminal_at" ||
