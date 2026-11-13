@@ -267,6 +267,8 @@ interface MachinesStore {
   /** The connection over SSH in progress, or the last one: its steps as they go. */
   ssh: SshRun | null;
   sshError: string | null;
+  /** The SSH connection worked but its second direction did not; one-way pairing stays. */
+  sshNotice: string | null;
   /** This computer's RustCode server as a background service, once asked. */
   server: ServerService | null;
   /** This computer's own name and icon, kept here because it is not paired. */
@@ -298,6 +300,7 @@ export const useMachines = create<MachinesStore>(() => ({
   connectError: null,
   ssh: null,
   sshError: null,
+  sshNotice: null,
   server: null,
   serverInstalling: false,
   serverLinking: false,
@@ -1745,7 +1748,7 @@ export async function connectWithCode(code: string, address?: string): Promise<b
 
 /** One step of a connection over SSH (`rustcode_client::ssh::Progress`). */
 export interface SshStep {
-  step: "sign_in" | "check" | "install" | "start" | "pair";
+  step: "sign_in" | "check" | "install" | "start" | "pair" | "pair_back";
   state: "running" | "done" | "skipped" | "failed";
   label: string;
   detail?: string | null;
@@ -1766,13 +1769,17 @@ export const SSH_DEADLINE_MS = 15 * 60_000;
  * Connect over SSH: install RustCode on `target` at this version when allowed and needed, start
  * its server and pair with it. The steps are polled while it runs.
  */
-export async function connectOverSsh(target: string, allowInstall: boolean): Promise<boolean> {
+export async function connectOverSsh(
+  target: string,
+  allowInstall: boolean,
+  mutual = false,
+): Promise<boolean> {
   const typed = target.trim();
   if (!typed) {
     useMachines.setState({ sshError: "Type the host first, like lars@box or an alias from ~/.ssh/config." });
     return false;
   }
-  useMachines.setState({ ssh: { running: true, steps: [] }, sshError: null });
+  useMachines.setState({ ssh: { running: true, steps: [] }, sshError: null, sshNotice: null });
   const poll = setInterval(() => {
     void shellCall<SshRun>("machines_ssh_progress").then(
       (run) => {
@@ -1792,6 +1799,10 @@ export async function connectOverSsh(target: string, allowInstall: boolean): Pro
     useMachines.setState((state) => ({
       machines: [...state.machines.filter((saved) => saved.id !== machine.id), machine],
     }));
+    if (mutual) {
+      const failure = await pairBack(typed);
+      if (failure) useMachines.setState({ sshNotice: pairBackNotice(machine.name, failure) });
+    }
     toast(`Connected to ${machine.name}.`, "success");
     await refreshMachines();
     return true;
@@ -1807,9 +1818,45 @@ export async function connectOverSsh(target: string, allowInstall: boolean): Pro
   }
 }
 
+/**
+ * The second direction of mutual access: create a connect code on this computer and have the
+ * computer just connected redeem it over SSH. Returns why it did not work, or null. The one-way
+ * pairing is saved either way, and a code that was not used is withdrawn.
+ */
+async function pairBack(target: string): Promise<string | null> {
+  let link: string | null = null;
+  try {
+    const answer = obj(await request<JsonObject>(RemoteMethod.connectCode, {}, 20_000));
+    const offer = parseConnectOffer(answer?.connectCode);
+    if (!offer) return str(answer?.connectCodeError) ?? "This computer could not create a connect code.";
+    if (offer.loopbackOnly) {
+      return "Remote access on this computer listens here only (remote.bind), so no other computer can reach it. Set remote.bind to auto and try again.";
+    }
+    link = offer.link;
+    await shellCallWithin<null>(PAIR_BACK_DEADLINE_MS, "machines_pair_back", {
+      target,
+      port: null,
+      identity: null,
+      link,
+    });
+    return null;
+  } catch (error) {
+    if (link) await request(RemoteMethod.connectCode, { cancel: true }, 15_000).catch(() => {});
+    return errorText(error);
+  }
+}
+
+/** How long the page waits for the other computer to redeem the code: the shell bounds it at two minutes. */
+const PAIR_BACK_DEADLINE_MS = 3 * 60_000;
+
+/** The notice for a connection that is one way because pairing back failed. */
+export function pairBackNotice(name: string, reason: string): string {
+  return `Connected to ${name}, one way: this computer reaches it, but it cannot reach this computer. ${reason.trim()}`;
+}
+
 /** Clear the steps of a finished connection over SSH. */
 export function dismissSsh(): void {
-  useMachines.setState({ ssh: null, sshError: null });
+  useMachines.setState({ ssh: null, sshError: null, sshNotice: null });
 }
 
 /** Forget a machine, after asking: its token and its routes go with it. */

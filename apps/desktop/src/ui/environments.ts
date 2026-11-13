@@ -233,21 +233,24 @@ export function addressSteps(
   });
 }
 
-const SSH_ORDER: SshStep["step"][] = ["sign_in", "check", "install", "start", "pair"];
+const SSH_ORDER: SshStep["step"][] = ["sign_in", "check", "install", "start", "pair", "pair_back"];
 const SSH_LABEL: Record<SshStep["step"], string> = {
   sign_in: "Sign in over SSH",
   check: "Check RustCode there",
   install: "Install RustCode",
   start: "Start its server",
   pair: "Pair",
+  pair_back: "Let it reach this computer",
 };
 
 /** The SSH run's steps in the order they run, with the ones not reached yet listed as to do. */
-export function sshProgress(steps: readonly SshStep[], running: boolean): ProgressStep[] {
+export function sshProgress(steps: readonly SshStep[], running: boolean, mutual = false): ProgressStep[] {
   const failed = steps.some((step) => step.state === "failed");
   return SSH_ORDER.flatMap((name): ProgressStep[] => {
     const step = steps.find((seen) => seen.step === name);
     if (!step && !running) return [];
+    // Pairing back is a step of mutual access only: one way never lists it.
+    if (!step && name === "pair_back" && !mutual) return [];
     const state = step?.state ?? "todo";
     if (failed && state === "todo") return [];
     return [

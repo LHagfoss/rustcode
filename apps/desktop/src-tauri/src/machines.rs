@@ -1391,6 +1391,44 @@ pub async fn machines_connect_ssh(
     result
 }
 
+/// The last step of mutual access: have the computer just connected over SSH
+/// redeem `link`, a connect code the page created on this computer, so it can
+/// reach this one too. The step joins the steps `machines_ssh_progress`
+/// reports; a failure's message says what to do, and the one-way pairing
+/// stays as it is.
+#[tauri::command]
+pub async fn machines_pair_back(
+    machines: tauri::State<'_, Arc<Machines>>,
+    target: String,
+    port: Option<u16>,
+    identity: Option<String>,
+    link: String,
+) -> Result<(), String> {
+    let identity = identity
+        .map(|path| path.trim().to_owned())
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from);
+    let target = rustcode_client::ssh::SshTarget::parse(&target, port, identity).map_err(chain)?;
+    {
+        let mut run = machines.ssh.lock().unwrap();
+        if run.running {
+            return Err("A connection over SSH is already running.".to_owned());
+        }
+        run.running = true;
+    }
+    let shared = Arc::clone(&machines);
+    let mut progress = move |step: rustcode_client::ssh::Progress| {
+        let mut run = shared.ssh.lock().unwrap();
+        run.steps.retain(|seen| seen.step != step.step);
+        run.steps.push(step);
+    };
+    let result = rustcode_client::ssh::pair_back(&target, &link, &mut progress)
+        .await
+        .map_err(chain);
+    machines.ssh.lock().unwrap().running = false;
+    result
+}
+
 /// The steps of the connection over SSH in progress, or of the last one.
 #[tauri::command]
 pub fn machines_ssh_progress(machines: tauri::State<'_, Arc<Machines>>) -> SshRun {
