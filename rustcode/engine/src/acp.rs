@@ -7561,6 +7561,7 @@ mod tests {
     struct Noting {
         connection: agent_client_protocol::ConnectionTo<Agent>,
         notes: tokio::sync::mpsc::UnboundedReceiver<SessionNotification>,
+        relay: tokio::task::JoinHandle<Result<(), agent_client_protocol::Error>>,
         close: tokio::sync::oneshot::Sender<()>,
         serving: tokio::sync::oneshot::Receiver<Result<(), agent_client_protocol::Error>>,
         client: tokio::task::JoinHandle<Result<(), agent_client_protocol::Error>>,
@@ -7568,8 +7569,42 @@ mod tests {
 
     impl Noting {
         async fn connect(server: &AcpServer) -> Self {
-            let (engine, transport) = agent_client_protocol::Channel::duplex();
+            let (engine, wire) = agent_client_protocol::Channel::duplex();
+            let (relay_transport, transport) = agent_client_protocol::Channel::duplex();
             let (notes_tx, notes) = tokio::sync::mpsc::unbounded_channel();
+            // Record in wire order before forwarding the load response. Notification
+            // handlers run independently of responses, so sleeping after a response
+            // cannot establish that replay has reached the recorder.
+            let relay = tokio::spawn(agent_client_protocol::Channel::bridge_with_inspection(
+                wire,
+                relay_transport,
+                move |message| {
+                    if let agent_client_protocol::RawJsonRpcMessage::Notification(note) = message
+                        && note.method.as_ref() == "session/update"
+                    {
+                        let notification: SessionNotification = serde_json::from_value(
+                            note.params
+                                .clone()
+                                .expect("session/update params")
+                                .into_value(),
+                        )
+                        .expect("session/update");
+                        let status = notification.meta.is_none()
+                            && matches!(
+                                &notification.update,
+                                SessionUpdate::SessionInfoUpdate(info)
+                                    if info.meta.as_ref().is_some_and(|meta| {
+                                        meta["rustcode"].get("status").is_some()
+                                    })
+                            );
+                        if !status {
+                            let _ = notes_tx.send(notification);
+                        }
+                    }
+                    Ok(())
+                },
+                |_| Ok(()),
+            ));
             let (ready_tx, ready) = tokio::sync::oneshot::channel();
             let (close, closed) = tokio::sync::oneshot::channel();
             let serving = serve_on_thread(server, engine);
@@ -7577,23 +7612,7 @@ mod tests {
                 agent_client_protocol::Client
                     .builder()
                     .on_receive_notification(
-                        async move |notification: SessionNotification, _connection| {
-                            // A thread's status goes to every client for its
-                            // thread list; it is not part of the session's
-                            // stream and has no cursor.
-                            let status = notification.meta.is_none()
-                                && matches!(
-                                    &notification.update,
-                                    SessionUpdate::SessionInfoUpdate(info)
-                                        if info.meta.as_ref().is_some_and(|meta| {
-                                            meta["rustcode"].get("status").is_some()
-                                        })
-                                );
-                            if !status {
-                                let _ = notes_tx.send(notification);
-                            }
-                            Ok(())
-                        },
+                        async move |_notification: SessionNotification, _connection| Ok(()),
                         agent_client_protocol::on_receive_notification!(),
                     )
                     .on_receive_request(
@@ -7620,6 +7639,7 @@ mod tests {
             Self {
                 connection,
                 notes,
+                relay,
                 close,
                 serving,
                 client,
@@ -7640,9 +7660,7 @@ mod tests {
                 .block_task()
                 .await
                 .expect("session/load");
-            // Notifications come before the answer on the wire; give the
-            // handler a moment to have passed them on.
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            // The relay recorded every preceding notification before this answer.
             (self.drain(), response)
         }
 
@@ -7679,10 +7697,17 @@ mod tests {
                 .await
                 .expect("client task")
                 .expect("client ends cleanly");
-            self.serving
-                .await
-                .expect("connection")
-                .expect("connection ends cleanly");
+            if let Err(error) = self.serving.await.expect("connection") {
+                // These clients deliberately drop their transport, including
+                // mid-turn. An in-flight notification can lose that race.
+                assert_eq!(error.code, agent_client_protocol::ErrorCode::InternalError);
+                assert_eq!(
+                    error.data,
+                    Some(serde_json::json!("send failed because receiver is gone")),
+                    "unexpected disconnect error: {error:?}"
+                );
+            }
+            self.relay.abort();
         }
     }
 
@@ -8269,16 +8294,23 @@ mod tests {
         // Later, with the turn over, each client resumes from its own place:
         // A's gets the whole reply (the observer's updates after A's cursor),
         // one at the end gets nothing.
-        let all_after_author: Vec<_> = observer_got
-            .into_iter()
-            .chain(observer.drain())
-            .filter(|note| cursor_of(note) > author_cursor)
-            .collect();
         let mut late_a = Noting::connect(&server).await;
-        let (from_a, _) = late_a
+        let (from_a, late_a_response) = late_a
             .load(&session_id, &cwd_path, Some(author_cursor))
             .await;
         assert!(from_a.iter().all(|note| !is_reset(note)));
+        let end = answered_cursor(&late_a_response).expect("completed replay cursor");
+        let mut all_after_author = observer_got;
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            while !all_after_author
+                .iter()
+                .any(|note| cursor_opt(note) == Some(end))
+            {
+                all_after_author.push(observer.notes.recv().await.expect("observer update"));
+            }
+        })
+        .await
+        .expect("observer reaches the replay cursor");
         let wanted: Vec<_> = chunks(&all_after_author);
         assert!(!wanted.is_empty());
         assert_eq!(chunks(&from_a), wanted, "A's place");
