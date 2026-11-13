@@ -6,6 +6,7 @@
 
 import type { UsageRow } from "../acp/rustcode";
 import type { SessionSummary } from "../acp/types";
+import { readFlag, writeFlag } from "../lib/storage";
 import { sameProject } from "./orchestration";
 import { DAY_MS } from "./period";
 
@@ -98,17 +99,10 @@ export function projectThreads(sessions: readonly SessionSummary[], project: str
 /** The overview is opt-in and remembers its last setting on this device. */
 const OVERVIEW_KEY = "rc-new-thread-overview";
 export function overviewExpanded(): boolean {
-  try {
-    return localStorage.getItem(OVERVIEW_KEY) === "1";
-  } catch {
-    return false;
-  }
+  return readFlag(OVERVIEW_KEY, false);
 }
 
 export function setOverviewExpanded(expanded: boolean): void {
-  try {
-    localStorage.setItem(OVERVIEW_KEY, expanded ? "1" : "0");
-  } catch {
-    // Storage can be unavailable; the view still works for this session.
-  }
+  // Storage can be unavailable; the view still works for this session.
+  writeFlag(OVERVIEW_KEY, expanded);
 }

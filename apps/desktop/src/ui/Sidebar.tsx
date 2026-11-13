@@ -72,6 +72,7 @@ import { rowBranch } from "../lib/gitRef";
 import { formatBinding, listCommandFor } from "../lib/keys";
 import { onFileDrop, openTerminalAt, openThreadLog, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
+import { readStorage, writeStorage } from "../lib/storage";
 import { delegateCount, liveSubagents, type StackAgent } from "../state/agentStack";
 import { type BranchRow, branchKindOf, branchRows } from "../state/branches";
 import { useCheckoutBranch } from "../state/checkoutBranch";
@@ -210,19 +211,12 @@ const MAX = 460;
 const DEFAULT_WIDTH = 256;
 
 function useSidebarWidth() {
-  const [width, setWidth] = useState(() => {
-    try {
-      return Math.max(MIN, Number(localStorage.getItem("rustcode.sidebarWidth")) || DEFAULT_WIDTH);
-    } catch {
-      return DEFAULT_WIDTH;
-    }
-  });
+  const [width, setWidth] = useState(() =>
+    Math.max(MIN, Number(readStorage("rustcode.sidebarWidth")) || DEFAULT_WIDTH),
+  );
   useEffect(() => {
-    try {
-      localStorage.setItem("rustcode.sidebarWidth", String(width));
-    } catch {
-      // Not persisted in a private window.
-    }
+    // Not persisted in a private window.
+    writeStorage("rustcode.sidebarWidth", String(width));
   }, [width]);
   return [width, setWidth] as const;
 }
@@ -1565,11 +1559,7 @@ export function Sidebar() {
   // The groups of child rows are gone, and with them the folds older releases kept open: drop
   // the record once, so a stale preference does not sit in localStorage for ever.
   useEffect(() => {
-    try {
-      localStorage.removeItem("rustcode.sidebar.childrenOpen");
-    } catch {
-      // Nothing stored in a private window.
-    }
+    writeStorage("rustcode.sidebar.childrenOpen", null);
   }, []);
   const [width, setWidth] = useSidebarWidth();
   // The slot takes its new width at once, so the transcript reflows once per toggle, not every

@@ -17,6 +17,7 @@ import { create } from "zustand";
 import { arr, type Json, type JsonObject, obj } from "../acp/jsonrpc";
 import type { Harness, HarnessSnapshot } from "../acp/types";
 import { Method, parseHarnessSnapshot } from "../acp/types";
+import { readStorage, writeStorage } from "../lib/storage";
 import { useMachines } from "./machines";
 import {
   failureSummary,
@@ -42,7 +43,7 @@ const SCOPE_STORAGE = "rustcode.settingsScope";
 
 function readScope(): SettingsScope {
   try {
-    const raw = JSON.parse(localStorage.getItem(SCOPE_STORAGE) ?? "null") as unknown;
+    const raw = JSON.parse(readStorage(SCOPE_STORAGE) ?? "null") as unknown;
     const root = obj(raw as Json);
     const mode = root?.mode;
     if (mode === "all") return { mode: "all" };
@@ -61,11 +62,8 @@ interface ScopeStore {
 export const useSettingsScope = create<ScopeStore>((set) => ({
   scope: readScope(),
   setScope: (scope) => {
-    try {
-      localStorage.setItem(SCOPE_STORAGE, JSON.stringify(scope));
-    } catch {
-      // A full or disabled store only loses the choice for the next open.
-    }
+    // A full or disabled store only loses the choice for the next open.
+    writeStorage(SCOPE_STORAGE, JSON.stringify(scope));
     set({ scope });
   },
 }));
@@ -147,14 +145,6 @@ export async function machineRequest<T = Json>(
 
 const LOCAL_SEEDED = "rustcode.serverSettingsSeeded";
 
-function stored(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
 interface ValuesStore {
   values: Record<string, Json>;
   loading: Record<string, boolean>;
@@ -187,13 +177,13 @@ function localValues(): Record<ServerSettingKey, Json> {
  * started, and this seed is a migration, not an overwrite.
  */
 async function seedLocalSettings(host: string): Promise<void> {
-  if (host !== LOCAL_HOST || stored(LOCAL_SEEDED) === "1") return;
+  if (host !== LOCAL_HOST || readStorage(LOCAL_SEEDED) === "1") return;
   const answer = await machineRequest(host, "_rustcode/settings/get", {}, 10_000);
   const storedKeys = arr(obj(answer)?.stored).flatMap((key) => (typeof key === "string" ? [key] : []));
   const missing = missingSettingValues(storedKeys, localValues());
   if (Object.keys(missing).length)
     await machineRequest(host, "_rustcode/settings/set", { values: missing }, 10_000);
-  localStorage.setItem(LOCAL_SEEDED, "1");
+  writeStorage(LOCAL_SEEDED, "1");
 }
 
 /** Copy the server's values for one host into the shared cache. */

@@ -8,6 +8,7 @@
 // on this one.)
 
 import { projectName } from "../acp/types";
+import { readStorage, writeStorage } from "../lib/storage";
 import { cleanProjectPath } from "./orchestration";
 
 /** What the app remembers about one project folder. */
@@ -33,7 +34,7 @@ export const projectKey = cleanProjectPath;
 /** What the app keeps about the projects: an unreadable value reads as none. */
 export function readProjectBook(): ProjectBook {
   try {
-    const raw = localStorage.getItem(PROJECTS_STORAGE_KEY);
+    const raw = readStorage(PROJECTS_STORAGE_KEY);
     const parsed: unknown = raw ? JSON.parse(raw) : null;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
     const book: ProjectBook = {};
@@ -54,11 +55,8 @@ export function readProjectBook(): ProjectBook {
 }
 
 function writeProjectBook(book: ProjectBook): void {
-  try {
-    localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(book));
-  } catch {
-    // Storage can be unavailable (private window); the entry just does not persist.
-  }
+  // Storage can be unavailable (private window); the entry just does not persist.
+  writeStorage(PROJECTS_STORAGE_KEY, JSON.stringify(book));
 }
 
 /** One project's entry, if the app has one. */

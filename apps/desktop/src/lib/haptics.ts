@@ -4,6 +4,7 @@
 
 import { isTauri } from "../acp/transport";
 import { shellCall } from "./shell";
+import { readFlag, writeFlag } from "./storage";
 
 const KEY = "rustcode.haptics";
 
@@ -13,20 +14,12 @@ export type HapticKind = "generic" | "alignment" | "level";
 export const HAPTICS_DEFAULT = true;
 
 export function hapticsEnabled(): boolean {
-  try {
-    const raw = localStorage.getItem(KEY);
-    return raw === null ? HAPTICS_DEFAULT : raw === "1";
-  } catch {
-    return HAPTICS_DEFAULT;
-  }
+  return readFlag(KEY, HAPTICS_DEFAULT);
 }
 
 export function setHaptics(on: boolean) {
-  try {
-    localStorage.setItem(KEY, on ? "1" : "0");
-  } catch {
-    // Not persisted in a private window.
-  }
+  // Not persisted in a private window.
+  writeFlag(KEY, on);
 }
 
 let last = 0;
