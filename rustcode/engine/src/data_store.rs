@@ -306,6 +306,38 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "tool_calls_turn_index",
         "CREATE INDEX IF NOT EXISTS tool_calls_turn ON tool_calls(turn_id);",
     ),
+    // Additive only: new nullable columns and a new table. No existing column,
+    // row or view is changed, so a store at migration 8 keeps every row.
+    (
+        9,
+        "keep_more_thread_data",
+        "ALTER TABLE threads ADD COLUMN account TEXT;
+         ALTER TABLE threads ADD COLUMN machine TEXT;
+         ALTER TABLE threads ADD COLUMN created_with_version TEXT;
+         ALTER TABLE threads ADD COLUMN branch TEXT;
+         ALTER TABLE threads ADD COLUMN final_commit TEXT;
+         ALTER TABLE threads ADD COLUMN pull_request TEXT;
+         ALTER TABLE threads ADD COLUMN pull_request_state TEXT;
+         ALTER TABLE threads ADD COLUMN settled_at TEXT;
+         ALTER TABLE turns ADD COLUMN effort TEXT;
+         ALTER TABLE turns ADD COLUMN account TEXT;
+         ALTER TABLE turns ADD COLUMN machine TEXT;
+         ALTER TABLE turns ADD COLUMN rustcode_version TEXT;
+         ALTER TABLE turns ADD COLUMN diff_files INTEGER;
+         ALTER TABLE turns ADD COLUMN diff_added INTEGER;
+         ALTER TABLE turns ADD COLUMN diff_removed INTEGER;
+         CREATE TABLE IF NOT EXISTS approvals (
+            id INTEGER PRIMARY KEY,
+            thread_id TEXT NOT NULL,
+            source TEXT NOT NULL,
+            tool_name TEXT,
+            requested_at TEXT NOT NULL,
+            decided_at TEXT,
+            wait_ms INTEGER,
+            decision TEXT NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS approvals_thread ON approvals(thread_id, requested_at);",
+    ),
 ];
 
 /// One turn's token totals. Each is optional: a harness that reports no count
@@ -474,6 +506,16 @@ pub struct TurnRow {
     /// `refused`, `recovery_failed`, …), when the caller knows more than
     /// `status`.
     pub stop_reason: Option<String>,
+    /// The reasoning effort the turn ran with, when the thread has one.
+    pub effort: Option<String>,
+    /// The named harness account the turn ran on.
+    pub account: Option<String>,
+    /// Uncommitted changes in the thread's checkout when the turn ended
+    /// (`git diff --numstat HEAD`): files, added lines and removed lines. The
+    /// store fills these in when the caller leaves them empty.
+    pub diff_files: Option<i64>,
+    pub diff_added: Option<i64>,
+    pub diff_removed: Option<i64>,
     pub tool_calls: Vec<ToolCallRow>,
 }
 
@@ -1594,6 +1636,7 @@ pub fn record_turn(turn: &TurnRow) {
         return;
     }
     let Some(path) = data_path() else { return };
+    let turn = &with_checkout_diff(turn);
     let written = open(&path).and_then(|connection| write_turn(&connection, turn));
     if let Err(error) = written {
         crate::dbg_log!(
@@ -1622,6 +1665,7 @@ pub fn record_cumulative_turn(turn: &TurnRow, cumulative: SessionUsage, series: 
         return;
     }
     let Some(path) = data_path() else { return };
+    let turn = &with_checkout_diff(turn);
     let written = open(&path)
         .and_then(|connection| write_cumulative_turn(&connection, turn, cumulative, series));
     if let Err(error) = written {
@@ -1955,9 +1999,11 @@ fn write_turn_in(transaction: &Connection, turn: &TurnRow) -> Result<(), String>
             "INSERT INTO turns (thread_id, started_at, finished_at, harness, model,
                     input_tokens, output_tokens, cached_tokens, cache_write_tokens,
                     cost_usd, tool_calls, status, duration_ms, time_to_first_token_ms,
-                    model_time_ms, tool_time_ms, context_tokens, context_window, stop_reason)
+                    model_time_ms, tool_time_ms, context_tokens, context_window, stop_reason,
+                    effort, account, machine, rustcode_version, diff_files, diff_added,
+                    diff_removed)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-                     ?15, ?16, ?17, ?18, ?19)
+                     ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
              ON CONFLICT(thread_id, started_at) DO UPDATE SET
                 finished_at = excluded.finished_at,
                 harness = COALESCE(excluded.harness, turns.harness),
@@ -1976,7 +2022,14 @@ fn write_turn_in(transaction: &Connection, turn: &TurnRow) -> Result<(), String>
                 tool_time_ms = COALESCE(excluded.tool_time_ms, turns.tool_time_ms),
                 context_tokens = COALESCE(excluded.context_tokens, turns.context_tokens),
                 context_window = COALESCE(excluded.context_window, turns.context_window),
-                stop_reason = COALESCE(excluded.stop_reason, turns.stop_reason)",
+                stop_reason = COALESCE(excluded.stop_reason, turns.stop_reason),
+                effort = COALESCE(excluded.effort, turns.effort),
+                account = COALESCE(excluded.account, turns.account),
+                machine = COALESCE(turns.machine, excluded.machine),
+                rustcode_version = COALESCE(excluded.rustcode_version, turns.rustcode_version),
+                diff_files = COALESCE(excluded.diff_files, turns.diff_files),
+                diff_added = COALESCE(excluded.diff_added, turns.diff_added),
+                diff_removed = COALESCE(excluded.diff_removed, turns.diff_removed)",
             params![
                 turn.thread_id,
                 turn.started_at,
@@ -1997,6 +2050,28 @@ fn write_turn_in(transaction: &Connection, turn: &TurnRow) -> Result<(), String>
                 turn.context_tokens,
                 turn.context_window,
                 turn.stop_reason,
+                turn.effort.clone().or_else(|| thread.effort.clone()),
+                turn.account,
+                local_machine(),
+                env!("CARGO_PKG_VERSION"),
+                turn.diff_files,
+                turn.diff_added,
+                turn.diff_removed,
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "UPDATE threads SET
+                account = COALESCE(?2, account),
+                machine = COALESCE(machine, ?3),
+                created_with_version = COALESCE(created_with_version, ?4)
+             WHERE id = ?1",
+            params![
+                turn.thread_id,
+                turn.account,
+                local_machine(),
+                env!("CARGO_PKG_VERSION")
             ],
         )
         .map_err(|error| error.to_string())?;
@@ -2043,6 +2118,224 @@ fn write_turn_in(transaction: &Connection, turn: &TurnRow) -> Result<(), String>
             .map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+/// Make sure a `threads` row exists for `thread_id` so an outcome recorded
+/// before the first turn (or for an older thread) has a row to land on.
+fn ensure_thread(connection: &Connection, thread_id: &str) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT INTO threads (id) VALUES (?1) ON CONFLICT(id) DO NOTHING",
+            [thread_id],
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// What a thread's work ended as: its branch and the commit it stood on, kept
+/// when its worktree is removed so the code can be found in git afterwards.
+pub fn record_thread_outcome(thread_id: &str, branch: &str, final_commit: &str) {
+    if thread_id.trim().is_empty() || rustcode_session::is_scratch_session_id(thread_id) {
+        return;
+    }
+    let Some(path) = data_path() else { return };
+    if let Err(error) = record_thread_outcome_at(&path, thread_id, branch, final_commit) {
+        crate::dbg_log!("data store: outcome of {thread_id} not recorded: {error}");
+    }
+}
+
+pub fn record_thread_outcome_at(
+    path: &Path,
+    thread_id: &str,
+    branch: &str,
+    final_commit: &str,
+) -> Result<(), String> {
+    let connection = open(path)?;
+    ensure_thread(&connection, thread_id)?;
+    connection
+        .execute(
+            "UPDATE threads SET branch = COALESCE(NULLIF(?2, ''), branch),
+                    final_commit = COALESCE(NULLIF(?3, ''), final_commit)
+             WHERE id = ?1",
+            params![thread_id, branch, final_commit],
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// The pull request a thread's branch is in, as the watch last read it.
+/// `state` is `open`, `closed` or `merged`; a merged pull request's head is
+/// the thread's final commit.
+pub fn record_thread_pull_request(thread_id: &str, url: &str, state: &str, head: &str) {
+    if thread_id.trim().is_empty()
+        || url.trim().is_empty()
+        || rustcode_session::is_scratch_session_id(thread_id)
+    {
+        return;
+    }
+    let Some(path) = data_path() else { return };
+    if let Err(error) = record_thread_pull_request_at(&path, thread_id, url, state, head) {
+        crate::dbg_log!("data store: pull request of {thread_id} not recorded: {error}");
+    }
+}
+
+pub fn record_thread_pull_request_at(
+    path: &Path,
+    thread_id: &str,
+    url: &str,
+    state: &str,
+    head: &str,
+) -> Result<(), String> {
+    let connection = open(path)?;
+    ensure_thread(&connection, thread_id)?;
+    let merged_head = if state == "merged" { head } else { "" };
+    connection
+        .execute(
+            "UPDATE threads SET pull_request = ?2, pull_request_state = ?3,
+                    final_commit = COALESCE(NULLIF(?4, ''), final_commit)
+             WHERE id = ?1",
+            params![thread_id, url, state, merged_head],
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// When a thread was settled, or cleared when it is put back to active.
+/// Settling is a status: nothing the thread recorded is removed.
+pub fn record_thread_settled(thread_id: &str, settled: bool) {
+    if thread_id.trim().is_empty() || rustcode_session::is_scratch_session_id(thread_id) {
+        return;
+    }
+    let Some(path) = data_path() else { return };
+    if let Err(error) = record_thread_settled_at(&path, thread_id, settled) {
+        crate::dbg_log!("data store: settling {thread_id} not recorded: {error}");
+    }
+}
+
+pub fn record_thread_settled_at(path: &Path, thread_id: &str, settled: bool) -> Result<(), String> {
+    let connection = open(path)?;
+    ensure_thread(&connection, thread_id)?;
+    let at =
+        settled.then(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+    connection
+        .execute(
+            "UPDATE threads SET settled_at = ?2 WHERE id = ?1",
+            params![thread_id, at],
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// One approval a user was asked for and what they decided. Names the tool and
+/// the decision; never the command, path or arguments it was about.
+#[derive(Debug, Clone, Default)]
+pub struct ApprovalRow {
+    pub thread_id: String,
+    /// `builtin`, `subagent` or `harness`.
+    pub source: String,
+    pub tool_name: Option<String>,
+    pub requested_at: String,
+    pub decided_at: Option<String>,
+    pub wait_ms: Option<i64>,
+    /// `allow_once`, `allow_hour`, `allow_always`, `reject` or `cancelled`.
+    pub decision: String,
+}
+
+pub fn record_approval(row: &ApprovalRow) {
+    if row.thread_id.trim().is_empty() || rustcode_session::is_scratch_session_id(&row.thread_id) {
+        return;
+    }
+    let Some(path) = data_path() else { return };
+    if let Err(error) = record_approval_at(&path, row) {
+        crate::dbg_log!(
+            "data store: approval of {} not recorded: {error}",
+            row.thread_id
+        );
+    }
+}
+
+pub fn record_approval_at(path: &Path, row: &ApprovalRow) -> Result<(), String> {
+    let connection = open(path)?;
+    connection
+        .execute(
+            "INSERT INTO approvals (thread_id, source, tool_name, requested_at, decided_at,
+                    wait_ms, decision)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                row.thread_id,
+                row.source,
+                row.tool_name,
+                row.requested_at,
+                row.decided_at,
+                row.wait_ms,
+                row.decision
+            ],
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// This machine's name, kept on each thread and turn so data from several
+/// machines can be told apart. Read once: it does not change under a run.
+fn local_machine() -> Option<String> {
+    static NAME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        sysinfo::System::host_name()
+            .map(|name| name.trim().to_owned())
+            .filter(|name| !name.is_empty())
+    })
+    .clone()
+}
+
+/// `turn` with its diff columns filled from the thread's checkout when the
+/// caller left them empty. A folder that is not a git checkout, or a git that
+/// does not answer, leaves them NULL rather than 0.
+fn with_checkout_diff(turn: &TurnRow) -> TurnRow {
+    let mut turn = turn.clone();
+    if turn.diff_files.is_some() {
+        return turn;
+    }
+    let cwd = crate::harness::store::load(&turn.thread_id)
+        .map(|record| record.cwd)
+        .or_else(|| {
+            crate::config::load_session_workspace(&turn.thread_id).map(|workspace| workspace.cwd)
+        });
+    if let Some((files, added, removed)) = cwd.as_deref().and_then(checkout_diff) {
+        turn.diff_files = Some(files);
+        turn.diff_added = Some(added);
+        turn.diff_removed = Some(removed);
+    }
+    turn
+}
+
+/// Files, added lines and removed lines of the uncommitted changes in `cwd`.
+fn checkout_diff(cwd: &Path) -> Option<(i64, i64, i64)> {
+    if !cwd.is_dir() {
+        return None;
+    }
+    let output = rustcode_command::hidden_command("git")
+        .args(["diff", "--numstat", "HEAD"])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    Some(parse_numstat(&String::from_utf8_lossy(&output.stdout)))
+}
+
+/// Sums `git diff --numstat` lines; a binary file (`-\t-\t...`) counts as a
+/// changed file with no lines.
+fn parse_numstat(text: &str) -> (i64, i64, i64) {
+    let (mut files, mut added, mut removed) = (0, 0, 0);
+    for line in text.lines() {
+        let mut parts = line.splitn(3, '\t');
+        let (Some(add), Some(remove), Some(_)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        files += 1;
+        added += add.parse::<i64>().unwrap_or(0);
+        removed += remove.parse::<i64>().unwrap_or(0);
+    }
+    (files, added, removed)
 }
 
 /// The server in an `mcp__<server>__<tool>` tool name, if it is one.
@@ -3101,13 +3394,14 @@ pub fn prune_telemetry_at(path: &Path) -> Result<PruneReport, String> {
 }
 
 /// The retention policy: structured rows are the history and are never
-/// deleted; only the bulky raw protocol payloads age out. Payloads older than
-/// [`PAYLOAD_RETENTION_DAYS`] are dropped, streaming-delta and status-ping
-/// payloads are dropped on every pass, and the raw tables are held under
-/// [`TELEMETRY_MAX_BYTES`] by dropping payloads before rows. When
-/// `telemetry_retention` in `config.toml` names a number of days, raw
-/// `provider_requests` and `harness_rpc_messages` rows older than that are
-/// deleted too; the default `forever` keeps their metadata. Command receipts
+/// deleted. Streaming-delta and status-ping payloads are dropped on every
+/// pass (they are text the thread already holds). Everything else is kept
+/// under the default `telemetry_retention = "forever"`. Only when
+/// `telemetry_retention` names a number of days do payloads older than
+/// [`PAYLOAD_RETENTION_DAYS`] go, raw `provider_requests` and
+/// `harness_rpc_messages` rows older than that number of days, and the raw
+/// tables are held under [`TELEMETRY_MAX_BYTES`] by dropping payloads before
+/// rows. Command receipts
 /// have their own, shorter window ([`COMMAND_RECEIPT_RETENTION_DAYS`],
 /// [`COMMAND_RECEIPT_MAX_ROWS`]): they exist to make a retry safe for a while,
 /// not to keep history. The file is then checkpointed (and vacuumed only when
@@ -3150,8 +3444,11 @@ fn prune_with(
         ..PruneReport::default()
     };
     report.payloads_cleared += clear_noise_payloads(connection)?;
-    report.payloads_cleared += clear_payloads_before(connection, &payload_cutoff)?;
+    // Age and size limits are opt-in: with `telemetry_retention = "forever"`
+    // (the default) no stored payload is cleared or deleted because it is old
+    // or because the file is large.
     if let Some(days) = row_retention_days {
+        report.payloads_cleared += clear_payloads_before(connection, &payload_cutoff)?;
         let row_cutoff = rfc3339_days_ago(now, days);
         report.rows_deleted += delete_rows_before(connection, &row_cutoff)?;
     }
@@ -3160,7 +3457,9 @@ fn prune_with(
         COMMAND_RECEIPT_RETENTION_DAYS,
         COMMAND_RECEIPT_MAX_ROWS,
     )?;
-    trim_to_budget(connection, max_bytes, &mut report)?;
+    if row_retention_days.is_some() {
+        trim_to_budget(connection, max_bytes, &mut report)?;
+    }
     report.bytes_after = telemetry_bytes(connection)?;
     compact(connection);
     Ok(report)
@@ -3944,6 +4243,7 @@ mod tests {
                 context_window: None,
                 stop_reason: None,
                 tool_calls: Vec::new(),
+                ..Default::default()
             },
         )
         .unwrap();
@@ -4127,6 +4427,7 @@ mod tests {
             context_window: None,
             stop_reason: None,
             tool_calls: Vec::new(),
+            ..Default::default()
         };
         for turn in [
             spent("2026-11-01T10:00:00Z", Some(10), Some(2), Some(3), Some(1)),
@@ -5997,6 +6298,13 @@ mod tests {
         assert_eq!(latency["mean_duration_ms"], 9_500.0);
     }
 
+    /// A thread, a turn and a tool call written with plain SQL against only
+    /// the columns migrations 1 to 8 know, so a test can build an old store.
+    const OLD_ROWS: &str = "INSERT INTO threads (id, title) VALUES ('t', 'kept');
+        INSERT INTO turns (id, thread_id, started_at, input_tokens, output_tokens, status)
+            VALUES (1, 't', '2026-11-01T10:00:00Z', 10, 2, 'completed');
+        INSERT INTO tool_calls (thread_id, turn_id, tool_name, success) VALUES ('t', 1, 'x', 1);";
+
     #[test]
     fn the_telemetry_tables_migrate_again_without_losing_rows() {
         let dir = tempfile::tempdir().unwrap();
@@ -6061,11 +6369,7 @@ mod tests {
                     )
                     .unwrap();
             }
-            write_turn(
-                &connection,
-                &turn("t", "2026-11-01T10:00:00Z", (10, 2), "completed"),
-            )
-            .unwrap();
+            connection.execute_batch(OLD_ROWS).unwrap();
         }
         assert!(
             !indexes(&path).iter().any(|name| name == "tool_calls_turn"),
@@ -6088,6 +6392,224 @@ mod tests {
         // the index some other way.
         let last = MIGRATIONS.iter().find(|(id, _, _)| *id == 8).unwrap().2;
         connection.execute_batch(last).unwrap();
+    }
+
+    #[test]
+    fn migration_nine_only_adds_and_keeps_every_existing_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        // A store as migration 8 left it, holding a thread, a turn and a call.
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL);",
+                )
+                .unwrap();
+            for (id, name, sql) in MIGRATIONS.iter().filter(|(id, _, _)| *id <= 8) {
+                connection.execute_batch(sql).unwrap();
+                connection
+                    .execute(
+                        "INSERT INTO schema_migrations (id, name) VALUES (?1, ?2)",
+                        params![id, name],
+                    )
+                    .unwrap();
+            }
+            connection.execute_batch(OLD_ROWS).unwrap();
+        }
+        let columns = |table: &str| -> Vec<String> {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .prepare(&format!("PRAGMA table_info({table})"))
+                .unwrap()
+                .query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .filter_map(Result::ok)
+                .collect()
+        };
+        let threads_before = columns("threads");
+        let turns_before = columns("turns");
+
+        let connection = open(&path).unwrap();
+        let recorded: i64 = connection
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(recorded, MIGRATIONS.len() as i64);
+        // Every old column is still there, in order, with new ones after it.
+        assert_eq!(columns("threads")[..threads_before.len()], threads_before);
+        assert_eq!(columns("turns")[..turns_before.len()], turns_before);
+        for column in [
+            "branch",
+            "final_commit",
+            "pull_request",
+            "settled_at",
+            "machine",
+        ] {
+            assert!(
+                columns("threads").iter().any(|name| name == column),
+                "{column}"
+            );
+        }
+        for column in [
+            "effort",
+            "account",
+            "diff_files",
+            "diff_added",
+            "diff_removed",
+        ] {
+            assert!(
+                columns("turns").iter().any(|name| name == column),
+                "{column}"
+            );
+        }
+        // The rows survive, the new columns are NULL, and the view still reads.
+        assert_eq!(count_rows(&path, "turns"), 1);
+        assert_eq!(count_rows(&path, "tool_calls"), 1);
+        assert_eq!(count_rows(&path, "approvals"), 0);
+        let kept = one_row(
+            &path,
+            "SELECT th.title, tu.input_tokens, tu.effort, th.branch
+             FROM turns tu JOIN threads th ON th.id = tu.thread_id",
+        );
+        assert_eq!(kept["title"], "kept");
+        assert_eq!(kept["input_tokens"], 10);
+        assert!(
+            kept["effort"].is_null() && kept["branch"].is_null(),
+            "{kept}"
+        );
+        assert_eq!(count_rows(&path, "daily_usage"), 1);
+    }
+
+    #[test]
+    fn a_turn_keeps_its_effort_account_machine_and_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let connection = open(&path).unwrap();
+        let mut row = turn("t", "2026-11-01T10:00:00Z", (10, 2), "completed");
+        row.effort = Some("high".to_owned());
+        row.account = Some("paral-2".to_owned());
+        row.diff_files = Some(3);
+        row.diff_added = Some(40);
+        row.diff_removed = Some(7);
+        write_turn(&connection, &row).unwrap();
+        let stored = one_row(
+            &path,
+            "SELECT effort, account, rustcode_version, diff_files, diff_added, diff_removed
+             FROM turns",
+        );
+        assert_eq!(stored["effort"], "high");
+        assert_eq!(stored["account"], "paral-2");
+        assert_eq!(stored["rustcode_version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(stored["diff_files"], 3);
+        assert_eq!(stored["diff_added"], 40);
+        assert_eq!(stored["diff_removed"], 7);
+        let thread = one_row(&path, "SELECT account, created_with_version FROM threads");
+        assert_eq!(thread["account"], "paral-2");
+        assert_eq!(thread["created_with_version"], env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn numstat_lines_sum_into_files_and_lines() {
+        let text = "10\t2\tsrc/a.rs\n-\t-\tlogo.png\n3\t0\tdocs/b.md\n";
+        assert_eq!(parse_numstat(text), (3, 13, 2));
+        assert_eq!(parse_numstat(""), (0, 0, 0));
+    }
+
+    #[test]
+    fn a_threads_outcome_pull_request_settling_and_approvals_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        {
+            let connection = open(&path).unwrap();
+            write_turn(
+                &connection,
+                &turn("t", "2026-11-01T10:00:00Z", (10, 2), "completed"),
+            )
+            .unwrap();
+        }
+        record_thread_outcome_at(&path, "t", "feat/x", "abc123").unwrap();
+        record_thread_pull_request_at(
+            &path,
+            "t",
+            "https://example.test/pull/9",
+            "merged",
+            "def456",
+        )
+        .unwrap();
+        record_thread_settled_at(&path, "t", true).unwrap();
+        let thread = one_row(
+            &path,
+            "SELECT branch, final_commit, pull_request, pull_request_state, settled_at,
+                    title FROM threads WHERE id = 't'",
+        );
+        assert_eq!(thread["branch"], "feat/x");
+        assert_eq!(thread["final_commit"], "def456", "the merged head wins");
+        assert_eq!(thread["pull_request"], "https://example.test/pull/9");
+        assert_eq!(thread["pull_request_state"], "merged");
+        assert!(thread["settled_at"].is_string(), "{thread}");
+        // Settling keeps the turns and tool calls it already had.
+        assert_eq!(count_rows(&path, "turns"), 1);
+        assert_eq!(count_rows(&path, "tool_calls"), 1);
+        record_thread_settled_at(&path, "t", false).unwrap();
+        let reopened = one_row(&path, "SELECT settled_at FROM threads WHERE id = 't'");
+        assert!(reopened["settled_at"].is_null(), "{reopened}");
+
+        // An open pull request does not replace the final commit.
+        record_thread_pull_request_at(&path, "t", "https://example.test/pull/9", "open", "zzz")
+            .unwrap();
+        let after = one_row(&path, "SELECT final_commit FROM threads WHERE id = 't'");
+        assert_eq!(after["final_commit"], "def456");
+
+        record_approval_at(
+            &path,
+            &ApprovalRow {
+                thread_id: "t".to_owned(),
+                source: "builtin".to_owned(),
+                tool_name: Some("run_command".to_owned()),
+                requested_at: "2026-11-01T10:00:00.000Z".to_owned(),
+                decided_at: Some("2026-11-01T10:00:04.000Z".to_owned()),
+                wait_ms: Some(4000),
+                decision: "allow_once".to_owned(),
+            },
+        )
+        .unwrap();
+        let approval = one_row(&path, "SELECT * FROM approvals");
+        assert_eq!(approval["decision"], "allow_once");
+        assert_eq!(approval["wait_ms"], 4000);
+        assert_eq!(approval["tool_name"], "run_command");
+    }
+
+    #[test]
+    fn by_default_old_and_large_payloads_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DATA_FILE);
+        let connection = open(&path).unwrap();
+        let payload = format!("{{\"pad\":\"{}\"}}", "p".repeat(1024));
+        for days in [400, 40, 8, 0] {
+            write_provider_request(
+                &connection,
+                &provider_row("t", &days_ago(days), Some(&payload)),
+            )
+            .unwrap();
+        }
+        // A one-byte budget would clear everything if size mattered.
+        let report = prune_with(&connection, 1, None).unwrap();
+        assert_eq!(report.payloads_cleared, 0, "{report:?}");
+        assert_eq!(report.rows_deleted, 0, "{report:?}");
+        assert_eq!(count_rows(&path, "provider_requests"), 4);
+        let kept = query_path(
+            &path,
+            "SELECT request_payload_json FROM provider_requests",
+            10,
+        )
+        .unwrap()
+        .rows;
+        assert!(
+            kept.iter()
+                .all(|row| row["request_payload_json"] == payload)
+        );
     }
 
     #[test]
@@ -6279,7 +6801,7 @@ mod tests {
         write_provider_request(&connection, &provider_row("t", &days_ago(0), Some(payload)))
             .unwrap();
 
-        let report = prune_with(&connection, TELEMETRY_MAX_BYTES, None).unwrap();
+        let report = prune_with(&connection, TELEMETRY_MAX_BYTES, Some(10_000)).unwrap();
         assert!(report.payloads_cleared >= 2, "{report:?}");
         assert_eq!(
             report.rows_deleted, 0,
@@ -6350,7 +6872,7 @@ mod tests {
         )
         .unwrap();
 
-        let report = prune_with(&connection, TELEMETRY_MAX_BYTES, None).unwrap();
+        let report = prune_with(&connection, TELEMETRY_MAX_BYTES, Some(10_000)).unwrap();
         assert_eq!(
             report.payloads_cleared, 2,
             "the raw bodies only: {report:?}"
@@ -6421,7 +6943,7 @@ mod tests {
             .unwrap();
         }
         let budget = 100 * 1024;
-        let report = prune_with(&connection, budget, None).unwrap();
+        let report = prune_with(&connection, budget, Some(10_000)).unwrap();
         assert!(report.bytes_before > budget, "{report:?}");
         assert!(report.bytes_after <= budget, "{report:?}");
         assert!(report.payloads_cleared > 0, "{report:?}");
@@ -6716,7 +7238,7 @@ mod tests {
                 .unwrap();
         }
 
-        let report = prune_with(&connection, TELEMETRY_MAX_BYTES, None).unwrap();
+        let report = prune_with(&connection, TELEMETRY_MAX_BYTES, Some(10_000)).unwrap();
         assert_eq!(report.rows_deleted, 1, "{report:?}");
         assert_eq!(
             check_receipt_at(&path, "a", "old", "message_session", "h1").unwrap(),
