@@ -71,7 +71,7 @@ const ROW_KINDS: { section: SettingsSection; title: string; kind: SettingKind }[
   // The rest of the machine-only pages.
   { section: "remote", title: "Share this computer's threads with a phone", kind: "machine" },
   { section: "remote", title: "Gateway address", kind: "machine" },
-  { section: "machines", title: "Machines", kind: "machine" },
+  { section: "machines", title: "Environments", kind: "machine" },
   // Advanced's telemetry switches are kept by each server.
   { section: "advanced", title: "Provider request bodies", kind: "server" },
   { section: "advanced", title: "Harness messages", kind: "server" },

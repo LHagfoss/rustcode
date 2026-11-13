@@ -1350,7 +1350,7 @@ on that machine (a failed read is retried on the next call).
 **`list_machines` to choose by.** Each row now carries `version` (the
 RustCode version it last reported; this app's own for this computer), `state`
 (`connected`, `connecting`, `offline` or `revoked`) and, when it is not
-connected, `reason` (what Settings › Machines says, with its hint) and
+connected, `reason` (what Settings › Environments says, with its hint) and
 `retry_in_secs`; `running_threads` and `pending_requests` (what this app lists
 for it); `harnesses` with `default`, the first eight model ids
 (`omitted_models` counts the rest; `list_harnesses` with `machine` has them)

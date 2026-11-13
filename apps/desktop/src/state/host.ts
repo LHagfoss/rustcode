@@ -756,7 +756,7 @@ export function machineUnavailable(machine: MachineRef): Failure | null {
   if (saved?.state === "needsPairing") {
     return failure(
       "offline",
-      `${machine.name} is no longer paired with this computer; pair it again in Settings › Machines. Nothing was sent`,
+      `${machine.name} is no longer paired with this computer; pair it again in Settings › Environments. Nothing was sent`,
     );
   }
   const since = offlineSinceLabel(useMachines.getState().offlineSince[machine.host]);

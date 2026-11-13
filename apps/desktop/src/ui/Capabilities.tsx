@@ -243,7 +243,7 @@ export function CapabilitiesPage() {
       </div>
       {online.length === 0 && (
         <p className="mb-6 rounded-lg bg-warning/10 px-3 py-2 text-callout">
-          No connected machine. Connect one in Settings › Machines to read or change its skills and MCP
+          No connected environment. Add one in Settings › Environments to read or change its skills and MCP
           servers.
         </p>
       )}
@@ -307,7 +307,7 @@ function MachineCapabilities({
       <Group title={showName ? machine.name : undefined}>
         <Row
           title="Offline — keeps its skills and servers"
-          subtitle="Connect the machine in Settings › Machines to read or change them."
+          subtitle="Connect the environment in Settings › Environments to read or change them."
         />
       </Group>
     );
