@@ -16,6 +16,7 @@ import {
   claimLive,
   clearHalt,
   frameToken,
+  frameUrl,
   HoverSize,
   haltOf,
   haltView,
@@ -52,12 +53,6 @@ function currentTheme() {
     sans: cssVar("--font-sans"),
     mono: cssVar("--font-mono"),
   });
-}
-
-/** Where a page is served from in the app: its own scheme, with its own CSP (src-tauri/src/smartui.rs). */
-function frameUrl(id: string): string {
-  const windows = navigator.userAgent.includes("Windows");
-  return windows ? `http://rcui.localhost/${id}` : `rcui://localhost/${id}`;
 }
 
 /** The scroller around a view: an observer's margin only applies to its own root. */

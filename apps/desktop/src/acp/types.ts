@@ -1,6 +1,7 @@
 // ACP v1 shapes the app uses, and parsers from raw JSON. Ported from the
 // SwiftUI app's RustCodeKit (ACPTypes.swift, FileDiff.swift, SessionUsage.swift).
 
+import { isMcpApp, type McpApp, toolCallApp } from "../lib/mcpApp";
 import { modelTitle } from "../lib/modelNames";
 import { basename, shortenHome } from "../lib/paths";
 import { stripOutputFence } from "../lib/toolOutput";
@@ -32,6 +33,8 @@ export const Method = {
   requestPermission: "session/request_permission",
   warm: "_rustcode/warm",
   steer: "_rustcode/steer",
+  /** Read or call through the MCP App of a tool call (built-in harness). */
+  mcpApp: "_rustcode/mcp/app",
   agents: "_rustcode/agents",
   rewind: "_rustcode/rewind",
   usageLimits: "_rustcode/usage/limits",
@@ -572,6 +575,8 @@ export type SessionUpdate =
       summary?: string;
       diffs: FileDiff[];
       output?: string;
+      /** The interactive view (MCP App) the result embeds, drawn next to its text. */
+      app?: McpApp;
       /** The harness's own tool name (`_meta.claudeCode.toolName`), such as `Agent`. */
       toolName?: string;
       /** The Agent/Task call whose subagent made this call (`_meta.claudeCode.parentToolUseId`). */
@@ -584,6 +589,7 @@ export type SessionUpdate =
       status?: ToolStatus;
       output?: string;
       outputDelta?: string;
+      app?: McpApp;
       diffs: FileDiff[];
       exitCode?: number;
       parent?: string;
@@ -601,7 +607,10 @@ function contentText(content: Json | undefined): string {
   const c = obj(content);
   if (!c) return "";
   if (str(c.type) === "text") return str(c.text) ?? "";
-  return str(obj(c.resource)?.text) ?? "";
+  const resource = obj(c.resource);
+  // An MCP App's HTML is the view, not what the tool printed (`lib/mcpApp.ts`).
+  if (isMcpApp(str(resource?.uri), str(resource?.mimeType))) return "";
+  return str(resource?.text) ?? "";
 }
 
 function toolOutput(update: JsonObject): string | undefined {
@@ -726,6 +735,7 @@ export function parseSessionUpdate(params: JsonObject): SessionUpdate {
         summary: str(meta?.summary) ?? str(obj(update.rawInput)?.summary),
         diffs: parseDiffs(update.content),
         output: toolOutput(update),
+        app: toolCallApp(update.content),
         toolName: str(claudeMeta(update)?.toolName),
         parent: str(claudeMeta(update)?.parentToolUseId),
       };
@@ -737,6 +747,7 @@ export function parseSessionUpdate(params: JsonObject): SessionUpdate {
         status: parseToolStatus(update.status),
         output: toolOutput(update),
         outputDelta: str(meta?.outputDelta),
+        app: toolCallApp(update.content),
         diffs: parseDiffs(update.content),
         exitCode: num(obj(update.rawOutput)?.exitCode),
         parent: str(claudeMeta(update)?.parentToolUseId),

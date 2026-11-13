@@ -474,7 +474,7 @@ pub(super) fn schema_from_arguments(arguments: &str) -> Value {
 /// Gather all connected MCP tools as `(name, description, input_schema)`,
 /// sorted by name for a deterministic, cache-stable ordering. Shared by both
 /// the native schema builder and the text-protocol prompt listing.
-pub(super) fn mcp_canonical_name(server: &str, tool: &str) -> String {
+pub(crate) fn mcp_canonical_name(server: &str, tool: &str) -> String {
     let server = server
         .chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
@@ -499,6 +499,39 @@ pub(super) fn mcp_canonical_name_for_clients(
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     server.hash(&mut hasher);
     format!("{base}__{:016x}", hasher.finish())
+}
+
+/// The MCP server connection that served a model-visible tool call named
+/// `name` (provider-facing canonical name, or a raw name unique among the
+/// connected servers), with the tool's own name. Used
+/// to reach the exact connection that ran a call, never a server of the same
+/// name that was started for something else.
+pub(crate) fn resolve_mcp_tool_call(name: &str) -> Option<(Arc<crate::mcp::McpClient>, String)> {
+    let mut clients = crate::mcp::get_mcp_registry()
+        .lock()
+        .ok()?
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    clients.sort_by(|a, b| a.name.cmp(&b.name));
+    for client in &clients {
+        let Ok(tools) = client.get_tools() else {
+            continue;
+        };
+        for tool in tools {
+            if !crate::mcp::tool_visible_to(&tool, "model") {
+                continue;
+            }
+            let Some(raw) = tool.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            let canonical = mcp_canonical_name_for_clients(&client.name, raw, &clients);
+            if name == canonical || (name == raw && mcp_raw_name_is_unique(name, &clients)) {
+                return Some((Arc::clone(client), raw.to_owned()));
+            }
+        }
+    }
+    None
 }
 
 pub(super) fn mcp_raw_name_is_unique(name: &str, clients: &[Arc<crate::mcp::McpClient>]) -> bool {
@@ -572,6 +605,9 @@ pub(super) fn collect_mcp_tools_with_servers() -> Vec<(String, String, String, S
         for client in &clients {
             if let Ok(mcp_tools) = client.get_tools() {
                 for tool in mcp_tools {
+                    if !crate::mcp::tool_visible_to(&tool, "model") {
+                        continue;
+                    }
                     let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
                     if name.is_empty() {
                         continue;

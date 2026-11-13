@@ -7,6 +7,12 @@
 
 import { MAX_LIVE } from "./parse";
 
+/** Where a page is served from in the app: its own scheme, with its own CSP (src-tauri/src/smartui.rs). */
+export function frameUrl(id: string): string {
+  const windows = navigator.userAgent.includes("Windows");
+  return windows ? `http://rcui.localhost/${id}` : `rcui://localhost/${id}`;
+}
+
 const live: { id: string; stop: () => void; visible: () => boolean }[] = [];
 
 export function claimLive(id: string, stop: () => void, visible: () => boolean = () => true) {

@@ -7919,6 +7919,7 @@ fn test_structured_session_memory_semantic_continuity_across_compactions() {
         retryable: false,
         inspection: None,
         command_status: None,
+        mcp_app: None,
     });
     history.push(failed_tool);
 

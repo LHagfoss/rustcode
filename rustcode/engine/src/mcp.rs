@@ -6,7 +6,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Child;
 use tokio::sync::{Mutex, Notify, mpsc};
 
@@ -38,6 +38,9 @@ pub(crate) const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 /// forever. Counted in time, not notifications: a server that reports often
 /// must not use the allowance up sooner than one that reports rarely.
 const MAX_TOTAL_TIMEOUTS: u32 = 61;
+
+/// Bound one server response before parsing or retaining its contents.
+const MAX_MCP_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 /// Sends `notifications/cancelled` for a stdio request when dropped while
 /// still armed.
@@ -912,6 +915,50 @@ fn check_jsonrpc_response(resp: Value) -> Result<Value, String> {
     Ok(resp)
 }
 
+/// MCP Apps visibility defaults to both audiences when absent; malformed values fail closed.
+pub(crate) fn tool_visible_to(tool: &Value, audience: &str) -> bool {
+    match tool.pointer("/_meta/ui/visibility") {
+        None => true,
+        Some(Value::Array(visibility)) => visibility
+            .iter()
+            .any(|entry| entry.as_str() == Some(audience)),
+        Some(_) => false,
+    }
+}
+
+async fn bounded_mcp_line<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+    limit: usize,
+) -> std::io::Result<Option<Vec<u8>>> {
+    let mut bytes = Vec::new();
+    let count = reader
+        .take((limit + 1) as u64)
+        .read_until(b'\n', &mut bytes)
+        .await?;
+    if count > limit {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "MCP response exceeds size limit",
+        ));
+    }
+    Ok((count != 0).then_some(bytes))
+}
+
+async fn bounded_mcp_body(mut response: reqwest::Response) -> Result<Vec<u8>, String> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| format!("response read failed: {e}"))?
+    {
+        if chunk.len() > MAX_MCP_RESPONSE_BYTES.saturating_sub(body.len()) {
+            return Err("response exceeds size limit".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
 impl McpClient {
     #[cfg(test)]
     pub async fn start(
@@ -980,8 +1027,26 @@ impl McpClient {
         // Stdout reader task
         let stdout_server_name = name.clone();
         tokio::spawn(async move {
-            let mut reader = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
+            let mut reader = BufReader::new(stdout);
+            loop {
+                let bytes = match bounded_mcp_line(&mut reader, MAX_MCP_RESPONSE_BYTES).await {
+                    Ok(Some(bytes)) => bytes,
+                    Ok(None) => break,
+                    Err(error) => {
+                        crate::dbg_log!("[mcp:{stdout_server_name}] stdout read failed: {error}");
+                        if error.kind() == std::io::ErrorKind::InvalidData {
+                            for (id, sender) in pending_clone.lock().await.drain() {
+                                let _ = sender.send(json!({"jsonrpc":"2.0", "id":id,
+                                    "error":{"code":-32000, "message":"MCP response exceeds size limit"}}));
+                            }
+                        }
+                        break;
+                    }
+                };
+                let Ok(line) = String::from_utf8(bytes) else {
+                    crate::dbg_log!("[mcp:{stdout_server_name}] invalid UTF-8 on stdout");
+                    break;
+                };
                 if let Ok(msg) = serde_json::from_str::<Value>(&line) {
                     if msg.get("method").and_then(Value::as_str) == Some("notifications/progress") {
                         let token = msg["params"]["progressToken"].as_i64();
@@ -1004,11 +1069,7 @@ impl McpClient {
                     note_mcp_non_json_line(&stdout_server_name);
                     crate::dbg_log!(
                         "[mcp:{stdout_server_name}] ignoring non-JSON stdout line: {}",
-                        if line.len() > 100 {
-                            &line[..100]
-                        } else {
-                            &line
-                        }
+                        line.chars().take(100).collect::<String>()
                     );
                 }
             }
@@ -1451,7 +1512,10 @@ impl McpClient {
                     }
                 }
             }
-            let snippet = truncate_snippet(&resp.text().await.unwrap_or_default(), 300);
+            let snippet = match bounded_mcp_body(resp).await {
+                Ok(body) => truncate_snippet(&String::from_utf8_lossy(&body), 300),
+                Err(error) => error,
+            };
             return Err(format!(
                 "MCP server '{name}' request failed (HTTP {status}): {snippet}"
             ));
@@ -1472,11 +1536,12 @@ impl McpClient {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default()
             .to_ascii_lowercase();
+        let body = bounded_mcp_body(resp)
+            .await
+            .map_err(|e| format!("MCP server '{name}' {e}"))?;
+        let text = String::from_utf8(body)
+            .map_err(|e| format!("MCP server '{name}' returned invalid UTF-8: {e}"))?;
         if content_type.contains("text/event-stream") {
-            let text = resp
-                .text()
-                .await
-                .map_err(|e| format!("MCP server '{name}' SSE read failed: {e}"))?;
             for line in text.lines() {
                 let Some(payload) = line.strip_prefix("data:") else {
                     continue;
@@ -1496,10 +1561,6 @@ impl McpClient {
                 "MCP server '{name}' sent an SSE stream with no response for request {id}"
             ));
         }
-        let text = resp
-            .text()
-            .await
-            .map_err(|e| format!("MCP server '{name}' response read failed: {e}"))?;
         if text.trim().is_empty() {
             return Err(format!(
                 "MCP server '{name}' accepted the request but returned no result (HTTP {status})"
@@ -1901,6 +1962,78 @@ impl McpClient {
             .get("result")
             .cloned()
             .ok_or_else(|| "MCP response missing result".into())
+    }
+
+    /// Call an app-visible tool on this exact server only after the host approves it.
+    /// The approval callback receives the server, tool and arguments for an origin-labelled prompt.
+    pub async fn call_app_tool<F, Fut>(
+        &self,
+        tool: &str,
+        arguments: Value,
+        approve: F,
+    ) -> Result<Value, String>
+    where
+        F: FnOnce(&str, &str, &Value) -> Fut,
+        Fut: Future<Output = bool>,
+    {
+        if !arguments.is_object() {
+            return Err("MCP app tool arguments must be an object".into());
+        }
+        if serde_json::to_vec(&arguments)
+            .map_err(|e| e.to_string())?
+            .len()
+            > 512 * 1024
+        {
+            return Err("MCP app tool arguments exceed size limit".into());
+        }
+        let allowed = self.get_tools()?.iter().any(|entry| {
+            entry.get("name").and_then(Value::as_str) == Some(tool) && tool_visible_to(entry, "app")
+        });
+        if !allowed {
+            return Err("MCP app tool is unavailable or not visible to apps".into());
+        }
+        if !approve(&self.name, tool, &arguments).await {
+            return Err("MCP app tool call was not approved".into());
+        }
+        self.call_tool(tool, arguments).await
+    }
+
+    /// Fetch only the UI resource declared by this server's tool definition.
+    /// A caller cannot use this method to read an arbitrary server resource.
+    pub async fn read_tool_app(
+        &self,
+        tool: &str,
+    ) -> Result<Option<rustcode_core::mcp_app::McpAppResource>, String> {
+        let uri = self
+            .get_tools()?
+            .iter()
+            .find(|entry| entry.get("name").and_then(Value::as_str) == Some(tool))
+            .and_then(|entry| entry.pointer("/_meta/ui/resourceUri"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let Some(uri) = uri else {
+            return Ok(None);
+        };
+        if !uri.starts_with("ui://") {
+            return Err("MCP app resource must use ui://".into());
+        }
+        let response = self.call("resources/read", json!({"uri": uri})).await?;
+        let contents = response
+            .pointer("/result/contents")
+            .and_then(Value::as_array)
+            .ok_or("MCP app resource is unavailable")?;
+        let resource = contents
+            .iter()
+            .find(|entry| entry.get("uri").and_then(Value::as_str) == Some(uri.as_str()))
+            .ok_or("MCP app resource URI did not match")?;
+        let text = resource
+            .get("text")
+            .and_then(Value::as_str)
+            .ok_or("MCP app resource is not text")?;
+        let mime = resource.get("mimeType").and_then(Value::as_str);
+        rustcode_core::mcp_app::mcp_app_resource(&uri, mime, text)
+            .map(Some)
+            .ok_or_else(|| "MCP app resource has an unsupported MIME type".into())
     }
 
     pub fn notify(&self, method: &str, params: Value) -> Result<(), String> {
@@ -2841,6 +2974,84 @@ mod tests {
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].get("name").unwrap().as_str().unwrap(), "test_tool");
 
+        client.shutdown().await;
+    }
+
+    #[test]
+    fn mcp_app_visibility_defaults_and_fails_closed() {
+        assert!(tool_visible_to(&json!({}), "model"));
+        assert!(tool_visible_to(&json!({}), "app"));
+        let app_only = json!({"_meta":{"ui":{"visibility":["app"]}}});
+        assert!(!tool_visible_to(&app_only, "model"));
+        assert!(tool_visible_to(&app_only, "app"));
+        assert!(!tool_visible_to(
+            &json!({"_meta":{"ui":{"visibility":"app"}}}),
+            "app"
+        ));
+    }
+
+    #[tokio::test]
+    async fn mcp_line_is_bounded_before_parsing() {
+        let mut reader = BufReader::new(&b"12345\nnext\n"[..]);
+        assert_eq!(
+            bounded_mcp_line(&mut reader, 6).await.unwrap().unwrap(),
+            b"12345\n"
+        );
+        assert_eq!(
+            bounded_mcp_line(&mut reader, 4).await.unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_app_reads_only_the_declared_resource() {
+        let script = r#"read line; echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"mock","version":"1"}}}'; read line; read line; echo '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"weather","inputSchema":{},"_meta":{"ui":{"resourceUri":"ui://weather/view"}}}]}}'; read line; case "$line" in *'ui://weather/view'*) echo '{"jsonrpc":"2.0","id":3,"result":{"contents":[{"uri":"ui://weather/view","mimeType":"text/html;profile=mcp-app","text":"<p>Weather</p>"}]}}';; esac"#;
+        let client = McpClient::start(
+            "mock".into(),
+            "sh".into(),
+            vec!["-c".into(), script.into()],
+            HashMap::new(),
+        )
+        .await
+        .unwrap();
+        assert!(client.read_tool_app("other").await.unwrap().is_none());
+        let app = client.read_tool_app("weather").await.unwrap().unwrap();
+        assert_eq!(app.uri, "ui://weather/view");
+        assert_eq!(app.html.as_deref(), Some("<p>Weather</p>"));
+        client.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn app_calls_require_visibility_and_approval() {
+        let script = r#"read line; echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"mock","version":"1"}}}'; read line; read line; echo '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"app_tool","inputSchema":{},"_meta":{"ui":{"visibility":["app"]}}},{"name":"model_tool","inputSchema":{},"_meta":{"ui":{"visibility":["model"]}}}]}}'; read line; case "$line" in *'app_tool'*) echo '{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"done"}]}}';; esac"#;
+        let client = McpClient::start(
+            "bound-server".into(),
+            "sh".into(),
+            vec!["-c".into(), script.into()],
+            HashMap::new(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            client
+                .call_app_tool("model_tool", json!({}), |_, _, _| async { true })
+                .await
+                .is_err()
+        );
+        assert!(
+            client
+                .call_app_tool("app_tool", json!({}), |_, _, _| async { false })
+                .await
+                .is_err()
+        );
+        let result = client
+            .call_app_tool("app_tool", json!({}), |server, tool, _| {
+                assert_eq!((server, tool), ("bound-server", "app_tool"));
+                async { true }
+            })
+            .await
+            .unwrap();
+        assert_eq!(result["content"][0]["text"], "done");
         client.shutdown().await;
     }
 

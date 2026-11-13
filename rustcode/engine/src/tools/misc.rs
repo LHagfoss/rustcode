@@ -2391,6 +2391,7 @@ fn start_mcp_server_in_session(
         .and_then(|client| client.get_tools().ok())
         .unwrap_or_default()
         .iter()
+        .filter(|tool| crate::mcp::tool_visible_to(tool, "model"))
         .filter_map(|tool| tool.get("name")?.as_str().map(str::to_owned))
         .map(|tool| super::schema::mcp_canonical_name_for_clients(name, &tool, &clients))
         .collect::<Vec<_>>();

@@ -67,9 +67,9 @@ use dispatch::as_error_message;
 use parser::repair_json;
 #[cfg(test)]
 use schema::{
-    MAX_MCP_NATIVE_SCHEMA_BYTES, MCP_DISCOVERY_FALLBACK_COUNT, mcp_canonical_name,
-    provider_compatible_schema, schema_from_arguments, select_mcp_tools_for_context,
-    select_mcp_tools_for_context_in_phase, select_mcp_tools_for_context_with_sticky,
+    MAX_MCP_NATIVE_SCHEMA_BYTES, MCP_DISCOVERY_FALLBACK_COUNT, provider_compatible_schema,
+    schema_from_arguments, select_mcp_tools_for_context, select_mcp_tools_for_context_in_phase,
+    select_mcp_tools_for_context_with_sticky,
 };
 
 #[cfg(test)]
@@ -95,6 +95,7 @@ pub(crate) use exec::{
 };
 pub use exec::{has_foreground_command, move_foreground_commands_to_background};
 pub use schema::mcp_tool_display_name;
+pub(crate) use schema::{mcp_canonical_name, resolve_mcp_tool_call};
 
 pub(crate) use filesystem::edit_target_and_replacement;
 pub(crate) use misc::{mcp_servers_approval, search_web_async};

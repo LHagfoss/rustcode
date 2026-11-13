@@ -3020,6 +3020,13 @@ export class MockEngine {
         run.steers.push(str(params.text) ?? "");
         return { accepted: true };
       }
+      case "_rustcode/mcp/app": {
+        // The mock has no MCP servers: no tool declares an app, and none can be called.
+        if (params.action === "read") return { app: null };
+        throw Object.assign(new Error("the MCP server that ran this call is not connected"), {
+          code: -32602,
+        });
+      }
       case "_rustcode/agents": {
         const sid = str(params.sessionId) ?? "";
         const list = this.agents.get(sid) ?? [];
