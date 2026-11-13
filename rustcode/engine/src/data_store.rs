@@ -4187,6 +4187,7 @@ mod tests {
                 at: Some(started.to_owned()),
                 ..Default::default()
             }],
+            ..Default::default()
         }
     }
 
