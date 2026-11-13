@@ -81,6 +81,14 @@ does. The word is user-facing only: `Machine`, `useMachines`, the
 script or protocol client changes. Write *environment* in UI text and docs
 about the app, and *machine* in code and the CLI.
 
+An environment's **name** is shared across the fleet: a rename on one computer
+is stamped and reaches every paired computer, and the newest rename wins
+([Environment names and the fleet](remote.md#environment-names-and-the-fleet)).
+An environment this computer only *knows of* through a paired one is **known**,
+not paired: it is listed read-only until it is paired on its own. The code says
+`fleet` (`fleet.rs`, `fleet.json`, `state/fleet.ts`) and the protocol
+`_rustcode/environment/sync`.
+
 ## What stays "session"
 
 - **ACP.** `session/*` and `sessionId` are the

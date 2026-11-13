@@ -617,6 +617,48 @@ holds until encrypted transport (#2651) lands.
   would send them to a network they are not on. Those routes are still kept
   and dialled, but only after every route that can answer.
 
+### Environment names and the fleet
+
+Pairing is trust between two computers. On top of it, paired computers share
+*metadata* about themselves and about each other, so a name chosen on one
+computer shows on all of them and every computer can see the whole fleet, not
+only the computers it paired with directly. Nothing here grants access: a
+computer that is only *known* through a peer has no address, token or route
+saved, and is paired on its own (**Pair** in Settings › Environments).
+
+- **What travels:** a computer's id (its gateway id), its name and the time that
+  name was chosen, its platform, its RustCode version and when some computer
+  last had word from it. Nothing else.
+- **How:** `_rustcode/environment/sync`, an ACP request over the connection a
+  pairing already opened (`engine/src/acp/environment.rs`; it is on the gateway's
+  relay allowlist). The caller sends itself and everything it knows; the other
+  computer merges that and answers with itself and everything *it* knows. The
+  desktop app runs it against its own engine and every connected environment
+  when a connection comes up, when a name changes and every minute
+  (`apps/desktop/src/state/fleet.ts`).
+- **Merge:** last writer wins per computer (`engine/src/fleet.rs`). A name is a
+  pair of *name* and *chosen at*; the later time wins, and on a tie the greater
+  name does, so every computer ends on the same one. A name nobody chose (the
+  operating system's) has no time and loses to any rename. Platform, version
+  and last-seen come from the more recent report. An entry about a computer
+  that was never reported on for 90 days is forgotten.
+- **Storage:** a computer's own name is `environment.json` in the configuration
+  directory (without it the gateway announces the operating system's name; a
+  gateway reads it when it starts, so a new pairing sees the new name).
+  What it learned of the others is `fleet.json`. A paired machine's name is its
+  `display_name` with `name_updated_at` in `machines.json`.
+- **Rename:** renaming an environment stamps the name with the time. The next
+  sync sends it to that computer, which adopts it as its own name when it is
+  newer than the one it has, and from there it spreads to every computer that
+  syncs with either. A computer that was offline keeps its old name until it
+  syncs; the first sync after it reconnects brings the newest one. Renaming
+  this computer announces it the same way, to every connected environment.
+- **Known through another:** a computer this one is not paired with is listed
+  read-only, with who told us and when it was last seen. The list is only as
+  fresh as that last report, so its row says *last seen*, never *online*.
+- **Older RustCode:** a computer that does not know the request answers with an
+  error, which the app ignores; it simply does not take part until it is updated.
+
 ### Connect codes
 
 A connect code pairs two computers by carrying one string from one to the
@@ -1188,6 +1230,8 @@ Client requests and notifications are restricted to these exact methods:
 - `_rustcode/harnesses`, `_rustcode/harnesses/default`, `_rustcode/harnesses/set`
 - `_rustcode/settings/get`, `_rustcode/settings/set`
 - `_rustcode/skills/add`, `_rustcode/skills/get`
+- `_rustcode/environment/sync`: names, versions and last-seen times of the fleet
+  ([Environment names and the fleet](#environment-names-and-the-fleet))
 - `_rustcode/threads/search`, `_rustcode/data/activity`, `_rustcode/project/read`,
   `_rustcode/project/clone` and `_rustcode/worktrees/state`: what an agent on the
   paired computer reads and does here (`docs/orchestrator.md` › Machines)
