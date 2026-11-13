@@ -34,6 +34,7 @@ import {
   delegateParent,
   displayPath,
   fallbackHarnessSnapshot,
+  type Harness,
   type HarnessAccount,
   type HarnessLast,
   type HarnessSnapshot,
@@ -204,6 +205,7 @@ import {
   networkStop,
   nextInternetWait,
 } from "./internetWait";
+import { type FallbackRule, movedNotice, parseRules, pickFallback, switchText } from "./limitFallback";
 import {
   type LimitWait,
   limitReset,
@@ -288,6 +290,7 @@ import { beginSetup, dismissSetup, type PendingSetup, setupFailed, setupSucceede
 import { keepThreads, type SidebarOrder, withoutThreads } from "./sidebarOrder";
 import { dueSnoozes } from "./snooze";
 import {
+  appendNotice,
   appendSteer,
   applyUpdate,
   beginQuietTurn,
@@ -560,6 +563,12 @@ export interface AppState {
   totalLimit: number;
   /** Agents may read threads of every project, not only the calling thread's (Settings › Harnesses). */
   readAcrossProjects: boolean;
+  /**
+   * A delegate that stops on a usage limit goes on at once on the table's model of the other
+   * provider instead of waiting for the reset (issue 3392). Server settings; read at start.
+   */
+  limitFallback: boolean;
+  limitFallbackMap: FallbackRule[];
   /** Threads that were running when the app quit or the engine restarted continue on their own. */
   resumeAfterRestart: boolean;
   /** A system notification when a thread needs you or finishes (Settings › General). */
@@ -877,6 +886,9 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   // On unless turned off: reading knows no project boundary, so an agent asked
   // about the user's work is not answered with a fragment of it.
   readAcrossProjects: storedFlag(STORAGE.readAcrossProjects, SETTINGS_DEFAULTS.readAcrossProjects),
+  // Kept on the server only (`limit-fallback`, `limit-fallback-map`); hydrated at start.
+  limitFallback: false,
+  limitFallbackMap: [],
   resumeAfterRestart: storedFlag(STORAGE.resumeAfterRestart, SETTINGS_DEFAULTS.resumeAfterRestart),
   systemNotifications: storedFlag(STORAGE.systemNotifications, SETTINGS_DEFAULTS.systemNotifications),
   notificationsBackgroundOnly: storedFlag(
@@ -5156,7 +5168,18 @@ export async function runPrompt(
   if (id === get().selectedId) void refreshPlanCache();
   void refreshAgents(id);
   void refreshCheckpoints(id);
-  if (!options.autoCompact && !options.continued && (outcome === "completed" || outcome === "failed")) {
+  // A delegate stopped on a plan limit may go on elsewhere at once (issue 3392); the move says so.
+  const move = waiting && !options.autoCompact ? limitMoveFor(id, waiting) : null;
+  const moved = move && waiting ? await switchOnLimit(id, waiting, move) : false;
+  if (move && !moved) {
+    notifyThread({ threadId: id, kind: "limit", key: String(waiting!.until), title: threadName(id) }, get());
+  }
+  if (
+    !moved &&
+    !options.autoCompact &&
+    !options.continued &&
+    (outcome === "completed" || outcome === "failed")
+  ) {
     finishToast(id, outcome, { waiting, offline, link: options.link });
   }
   // A queued message starts at once, so "working" stays up across the hand-off. A turn that was
@@ -5164,7 +5187,7 @@ export async function runPrompt(
   // Resume starts them.
   // Nor does one go out into a wait: it waits for the turn that continues.
   const after = get().threads[id];
-  const next = after && !waiting && !offline ? nextQueued(after.queue, after) : undefined;
+  const next = after && !waiting && !moved && !offline ? nextQueued(after.queue, after) : undefined;
   if (next) {
     removeQueued(id, next.id);
     await runPrompt(id, next.text, next.extras, {
@@ -5950,6 +5973,7 @@ export async function switchThreadHarness(
   id: string,
   harness: string,
   account?: string | null,
+  choice: { model?: string; effort?: string; reason?: "limit"; quiet?: boolean } = {},
 ): Promise<boolean> {
   const thread = get().threads[id];
   if (!thread || thread.running) return false;
@@ -5964,8 +5988,10 @@ export async function switchThreadHarness(
         sessionId: splitThreadKey(id).id,
         harness,
         account: account ?? null,
-        model: last?.model ?? null,
-        effort: last?.effort ?? null,
+        model: choice.model ?? last?.model ?? null,
+        effort: choice.effort ?? last?.effort ?? null,
+        // The engine records why in the thread's activity (`thread.limit_switch`).
+        ...(choice.reason ? { reason: choice.reason } : {}),
       },
       30_000,
     )) as JsonObject | null;
@@ -5989,9 +6015,76 @@ export async function switchThreadHarness(
     void refreshPlanCache();
     return true;
   } catch (error) {
-    toast(`Could not switch harness: ${errorText(error)}`, "error");
+    if (!choice.quiet) toast(`Could not switch harness: ${errorText(error)}`, "error");
     return false;
   }
+}
+
+// ---------------------------------------------------------------- switching at a limit
+
+// The harnesses a thread left on a limit, by thread: a row never sends it back to one of them, so two
+// providers at their limits do not hand it to each other. Memory only: a restart starts afresh.
+const leftOnLimit = new Map<string, Set<string>>();
+
+interface LimitMove {
+  rule: FallbackRule;
+  fromName: string;
+  to: Harness;
+}
+
+/**
+ * Where a delegate that just stopped on a plan limit would go on instead of waiting (issue 3392), or
+ * null: the setting is off, the stop is not a limit, the thread is not a delegate of this machine, or
+ * no row of the table names an available harness for what it ran on.
+ */
+function limitMoveFor(id: string, wait: LimitWait): LimitMove | null {
+  const s = get();
+  if (!s.limitFallback || (wait.reason ?? "limit") !== "limit") return null;
+  if (threadIsRemote(id) || !isDelegated(id)) return null;
+  const ran = harnessOf(s, id);
+  const model = selectOption(s.threads[id]?.configOptions ?? [], "model")?.current;
+  const rule = pickFallback(s.limitFallbackMap, { harness: ran, model }, leftOnLimit.get(id));
+  if (!rule) return null;
+  const listed = s.harnesses?.harnesses ?? [];
+  const to = listed.find((h) => h.id === rule.to.harness);
+  if (!to || unavailableReason(to)) return null;
+  return { rule, fromName: listed.find((h) => h.id === ran)?.name ?? ran ?? "The harness", to };
+}
+
+/**
+ * Move a limited delegate to the table's model and carry on there with the turn it was in, in the
+ * same way `continueDueThreads` carries on after a reset: the links the stop settled are reopened and
+ * answered by it. The thread says which model it moved to and why, and the engine records the move
+ * in its activity. False when the move did not happen; the thread then waits for the reset as before.
+ */
+async function switchOnLimit(id: string, wait: LimitWait, move: LimitMove): Promise<boolean> {
+  const { rule, fromName, to } = move;
+  const from = harnessOf(get(), id);
+  const account = rule.to.account ?? newThreadAccountOn(to, lastAccountFor(to.id), get().signedOutLogins);
+  const moved = await switchThreadHarness(id, to.id, account, {
+    model: rule.to.model,
+    effort: rule.to.effort,
+    reason: "limit",
+    quiet: true,
+  });
+  if (!moved) return false;
+  if (from) leftOnLimit.set(id, new Set([...(leftOnLimit.get(id) ?? []), from]));
+  dropLimitWait(id);
+  const options = get().threads[id]?.configOptions ?? [];
+  const modelOption = selectOption(options, "model");
+  const model =
+    modelOption?.choices.find((c) => c.value === modelOption.current)?.name ?? modelOption?.current;
+  const target = model ? `${to.name} · ${model}` : to.name;
+  updateThread(id, (t) => appendNotice(t, movedNotice(fromName, target), "info"));
+  toast(`“${threadName(id)}” hit its limit and moved to ${target}`, "info", {
+    action: { label: "Open", run: () => selectThread(id) },
+  });
+  void runPrompt(id, switchText(fromName, target), undefined, {
+    automatic: true,
+    autoResume: true,
+    resumeLinks: wait.links,
+  });
+  return true;
 }
 
 // ---------------------------------------------------------------- subagents and usage
@@ -6119,6 +6212,14 @@ export function setHeaderButtons(shown: HeaderButtonId[]) {
 export function setReadAcrossProjects(on: boolean) {
   set({ readAcrossProjects: on });
   store(STORAGE.readAcrossProjects, on ? "1" : "0");
+}
+
+export function setLimitFallback(on: boolean) {
+  set({ limitFallback: on });
+}
+
+export function setLimitFallbackMap(value: Parameters<typeof parseRules>[0]) {
+  set({ limitFallbackMap: parseRules(value) });
 }
 
 export function setOrchestration(on: boolean) {
@@ -8194,7 +8295,8 @@ function settleStopWait(
     return null;
   }
   storeLimitWaits({ ...get().limitWaits, [id]: wait });
-  if (!overload)
+  // A delegate that goes on elsewhere at once is told about by the move, not by a wait (`switchOnLimit`).
+  if (!overload && !limitMoveFor(id, wait))
     notifyThread({ threadId: id, kind: "limit", key: String(wait.until), title: threadName(id) }, get());
   return wait;
 }

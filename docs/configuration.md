@@ -550,7 +550,10 @@ holds). The engine refuses a key outside its registry, so the file
 cannot become a general store over ACP. The keys are
 `default-permission-mode`, `resume-after-restart`, `continue-after-limit`,
 `auto-compact-mode`, `auto-compact-threshold`, `orchestration`,
-`delegates-total`, `delegates-per-thread` and `read-across-projects`. A client
+`delegates-total`, `delegates-per-thread`, `read-across-projects`,
+`delegate-presets` (a list, see [orchestrator.md](orchestrator.md) › Delegate
+presets), `limit-fallback` (off by default) and `limit-fallback-map` (a list,
+see › Switching a delegate at a limit). A client
 that reads a key the machine never set gets the engine's default. The desktop
 app seeds its own values once on first start, but only for the keys `stored`
 does not list, so a value another machine wrote first is kept.
