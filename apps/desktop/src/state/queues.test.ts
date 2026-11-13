@@ -73,7 +73,7 @@ describe("the queue as it is kept", () => {
     ]);
   });
 
-  test("a row nobody could read back is not kept; an unreadably big attachment goes, its text stays", () => {
+  test("a row nobody could read back is not kept; an unreadably big attachment is marked lost", () => {
     const huge = "x".repeat(MAX_ROW_TEXT + 1);
     const big = {
       links: [],
@@ -88,17 +88,30 @@ describe("the queue as it is kept", () => {
       ),
     );
     expect(book.threads.t1!.map((row) => row.id)).toEqual(["big"]);
-    // The message is still a message: only what cannot be kept is dropped.
+    // The text is kept, and the row says what it lost, so a restart holds it rather than send it.
     expect(book.threads.t1![0]!.extras).toBeUndefined();
+    expect(book.threads.t1![0]!.extrasLost).toBe(true);
     expect(book.threads.t1![0]!.text).toBe("message big");
+  });
+
+  test("a message that is only an attachment is kept across a restart", () => {
+    const pic = {
+      links: [],
+      attachments: [{ id: "p", kind: "image" as const, name: "a.png", mimeType: "image/png", data: "abc" }],
+    };
+    const book = roundTrip(
+      withQueue({ threads: {}, acked: [] }, "t1", [item("pic", { text: "", extras: pic })], now),
+    );
+    expect(queueOf(book.threads.t1!)).toEqual([{ id: "pic", text: "", extras: pic }]);
   });
 
   test("a book is bounded: rows per thread, threads kept, and ids remembered", () => {
     const many = Array.from({ length: MAX_ROWS + 3 }, (_, i) => item(`q${i}`));
     const kept = persistable(withQueue({ threads: {}, acked: [] }, "t1", many, now));
     expect(kept.threads.t1).toHaveLength(MAX_ROWS);
-    // The newest rows are the ones kept: a queue is read from its head, and the head ran first.
-    expect(kept.threads.t1![0]!.id).toBe("q3");
+    // The head is kept: it is the next to run, and the overflow is what was queued last.
+    expect(kept.threads.t1![0]!.id).toBe("q0");
+    expect(kept.threads.t1!.at(-1)!.id).toBe(`q${MAX_ROWS - 1}`);
 
     let book: QueueBook = { threads: {}, acked: [] };
     for (let i = 0; i < MAX_THREADS + 2; i++) book = withQueue(book, `t${i}`, [item(`m${i}`)], now);
@@ -211,6 +224,30 @@ describe("a restart puts a thread's queue back", () => {
       const written = JSON.parse(data.get(QUEUES_KEY) ?? "{}") as QueueBook;
       // Sent, so recorded: a second restart cannot deliver it again.
       expect(written.acked).toContain("q1");
+    });
+  });
+
+  test("a message that lost its attachments in the restart holds its queue instead of sending", async () => {
+    const big = {
+      links: [],
+      attachments: [{ id: "f", kind: "file" as const, name: "a.txt", text: "y".repeat(MAX_ROW_EXTRAS) }],
+    };
+    const kept = withQueue(
+      { threads: {}, acked: [] },
+      "mock-thread-1",
+      [item("q1", { text: "look at this file", extras: big })],
+      now,
+    );
+    await withStorage(kept, async () => {
+      await connect(new MockTransport({ delayMs: 0 }));
+      await until(() => useApp.getState().threads["mock-thread-1"]?.queue.length === 1);
+      await sleep(50);
+      const thread = useApp.getState().threads["mock-thread-1"]!;
+      expect(thread.queueHeld).toBe(true);
+      expect(thread.items.some((row) => row.kind === "user" && row.text.includes("look at this file"))).toBe(
+        false,
+      );
+      expect(useApp.getState().toasts.some((t) => t.text.includes("lost its attachments"))).toBe(true);
     });
   });
 

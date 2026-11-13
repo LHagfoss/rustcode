@@ -232,6 +232,7 @@ import {
   steer,
   steeringOf,
   switchThreadHarness,
+  toast,
   togglePin,
   turnState,
   updateQueued,
@@ -5104,13 +5105,26 @@ function queuesChanged(state: AppState): void {
       restoredQueues.add(id);
       const rows = restorable(id, thread.queue);
       if (rows.length) {
+        // A row whose pictures were too big to keep came back as its text alone: the queue waits
+        // for the user rather than sending a message without what it was about.
+        const back = new Set(rows.map((item) => item.id));
+        const lost = pendingRows(loaded, id).some((row) => row.extrasLost && back.has(row.id));
         restoring = true;
         try {
-          updateThread(id, (t) => ({ ...t, queue: [...t.queue, ...rows] }));
+          updateThread(id, (t) => ({
+            ...t,
+            queue: [...t.queue, ...rows],
+            ...(lost ? { queueHeld: true } : {}),
+          }));
         } finally {
           restoring = false;
         }
-        drain.push(id);
+        if (lost) {
+          toast(
+            "A queued message lost its attachments in the restart, so its queue is held: check it, then Resume.",
+            "error",
+          );
+        } else drain.push(id);
       }
       watchedQueues.set(id, useApp.getState().threads[id]?.queue ?? thread.queue);
       continue;

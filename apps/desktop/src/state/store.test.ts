@@ -5213,6 +5213,37 @@ describe("continuing after a limit", () => {
     await continueDueThreads();
   });
 
+  test("a thread missing from a capped list keeps its wait; one missing from a whole list is gone", async () => {
+    const { connect, continueDueThreads, continueInternetThreads, threadIsGone } = await import("./store");
+    resetForTests();
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessionsLoaded);
+    const later = { until: Date.now() + 3_600_000, harness: "claude-code", account: null, attempts: 1 };
+    const net = { since: Date.now(), attempts: 0, harness: "claude-code", account: null };
+    // The list stopped at its page cap: the thread may be past it, so nothing waiting on it is dropped.
+    useApp.setState({
+      sessionsCapped: true,
+      limitWaits: { "past-the-cap": later },
+      internetWaits: { "past-the-cap": net },
+    });
+    expect(threadIsGone("past-the-cap")).toBe(false);
+    await continueDueThreads();
+    await continueInternetThreads();
+    expect(useApp.getState().limitWaits["past-the-cap"]).toBeDefined();
+    expect(useApp.getState().internetWaits["past-the-cap"]).toBeDefined();
+    // A paired machine that has not listed its threads yet says nothing about them either.
+    expect(threadIsGone("machine-x/abc")).toBe(false);
+    // A list that came in whole is the truth: the thread is gone and its waits go with it.
+    useApp.setState({ sessionsCapped: false });
+    expect(threadIsGone("past-the-cap")).toBe(true);
+    expect(threadIsGone("mock-thread-1")).toBe(false);
+    await continueDueThreads();
+    await continueInternetThreads();
+    expect(useApp.getState().limitWaits).toEqual({});
+    expect(useApp.getState().internetWaits).toEqual({});
+    resetForTests();
+  });
+
   test("a thread waiting for the internet is cancelled and cleared the same way", async () => {
     const { continueInternetThreads, dropInternetWait, setContinueAfterLimit } = await import("./store");
     const wait = { since: Date.now(), attempts: 0, harness: "claude-code", account: null };
