@@ -2631,6 +2631,46 @@ describe("engine controller with the mock engine", () => {
     expect(statusOf(useApp.getState(), "mock-thread-4")).toBe("review");
   });
 
+  test("a turn the engine no longer runs stops reading as running after two list reads (issue 3652)", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().features.status === true);
+    const id = useApp.getState().sessions[0]!.id;
+    await setThreadStatus(id, "idle");
+    selectThread(id);
+    await until(() => !!useApp.getState().threads[id]?.loaded);
+    // The window missed the turn's end: it still says running, the engine's list says idle.
+    useApp.setState((s) => ({
+      threads: {
+        ...s.threads,
+        [id]: { ...s.threads[id]!, running: true, turnStartedAt: Date.now() - 60_000 },
+      },
+    }));
+    expect(statusOf(useApp.getState(), id)).toBe("running");
+    await refreshSessions({ quiet: true });
+    expect(useApp.getState().threads[id]?.running).toBe(true);
+    await refreshSessions({ quiet: true });
+    expect(useApp.getState().threads[id]?.running).toBe(false);
+    expect(statusOf(useApp.getState(), id)).not.toBe("running");
+  });
+
+  test("a thread the engine runs shows as running, and Stop reaches it (issue 3652)", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().features.status === true);
+    const id = useApp.getState().sessions[0]!.id;
+    const state = useApp.getState();
+    expect(statusOf({ ...state, engineRunning: { [id]: true } }, id)).toBe("running");
+    // A thread no stream is held for reads as the engine's list says.
+    const listed = {
+      ...state,
+      threads: {},
+      sessions: state.sessions.map((x) => ({ ...x, status: "running" as const })),
+    };
+    expect(statusOf(listed, id)).toBe("running");
+    // Opened and idle, the window's own state wins over a list that is a few seconds old.
+    const opened = { ...listed, threads: { [id]: { ...emptyThread(id, ""), loaded: true } } };
+    expect(statusOf(opened, id)).toBe("idle");
+  });
+
   test("sending in a settled thread unsettles it without a toast", async () => {
     await connect(new MockTransport({ delayMs: 0 }));
     await until(() => useApp.getState().status === "ready" && useApp.getState().features.status === true);
