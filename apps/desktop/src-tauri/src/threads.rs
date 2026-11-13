@@ -68,7 +68,7 @@ pub fn clean_title(title: &str) -> Option<String> {
 }
 
 /// Renames a thread. `user` is a name the user typed: it is recorded in the
-/// thread's `metadata.json` (`user_titled`), so an agent naming its own thread
+/// thread directory, so an agent naming its own thread
 /// leaves it alone (issue 3599). A rename an agent asked for leaves the record as
 /// it is.
 #[tauri::command(async)]
