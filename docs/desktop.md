@@ -1662,6 +1662,9 @@ off (`rustcode.haptics`).
 
 ### Updater
 
+Per-OS first-run and post-update steps (PATH, quarantine, launcher entry, the
+background server) and their Settings page are in [system-setup.md](system-setup.md).
+
 The app checks for an update 5 s after launch, every 30 seconds while its
 window is in front (every 30 minutes behind it), when its window comes back,
 and 30 s after a failed check, doubling to 5 minutes (`src/state/updates.ts`).
