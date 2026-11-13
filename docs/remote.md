@@ -614,12 +614,11 @@ A connect code pairs two computers by carrying one string from one to the
 other: no request to accept, and no address to look up when the code carries
 it.
 
-1. On the computer to be reached: Settings › Machines › **Create connect code**
+1. On the computer to be reached: Settings › Environments › **Add environment** › Connect code › **Create connect code**
    (or `rustcode machines code`). It shows `K7MQ-29XH-TP4W-NRD6` with **Copy**
    and **Copy link**, the address the code carries, and a countdown with
    *Waiting for a computer…*, which becomes *Paired ‹name›*.
-2. On the other computer: Settings › Machines › **Connect to another
-   computer**, paste the code or the link, **Connect** (or
+2. On the other computer: Settings › Environments › **Add environment** › Connect code › **I have a code**, paste the code or the link, **Connect** (or
    `rustcode machines connect <code>`). It is paired, its token stored, and
    the first computer's threads appear.
 
@@ -725,9 +724,13 @@ rustcode machines add-ssh lars@box [--port 2222] [--identity ~/.ssh/key] [--yes 
 
 ### In the desktop app
 
-Settings › **Machines** is the same pairing without a terminal: *This Mac* (or
+Settings › **Environments** is the same pairing without a terminal: *This Mac* (or
 *This PC*) first — the app's own RustCode server — then one row per saved
-machine, then the machines found for adding. `?machines=paired|connect|offline|revoked`
+environment (a machine; the app says *environment*, after T3 Code), each with a live
+status (*Online*, *Connecting*, *Offline*), its address and route, the RustCode version it runs
+and its actions (*Connect* / *Reconnect* / *Pair again*, *Rename*, *Settings*, *Remove*). **Add environment**
+opens one dialog with the ways in: *Connect code*, *SSH* and *Address*, each with its steps and, when
+one fails, a plain message with **Try again**. `?machines=paired|connect|offline|revoked`
 in the mock shows the page without a second computer; `connect` starts with one
 saved machine on an older RustCode reached over NetBird and the background
 server not installed, so the add sheet, the version skew line and the install
@@ -735,10 +738,10 @@ are all visible at once.
 
 | In the app | What it does |
 | --- | --- |
-| **Connect over SSH** | A host field and *Install or update RustCode there when needed* (on by default), then the steps of [Connect over SSH](#connect-over-ssh) ticking off, each with its detail, and the failed step's sentence. |
-| **Connect with a code** | *Create connect code* shows a code for another computer to pair with this one ([Connect codes](#connect-codes)); *Connect to another computer* takes a code or link created there, with an optional address for a short code that carries none. |
-| **Machines found** | The machines the Add sheet lists without an address typed, filled in when the page opens (*Look again* to repeat): Bonjour, the same browse as `machines discover`, for every machine whose record lists `caps=desktops`; and the *saved* machines whose handshake reported a NetBird, Tailscale or ZeroTier address, which no browse on the LAN can hear. One machine found both ways is one row, merged by its host id. Each row names the machine, its platform, the RustCode version it runs, the network its address is on (`LAN`, `NetBird`, `Tailscale`, `VPN`, `Public`) and the address. A machine not yet paired has *Ask to connect*; one already saved is *Saved*. When the local browse itself fails (a container or a network without multicast), the rows from the saved machines are still listed and the sheet says *Could not look for machines on this network* with the reason. |
-| **Machines found › Enter an address** | The `host:port` a machine is reached on when it is not announced (an overlay, or another subnet). The fallback, never the first step. |
+| **Add environment › SSH** | A host field and *Install or update RustCode there when needed* (on by default), then the steps of [Connect over SSH](#connect-over-ssh) ticking off, each with its detail, and the failed step's sentence. |
+| **Add environment › Connect code** | *Create connect code* shows a code for another computer to pair with this one ([Connect codes](#connect-codes)); *I have a code* takes a code or link created there, with an optional address for a short code that carries none. |
+| **Add environment › Address › Found on this network** | The machines the Add sheet lists without an address typed, filled in when the page opens (*Look again* to repeat): Bonjour, the same browse as `machines discover`, for every machine whose record lists `caps=desktops`; and the *saved* machines whose handshake reported a NetBird, Tailscale or ZeroTier address, which no browse on the LAN can hear. One machine found both ways is one row, merged by its host id. Each row names the machine, its platform, the RustCode version it runs, the network its address is on (`LAN`, `NetBird`, `Tailscale`, `VPN`, `Public`) and the address. A machine not yet paired has *Ask to connect*; one already saved is *Saved*. When the local browse itself fails (a container or a network without multicast), the rows from the saved machines are still listed and the sheet says *Could not look for machines on this network* with the reason. |
+| **Add environment › Address › Enter an address** | The `host:port` a machine is reached on when it is not announced (an overlay, or another subnet). The fallback, never the first step. |
 | **Waiting for ‹host› to accept on that machine…** | The request is on that machine's screen; *Cancel* drops it. Once its owner accepts, the eight digits it shows are typed here, one box per digit. |
 | **Checking the code** | The code is being checked with that machine, which answers within ten seconds. After half a minute the page stops waiting and says so — *‹host› did not answer* — with **Ask again** and **Cancel**: a machine that accepted the code but could not store the token still lists this computer as a device, so it is removed there and the pairing started again. No stage of the flow is a spinner without a way out. |
 | A machine row | Its name and platform, the state chip at the row's top right — *Connected*, *Connecting*, *Reconnecting…* (a machine that is away while the app retries it on its own), *Offline*, what a machine that answered and would not serve said — *Server not running*, *Version mismatch*, *Not allowed*, *Busy*, *Refused* — and *Needs pairing* — the route **in use** (else the one it answered on last) under the name as `LAN · Unencrypted` or `NetBird`/`Tailscale`/`VPN · Encrypted`, then when it was last reached and how many threads it has. **Remove** sits in a row of its own below. Under the route, the hint for one kind of route that answers while another does not (see [Machines](#machines)), and a version skew line when that machine runs another RustCode: *RustCode 0.96.0 on that machine — update it there: Settings › About › Check for updates, or `brew upgrade rustcode`* (the platform's own way, from [install](install.md#updating); a development build never shows the line), or *update RustCode here* when that machine is newer. |

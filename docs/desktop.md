@@ -51,7 +51,7 @@ Next, in rough order:
    sidebar listed from the index, lazy transcript import.
 5. The rest of [Not yet ported](#not-yet-ported).
 
-Several machines (#3202): Settings › **Machines** pairs the app with another
+Several machines (#3202): Settings › **Environments** (called Machines before; the app says *environment* for a computer it can run threads on, after T3 Code) pairs the app with another
 computer's RustCode server and keeps the connection, so one app reaches its
 own threads here and other machines' threads there. The sidebar is one flat
 list: every machine's threads sit in the same sections, in the order this
@@ -64,10 +64,10 @@ stays under its parent whichever machine it runs on. A machine that is away
 lists the copy this computer last read from it, read-only, and its chat says
 “‹Machine› is offline since HH:MM. This is the last copy this computer saw; it
 updates when the machine is back.”; the Settings gear shows an amber dot while any paired
-machine is not connected. New thread and ⌘N still start here; the draft's Run on pill picks another machine, and Settings › Machines keeps the
+machine is not connected. New thread and ⌘N still start here; the draft's Run on selector picks another environment (each with its status and address, and *Add environment…* at the end), and Settings › Environments keeps the
 pairing, Reconnect and each machine's own page. A machine that is away while
 the app retries it on its own reads **Reconnecting…** rather than Offline (in
-Settings › Machines and in the notice of its open thread), because it is coming
+Settings › Environments and in the notice of its open thread), because it is coming
 back without anyone pressing anything. Every client that lists threads
 hears of one another makes there (`_rustcode/threads/created`), a just-made
 thread stays listed until that machine's own list names it, and one trashed in
@@ -111,8 +111,8 @@ the page without a second computer; `paired` is a Mac, a Windows PC with
 threads, and an offline Linux box, so the sidebar shows three headings, the
 Linux box folded to a muted row.
 
-A machine's name and glyph are this app's own: Settings › Machines (and the
-same row for this computer) gives each one a **Name and icon** popover. A name
+A machine's name and glyph are this app's own: Settings › Environments (and the
+same row for this computer) gives each one a **Rename** popover (name and icon). A name
 is stored as `display_name` in `machines.json` and never sent to the other
 computer, so it keeps the name it reports; **Reset** (or a blank field) shows
 that name again, and pairing the same machine again keeps the local name. The
@@ -228,7 +228,7 @@ A machine on an older RustCode that does not answer `_rustcode/harnesses` is
 shown as the builtin harness, as this computer's engine is, so a thread can
 still start there. A harness whose models that machine has not learned yet
 keeps no model from here: the machine's own default decides. Removing a
-machine in Settings › Machines sends Run on back to this computer and drops
+machine in Settings › Environments sends Run on back to this computer and drops
 the harness list kept for it. Reopening a thread uses its own machine's
 connection (`openThread`), including a thread listed before its machine went
 away.

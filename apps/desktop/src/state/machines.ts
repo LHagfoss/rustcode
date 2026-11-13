@@ -275,6 +275,8 @@ interface MachinesStore {
   serverLinking: boolean;
   /** A route test is running now. */
   probing: boolean;
+  /** The Add environment dialog is open (Settings › Environments, or the new-thread selector asked). */
+  addOpen: boolean;
 }
 
 export const useMachines = create<MachinesStore>(() => ({
@@ -298,6 +300,7 @@ export const useMachines = create<MachinesStore>(() => ({
   serverInstalling: false,
   serverLinking: false,
   probing: false,
+  addOpen: false,
   local: readLocalIdentity(),
 }));
 
@@ -1122,6 +1125,7 @@ export function resetMachinesForTests(): void {
     serverInstalling: false,
     serverLinking: false,
     probing: false,
+    addOpen: false,
   });
 }
 
@@ -1849,6 +1853,16 @@ export async function setMachinePaused(machine: Pick<Machine, "id">, paused: boo
     await refreshMachines();
     toast(errorText(error), "error");
   }
+}
+
+/** Open or close the Add environment dialog, which lives on Settings › Environments. */
+export function setAddEnvironmentOpen(open: boolean): void {
+  useMachines.setState({ addOpen: open });
+}
+
+/** Clear what the last attempt to connect with a code said, so the dialog starts clean. */
+export function clearConnectError(): void {
+  useMachines.setState({ connectError: null });
 }
 
 /** Close a machine's connection without forgetting it; Run on can still use it another time. */

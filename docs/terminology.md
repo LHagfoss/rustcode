@@ -34,6 +34,7 @@ repository depends on them.
 | **Delegate** | A thread working for another thread (`start_session`, `fan_out`, `message_session`), which the orchestrating thread is told about when it finishes or asks. It is a thread of its own, listed in the sidebar; a *link* in code. | The wake notice ("Delegate finished: …"), `link_id`, the orchestration tools and docs. |
 | **Harness** | What runs a thread's turns: RustCode's built-in harness or an external coding agent such as Codex or Claude Code. Chosen when the thread starts ([harnesses.md](harnesses.md)). | The new-thread picker, onboarding, Settings; `_meta.rustcode.harness` in ACP. |
 | **Provider** | A model API the built-in harness calls (OpenAI, Anthropic, Copilot, an OpenAI-compatible server). An external harness has its own models and sign-in, not RustCode's providers. | Settings → providers, `[[providers]]` in the config. |
+| **Environment** | A computer running RustCode that this app can run threads on: this computer, or one paired over a connect code, SSH or an address. The app says *environment* (Settings › Environments, *Add environment*, the Run on selector), after T3 Code. Code, the shell and the protocol keep `machine` (`Machine`, `machines_*`, `machines.json`, `machines.rs`, `?machines=`). | Settings › Environments, the new-thread Run on selector, the Add environment dialog. |
 | **Plan** | The agent's task list (`todo_write`): what it proposes to do, step by step. | The task plan; never proof that a step ran. |
 
 ## Harness, provider, agent
@@ -70,6 +71,15 @@ Where both words appear today they mean the same:
 | "Thread status", "Resume thread" | "Session status", "Resume session" | Terminal UI; old transcripts still say session and render the same |
 | `/session` | (unchanged command name) | Slash commands keep their names |
 | `SessionStore`, `selectedSession`, `session_id` | (unchanged) | Internal code identifiers |
+
+## Environment = machine
+
+The apps call a computer a thread can run on an **environment**, as T3 Code
+does. The word is user-facing only: `Machine`, `useMachines`, the
+`machines_*` shell commands, `machines.json`, `rustcode machines …` and the
+`machine` field new threads accept keep their names, so no stored file, CLI
+script or protocol client changes. Write *environment* in UI text and docs
+about the app, and *machine* in code and the CLI.
 
 ## What stays "session"
 
