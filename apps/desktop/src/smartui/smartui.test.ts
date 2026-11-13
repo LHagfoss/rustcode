@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { MOCK_CHARTS, MOCK_KIT, MOCK_VIEW } from "../acp/mock";
+import { MOCK_CHARTS, MOCK_DASH, MOCK_KIT, MOCK_VIEW } from "../acp/mock";
 import {
   AutoRun,
   claimLive,
@@ -353,7 +353,7 @@ describe("smart ui", () => {
   });
 
   test("the mock's views are kit only, on the theme and the rhythm", () => {
-    for (const lines of [MOCK_VIEW, MOCK_KIT, MOCK_CHARTS]) {
+    for (const lines of [MOCK_VIEW, MOCK_KIT, MOCK_CHARTS, MOCK_DASH]) {
       const source = splitReply(lines.join(""))
         .filter((p) => p.kind === "ui")
         .map((p) => p.source)
@@ -379,6 +379,13 @@ describe("smart ui", () => {
       ".rc-stat-value",
       ".rc-stat-label",
       ".rc-stat-note",
+      ".rc-head",
+      ".rc-hero",
+      ".rc-hero-value",
+      ".rc-hero-delta",
+      ".rc-flat",
+      ".rc-dash",
+      ".rc-chart[data-size=xl]",
       ".rc-badge",
       ".rc-ok",
       ".rc-warn",
@@ -521,6 +528,71 @@ describe("smart ui", () => {
     expect(new TextEncoder().encode(part?.source).length).toBeLessThan(64 * 1024);
   });
 
+  test("the mock's dashboard is the headline layout, in kit classes and one chart script", () => {
+    const [part] = splitReply(MOCK_DASH.join("")).filter((p) => p.kind === "ui");
+    expect(part?.complete).toBe(true);
+    expect(blockProblem(part?.source ?? "")).toBeNull();
+    for (const name of [
+      "rc-dash",
+      "rc-head",
+      "rc-hero-value",
+      "rc-hero-delta",
+      "rc-stats rc-flat",
+      "rc-stat-note",
+      "rcMarks",
+      'data-size="xl"',
+    ]) {
+      expect(part?.source).toContain(name);
+    }
+    expect(usesChart(part?.source ?? "")).toBe(true);
+    expect(new TextEncoder().encode(part?.source).length).toBeLessThan(64 * 1024);
+    const scripts = [...(part?.source ?? "").matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
+    for (const code of scripts) expect(() => new Function(code)).not.toThrow();
+  });
+
+  test("the chart marks shade a band, draw a labelled line and mark the last point", () => {
+    const { marks, defaults } = runChartTheme({ vars: (name) => (name === "--rc-text" ? "#ffffff" : "") });
+    expect(defaults.elements.line.borderWidth).toBe(2);
+    expect(marks).toBeDefined();
+    const calls: string[] = [];
+    const ctx = {
+      save: () => calls.push("save"),
+      restore: () => calls.push("restore"),
+      beginPath: () => undefined,
+      moveTo: () => undefined,
+      lineTo: () => undefined,
+      stroke: () => calls.push("stroke"),
+      fill: () => calls.push("fill"),
+      arc: () => calls.push("arc"),
+      fillRect: (_x: number, y: number, _w: number, h: number) => calls.push(`band ${y} ${h}`),
+      fillText: (text: string) => calls.push(`text ${text}`),
+    };
+    const chart = {
+      ctx,
+      chartArea: { left: 0, right: 200, top: 0, bottom: 100 },
+      scales: { y: { getPixelForValue: (value: number) => 100 - value / 5 } },
+      getDatasetMeta: () => ({
+        data: [
+          { x: 10, y: 50 },
+          { x: 190, y: 4 },
+        ],
+      }),
+      data: { datasets: [{ data: [100, 480], borderColor: "#ff9f0a" }] },
+    };
+    marks.beforeDatasetsDraw(chart, {}, { band: [50, 250] });
+    // y 50 is pixel 90 and y 250 pixel 50: the band is 40 px tall from 50.
+    expect(calls).toContain("band 50 40");
+    marks.afterDatasetsDraw(chart, {}, { line: 150, lineLabel: "normal", end: true });
+    expect(calls).toContain("text normal");
+    expect(calls).toContain("arc");
+    expect(calls).toContain("text 480");
+    // Without options a chart draws nothing extra.
+    calls.length = 0;
+    marks.beforeDatasetsDraw(chart, {}, undefined);
+    marks.afterDatasetsDraw(chart, {}, {});
+    expect(calls.filter((c) => c !== "save" && c !== "restore")).toEqual([]);
+  });
+
   test("the mock's chart and hover view fits a block", () => {
     const [part] = splitReply(MOCK_CHARTS.join("")).filter((p) => p.kind === "ui");
     expect(part?.complete).toBe(true);
@@ -574,7 +646,7 @@ describe("smart ui", () => {
     const Chart = {
       defaults,
       instances: {} as Record<string, unknown>,
-      register: (plugin: unknown) => registered.push(plugin),
+      register: (...plugins: unknown[]) => registered.push(...plugins),
     };
     const gradient = {
       addColorStop: (_at: number, colour: string) => {
@@ -610,7 +682,14 @@ describe("smart ui", () => {
       height: 100,
       options: {} as Record<string, any>,
     });
-    return { defaults, stops, gradient, chart, plugin: registered.find((p) => p.id === "rcSeries") };
+    return {
+      defaults,
+      stops,
+      gradient,
+      chart,
+      plugin: registered.find((p) => p.id === "rcSeries"),
+      marks: registered.find((p) => p.id === "rcMarks"),
+    };
   }
 
   test("the chart theme runs against Chart, and fills a line and a donut", () => {
@@ -700,6 +779,7 @@ describe("smart ui", () => {
 
     const frames: ((at: number) => void)[] = [];
     const stops: string[] = [];
+    const texts: string[] = [];
     const vars: Record<string, string> = {
       "--rc-text": "#ededed",
       "--rc-separator": "#ffffff0f",
@@ -755,6 +835,7 @@ describe("smart ui", () => {
         "putImageData",
       ])
         ctx[method] = () => undefined;
+      ctx.fillText = (text: string) => texts.push(String(text));
       ctx.isPointInPath = () => false;
       ctx.isPointInStroke = () => false;
       ctx.getImageData = () => ({ data: [] });
@@ -785,7 +866,7 @@ describe("smart ui", () => {
       ctx.canvas = canvas;
       return canvas;
     };
-    const canvases = [makeCanvas(), makeCanvas()];
+    const canvases = [makeCanvas(), makeCanvas(), makeCanvas(), makeCanvas()];
     const empty = () => ({
       style: {},
       appendChild: () => undefined,
@@ -800,7 +881,7 @@ describe("smart ui", () => {
         documentElement: {},
         createElement: (name: string) => (name === "canvas" ? makeCanvas() : empty()),
         createElementNS: empty,
-        getElementById: () => null,
+        getElementById: (id: string) => (id === "hours" ? canvases[2] : id === "days" ? canvases[3] : null),
         querySelector: () => null,
         querySelectorAll: () => [],
         addEventListener: () => undefined,
@@ -880,6 +961,35 @@ describe("smart ui", () => {
       expect(stops[0]).toBe("rgba(10, 132, 255, 0.3)");
       line.destroy();
       donut.destroy();
+
+      // The mock dashboard's own script, with its real options: the quiet axes, the
+      // banded line and the histogram must build and draw, marks included.
+      const [part] = splitReply(MOCK_DASH.join("")).filter((p) => p.kind === "ui");
+      const scripts = [...(part?.source ?? "").matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
+      expect(scripts.length).toBe(1);
+      for (const code of scripts) new Function("Chart", "document", code)(Chart, g.document);
+      const dash = Object.values(Chart.instances as Record<string, any>).filter((c) =>
+        [canvases[2], canvases[3]].includes(c.canvas),
+      );
+      expect(dash.length).toBe(2);
+      for (const chart of dash) {
+        chart.attached = true;
+        chart.resize(720, 340);
+        chart.update();
+      }
+      for (let at = 0; at < 40 && frames.length; at++) {
+        clock += 20;
+        frames.shift()?.(clock);
+      }
+      for (const chart of dash) expect(chart.chartArea?.width ?? 0).toBeGreaterThan(100);
+      // The reference line's label and the last point's value were drawn.
+      expect(texts).toContain("normal");
+      expect(texts.some((t) => /^\d{3}$/.test(t))).toBe(true);
+      // Quiet axes: no vertical rules on the category axis, no axis line.
+      const hours = dash.find((c) => c.canvas === canvases[2]);
+      expect(hours.scales.x.options.grid.display).toBe(false);
+      expect(hours.scales.y.options.border.display).toBe(false);
+      for (const chart of dash) chart.destroy();
     } finally {
       Date.now = realNow;
       for (const [key, value] of saved) {

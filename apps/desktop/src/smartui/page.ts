@@ -111,7 +111,7 @@ body { position: relative; color: var(--rc-text); font: var(--rc-text-size)/1.5 
    \`flow-root\` keeps any child margin inside the root, where the measurement sees it. */
 #rc-root, #rc-stream { display: flow-root; }
 #rc-root > :not(title, style, script, link, meta, template) ~ :not(title, style, script, link, meta, template),
-#rc-stream > :not(title, style, script, link, meta, template) ~ :not(title, style, script, link, meta, template) { margin-top: 12px; }
+#rc-stream > :not(title, style, script, link, meta, template) ~ :not(title, style, script, link, meta, template) { margin-top: 16px; }
 h1, h2, h3, h4 { margin: 0; font-size: var(--rc-text-size); font-weight: 600; line-height: 1.3; }
 h1 { font-size: var(--rc-text-size-title); }
 p { margin: 0; } p + p { margin-top: 8px; }
@@ -150,14 +150,32 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 
 .rc-title { font-size: var(--rc-text-size-title); font-weight: 600; line-height: 1.3; margin: 0; }
 .rc-lead { color: var(--rc-muted); margin: 0; }
+.rc-lead :is(b, strong) { color: var(--rc-text); font-weight: 600; }
+/* A title on the left and a muted caption (source, range, time) on the right. */
+.rc-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 16px; }
+.rc-head > :not(:first-child) { margin-left: auto; text-align: right; font-size: var(--rc-text-size-sm); color: var(--rc-muted); }
+/* One huge number, an accent multiplier or delta beside it, then a label above and a sentence below. */
+.rc-hero { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.rc-hero > :is(.rc-label, p, .rc-lead) { flex: 0 0 100%; margin: 0; }
+.rc-hero > .rc-label { font-size: var(--rc-text-size-sm); }
+.rc-hero-value { font-size: 64px; line-height: 1.05; font-weight: 600; letter-spacing: -0.035em; font-variant-numeric: tabular-nums; }
+.rc-hero-delta { font-size: var(--rc-text-size-value); line-height: 1.2; font-weight: 600; color: var(--rc-tint, var(--rc-accent)); }
+.rc-hero > .rc-lead, .rc-hero > p { margin-top: 8px; color: var(--rc-muted); }
+/* A dashboard: wider rhythm between its parts. */
+#rc-root .rc-dash, #rc-stream .rc-dash { display: flow-root; }
+#rc-root .rc-dash > :not(title, style, script) ~ :not(title, style, script),
+#rc-stream .rc-dash > :not(title, style, script) ~ :not(title, style, script) { margin-top: 28px; }
 .rc-label { font-size: var(--rc-text-size-xs); line-height: 1.45; color: var(--rc-muted); }
 .rc-ok { --rc-tint: var(--rc-success); } .rc-warn { --rc-tint: var(--rc-warning); }
 .rc-bad { --rc-tint: var(--rc-danger); } .rc-info { --rc-tint: var(--rc-accent); }
 
 .rc-stats { gap: 8px; }
-.rc-stat { display: flex; flex-direction: column; min-width: 0; padding: 10px 12px;
+.rc-stat { display: flex; flex-direction: column; min-width: 0; padding: 12px 14px;
   border: 1px solid var(--rc-separator); border-radius: var(--rc-radius); }
 .rc-stat-label { order: -1; font-size: var(--rc-text-size-xs); line-height: 1.45; color: var(--rc-muted); }
+.rc-flat { gap: 16px 24px; }
+.rc-flat > .rc-stat { padding: 0; border: 0; border-radius: 0; gap: 2px; }
+.rc-flat .rc-stat-value { font-size: 28px; line-height: 1.15; letter-spacing: -0.02em; }
 .rc-stat-value { font-size: var(--rc-text-size-value); line-height: 1.25; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
 .rc-stat-note { font-size: var(--rc-text-size-xs); line-height: 1.45; color: var(--rc-tint, var(--rc-muted)); }
 
@@ -212,6 +230,7 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 .rc-chart { position: relative; height: 200px; }
 .rc-chart[data-size=sm] { height: 140px; }
 .rc-chart[data-size=lg] { height: 260px; }
+.rc-chart[data-size=xl] { height: 340px; }
 .rc-chart > canvas { display: block; }
 .rc-donut-total { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
   pointer-events: none; font-variant-numeric: tabular-nums; }
@@ -758,7 +777,15 @@ export const CHART_THEME_SCRIPT = `(() => {
       d.plugins.legend.onHover = (event, item, legend) => { legend.chart.canvas.style.cursor = item ? "pointer" : ""; };
       d.plugins.legend.onLeave = (event, item, legend) => { legend.chart.canvas.style.cursor = ""; };
     }
-    d.elements.line.borderWidth = 3;
+    // Quiet axes: no axis line or tick marks, faint horizontal rules only.
+    if (d.scale) {
+      if (d.scale.border) d.scale.border.display = false;
+      if (d.scale.grid) d.scale.grid.drawTicks = false;
+      if (d.scale.ticks) d.scale.ticks.padding = 8;
+    }
+    // The category type's defaults may carry no grid object yet, so make one.
+    if (d.scales && d.scales.category) d.scales.category.grid = Object.assign(d.scales.category.grid || {}, { display: false });
+    d.elements.line.borderWidth = 2;
     d.elements.point.radius = 0;
     d.elements.point.hoverRadius = 4;
     d.elements.point.hoverBorderWidth = 2;
@@ -774,8 +801,65 @@ export const CHART_THEME_SCRIPT = `(() => {
     if (tries > 10 || (chart.width > 1 && chart.height > 1)) return;
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => chart.resize());
   };
+  // Marks a view asks for in options.plugins.rcMarks: band [low, high] shaded on the y
+  // scale, line (a y value) with lineLabel, and end (true, or its text) for a dot and
+  // the value at a line's last point. All drawn inside the plot, in the text variables.
+  const marks = {
+    id: "rcMarks",
+    beforeDatasetsDraw(chart, args, o) {
+      const y = chart.scales && chart.scales.y;
+      const a = chart.chartArea;
+      if (!o || !y || !a || !Array.isArray(o.band)) return;
+      const top = y.getPixelForValue(o.band[1]);
+      const bottom = y.getPixelForValue(o.band[0]);
+      chart.ctx.save();
+      chart.ctx.globalAlpha = 0.07;
+      chart.ctx.fillStyle = v("--rc-text");
+      chart.ctx.fillRect(a.left, Math.min(top, bottom), a.right - a.left, Math.abs(bottom - top));
+      chart.ctx.restore();
+    },
+    afterDatasetsDraw(chart, args, o) {
+      const y = chart.scales && chart.scales.y;
+      const a = chart.chartArea;
+      if (!o || !y || !a) return;
+      const ctx = chart.ctx;
+      ctx.save();
+      ctx.font = "500 11px " + v("--rc-font");
+      ctx.textAlign = "right";
+      ctx.textBaseline = "bottom";
+      if (typeof o.line === "number") {
+        const at = Math.round(y.getPixelForValue(o.line)) + 0.5;
+        ctx.strokeStyle = v("--rc-muted");
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(a.left, at);
+        ctx.lineTo(a.right, at);
+        ctx.stroke();
+        if (o.lineLabel) {
+          ctx.fillStyle = v("--rc-muted");
+          ctx.fillText(o.lineLabel, a.right - 4, at - 4);
+        }
+      }
+      const meta = o.end && chart.getDatasetMeta && chart.getDatasetMeta(0);
+      const last = meta && meta.data && meta.data[meta.data.length - 1];
+      if (last) {
+        const raw = chart.data.datasets[0].data[meta.data.length - 1];
+        const value = raw && typeof raw === "object" ? raw.y : raw;
+        const colour = solid(chart.data.datasets[0].borderColor, solid(v("--rc-accent"), NEUTRAL));
+        ctx.fillStyle = colour;
+        ctx.beginPath();
+        ctx.arc(last.x, last.y, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.font = "600 12px " + v("--rc-font");
+        ctx.fillStyle = v("--rc-text");
+        const text = typeof o.end === "string" ? o.end : Number(value).toLocaleString();
+        ctx.fillText(text, last.x - 8, Math.max(a.top + 14, last.y - 8));
+      }
+      ctx.restore();
+    },
+  };
   apply();
-  Chart.register({ id: "rcSeries", beforeUpdate: paint, afterRender: refit });
+  Chart.register({ id: "rcSeries", beforeUpdate: paint, afterRender: refit }, marks);
   window.__rcThemeCharts = () => {
     apply();
     for (const chart of Object.values(Chart.instances || {})) {

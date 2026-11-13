@@ -1174,8 +1174,11 @@ mod tests {
         // font of one's own), the one-rhythm rule, `data-size`, and one
         // canonical example per intent cost about 640 over the 1,552 it was
         // (#3304). The skill is read once, when a view is written, not on
-        // every turn like the harness hint, so it stays under 2,300.
-        assert!(tokens < 2_300, "the smart-ui skill is {tokens} tokens");
+        // every turn like the harness hint, so it stays under 2,300. The
+        // dashboard layout (headline, context, stats, chart) and the chart
+        // marks add about 150 more once three examples are cut, so the
+        // ceiling is 2,400.
+        assert!(tokens < 2_400, "the smart-ui skill is {tokens} tokens");
         // The runtime the clients inject (docs/smart-ui.md), named exactly.
         for name in [
             "--rc-series-8",

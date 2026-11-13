@@ -328,7 +328,8 @@ macOS text styles one point up (read at a laptop's distance), SF Pro
 (Settings › Appearance › Rounded font switches to SF Pro Rounded) / SF Mono.
 Replies read at 14px on a 1.625 line height (22.75px, `leading-relaxed`,
 set on the reply's own scope so the app's rows keep 19px), in `fg` at 90%,
-with headings at 20/18/16/14 in semibold:
+with headings at 26/21/18/16 (`h1`–`h4`) in semibold, a step bigger than the 14px body so a
+long reply scans by its headings:
 
 | Class | Size / line | Use |
 |---|---|---|
@@ -339,6 +340,7 @@ with headings at 20/18/16/14 in semibold:
 | `text-title3` | 16/21 | Card titles |
 | `text-title2` | 18/23 | Onboarding, a document's headings |
 | `text-title` | 23/29 | Empty-state heading |
+| `text-[26px]`, `text-[21px]` | 26/31, 21/26 | A reply's `h1`, `h2` (`Markdown.tsx`) |
 
 Weights: 400 body, 500 controls and selected rows, 600 titles. Numbers
 that change use `tabular`.
