@@ -32,6 +32,8 @@ const LINK_BIT: &str = " · link_id ";
 const WAKE_MARK: &str = "<!-- rustcode:wake -->";
 /// What the app's continue-after-a-compaction prompt ends with (`CONTINUE_MARK`).
 const CONTINUE_MARK: &str = "<!-- rustcode:continued -->";
+/// What a linked pull request's news ends with (`PULL_MARK` in the app).
+const PULL_MARK: &str = "<!-- rustcode:pull -->";
 
 /// One delegate a wake reports: `- link_id <id> · <status> · “<title>” · … · session <id> · …`.
 const LINK_LINE: &str = "- link_id ";
@@ -217,7 +219,7 @@ pub(crate) fn of_text(text: &str) -> MessageOrigin {
             threads: text.lines().filter_map(wake_thread).collect(),
         };
     }
-    if text.contains(CONTINUE_MARK) {
+    if text.contains(CONTINUE_MARK) || text.contains(PULL_MARK) {
         return MessageOrigin::of_kind(OriginKind::System);
     }
     MessageOrigin::of_kind(OriginKind::User)
@@ -503,6 +505,9 @@ The rest is in read_session on a child's session id.\n\
     fn the_apps_continue_prompt_is_the_systems() {
         let origin = of_text("Continue where you left off.\n\n<!-- rustcode:continued -->");
         assert_eq!(origin, MessageOrigin::of_kind(OriginKind::System));
+        // A linked pull request's news is the app's too, not the user's.
+        let pull = of_text("Pull request #12: Merged\n\n<!-- rustcode:pull -->");
+        assert_eq!(pull, MessageOrigin::of_kind(OriginKind::System));
     }
 
     #[test]

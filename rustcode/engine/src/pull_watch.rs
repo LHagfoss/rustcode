@@ -1031,6 +1031,40 @@ fn at(seconds: i64) -> Option<String> {
     chrono::DateTime::from_timestamp(seconds, 0).map(|time| time.to_rfc3339())
 }
 
+/// The links whose news this engine has not passed on to its clients yet.
+///
+/// Only the engine holding the checking lease reads GitHub, and it tells its
+/// own clients. When that is another process (a `rustcode server` service, a
+/// second app window's engine), this engine's clients would hear nothing
+/// until they reconnected and listed the watches again: every event arrived
+/// at once after an app restart, as if typed then. Each round, an engine
+/// without the lease passes on what the store holds for a link and its thread
+/// has not been handed. `announced` remembers how many events it already
+/// passed on per link, so a round adds a notification only for news. The
+/// client claims events through [`WatchStore::take`], so a notification the
+/// checking engine also sent repeats nothing.
+pub fn unannounced(
+    watches: &[Watch],
+    announced: &mut std::collections::HashMap<(String, String, u64), usize>,
+) -> Vec<(Watch, Vec<WatchEvent>)> {
+    let key = |watch: &Watch| (watch.session_id.clone(), watch.repo.clone(), watch.number);
+    announced.retain(|known, _| watches.iter().any(|watch| key(watch) == *known));
+    let mut out = Vec::new();
+    for watch in watches.iter().filter(|watch| watch.link) {
+        let pending = watch.pending();
+        if pending.is_empty() {
+            announced.remove(&key(watch));
+            continue;
+        }
+        let total = watch.events.len();
+        if announced.insert(key(watch), total) == Some(total) {
+            continue;
+        }
+        out.push((watch.clone(), pending.to_vec()));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1620,5 +1654,39 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
+    }
+
+    #[test]
+    fn an_engine_without_the_lease_passes_on_link_news_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WatchStore::new(dir.path());
+        let mut link = watch(&store);
+        link.link = true;
+        let mut plain = link.clone();
+        plain.link = false;
+        plain.session_id = "s2".to_owned();
+        let event = |kind: &str| WatchEvent {
+            kind: kind.to_owned(),
+            message: kind.to_owned(),
+            at: String::new(),
+        };
+        link.events = vec![event("checks_passed")];
+        plain.events = vec![event("checks_passed")];
+        let mut announced = std::collections::HashMap::new();
+
+        // News on a link is passed on; a one-off watch is not a link.
+        let first = unannounced(&[link.clone(), plain.clone()], &mut announced);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].1, vec![event("checks_passed")]);
+        // The same news is not passed on again the next round.
+        assert!(unannounced(&[link.clone(), plain.clone()], &mut announced).is_empty());
+        // A new event is, with everything the thread still has not been handed.
+        link.events.push(event("closed"));
+        let second = unannounced(&[link.clone()], &mut announced);
+        assert_eq!(second[0].1, vec![event("checks_passed"), event("closed")]);
+        // Once handed over, nothing is pending and nothing is passed on.
+        link.delivered = link.events.len();
+        assert!(unannounced(&[link.clone()], &mut announced).is_empty());
+        assert!(announced.is_empty());
     }
 }

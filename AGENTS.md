@@ -184,6 +184,10 @@ instructions for work in this repository.
   `cargo build -p rustcode-tui --bin rustcode`, then `bun tauri dev`. A
   plain `cargo build` does not rebuild that binary, and the app then talks
   to the old engine.
+- To install a local build over the user's app, replace
+  `/Applications/RustCode.app` in place and keep no copy of the old one in
+  `/Applications`: three `RustCode-<version>-backup.app` copies once made
+  the app take four times its space. A rollback is a release download away.
 - Never copy `credentials.json` or `provider-accounts.json` into a scratch
   `RUSTCODE_CONFIG_DIR`. A token refresh there rotates the OpenAI refresh
   token, and the user's real sign-in then fails with "OpenAI token request

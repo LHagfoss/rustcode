@@ -3,6 +3,7 @@
 import { type AcpConnection, arr, type JsonObject, obj, str } from "../acp/jsonrpc";
 import { deliver } from "./host";
 import { openThread, useApp } from "./store";
+import { withPullMark } from "./thread";
 import { threadKey } from "./threadKeys";
 
 export const PULL_WATCHES = "_rustcode/pulls/watches";
@@ -26,8 +27,17 @@ export async function deliverPullWatch(conn: AcpConnection, params: JsonObject, 
   await openThread(id);
   if (!useApp.getState().threads[id]?.loaded) return;
   const answer = obj(await conn.request(PULL_WATCHES, { sessionId, take: number }, 15_000));
-  for (const event of arr(answer?.events)) {
+  const said = arr(answer?.events).flatMap((event) => {
     const message = str(obj(event)?.message);
-    if (message) deliver(id, `Pull request #${number}: ${message}`, "", "");
-  }
+    return message ? [message] : [];
+  });
+  if (said.length) deliver(id, pullNotice(number, said), "", "");
+}
+
+/**
+ * The one message a batch of a pull request's news makes: one turn for all of it, marked as the
+ * app's, so it shows as a notice row and not as something the user typed.
+ */
+export function pullNotice(number: number, said: string[]): string {
+  return withPullMark(`Pull request #${number}: ${said.join(" · ")}`);
 }

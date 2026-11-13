@@ -311,8 +311,21 @@ export const withContinueMark = (text: string) => `${text}\n\n${CONTINUE_MARK}`;
  */
 export const RESUME_MARK = "<!-- rustcode:resumed -->";
 
-/** Whether a message is the app continuing the thread, after a compaction or after a restart. */
-export const isContinueMessage = (text: string) => text.includes(CONTINUE_MARK) || text.includes(RESUME_MARK);
+/**
+ * The marker a linked pull request's news ends with (`manage_pull_links`): the app tells the thread,
+ * so it reads as a notice row ("Pull request #12: Merged"), never as a message the user typed.
+ */
+export const PULL_MARK = "<!-- rustcode:pull -->";
+
+/** A linked pull request's news for its thread, marked as the app's own. */
+export const withPullMark = (text: string) => `${text}\n\n${PULL_MARK}`;
+
+/**
+ * Whether a message is the app's own notice: continuing the thread after a compaction or a restart,
+ * or a linked pull request's news. Each shows as a notice row of its first line.
+ */
+export const isContinueMessage = (text: string) =>
+  text.includes(CONTINUE_MARK) || text.includes(RESUME_MARK) || text.includes(PULL_MARK);
 
 /** A wake message's first line: its compact summary ("2 delegates finished · 1 delegate asks"). */
 export const wakeLine = (text: string) => text.split("\n")[0] ?? text;
