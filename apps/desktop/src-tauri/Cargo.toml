@@ -61,5 +61,10 @@ objc2-web-kit = { version = "=0.3.2", default-features = false, features = ["WKW
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
 
-[profile.dev]
-incremental = false
+# Incremental compilation stays on (cargo's default), as in the root
+# workspace: with it off, a one-file edit rebuilt the whole app crate.
+
+# Symbols out of the shipped binary: the Linux build kept them, 40 MB where
+# 29 MB runs the same. The root workspace's release profile strips too.
+[profile.release]
+strip = true
