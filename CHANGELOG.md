@@ -1,3 +1,8 @@
+## [v1.34.2](https://github.com/LHagfoss/rustcode/releases/tag/v1.34.2) - 2026-11-13
+
+### Features
+- Agent builds are much faster: cargo uses every core at low priority with incremental compilation, and tests run in CI instead of on the laptop. (#3674)
+- Orchestrators can wait for a whole wave of delegates in one `wait_session` call (`all: true`) instead of waking once per delegate. (#3675)
 ## [v1.34.1](https://github.com/LHagfoss/rustcode/releases/tag/v1.34.1) - 2026-11-13
 
 ### Fixes
