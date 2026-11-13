@@ -12,13 +12,14 @@ import {
   deviceRouteName,
   deviceStatus,
   localDeviceStatus,
+  machineAccess,
   machineThreadCounts,
   offlineReason,
   routePort,
   threadCountLabel,
   versionLine,
 } from "./deviceRows";
-import { DEV_APP_VERSION } from "./machines";
+import { DEV_APP_VERSION, pairBackNotice } from "./machines";
 import { LOCAL_HOST, threadKey } from "./threadKeys";
 
 const LINUX = "gw-7c1d9e4f2a8b6d30";
@@ -225,5 +226,46 @@ describe("two versions", () => {
     expect(versionLine("Studio", null, "1.29.1", "This Mac")).toBeNull();
     expect(versionLine("Studio", "1.29.0", null, "This Mac")).toBeNull();
     expect(versionLine("Studio", "1.29.0", DEV_APP_VERSION, "This Mac")).toBeNull();
+  });
+});
+
+describe("access between this computer and a machine", () => {
+  const machine = { id: LINUX, name: "Arch", displayName: null, state: "connected" as const };
+  const device = (hostId: string | undefined) => ({
+    id: "dev-1",
+    name: "Arch",
+    kind: "desktop" as const,
+    platform: "linux",
+    hostId,
+  });
+
+  test("a machine this computer reaches and nothing reaches back is one way", () => {
+    const access = machineAccess(machine, []);
+    expect(access.label).toBe("This computer \u2192 it");
+    expect(access.outbound).toBe(true);
+    expect(access.inbound).toBeNull();
+    expect(access.inboundText).toContain("cannot reach this computer");
+  });
+
+  test("a paired device with the machine's host id makes it both ways, and only that one", () => {
+    expect(machineAccess(machine, [device("gw-other")]).inbound).toBeNull();
+    const both = machineAccess(machine, [device("gw-other"), device(LINUX)]);
+    expect(both.label).toBe("Both ways");
+    expect(both.inbound?.id).toBe("dev-1");
+    expect(both.inboundText).toContain("Revoke");
+  });
+
+  test("each direction is judged alone: an ended pairing here leaves the one there", () => {
+    const ended = machineAccess({ ...machine, state: "needsPairing" }, [device(LINUX)]);
+    expect(ended.label).toBe("It \u2192 this computer");
+    expect(ended.outbound).toBe(false);
+    expect(ended.outboundText).toContain("Pair it again");
+    expect(machineAccess({ ...machine, state: "needsPairing" }, []).label).toBe("No access");
+  });
+
+  test("a failed pair back says the pairing is one way and why", () => {
+    const notice = pairBackNotice("Arch", " Arch could not reach this computer. ");
+    expect(notice).toContain("one way");
+    expect(notice).toEndWith("Arch could not reach this computer.");
   });
 });

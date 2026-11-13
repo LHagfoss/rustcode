@@ -5,6 +5,7 @@
 // (docs/desktop.md › Several machines). An old RustCode on the other end is a
 // sentence, not a silent connection failure.
 
+import type { RemoteDevice } from "../acp/remote";
 import type { SessionSummary } from "../acp/types";
 import {
   DEV_APP_VERSION,
@@ -181,4 +182,51 @@ export function versionLine(
 /** The platform as the card says it, with a fallback that does not leave a gap. */
 export function devicePlatform(platform: string): string {
   return platformName(platform) ?? "Unknown platform";
+}
+
+/** Which computer may reach which, between this one and a saved machine. */
+export interface MachineAccess {
+  /** This computer can see and run threads on the machine (it holds a pairing for it). */
+  outbound: boolean;
+  /** The machine's paired device on this computer, when it may reach this one. */
+  inbound: RemoteDevice | null;
+  /** The direction in a few words, for the row's chip. */
+  label: string;
+  /** What each side can do, as the settings page says it. */
+  outboundText: string;
+  inboundText: string;
+}
+
+/**
+ * The access between this computer and `machine`. This computer reaches the machine while it holds
+ * a pairing for it; the machine reaches this one while this computer's gateway lists a paired
+ * device with the machine's own host id. Each is revoked on its own side: Forget here, Revoke in
+ * Remote access there.
+ */
+export function machineAccess(
+  machine: Pick<Machine, "id" | "name" | "displayName" | "state">,
+  devices: readonly RemoteDevice[],
+): MachineAccess {
+  const name = machine.displayName?.trim() || machine.name;
+  const outbound = machine.state !== "needsPairing";
+  const inbound = devices.find((device) => device.hostId === machine.id) ?? null;
+  const label =
+    outbound && inbound
+      ? "Both ways"
+      : outbound
+        ? "This computer \u2192 it"
+        : inbound
+          ? "It \u2192 this computer"
+          : "No access";
+  return {
+    outbound,
+    inbound,
+    label,
+    outboundText: outbound
+      ? `This computer can see and run threads on ${name}. Forget removes it.`
+      : `This computer's pairing with ${name} ended, so it cannot reach it. Pair it again.`,
+    inboundText: inbound
+      ? `${name} can see and run all threads on this computer. Revoke it under Remote access › Paired devices.`
+      : `${name} cannot reach this computer. Connect over SSH with Both ways, or create a connect code on this computer and redeem it there.`,
+  };
 }

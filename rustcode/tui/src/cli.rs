@@ -599,6 +599,7 @@ pub enum MachineCommands {
   rustcode machines add-ssh lars@box
   rustcode machines add-ssh studio --yes          # an alias from ~/.ssh/config; install without asking
   rustcode machines add-ssh admin@vps -p 2222 -i ~/.ssh/vps_ed25519
+  rustcode machines add-ssh lars@box --mutual     # that computer can reach this one too
 
 SSH runs non-interactively (BatchMode): a key that needs a passphrase must be in
 the agent (`ssh-add`), and an unknown host key must be accepted once in a terminal."
@@ -621,6 +622,15 @@ the agent (`ssh-add`), and an unknown host key must be accepted once in a termin
         /// Never install: fail when RustCode there is missing or older
         #[arg(long)]
         no_install: bool,
+        /// Both ways: after pairing, that computer pairs back, so it can see
+        /// and run the threads on this one too. Each side keeps its own
+        /// pairing and revokes it alone
+        #[arg(long, conflicts_with = "one_way")]
+        mutual: bool,
+        /// One way only: this computer reaches that one and not the other way
+        /// round (the default when there is no terminal to ask at)
+        #[arg(long)]
+        one_way: bool,
         /// Print each step and the result as JSON lines, for the app and agents
         #[arg(long)]
         json: bool,
@@ -1515,9 +1525,12 @@ mod tests {
                 identity,
                 yes,
                 no_install,
+                mutual,
+                one_way,
                 json,
                 name,
             } => {
+                assert!(!mutual && !one_way);
                 assert_eq!(target, "lars@box");
                 assert_eq!(port, Some(2222));
                 assert_eq!(identity, Some(std::path::PathBuf::from("/k/id")));
@@ -1529,6 +1542,26 @@ mod tests {
         assert!(
             machines(&["add-ssh", "box", "--yes", "--no-install"]).is_err(),
             "installing without asking and never installing conflict"
+        );
+        assert!(matches!(
+            machines(&["add-ssh", "box", "--mutual"]).unwrap(),
+            MachineCommands::AddSsh {
+                mutual: true,
+                one_way: false,
+                ..
+            }
+        ));
+        assert!(matches!(
+            machines(&["add-ssh", "box", "--one-way"]).unwrap(),
+            MachineCommands::AddSsh {
+                mutual: false,
+                one_way: true,
+                ..
+            }
+        ));
+        assert!(
+            machines(&["add-ssh", "box", "--mutual", "--one-way"]).is_err(),
+            "both ways and one way conflict"
         );
         assert!(matches!(
             machines(&["list", "--threads", "--json"]).unwrap(),

@@ -6310,6 +6310,7 @@ export class MockTransport implements Transport {
         install: `Installing RustCode 1.31.4 on ${host}`,
         start: `Starting the server on ${host}`,
         pair: `Pairing with ${host}`,
+        pair_back: `Letting ${host} reach this computer`,
       };
       this.sshRunning = true;
       this.sshSteps = [];
@@ -6354,6 +6355,32 @@ export class MockTransport implements Transport {
         const paired = mockMachine("connected", Date.now());
         this.machineList = [...this.machineList.filter((machine) => machine.id !== paired.id), paired];
         return { ...paired, state: "connecting" };
+      } finally {
+        this.sshRunning = false;
+      }
+    }
+    if (command === "machines_pair_back") {
+      // A host with "noback" in it cannot reach this computer, so pairing stays one way.
+      const target = String(args.target ?? "").trim();
+      const host = target.includes("@") ? target.slice(target.lastIndexOf("@") + 1) : target;
+      this.sshRunning = true;
+      const label = `Letting ${host} reach this computer`;
+      const set = (state: string, detail: string | null = null) => {
+        this.sshSteps = [
+          ...this.sshSteps.filter((seen) => seen.step !== "pair_back"),
+          { step: "pair_back", state, label, detail },
+        ];
+      };
+      try {
+        set("running");
+        await new Promise<void>((resolve) => setTimeout(resolve, 700));
+        if (target.includes("noback")) {
+          const message = `${host} could not reach this computer on RustCode's port: 192.168.1.20:17879 timed out. Put both computers on the same network or a VPN such as NetBird or Tailscale, and check that nothing blocks the port here.`;
+          set("failed", message);
+          throw new Error(message);
+        }
+        set("done");
+        return null;
       } finally {
         this.sshRunning = false;
       }
