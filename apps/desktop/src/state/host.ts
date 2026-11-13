@@ -132,6 +132,7 @@ import {
   pageOf,
   parseBook,
   parseCall,
+  parseDelivered,
   projectOf,
   prune,
   QUEUE_PREVIEW_CHARS,
@@ -1816,7 +1817,7 @@ async function perform(
       if (isFailure(machine)) return failureJson(machine);
       const target = scopedTarget(machine, call.target);
       if (isFailure(target)) return failureJson(target);
-      const answer = await message(caller, target, call.text, call.attachments, call.steer);
+      const answer = await message(caller, target, call.text, call.attachments, call.steer, call.wait);
       return answer.error ? answer : { ...answer, ...machineFields(machineOfThread(target)) };
     }
     case "manage_queue": {
@@ -3969,8 +3970,9 @@ function message(
   text: string,
   attachments: readonly string[] = [],
   steerNow = false,
+  wait = false,
 ): Promise<JsonObject> {
-  return withLinkGate(() => messageNow(caller, targetId, text, attachments, steerNow));
+  return withLinkGate(() => messageNow(caller, targetId, text, attachments, steerNow, wait));
 }
 
 /** Do not message a settled or archived thread. */
@@ -3991,13 +3993,15 @@ async function messageNow(
   text: string,
   attachments: readonly string[] = [],
   steerNow = false,
+  /** `wait: false` is one-way: no link, so the caller never shows Waiting and nothing comes back (issue 3544). */
+  wait = false,
 ): Promise<JsonObject> {
   const state = useApp.getState();
   const target = ruleThread(state, targetId);
   // A thread on another machine is not this app's project topic to check: the
   // user named that machine, and the card below is the gate.
   const remote = isRemoteThread(targetId);
-  const refused = checkMessage(caller, target, book(), false, false, delegateLimits(), remote);
+  const refused = checkMessage(caller, target, book(), false, false, delegateLimits(), remote, !wait);
   if (refused || !target) return failureJson(refused ?? failure("not_found", "no such thread"));
   const unavailable = messageTargetRefusal(state, targetId);
   if (unavailable) return failureJson(unavailable);
@@ -4024,7 +4028,7 @@ async function messageNow(
   // The user took their time: look again.
   const afterPermission = useApp.getState();
   const current = ruleThread(afterPermission, targetId);
-  const again = checkMessage(caller, current, book(), false, false, delegateLimits(), remote);
+  const again = checkMessage(caller, current, book(), false, false, delegateLimits(), remote, !wait);
   if (again) return failureJson(again);
   const stopped = messageTargetRefusal(afterPermission, targetId);
   if (stopped) return failureJson(stopped);
@@ -4042,6 +4046,7 @@ async function messageNow(
     false,
     delegateLimits(),
     remote,
+    !wait,
   );
   if (noLongerReachable) return failureJson(noLongerReachable);
   const noLongerAvailable = messageTargetRefusal(afterOpen, targetId);
@@ -4055,32 +4060,40 @@ async function messageNow(
   const harnessName = session?.harness
     ? afterOpen.harnesses?.harnesses.find((h) => h.id === session.harness)?.name
     : undefined;
-  const id = addLink({
-    orchestrator: caller.id,
-    target: target.id,
-    orchestratorTitle: caller.title,
-    targetTitle: target.title,
-    message: text,
-    state: busy ? "queued" : "working",
-    harness: session?.harness,
-    harnessName,
-    model: session?.model,
-  });
+  const id = wait
+    ? addLink({
+        orchestrator: caller.id,
+        target: target.id,
+        orchestratorTitle: caller.title,
+        targetTitle: target.title,
+        message: text,
+        state: busy ? "queued" : "working",
+        harness: session?.harness,
+        harnessName,
+        model: session?.model,
+      })
+    : undefined;
+  // The sender's id (and the link it waits on) rides under the heading, so the target can tell two
+  // senders with the same title apart and the app links the sender's name (issue 3539).
+  const sent = delivered(text, caller.title, { session: caller.id, link: id });
   let delivery: "steered" | "queued" | "started";
   if (
     steerNow &&
     busy &&
     sendDecisionFor(thread, extras).action === "steer" &&
-    (await steer(target.id, delivered(text, caller.title), extras))
+    (await steer(target.id, sent, extras, caller.id, id))
   ) {
     delivery = "steered";
-    linkSteered(target.id, id, delivered(text, caller.title));
+    if (id) linkSteered(target.id, id, sent);
   } else {
-    deliver(target.id, delivered(text, caller.title), id, caller.id, extras);
-    delivery = useApp.getState().threads[target.id]?.queue.some((q) => q.link === id) ? "queued" : "started";
+    const before = new Set(useApp.getState().threads[target.id]?.queue.map((q) => q.id));
+    deliver(target.id, sent, id, caller.id, extras);
+    delivery = useApp.getState().threads[target.id]?.queue.some((q) => !before.has(q.id))
+      ? "queued"
+      : "started";
   }
   return {
-    link_id: id,
+    ...(id ? { link_id: id } : { return_to: "none" }),
     receipt: delivery,
     delivered: delivery,
     session_id: target.id,
@@ -4111,7 +4124,13 @@ function addLink(link: Omit<Link, "id" | "createdAt" | "events">): string {
 }
 
 /** After the turn the target runs, never into it: the same queue a typed message uses. */
-export function deliver(target: string, text: string, link: string, from: string, extras?: ComposeExtras) {
+export function deliver(
+  target: string,
+  text: string,
+  link: string | undefined,
+  from: string,
+  extras?: ComposeExtras,
+) {
   const thread = useApp.getState().threads[target];
   if (thread?.running) {
     // `from` is who queued it, so that thread can correct it while it waits (`manageQueue`).
@@ -4119,11 +4138,18 @@ export function deliver(target: string, text: string, link: string, from: string
       ...t,
       queue: [
         ...t.queue,
-        { id: localId("queued"), text, link, from, queuedAt: Date.now(), ...(extras ? { extras } : {}) },
+        {
+          id: localId("queued"),
+          text,
+          ...(link ? { link } : {}),
+          from,
+          queuedAt: Date.now(),
+          ...(extras ? { extras } : {}),
+        },
       ],
     }));
   } else {
-    void runPrompt(target, text, extras, { link });
+    void runPrompt(target, text, extras, { link, sender: from });
   }
 }
 
@@ -4146,8 +4172,8 @@ function goneFromQueue(queueId: string | undefined): Failure {
  * agent reads its own text back and an edit says only what it says (`manageQueue`).
  */
 function bodyOf(item: QueuedPrompt, from: string): string {
-  const said = delivered("", from);
-  return item.text.startsWith(said) ? item.text.slice(said.length) : item.text;
+  const said = parseDelivered(item.text);
+  return said && said.title === from ? said.body : item.text;
 }
 
 /** One queued message as `manage_queue` lists it: which one, what it says, and when it waits. */
@@ -4227,7 +4253,11 @@ async function manageQueue(caller: RuleThread, call: ManageQueueCall): Promise<J
     case "edit": {
       const text = (call.text ?? "").trim();
       // Delivered the way `message` delivered it, so the target still reads who asked.
-      updateQueued(target.id, again.id, delivered(text, caller.title));
+      updateQueued(
+        target.id,
+        again.id,
+        delivered(text, caller.title, { session: caller.id, ...(again.link ? { link: again.link } : {}) }),
+      );
       // The link card says what was sent, so it says the new text now.
       const link = again.link;
       if (link) setBook((b) => updateLink(b, link, { message: text }));
@@ -5809,6 +5839,20 @@ export function reconcileLinks(now = Date.now()): void {
     const error = state.threads[link.target]?.error;
     linksFinished([link.id], link.target, error ? "failed" : "completed", error, []);
   }
+}
+
+/** Settling a sender abandons its outstanding links without stopping their targets. */
+export function clearWaitingLinks(ids: readonly string[]) {
+  const senders = new Set(ids);
+  const at = Date.now();
+  setBook((book) => ({
+    ...book,
+    links: book.links.map((link) =>
+      senders.has(link.orchestrator) && isActive(link.state)
+        ? advanceLink(link, { state: "cancelled", settledAt: at, notifiedAt: at }, at)
+        : link,
+    ),
+  }));
 }
 
 /** The threads whose work is being stopped right now: a cascade stops each one once. */

@@ -24,6 +24,8 @@ pub(crate) struct SteerRequest {
     /// takes them mid-turn. The built-in harness steers with `text` only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<Vec<agent_client_protocol::schema::v1::ContentBlock>>,
+    #[serde(default, rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<serde_json::Value>,
 }
 
 /// Mark the session's ACP turn as one that takes steers.

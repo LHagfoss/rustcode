@@ -256,6 +256,9 @@ pub(crate) fn set(session_id: &str, status: &str) -> Result<(), String> {
     let status = Status::storable(status)
         .ok_or_else(|| format!("status must be review, done or idle, not '{status}'"))?;
     store(session_id, status)?;
+    if status == Status::Done {
+        crate::orchestration::local_threads::clear_waiting_links(session_id);
+    }
     notify(session_id);
     Ok(())
 }

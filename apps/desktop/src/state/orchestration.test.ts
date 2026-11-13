@@ -62,6 +62,7 @@ import {
   pageOf,
   parseBook,
   parseCall,
+  parseDelivered,
   pendingWakeUnder,
   queueWake,
   quietTree,
@@ -282,6 +283,7 @@ describe("management tools", () => {
       target: "b",
       text: "look",
       attachments: ["/repo/a.png", "/repo/b.log"],
+      wait: false,
     });
     expect(
       isFailure(
@@ -386,9 +388,48 @@ describe("orchestration rules", () => {
 
   test("the app advertises the version whose arguments it answers", () => {
     // The engine strips `account` below 5, `attachments` below 10, `machine` below 12,
-    // `steer` below 14 and `standalone` below 15, and refuses a call that carries one:
-    // the app speaks the newest, so it is offered all five.
-    expect(CAPABILITY_VERSION).toBe(16);
+    // `steer` below 14, `standalone` below 15 and `wait` below 17, and refuses a call that
+    // carries one: the app speaks the newest, so it is offered all of them.
+    expect(CAPABILITY_VERSION).toBe(17);
+  });
+
+  test("message_session defaults to one-way and can request a reply", () => {
+    const base = { session_id: "b", message: "fyi" };
+    expect(parseCall({ tool: "message_session", args: base })).toMatchObject({ wait: false });
+    expect(parseCall({ tool: "message_session", args: { ...base, return_to: "me" } })).toMatchObject({
+      wait: true,
+    });
+    expect(parseCall({ tool: "message_session", args: { ...base, return_to: "none" } })).toMatchObject({
+      wait: false,
+    });
+    expect(parseCall({ tool: "message_session", args: { ...base, return_to: "bad" } })).toMatchObject({
+      code: "invalid",
+    });
+  });
+
+  test("a delivered message names its sender by id under the unchanged heading", () => {
+    const text = delivered("Review it.", "Ship it", { session: "20261113-aaaa", link: "20261113-aaaa/2" });
+    expect(text).toBe(
+      "From thread “Ship it” (agent):\nsession 20261113-aaaa · link_id 20261113-aaaa/2\n\nReview it.",
+    );
+    expect(parseDelivered(text)).toEqual({
+      title: "Ship it",
+      session: "20261113-aaaa",
+      link: "20261113-aaaa/2",
+      body: "Review it.",
+    });
+    // A one-way message has no link.
+    expect(parseDelivered(delivered("FYI.", "Ship it", { session: "s1" }))).toEqual({
+      title: "Ship it",
+      session: "s1",
+      body: "FYI.",
+    });
+    // An older message has the title alone, and a body that starts with the word is still the body.
+    expect(parseDelivered(delivered("session notes", "Old"))).toEqual({
+      title: "Old",
+      body: "session notes",
+    });
+    expect(parseDelivered("Why does it fail?")).toBeNull();
   });
 
   test("a machine is read from any call that takes one, and absent when it is not named", () => {
@@ -521,6 +562,10 @@ describe("orchestration rules", () => {
     expect(checkMessage(a, thread("b"), book(full), false, false, { perThread: 4, total: 16 })?.code).toBe(
       "busy",
     );
+    // A one-way message opens no link, so a full caller may still send one.
+    expect(
+      checkMessage(a, thread("b"), book(full), false, false, { perThread: 4, total: 16 }, false, true),
+    ).toBeNull();
     expect(checkStart(a, book(full.slice(0, 2)), 3, { perThread: 4, total: 16 })?.code).toBe("busy");
     expect(checkStart(a, book(full.slice(0, 2)), 2, { perThread: 4, total: 16 })).toBeNull();
     // The default is eight per thread and sixteen in all.

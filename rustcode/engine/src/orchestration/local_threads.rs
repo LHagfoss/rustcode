@@ -734,6 +734,18 @@ pub(crate) async fn message(caller: &str, args: &Value) -> Value {
             "that thread is working on a turn; send the message with steer true to join it, or wait_session on it first. Nothing was sent.",
         );
     }
+    // `return_to: none` is a one-way message: no link, nothing to wait on and
+    // nothing delivered back, so the caller never shows Waiting (issue 3544).
+    if !super::waits_for_reply(args) {
+        deliver(
+            engine,
+            target.to_owned(),
+            delivered_from(text, &caller_title, caller, None),
+            None,
+        );
+        let preview: String = text.chars().take(PREVIEW_CHARS).collect();
+        return json!({ "session_id": target, "preview": preview, "return_to": "none" });
+    }
     let _gate = link_gate().lock().await;
     // A follow-up to a thread this one already works with takes no new slot.
     if !has_active_link(caller, target)
@@ -765,7 +777,7 @@ pub(crate) async fn message(caller: &str, args: &Value) -> Value {
     deliver(
         engine,
         target.to_owned(),
-        delivered(text, &caller_title),
+        delivered_from(text, &caller_title, caller, Some(&link)),
         Some(link.clone()),
     );
     let preview: String = text.chars().take(PREVIEW_CHARS).collect();
@@ -859,13 +871,48 @@ fn link_book() -> Value {
         .unwrap_or_else(empty_book)
 }
 
+/// Abandon links a settled sender was waiting on, without interrupting their targets.
+pub(crate) fn clear_waiting_links(sender: &str) {
+    let book = link_book();
+    if let Some(links) = book.get("links").and_then(Value::as_array) {
+        for link in links {
+            if link.get("orchestrator").and_then(Value::as_str) != Some(sender) {
+                continue;
+            }
+            if let Some(id) = link.get("id").and_then(Value::as_str) {
+                let at = now();
+                let _ = crate::data_store::change_link(id, |link| {
+                    if !link
+                        .get("state")
+                        .and_then(Value::as_str)
+                        .is_some_and(is_active)
+                    {
+                        return link;
+                    }
+                    link_after(
+                        link,
+                        &json!({"state": "cancelled", "settledAt": at, "notifiedAt": at}),
+                        at,
+                    )
+                });
+            }
+        }
+    }
+}
+
 /// Change one link in the store, in one transaction of its own: the engine
 /// never reads the whole book and writes it back, so it cannot undo what the
 /// app saved meanwhile, and the app's whole-book save cannot undo this
 /// (`data_store::save_link_book`).
 fn update_link(id: &str, change: Value) {
     let at = now();
-    match crate::data_store::change_link(id, |link| link_after(link, &change, at)) {
+    match crate::data_store::change_link(id, |link| {
+        if link.get("state").and_then(Value::as_str) == Some("cancelled") {
+            link
+        } else {
+            link_after(link, &change, at)
+        }
+    }) {
         Ok(true) => {}
         Ok(false) => crate::dbg_log!("local orchestration: link {id} is no longer in the book"),
         Err(reason) => crate::dbg_log!("local orchestration: link {id} was not saved: {reason}"),
@@ -1430,6 +1477,7 @@ impl Engine {
             session_id: session_id.to_owned(),
             text: text.to_owned(),
             prompt: None,
+            meta: None,
         };
         let answer = self.request(request, CONNECT_TIMEOUT).await?;
         Ok(answer
@@ -1506,6 +1554,16 @@ fn acp_message(error: agent_client_protocol::Error) -> String {
 /// The message as the other thread receives it: who it is from, then the text.
 fn delivered(text: &str, from: &str) -> String {
     format!("From thread “{from}” (agent):\n\n{text}")
+}
+
+/// A message as its target receives it, with the sender's session (and the
+/// link it waits on) on the line under the heading, so a reader can tell two
+/// senders with the same title apart (`message_origin::delivered_sender`).
+fn delivered_from(text: &str, from: &str, session: &str, link: Option<&str>) -> String {
+    let link = link
+        .map(|link| format!(" · link_id {link}"))
+        .unwrap_or_default();
+    format!("From thread “{from}” (agent):\nsession {session}{link}\n\n{text}")
 }
 
 /// A task as a new delegate receives it: attributed, with the report it ends with.
@@ -1925,6 +1983,25 @@ mod tests {
         assert!(text.starts_with("From thread “Parent” (agent):\n\ndo it"));
         assert!(text.ends_with(DELEGATE_REPORT));
         assert!(!delivered("do it", "Parent").contains(DELEGATE_REPORT));
+    }
+
+    #[test]
+    fn a_message_names_its_sender_by_id_and_the_reader_finds_it() {
+        let waits = delivered_from("do it", "Parent", "s1", Some("s1/2"));
+        assert_eq!(
+            crate::message_origin::delivered_sender(&waits),
+            Some(("s1".to_owned(), Some("s1/2".to_owned())))
+        );
+        assert_eq!(
+            crate::message_origin::delivered_title(&waits),
+            Some("Parent")
+        );
+        assert!(waits.ends_with("\n\ndo it"));
+        let one_way = delivered_from("fyi", "Parent", "s1", None);
+        assert_eq!(
+            crate::message_origin::delivered_sender(&one_way),
+            Some(("s1".to_owned(), None))
+        );
     }
 
     #[test]

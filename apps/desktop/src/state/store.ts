@@ -151,6 +151,7 @@ import {
 } from "./headerButtons";
 import {
   answerOrchestration,
+  clearWaitingLinks,
   interruptedLinks,
   linkFinished,
   linkStarted,
@@ -231,6 +232,7 @@ import {
   MAX_DELEGATES_TOTAL,
   MIN_DELEGATES_PER_THREAD,
   MIN_DELEGATES_TOTAL,
+  parseDelivered,
 } from "./orchestration";
 import { clearPageCache } from "./pageCache";
 import { autoAnswer, effectiveMode, type PermissionMode, parsePermissionMode } from "./permissions";
@@ -4301,7 +4303,13 @@ export function sendDecisionFor(
  * engine will not take one now. Exported for the wake a busy parent gets for a child's question
  * (state/host.ts `sendWake`), which is sent by the same rule as a typed message.
  */
-export async function steer(id: string, text: string, extras?: ComposeExtras): Promise<boolean> {
+export async function steer(
+  id: string,
+  text: string,
+  extras?: ComposeExtras,
+  sender?: string,
+  link?: string,
+): Promise<boolean> {
   const thread = get().threads[id];
   // What the turn reads: the typed text with its command, links and long pastes in place.
   const full = composedText(text, extras ?? emptyExtras);
@@ -4323,7 +4331,29 @@ export async function steer(id: string, text: string, extras?: ComposeExtras): P
     const sessionId = splitThreadKey(id).id;
     const result = (await conn.request(
       Method.steer,
-      prompt ? { sessionId, text: full, prompt } : { sessionId, text: full },
+      {
+        sessionId,
+        text: full,
+        ...(prompt ? { prompt } : {}),
+        ...(sender && parseDelivered(text)
+          ? {
+              _meta: {
+                rustcode: {
+                  origin: {
+                    kind: "agent",
+                    threads: [
+                      {
+                        sessionId: sender,
+                        title: parseDelivered(text)?.title ?? "",
+                        ...(link ? { linkId: link } : {}),
+                      },
+                    ],
+                  },
+                },
+              },
+            }
+          : {}),
+      },
       10_000,
     )) as JsonObject | null;
     if (result?.accepted !== true) return false;
@@ -4353,7 +4383,7 @@ export async function sendQueuedNow(id: string, queuedId: string): Promise<boole
     removeQueued(id, queuedId);
     return restartWith(id, item.text, item.extras ?? emptyExtras);
   }
-  if (await steer(id, item.text, item.extras)) {
+  if (await steer(id, item.text, item.extras, item.from, item.link)) {
     removeQueued(id, queuedId);
     glideAway(id, item);
     // A delegate's message that was waiting: the turn it went into answers its link.
@@ -4390,6 +4420,7 @@ export async function resumeQueue(id: string): Promise<boolean> {
   await runPrompt(id, next.text, next.extras, {
     fromView: next.fromView,
     link: next.link,
+    sender: next.from,
     resumeLinks: next.resume,
     wake: next.wake,
     wakeLinks: next.wakeLinks,
@@ -4699,6 +4730,7 @@ export async function runPrompt(
   options: {
     fromView?: boolean;
     link?: string;
+    sender?: string;
     /**
      * The links a restart severed and this resume turn answers (`resumeInterrupted`): started as
      * working when its turn begins and settled when it ends, as a link's own turn leaves its link
@@ -4859,6 +4891,20 @@ export async function runPrompt(
     request._meta = {
       rustcode: {
         access: permissionModeOf(get(), id),
+        ...(options.sender && parseDelivered(text)
+          ? {
+              origin: {
+                kind: "agent",
+                threads: [
+                  {
+                    sessionId: options.sender,
+                    title: parseDelivered(text)?.title ?? "",
+                    ...(options.link ? { linkId: options.link } : {}),
+                  },
+                ],
+              },
+            }
+          : {}),
         ...(options.autoCompact ? { autoCompact: true } : {}),
       },
     };
@@ -6300,6 +6346,7 @@ export function setThreadStatus(id: string, status: "review" | "done" | "idle"):
  * Whatever fails is reported in one toast for the selection, not one per thread.
  */
 export async function setThreadsStatus(ids: string[], status: "review" | "done" | "idle"): Promise<number> {
+  if (status === "done") clearWaitingLinks(ids.filter((id) => !threadIsRemote(id)));
   const remote = ids.filter(threadIsRemote);
   const remoteRequests = remote.map(async (id) => {
     const conn = connectionForThread(id);
