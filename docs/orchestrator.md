@@ -91,6 +91,34 @@ create fails `session/new` with the error above. The worktree is created on
 the request's dispatch, so a very large checkout delays other requests
 while git checks it out.
 
+### Builds in a worktree
+
+Parallel delegates compiling a Rust project in their worktrees at once each
+start from an empty `target/`, queue on cargo's locks for minutes and slow the
+machine. An external harness started in a worktree that has a `Cargo.toml`
+therefore runs with (`harness/build_env.rs`):
+
+- **A shared build directory per project**: `CARGO_TARGET_DIR` is
+  `~/.config/rustcode/build/<repo-name>/slot-1`, outside the worktree, so a new
+  worktree starts from a warm build. A `CARGO_TARGET_DIR` the user set (in the
+  environment or the harness's own variables) is kept.
+- **Background priority** for the harness and everything it starts: the macOS
+  background policy (what `taskpolicy -b` sets), `nice -n 10` on Linux, below
+  normal priority on Windows.
+- **A build queue** (macOS and Linux): a `cargo` wrapper first on `PATH`
+  (`~/.config/rustcode/build/bin/cargo`) lets at most `RUSTCODE_BUILD_SLOTS`
+  builds run at once across all delegates, default 2. `build`, `check`, `test`,
+  `clippy`, `run`, `bench`, `doc`, `nextest` and the like take a slot; `fmt`,
+  `metadata` and `--version` do not. Each slot builds in its own
+  `~/.config/rustcode/build/<repo-name>/slot-N`, so two builds never wait on the
+  same build-directory lock. A delegate that has to wait prints `cargo: waiting
+  for a build slot …` every 30 s, so the wait is output, not silence. A slot
+  whose build died is taken over. Windows has no wrapper: it gets the shared
+  directory and the priority only.
+
+Threads that are not a worktree of a Rust project, and the built-in harness,
+are untouched.
+
 ## Thread status
 
 `_meta.rustcode.status` on a thread: `"idle" | "running" | "needs_input" | "review" | "done"`.
@@ -714,6 +742,18 @@ they finish or ask, instead of having to poll with sleeps.
   `link_id`, and that the message is the notification. A child that was
   stopped, or interrupted and left interrupted, is no result to wait for:
   nothing ever reports it, so it does not hold its parent back.
+- **No progress.** A child whose turn runs but that has shown nothing for 10
+  min (`STALL_NOTICE_MS`) wakes its parent once per silence. The processes the
+  child's harness started count as progress: while the turn runs, the engine
+  samples its process tree every 30 s (`harness/child_activity.rs`) and sends
+  `_rustcode/session/childActivity` `{ sessionId, processes, cpuMs, busiest?,
+  activeAgoMs? }` (capability `childActivity`). A tree that added at least
+  500 ms of CPU between two samples is active, and its time resets the stall
+  timer like a line of output, so a `cargo test` that compiles for half an hour
+  is no stall. The notice names the last tool and its command, and when child
+  processes exist, how many, the busiest, and the CPU they used in all. `wait_session`'s
+  `idle_ms` and `stalled` read the same activity. The built-in harness runs its
+  commands in-process and sends no sample.
 - **A delegate on another machine whose channel goes.** The prompt request that
   ran a remote turn dies with its machine's connection; the turn there does
   not. Nothing is settled from the rows that had arrived — a half-written

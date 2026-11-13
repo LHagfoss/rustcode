@@ -21,6 +21,12 @@ pub(crate) struct HarnessProcess {
 }
 
 impl HarnessProcess {
+    /// The harness's process id: the root of the tree whose children a turn is
+    /// waiting on ([`super::child_activity`]).
+    pub(crate) fn pid(&self) -> Option<u32> {
+        self.group.and_then(|group| u32::try_from(group).ok())
+    }
+
     /// Kill the harness and its process group now.
     pub(crate) fn kill(&self) {
         if let Some(group) = self.group {
@@ -105,6 +111,66 @@ pub(crate) fn spawn(
     env: &[(String, String)],
     remove: &[&str],
 ) -> Result<(HarnessProcess, ChildStdout, ChildStdin), String> {
+    spawn_with(
+        harness_id,
+        command,
+        cwd,
+        log_session,
+        env,
+        remove,
+        super::build_env::Priority::Normal,
+    )
+}
+
+/// Run `builder`'s child at `priority`: the process and everything it starts.
+fn apply_priority(builder: &mut tokio::process::Command, priority: super::build_env::Priority) {
+    use super::build_env::Priority;
+    match priority {
+        Priority::Normal => {}
+        #[cfg(target_os = "macos")]
+        Priority::MacBackground => {
+            // SAFETY: setpriority(2) is async-signal-safe and touches no
+            // shared state; this is what `taskpolicy -b` does to a process.
+            unsafe {
+                builder.pre_exec(|| {
+                    libc::setpriority(libc::PRIO_DARWIN_PROCESS, 0, libc::PRIO_DARWIN_BG);
+                    Ok(())
+                });
+            }
+        }
+        #[cfg(unix)]
+        Priority::Nice(level) => {
+            // SAFETY: setpriority(2) is async-signal-safe and touches no shared state.
+            unsafe {
+                builder.pre_exec(move || {
+                    libc::setpriority(libc::PRIO_PROCESS, 0, level);
+                    Ok(())
+                });
+            }
+        }
+        #[cfg(windows)]
+        Priority::BelowNormal => {
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
+            // Setting the flags replaces `hide_console_window`'s, so keep them.
+            builder.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
+        }
+        // Another operating system's policy: nothing to set here.
+        #[allow(unreachable_patterns)]
+        _ => {}
+    }
+}
+
+/// [`spawn`] at `priority`.
+pub(crate) fn spawn_with(
+    harness_id: &str,
+    command: &[String],
+    cwd: &Path,
+    log_session: Option<String>,
+    env: &[(String, String)],
+    remove: &[&str],
+    priority: super::build_env::Priority,
+) -> Result<(HarnessProcess, ChildStdout, ChildStdin), String> {
     let program = command
         .first()
         .ok_or_else(|| format!("{harness_id} has no command configured"))?;
@@ -134,6 +200,7 @@ pub(crate) fn spawn(
     builder.envs(env.iter().map(|(name, value)| (name, value)));
     #[cfg(unix)]
     builder.process_group(0);
+    apply_priority(&mut builder, priority);
     let mut child = builder
         .spawn()
         .map_err(|error| format!("could not start {program}: {error}"))?;

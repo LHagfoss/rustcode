@@ -56,6 +56,10 @@ pub(crate) enum Output {
     Flush(oneshot::Sender<()>),
     /// The harness's background work changed (`harness/background.rs`).
     Activity(super::background::Activity),
+    /// What the processes the harness started did since the last sample
+    /// (`harness/child_activity.rs`). The engine's own reading, not the
+    /// harness speaking.
+    ChildActivity(super::child_activity::ChildActivity),
     /// The harness sent something that became no update of its own: any event
     /// counts as output for the silence deadline (`watchdog`).
     Heartbeat,
@@ -76,6 +80,8 @@ pub(crate) trait ClientSink: Send + Sync + 'static {
     fn request_permission(&self, request: RequestPermissionRequest) -> PermissionFuture;
     /// What the thread does outside a prompt: background work, or a turn the harness started itself.
     fn activity(&self, _activity: super::background::Activity) {}
+    /// The processes the harness started are using CPU, or no longer are.
+    fn child_activity(&self, _activity: super::child_activity::ChildActivity) {}
     /// A turn starts with `prompt`, after `history` recorded messages: a
     /// client that opens the thread mid-turn is sent what it missed.
     fn turn_started(&self, _history: usize, _prompt: String) {}
@@ -164,14 +170,22 @@ impl Adapter {
         options: StartOptions,
         out: OutputSender,
     ) -> Result<Self, String> {
-        let (env, remove) = launch_env(harness, &options);
-        let (child, stdout, stdin) = process::spawn(
+        let (mut env, remove) = launch_env(harness, &options);
+        // A delegate building a Rust project in a worktree: a shared build
+        // directory, a queue for the build slots, background priority.
+        let mut priority = super::build_env::Priority::Normal;
+        if let Some(build) = super::build_env::for_launch(cwd, &env) {
+            env.extend(build.env);
+            priority = build.priority;
+        }
+        let (child, stdout, stdin) = process::spawn_with(
             &harness.id,
             &harness.command,
             cwd,
             options.log_session.clone(),
             &env,
             &remove,
+            priority,
         )?;
         let recorder = options.thread_id.as_ref().map(|thread_id| {
             let protocol = match harness.kind {
@@ -239,6 +253,14 @@ impl Adapter {
         match self {
             Adapter::Acp(adapter) => adapter.is_alive(),
             Adapter::Codex(adapter) => adapter.is_alive(),
+        }
+    }
+
+    /// The harness process's id, the root of the tree its turn's commands run in.
+    pub(crate) fn pid(&self) -> Option<u32> {
+        match self {
+            Adapter::Acp(adapter) => adapter.pid(),
+            Adapter::Codex(adapter) => adapter.pid(),
         }
     }
 
@@ -345,7 +367,10 @@ pub(crate) async fn list_models(harness: &ResolvedHarness) -> Result<Vec<Harness
                 Output::Flush(reply) => {
                     let _ = reply.send(());
                 }
-                Output::Update(_) | Output::Marker(_) | Output::Activity(_) => {}
+                Output::Update(_)
+                | Output::Marker(_)
+                | Output::Activity(_)
+                | Output::ChildActivity(_) => {}
                 Output::Heartbeat | Output::TurnStarted(_) | Output::TurnEnded => {}
             }
         }
@@ -559,6 +584,7 @@ fn note_output(progress: &watchdog::Progress, output: &Output) {
         // The guard a permission request takes counts it; a flush and a
         // turn's bounds are the engine's own, not the harness speaking.
         Output::Permission { .. }
+        | Output::ChildActivity(_)
         | Output::Flush(_)
         | Output::TurnStarted(_)
         | Output::TurnEnded => {}
@@ -798,6 +824,7 @@ impl ExternalSession {
                             let _ = reply.send(());
                         }
                         Output::Activity(activity) => sink.activity(activity),
+                        Output::ChildActivity(activity) => sink.child_activity(activity),
                         Output::Heartbeat => {}
                         Output::TurnStarted(prompt) => {
                             // Counted here, after every update before it.
@@ -1643,6 +1670,10 @@ impl ExternalSession {
         }
         // Nothing a finished turn left running still counts against this one.
         self.progress.begin_turn();
+        // A turn parked in a long build says nothing; its children's CPU does.
+        let _children = adapter
+            .pid()
+            .map(|pid| super::child_activity::watch(pid, self.out.clone()));
         let silence = self.silence_timeout();
         adapter.apply_access(
             *self

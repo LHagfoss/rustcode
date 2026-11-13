@@ -573,6 +573,10 @@ impl AcpAdapter {
         !self.killed.load(Ordering::Acquire) && !self.peer.is_closed()
     }
 
+    pub(crate) fn pid(&self) -> Option<u32> {
+        self.process.as_ref().and_then(HarnessProcess::pid)
+    }
+
     pub(crate) async fn prompt(&self, prompt: Vec<ContentBlock>) -> Result<StopReason, String> {
         let mut prompt = prompt;
         {

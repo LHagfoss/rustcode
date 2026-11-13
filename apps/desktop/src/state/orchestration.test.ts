@@ -42,6 +42,7 @@ import {
   isActive,
   isFailure,
   type Link,
+  type LinkActivity,
   type LinkBook,
   latestReply,
   linkCounts,
@@ -1178,6 +1179,47 @@ describe("waking a parent", () => {
     expect(wakesDue(heard, resumed)).toEqual([]);
     const again = wakesDue(heard, { ...resumed, now: due + STALL_NOTICE_MS, activity: resumed.activity });
     expect(again[0]!.stalled?.map((n) => n.link.target)).toEqual(["b"]);
+  });
+
+  test("a child process that still uses CPU counts as progress; a silent one is a stall that says what runs", () => {
+    const at = 1_000;
+    const child = { ...link("a", "b", "working"), startedAt: at };
+    const stallCtx = (now: number, activity: Record<string, LinkActivity>): WakeContext =>
+      ctx({
+        now,
+        threads: {
+          a: { title: "Parent a", running: false },
+          b: { title: "Thread b", running: true },
+        },
+        activity,
+      });
+    const items = [{ kind: "tool", at, toolName: "bash", input: { command: "cargo test" } }];
+    const due = at + STALL_NOTICE_MS;
+    // Ten minutes without a line of output, but a compiler used CPU a minute ago: no stall.
+    const building = activityOf(items, {
+      processes: 3,
+      cpuMs: 190_000,
+      busiest: "rustc",
+      activeAt: due - 60_000,
+    });
+    expect(building.lastAt).toBe(due - 60_000);
+    expect(wakesDue(book([child]), stallCtx(due, { b: building }))).toEqual([]);
+    expect(nextWakeAt(book([child]), stallCtx(due, { b: building }))).toBe(due - 60_000 + STALL_NOTICE_MS);
+    // The same children that stopped using CPU at the start: stalled, with what runs and its CPU.
+    const stuck = activityOf(items, { processes: 3, cpuMs: 190_000, busiest: "rustc", activeAt: at });
+    const [wake] = wakesDue(book([child]), stallCtx(due, { b: stuck }));
+    expect(wake!.stalled?.map((n) => n.link.target)).toEqual(["b"]);
+    const text = wakeMessage(wake!, due);
+    expect(text).toContain("last tool: bash: cargo test.");
+    expect(text).toContain(
+      "3 processes run under it (busiest: rustc), 3m 10s of CPU used in all and none for 10m",
+    );
+    // Children the engine saw end, or no sample at all: the old rule, with no process line.
+    const none = activityOf(items, { processes: 0, cpuMs: 0 });
+    expect(none.children).toBeUndefined();
+    expect(wakeMessage(wakesDue(book([child]), stallCtx(due, { b: none }))[0]!, due)).not.toContain(
+      "processes run",
+    );
   });
 
   test("a stall notice survives a wake folded around a finished sibling", () => {

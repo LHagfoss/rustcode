@@ -294,6 +294,18 @@ impl ClientSink for AcpClientSink {
             });
     }
 
+    fn child_activity(&self, activity: harness::child_activity::ChildActivity) {
+        let _ = self
+            .clients
+            .notify(super::prompt::SessionChildActivityNotification {
+                session_id: self.clients.session_id().to_owned(),
+                processes: activity.processes,
+                cpu_ms: activity.cpu_ms,
+                busiest: activity.busiest,
+                active_ago_ms: activity.active_ago_ms,
+            });
+    }
+
     fn request_permission(&self, mut request: RequestPermissionRequest) -> PermissionFuture {
         request.session_id = self.clients.session_id().to_owned().into();
         let clients = self.clients.clone();

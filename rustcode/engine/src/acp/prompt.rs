@@ -585,6 +585,27 @@ pub(crate) struct SessionActivityNotification {
     pub background: usize,
 }
 
+/// `_rustcode/session/childActivity`: what the processes a harness started
+/// are doing while its turn runs, sampled every 30 s
+/// (`harness/child_activity.rs`). A build that prints nothing for minutes still
+/// uses CPU, which the app's stall notice counts as progress. `processes` is 0
+/// once the last child ended; `activeAgoMs` is how long ago the tree last
+/// added CPU, absent while it has not.
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, agent_client_protocol::JsonRpcNotification,
+)]
+#[notification(method = "_rustcode/session/childActivity")]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SessionChildActivityNotification {
+    pub session_id: String,
+    pub processes: usize,
+    pub cpu_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub busiest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_ago_ms: Option<u64>,
+}
+
 fn send_activity(clients: &SessionClients, session_id: &str, state: &str, background: usize) {
     let _ = clients.notify(SessionActivityNotification {
         session_id: session_id.to_owned(),

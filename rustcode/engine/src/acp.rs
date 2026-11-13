@@ -134,6 +134,7 @@ fn server_capabilities() -> AgentCapabilities {
                 "sessionMove": 1,
                 "sessionRepair": 1,
                 "sessionActivity": 1,
+                "childActivity": 1,
                 "pullRequests": 3,
                 "worktrees": 1,
                 "checkpoints": 2,

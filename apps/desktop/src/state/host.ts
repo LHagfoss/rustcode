@@ -2903,7 +2903,8 @@ async function threadStatus(
     const { entry, state, activity } = result.value;
     const recorded = Array.isArray(activity?.items) ? obj(activity.items[0]) : undefined;
     const recordedAt = typeof recorded?.at === "string" ? Date.parse(recorded.at) : NaN;
-    const transcriptAt = activityOf(useApp.getState().threads[entry.id]?.items ?? []).lastAt;
+    const transcript = useApp.getState().threads[entry.id];
+    const transcriptAt = activityOf(transcript?.items ?? [], transcript?.children).lastAt;
     const times = [transcriptAt, Number.isFinite(recordedAt) ? recordedAt : undefined].filter(
       (time): time is number => time !== undefined,
     );
@@ -4902,7 +4903,7 @@ async function wait(
   const result = (link: Link, shown = shownOf(link)) => {
     const s = useApp.getState();
     const now = Date.now();
-    const activity = activityOf(s.threads[link.target]?.items ?? []);
+    const activity = activityOf(s.threads[link.target]?.items ?? [], s.threads[link.target]?.children);
     // A settled link with no answer still has one: the target's last reply, read now.
     const reply = link.answer?.trim()
       ? link
@@ -5252,7 +5253,7 @@ function wakeContext(now: number): WakeContext {
     remember(link.orchestrator);
     remember(link.target);
     if (!answers[link.target]) answers[link.target] = latestReply(target?.items ?? []);
-    if (!activity[link.target]) activity[link.target] = activityOf(target?.items ?? []);
+    if (!activity[link.target]) activity[link.target] = activityOf(target?.items ?? [], target?.children);
   }
   for (const [id, ids] of waiting) said[id] = [...ids];
   // What each parent's queued wake rows already report: their turn delivers it, marked when it starts.

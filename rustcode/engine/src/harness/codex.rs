@@ -386,6 +386,10 @@ impl CodexAdapter {
         !self.killed.load(Ordering::Acquire) && !self.peer.is_closed()
     }
 
+    pub(crate) fn pid(&self) -> Option<u32> {
+        self.process.as_ref().and_then(HarnessProcess::pid)
+    }
+
     /// The client's access level for this thread, applied from its next turn.
     pub(crate) fn set_full_access(&self, full: bool) {
         lock(&self.state).full_access = Some(full);
