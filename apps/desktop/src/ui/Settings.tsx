@@ -121,6 +121,7 @@ import {
 } from "../state/updates";
 import { AddHarnessForm } from "./AddHarness";
 import { CapabilitiesPage } from "./Capabilities";
+import { DelegatePresetsGroup } from "./DelegatePresets";
 import { DiagnosticsPage } from "./DiagnosticsPage";
 import { DefaultsForm, HarnessList, useAutoDetect } from "./Harnesses";
 import { HeaderButtonsSetting } from "./HeaderButtonsSetting";
@@ -690,6 +691,7 @@ function AgentsPage() {
         )}
       </Group>
       <OrchestrationGroup />
+      <DelegatePresetsGroup />
     </>
   );
 }

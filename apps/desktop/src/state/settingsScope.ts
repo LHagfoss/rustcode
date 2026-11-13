@@ -168,6 +168,8 @@ function localValues(): Record<ServerSettingKey, Json> {
     "delegates-total": state.totalLimit,
     "delegates-per-thread": state.threadLimit,
     "read-across-projects": state.readAcrossProjects,
+    // Only ever kept on the server: there is no app-side copy to migrate.
+    "delegate-presets": [],
   };
 }
 

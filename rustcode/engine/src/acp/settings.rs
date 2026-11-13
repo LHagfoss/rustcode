@@ -32,6 +32,8 @@ enum SettingType {
     Boolean,
     Number,
     Text,
+    /// A JSON array; its entries are read by the code that applies the key.
+    List,
 }
 
 /// Every server setting, once: `(key, type, default)`. The order is the
@@ -54,6 +56,7 @@ fn registry() -> &'static [(&'static str, SettingType, Value)] {
             ("delegates-total", SettingType::Number, json!(8)),
             ("delegates-per-thread", SettingType::Number, json!(4)),
             ("read-across-projects", SettingType::Boolean, json!(true)),
+            ("delegate-presets", SettingType::List, json!([])),
         ]
     })
 }
@@ -125,6 +128,7 @@ fn value_matches(kind: SettingType, value: &Value) -> bool {
         SettingType::Boolean => value.is_boolean(),
         SettingType::Number => value.as_f64().is_some_and(|n| n.is_finite()),
         SettingType::Text => value.is_string(),
+        SettingType::List => value.is_array(),
     }
 }
 

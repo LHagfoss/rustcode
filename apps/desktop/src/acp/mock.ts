@@ -2105,6 +2105,7 @@ export class MockEngine {
     "delegates-total": 8,
     "delegates-per-thread": 4,
     "read-across-projects": true,
+    "delegate-presets": [],
   };
   /** The payload-capture switches (docs/data-store.md › Captured payloads), off as `config.toml` defaults them. */
   private payloadCapture = { providerPayloads: false, harnessRpcPayloads: false };
@@ -5482,6 +5483,7 @@ export class MockMachine {
       "delegates-total": 8,
       "delegates-per-thread": studio ? 4 : 6,
       "read-across-projects": true,
+      "delegate-presets": [],
     };
     this.skills = [
       {

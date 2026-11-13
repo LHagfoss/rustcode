@@ -572,6 +572,35 @@ does not move it.
   children it already started as they were — the grant was made when they
   started, as with every other grant in the link book.
 
+### Delegate presets
+
+A preset is a named set of `start_session` / `fan_out` arguments the user keeps
+in Settings › Harnesses › Delegate presets (#3391), so an orchestrator does not
+restate the harness, model, effort, account, access, worktree and the same
+boilerplate instructions in every call. They are the `delegate-presets` server
+setting (`acp/settings.rs`), a list of
+`{ name, harness?, model?, effort?, account?, access?, worktree?, instructions? }`,
+empty by default, edited per machine or on all of them like any other server
+setting (`ui/DelegatePresets.tsx`, `state/delegatePresets.ts`).
+
+- `start_session` takes `preset`; each `fan_out` entry takes `preset` for its
+  harness, model, effort and account, and a top-level `fan_out` `preset` gives
+  the shared prompt's instructions and the access (every `fan_out` thread has
+  its own worktree anyway).
+- The engine expands the name before the call is forwarded to the app or
+  answered with no app attached (`orchestration/presets.rs`, called from
+  `orchestration::execute` and the hub), so every client version sees ordinary
+  arguments, and checks the result like any other call.
+- An argument the call passes itself (non-empty) wins over the preset's. The
+  preset's `instructions` go before the prompt, with a blank line between.
+- An unknown name is an `InvalidArguments` error that lists the saved names;
+  nothing is sent. Names match without regard to case.
+- `access` (`ask`, `edits` or `full`, also a plain argument now) only lowers
+  what the thread gets: the app takes the lower of it and the access above
+  (`narrowed` in `state/host.ts`).
+- `list_harnesses` ends with the saved presets, by name and what each sets, so
+  an agent learns what it can pass.
+
 ### Forks and side chats
 
 The parent record carries a `relationship`: `delegate` (an agent started the

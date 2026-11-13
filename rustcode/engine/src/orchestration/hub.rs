@@ -301,22 +301,23 @@ impl Hub {
                 request.tool
             ));
         }
-        let output = match client {
-            Some(client) => {
-                super::execute_versioned(
-                    Some(client),
-                    version,
-                    cancel,
-                    &request.tool,
-                    &request.args,
-                )
-                .await
-            }
-            None => {
-                super::local::answer(&request.session_id, cancel, &request.tool, &request.args)
-                    .await
+        let expanded = match super::with_preset(&request.tool, &request.args) {
+            Ok(expanded) => expanded,
+            Err(refusal) => {
+                return CallAnswer {
+                    success: refusal.success,
+                    content: refusal.content,
+                };
             }
         };
+        let args = expanded.as_ref().unwrap_or(&request.args);
+        let output = match client {
+            Some(client) => {
+                super::execute_versioned(Some(client), version, cancel, &request.tool, args).await
+            }
+            None => super::local::answer(&request.session_id, cancel, &request.tool, args).await,
+        };
+        let output = super::with_preset_listing(&request.tool, output);
         CallAnswer {
             success: output.success,
             content: output.content,
