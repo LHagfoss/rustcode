@@ -41,6 +41,7 @@ payload only when the user turns payload capture on ("Captured payloads").
 | `compactions` | one row per history compaction, from any harness: `thread_id`, `turn_id`, `harness`, `model`, `at`, `duration_ms`, `trigger`, `mode`, `tokens_before`, `tokens_after`, `messages_before`, `messages_after`, `idle_secs_before`, `count`, `success`, `error_kind`, `external_id`, `source` |
 | `daily_usage` | a view over `turns`: `day`, `harness`, `model`, summed tokens, `cost_usd` and turn count |
 | `daily_compactions` | a view over `compactions`: compactions, failures, tokens before and after, reclaimed tokens and mean duration per day, harness and trigger |
+| `tool_command_time_daily` | calls, timed calls, total and mean duration per day, tool and command name |
 | `tool_failure_rates` | a view over `tool_calls`: calls, failures, failure rate, mean duration and truncated results per day and tool |
 | `turn_latency_daily` | a view over `turns`: turn count, mean wall, first-token, model, tool and context values per day, harness and model |
 | `thread_links` | one row per link between two threads: `id`, `orchestrator`, `target`, `state`, `started_at`, `settled_at`, `harness`, `files_changed`, and `body`, the whole link record as JSON |
@@ -613,6 +614,10 @@ and output, and per-turn history for turns recorded before this file existed.
 Opencode reports no token counts RustCode can read, so its turns keep `NULL`
 tokens and only its reported cost. Payloads are kept only when captured and
 only for 7 days; an external harness's provider HTTP is never visible here at
-all ("Request and protocol telemetry"). Per-call tool duration is `NULL`: a
-harness's transcript does not carry it, so the store does not invent one; a
-turn's `tool_time_ms` is recorded when the caller measured it.
+all ("Request and protocol telemetry"). Live external tool calls measure
+duration from announcement to the first completed or failed status; Codex command items use their reported `durationMs` when
+available. Session-load replay is not timed. Shell command names retain only
+the first program (peeling shell, environment and priority wrappers), never
+arguments. `tool_command_time_daily` groups calls and time by command name;
+older calls keep NULL durations and names. A turn's `tool_time_ms` is recorded
+when the caller measured it.

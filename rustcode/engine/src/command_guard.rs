@@ -693,6 +693,17 @@ pub fn shell_quote(word: &str) -> String {
     format!("'{}'", word.replace('\'', "'\\''"))
 }
 
+/// The first program in a shell command, peeling wrappers, assignments and shells.
+/// Only the program name is retained for tool-call telemetry.
+pub(crate) fn command_name(command: &str) -> Option<String> {
+    let mut found = Vec::new();
+    scan(command, None, 0, &Context::default(), &mut found);
+    found
+        .into_iter()
+        .next()
+        .map(|invocation| invocation.program)
+}
+
 /// The command an approval request asks to run, when it is a shell command:
 /// the `command` of its raw input, a string or an argv array.
 pub fn requested_command(raw_input: &Value) -> Option<String> {

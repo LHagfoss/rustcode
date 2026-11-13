@@ -1651,7 +1651,9 @@ impl ExternalSession {
                 .get(history_from.min(transcript.history.len())..)
                 .unwrap_or_default()
                 .iter()
-                .filter_map(|message| {
+                .enumerate()
+                .filter_map(|(offset, message)| {
+                    let metrics = transcript.tool_metrics.get(&(history_from + offset));
                     let recorded = message.tool_result.as_ref()?;
                     if recorded.pending {
                         return None;
@@ -1661,16 +1663,15 @@ impl ExternalSession {
                         success: Some(recorded.success),
                         exit_code: recorded.exit_code.map(i64::from),
                         at: (!message.timestamp.is_empty()).then(|| message.timestamp.clone()),
-                        started_at: None,
-                        duration_ms: None,
+                        started_at: metrics.map(|(at, _)| at.clone()),
+                        duration_ms: metrics.map(|(_, duration)| *duration),
                         output_bytes: Some(message.content.len() as i64),
                         truncated: Some(recorded.truncated || recorded.payload_truncated),
                         mcp_server: None,
                         command_name: recorded
                             .command
                             .as_deref()
-                            .and_then(|command| command.split_whitespace().next())
-                            .map(str::to_owned),
+                            .and_then(crate::command_guard::command_name),
                         error_kind: recorded.error_kind.clone(),
                     })
                 })

@@ -356,6 +356,17 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
     CREATE INDEX outside_agent_calls_at ON outside_agent_calls(at);
     CREATE INDEX outside_agent_calls_client ON outside_agent_calls(client_id, at);",
     ),
+    (
+        11,
+        "tool_command_time_daily",
+        "CREATE VIEW tool_command_time_daily AS
+         SELECT substr(at, 1, 10) AS day, tool_name, command_name,
+                COUNT(*) AS calls, COUNT(duration_ms) AS timed_calls,
+                SUM(duration_ms) AS total_duration_ms,
+                AVG(duration_ms) AS mean_duration_ms
+         FROM tool_calls
+         GROUP BY substr(at, 1, 10), tool_name, command_name;",
+    ),
 ];
 
 /// One turn's token totals. Each is optional: a harness that reports no count
@@ -6417,6 +6428,14 @@ mod tests {
         )
         .unwrap()
         .rows;
+        let command_time = one_row(
+            &path,
+            "SELECT command_name, calls, timed_calls, total_duration_ms FROM tool_command_time_daily WHERE command_name = 'cargo'",
+        );
+        assert_eq!(command_time["command_name"], "cargo");
+        assert_eq!(command_time["calls"], 1);
+        assert_eq!(command_time["timed_calls"], 1);
+        assert_eq!(command_time["total_duration_ms"], 250);
         assert_eq!(tools[0]["command_name"], "cargo");
         assert_eq!(tools[0]["duration_ms"], 250);
         assert_eq!(tools[0]["truncated"], 1);
