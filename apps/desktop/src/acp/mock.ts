@@ -4866,24 +4866,26 @@ export class MockEngine {
           ],
         });
       }
-      const reply = /\bkit\b/i.test(prompt)
-        ? MOCK_KIT
-        : /\b(hover|trend|graph)\b/i.test(prompt)
-          ? MOCK_CHARTS
-          : /\bview\b/i.test(prompt)
-            ? MOCK_VIEW
-            : /\bcharts?\b/i.test(prompt)
-              ? MOCK_VIZ
-              : [
-                  "Done. ",
-                  "I updated the greeting in `src/app.ts` ",
-                  "and the tests pass.\n\n",
-                  "```ts\n",
-                  'const greeting = "hello, world";\n',
-                  "export default greeting;\n",
-                  "```\n\n",
-                  "| Check | Result |\n|---|---|\n| tests | 24 pass |\n| lint | clean |\n",
-                ];
+      const reply = /\bdashboard\b/i.test(prompt)
+        ? MOCK_DASH
+        : /\bkit\b/i.test(prompt)
+          ? MOCK_KIT
+          : /\b(hover|trend|graph)\b/i.test(prompt)
+            ? MOCK_CHARTS
+            : /\bview\b/i.test(prompt)
+              ? MOCK_VIEW
+              : /\bcharts?\b/i.test(prompt)
+                ? MOCK_VIZ
+                : [
+                    "Done. ",
+                    "I updated the greeting in `src/app.ts` ",
+                    "and the tests pass.\n\n",
+                    "```ts\n",
+                    'const greeting = "hello, world";\n',
+                    "export default greeting;\n",
+                    "```\n\n",
+                    "| Check | Result |\n|---|---|\n| tests | 24 pass |\n| lint | clean |\n",
+                  ];
       for (const chunk of reply) {
         if (run.cancelled) return done("cancelled");
         await this.sleep();
@@ -4941,6 +4943,50 @@ export const MOCK_VIEW = [
   "  options: { scales: { x: { stacked: true }, y: { stacked: true } } } });\n",
   "document.getElementById('ask').onclick = () => window.rustcode?.send(\"Why did 4 tests fail on Thursday?\");\n",
   "document.getElementById('copy').onclick = () => window.rustcode?.copy('Mon 24/1, Tue 27/0, Wed 22/2, Thu 19/4, Fri 29/0');\n",
+  "</script>\n",
+  "```\n",
+];
+
+/** A Smart UI dashboard in the kit's headline style: a title and caption, one hero number, quiet stats and a banded line chart. */
+export const MOCK_DASH = [
+  "Merges are at 3.4x a normal day; the last 24 hours are the busiest of the quarter.\n\n",
+  "```rustcode-ui v1\n",
+  "<title>Merge traffic</title>\n",
+  '<div class="rc-dash">\n',
+  '<div class="rc-head"><span class="rc-title">Merge traffic</span><span>Merged PRs on acme/web, UTC. Updated 20:39 UTC.</span></div>\n',
+  '<div class="rc-grid rc-gap-4">\n',
+  '  <div class="rc-hero"><span class="rc-label">Merged in the last 24 hours</span><span class="rc-hero-value">503</span><span class="rc-hero-delta">3.4x</span><p class="rc-lead">A normal day is <b>150</b>, the median of the last 28 days. Busier than <b>100%</b> of the last 90 days.</p></div>\n',
+  '  <div><p class="rc-label">Days by merges, last 90 days</p><div class="rc-chart" data-size="sm"><canvas id="days" role="img" aria-label="Days by number of merges"></canvas></div></div>\n',
+  "</div>\n",
+  "<hr>\n",
+  '<div class="rc-stats rc-flat">\n',
+  '  <div class="rc-stat"><span class="rc-stat-value">1,058</span><span class="rc-stat-label">Last 7 days</span><span class="rc-stat-note rc-bad">-19% vs the week before</span></div>\n',
+  '  <div class="rc-stat"><span class="rc-stat-value">347</span><span class="rc-stat-label">Today so far</span><span class="rc-stat-note">21.3 hours into the UTC day</span></div>\n',
+  '  <div class="rc-stat"><span class="rc-stat-value">448</span><span class="rc-stat-label">Busiest day</span><span class="rc-stat-note">Tue, Oct 20</span></div>\n',
+  '  <div class="rc-stat"><span class="rc-stat-value">10,335</span><span class="rc-stat-label">All time</span><span class="rc-stat-note">since Feb 9</span></div>\n',
+  "</div>\n",
+  '<div class="rc-head"><span class="rc-title">Trailing 24 hours</span><span>Hourly, last 14 days. Shaded band is a normal day.</span></div>\n',
+  '<div class="rc-chart" data-size="xl"><canvas id="hours" role="img" aria-label="Merges in the trailing 24 hours, hourly over 14 days"></canvas></div>\n',
+  "</div>\n",
+  '<script src="rustcode-lib:chart.js"></script>\n',
+  "<script>\n",
+  "let seed = 11;\n",
+  "const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;\n",
+  'const day = ["Oct 30", "Oct 31", "Nov 1", "Nov 2", "Nov 3", "Nov 4", "Nov 5", "Nov 6", "Nov 7", "Nov 8", "Nov 9", "Nov 10", "Nov 11", "Nov 12"];\n',
+  "const hours = [], labels = [];\n",
+  "for (let i = 0; i < 14 * 24; i++) {\n",
+  "  const ramp = Math.max(0, i - 14 * 24 + 36) * 11;\n",
+  "  hours.push(Math.round(Math.max(20, 150 + 90 * Math.sin(i / 37) + 60 * (rnd() - 0.5) + ramp)));\n",
+  '  labels.push(day[Math.floor(i / 24)] + ", " + String(i % 24).padStart(2, "0") + ":00");\n',
+  "}\n",
+  'new Chart(document.getElementById("hours"), { type: "line",\n',
+  '  data: { labels, datasets: [{ label: "Merged, trailing 24 h", data: hours, tension: 0.2 }] },\n',
+  '  options: { plugins: { legend: { display: false }, rcMarks: { band: [75, 270], line: 150, lineLabel: "normal", end: true } },\n',
+  '    scales: { x: { ticks: { autoSkip: false, maxRotation: 0, callback(v, i) { return i % 48 === 0 ? day[i / 24] : ""; } } }, y: { beginAtZero: true, ticks: { maxTicksLimit: 4 } } } } });\n',
+  'const bins = ["0-50", "50-100", "100-150", "150-200", "200-300", "300+"];\n',
+  'new Chart(document.getElementById("days"), { type: "bar",\n',
+  '  data: { labels: bins, datasets: [{ label: "Days", data: [12, 21, 29, 17, 9, 2] }] },\n',
+  "  options: { plugins: { legend: { display: false } }, scales: { y: { ticks: { maxTicksLimit: 3 } } } } });\n",
   "</script>\n",
   "```\n",
 ];

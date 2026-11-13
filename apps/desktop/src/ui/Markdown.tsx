@@ -242,10 +242,14 @@ function ThreadChip({ id, label }: { id: string; label?: string }) {
 const components: Components = {
   // A heading takes more air above it than the blocks' own gap gives it, so it groups with
   // the text it heads rather than floating between two paragraphs.
-  h1: ({ children }) => <h1 className="mt-3 font-semibold text-[20px] text-fg leading-[1.3]">{children}</h1>,
-  h2: ({ children }) => <h2 className="mt-3 font-semibold text-title2 text-fg leading-[1.3]">{children}</h2>,
-  h3: ({ children }) => <h3 className="mt-2 font-semibold text-title3 text-fg leading-[1.3]">{children}</h3>,
-  h4: ({ children }) => <h4 className="mt-1.5 font-semibold text-body text-fg leading-[1.3]">{children}</h4>,
+  h1: ({ children }) => (
+    <h1 className="mt-5 font-semibold text-[26px] text-fg leading-[1.2] tracking-[-0.01em]">{children}</h1>
+  ),
+  h2: ({ children }) => (
+    <h2 className="mt-4 font-semibold text-[21px] text-fg leading-[1.25] tracking-[-0.005em]">{children}</h2>
+  ),
+  h3: ({ children }) => <h3 className="mt-3 font-semibold text-title2 text-fg leading-[1.3]">{children}</h3>,
+  h4: ({ children }) => <h4 className="mt-2 font-semibold text-title3 text-fg leading-[1.3]">{children}</h4>,
   p: ({ children }) => <p className="leading-[1.625]">{children}</p>,
   // 600, not the browser's 700: the app's heaviest weight is the semibold of titles.
   strong: ({ children }) => <strong className="font-semibold">{children}</strong>,

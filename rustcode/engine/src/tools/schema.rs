@@ -2741,11 +2741,11 @@ pub(crate) fn runtime_reminder(instructions: &str) -> String {
 pub(crate) const SMART_UI_HARNESS_HINT: &str = "\
 # Smart UI
 Views run in chat: a ```rustcode-ui v1 fence of one HTML fragment with a <title> (inline <style> or <script> only if needed), no imports or network, max 64 KB, 5,000 elements. \
-Default to a view for anything structured: a table, comparison, breakdown, status overview, plan, numbers, a chart or a dashboard, asked or not. Prose, a single fact, a few bullets, code and diffs stay Markdown. Put the finding in one short line before the view and nothing after it. Sources go last inside the view, folded: details.rc-sources > ol > li > a[href]. A report to another thread stays plain Markdown.
-Pick by question: a trend → line chart; parts of a whole → stacked bar, donut; a ranking → .rc-bars; exact values → a table; a headline number → .rc-stats. Comparisons: a table, data-rc-sort past eight rows; graphs or hover → Chart.js.
-Use the app's kit, not CSS: set no colours, as little CSS as you can. Classes: .rc-title .rc-lead .rc-label; .rc-stats > .rc-stat > .rc-stat-value .rc-stat-label; .rc-badge .rc-callout (tint .rc-ok|warn|bad|info); .rc-progress > span; .rc-bars > .rc-bar > span i[width%] b; table.rc-table; .rc-list > .rc-item; .rc-steps > li.rc-step.rc-done|rc-active|rc-failed|rc-todo; .rc-details, .rc-tree, .rc-file; .rc-term; .rc-chip; .rc-tip[tabindex=0] > span (on hover); .rc-spark[data-values]; .rc-chart (sized) .rc-donut-total; .rc-row .rc-col .rc-grid .rc-gap-1…4 .rc-muted .rc-num .rc-scroll. \
-No script: data-rc-send=\"text\" sends a follow-up (on a <form>, with its fields), data-rc-copy=\"text\" copies; .rc-tabs holds [role=tablist] > button[role=tab][data-rc-tab=a] + section[data-rc-panel=a]; .rc-bar[data-rc-tip] and table.rc-table[data-rc-sort] hover and sort themselves. \
-Variables: --rc-text --rc-muted --rc-accent --rc-separator --rc-series-1…8. Chart.js: <script src=\"rustcode-lib:chart.js\"></script> in a sized div: tooltips, legend toggles. \
+Default to a view for anything structured (table, comparison, breakdown, status, plan, numbers, chart, dashboard), asked or not. Prose, a single fact, a few bullets, code and diffs stay Markdown. Put the finding in one short line before the view and nothing after it. Sources go last inside the view, folded: details.rc-sources > ol > li > a[href]. A report to another thread stays plain Markdown.
+Pick by question: a trend → line chart; parts → stacked bar, donut; a ranking → .rc-bars; exact values, comparisons → a table (data-rc-sort past eight rows). Numbers → a dashboard, .rc-dash > .rc-head (title, caption); .rc-hero (.rc-label, .rc-hero-value, .rc-hero-delta, p.rc-lead with <b>); hr; .rc-stats.rc-flat (.rc-stat-note: subline); .rc-head; chart.
+Use the app's kit, not CSS: set no colours, as little CSS as you can. Classes: .rc-title .rc-lead .rc-label; .rc-stats > .rc-stat > .rc-stat-value .rc-stat-label; .rc-badge .rc-callout (tint .rc-ok|warn|bad|info); .rc-progress > span; .rc-bars > .rc-bar > span i[width%] b; table.rc-table; .rc-list > .rc-item; .rc-steps > li.rc-step.rc-done|rc-active|rc-failed|rc-todo; .rc-details, .rc-tree, .rc-file; .rc-term; .rc-chip; .rc-tip[tabindex=0] > span (on hover); .rc-spark[data-values]; .rc-chart (sized) .rc-donut-total; .rc-row .rc-col .rc-grid .rc-gap-1…4 .rc-num .rc-scroll. \
+No script: data-rc-send=\"text\" sends a follow-up (on a <form>, with its fields), data-rc-copy=\"text\" copies; .rc-tabs holds [role=tablist] > button[role=tab][data-rc-tab=a] + section[data-rc-panel=a]; .rc-bar[data-rc-tip], table.rc-table[data-rc-sort] work alone. \
+Variables: --rc-text --rc-muted --rc-accent --rc-separator --rc-series-1…8. Chart.js: <script src=\"rustcode-lib:chart.js\"></script> in .rc-chart (data-size sm|lg|xl): tooltips, legend toggles; line option plugins.rcMarks {band:[lo,hi], line:n, lineLabel, end:true}. \
 No outer border, background or repeated title; no vh. If `smart_ui_check` is listed, run it first.
 
 ";
@@ -2829,7 +2829,7 @@ pub(crate) fn append_visualization_hint(
 /// advertise `_meta.rustcode.smartUi`; the format lives in `docs/smart-ui.md`.
 pub(crate) const SMART_UI_PROMPT_HINT: &str = "# Smart UI\n\
 This app runs small views in replies: a ```rustcode-ui v1 fence of self-contained HTML that reads like chat. \
-Default to a view for anything structured: a table, comparison, breakdown, status overview, plan, numbers, a chart or a dashboard, asked or not. \
+Default to a view for anything structured (table, comparison, breakdown, status, plan, numbers, chart, dashboard), asked or not. \
 Prose, a single fact, a few bullets, code and diffs stay Markdown. Put the finding in one short line before the view and nothing after it. Sources go last inside the view, folded: details.rc-sources > ol > li > a[href]. A report to another thread stays plain Markdown. \
 First call `use_skill` with `smart-ui` directly (no `list_skills`).\n\n";
 

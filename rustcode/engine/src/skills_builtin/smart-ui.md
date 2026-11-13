@@ -20,7 +20,7 @@ folded (Kit › Sources), never as a Markdown list after it.
 
 Pick by question: a trend over time → line chart; parts of a whole → stacked
 bar or donut; a ranking → `.rc-bars`; exact values the user will scan → a table
-(sortable past eight rows); a headline number → `.rc-stats`. Comparisons are a
+(sortable past eight rows); numbers → the dashboard below. Comparisons are a
 table, the form the user likes best. Asked for graphs or hover, chart with
 Chart.js: tooltips, legend toggles and the eight series colours come free, and
 hovering a column shows that column.
@@ -56,10 +56,14 @@ literal is what makes two views of the same kind look unlike, and
 
 Use the classes; write as little CSS as you can, and none for colour, font,
 height or spacing. The page spaces one block from the next by itself (12 px),
-so leave out margins. A `.rc-card` is already a card: never nest one.
+so leave out margins (16 px; 28 px inside `.rc-dash`). A `.rc-card` is already a card: never nest one.
 
 - Text: `.rc-title .rc-lead .rc-label .rc-muted .rc-mono .rc-num`.
-- Numbers: `.rc-stats` > `.rc-stat` > `.rc-stat-value .rc-stat-label .rc-stat-note`.
+- Numbers: `.rc-stats` > `.rc-stat` > `.rc-stat-value .rc-stat-label .rc-stat-note`;
+  `.rc-flat` on `.rc-stats` drops the boxes for big bare values.
+- Headline: `.rc-head` (a title, then a muted caption pushed right) and `.rc-hero`
+  (`.rc-label`, `.rc-hero-value` huge, `.rc-hero-delta` accent, then `p.rc-lead`
+  whose `<b>` reads bold).
 - Status: `.rc-badge .rc-callout`, tinted by `.rc-ok .rc-warn .rc-bad .rc-info`
   (also on a stat, a bar or a line in `.rc-term`);
   `<div class="rc-progress"><span style="width:72%"></span></div>`
@@ -88,7 +92,7 @@ so leave out margins. A `.rc-card` is already a card: never nest one.
 `<script src="rustcode-lib:chart.js"></script>`, then a chart in
 `<div class="rc-chart"><canvas role="img" aria-label="…"></canvas></div>`.
 One height, 200 px: step it with `data-size="sm"` (140 px) or `data-size="lg"`
-(260 px), never with an inline height. Themed: series colours, hover tooltips,
+(260 px), `data-size="xl"` (340 px), never with an inline height. Themed: series colours, hover tooltips,
 a hovered bar a step lighter, legend toggles, a line filled from its colour
 down. A canvas draws nothing with `CanvasText`, and its figures are not
 tabular, so keep exact numbers in `.rc-num` text beside it.
@@ -105,6 +109,9 @@ tabular, so keep exact numbers in `.rc-num` text beside it.
 - Stacked bar: `type: "bar"`, `options: { scales: { x: { stacked: true }, y: { stacked: true } } }`.
 - Donut with a centre total: `type: "doughnut"` and
   `<div class="rc-donut-total"><b>128</b><span>runs</span></div>` in the same `.rc-chart`.
+- Line marks: `options: { plugins: { rcMarks: { band: [75, 270], line: 150, lineLabel: "normal", end: true } } }`
+  shades a normal range of the y scale, draws a labelled reference line, and
+  puts a dot and the value on the last point.
 - Sparkline, no script: `<span class="rc-spark" data-values="1,4,2,8"></span>`.
 
 From a script: `window.rustcode?.send(text, context?)` only in a click or key
@@ -112,11 +119,20 @@ press (`context`, an object, follows as a JSON fence), `copy(text)`, `theme`,
 `onThemeChange(callback)`. Older apps have no runtime, so fall back:
 `window.rustcode?.send(...)`, `var(--rc-muted, GrayText)`.
 
+## Dashboard (numbers, trends)
+
+When the answer is a number that moved, build the layout the reader scans
+top-down: headline, context, stats, chart. A small `.rc-head` over everything,
+one `.rc-hero` (the value, its multiplier or delta, one or two plain
+sentences with the key figures in `<b>`), an `hr`, a `.rc-stats.rc-flat` of
+three or four stats whose `.rc-stat-note` is the comparison, then a `.rc-head`
+and a large `data-size="xl"` line chart with `rcMarks`. All in one `.rc-dash`.
+
 ## One example per intent
 
 All kit, no CSS: the same intent reads the same way in every turn.
 
-- Status: `<div class="rc-stats"><div class="rc-stat"><span class="rc-stat-value">128</span><span class="rc-stat-label">Runs</span></div><div class="rc-stat rc-bad"><span class="rc-stat-value">7</span><span class="rc-stat-label">Failed</span></div></div>`
+- Status: `<div class="rc-stats"><div class="rc-stat rc-bad"><span class="rc-stat-value">7</span><span class="rc-stat-label">Failed</span></div></div>`
   then a `.rc-callout rc-warn` with the cause.
 - Comparison: `<table class="rc-table" data-rc-sort"><thead><tr><th>Suite</th><th>Status</th></tr></thead><tbody><tr><td>engine</td><td><span class="rc-badge rc-ok">Passing</span></td></tr></tbody></table>`
 - Ranking: `<div class="rc-bars"><div class="rc-bar"><span>engine</span><i style="width:100%"></i><b>42 s</b></div><div class="rc-bar rc-bad"><span>auth</span><i style="width:25%"></i><b>10.5 s</b></div></div>`
