@@ -940,6 +940,7 @@ mod tests {
         let identity = Identity {
             session_id: "thread-1".into(),
             token,
+            outside: false,
         };
         let call = |id: i64, arguments: Value| {
             json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
