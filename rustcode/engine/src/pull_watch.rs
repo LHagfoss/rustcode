@@ -1538,8 +1538,14 @@ mod tests {
 
         // The next read that works clears the failure and says so once.
         let events = watch.apply(&open(), now + 240);
-        assert_eq!(events[0].kind, "sync_recovered");
-        assert!(events[0].message.contains("1 failed check"));
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.kind.as_str())
+                .collect::<Vec<_>>(),
+            ["checks_passed", "sync_recovered"]
+        );
+        assert!(events[1].message.contains("1 failed check"));
         assert_eq!(watch.failures, 0);
         assert!(watch.last_error.is_none());
         assert!(watch.apply(&open(), now + 360).is_empty());
