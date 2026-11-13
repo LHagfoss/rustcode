@@ -126,14 +126,10 @@ windows-sys = { version = "0.61", features = [
 # unicode-width, and tui-markdown are 5-10x slower at opt-level=0 and
 # dominate scroll latency in long sessions. Our own code stays at opt-level=0
 # for fast compilation and full debuginfo.
-# Keep rustc's per-build incremental state from accumulating in this large
-# workspace. Full debug information remains enabled for normal debugging.
-[profile.dev]
-incremental = false
-
-[profile.test]
-incremental = false
-
+# Incremental compilation stays on (cargo's default): with it off, a one-file
+# edit rebuilt the whole engine crate on every check. The shared build slots
+# (rustcode/engine/src/harness/build_env.rs) and the size check in AGENTS.md
+# bound its state.
 [profile.dev.package."*"]
 opt-level = 2
 

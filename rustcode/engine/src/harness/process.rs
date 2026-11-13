@@ -127,17 +127,6 @@ fn apply_priority(builder: &mut tokio::process::Command, priority: super::build_
     use super::build_env::Priority;
     match priority {
         Priority::Normal => {}
-        #[cfg(target_os = "macos")]
-        Priority::MacBackground => {
-            // SAFETY: setpriority(2) is async-signal-safe and touches no
-            // shared state; this is what `taskpolicy -b` does to a process.
-            unsafe {
-                builder.pre_exec(|| {
-                    libc::setpriority(libc::PRIO_DARWIN_PROCESS, 0, libc::PRIO_DARWIN_BG);
-                    Ok(())
-                });
-            }
-        }
         #[cfg(unix)]
         Priority::Nice(level) => {
             // SAFETY: setpriority(2) is async-signal-safe and touches no shared state.

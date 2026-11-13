@@ -5,23 +5,22 @@
 # wrappers such as `timeout`, `env` or `sh -c`.
 
 [[rule]]
-name = "no-workspace-tests"
+name = "no-local-tests"
 action = "deny"
 program = "cargo"
 subcommand = ["test", "t", "nextest"]
-flags = ["--workspace", "--all"]
-allow_env = "RUSTCODE_ALLOW_WORKSPACE_TESTS"
-message = "`cargo test --workspace` builds and runs every crate and drains the laptop's battery; CI runs it on every push. Run `cargo test -p <package> <module>` for what you changed, then push and read `gh pr checks`. Reproducing a CI failure is the one reason to run it locally."
+allow_env = "RUSTCODE_ALLOW_LOCAL_TESTS"
+message = "Tests run in CI, not on this laptop: building the engine's tests took 4–7 minutes per run and drained the battery. Run `cargo check --workspace --tests` and `cargo fmt --all -- --check`, push, then read `gh pr checks <n>` and `gh run view <run> --log-failed`. Reproducing a CI failure the log cannot explain is the one reason to run a single test locally."
 
 [[rule]]
-name = "cargo-background-priority"
+name = "cargo-low-priority"
 action = "rewrite"
 program = "cargo"
 subcommand = ["build", "b", "check", "c", "clippy", "test", "t", "nextest", "run", "r", "bench", "doc", "fix", "install", "rustc"]
-prefix_macos = "taskpolicy -b env CARGO_BUILD_JOBS=2"
-prefix_linux = "nice -n 10 env CARGO_BUILD_JOBS=2"
+prefix_macos = "nice -n 10"
+prefix_linux = "nice -n 10"
 skip_if_wrapped = ["taskpolicy", "nice"]
-message = "Cargo runs at background priority with two jobs so several agents can build on one laptop."
+message = "Cargo runs at nice 10: it yields to the user's work but keeps every core. Not `taskpolicy -b`, which confines a build to the efficiency cores on Apple silicon."
 
 [[rule]]
 name = "no-git-rebase"

@@ -6,8 +6,10 @@
 //!
 //! - a shared build directory per project outside the worktree
 //!   (`CARGO_TARGET_DIR`), so a new worktree starts from a warm one;
-//! - background priority, so a build does not slow the machine the user works
-//!   on (macOS background policy, `nice` on Linux, below normal on Windows);
+//! - low priority, so a build does not slow the machine the user works on
+//!   (`nice` on macOS and Linux, below normal on Windows). Not the macOS
+//!   background policy: it confines a process to the efficiency cores and
+//!   made a delegate's builds 2–5× slower;
 //! - on Unix a `cargo` wrapper first on `PATH` ([`SHIM`]): at most
 //!   [`DEFAULT_SLOTS`] builds run at once across all delegates, and each runs
 //!   in a target directory of its own (`slot-N`), so no two share a lock. A
@@ -32,8 +34,6 @@ const SHIM: &str = include_str!("cargo_slot.sh");
 pub(crate) enum Priority {
     /// The operating system's default.
     Normal,
-    /// macOS: the process's background policy, what `taskpolicy -b` sets.
-    MacBackground,
     /// Unix: `nice` by this much.
     Nice(i32),
     /// Windows: `BELOW_NORMAL_PRIORITY_CLASS`.
@@ -44,9 +44,8 @@ impl Priority {
     /// The background priority `os` (`std::env::consts::OS`) offers.
     pub(crate) fn background_for(os: &str) -> Self {
         match os {
-            "macos" => Self::MacBackground,
             "windows" => Self::BelowNormal,
-            "linux" | "freebsd" | "netbsd" | "openbsd" | "dragonfly" => Self::Nice(10),
+            "macos" | "linux" | "freebsd" | "netbsd" | "openbsd" | "dragonfly" => Self::Nice(10),
             _ => Self::Normal,
         }
     }
@@ -233,7 +232,7 @@ mod tests {
 
     #[test]
     fn each_os_gets_its_own_background_priority() {
-        assert_eq!(Priority::background_for("macos"), Priority::MacBackground);
+        assert_eq!(Priority::background_for("macos"), Priority::Nice(10));
         assert_eq!(Priority::background_for("linux"), Priority::Nice(10));
         assert_eq!(Priority::background_for("windows"), Priority::BelowNormal);
         assert_eq!(Priority::background_for("haiku"), Priority::Normal);
@@ -269,7 +268,7 @@ mod tests {
         let path = std::env::split_paths(value(&plan, "PATH").unwrap()).collect::<Vec<_>>();
         assert_eq!(path.first(), Some(&shim), "the wrapper comes first");
         assert!(path.len() >= 2, "the rest of PATH follows");
-        assert_eq!(plan.priority, Priority::MacBackground);
+        assert_eq!(plan.priority, Priority::Nice(10));
     }
 
     #[test]
