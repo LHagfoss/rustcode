@@ -954,7 +954,17 @@ export function updateThread(id: string, fn: (thread: ThreadState) => ThreadStat
     const thread = state.threads[id];
     if (!thread) return state;
     const next = fn(thread);
-    return next === thread ? state : { threads: { ...state.threads, [id]: next } };
+    if (next === thread) return state;
+    const model =
+      next.configOptions !== thread.configOptions && next.configOptions
+        ? selectOption(next.configOptions, "model")?.current
+        : undefined;
+    return {
+      threads: { ...state.threads, [id]: next },
+      ...(model && next.configOptions !== thread.configOptions
+        ? { sessions: state.sessions.map((x) => (x.id === id ? { ...x, model } : x)) }
+        : {}),
+    };
   });
 }
 
@@ -3061,6 +3071,7 @@ async function makeSession(options: NewSession, made: (id: string) => void): Pro
     updatedAt: Date.now(),
     harness: thread.harness?.id ?? options.harness,
     account: thread.harness?.account ?? options.account ?? undefined,
+    model: selectOption(thread.configOptions, "model")?.current ?? options.model ?? undefined,
     worktree,
     repo,
     title: options.title,
@@ -3128,7 +3139,13 @@ async function makeSession(options: NewSession, made: (id: string) => void): Pro
     // Listed now, with the setup gone in the same update: the row the message was sent to becomes
     // the thread, in place, and the chat goes on from the message it already shows.
     set((st) => ({
-      sessions: [summary, ...st.sessions.filter((x) => x.id !== id)],
+      sessions: [
+        {
+          ...summary,
+          model: selectOption(st.threads[id]?.configOptions ?? [], "model")?.current ?? summary.model,
+        },
+        ...st.sessions.filter((x) => x.id !== id),
+      ],
       ...(options.select && !st.selectedId ? viewingThread(st, id) : {}),
       pendingSetup: setupSucceeded(st.pendingSetup, options.pendingId),
     }));
