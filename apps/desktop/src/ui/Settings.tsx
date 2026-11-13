@@ -1031,7 +1031,7 @@ function NewTheme({ base, onDone }: { base: string; onDone: () => void }) {
     }
   };
   return (
-    <div className="rc-expand flex flex-col gap-2 border-border border-t px-4 py-3">
+    <div className="rc-expand rule-t flex flex-col gap-2 px-4 py-3">
       <div className="flex items-center gap-2">
         <input
           autoFocus
@@ -1835,7 +1835,7 @@ export function Settings() {
 function PanelHeader({ label }: { label: string }) {
   const resets = useRowResets();
   return (
-    <header className="flex h-12 shrink-0 items-center gap-3 border-border border-b ps-4 pe-2">
+    <header className="rule-b flex h-12 shrink-0 items-center gap-3 ps-4 pe-2">
       <nav aria-label="Settings breadcrumb" className="min-w-0">
         <ol className="m-0 flex min-w-0 list-none items-center gap-2 p-0 text-body">
           <li className="shrink-0 font-medium text-fg-muted">Settings</li>

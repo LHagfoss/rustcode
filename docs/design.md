@@ -128,10 +128,24 @@ the shadow where it floats), not by a line drawn round it.
   `bg-fill-subtle`, again with no border; controls are `bg-fill`, which is
   translucent and so is always a step over whatever holds it. Never stack two
   edges to tell them apart.
-- The only lines left are separators: `divide-border` between the rows of one
-  card, `border-b` under a header, `border-t` above a footer. They use
-  `border-border`; `border-strong` is for a line that must read (a chart
-  marker, a dashed outline), never for a card.
+- The only lines left are separators: between the rows of one card, under a
+  header, above a footer. They all use the one soft `--rc-separator`
+  (`border-border`, `divide-border` and `bg-border` resolve to it), a few per cent of the text
+  colour that is derived, never set by a theme: a theme's solid `border`
+  colour read as a dark, hard line on a raised surface, so that token no
+  longer draws separators. `border-strong` is for a line that must read
+  (a chart marker, a dashed outline), never for a card.
+- A horizontal separator stops where the content's padding does, and a
+  vertical one stops short of the panel's top and bottom by the same amount
+  (never edge to edge): `rule-t`, `rule-b`, `rule-l`, `rule-r` and
+  `rule-rows` (a line above every child but the first) draw it as a
+  background, inset by `--rc-rule-inset` (16px; set it on the element to
+  match its padding, e.g. `[--rc-rule-inset:0.75rem]`). `menuSeparator`
+  is `mx-2` to line up with a menu row's text. A separator inside a padded
+  parent is already inset by that padding and keeps a plain `border-t`.
+- A panel nested in a rounded surface (the model card's effort column) is
+  inset by the surface's padding, takes the step below its radius and has
+  no edge line of its own.
 - Raised surfaces get their edge from `--rc-shadow-*`, which includes a 1px
   `border` ring; do not add `border` to a popover or menu as well.
 - No coloured borders for state (an error card is not outlined in red; a
@@ -581,7 +595,11 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   option. `Segments` when two to four short options should all show: a
   `bg-fill` track with the picked segment on a white pill that slides to it
   (`bg-knob`, `text-knob-fg`), the others muted; `Choice` (settingsKit) is the
-  same pill track and selected pill inside Settings' cards.
+  same pill track and selected pill inside Settings' cards. Both tracks fit
+  their segments (`w-fit`), so a flex column never stretches one into a
+  full-width track with its buttons at one end; a toggle that spans its card
+  (the usage card's Before / After) passes `fill` to `Segments`, and the
+  segments share the width equally.
 - **Switch:** the track is 44×20 px (`bg-accent` on, `bg-fill-strong` off)
   and its thumb a 28×20 px white pill knob (`bg-knob shadow-knob`), as tall as
   the track and sliding from x=0 to x=16 over 200 ms.
