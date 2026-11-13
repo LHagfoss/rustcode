@@ -2111,6 +2111,35 @@ function onSessionActivity(params: unknown) {
   if (state !== "running") scheduleAutoCompact(id);
 }
 
+/**
+ * `_rustcode/session/childActivity`: what the processes the thread's harness started are doing
+ * (a build, a test run) while its turn runs. Kept for the stall notice, which counts a child that
+ * still uses CPU as progress; no row is written for it.
+ */
+function onChildActivity(params: unknown) {
+  const p = obj(params);
+  const id = str(p?.sessionId);
+  if (!id || !get().threads[id]) return;
+  const processes = typeof p?.processes === "number" ? p.processes : 0;
+  const cpuMs = typeof p?.cpuMs === "number" ? p.cpuMs : 0;
+  const busiest = str(p?.busiest);
+  const activeAgo = typeof p?.activeAgoMs === "number" ? p.activeAgoMs : undefined;
+  const now = Date.now();
+  updateThread(id, (t) =>
+    processes > 0
+      ? {
+          ...t,
+          children: {
+            processes,
+            cpuMs,
+            ...(busiest ? { busiest } : {}),
+            ...(activeAgo !== undefined ? { activeAt: now - activeAgo } : {}),
+          },
+        }
+      : { ...t, children: undefined },
+  );
+}
+
 async function handleInbound(message: Inbound, conn: AcpConnection | null = connection, host = LOCAL_HOST) {
   switch (message.type) {
     case "closed":
@@ -2133,6 +2162,7 @@ async function handleInbound(message: Inbound, conn: AcpConnection | null = conn
     case "notification":
       if (message.method === Method.sessionUpdate) onSessionUpdate(message.params);
       else if (message.method === Method.sessionActivity) onSessionActivity(message.params);
+      else if (message.method === Method.sessionChildActivity) onChildActivity(message.params);
       else if (message.method === Method.threadCreated) threadCreated(message.params);
       else if (message.method === Method.threadDeleted) threadDeleted(message.params);
       else if (message.method === V2Method.orchestrationCancelled) orchestrationCallDropped(message.params);

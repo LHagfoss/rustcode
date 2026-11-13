@@ -12,7 +12,7 @@ import { answerPreview } from "./answerPreview";
 import { MAX_ATTACHMENT_FILES } from "./attachments";
 import type { PermissionMode } from "./permissions";
 import { snoozeAt } from "./snooze";
-import { formatDuration, type QueuedPrompt, withWakeMark } from "./thread";
+import { type ChildActivity, formatDuration, type QueuedPrompt, withWakeMark } from "./thread";
 
 /**
  * What the client advertises in `initialize` while the setting is on.
@@ -2036,6 +2036,8 @@ export interface LinkActivity {
   lastTool?: string;
   /** The last tool's command, when it reported one. */
   lastCommand?: string;
+  /** The processes below the child's harness, when the engine sampled any (`ThreadState.children`). */
+  children?: { processes: number; cpuMs: number; busiest?: string };
   turns: number;
 }
 
@@ -2046,8 +2048,12 @@ function commandOf(input: Json | undefined): string | undefined {
   return typeof command === "string" && command.trim() ? command.trim() : undefined;
 }
 
-/** The last activity in a thread, from the items the app already holds: no polling. */
-export function activityOf(items: readonly ActivityItem[]): LinkActivity {
+/**
+ * The last activity in a thread, from the items the app already holds: no polling. The processes
+ * its harness started count too: a build that prints nothing for ten minutes while a compiler uses
+ * CPU is working, not stalled (`children.activeAt` is when they last did).
+ */
+export function activityOf(items: readonly ActivityItem[], children?: ChildActivity): LinkActivity {
   let lastAt: number | undefined;
   let lastTool: string | undefined;
   let lastCommand: string | undefined;
@@ -2061,7 +2067,25 @@ export function activityOf(items: readonly ActivityItem[]): LinkActivity {
     }
     if (item.kind === "turnEnd") turns += 1;
   }
-  return { lastAt, lastTool, ...(lastCommand ? { lastCommand } : {}), turns };
+  if (children && children.processes > 0) {
+    if (children.activeAt !== undefined && (lastAt === undefined || children.activeAt > lastAt))
+      lastAt = children.activeAt;
+  }
+  return {
+    lastAt,
+    lastTool,
+    ...(lastCommand ? { lastCommand } : {}),
+    ...(children && children.processes > 0
+      ? {
+          children: {
+            processes: children.processes,
+            cpuMs: children.cpuMs,
+            ...(children.busiest ? { busiest: children.busiest } : {}),
+          },
+        }
+      : {}),
+    turns,
+  };
 }
 
 /** One child that has shown no progress while its turn still runs, and what it last ran. */
@@ -2072,6 +2096,8 @@ export interface StallNotice {
   idleMs: number;
   lastTool?: string;
   lastCommand?: string;
+  /** The child's processes when it stalled: what runs and the CPU it has used in all. */
+  children?: LinkActivity["children"];
 }
 
 /** A parent that should hear about its children, and what about them. */
@@ -2133,6 +2159,7 @@ function stallNotice(link: Link, ctx: WakeContext): StallNotice | undefined {
     idleMs,
     ...(activity?.lastTool ? { lastTool: activity.lastTool } : {}),
     ...(activity?.lastCommand ? { lastCommand: activity.lastCommand } : {}),
+    ...(activity?.children ? { children: activity.children } : {}),
   };
 }
 
@@ -2851,12 +2878,19 @@ export function wakeMessage(wake: Wake, now: number): string {
   }
   if (wake.stalled?.length) {
     lines.push("No progress while the turn still runs:", "");
-    for (const { link, idleMs, lastTool, lastCommand } of wake.stalled) {
+    for (const { link, idleMs, lastTool, lastCommand, children } of wake.stalled) {
       const tool = lastTool
         ? `${lastTool}${lastCommand ? `: ${preview(lastCommand, 120)}` : ""}`
         : "none reported";
+      // What still runs below it and how much CPU it has used: a process that used none for the
+      // whole window is stuck (a lock, a prompt), not building.
+      const below = children
+        ? ` ${children.processes === 1 ? "1 process runs" : `${children.processes} processes run`} under it${
+            children.busiest ? ` (busiest: ${children.busiest})` : ""
+          }, ${formatDuration(children.cpuMs)} of CPU used in all and none for ${formatDuration(idleMs)}.`
+        : "";
       lines.push(
-        `- Delegate “${link.targetTitle}” has made no progress for ${formatDuration(idleMs)}; last tool: ${tool}. It may be stuck on a command that does not exit; interrupt_session it or message it.`,
+        `- Delegate “${link.targetTitle}” has made no progress for ${formatDuration(idleMs)}; last tool: ${tool}.${below} It may be stuck on a command that does not exit; interrupt_session it or message it.`,
       );
     }
     lines.push("");

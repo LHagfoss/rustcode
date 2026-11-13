@@ -312,6 +312,18 @@ export const isContinueMessage = (text: string) => text.includes(CONTINUE_MARK) 
 /** A wake message's first line: its compact summary ("2 delegates finished · 1 delegate asks"). */
 export const wakeLine = (text: string) => text.split("\n")[0] ?? text;
 
+/** What the engine last saw of the processes a harness started, from `_rustcode/session/childActivity`. */
+export interface ChildActivity {
+  /** How many are running. */
+  processes: number;
+  /** CPU time they have used in total, in milliseconds. */
+  cpuMs: number;
+  /** The one that used the most (`rustc`). */
+  busiest?: string;
+  /** When they last added CPU, in this app's clock; absent while they have not. */
+  activeAt?: number;
+}
+
 export interface ThreadState {
   id: string;
   cwd: string;
@@ -341,6 +353,12 @@ export interface ThreadState {
   turnUsage?: TurnUsage;
   /** Background commands the last turn parked on; it resumes when they finish. */
   waiting?: number;
+  /**
+   * The processes the running turn's harness started (a build, a test run), as the engine last
+   * sampled them. A tool that prints nothing for minutes still counts as progress while they use
+   * CPU (`orchestration.ts` `stallNotice`). Gone when the turn ends.
+   */
+  children?: ChildActivity;
   /** The running turn is one the engine resumed itself, not a prompt the app sent. */
   woken?: boolean;
   /**
@@ -903,6 +921,7 @@ export function finishTurn(
     queueHeld: holdsQueue(outcome) && state.queue.length && !state.queue[0]?.restart ? true : undefined,
     turnStartedAt: undefined,
     woken: undefined,
+    children: undefined,
     pendingTurn: undefined,
     permissions: [],
     error,

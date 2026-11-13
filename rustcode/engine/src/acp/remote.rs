@@ -2289,6 +2289,10 @@ impl ClientSink for TeeSink {
     fn turn_ended(&self) {
         self.inner.turn_ended();
     }
+
+    fn child_activity(&self, activity: crate::harness::child_activity::ChildActivity) {
+        self.inner.child_activity(activity);
+    }
 }
 
 /// Offer a harness's permission request to paired devices while the app is

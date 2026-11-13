@@ -21,6 +21,8 @@ export const Method = {
   sessionMove: "_rustcode/session/move",
   sessionRepair: "_rustcode/session/repair",
   sessionActivity: "_rustcode/session/activity",
+  /** What the processes a harness started do while its turn runs (CPU), sampled by the engine. */
+  sessionChildActivity: "_rustcode/session/childActivity",
   /** A thread the engine started because a paired device asked for one. */
   threadCreated: "_rustcode/threads/created",
   /** A thread trashed here: every client that lists threads drops the row. */

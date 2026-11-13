@@ -10,7 +10,9 @@
 
 pub(crate) mod acp_child;
 pub(crate) mod background;
+pub(crate) mod build_env;
 pub(crate) mod cache;
+pub(crate) mod child_activity;
 pub(crate) mod codex;
 pub mod config;
 pub(crate) mod detect;
