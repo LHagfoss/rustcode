@@ -1,6 +1,6 @@
 import { formatBinding } from "../lib/keys";
 import { basename } from "../lib/paths";
-import { appPlatform, fileManagerName, primaryModifier } from "../lib/platform";
+import { appPlatform, primaryModifier } from "../lib/platform";
 // The composer, after ContentView.swift's Composer: one glass box floating over
 // the transcript, holding the attachments, the field (with a slash-command token
 // in front of it; pasted links stay inline as text) and its foot: + on the left,
@@ -20,11 +20,8 @@ import {
   ChevronUp,
   Clock,
   Command,
-  Copy,
   FileText,
   Folder,
-  FolderOpen,
-  FolderPlus,
   GitBranch,
   ListEnd,
   Paperclip,
@@ -35,7 +32,6 @@ import {
   ShieldOff,
   Square,
   SquarePen,
-  SquareTerminal,
   WifiOff,
   X,
 } from "lucide-react";
@@ -47,15 +43,12 @@ import type { ThreadStatus } from "../acp/v2";
 import { suggestBranch, validBranch } from "../acp/v2";
 import { FIELD_FADE, type FieldFade, fieldFade } from "../lib/fade";
 import { measuredFieldHeight } from "../lib/fieldHeight";
-import { folderRows, matchSpans, middleEllipsis } from "../lib/folderList";
+import { matchSpans } from "../lib/folderList";
 import { haptic } from "../lib/haptics";
 import {
-  canOpenTerminal,
   clipboardImage,
   type ImageFile,
   onFileDrop,
-  openPath,
-  openTerminalAt,
   pickFiles,
   pickFolder,
   projectFiles,
@@ -156,13 +149,15 @@ import { localId, shortAge, type ThreadState } from "../state/thread";
 import { LOCAL_HOST, splitThreadKey } from "../state/threadKeys";
 import { UsageMeter } from "./ComposerUsage";
 import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
+import { overFolderDrop } from "./folderDropTarget";
 import { HarnessIcon } from "./HarnessIcon";
 import { openLightbox } from "./Lightbox";
 import { LinkChip } from "./LinkChip";
 import { DeviceGlyphIcon } from "./MachineGlyph";
 import { ModelPicker } from "./ModelPicker";
 import { PasteChip } from "./PasteChip";
-import { cx, MenuSearchField, MenuShortcut, noTextHelpers, Pill, Tooltip } from "./primitives";
+import { ProjectPicker, useMoveBlockedReason } from "./ProjectPicker";
+import { cx, MenuShortcut, noTextHelpers, Pill, Tooltip } from "./primitives";
 import { QueuedAnnouncer } from "./QueuedMessages";
 import { ScheduledMessages } from "./ScheduledMessages";
 import { SendLaterDialog } from "./SendLaterDialog";
@@ -181,7 +176,6 @@ const PAD = 6;
 const MIN_HEIGHT = Math.round(LINE + PAD * 2);
 const MAX_HEIGHT = 208;
 // How much of a folder's path the picker shows: its ends, not the whole of a deep path.
-const PATH_CHARS = 30;
 
 function readFileAs(file: File, as: "base64" | "text"): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -877,8 +871,10 @@ export const Composer = memo(function Composer({
     let stop: (() => void) | undefined;
     let live = true;
     void onFileDrop((event) => {
-      setDropping(event.type === "over");
-      if (event.type === "drop" && event.paths.length) dropped.current(event.paths);
+      // A drag over the sidebar is a folder becoming a project there, not an attachment.
+      const elsewhere = overFolderDrop(event.position);
+      setDropping(event.type === "over" && !elsewhere);
+      if (event.type === "drop" && event.paths.length && !elsewhere) dropped.current(event.paths);
     }).then((unlisten) => {
       if (live) stop = unlisten;
       else unlisten();
@@ -2107,50 +2103,20 @@ function RunOnMenu() {
 }
 
 /**
- * The folder a thread works in: for a new thread a menu of projects to start
- * in; once the thread exists, what to do with its folder (Finder, Terminal,
- * copy the path, another thread there).
- *
- * The list is projects, not every folder a thread ever ran in: the root, a home folder and a
- * folder named like a container (`~/code`, `~/dev`) that holds another project are not offered, and
- * a worktree nests under the repo it was cut from (lib/folderList.ts). Projects are ranked by how
- * much they are used — how recently, and how many threads — so the ones worked in sit at the top.
- * One line per row — the name, then the end of its path, faded — so a deep checkout never turns the
- * list into a wall of wrapping text. "Choose Folder…" is the last row, and the last thing the
- * arrow keys reach.
+ * The folder button under the composer: the project picker (ui/ProjectPicker.tsx), which starts a
+ * new thread in a project or moves the open thread to another one.
  */
 function FolderMenu({ thread, cwd, host }: { thread?: ThreadState; cwd: string; host: string }) {
-  const sessions = useApp((s) => s.sessions);
-  const machineName = useApp((s) => s.machineNames[host]);
-  const threadMachine = useMachineOfThread(thread?.id);
-  const [filter, setFilter] = useState("");
-  // A new thread on another computer starts in that computer's folders: its threads' projects,
-  // never this computer's paths, which are meaningless there.
-  const sources = useMemo(
-    () =>
-      sessions
-        // A thread with no folder of its own lists a stand-in (its home), not a project (issue 3425).
-        .filter((s) => (s.host ?? LOCAL_HOST) === host && !s.workspaceUnknown)
-        .map((s) => ({ cwd: s.cwd, worktree: s.worktree, updatedAt: s.updatedAt })),
-    [sessions, host],
-  );
-  const all = useMemo(() => folderRows(sources), [sources]);
-  const rows = useMemo(() => folderRows(sources, { filter }), [sources, filter]);
-  // The search appears once there is a list worth searching, and stays while it holds something.
-  const searchable = all.length > 4 || !!filter.trim();
+  const blocked = useMoveBlockedReason(thread);
   return (
-    <CardPopover
-      label={cwd ? `Project folder: ${projectName(cwd)}` : "Choose a folder"}
-      onKeyDown={menuKeys}
-      tooltip={cwd || "Choose a folder"}
+    <ProjectPicker
+      thread={thread}
+      cwd={cwd}
+      host={host}
       // Always above the button, pinned: the list is what it is about, and the card above it has
       // the room (docs/design.md › Composer strip).
       side="top"
-      className="flex w-[300px] flex-col gap-1"
-      onOpenChange={(open) => {
-        // A search is about the panel it was typed in, not a filter the next one inherits.
-        if (!open) setFilter("");
-      }}
+      tooltip={blocked ? `${cwd} · ${blocked}` : cwd || "Choose a folder"}
       trigger={
         <button
           type="button"
@@ -2170,102 +2136,7 @@ function FolderMenu({ thread, cwd, host }: { thread?: ThreadState; cwd: string; 
           <ChevronDown size={12} className="shrink-0 text-fg-faint" />
         </button>
       }
-    >
-      {thread ? (
-        <FolderActions cwd={cwd} host={host} remote={!!threadMachine} />
-      ) : (
-        <>
-          {/* The folders scroll under a search that filters them; "Choose Folder…" stays pinned
-              under them, last in the list and last to the arrow keys. */}
-          {searchable && (
-            <div data-menu-static className="px-0.5 pb-0.5">
-              <MenuSearchField
-                value={filter}
-                onChange={setFilter}
-                placeholder="Search folders"
-                label="Search folders"
-              />
-            </div>
-          )}
-          <div className="scroll-stable min-h-0 flex-1">
-            {rows.map((row) => (
-              <CardMenuItem
-                key={row.path}
-                onSelect={() => setProjectCwd(row.path)}
-                className={cx("gap-2", row.path === cwd && "bg-fill", row.repo && "pl-6")}
-              >
-                {/* A worktree is the repo's, not a project of its own: indented under it, marked by
-                    the branch it is. */}
-                {row.repo && <GitBranch size={12} className="shrink-0 text-fg-faint" />}
-                <span className="min-w-[40%] flex-1 truncate text-body text-fg">
-                  {matchSpans(row.name, filter).map((span, i) =>
-                    span.hit ? (
-                      <mark key={i} className="rounded-xs bg-fill-strong text-fg">
-                        {span.text}
-                      </mark>
-                    ) : (
-                      span.text
-                    ),
-                  )}
-                </span>
-                <span className="min-w-0 shrink truncate text-caption text-fg-faint">
-                  {middleEllipsis(row.path, PATH_CHARS)}
-                </span>
-              </CardMenuItem>
-            ))}
-            {!rows.length && all.length > 0 && (
-              <p className="px-3 py-2 text-callout text-fg-muted">No folder matches</p>
-            )}
-            {!all.length && host && (
-              <p className="px-3 py-2 text-callout text-fg-muted">
-                No folders on {machineName ?? "that computer"} yet
-              </p>
-            )}
-          </div>
-          {/* A folder of another computer is not this app's to browse: its projects are what its
-              threads name, and nothing here can read its disk. */}
-          {all.length > 0 && !host && <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />}
-          {!host && (
-            <CardMenuItem onSelect={() => void pickFolder(cwd).then((p) => p && setProjectCwd(p))}>
-              <FolderPlus size={13} className="text-fg-muted" /> Choose Folder…
-            </CardMenuItem>
-          )}
-        </>
-      )}
-    </CardPopover>
-  );
-}
-
-/**
- * What the folder of an existing thread offers. A thread on another computer has its folder there:
- * this one can copy the path, but neither Finder nor a terminal on this Mac can open it.
- */
-function FolderActions({ cwd, host, remote }: { cwd: string; host: string; remote?: boolean }) {
-  return (
-    <>
-      <div className="truncate px-3 pt-1 pb-1.5 text-caption text-fg-muted">
-        {middleEllipsis(cwd, PATH_CHARS + 10)}
-      </div>
-      {!remote && (
-        <CardMenuItem onSelect={() => openPath(cwd)}>
-          <FolderOpen size={13} className="text-fg-muted" /> Open in {fileManagerName()}
-        </CardMenuItem>
-      )}
-      {!remote && canOpenTerminal() && (
-        <CardMenuItem onSelect={() => void openTerminalAt(cwd).catch((e) => toast(String(e), "error"))}>
-          <SquareTerminal size={13} className="text-fg-muted" /> Open in Terminal
-        </CardMenuItem>
-      )}
-      <CardMenuItem
-        onSelect={() => void navigator.clipboard.writeText(cwd).then(() => toast("Path copied", "info"))}
-      >
-        <Copy size={13} className="text-fg-muted" /> Copy Path
-      </CardMenuItem>
-      <div className="mx-1.5 my-1 h-px shrink-0 bg-border" />
-      <CardMenuItem onSelect={() => startNewThread(cwd, host || undefined)}>
-        <SquarePen size={13} className="text-fg-muted" /> New Thread Here
-      </CardMenuItem>
-    </>
+    />
   );
 }
 

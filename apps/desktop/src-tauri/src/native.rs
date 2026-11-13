@@ -752,6 +752,32 @@ pub fn attached_files(paths: Vec<String>, roots: Vec<String>) -> Result<Vec<Atta
     Ok(out)
 }
 
+/// What each dropped path is, in order: `folder`, `file`, `missing` (gone or
+/// not absolute) or `denied` (it exists but cannot be read). The sidebar adds
+/// only folders as projects, and a web view cannot stat a path itself.
+#[tauri::command(async)]
+pub fn path_kinds(paths: Vec<String>) -> Vec<&'static str> {
+    paths
+        .iter()
+        .map(|path| path_kind(Path::new(path)))
+        .collect()
+}
+
+fn path_kind(path: &Path) -> &'static str {
+    if !path.is_absolute() {
+        return "missing";
+    }
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.is_dir() => match std::fs::read_dir(path) {
+            Ok(_) => "folder",
+            Err(_) => "denied",
+        },
+        Ok(_) => "file",
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => "denied",
+        Err(_) => "missing",
+    }
+}
+
 /// `~`, `~/…` and, on Windows, `~\…` from the engine or the mock, against the
 /// user's home folder (`USERPROFILE` on Windows, where `HOME` is normally
 /// unset).
@@ -995,6 +1021,22 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn path_kinds_tells_folders_from_files_and_missing_paths() {
+        let dir = std::env::temp_dir().join(format!("rc-path-kinds-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("notes.txt");
+        std::fs::write(&file, "").unwrap();
+        let kinds = path_kinds(vec![
+            dir.to_string_lossy().into_owned(),
+            file.to_string_lossy().into_owned(),
+            dir.join("gone").to_string_lossy().into_owned(),
+            "relative/folder".into(),
+        ]);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(kinds, vec!["folder", "file", "missing", "missing"]);
+    }
 
     #[test]
     fn a_tilde_path_expands_against_the_home_folder() {

@@ -6109,6 +6109,13 @@ export class MockTransport implements Transport {
     if (command === "skill_create") return `~/.config/rustcode/skills/${String(args.name)}/SKILL.md`;
     // The mock window has no system clipboard to paste from, and no picture to stand in for.
     if (command === "clipboard_image") return null;
+    // A dropped path is a folder unless it has an extension; nothing on the mock's disk is missing.
+    if (command === "path_kinds") {
+      const paths = Array.isArray(args.paths) ? args.paths.map(String) : [];
+      return paths.map((path) =>
+        !path.startsWith("/") ? "missing" : /\.[a-z0-9]+$/i.test(path) ? "file" : "folder",
+      );
+    }
     throw new Error(`The mock does not run ${command}.`);
   }
 

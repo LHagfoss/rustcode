@@ -31,6 +31,7 @@ import {
   FileText,
   Folder,
   FolderOpen,
+  FolderPlus,
   FolderX,
   GitBranch,
   GitFork,
@@ -69,12 +70,13 @@ import { displayPath, modelName, projectName, type SessionSummary } from "../acp
 import type { ThreadStatus } from "../acp/v2";
 import { rowBranch } from "../lib/gitRef";
 import { formatBinding, listCommandFor } from "../lib/keys";
-import { openTerminalAt, openThreadLog, revealPath } from "../lib/native";
+import { onFileDrop, openTerminalAt, openThreadLog, revealPath } from "../lib/native";
 import { hasShell } from "../lib/shell";
 import { delegateCount, liveSubagents, type StackAgent } from "../state/agentStack";
 import { type BranchRow, branchKindOf, branchRows } from "../state/branches";
 import { useCheckoutBranch } from "../state/checkoutBranch";
 import { type ChildInfo, childInfo } from "../state/children";
+import { addDroppedFolders } from "../state/folders";
 import { stateOf } from "../state/host";
 import { hasPendingChange, useOutbox } from "../state/machineOutbox";
 import {
@@ -169,6 +171,7 @@ import { formatClock, idleSettled, shortAge } from "../state/thread";
 import { openChain, parentOf as parentOfThread, type SubRow, topLevel } from "../state/topLevel";
 import { useWaiting, useWaitingIds, waitingLabel, waitingTitle } from "../state/waiting";
 import { CustomSnooze } from "./CustomSnooze";
+import { FOLDER_DROP_ATTR, overFolderDrop } from "./folderDropTarget";
 import { HarnessIcon } from "./HarnessIcon";
 import { NeedsYouRow } from "./Inbox";
 import { LinkBadge } from "./Links";
@@ -1573,6 +1576,26 @@ export function Sidebar() {
   // frame (docs/design.md › Motion). The column beside it then slides from where it was with a
   // transform, in step with the sidebar's own slide, so the sidebar pushes the content along.
   const slot = useRef<HTMLElement>(null);
+  // Folders dragged from the file manager onto the sidebar become projects (issue 3608). The drag
+  // is the window's, not the list's: a thread row being reordered is a pointer drag inside the
+  // page and never reaches here, and a drag elsewhere stays the composer's attachment.
+  const [folderDrop, setFolderDrop] = useState(false);
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let live = true;
+    void onFileDrop((event) => {
+      const over = overFolderDrop(event.position);
+      setFolderDrop(event.type === "over" && over);
+      if (event.type === "drop" && over && event.paths.length) void addDroppedFolders(event.paths);
+    }).then((unlisten) => {
+      if (live) stop = unlisten;
+      else unlisten();
+    });
+    return () => {
+      live = false;
+      stop?.();
+    };
+  }, []);
   const shown = useRef(!hidden);
   useLayoutEffect(() => {
     if (shown.current === !hidden) return;
@@ -2288,12 +2311,23 @@ export function Sidebar() {
       aria-hidden={hidden}
     >
       <div
+        {...{ [FOLDER_DROP_ATTR]: "" }}
         className={cx(
-          "flex h-full flex-col bg-sidebar-glass transition-[translate] duration-200 ease-snappy",
+          "relative flex h-full flex-col bg-sidebar-glass transition-[translate] duration-200 ease-snappy",
           hidden ? "-translate-x-full" : "translate-x-0",
         )}
         style={{ width, minWidth: width }}
       >
+        {folderDrop && (
+          // The drop target: the whole sidebar, outlined the way the composer outlines a file drop.
+          <div
+            aria-live="polite"
+            className="pointer-events-none absolute inset-2 z-30 flex flex-col items-center justify-center gap-2 rounded-lg bg-accent/10 px-4 text-center text-callout text-fg outline-2 outline-accent outline-dashed"
+          >
+            <FolderPlus size={20} className="text-accent" />
+            Drop folders to add them as projects
+          </div>
+        )}
         {/* Keep the toggle and Settings at the right edge, clear of the window controls. */}
         <TitlebarRow className="pr-3">
           <Cluster className="ml-auto shrink-0">
