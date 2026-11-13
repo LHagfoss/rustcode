@@ -3,6 +3,7 @@
 // behind a `Show all` row. What is typed searches every item, never only the few
 // that are on screen, and the rows still say which section and harness they are in.
 
+import { fuzzyScore } from "../lib/modelSearch";
 import type { AgentChoice, ThreadChoice } from "./compose";
 import type { MentionScope } from "./fileRefs";
 
@@ -19,7 +20,8 @@ export type MentionSection = "agents" | "threads" | "files";
 /** How the drawer draws a section: its name, a harness's name, a row, or its rest and its end. */
 export type MentionNode =
   | { kind: "heading"; label: string }
-  | { kind: "harness"; harness: string; name: string }
+  /** A harness's name, with the login and plan its rows run on: said once here, not on every row. */
+  | { kind: "harness"; harness: string; name: string; account?: string; plan?: string }
   | { kind: "entry"; entry: MentionEntry }
   /** The rows a section kept back: `Show N more` draws them. */
   | { kind: "more"; section: MentionSection; hidden: number }
@@ -68,6 +70,35 @@ function harnessOf(entry: MentionEntry): string {
   if (entry.kind === "agent") return entry.agent.harness;
   if (entry.kind === "thread") return entry.thread.harness || "rustcode";
   return "";
+}
+
+/** The login and plan a harness's rows share: the first row that names them speaks for the group. */
+function groupDetail(entries: readonly MentionEntry[]): { account?: string; plan?: string } {
+  const agents = entries.flatMap((entry) => (entry.kind === "agent" ? [entry.agent] : []));
+  return {
+    account: agents.find((agent) => agent.account)?.account,
+    plan: agents.find((agent) => agent.plan)?.plan,
+  };
+}
+
+/** How well a section's best row answers what is typed: the sections are listed by it. */
+function sectionScore(query: string, nodes: readonly MentionNode[]): number {
+  let best = Number.NEGATIVE_INFINITY;
+  for (const node of nodes) {
+    if (node.kind !== "entry") continue;
+    const entry = node.entry;
+    const label =
+      entry.kind === "agent"
+        ? entry.agent.name
+        : entry.kind === "thread"
+          ? entry.thread.title
+          : entry.kind === "file"
+            ? entry.path.slice(entry.path.lastIndexOf("/") + 1)
+            : "";
+    const score = label ? fuzzyScore(query, label) : null;
+    if (score !== null && score > best) best = score;
+  }
+  return best;
 }
 
 /** What a row calls itself, so a harness's heading can be left out when the row already says it. */
@@ -140,7 +171,7 @@ export function mentionNodes(input: MentionInput): MentionNode[] {
       // `Local Agent` row reads as one row, not a group).
       const name = nameOf(group.harness);
       if (shown.length > 1 || nameOfEntry(shown[0]!) !== name) {
-        nodes.push({ kind: "harness", harness: group.harness, name });
+        nodes.push({ kind: "harness", harness: group.harness, name, ...groupDetail(group.entries) });
       }
       for (const entry of shown) nodes.push({ kind: "entry", entry });
       kept += shown.length;
@@ -177,12 +208,21 @@ export function mentionNodes(input: MentionInput): MentionNode[] {
     }
   }
 
+  // Something typed lists the section with the closest match first, so the highlighted first row is
+  // the best answer whichever group it is in; nothing typed keeps the drawer's own order.
+  if (asked && !scope) {
+    const scores = new Map(groups.map((group) => [group, sectionScore(query, group.nodes)]));
+    // `|| 0`: two sections with nothing scored are -Infinity apart, which is NaN, not a tie.
+    groups.sort((a, b) => scores.get(b)! - scores.get(a)! || 0);
+  }
   // A heading only separates groups the drawer draws beside each other; one group needs none.
   const labelled = groups.length > 1;
-  const nodes: MentionNode[] = [...keywords];
+  const nodes: MentionNode[] = asked ? [] : [...keywords];
   for (const group of groups) {
     if (labelled) nodes.push({ kind: "heading", label: LABEL[group.section] });
     nodes.push(...group.nodes);
   }
+  // A keyword that is still being typed (`@fi`) follows the matches rather than leading them.
+  if (asked) nodes.push(...keywords);
   return nodes;
 }

@@ -47,17 +47,31 @@ export function slashToken(text: string, caret: number): TokenRange | null {
 }
 
 /**
- * The commands the token `query` is looking for: names that start with it first,
- * then the ones with it anywhere, so `/rev` finds `/review` and `/release`.
+ * The commands and skills the token `query` is looking for, the best match first: a name that starts
+ * with it, then one that contains it, then one with its letters in order (`/rlsa` finds
+ * `/release-automation`), then one whose description says it. A name listed twice (a command and a
+ * skill that share it) is listed once, the first one winning.
  */
 export function commandSuggestions(query: string, commands: SlashCommand[], limit = 40): SlashCommand[] {
-  const typed = `/${query.toLowerCase()}`;
-  const prefixed = commands.filter((c) => c.name.toLowerCase().startsWith(typed));
-  const others =
-    typed.length > 1
-      ? commands.filter((c) => !prefixed.includes(c) && c.name.toLowerCase().includes(typed.slice(1)))
-      : [];
-  return [...prefixed, ...others].slice(0, limit);
+  const seen = new Set<string>();
+  const unique = commands.filter((c) => {
+    const key = c.name.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const typed = query.trim().toLowerCase();
+  if (!typed) return unique.slice(0, limit);
+  const scored = unique.flatMap((command, at) => {
+    const name = command.name.toLowerCase().replace(/^\//, "");
+    const tier = name.startsWith(typed) ? 0 : name.includes(typed) ? 1 : 2;
+    const byName = fuzzyScore(typed, name);
+    if (byName !== null) return [{ command, at, rank: tier * 1000 - byName }];
+    const byDescription = command.description.toLowerCase().includes(typed);
+    return byDescription ? [{ command, at, rank: 3000 }] : [];
+  });
+  scored.sort((a, b) => a.rank - b.rank || a.at - b.at);
+  return scored.slice(0, limit).map((hit) => hit.command);
 }
 
 /** The text with the token replaced by `/name `, and where the caret goes. */
