@@ -975,6 +975,7 @@ mod tests {
             Identity {
                 session_id: "thread-1".into(),
                 token,
+                outside: false,
             },
             hub.path().to_owned(),
             &[
@@ -1045,6 +1046,7 @@ mod tests {
             Identity {
                 session_id: "thread-1".into(),
                 token,
+                outside: false,
             },
             hub.path().to_owned(),
             &[call],
@@ -1095,6 +1097,7 @@ mod tests {
             Identity {
                 session_id: "thread-1".into(),
                 token,
+                outside: false,
             },
             hub.path().to_owned(),
             &[call],
@@ -1125,6 +1128,7 @@ mod tests {
             Identity {
                 session_id: "thread-1".into(),
                 token,
+                outside: false,
             },
             hub.path().to_owned(),
             &[delegate, standalone],
@@ -1152,6 +1156,7 @@ mod tests {
                 Identity {
                     session_id: "thread-1".into(),
                     token,
+                    outside: false,
                 },
                 hub.path().to_owned(),
                 &[call],
@@ -1204,6 +1209,7 @@ mod tests {
             Identity {
                 session_id: "thread-1".into(),
                 token,
+                outside: false,
             },
             hub.path().to_owned(),
             &[call],
