@@ -8,7 +8,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { modelName } from "../acp/types";
-import { type GitChanges, gitChanges } from "../lib/native";
+import { type GitChanges, gitChangeSummary } from "../lib/native";
 import { selectOption } from "../state/harness";
 import { useApp, worktreeOf } from "../state/store";
 import { splitThreadKey } from "../state/threadKeys";
@@ -30,21 +30,25 @@ import {
   writeFolded,
 } from "./overview";
 
-/** The thread's working tree against HEAD, read once its turn ends, so a finished turn counts. */
+/**
+ * The thread's working tree against HEAD, read once its turn ends, so a finished turn counts. Only
+ * the counts and branch: the panel shows no diff here. Another folder starts empty, so the previous
+ * thread's branch is never shown under this one while the read is out.
+ */
 function useChanges(cwd: string | undefined, running: boolean) {
-  const [changes, setChanges] = useState<GitChanges | null>(null);
+  const [changes, setChanges] = useState<{ cwd: string; changes: GitChanges | null } | null>(null);
   useEffect(() => {
     if (!cwd || running) return;
     let alive = true;
-    void gitChanges(cwd).then(
-      (result) => alive && setChanges(result),
+    void gitChangeSummary(cwd).then(
+      (result) => alive && setChanges({ cwd, changes: result }),
       () => alive && setChanges(null),
     );
     return () => {
       alive = false;
     };
   }, [cwd, running]);
-  return changes;
+  return changes && changes.cwd === cwd ? changes.changes : null;
 }
 
 export function ThreadDetails() {
