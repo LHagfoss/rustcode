@@ -22,6 +22,7 @@ import { hasShell, shellCall, shellCallWithin } from "../lib/shell";
 import { readStorage, writeStorage } from "../lib/storage";
 import { appVersion } from "../lib/updater";
 import { forgetMachineCache, forgetTranscript, loadThreadList, saveThreadList } from "./machineCache";
+import { loadMirroredList, mirrorThreadList, withMirroredRows } from "./machineMirror";
 import { forgetMachineOutbox, forgetThreadOutbox } from "./machineOutbox";
 import {
   APP_VERSION,
@@ -311,7 +312,13 @@ export const useMachines = create<MachinesStore>(() => ({
 useMachines.subscribe((state, prev) => {
   if (state.sessions === prev.sessions) return;
   for (const [host, rows] of Object.entries(state.sessions)) {
-    if (rows !== prev.sessions[host]) saveThreadList(host, rows);
+    if (rows === prev.sessions[host]) continue;
+    saveThreadList(host, rows);
+    // Only a machine that answers is mirrored: the rows of one that is away are this computer's
+    // own copy, not something the machine said (`state/machineMirror.ts`).
+    if (state.machines.find((machine) => machine.id === host)?.state === "connected") {
+      mirrorThreadList(host, rows);
+    }
   }
 });
 
@@ -923,6 +930,11 @@ export async function refreshMachines(): Promise<void> {
       error: null,
       ...(Object.keys(cached).length ? { sessions: { ...state.sessions, ...cached } } : {}),
     });
+    // A machine that is away also draws what this computer's disk mirrored from it, past the 200
+    // newest the web view keeps (`state/machineMirror.ts`).
+    for (const machine of machines) {
+      if (machine.state !== "connected") void drawMirrored(machine.id);
+    }
     for (const machine of machines) void attach(machine);
     for (const id of [...links.keys()]) {
       if (!machines.some((machine) => machine.id === id)) detach(id);
@@ -930,6 +942,19 @@ export async function refreshMachines(): Promise<void> {
   } catch (error) {
     useMachines.setState({ ready: true, error: errorText(error) });
   }
+}
+
+/** Adds the mirrored rows a machine that is away lacks; a live read still replaces them all. */
+async function drawMirrored(host: string): Promise<void> {
+  const mirrored = await loadMirroredList(host);
+  if (!mirrored.length) return;
+  useMachines.setState((state) => {
+    // The machine came back while the disk was read: its own list is the truth now.
+    if (state.machines.find((machine) => machine.id === host)?.state === "connected") return {};
+    const current = state.sessions[host] ?? [];
+    const merged = withMirroredRows(current, mirrored);
+    return merged.length === current.length ? {} : { sessions: { ...state.sessions, [host]: merged } };
+  });
 }
 
 /**

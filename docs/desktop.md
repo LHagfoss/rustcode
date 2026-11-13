@@ -86,7 +86,15 @@ A machine that is away keeps its threads listed and read-only, also after the
 app restarted: the app keeps what it last read from each machine in its own
 storage (`state/machineCache.ts`: the 200 newest threads per machine, and the
 transcript of each thread opened in the last 30 days, capped in size; never a
-token), and a live read replaces it when the machine is back. The chat says
+token), and a live read replaces it when the machine is back. The same reads also go to this
+computer's disk, through its own engine (`state/machineMirror.ts`, `docs/data-store.md`
+› Thread mirror): every thread a machine listed and the last transcript read
+from each, without the web view's caps, so a wiped web view, a reinstall or a
+machine that is wiped or removed does not take its threads with it. A machine that is away
+draws the mirrored threads its 200 cached rows lack, and a thread whose transcript
+the web view no longer holds opens from the mirror. It is read-only, never deleted
+and never sent back; Settings › Environments › **Thread copies** switches it off
+and lists projects to leave out. The chat says
 "‹Machine› is offline since HH:MM. This is the last copy this computer saw; it
 updates when the machine is back.", the composer is disabled, and the
 header shows `Runs on ‹machine› · ‹harness› · ‹model›`; the controls that read
