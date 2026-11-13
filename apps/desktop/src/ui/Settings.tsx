@@ -108,12 +108,12 @@ import {
   useApp,
 } from "../state/store";
 import {
-  applyUpdate,
   checkIfStale,
   checkNow,
   installProgress,
   loadChannels,
   offersUpdate,
+  requestUpdate,
   setAutoInstall,
   setUpdateChannel,
   showWhatsNew,
@@ -1336,6 +1336,7 @@ function AppVersion() {
   const installing = useUpdates((s) => s.installing);
   const progress = useUpdates((s) => s.progress);
   const background = useUpdates((s) => s.error);
+  const waiting = useUpdates((s) => s.waiting);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const shellVersion = useUpdates((s) => s.version);
@@ -1357,7 +1358,7 @@ function AppVersion() {
     }
     setError(null);
     // One install path: the sidebar row shows the same progress when it is visible.
-    const failed = await applyUpdate();
+    const failed = await requestUpdate();
     if (failed) setError(failed);
   };
   const { fraction, step } = installProgress(progress);
@@ -1366,13 +1367,15 @@ function AppVersion() {
     ? failure
     : installing
       ? step
-      : info && !info.available
-        ? "RustCode is up to date."
-        : info?.development
-          ? "A development build; it does not update itself."
-          : offered
-            ? (info?.installNote ?? undefined)
-            : undefined;
+      : waiting
+        ? "Waiting for threads to finish, then reopens."
+        : info && !info.available
+          ? "RustCode is up to date."
+          : info?.development
+            ? "A development build; it does not update itself."
+            : offered
+              ? (info?.installNote ?? undefined)
+              : undefined;
   return (
     <Row
       title={`RustCode ${version}`}

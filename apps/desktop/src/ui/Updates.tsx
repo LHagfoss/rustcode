@@ -23,11 +23,11 @@ import { openExternal } from "../lib/native";
 import { parseReleaseNotes } from "../lib/releaseNotes";
 import { toast } from "../state/store";
 import {
-  applyUpdate,
   closeWhatsNew,
   installProgress,
   isPrerelease,
   offersUpdate,
+  requestUpdate,
   skipBeta,
   updateHint,
   useUpdates,
@@ -44,6 +44,8 @@ export function UpdateRow() {
   const channel = useUpdates((s) => s.channel);
   const installing = useUpdates((s) => s.installing);
   const progress = useUpdates((s) => s.progress);
+  const installError = useUpdates((s) => s.installError);
+  const waiting = useUpdates((s) => s.waiting);
   // The offer is the selected channel's, and a dev build never shows the row.
   if (!info?.latest || info.development || !offersUpdate(info, channel)) return null;
   const beta = isPrerelease(info.latest);
@@ -58,7 +60,7 @@ export function UpdateRow() {
         type="button"
         disabled={installing}
         onClick={() =>
-          void applyUpdate().then(
+          void requestUpdate().then(
             (error) =>
               error &&
               toast(`The update did not install: ${error}`, "error", {
@@ -71,7 +73,11 @@ export function UpdateRow() {
         {installing ? <Spinner size={13} /> : <ArrowUpCircle size={15} className="shrink-0 text-accent" />}
         <span className="min-w-0 flex-1">
           <span className="block font-medium">
-            {installing ? `Updating to ${info.latest}…` : `Update to ${info.latest}`}
+            {installing
+              ? `Updating to ${info.latest}…`
+              : installError
+                ? `Retry update to ${info.latest}`
+                : `Update to ${info.latest}`}
           </span>
           {installing && (
             <span
@@ -91,8 +97,19 @@ export function UpdateRow() {
               />
             </span>
           )}
-          <span className="block text-caption text-fg-muted tabular">
-            {installing ? step : `${beta ? "Beta · " : ""}${updateHint(info)}`}
+          <span
+            className={cx(
+              "block text-caption tabular",
+              installError && !installing ? "text-warning" : "text-fg-muted",
+            )}
+          >
+            {installing
+              ? step
+              : installError
+                ? `Did not install: ${installError}`
+                : waiting
+                  ? "Waiting for threads to finish, then reopens"
+                  : `${beta ? "Beta · " : ""}${updateHint(info)}`}
           </span>
         </span>
       </button>
