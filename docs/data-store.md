@@ -339,8 +339,9 @@ fields listed; every other event and field stays in `debug.log`:
 | `turn.budget_exceeded` | `limit`, `tool_rounds`, `elapsed_secs`, `tokens_used`, `failed_mutations`, `segment_rounds`, `segment_limit`, `total_round_limit`, `continuation` |
 | `turn.recovery_decision` | `round`, `source`, `decision`, `reason`, `loop_recovery_attempts`, `reasoning_recovery_attempts`, `no_progress_streak` |
 | `tools.batch.finish` | `count`, `requested`, `executed`, `deferred`, `queued`, `auto_executed`, `successes`, `failed`, `pending`, `changed_paths` |
+| `command_guard.violation` | `rule`, `action` (`deny` or `rewrite`), `harness`; written directly by the command guard (`docs/command-guard.md`), never any command text |
 | `context.compaction` | `trigger`, `mode`, `before_tokens`, `after_tokens`, `reclaimed_tokens`, `count`, `history_tokens`, `budget`, `messages_considered`, `summary_generated`, `originating_path`, `deterministic_record` |
-| `harness.reaped` | `harness`, `native_session_id`, `reason`, `idle_ms` |
+| `harness.reaped` | `harness`, `native_session_id`, `reason` (`idle`, `memory` or `cap`), `idle_ms`, `work_in_flight`, `pressure`, `live` |
 | `harness.resumed` | `harness`, `native_session_id` |
 | `harness.turn_silent` | `harness`, `native_session_id`, `timeout_ms` |
 | `subagent.spawn` | `agent_id`, `parent_id`, `agent_type`, `context_inheritance`, `inherited_messages` |

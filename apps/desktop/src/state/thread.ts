@@ -305,8 +305,14 @@ export const CONTINUE_MARK = "<!-- rustcode:continued -->";
 /** The prompt that carries the thread on after the app compacted it, marked as the app's own. */
 export const withContinueMark = (text: string) => `${text}\n\n${CONTINUE_MARK}`;
 
-/** Whether a message is the app continuing the thread after a compaction. */
-export const isContinueMessage = (text: string) => text.includes(CONTINUE_MARK);
+/**
+ * The marker the prompt that continues a thread after an app restart ends with: it reads as the
+ * same kind of divider ("Resumed after restart"), and survives a reload for the same reason.
+ */
+export const RESUME_MARK = "<!-- rustcode:resumed -->";
+
+/** Whether a message is the app continuing the thread, after a compaction or after a restart. */
+export const isContinueMessage = (text: string) => text.includes(CONTINUE_MARK) || text.includes(RESUME_MARK);
 
 /** A wake message's first line: its compact summary ("2 delegates finished · 1 delegate asks"). */
 export const wakeLine = (text: string) => text.split("\n")[0] ?? text;

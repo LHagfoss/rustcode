@@ -16,6 +16,7 @@ pub mod config;
 pub(crate) mod detect;
 pub(crate) mod handoff;
 pub(crate) mod pi_mcp;
+pub(crate) mod pressure;
 pub(crate) mod process;
 pub(crate) mod rpc;
 pub(crate) mod rpc_capture;

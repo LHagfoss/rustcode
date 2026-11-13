@@ -641,7 +641,89 @@ fn run_command_output_with_workspace_and_progress_for_call(
     }
 }
 
+/// Apply the project's command policy (`crate::command_guard`) to a command
+/// before it runs: a denied command fails with the rule's message, a command a
+/// rule rewrites runs as rewritten and its output says so.
 fn run_command_output_inner(
+    args: &Value,
+    progress: Option<CommandProgressCallback>,
+    cancel_token: Option<tokio_util::sync::CancellationToken>,
+    call_id: Option<&str>,
+    explicit_workspace_root: Option<Option<std::path::PathBuf>>,
+) -> Result<super::ToolExecutionOutput, String> {
+    use crate::command_guard::{Verdict, check, record_violation, refusal};
+    let Some(command_str) = args.get("command").and_then(Value::as_str) else {
+        return run_command_output_unguarded(
+            args,
+            progress,
+            cancel_token,
+            call_id,
+            explicit_workspace_root,
+        );
+    };
+    let workspace = match &explicit_workspace_root {
+        Some(root) => root.clone(),
+        None => super::active_workspace_root(),
+    };
+    let guard_dir = match args.get("cwd").and_then(Value::as_str) {
+        Some("sandbox" | "./sandbox") => None,
+        Some(cwd) if std::path::Path::new(cwd).is_absolute() => Some(std::path::PathBuf::from(cwd)),
+        Some(cwd) => workspace.as_ref().map(|root| root.join(cwd)),
+        None => super::current_tool_context()
+            .task_working_directory
+            .clone()
+            .or(workspace),
+    };
+    let guard_env: Vec<(String, String)> = args
+        .get("env")
+        .and_then(Value::as_object)
+        .map(|env| {
+            env.iter()
+                .filter_map(|(name, value)| Some((name.clone(), value.as_str()?.to_owned())))
+                .collect()
+        })
+        .unwrap_or_default();
+    let verdict = guard_dir
+        .as_deref()
+        .map_or(Verdict::Allow, |dir| check(dir, command_str, &guard_env));
+    let thread_id = get_active_session_id().unwrap_or_default();
+    match verdict {
+        Verdict::Allow => run_command_output_unguarded(
+            args,
+            progress,
+            cancel_token,
+            call_id,
+            explicit_workspace_root,
+        ),
+        Verdict::Deny { .. } => {
+            record_violation(&thread_id, "rustcode", &verdict);
+            Err(refusal(&verdict).unwrap_or_default())
+        }
+        Verdict::Rewrite {
+            ref command,
+            ref rules,
+        } => {
+            record_violation(&thread_id, "rustcode", &verdict);
+            let mut rewritten = args.clone();
+            rewritten["command"] = Value::String(command.clone());
+            let note = format!(
+                "[command guard: rule `{}` ran this as: {command}]\n",
+                rules.join("`, `")
+            );
+            let mut output = run_command_output_unguarded(
+                &rewritten,
+                progress,
+                cancel_token,
+                call_id,
+                explicit_workspace_root,
+            )?;
+            output.content = format!("{note}{}", output.content);
+            Ok(output)
+        }
+    }
+}
+
+fn run_command_output_unguarded(
     args: &Value,
     progress: Option<CommandProgressCallback>,
     cancel_token: Option<tokio_util::sync::CancellationToken>,
@@ -2247,6 +2329,46 @@ mod tests {
         // grep's -rn is recursive and correct.
         assert!(super::rg_replace_flag_hint("grep -rn foo .").is_none());
         assert!(super::rg_replace_flag_hint("rg foo | grep -rn bar").is_none());
+    }
+
+    #[cfg(unix)]
+    fn project_with_policy(policy: &str) -> tempfile::TempDir {
+        let root = tempfile::tempdir().expect("project");
+        std::fs::create_dir_all(root.path().join(".git")).expect(".git");
+        std::fs::create_dir_all(root.path().join(".rustcode")).expect(".rustcode");
+        std::fs::write(root.path().join(".rustcode/command-policy.toml"), policy).expect("policy");
+        root
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_command_guard_refuses_a_command_the_project_policy_denies() {
+        let root = project_with_policy(
+            "[[rule]]\nname = \"no-echo\"\naction = \"deny\"\nprogram = \"echo\"\nmessage = \"Print with printf.\"\n",
+        );
+        let error = super::run_command_output_with_workspace(
+            &serde_json::json!({"command": "cd . && echo hi"}),
+            Some(root.path().to_path_buf()),
+        )
+        .expect_err("echo is denied");
+        assert!(error.contains("`no-echo`"), "{error}");
+        assert!(error.contains("Print with printf."), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_command_guard_runs_a_rewritten_command_and_says_so() {
+        let root = project_with_policy(
+            "[[rule]]\nname = \"mark\"\naction = \"rewrite\"\nprogram = \"printenv\"\nprefix = \"env GUARD_MARK=yes\"\n",
+        );
+        let output = super::run_command_output_with_workspace(
+            &serde_json::json!({"command": "printenv GUARD_MARK"}),
+            Some(root.path().to_path_buf()),
+        )
+        .expect("printenv runs");
+        assert!(output.success, "{}", output.content);
+        assert!(output.content.contains("`mark`"), "{}", output.content);
+        assert!(output.content.contains("yes"), "{}", output.content);
     }
 
     #[test]
