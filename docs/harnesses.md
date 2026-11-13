@@ -824,16 +824,29 @@ directory (#2898). RustCode scans a harness's own roots next to its own:
 | OpenCode | No skills directory: its own agent/plugin model | Gets the note below, naming the roots to read |
 
 Every external-harness thread's instructions carry one short `# Skills`
-section (`harness_skills_note`): the roots that exist on this machine, `read
-<root>/<name>/SKILL.md` with the harness's own tools, and the names turned off
-in RustCode (do not use them, even where the harness's own settings list them).
-It is bounded to the roots and disabled names, never the whole catalog,
-because that text is paid on every request, and it is capped at 1,500 bytes:
-long lists end in "and N more" so a machine with many roots or very long paths
-still pays a fixed, small amount per turn. A Claude Code thread is told only
-about the roots RustCode owns: it loads its own `.claude/skills` roots with its
-own Skill tool, so those are never named to it, and with nothing but harness
-roots installed it gets no note at all.
+section (`harness_skills_note`): the roots that exist on this machine, the
+names of the skills that may be used, `read <root>/<name>/SKILL.md` with the
+harness's own tools, and the names turned off in RustCode (do not use them,
+even where the harness's own settings list them). It is bounded to roots and
+names, never descriptions or bodies, because that text is paid on every
+request, and it is capped at 2,200 bytes: long lists end in "and N more" so a
+machine with many roots or very long paths still pays a fixed, small amount per
+turn. A Claude Code thread is told only about the roots RustCode owns: it loads
+its own `.claude/skills` roots with its own Skill tool, so those are never
+named to it, but a skill of those roots that is turned off in RustCode is named
+as turned off, and with nothing to name it gets no note at all.
+
+How the note reaches each harness:
+
+| Harness | Where the note goes |
+| --- | --- |
+| Built-in | Not needed: `list_skills` / `use_skill` read the same catalog and refuse a turned-off skill |
+| Claude Code | The ACP `systemPrompt` (append), on `session/new` and `session/load` |
+| Codex | `developerInstructions`, on `thread/start` and `thread/resume` |
+| Gemini CLI, OpenCode, Pi | The first prompt of a new session as a tagged setup block (no client system prompt). A loaded session already holds the setup text it was first sent, so the first prompt after each load carries the current note alone, and a toggle reaches the thread then |
+
+A slash command that starts a skill stays the first block of a prompt
+(`prepend_text`), so the setup block follows it and never hides it.
 
 The note is computed when RustCode starts that thread's harness process, and
 again whenever it starts one again — after the idle reaper stopped it, for
