@@ -155,6 +155,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   },
   {
     section: "agents",
+    title: "Merge delegate wakes within",
+    keywords: "orchestration delegation wake batch window finished stalled orchestrator turn cost seconds",
+  },
+  {
+    section: "agents",
     title: "Let agents read threads in other projects",
     keywords: "orchestration read search across all projects privacy agents",
   },

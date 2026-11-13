@@ -65,6 +65,7 @@ import { overviewExpanded, setOverviewExpanded } from "../state/widgets";
 import { AttentionCard, ResolvedApprovalBar } from "./AttentionCards";
 import { OriginChip } from "./Branches";
 import { Composer } from "./Composer";
+import { DelegateStatusPanel } from "./DelegateStatus";
 import { HarnessIcon } from "./HarnessIcon";
 import { LinkedThreads } from "./Links";
 import { DeviceGlyphIcon } from "./MachineGlyph";
@@ -1006,6 +1007,7 @@ export function ChatView() {
               )}
               {thread && (
                 <LaneItem over>
+                  <DelegateStatusPanel threadId={thread.id} />
                   <LinkedThreads threadId={thread.id} />
                 </LaneItem>
               )}

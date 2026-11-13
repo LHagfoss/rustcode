@@ -59,6 +59,7 @@ fn registry() -> &'static [(&'static str, SettingType, Value)] {
             ("delegate-presets", SettingType::List, json!([])),
             ("limit-fallback", SettingType::Boolean, json!(false)),
             ("limit-fallback-map", SettingType::List, json!([])),
+            ("wake-batch-seconds", SettingType::Number, json!(60)),
         ]
     })
 }

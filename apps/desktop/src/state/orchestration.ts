@@ -83,8 +83,18 @@ export const MAX_DEPTH = 2;
 export const DEFAULT_WAIT_MS = 20 * 60 * 1000;
 export const MAX_WAIT_MS = 25 * 60 * 1000;
 export const MAX_LAST_TURNS = 10;
-/** How long a settled child waits for its siblings before the parent hears about them. */
+/**
+ * How long a settled child waits for its siblings before the parent hears about them, when the
+ * batch window is off ({@link WAKE_BATCH_DEFAULT_S} of 0).
+ */
 export const WAKE_COALESCE_MS = 3_000;
+/**
+ * The default batch window, in seconds: finishes and stalls of one parent's delegates that arrive
+ * within it reach the parent in one turn instead of one turn each (issue 3649). A parent's turn
+ * resends its whole context, so each wake cost about as much as a message the user typed.
+ */
+export const WAKE_BATCH_DEFAULT_S = 60;
+export const WAKE_BATCH_MAX_S = 600;
 /**
  * How long a child's running turn may show no new activity before its parent is
  * told it looks stuck. A command with no timeout (a git editor with no TTY, a
@@ -2110,6 +2120,14 @@ export interface WakeContext {
   answers?: Readonly<Record<string, string>>;
   /** Each link target's last activity, for the stall notice and `wait_session`'s idle time. */
   activity?: Readonly<Record<string, LinkActivity>>;
+  /**
+   * The batch window in ms (Settings › Orchestration, `wake-batch-seconds`). With one, a parent
+   * hears about its delegates when the oldest unreported finish or stall is that old, all in one
+   * wake; a question for the user goes at once and takes whatever else is waiting along. Without
+   * one (0 or unset) a settled child waits {@link WAKE_COALESCE_MS} for its siblings only while
+   * one of them still works.
+   */
+  batchMs?: number;
   now: number;
 }
 
@@ -2481,47 +2499,85 @@ function replacedIds(book: LinkBook, ctx: WakeContext): Set<string> {
  * result twice.
  */
 export function wakesDue(book: LinkBook, ctx: WakeContext): Wake[] {
+  const batch = ctx.batchMs ?? 0;
+  const stale = new Set(supersededLinks(book, ctx).map((l) => l.id));
+  const out: Wake[] = [];
+  for (const [parent, links] of linksByParent(book)) {
+    const here = ctx.threads[parent];
+    if (!here) continue;
+    const pending = pendingForParent(book, ctx, links, stale);
+    const active = links.some((l) => isActive(stateOfLink(l, ctx)));
+    let { settled } = pending;
+    const { asking, stalled } = pending;
+    if (batch > 0) {
+      // One turn for everything that came in a window: nothing goes until the oldest finish or
+      // stall is `batch` old, unless a delegate needs the user, which takes the rest with it.
+      const oldest = oldestEvent(settled, stalled);
+      if (!asking.length && (oldest === null || ctx.now - oldest < batch)) continue;
+    } else {
+      settled = settled.filter((link) => !active || ctx.now - (link.settledAt ?? 0) >= WAKE_COALESCE_MS);
+    }
+    if (settled.length || asking.length || stalled.length) {
+      out.push({ parent, parentTitle: here.title, settled, asking, stalled });
+    }
+  }
+  return out;
+}
+
+function linksByParent(book: LinkBook): Map<string, Link[]> {
   const byParent = new Map<string, Link[]>();
   for (const link of book.links) {
     const list = byParent.get(link.orchestrator);
     if (list) list.push(link);
     else byParent.set(link.orchestrator, [link]);
   }
-  const stale = new Set(supersededLinks(book, ctx).map((l) => l.id));
-  const out: Wake[] = [];
-  for (const [parent, links] of byParent) {
-    const here = ctx.threads[parent];
-    if (!here) continue;
-    const waiting = new Set(ctx.waiting[parent] ?? []);
-    const carried = new Set(ctx.queued?.[parent] ?? []);
-    const active = links.some((l) => isActive(stateOfLink(l, ctx)));
-    const settled = links.filter((link) => {
-      const state = stateOfLink(link, ctx);
-      if (state !== "done" && state !== "failed") return false;
-      if (link.notifiedAt !== undefined || waiting.has(link.id)) return false;
-      if (carried.has(link.id)) return false;
-      if (stale.has(link.id)) return false;
-      if (!quietTree(book, ctx, link.target)) return false;
-      return !active || ctx.now - (link.settledAt ?? 0) >= WAKE_COALESCE_MS;
-    });
-    const asking = links.filter((link) => {
-      if (stateOfLink(link, ctx) !== "needs_user" || waiting.has(link.id)) return false;
-      if (carried.has(link.id)) return false;
-      const request = ctx.pending[link.id];
-      return request !== undefined && link.askedRequest !== request;
-    });
-    // A child that has gone quiet with its turn still running: told once per
-    // activity timestamp, so a resumed child can go quiet again and be told again.
-    const stalled = links.flatMap((link) => {
-      const notice = stallNotice(link, ctx);
-      if (!notice || link.stallNotifiedFor === notice.at) return [];
-      return [notice];
-    });
-    if (settled.length || asking.length || stalled.length) {
-      out.push({ parent, parentTitle: here.title, settled, asking, stalled });
-    }
+  return byParent;
+}
+
+/** What one parent has not heard yet, before any timing rule: finished, asking and stalled. */
+function pendingForParent(
+  book: LinkBook,
+  ctx: WakeContext,
+  links: readonly Link[],
+  stale: ReadonlySet<string>,
+): { settled: Link[]; asking: Link[]; stalled: StallNotice[] } {
+  const parent = links[0]?.orchestrator ?? "";
+  const waiting = new Set(ctx.waiting[parent] ?? []);
+  const carried = new Set(ctx.queued?.[parent] ?? []);
+  const settled = links.filter((link) => {
+    const state = stateOfLink(link, ctx);
+    if (state !== "done" && state !== "failed") return false;
+    if (link.notifiedAt !== undefined || waiting.has(link.id)) return false;
+    if (carried.has(link.id)) return false;
+    if (stale.has(link.id)) return false;
+    return quietTree(book, ctx, link.target);
+  });
+  const asking = links.filter((link) => {
+    if (stateOfLink(link, ctx) !== "needs_user" || waiting.has(link.id)) return false;
+    if (carried.has(link.id)) return false;
+    const request = ctx.pending[link.id];
+    return request !== undefined && link.askedRequest !== request;
+  });
+  // A child that has gone quiet with its turn still running: told once per activity timestamp, so
+  // a resumed child can go quiet again and be told again.
+  const stalled = links.flatMap((link) => {
+    const notice = stallNotice(link, ctx);
+    if (!notice || link.stallNotifiedFor === notice.at) return [];
+    return [notice];
+  });
+  return { settled, asking, stalled };
+}
+
+/** When the oldest of these finishes and stalls happened, or null when there are none. */
+function oldestEvent(settled: readonly Link[], stalled: readonly StallNotice[]): number | null {
+  let oldest: number | null = null;
+  for (const at of [
+    ...settled.map((link) => link.settledAt ?? 0),
+    ...stalled.map((notice) => notice.at + STALL_NOTICE_MS),
+  ]) {
+    if (oldest === null || at < oldest) oldest = at;
   }
-  return out;
+  return oldest;
 }
 
 /**
@@ -2602,28 +2658,41 @@ export function orphanedLinks(book: LinkBook, ctx: WakeContext): Link[] {
 }
 
 /**
- * When a wake could next be due, for a timer to look again: the oldest settled
- * child still inside its coalescing window. Null when nothing waits.
+ * When a wake could next be due, for a timer to look again: the end of the oldest
+ * batch window (or, with none, the oldest settled child's coalescing window), and a
+ * stall's silence reaching its notice. Null when nothing waits.
  */
 export function nextWakeAt(book: LinkBook, ctx: WakeContext): number | null {
   let next: number | null = null;
+  const consider = (at: number) => {
+    if (at > ctx.now && (next === null || at < next)) next = at;
+  };
   const stale = new Set(supersededLinks(book, ctx).map((l) => l.id));
+  // A stall not yet due: look again when the silence reaches the notice.
+  for (const link of book.links) {
+    if (stateOfLink(link, ctx) !== "working" || !ctx.threads[link.target]?.running) continue;
+    const at = ctx.activity?.[link.target]?.lastAt ?? link.startedAt;
+    if (at === undefined || link.stallNotifiedFor === at) continue;
+    consider(at + STALL_NOTICE_MS);
+  }
+  const batch = ctx.batchMs ?? 0;
+  if (batch > 0) {
+    // Each parent's window ends `batch` after its oldest unreported finish or stall.
+    for (const [parent, links] of linksByParent(book)) {
+      if (!ctx.threads[parent]) continue;
+      const { settled, stalled } = pendingForParent(book, ctx, links, stale);
+      const oldest = oldestEvent(settled, stalled);
+      if (oldest !== null) consider(oldest + batch);
+    }
+    return next;
+  }
   const carried = new Set(Object.values(ctx.queued ?? {}).flat());
   for (const link of book.links) {
     const state = stateOfLink(link, ctx);
-    if (state === "working" && ctx.threads[link.target]?.running) {
-      const at = ctx.activity?.[link.target]?.lastAt ?? link.startedAt;
-      if (at === undefined || link.stallNotifiedFor === at) continue;
-      const due = at + STALL_NOTICE_MS;
-      if (due > ctx.now && (next === null || due < next)) next = due;
-      continue;
-    }
     if (state !== "done" && state !== "failed") continue;
     if (link.notifiedAt !== undefined || stale.has(link.id) || carried.has(link.id)) continue;
     if (!quietTree(book, ctx, link.target)) continue;
-    const at = (link.settledAt ?? 0) + WAKE_COALESCE_MS;
-    if (at <= ctx.now) continue;
-    if (next === null || at < next) next = at;
+    consider((link.settledAt ?? 0) + WAKE_COALESCE_MS);
   }
   return next;
 }

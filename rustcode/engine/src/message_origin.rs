@@ -223,6 +223,39 @@ pub(crate) fn of_text(text: &str) -> MessageOrigin {
     MessageOrigin::of_kind(OriginKind::User)
 }
 
+/// What the data store records of a wake turn (`thread.wake`, `docs/data-store.md`): how many
+/// delegates the one message reported, split by what it said of them. Counts only; the wake's text
+/// stays in the thread. `None` for any other message. The turn's own tokens and cost are on its
+/// `turns` row, which a reader joins by thread and time (issue 3649).
+pub(crate) fn wake_event_fields(text: &str) -> Option<Value> {
+    let origin = of_text(text);
+    if origin.kind != OriginKind::Delegate {
+        return None;
+    }
+    let count = |status: &str| {
+        origin
+            .threads
+            .iter()
+            .filter(|thread| thread.status.as_deref() == Some(status))
+            .count()
+    };
+    Some(json!({
+        "delegates": origin.threads.len(),
+        "finished": count("done") + count("failed"),
+        "failed": count("failed"),
+        "asking": count("needs_user"),
+        "stalled": count("stalled"),
+    }))
+}
+
+/// Writes the `thread.wake` event for a prompt that is a wake; nothing for any other prompt.
+pub(crate) fn record_wake(session_id: &str, text: &str) {
+    if let Some(mut fields) = wake_event_fields(text) {
+        fields["session_id"] = Value::String(session_id.to_owned());
+        crate::logger::operational_event("thread.wake", fields);
+    }
+}
+
 /// The delegate one line of a wake message names. A delegate's answer is
 /// indented under its line, so only the app's own lines start at the margin.
 fn wake_thread(line: &str) -> Option<OriginThread> {
@@ -443,6 +476,21 @@ The rest is in read_session on a child's session id.\n\
                 thread(None, "Build the thing", "stalled", None),
             ]
         );
+    }
+
+    #[test]
+    fn a_wake_is_counted_by_what_it_reports() {
+        let fields = wake_event_fields(WAKE).unwrap();
+        assert_eq!(fields["delegates"], 4);
+        assert_eq!(fields["finished"], 2);
+        assert_eq!(fields["failed"], 1);
+        assert_eq!(fields["asking"], 1);
+        assert_eq!(fields["stalled"], 1);
+        // A wake in wording this release does not know is still one wake, of no known delegates.
+        let unknown = wake_event_fields("Delegate finished: x\n\n<!-- rustcode:wake -->").unwrap();
+        assert_eq!(unknown["delegates"], 0);
+        assert_eq!(wake_event_fields("Why does the parser test fail?"), None);
+        assert_eq!(wake_event_fields("From thread “a” (agent):\n\nhello"), None);
     }
 
     #[test]

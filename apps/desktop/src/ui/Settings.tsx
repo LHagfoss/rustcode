@@ -80,6 +80,8 @@ import {
   MAX_DELEGATES_TOTAL,
   MIN_DELEGATES_PER_THREAD,
   MIN_DELEGATES_TOTAL,
+  WAKE_BATCH_DEFAULT_S,
+  WAKE_BATCH_MAX_S,
 } from "../state/orchestration";
 import { PERMISSION_MODES } from "../state/permissions";
 import { RECAP_HOUR_OPTIONS } from "../state/recap";
@@ -715,6 +717,10 @@ function OrchestrationGroup() {
   const totalLimitSetting = useScopedSetting("delegates-total", (value) =>
     typeof value === "number" ? String(value) : "8",
   );
+  const wakeBatchSetting = useScopedSetting("wake-batch-seconds", (value) =>
+    typeof value === "number" ? (value === 0 ? "Off" : `${value} s`) : "60 s",
+  );
+  const wakeBatch = Number(wakeBatchSetting.value ?? WAKE_BATCH_DEFAULT_S);
   const readAcrossProjects = useScopedSetting("read-across-projects", boolLabel);
   const orchestrationValue = Boolean(orchestration.value ?? true);
   const readAcrossValue = Boolean(readAcrossProjects.value ?? true);
@@ -834,6 +840,28 @@ function OrchestrationGroup() {
               max={MAX_DELEGATES_PER_THREAD}
               onCommit={(value) => void threadLimitSetting.set(value)}
               unit="delegates"
+            />
+          </ScopedValue>
+        </Row>
+        <Row
+          title="Merge delegate wakes within"
+          reset={
+            wakeBatchSetting.mixed || wakeBatch !== WAKE_BATCH_DEFAULT_S
+              ? () => void wakeBatchSetting.set(WAKE_BATCH_DEFAULT_S)
+              : undefined
+          }
+          subtitle="Delegates that finish or stall inside this window reach the thread in one turn."
+          hint="Each wake is a model turn that resends the thread's whole context. A question for you is never held back. Off sends each as it comes."
+        >
+          <ScopedValue mixed={wakeBatchSetting.mixed} breakdown={wakeBatchSetting.breakdown}>
+            <Slider
+              label="Merge delegate wakes within"
+              value={wakeBatch}
+              min={0}
+              max={WAKE_BATCH_MAX_S}
+              step={15}
+              onCommit={(value) => void wakeBatchSetting.set(value)}
+              unit="seconds"
             />
           </ScopedValue>
         </Row>

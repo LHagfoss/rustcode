@@ -52,6 +52,8 @@ import {
   MAX_ATTACHMENT_FILES,
 } from "./attachments";
 import type { ComposeExtras } from "./compose";
+import { isStatusQuery, type StatusInput, type StatusPull, statusRows } from "./delegateStatus";
+import { LINK_AGENT_STATE } from "./delegates";
 import { restoreChoice, selectOption, unavailableReason, usableHarnesses } from "./harness";
 import { usageOf } from "./harnessUsage";
 import {
@@ -2955,6 +2957,113 @@ async function threadStatus(
   };
 }
 
+// ---------------------------------------------------------------- delegate status (issue 3651)
+
+/** How long a read pull request stands before the next read; the panel and "status" share it. */
+const PULL_READ_TTL_MS = 30_000;
+const pullReads = new Map<string, { at: number; value: StatusPull }>();
+const pullFlights = new Map<string, Promise<StatusPull>>();
+
+/** The pull request last read for a delegate, however old; undefined before the first read. */
+export function cachedDelegatePull(id: string): StatusPull | undefined {
+  return pullReads.get(id)?.value;
+}
+
+/**
+ * A delegate's pull request and checks, the same read `thread_status` makes (`delegatePull`), kept
+ * for {@link PULL_READ_TTL_MS} and shared by every caller in flight, so a panel that redraws and a
+ * "status" typed meanwhile cost one `gh` read. A delegate outside a worktree has no branch of its
+ * own to look up, so it reads as having none without asking.
+ */
+export function readDelegatePull(id: string, maxAgeMs = PULL_READ_TTL_MS): Promise<StatusPull> {
+  const hit = pullReads.get(id);
+  if (hit && Date.now() - hit.at < maxAgeMs) return Promise.resolve(hit.value);
+  const flying = pullFlights.get(id);
+  if (flying) return flying;
+  const entry = ruleThread(useApp.getState(), id);
+  if (!entry?.worktree) return Promise.resolve({ pull: null });
+  const read = delegatePull(entry)
+    .then((state): StatusPull => {
+      const value: StatusPull = state.error
+        ? { pull: null, note: state.error.message }
+        : { pull: state.pull ?? null, ...(state.note ? { note: state.note } : {}) };
+      pullReads.set(id, { at: Date.now(), value });
+      return value;
+    })
+    .finally(() => pullFlights.delete(id));
+  pullFlights.set(id, read);
+  return read;
+}
+
+/** The delegates a thread has, newest first and one per thread, for the status panel and reply. */
+export function delegateStatusInputs(s: AppState, orchestrator: string, max = 12): StatusInput[] {
+  const seen = new Set<string>();
+  const out: StatusInput[] = [];
+  const links = s.links.links;
+  for (let i = links.length - 1; i >= 0 && out.length < max; i--) {
+    const link = links[i]!;
+    if (link.orchestrator !== orchestrator || link.target === orchestrator || seen.has(link.target)) continue;
+    seen.add(link.target);
+    const thread = s.threads[link.target];
+    const session = sessionById(s, link.target);
+    const activity = activityOf(thread?.items ?? []);
+    out.push({
+      id: link.target,
+      title: session?.title || link.targetTitle,
+      state: LINK_AGENT_STATE[stateOf(s, link)],
+      lastAt: activity.lastAt ?? session?.updatedAt,
+      lastTool: activity.lastTool,
+      harness: link.harness ?? thread?.harness?.id ?? session?.harness,
+      account: thread?.harness?.account ?? session?.account,
+      model:
+        (thread?.configOptions && selectOption(thread.configOptions, "model")?.current) || session?.model,
+      branch: thread?.worktree?.branch ?? session?.worktree?.branch,
+      pull: cachedDelegatePull(link.target),
+    });
+  }
+  return out;
+}
+
+/**
+ * A bare "status" in a thread that has delegates is answered here, from what the app already
+ * knows: the user's message and a local reply row go into the transcript, and no model turn runs
+ * (each one resent the whole context and cost as much as any other). The pull requests are read
+ * after the row is drawn and fill in as they arrive. False for a thread with no delegates, where
+ * the model answers as it always did.
+ */
+export function answerStatusLocally(threadId: string, text: string): boolean {
+  if (!isStatusQuery(text)) return false;
+  const s = useApp.getState();
+  if (!s.threads[threadId]) return false;
+  const inputs = delegateStatusInputs(s, threadId, 20);
+  if (!inputs.length) return false;
+  const now = Date.now();
+  const rows = statusRows(inputs, now);
+  const statusId = localId("status");
+  updateThread(threadId, (t) => ({
+    ...t,
+    items: [
+      ...t.items,
+      { kind: "user", id: localId("user"), text: text.trim(), at: now },
+      { kind: "status", id: statusId, at: now, rows },
+    ],
+  }));
+  for (const row of rows) {
+    if (row.pull && Date.now() - now < PULL_READ_TTL_MS) continue;
+    void readDelegatePull(row.id).then((pull) =>
+      updateThread(threadId, (t) => ({
+        ...t,
+        items: t.items.map((item) =>
+          item.kind === "status" && item.id === statusId
+            ? { ...item, rows: item.rows.map((r) => (r.id === row.id ? { ...r, pull } : r)) }
+            : item,
+        ),
+      })),
+    );
+  }
+  return true;
+}
+
 /**
  * `merge_when_green`: waits for a delegate's checks and squash-merges, with the
  * semantics of scripts/pr-merge.sh (advisory jobs ignored, two quiet rounds,
@@ -5269,7 +5378,17 @@ function wakeContext(now: number): WakeContext {
       list.push(...item.wakeLinks);
     }
   }
-  return { states, pending, waiting: said, queued, threads, now, answers, activity };
+  return {
+    states,
+    pending,
+    waiting: said,
+    queued,
+    threads,
+    now,
+    answers,
+    activity,
+    batchMs: s.wakeBatchSeconds * 1000,
+  };
 }
 
 /** A link with the target's last reply when it holds no answer of its own. */

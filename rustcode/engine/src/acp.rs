@@ -4009,6 +4009,21 @@ async fn serve_connection(
                 async move |request: PromptRequest, responder, connection| {
                     let session_id = request.session_id.to_string();
                     let origin = request.meta.as_ref().and_then(|meta| meta.get("rustcode")).and_then(|v| v.get("origin")).cloned().filter(|v| crate::message_origin::from_meta(v).is_some());
+                    // A wake turn (the app telling an orchestrator what its delegates did) is
+                    // recorded with how many delegates it carried; its tokens and cost are on
+                    // the turn's own row (issue 3649).
+                    crate::message_origin::record_wake(
+                        &session_id,
+                        &request
+                            .prompt
+                            .iter()
+                            .filter_map(|block| match block {
+                                ContentBlock::Text(text) => Some(text.text.as_str()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    );
                     // The access the client runs this thread at, kept where the
                     // engine reads it with no app attached (orchestration/local_threads.rs).
                     if let Some(access) = request

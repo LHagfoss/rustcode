@@ -13,6 +13,7 @@ import { type Checkpoint, checkpointsByTurn } from "../acp/v2";
 import { type Attempt, attemptTurns, transcriptTurns } from "../state/attempts";
 import { returnToAttempt, useApp } from "../state/store";
 import type { TranscriptItem } from "../state/thread";
+import { StatusReplyRow } from "./DelegateStatus";
 import { Pill } from "./primitives";
 import {
   AssistantRow,
@@ -150,6 +151,7 @@ function AttemptItem({
   if (item.kind === "handoff") return <HandoffRow item={item} />;
   if (item.kind === "switch") return <SwitchRow item={item} />;
   if (item.kind === "question") return <QuestionRow item={item} />;
+  if (item.kind === "status") return <StatusReplyRow rows={item.rows} />;
   return (
     <TurnEndRow
       item={item}

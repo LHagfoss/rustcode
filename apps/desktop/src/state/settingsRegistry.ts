@@ -61,6 +61,7 @@ const ROW_KINDS: { section: SettingsSection; title: string; kind: SettingKind }[
   { section: "agents", title: "Delegation", kind: "server" },
   { section: "agents", title: "Delegates across all threads", kind: "server" },
   { section: "agents", title: "Delegates one thread can run at once", kind: "server" },
+  { section: "agents", title: "Merge delegate wakes within", kind: "server" },
   { section: "agents", title: "Let agents read threads in other projects", kind: "server" },
   // Credentials and accounts never leave their machine.
   { section: "connections", title: "GitHub", kind: "machine" },
@@ -110,7 +111,8 @@ export type ServerSettingKey =
   | "read-across-projects"
   | "delegate-presets"
   | "limit-fallback"
-  | "limit-fallback-map";
+  | "limit-fallback-map"
+  | "wake-batch-seconds";
 
 export interface ServerSettingSpec {
   key: ServerSettingKey;
@@ -162,6 +164,7 @@ export const SERVER_SETTINGS: readonly ServerSettingSpec[] = [
   { key: "delegate-presets", label: "Delegate presets", type: "list", default: [] },
   { key: "limit-fallback", label: "Switch a delegate at a limit", type: "boolean", default: false },
   { key: "limit-fallback-map", label: "Limit fallback models", type: "list", default: [] },
+  { key: "wake-batch-seconds", label: "Merge delegate wakes within", type: "number", default: 60 },
 ];
 
 export const SERVER_SETTING_KEYS: readonly ServerSettingKey[] = SERVER_SETTINGS.map((s) => s.key);

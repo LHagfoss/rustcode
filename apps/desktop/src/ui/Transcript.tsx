@@ -22,6 +22,7 @@ import { hasTimeline } from "../lib/trace";
 import { checkpointsByMessage } from "../state/attempts";
 import { type Branch, branchesOf } from "../state/branches";
 import { COLLAPSED_MESSAGE_HEIGHT, messageCollapses } from "../state/compose";
+import { statusReply } from "../state/delegateStatus";
 import {
   collapseNotices,
   collapseRepeats,
@@ -69,6 +70,7 @@ import { useWaiting, type Waiting, waitingLabel } from "../state/waiting";
 import { StartedThreadsRow, SubagentGroupRow, SubagentRow } from "./AgentViews";
 import { ApprovalRow, ChildRequestCard } from "./AttentionCards";
 import { BranchRow } from "./Branches";
+import { StatusReplyRow } from "./DelegateStatus";
 import { EarlierAttempts } from "./EarlierAttempts";
 import { PlanCard } from "./PlanCard";
 import { cx, noTextHelpers } from "./primitives";
@@ -243,6 +245,8 @@ export function estimatedRowHeight(row: Row | undefined, hidden = false): number
   const item = row.item;
   if (!item) return 24;
   if (item.kind === "tool" || item.kind === "turnEnd") return 26;
+  // The status card: a header line, then two lines a delegate.
+  if (item.kind === "status") return 34 + item.rows.length * 44;
   // A live thought shows its last lines; a finished one is its one line.
   if (item.kind === "thought")
     return item.done ? 17 : 25 + Math.min(THOUGHT_TAIL_LINES, lines(item.text, 55)) * 17;
@@ -289,6 +293,8 @@ function searchable(item: TranscriptItem): string {
     case "thought":
     case "notice":
       return item.text;
+    case "status":
+      return statusReply(item.rows);
     case "question":
       return `${item.header ?? ""} ${item.text} ${item.answer}`;
     case "tool":
@@ -1414,6 +1420,8 @@ export function Transcript({
                       <ToolRow item={item} cwd={thread.cwd} threadId={thread.id} />
                     ) : item?.kind === "notice" ? (
                       <NoticeRow item={item} />
+                    ) : item?.kind === "status" ? (
+                      <StatusReplyRow rows={item.rows} />
                     ) : item?.kind === "handoff" ? (
                       <HandoffRow item={item} />
                     ) : item?.kind === "switch" ? (

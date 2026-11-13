@@ -164,6 +164,7 @@ import {
 } from "./headerButtons";
 import {
   answerOrchestration,
+  answerStatusLocally,
   clearWaitingLinks,
   interruptedLinks,
   linkFinished,
@@ -255,6 +256,8 @@ import {
   MIN_DELEGATES_PER_THREAD,
   MIN_DELEGATES_TOTAL,
   parseDelivered,
+  WAKE_BATCH_DEFAULT_S,
+  WAKE_BATCH_MAX_S,
 } from "./orchestration";
 import { clearPageCache } from "./pageCache";
 import { autoAnswer, effectiveMode, type PermissionMode, parsePermissionMode } from "./permissions";
@@ -569,6 +572,11 @@ export interface AppState {
    */
   limitFallback: boolean;
   limitFallbackMap: FallbackRule[];
+  /**
+   * The window, in seconds, in which a parent's delegate finishes and stalls are merged into one
+   * wake turn (`wake-batch-seconds`, issue 3649); 0 sends them as they come. Server setting.
+   */
+  wakeBatchSeconds: number;
   /** Threads that were running when the app quit or the engine restarted continue on their own. */
   resumeAfterRestart: boolean;
   /** A system notification when a thread needs you or finishes (Settings › General). */
@@ -889,6 +897,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   // Kept on the server only (`limit-fallback`, `limit-fallback-map`); hydrated at start.
   limitFallback: false,
   limitFallbackMap: [],
+  wakeBatchSeconds: WAKE_BATCH_DEFAULT_S,
   resumeAfterRestart: storedFlag(STORAGE.resumeAfterRestart, SETTINGS_DEFAULTS.resumeAfterRestart),
   systemNotifications: storedFlag(STORAGE.systemNotifications, SETTINGS_DEFAULTS.systemNotifications),
   notificationsBackgroundOnly: storedFlag(
@@ -4235,6 +4244,8 @@ export async function submit(text: string, extras: ComposeExtras = emptyExtras):
     await cancel(id);
     return true;
   }
+  // A bare "status" in a thread with delegates is answered from what the app knows, with no turn.
+  if (!hasExtras(extras) && !get().editing[id] && answerStatusLocally(id, trimmed)) return true;
   const edit = get().editing[id];
   if (edit && !thread.running) {
     cancelEdit(id);
@@ -6214,6 +6225,15 @@ export function setReadAcrossProjects(on: boolean) {
   store(STORAGE.readAcrossProjects, on ? "1" : "0");
 }
 
+/** The wake batch window in seconds, kept to 0..600 (0 turns batching off). */
+export function setWakeBatchSeconds(seconds: number) {
+  const n = Math.min(WAKE_BATCH_MAX_S, Math.max(0, Math.round(seconds)));
+  if (n === get().wakeBatchSeconds) return;
+  set({ wakeBatchSeconds: n });
+  // A shorter window may have made a wake due already.
+  wakeTick();
+}
+
 export function setLimitFallback(on: boolean) {
   set({ limitFallback: on });
 }
@@ -8038,6 +8058,9 @@ export async function revokeRemoteDevice(id: string): Promise<void> {
 
 /** Test hook: reset to a clean slate. */
 export function resetForTests() {
+  // The wake tests follow what happens when a delegate settles, not the 60 s batch window; the
+  // window's own rules are tested on the pure functions (state/orchestration.test.ts).
+  useApp.setState({ wakeBatchSeconds: 0 });
   wholeLists.clear();
   // A machine's channel and its threads are process-global too: one test file's MockMachine must
   // not answer the next one's `openThread` (machinesThreads.test.ts › findings 1).

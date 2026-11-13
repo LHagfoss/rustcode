@@ -1239,6 +1239,10 @@ const ALLOWED_EVENT_FIELDS: &[(&str, &[&str])] = &[
             "reason",
         ],
     ),
+    (
+        "thread.wake",
+        &["delegates", "finished", "failed", "asking", "stalled"],
+    ),
 ];
 
 /// The safe projection of one operational event, or `None` when the event is

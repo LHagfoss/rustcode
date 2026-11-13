@@ -2112,6 +2112,7 @@ export class MockEngine {
     "delegate-presets": [],
     "limit-fallback": false,
     "limit-fallback-map": [],
+    "wake-batch-seconds": 60,
   };
   /** The payload-capture switches (docs/data-store.md › Captured payloads), off as `config.toml` defaults them. */
   private payloadCapture = { providerPayloads: false, harnessRpcPayloads: false };
@@ -5591,6 +5592,7 @@ export class MockMachine {
       "delegate-presets": [],
       "limit-fallback": false,
       "limit-fallback-map": [],
+      "wake-batch-seconds": 60,
     };
     this.skills = [
       {
