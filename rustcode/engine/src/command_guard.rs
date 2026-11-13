@@ -711,9 +711,10 @@ pub fn requested_command(raw_input: &Value) -> Option<String> {
 }
 
 /// The Claude Code settings that run [`hook_response`] before each Bash call
-/// of thread `thread_id`, as the JSON string Claude Code's `--settings` takes.
+/// of thread `thread_id`, as an inline SDK settings object.
+/// The ACP adapter treats string settings as file paths, not serialized JSON.
 /// `None` where the hook cannot run (not the `rustcode` binary, not Unix).
-pub fn claude_code_settings(thread_id: Option<&str>) -> Option<String> {
+pub fn claude_code_settings(thread_id: Option<&str>) -> Option<Value> {
     if !cfg!(unix) {
         return None;
     }
@@ -729,17 +730,18 @@ pub fn claude_code_settings(thread_id: Option<&str>) -> Option<String> {
         "{} guard-command",
         shell_quote(&exe.to_string_lossy())
     ));
-    Some(
-        json!({
-            "hooks": {
-                "PreToolUse": [{
-                    "matcher": "Bash",
-                    "hooks": [{"type": "command", "command": command}],
-                }]
-            }
-        })
-        .to_string(),
-    )
+    Some(claude_hook_settings(command))
+}
+
+fn claude_hook_settings(command: String) -> Value {
+    json!({
+        "hooks": {
+            "PreToolUse": [{
+                "matcher": "Bash",
+                "hooks": [{"type": "command", "command": command}],
+            }]
+        }
+    })
 }
 
 /// Answer a Claude Code `PreToolUse` hook call: the JSON to print when the
@@ -776,3 +778,19 @@ pub fn hook_response(input: &str) -> Option<String> {
 #[cfg(test)]
 #[path = "command_guard_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod settings_regression {
+    #[test]
+    fn inline_hook_settings_are_an_object_not_a_file_path() {
+        let settings = serde_json::json!(super::claude_hook_settings(
+            "rustcode guard-command".to_owned()
+        ));
+        assert!(settings.is_object(), "SDK string settings are file paths");
+        assert_eq!(settings["hooks"]["PreToolUse"][0]["matcher"], "Bash");
+        assert_eq!(
+            settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            "rustcode guard-command"
+        );
+    }
+}
