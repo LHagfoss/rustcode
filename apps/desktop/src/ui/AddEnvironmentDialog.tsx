@@ -105,10 +105,9 @@ export function AddEnvironmentDialog({
                 <Dialog.Title className="font-semibold text-title3 text-fg">Add environment</Dialog.Title>
                 <Dialog.Description
                   id="add-environment-description"
-                  className="m-0 pt-1 text-callout text-fg-muted leading-normal"
+                  className="m-0 pt-1 text-callout text-fg-muted"
                 >
-                  An environment is another computer running RustCode. Threads you start there run there, and
-                  its threads are listed here.
+                  Another computer running RustCode.
                 </Dialog.Description>
               </div>
               <Dialog.Close asChild>
@@ -122,7 +121,9 @@ export function AddEnvironmentDialog({
               <Added machine={added} onDone={() => onOpenChange(false)} />
             ) : (
               <>
-                <Segments value={method} options={ADD_METHODS} onChange={setMethod} label="Connect with" />
+                <div className="flex">
+                  <Segments value={method} options={ADD_METHODS} onChange={setMethod} label="Connect with" />
+                </div>
                 {method === "code" && <CodePane />}
                 {method === "ssh" && <SshPane />}
                 {method === "address" && <AddressPane local={local} />}
@@ -251,6 +252,8 @@ function CodePane() {
   const error = useMachines((s) => s.connectError);
   const [code, setCode] = useState("");
   const [address, setAddress] = useState("");
+  // The address is for a short code that carries none, so it is asked for only on request.
+  const [withAddress, setWithAddress] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const open = offer !== null && !offer.pairedWith && !offer.usedUp && offer.expiresAt > now;
 
@@ -270,15 +273,13 @@ function CodePane() {
       if (!paired) return;
       setCode("");
       setAddress("");
+      setWithAddress(false);
     });
   };
   const connecting = busy && !offer;
   return (
     <div className="flex flex-col gap-4">
-      <Field
-        title="I have a code"
-        hint="Paste the code or link created on the other computer (Settings › Environments › Add environment there, or rustcode machines code)."
-      >
+      <Field title="I have a code" hint="Created on the other computer.">
         <div className="flex w-full flex-wrap items-center gap-2">
           <input
             value={code}
@@ -286,24 +287,30 @@ function CodePane() {
             onKeyDown={(event) => {
               if (event.key === "Enter") connect();
             }}
-            placeholder="K7MQ-29XH-TP4W-NRD6 or rustcode://connect/…"
+            placeholder="Code or link"
             aria-label="Connect code"
-            disabled={connecting}
-            {...noTextHelpers}
-            className={cx(fieldClass, "min-w-0 flex-[2] font-mono")}
-          />
-          <input
-            value={address}
-            onChange={(event) => setAddress(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") connect();
-            }}
-            placeholder="Address (optional)"
-            aria-label="Address of the other computer"
             disabled={connecting}
             {...noTextHelpers}
             className={cx(fieldClass, "min-w-0 flex-1 font-mono")}
           />
+          {withAddress || address ? (
+            <input
+              value={address}
+              onChange={(event) => setAddress(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") connect();
+              }}
+              placeholder="Address"
+              aria-label="Address of the other computer"
+              disabled={connecting}
+              {...noTextHelpers}
+              className={cx(fieldClass, "w-40 min-w-0 font-mono")}
+            />
+          ) : (
+            <Action quiet disabled={connecting} onClick={() => setWithAddress(true)}>
+              Add address
+            </Action>
+          )}
           <Action prominent disabled={busy || !code.trim()} onClick={connect}>
             {connecting ? <Spinner /> : null}
             Connect
@@ -316,10 +323,7 @@ function CodePane() {
       </Field>
 
       <div className="border-border border-t pt-4">
-        <Field
-          title="Let another computer in"
-          hint="Shows a code to type or paste there. That computer then sees and runs this computer's threads. A code works once, for ten minutes."
-        >
+        <Field title="Let another computer in" hint="Shows a code that works once, for ten minutes.">
           {offer ? (
             <OfferView offer={offer} now={now} />
           ) : (

@@ -118,7 +118,8 @@ export function MachinesPage() {
             Add environment
           </Action>
         }
-        footer="A thread stays in the environment that runs it; choose one under Run on when you start a thread. A LAN route is authenticated but not encrypted; Tailscale and VPN tunnels encrypt what they carry. Removing an environment forgets its pairing here; it keeps listing this computer until you revoke it there."
+        footer="Choose where a thread runs under Run on when you start it."
+        hint="A LAN route is authenticated but not encrypted; Tailscale and VPN tunnels encrypt what they carry. Removing an environment forgets its pairing here; it keeps listing this computer until you revoke it there."
       >
         <ThisComputer />
         {machines.map((machine) => (
@@ -173,9 +174,7 @@ function ThisComputer() {
           <Chip>This computer</Chip>
         </>
       }
-      subtitle={`The RustCode server this app runs, over the local socket. ${open === 1 ? "One thread is open." : `${open} threads are open.`}${
-        installed ? "" : " It runs only while the app is open, so closed threads stop with it."
-      }`}
+      subtitle={`Local server · ${open === 1 ? "1 thread" : `${open} threads`}`}
       status={
         <>
           <span className="tabular">Server: {serverLine(server)}</span>
