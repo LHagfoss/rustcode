@@ -39,7 +39,7 @@ import {
   WifiOff,
   X,
 } from "lucide-react";
-import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { harnessPlanKey } from "../acp/rustcode";
 import { type Harness, projectName, type SlashCommand } from "../acp/types";
@@ -61,6 +61,13 @@ import {
   projectFiles,
   readImage,
 } from "../lib/native";
+import {
+  dismissNextPrompt,
+  nextPromptDismissed,
+  nextPromptEnabled,
+  nextPromptFor,
+  suggestionKeyAction,
+} from "../lib/nextPrompt";
 import { isLongPaste, pastedImages } from "../lib/paste";
 import { observeSize } from "../lib/resize";
 import { fadeClearedField } from "../lib/sendFlight";
@@ -890,6 +897,35 @@ export const Composer = memo(function Composer({
   }, []);
 
   const approval = thread?.permissions.find((p) => !p.question);
+  // A suggested next prompt (lib/nextPrompt.ts): ghost text in an empty field after a completed
+  // turn, when Settings › Chat turns it on. Typing hides it, Tab puts it in the field to edit,
+  // Escape dismisses it for that turn. It is never sent on its own.
+  const [, setDismissedNext] = useState(0);
+  // Read on each render, so turning the setting on shows it as soon as the chat is back.
+  const nextPrompt = nextPromptEnabled() ? nextPromptFor(thread) : null;
+  const suggestion =
+    nextPrompt &&
+    !nextPromptDismissed(nextPrompt.key) &&
+    !draft &&
+    !hasExtras(extras) &&
+    !queuedEdit &&
+    !editing &&
+    !offline
+      ? nextPrompt
+      : null;
+  const suggestionHint = useId();
+  const acceptSuggestion = () => {
+    if (!suggestion) return;
+    history.current = null;
+    update(suggestion.text);
+    setCaret(suggestion.text.length);
+    field.current?.focus();
+  };
+  const dismissSuggestion = () => {
+    if (!suggestion) return;
+    dismissNextPrompt(suggestion.key);
+    setDismissedNext((n) => n + 1);
+  };
   const send = (steer: boolean) => {
     if (offline) return;
     haptic("generic");
@@ -1083,6 +1119,18 @@ export const Composer = memo(function Composer({
     // An IME's Enter (keyCode 229) belongs to the field: it commits a candidate. Taking it would
     // complete a command or send a draft that was still being written.
     if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+    // A completion menu keeps Tab and Escape; an open popover keeps its Escape.
+    const onSuggestion = suggestion ? suggestionKeyAction(e, picks.length > 0 || !!drawer) : null;
+    if (onSuggestion === "accept") {
+      e.preventDefault();
+      acceptSuggestion();
+      return;
+    }
+    if (onSuggestion === "dismiss" && !overlayOpen()) {
+      e.preventDefault();
+      dismissSuggestion();
+      return;
+    }
     if (picks.length) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
@@ -1650,8 +1698,9 @@ export const Composer = memo(function Composer({
                 onPaste={onPaste}
                 onScroll={syncField}
                 rows={1}
-                placeholder={placeholder}
+                placeholder={suggestion ? `${suggestion.text}  ⇥` : placeholder}
                 aria-label="Message"
+                aria-describedby={suggestion ? suggestionHint : undefined}
                 readOnly={offline}
                 {...noTextHelpers}
                 style={fadeStyle}
@@ -1660,6 +1709,11 @@ export const Composer = memo(function Composer({
                   tokenized && "text-transparent caret-fg selection:bg-accent/30",
                 )}
               />
+              {suggestion && (
+                <span id={suggestionHint} className="sr-only">
+                  Suggestion: {suggestion.text} Press Tab to insert, Escape to dismiss.
+                </span>
+              )}
             </div>
           </div>
           {/* The card's own row: the + that adds to the message at one end, what sends it at the
@@ -1704,6 +1758,30 @@ export const Composer = memo(function Composer({
               }}
             />
             <span className="flex-1" />
+            {suggestion && (
+              // The pointer's way to the same two choices Tab and Escape make.
+              <div className="flex min-w-0 shrink items-center gap-0.5 rc-in">
+                <Tooltip label="Put the suggestion in the field to edit (⇥)">
+                  <button
+                    type="button"
+                    onClick={acceptSuggestion}
+                    className="h-7 rounded-sm px-2 text-caption text-fg-muted hover:bg-fill hover:text-fg"
+                  >
+                    Use suggestion
+                  </button>
+                </Tooltip>
+                <Tooltip label="Dismiss the suggestion (Esc)">
+                  <button
+                    type="button"
+                    aria-label="Dismiss suggestion"
+                    onClick={dismissSuggestion}
+                    className="flex size-7 items-center justify-center rounded-sm text-fg-faint hover:bg-fill hover:text-fg"
+                  >
+                    <X size={12} strokeWidth={2.25} />
+                  </button>
+                </Tooltip>
+              </div>
+            )}
             <div className="flex shrink-0 items-center gap-2">
               <ModelPicker thread={thread} compact={compact} />
               {queuedEdit ? (
