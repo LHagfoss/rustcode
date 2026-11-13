@@ -523,6 +523,18 @@ fn client() -> Result<reqwest::Client, String> {
         .map_err(|e| e.to_string())
 }
 
+/// The client for the install's downloads: no cap on the whole transfer (a
+/// slow connection still finishes a large app), but a transfer that stalls for
+/// 30 seconds fails, and is tried again.
+fn download_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .user_agent("rustcode-desktop-updater")
+        .connect_timeout(Duration::from_secs(15))
+        .read_timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())
+}
+
 /// The latest stable release's tag, from where `releases/latest` redirects
 /// (`…/releases/tag/vX.Y.Z`); betas are prereleases and never latest.
 async fn latest_tag(client: &reqwest::Client) -> Result<String, String> {
@@ -817,6 +829,20 @@ pub async fn update_install(
     skipped: Option<String>,
     on_progress: Channel<InstallProgress>,
 ) -> Result<(), String> {
+    let result = install_update(app, channel, skipped, on_progress).await;
+    // On success the app has quit already, so only a failure is left to say.
+    if let Err(error) = &result {
+        crate::update_log::record("update.failed", error);
+    }
+    result
+}
+
+async fn install_update(
+    app: AppHandle,
+    channel: Option<String>,
+    skipped: Option<String>,
+    on_progress: Channel<InstallProgress>,
+) -> Result<(), String> {
     let install = current_install();
     let info = check(
         &app,
@@ -840,7 +866,11 @@ pub async fn update_install(
     let asset = package
         .asset(&version, arch())
         .ok_or("This release has no app for this platform.")?;
-    let client = client()?;
+    crate::update_log::record(
+        "update.started",
+        &format!("{} -> {version} ({asset})", info.current),
+    );
+    let client = download_client()?;
     let bytes = fetch_verified(
         &client,
         &download_base(&format!("v{version}")),
@@ -852,10 +882,14 @@ pub async fn update_install(
     .await?;
     // Verified: nothing from here on installs a file that did not match.
     let _ = on_progress.send(InstallProgress::Installing);
+    crate::update_log::record("update.verified", &format!("{version} ({asset})"));
     let quit = app.clone();
     tauri::async_runtime::spawn_blocking(move || install_package(&quit, &install, &asset, &bytes))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())??;
+    // Reached only once the installer is started and the app is about to quit.
+    crate::update_log::record("update.installing", &version);
+    Ok(())
 }
 
 /// The release asset, checked against the release's `SHA256SUMS`, as bytes
@@ -1206,29 +1240,94 @@ fn run_installer(setup: &Path) -> Result<(), String> {
         .map_err(|e| format!("Could not start the installer: {e}"))
 }
 
-/// Like `fetch`, reporting progress at most every 64 KiB.
+/// Tries one download makes before the install gives up: a network that drops
+/// for a moment, or a server that answers 5xx, is tried again after these waits.
+const RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(2), Duration::from_secs(6)];
+
+/// Why one download attempt failed, and whether another attempt may succeed.
+struct Failure {
+    message: String,
+    /// A dropped connection or a 5xx/429: worth another attempt. A 404 or a
+    /// checksum mismatch is not, and waiting changes nothing.
+    transient: bool,
+}
+
+impl Failure {
+    fn network(error: impl std::fmt::Display) -> Self {
+        Self {
+            message: format!("The download failed: {error}"),
+            transient: true,
+        }
+    }
+
+    fn status(status: reqwest::StatusCode) -> Self {
+        let transient = status.is_server_error() || matches!(status.as_u16(), 408 | 425 | 429);
+        let message = if status == reqwest::StatusCode::NOT_FOUND {
+            // The release is tagged before every platform's app is uploaded
+            // (issue #3602 saw a Windows archive missing from a release).
+            "The download failed (HTTP 404): this release has no app for this platform yet. Try again in a few minutes, or get it from the release page.".to_owned()
+        } else {
+            format!("The download failed (HTTP {status}).")
+        };
+        Self { message, transient }
+    }
+}
+
+/// How long to wait before attempt `attempt + 1` (0 is the first attempt that
+/// failed), or `None` to stop: a permanent failure, or the attempts used up.
+fn next_retry(attempt: usize, transient: bool) -> Option<Duration> {
+    if transient {
+        RETRY_DELAYS.get(attempt).copied()
+    } else {
+        None
+    }
+}
+
+/// Like `fetch`, reporting progress at most every 64 KiB. A transient failure
+/// starts the download over (the bar returns to 0) after a short wait.
 async fn download(
     client: &reqwest::Client,
     url: &str,
     mut progress: impl FnMut(u64, Option<u64>),
 ) -> Result<Vec<u8>, String> {
-    let mut response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("The download failed: {e}"))?;
+    let mut attempt = 0;
+    loop {
+        match download_once(client, url, &mut progress).await {
+            Ok(body) => return Ok(body),
+            Err(failure) => match next_retry(attempt, failure.transient) {
+                Some(wait) => {
+                    crate::update_log::record(
+                        "download.retry",
+                        &format!(
+                            "attempt {} of {}: {}",
+                            attempt + 1,
+                            RETRY_DELAYS.len() + 1,
+                            failure.message
+                        ),
+                    );
+                    tokio::time::sleep(wait).await;
+                    attempt += 1;
+                }
+                None => return Err(failure.message),
+            },
+        }
+    }
+}
+
+async fn download_once(
+    client: &reqwest::Client,
+    url: &str,
+    progress: &mut impl FnMut(u64, Option<u64>),
+) -> Result<Vec<u8>, Failure> {
+    let mut response = client.get(url).send().await.map_err(Failure::network)?;
     if !response.status().is_success() {
-        return Err(format!("The download failed (HTTP {}).", response.status()));
+        return Err(Failure::status(response.status()));
     }
     let total = response.content_length();
     let mut body = Vec::with_capacity(total.unwrap_or(0).min(512 << 20) as usize);
     let mut reported = 0u64;
     progress(0, total);
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|e| format!("The download failed: {e}"))?
-    {
+    while let Some(chunk) = response.chunk().await.map_err(Failure::network)? {
         body.extend_from_slice(&chunk);
         let received = body.len() as u64;
         if received - reported >= 64 * 1024 || Some(received) == total {
@@ -1236,19 +1335,37 @@ async fn download(
             progress(received, total);
         }
     }
+    if total.is_some_and(|total| total != body.len() as u64) {
+        return Err(Failure::network(
+            "the connection closed before the file ended",
+        ));
+    }
     Ok(body)
 }
 
+/// A small file (the checksums), tried again like `download`.
 async fn fetch(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("The download failed: {e}"))?;
-    if !response.status().is_success() {
-        return Err(format!("The download failed (HTTP {}).", response.status()));
+    let mut attempt = 0;
+    loop {
+        match fetch_once(client, url).await {
+            Ok(body) => return Ok(body),
+            Err(failure) => match next_retry(attempt, failure.transient) {
+                Some(wait) => {
+                    tokio::time::sleep(wait).await;
+                    attempt += 1;
+                }
+                None => return Err(failure.message),
+            },
+        }
     }
-    Ok(response.bytes().await.map_err(|e| e.to_string())?.to_vec())
+}
+
+async fn fetch_once(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, Failure> {
+    let response = client.get(url).send().await.map_err(Failure::network)?;
+    if !response.status().is_success() {
+        return Err(Failure::status(response.status()));
+    }
+    Ok(response.bytes().await.map_err(Failure::network)?.to_vec())
 }
 
 #[cfg(target_os = "macos")]
@@ -1976,6 +2093,79 @@ mod tests {
         assert!(fetch_verified(&client().unwrap(), &base, asset, |_| {})
             .await
             .is_err());
+    }
+
+    #[test]
+    fn only_a_network_or_server_failure_is_tried_again() {
+        use reqwest::StatusCode;
+        assert!(Failure::network("connection reset").transient);
+        for status in [500, 502, 503, 429, 408] {
+            let failure = Failure::status(StatusCode::from_u16(status).unwrap());
+            assert!(failure.transient, "{status}");
+        }
+        for status in [400, 401, 403, 404, 416] {
+            let failure = Failure::status(StatusCode::from_u16(status).unwrap());
+            assert!(!failure.transient, "{status}");
+        }
+    }
+
+    #[test]
+    fn a_missing_app_says_the_release_is_not_finished() {
+        let failure = Failure::status(reqwest::StatusCode::NOT_FOUND);
+        assert!(failure.message.contains("HTTP 404"), "{}", failure.message);
+        assert!(
+            failure.message.contains("no app for this platform yet"),
+            "{}",
+            failure.message
+        );
+    }
+
+    #[test]
+    fn a_failed_download_waits_and_tries_again_a_limited_number_of_times() {
+        assert_eq!(next_retry(0, true), Some(Duration::from_secs(2)));
+        assert_eq!(next_retry(1, true), Some(Duration::from_secs(6)));
+        // Three attempts in all: the third failure is the answer.
+        assert_eq!(next_retry(2, true), None);
+        // A permanent failure is never waited on.
+        assert_eq!(next_retry(0, false), None);
+    }
+
+    #[tokio::test]
+    async fn a_server_error_is_tried_again_and_then_succeeds() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://127.0.0.1:{}/app",
+            listener.local_addr().unwrap().port()
+        );
+        let hits = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&hits);
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let attempt = seen.fetch_add(1, Ordering::SeqCst);
+                let mut request = [0u8; 1024];
+                let _ = socket.read(&mut request).await;
+                let (status, body) = if attempt == 0 {
+                    ("503 Service Unavailable", &b""[..])
+                } else {
+                    ("200 OK", &b"the app"[..])
+                };
+                let head = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = socket.write_all(head.as_bytes()).await;
+                let _ = socket.write_all(body).await;
+            }
+        });
+        let got = download(&client().unwrap(), &url, |_, _| {}).await.unwrap();
+        assert_eq!(got, b"the app");
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
     }
 
     fn scratch(name: &str) -> PathBuf {

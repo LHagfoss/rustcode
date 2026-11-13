@@ -36,6 +36,12 @@ const SKIPPED_KEY = "rustcode.skippedBeta";
 const AUTO_KEY = "rustcode.autoInstallUpdates";
 /** How often a found update asks again whether the app is idle yet. */
 export const AUTO_INSTALL_RETRY_MS = 10_000;
+/**
+ * How long an automatic install that failed waits before it tries again: the
+ * network that dropped, or a release still being uploaded, usually mends within
+ * the quarter hour. After these the sidebar row keeps the failure and its Retry.
+ */
+export const AUTO_INSTALL_BACKOFF_MS = [60_000, 5 * 60_000, 15 * 60_000];
 
 interface UpdatesState {
   /** This app's version from the shell, known before any check answers. */
@@ -55,6 +61,12 @@ interface UpdatesState {
   installing: boolean;
   /** The install's progress, for the sidebar row's bar. */
   progress: InstallProgress | null;
+  /** Why the last install failed, kept on the sidebar row with its Retry; null while one runs or after a good one. */
+  installError: string | null;
+  /** The update installs by itself once no thread is working: "Update when idle", or the setting, while it waits. */
+  waiting: boolean;
+  /** "Update when idle" was chosen for this offer, whatever the setting says. */
+  whenIdle: boolean;
   /** The release notes to show once, after the app was updated. */
   whatsNew: WhatsNew | null;
 }
@@ -80,6 +92,9 @@ export const useUpdates = create<UpdatesState>(() => ({
   checkedAt: null,
   installing: false,
   progress: null,
+  installError: null,
+  waiting: false,
+  whenIdle: false,
   whatsNew: null,
 }));
 
@@ -300,9 +315,19 @@ export function anyThreadBusy(
   return Object.values(threads).some((t) => t.running || (t.waiting ?? 0) > 0 || t.permissions.length > 0);
 }
 
+/** How long to wait before the next automatic try after `failures` failures, or null to stop and leave it to the sidebar row. */
+export function autoRetryDelay(failures: number): number | null {
+  return AUTO_INSTALL_BACKOFF_MS[failures - 1] ?? null;
+}
+
 let autoTimer: ReturnType<typeof setTimeout> | undefined;
-/** The version an automatic install failed for: left to the sidebar row, not retried in a loop. */
+/** The version an automatic install gave up on: left to the sidebar row, not retried in a loop. */
 let autoFailed: string | null = null;
+/** Automatic installs that failed in a row for `autoFailedVersion`. */
+let autoFailures = 0;
+let autoFailedVersion: string | null = null;
+/** No automatic try before this time: every check calls `maybeAutoInstall`, and none may jump the backoff. */
+let autoNotBefore = 0;
 
 /**
  * Install the offered update by itself when the setting is on and no thread is
@@ -314,10 +339,10 @@ export function maybeAutoInstall() {
   void (async () => {
     // The store imports this module through the machines list, so it loads on demand.
     const { useApp, toast } = await import("./store");
-    const { info, channel, skipped, installing, autoInstall } = useUpdates.getState();
+    const { info, channel, skipped, installing, autoInstall, whenIdle } = useUpdates.getState();
     if (info?.latest && info.latest === autoFailed) return;
     const decision = autoInstallDecision({
-      enabled: autoInstall,
+      enabled: autoInstall || whenIdle,
       development: isDevBuild(),
       info,
       channel,
@@ -325,20 +350,40 @@ export function maybeAutoInstall() {
       installing,
       busy: anyThreadBusy(useApp.getState().threads),
     });
+    useUpdates.setState({ waiting: decision === "wait" });
     if (decision === "wait") {
       autoTimer = setTimeout(maybeAutoInstall, AUTO_INSTALL_RETRY_MS);
       return;
     }
     if (decision !== "install" || !info?.latest) return;
+    const wait = autoNotBefore - Date.now();
+    if (wait > 0) {
+      autoTimer = setTimeout(maybeAutoInstall, wait);
+      return;
+    }
     const version = info.latest;
     toast(`Updating to ${version}…`);
     const failed = await applyUpdate();
-    if (failed) {
+    if (!failed) return;
+    if (autoFailedVersion !== version) {
+      autoFailedVersion = version;
+      autoFailures = 0;
+    }
+    autoFailures += 1;
+    const retryIn = autoRetryDelay(autoFailures);
+    if (retryIn === null) {
       autoFailed = version;
       toast(`The update did not install: ${failed}`, "error", {
         action: { label: "Release page", run: () => info.page && openExternal(info.page) },
       });
+      return;
     }
+    toast(
+      `The update did not install: ${failed} Trying again in ${Math.round(retryIn / 60_000)} min.`,
+      "error",
+    );
+    autoNotBefore = Date.now() + retryIn;
+    autoTimer = setTimeout(maybeAutoInstall, retryIn);
   })();
 }
 
@@ -349,6 +394,8 @@ export function setAutoInstall(enabled: boolean) {
   useUpdates.setState({ autoInstall: enabled });
   if (enabled) {
     autoFailed = null;
+    autoFailures = 0;
+    autoNotBefore = 0;
     maybeAutoInstall();
   } else {
     clearTimeout(autoTimer);
@@ -456,16 +503,66 @@ export async function applyUpdate(): Promise<string | null> {
     if (info.page) openExternal(info.page);
     return null;
   }
-  useUpdates.setState({ installing: true, progress: null });
+  clearTimeout(autoTimer);
+  useUpdates.setState({ installing: true, progress: null, installError: null, waiting: false });
   write(UPDATED_FROM_KEY, info.current);
   try {
     await installUpdate(channel, skipped, (progress) => useUpdates.setState({ progress }));
     return null;
   } catch (error) {
     write(UPDATED_FROM_KEY, null);
-    useUpdates.setState({ installing: false, progress: null });
-    return error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
+    useUpdates.setState({ installing: false, progress: null, installError: message });
+    return message;
   }
+}
+
+/** What the confirmation says when a click would cut running threads short. */
+export const UPDATE_BUSY_MESSAGE =
+  "Threads are working. Updating now quits RustCode, which ends their running turns. Updating when they finish waits, then installs and reopens by itself.";
+
+/**
+ * The action behind the sidebar row and Settings: install now, unless a thread
+ * is working, when it asks first — "Update when idle" waits for them (and
+ * keeps checking), "Update now" ends their turns. Answers the failure, as
+ * `applyUpdate` does; null while it asks or waits.
+ */
+export async function requestUpdate(): Promise<string | null> {
+  const { useApp, askConfirm } = await import("./store");
+  const { info, channel } = useUpdates.getState();
+  const busy = anyThreadBusy(useApp.getState().threads);
+  if (!busy || !info || !offersUpdate(info, channel) || !info.canInstall) return applyUpdate();
+  askConfirm({
+    title: `Update to ${info.latest} now?`,
+    message: UPDATE_BUSY_MESSAGE,
+    action: "Update Now",
+    destructive: true,
+    run: () => {
+      void applyUpdate().then((failed) => {
+        if (failed) void announceFailure(failed);
+      });
+    },
+    alt: {
+      action: "Update When Idle",
+      run: () => {
+        autoFailed = null;
+        autoFailures = 0;
+        autoNotBefore = 0;
+        useUpdates.setState({ whenIdle: true, installError: null });
+        maybeAutoInstall();
+      },
+    },
+  });
+  return null;
+}
+
+/** An install that failed outside Settings: the toast, with the release page to fall back on. */
+async function announceFailure(failed: string) {
+  const { toast } = await import("./store");
+  const page = useUpdates.getState().info?.page;
+  toast(`The update did not install: ${failed}`, "error", {
+    action: { label: "Release page", run: () => page && openExternal(page) },
+  });
 }
 
 /**

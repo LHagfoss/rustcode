@@ -223,6 +223,10 @@ pub(crate) struct KnownHarness {
     /// `npx -y pi-acp` starts, but the `pi` it spawns does not. Missing means
     /// not installed, not a turn that fails at start.
     pub requires: Option<&'static str>,
+    /// The harness has its own tool to stop and ask the user a
+    /// multiple-choice question (Claude Code's `AskUserQuestion`); without
+    /// one the thread gets RustCode's `ask_user_question` (#3393).
+    pub native_questions: bool,
 }
 
 pub(crate) const KNOWN: &[KnownHarness] = &[
@@ -238,6 +242,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         version: Some(("codex", &["--version"])),
         auth_probe: Some(AuthProbe::Text(&["codex", "login", "status"])),
         requires: None,
+        native_questions: true,
     },
     KnownHarness {
         id: "claude-code",
@@ -251,6 +256,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         version: Some(("claude", &["--version"])),
         auth_probe: Some(AuthProbe::Json(&["claude", "auth", "status", "--json"])),
         requires: None,
+        native_questions: true,
     },
     KnownHarness {
         id: "gemini",
@@ -264,6 +270,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         version: Some(("gemini", &["--version"])),
         auth_probe: None,
         requires: None,
+        native_questions: false,
     },
     KnownHarness {
         id: "opencode",
@@ -277,6 +284,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         version: Some(("opencode", &["--version"])),
         auth_probe: None,
         requires: None,
+        native_questions: false,
     },
     // Pi speaks its own RPC protocol; `pi-acp` adapts it to ACP, as claude-agent-acp does for
     // Claude Code. Pi keeps its own models, logins, skills and sessions (~/.pi).
@@ -292,6 +300,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         version: Some(("pi", &["--version"])),
         auth_probe: None,
         requires: Some("pi"),
+        native_questions: false,
     },
 ];
 
@@ -648,6 +657,17 @@ pub(crate) fn capabilities(harness: &ResolvedHarness) -> Capabilities {
         capabilities.effort = true;
     }
     capabilities
+}
+
+/// Whether a thread on `harness` should get RustCode's `ask_user_question`
+/// tool: an external harness with no question tool of its own (#3393). The
+/// built-in harness has `ask_question`, Codex `request_user_input`, Claude
+/// Code `AskUserQuestion`.
+pub(crate) fn needs_question_tool(harness: &ResolvedHarness) -> bool {
+    match harness.kind {
+        HarnessKind::Builtin | HarnessKind::Codex => false,
+        HarnessKind::Acp => !harness.known.is_some_and(|known| known.native_questions),
+    }
 }
 
 /// `session_meta` of a built-in thread.
@@ -1395,6 +1415,27 @@ mod tests {
                 "{id} takes text only when it takes no pictures"
             );
             forget_learned(id);
+        }
+    }
+
+    #[test]
+    fn only_a_harness_without_a_question_tool_gets_ask_user_question() {
+        let entries = vec![config::HarnessEntry {
+            id: "my-agent".into(),
+            command: Some(vec!["my-agent".into(), "--acp".into()]),
+            ..Default::default()
+        }];
+        for (id, needs) in [
+            (BUILTIN_ID, false),
+            ("codex", false),
+            ("claude-code", false),
+            ("pi", true),
+            ("opencode", true),
+            ("gemini", true),
+            ("my-agent", true),
+        ] {
+            let harness = resolve(&entries, id).unwrap();
+            assert_eq!(needs_question_tool(&harness), needs, "{id}");
         }
     }
 

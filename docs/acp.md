@@ -87,6 +87,11 @@ free text by selecting any answer option and adding `_meta.rustcode.answer`:
 `{"options": ["A", "B"]}` or `{"text": "..."}`. The engine validates that answer
 like a terminal answer; one it cannot take cancels the question.
 
+A harness without a question tool of its own gets `ask_user_question` from the
+`rustcode` MCP server (`docs/orchestrator.md`). The engine sends each of its
+questions to the client as this same `session/request_permission` request, one
+at a time, so a client that renders `ask_question` renders these too.
+
 ## Localhost preview
 
 A client that sends `clientCapabilities._meta.rustcode.preview` (version 1) at

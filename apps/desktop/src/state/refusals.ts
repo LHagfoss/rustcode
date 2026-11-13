@@ -81,10 +81,32 @@ export function refusalCopy(refused: RemoteRefusedConnection): { title: string; 
         detail:
           "Its app sent a browser-style origin, which this computer does not accept. That is a RustCode app from before this computer required the native app origin, or a web page trying the port. Update RustCode on the phone; nothing was shared either way.",
       };
+    case "secure_connection":
+      return {
+        title: "A device tried a secure (wss://) connection to this computer",
+        detail:
+          "The remote gateway speaks plain WebSocket on the local network, so a secure connection cannot be read. Update the RustCode app on the phone, or enter the address as shown here without https:// or wss://, and connect again.",
+      };
+    case "unrecognized_request":
+      return {
+        title: `${who} sent a first message this computer does not understand`,
+        detail:
+          "Its app reached this computer but speaks the handshake differently, which is what a different app version does. Update RustCode on the device and on this computer so both are the latest, then connect again.",
+      };
     default:
       return {
         title: `${who} was refused`,
         detail: "This computer did not let the device in. Pair it again if it should have access.",
       };
   }
+}
+
+/**
+ * What to say when a pairing code ran out. A code nobody dialed in for is a network problem, not a
+ * wrong code: the phone never reached this computer, so no refusal can explain it.
+ */
+export function expiredCodeCopy(reached: boolean | undefined, address: string | undefined): string {
+  if (reached !== false) return "The last code expired. Pair again for a fresh one.";
+  const where = address ? ` (${address})` : "";
+  return `The last code expired, and no device connected to this computer while it showed. The phone must be on the same network as this computer${where}, or reach it over NetBird or a VPN. Check the address under Remote access, then pair again for a fresh code.`;
 }

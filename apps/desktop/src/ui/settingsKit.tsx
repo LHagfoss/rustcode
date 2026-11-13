@@ -111,7 +111,7 @@ export function Group({
       <fieldset
         disabled={disabled}
         className={cx(
-          "m-0 min-w-0 divide-y divide-border overflow-hidden rounded-xl border-0 bg-surface p-0",
+          "rule-rows m-0 min-w-0 overflow-hidden rounded-xl border-0 bg-surface p-0",
           disabled && "opacity-60",
         )}
       >
@@ -467,7 +467,7 @@ export function Choice<T extends string>({
       ref={group}
       role="radiogroup"
       aria-label={label}
-      className="relative inline-flex shrink-0 rounded-full bg-fill p-1"
+      className="relative inline-flex w-fit shrink-0 rounded-full bg-fill p-1"
     >
       {thumb && (
         <span
@@ -687,7 +687,7 @@ export function Loading({ error, onRetry }: { error: string | null; onRetry?: ()
     // Where the page's list will be: a group card of rows, title and subtitle each.
     <section className="mb-6" role="status" aria-label="Loading">
       <Skeleton className="mx-3 mb-3 h-3 w-24 sm:mx-4" />
-      <div className="divide-y divide-border overflow-hidden rounded-xl bg-surface">
+      <div className="rule-rows overflow-hidden rounded-xl bg-surface">
         {[46, 62, 38, 54].map((w, i) => (
           <div key={i} className="flex min-h-12 items-center gap-4 px-4 py-3">
             <div className="flex flex-1 flex-col gap-1.5">

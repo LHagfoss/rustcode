@@ -7,9 +7,11 @@ import {
   environmentAddress,
   environmentChoices,
   environmentIds,
+  environmentOutdated,
   environmentRecovery,
   environmentRoute,
   environmentStatus,
+  knownEnvironment,
   newEnvironment,
   recoveryLabel,
   sshProgress,
@@ -182,5 +184,60 @@ describe("a new environment", () => {
   test("is none when several appeared at once", () => {
     const before = environmentIds([]);
     expect(newEnvironment([machine(), machine({ id: "gw-2" })], before)).toBeNull();
+  });
+});
+
+describe("an outdated environment", () => {
+  test("is older than this app; a newer, equal, unknown or development version is not", () => {
+    expect(environmentOutdated("1.32.0", "1.33.0")).toBe(true);
+    expect(environmentOutdated("1.33.0", "1.33.0")).toBe(false);
+    expect(environmentOutdated("1.34.0", "1.33.0")).toBe(false);
+    expect(environmentOutdated(null, "1.33.0")).toBe(false);
+    expect(environmentOutdated("1.32.0", null)).toBe(false);
+    // A `tauri dev` build reports 0.1.0, which would make every environment look old.
+    expect(environmentOutdated("1.32.0", "0.1.0")).toBe(false);
+  });
+});
+
+describe("an environment known through another", () => {
+  test("shows what is known of it and who told us, and is outdated by the same rule", () => {
+    const now = Date.parse("2026-11-13T13:00:00Z");
+    const row = knownEnvironment(
+      {
+        hostId: "gw-pi",
+        name: "Raspberry Pi",
+        nameUpdatedAt: null,
+        platform: "linux",
+        version: "1.26.0",
+        lastSeenAt: "2026-11-13T10:00:00Z",
+        via: "gw-studio",
+      },
+      "Studio",
+      "1.33.0",
+      now,
+    );
+    expect(row.name).toBe("Raspberry Pi");
+    expect(row.facts).toEqual(["Linux", "RustCode 1.26.0", "Last seen 3 hours ago"]);
+    expect(row.via).toBe("Studio");
+    expect(row.outdated).toBe(true);
+  });
+
+  test("says nothing it does not know", () => {
+    const row = knownEnvironment(
+      {
+        hostId: "gw-x",
+        name: "Box",
+        nameUpdatedAt: null,
+        platform: "unknown",
+        version: null,
+        lastSeenAt: null,
+        via: null,
+      },
+      null,
+      "1.33.0",
+      Date.now(),
+    );
+    expect(row.facts).toEqual([]);
+    expect(row.outdated).toBe(false);
   });
 });

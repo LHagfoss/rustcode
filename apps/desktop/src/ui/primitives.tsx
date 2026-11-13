@@ -240,7 +240,7 @@ export const menuSurface = `elevated rounded-2xl z-50 max-h-[var(--radix-popper-
 export const menuItem =
   "flex min-h-7 w-full cursor-pointer items-center gap-2 rounded-xl px-2 py-1 text-left text-body outline-none data-[disabled]:cursor-default data-[disabled]:opacity-40 data-[highlighted]:bg-fill";
 export const menuItemDanger = "text-danger data-[highlighted]:bg-danger/12";
-export const menuSeparator = "mx-2 my-1 h-px shrink-0 bg-border";
+export const menuSeparator = "mx-2 my-1 h-px shrink-0 bg-separator";
 export const menuLabel = "px-2 pt-1.5 pb-1 text-caption text-fg-faint";
 
 /** A popover's surface: width and anything else its content needs goes after it. */
@@ -521,13 +521,18 @@ export function Switch({
   );
 }
 
-/** Segmented control: a track with a sliding thumb. */
+/**
+ * Segmented control: a track with a sliding thumb. The track fits its segments (`w-fit`), so a flex
+ * column that stretches its children never leaves the buttons at one end of a full-width track;
+ * `fill` is for a track that spans its card, where the segments share the width equally.
+ */
 export function Segments<T extends string>({
   value,
   options,
   onChange,
   label,
   onIntent,
+  fill,
 }: {
   value: T;
   options: { value: T; label: string; disabled?: boolean }[];
@@ -535,6 +540,8 @@ export function Segments<T extends string>({
   label: string;
   /** A rest of the pointer or focus on an option: the screen may read ahead for that choice. */
   onIntent?: (value: T) => void;
+  /** Span the container, the segments sharing the width equally (a card's own toggle). */
+  fill?: boolean;
 }) {
   // The selected segment's pill slides to the new one instead of jumping.
   const group = useRef<HTMLDivElement>(null);
@@ -558,7 +565,7 @@ export function Segments<T extends string>({
       ref={group}
       role="radiogroup"
       aria-label={label}
-      className="relative inline-flex rounded-full bg-fill p-[2px]"
+      className={cx("relative rounded-full bg-fill p-[2px]", fill ? "flex w-full" : "inline-flex w-fit")}
     >
       {thumb && (
         <span
@@ -581,6 +588,7 @@ export function Segments<T extends string>({
           onBlur={intent.cancel}
           className={cx(
             "relative h-5 whitespace-nowrap rounded-full px-2 font-medium text-caption disabled:opacity-40",
+            fill && "min-w-0 flex-1",
             o.value === value ? selected : "text-fg-muted hover:text-fg",
           )}
         >

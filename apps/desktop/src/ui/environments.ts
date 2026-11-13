@@ -4,14 +4,19 @@
 //
 // Pure functions over `state/machines.ts` values, so the words are testable without a page.
 
+import type { FleetEntry } from "../state/fleet";
 import {
+  DEV_APP_VERSION,
+  lastSeen,
   type Machine,
   type MachineState,
   machineReconnecting,
+  platformName,
   reasonLabel,
   routeLabel,
   type SshStep,
 } from "../state/machines";
+import { compareVersions } from "../state/updates";
 
 /** What a row's dot and chip say at a glance: the four states people tell apart. */
 export type EnvironmentStatusKind = "online" | "connecting" | "offline" | "attention";
@@ -42,6 +47,55 @@ export function environmentStatus(
     case "stopped":
       return { kind: "offline", label: "Not connected", tone: "idle" };
   }
+}
+
+/**
+ * Whether an environment runs an older RustCode than this app: the row says so and how to update
+ * it. A development build (`DEV_APP_VERSION`) is older than everything, so it never says it, and
+ * an environment that has not reported a version is not called outdated.
+ */
+export function environmentOutdated(
+  remote: string | null | undefined,
+  local: string | null | undefined,
+): boolean {
+  if (!remote || !local || local === DEV_APP_VERSION) return false;
+  return compareVersions(remote, local) < 0;
+}
+
+/**
+ * A computer this app is not paired with, known through one that is: the facts its row shows
+ * (platform, version, when it was last seen) and who told us. Read-only: knowing a computer is
+ * not access to it, and it is paired on its own.
+ */
+export interface KnownEnvironment {
+  id: string;
+  name: string;
+  platform: string;
+  facts: string[];
+  /** The name of the computer that told us, when there is one. */
+  via: string | null;
+  outdated: boolean;
+}
+
+export function knownEnvironment(
+  entry: FleetEntry,
+  via: string | null,
+  local: string | null,
+  now: number,
+): KnownEnvironment {
+  const facts = [
+    platformName(entry.platform),
+    entry.version ? `RustCode ${entry.version}` : undefined,
+    entry.lastSeenAt ? `Last seen ${lastSeen(entry.lastSeenAt, now)}` : undefined,
+  ].filter((fact): fact is string => Boolean(fact));
+  return {
+    id: entry.hostId,
+    name: entry.name,
+    platform: entry.platform,
+    facts,
+    via,
+    outdated: environmentOutdated(entry.version, local),
+  };
 }
 
 /** The address an environment is reached on (or tried first), or null before one is saved. */
