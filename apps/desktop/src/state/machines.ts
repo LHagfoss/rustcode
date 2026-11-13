@@ -29,6 +29,7 @@ import {
   flushMachineOutbox,
   isTombstoned,
   keptUnlisted,
+  noteThreadList,
   request,
   settleKeptUnlisted,
   toast,
@@ -1130,6 +1131,8 @@ function detach(id: string): void {
   // to be sent to it.
   forgetMachineCache(id);
   forgetMachineOutbox(id);
+  // Nothing of it is listed any more, and that is the whole truth: what waited on its threads goes.
+  noteThreadList(id, true);
   const link = links.get(id);
   links.delete(id);
   if (!link) return;
@@ -1169,6 +1172,8 @@ async function readThreads(id: string, connection: AcpConnection, link?: Link): 
       if (!cursor) break;
     }
     if (connection.isClosed) return;
+    // A cursor left over is a list that stopped at its cap: a thread missing from it is not gone.
+    noteThreadList(id, !cursor);
     // Rows the app keeps that this read does not name yet stay: a snapshot from before a thread
     // was announced is not news that it is gone. The ones it names now need no keeping.
     // A thread trashed while this read was out is not news that it came back.

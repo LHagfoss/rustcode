@@ -13,7 +13,7 @@ export const SCHEDULED_KEY = "rustcode.scheduled";
 export const MAX_SCHEDULED_TEXT = 100 * 1024;
 /** A message's command, links and attachments are kept up to this size in all: an image rides inline. */
 export const MAX_SCHEDULED_EXTRAS = 64 * 1024;
-/** At most this many scheduled messages per thread; the ones due last go first. */
+/** At most this many scheduled messages per thread: one more is refused, nothing is evicted. */
 export const MAX_SCHEDULED_ROWS = 20;
 /** At most this many threads keep a scheduled message; the oldest go first. */
 export const MAX_SCHEDULED_THREADS = 100;
@@ -125,7 +125,6 @@ const isMessage = (value: unknown): value is ScheduledMessage => {
     typeof row.id === "string" &&
     !!row.id &&
     typeof row.text === "string" &&
-    row.text.length > 0 &&
     row.text.length <= MAX_SCHEDULED_TEXT &&
     typeof row.due === "number" &&
     Number.isFinite(row.due) &&
@@ -158,42 +157,74 @@ export function parseScheduleBook(raw: string | null): ScheduleBook {
   const book: ScheduleBook = {};
   for (const [id, list] of Object.entries(value as Record<string, unknown>)) {
     if (!id || !Array.isArray(list)) continue;
-    const rows = list.filter(isMessage).map((row) => {
+    const rows = list.filter(isMessage).flatMap((row) => {
       const extras = extrasOf(row.extras);
-      return extras ? { ...row, extras } : { id: row.id, text: row.text, due: row.due };
+      if (extras) return [{ ...row, extras }];
+      // A message is never sent without what went with it: one whose extras cannot be read back
+      // (a hand edit) or that was nothing but them is not kept at all.
+      if (!row.text.length || row.extras !== undefined) return [];
+      return [{ id: row.id, text: row.text, due: row.due }];
     });
     if (rows.length) book[id] = rows.sort((a, b) => a.due - b.due);
   }
   return persistableSchedule(book);
 }
 
-/** The book as it goes to storage: bounded rows and threads, and nothing unreadable. */
+/**
+ * The book as it goes to storage: bounded rows and threads, and nothing unreadable. Each list is in
+ * the order it sends, so the cap keeps the soonest: they are the next to go out.
+ */
 export function persistableSchedule(book: ScheduleBook): ScheduleBook {
   const entries = Object.entries(book)
-    .map(([id, rows]) => [id, rows.slice(-MAX_SCHEDULED_ROWS)] as const)
+    .map(([id, rows]) => [id, rows.slice(0, MAX_SCHEDULED_ROWS)] as const)
     .filter(([, rows]) => rows.length)
     .slice(-MAX_SCHEDULED_THREADS);
   return Object.fromEntries(entries);
 }
 
+/** Why a message could not be scheduled; each has its own words in {@link scheduleRefusalText}. */
+export type ScheduleRefusal = "empty" | "text" | "extras" | "full" | "time";
+
+/** What the composer tells the user when a message cannot be scheduled. */
+export function scheduleRefusalText(reason: ScheduleRefusal): string {
+  switch (reason) {
+    case "empty":
+      return "There is nothing to schedule.";
+    case "text":
+      return "That message is too long to schedule.";
+    case "extras":
+      return "Its attachments are too big to schedule: send it now, or schedule it without them.";
+    case "full":
+      return `This thread already has ${MAX_SCHEDULED_ROWS} scheduled messages.`;
+    case "time":
+      return "Pick a time that has not passed.";
+  }
+}
+
 /**
- * The book with one message added for a thread. Null when the message itself cannot be kept (empty
- * or over the size a web view should hold), so nothing is scheduled that a restart would lose.
+ * The book with one message added for a thread, or why it cannot be. A message whose text or
+ * attachments are over what a web view should hold is refused whole, never kept without them, and
+ * a thread that already holds {@link MAX_SCHEDULED_ROWS} refuses the new one rather than evicting
+ * one the user already scheduled.
  */
 export function addScheduled(
   book: ScheduleBook,
   threadId: string,
   item: ScheduledMessage,
-): ScheduleBook | null {
-  if (!threadId || !item.text.length || item.text.length > MAX_SCHEDULED_TEXT) return null;
-  if (!Number.isFinite(item.due)) return null;
-  const extras = extrasOf(item.extras);
+): { book: ScheduleBook } | { refused: ScheduleRefusal } {
+  if (!Number.isFinite(item.due)) return { refused: "time" };
+  if (item.text.length > MAX_SCHEDULED_TEXT) return { refused: "text" };
+  const extras = item.extras === undefined ? undefined : extrasOf(item.extras);
+  if (item.extras !== undefined && !extras) return { refused: "extras" };
+  if (!threadId || (!item.text.length && !extras)) return { refused: "empty" };
+  const held = book[threadId] ?? [];
+  if (held.length >= MAX_SCHEDULED_ROWS) return { refused: "full" };
   const row: ScheduledMessage = extras
     ? { id: item.id, text: item.text, due: item.due, extras }
     : { id: item.id, text: item.text, due: item.due };
-  const rows = [...(book[threadId] ?? []), row].sort((a, b) => a.due - b.due);
+  const rows = [...held, row].sort((a, b) => a.due - b.due);
   const { [threadId]: _was, ...rest } = book;
-  return { ...rest, [threadId]: rows.slice(-MAX_SCHEDULED_ROWS) };
+  return { book: { ...rest, [threadId]: rows } };
 }
 
 /** The book without one message. The same book comes back when the id was not there. */

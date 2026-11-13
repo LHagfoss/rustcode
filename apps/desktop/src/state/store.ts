@@ -257,6 +257,7 @@ import {
   SCHEDULED_KEY,
   type ScheduleBook,
   type ScheduledMessage,
+  type ScheduleRefusal,
   scheduledCount,
   withoutScheduled,
 } from "./schedule";
@@ -2239,9 +2240,36 @@ export function threadCreated(params: unknown) {
   });
 }
 
+/**
+ * The computers whose own thread list came in whole this run: this one (LOCAL_HOST) once
+ * `refreshSessions` read every page, a paired machine once `machines.ts` `readThreads` did. Only
+ * there does a thread missing from the list mean it is gone.
+ */
+const wholeLists = new Set<string>();
+
+/** A computer's list came in (`whole` when it was every page), or it can no longer be trusted. */
+export function noteThreadList(host: string, whole: boolean): void {
+  if (whole) wholeLists.add(host);
+  else wholeLists.delete(host);
+}
+
+/**
+ * Whether a thread no longer exists: its computer listed every thread it has and this one was not
+ * among them. A list that stopped at its page cap, a machine that has not answered yet, or a read
+ * that failed is not news that it is gone, so what waits on the thread keeps waiting.
+ */
+export function threadIsGone(id: string): boolean {
+  const s = get();
+  if (s.sessions.some((x) => x.id === id)) return false;
+  const host = isRemoteThread(id) ? splitThreadKey(id).host : LOCAL_HOST;
+  if (host === LOCAL_HOST && (!s.sessionsLoaded || s.sessionsCapped)) return false;
+  return wholeLists.has(host);
+}
+
 export async function refreshSessions(): Promise<void> {
   const conn = connection;
   if (!conn || !get().agent?.listSessions) {
+    noteThreadList(LOCAL_HOST, false);
     set({ sessionsLoaded: true, sessionsCapped: false });
     return;
   }
@@ -2278,6 +2306,7 @@ export async function refreshSessions(): Promise<void> {
       // Another machine's threads are listed by that machine (state/machines.ts), kept as they are.
       const remote = s.sessions.filter((x) => x.host);
       const sessions = byActivity([...started, ...all, ...remote]);
+      noteThreadList(LOCAL_HOST, !capped);
       return {
         sessions,
         sessionsLoaded: true,
@@ -3799,18 +3828,18 @@ export function restoreScheduled(): void {
 }
 
 /**
- * Schedule the composer's message for `due`. Null when there is nothing to send, the app is not
- * connected, or the message is too big to keep; the composer keeps its text then.
+ * Schedule the composer's message for `due`: the message, or why it could not be (the composer
+ * keeps its text and attachments then, and says so). Not connected is `offline`.
  */
 export function scheduleMessage(
   threadId: string,
   text: string,
   extras: ComposeExtras,
   due: number,
-): ScheduledMessage | null {
-  if (get().status !== "ready") return null;
-  if (!text.trim() && !hasExtras(extras)) return null;
-  if (!(due > Date.now())) return null;
+): ScheduledMessage | { refused: ScheduleRefusal | "offline" } {
+  if (get().status !== "ready") return { refused: "offline" };
+  if (!text.trim() && !hasExtras(extras)) return { refused: "empty" };
+  if (!(due > Date.now())) return { refused: "time" };
   const item: ScheduledMessage = {
     id: localId("scheduled"),
     text,
@@ -3818,8 +3847,8 @@ export function scheduleMessage(
     ...(carriesExtras(extras) ? { extras } : {}),
   };
   const next = addScheduled(get().scheduled, threadId, item);
-  if (!next) return null;
-  writeScheduled(next);
+  if ("refused" in next) return next;
+  writeScheduled(next.book);
   return item;
 }
 
@@ -3852,8 +3881,7 @@ export async function sendScheduledNow(threadId: string, id: string): Promise<bo
  * yet — while a thread that no longer exists is `gone` and one the user deleted meanwhile is too.
  */
 async function deliverScheduled(threadId: string, item: ScheduledMessage): Promise<"sent" | "gone" | "wait"> {
-  const s = get();
-  if (s.sessionsLoaded && !s.sessions.some((session) => session.id === threadId)) {
+  if (threadIsGone(threadId)) {
     toast("That thread is gone, so its scheduled message was dropped.", "error");
     return "gone";
   }
@@ -7611,6 +7639,7 @@ export async function revokeRemoteDevice(id: string): Promise<void> {
 
 /** Test hook: reset to a clean slate. */
 export function resetForTests() {
+  wholeLists.clear();
   // A machine's channel and its threads are process-global too: one test file's MockMachine must
   // not answer the next one's `openThread` (machinesThreads.test.ts › findings 1).
   resetMachinesForTests();
@@ -7921,10 +7950,13 @@ export async function continueDueThreads(now = Date.now()): Promise<void> {
   continuing = true;
   try {
     for (const [id, wait] of Object.entries(get().limitWaits)) {
-      if (!get().sessions.some((x) => x.id === id) || get().archived[id]) {
-        if (get().sessionsLoaded) dropLimitWait(id);
+      // A thread missing from a list that is not whole keeps its wait: it may be past the cap.
+      if (threadIsGone(id) || get().archived[id]) {
+        dropLimitWait(id);
         continue;
       }
+      // Past the cap and not open: its harness and login cannot be read yet, so it waits as it is.
+      if (!get().sessions.some((x) => x.id === id) && !get().threads[id]) continue;
       // A turn the restart cut short is sent its own resume, which ends this wait: never both.
       if (resuming.has(id)) continue;
       const holds = () => {
@@ -7976,10 +8008,12 @@ export async function continueInternetThreads(now = Date.now()): Promise<void> {
   continuingNet = true;
   try {
     for (const [id, wait] of Object.entries(get().internetWaits)) {
-      if (!get().sessions.some((x) => x.id === id) || get().archived[id]) {
-        if (get().sessionsLoaded) dropInternetWait(id);
+      if (threadIsGone(id) || get().archived[id]) {
+        dropInternetWait(id);
         continue;
       }
+      // Past the cap and not open: its harness and login cannot be read yet, so it waits as it is.
+      if (!get().sessions.some((x) => x.id === id) && !get().threads[id]) continue;
       const holds = () => {
         const s = get();
         return internetHolds(wait, { harness: harnessOf(s, id), account: accountOn(s, id) });

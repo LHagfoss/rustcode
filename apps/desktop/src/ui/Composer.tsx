@@ -115,7 +115,7 @@ import {
 } from "../state/mentionDrawer";
 import { PERMISSION_MODES, type PermissionMode } from "../state/permissions";
 import { noteRecentFile, recentFiles, recentFirst } from "../state/recentFiles";
-import { scheduledSummary } from "../state/schedule";
+import { scheduledSummary, scheduleRefusalText } from "../state/schedule";
 import type { CachedPlan } from "../state/store";
 import {
   acceptsImages,
@@ -929,8 +929,15 @@ export const Composer = memo(function Composer({
   // would, into the card over the composer. A thread that is busy when its time comes queues it.
   const schedule = (due: number) => {
     if (!thread) return;
-    if (!scheduleMessage(thread.id, draft, extras, due)) {
-      toast("Could not schedule that message.", "error");
+    const scheduled = scheduleMessage(thread.id, draft, extras, due);
+    if ("refused" in scheduled) {
+      // The field keeps the message and its attachments: nothing is scheduled without them.
+      toast(
+        scheduled.refused === "offline"
+          ? "Not connected: the message was not scheduled."
+          : scheduleRefusalText(scheduled.refused),
+        "error",
+      );
       return;
     }
     setSendLater(false);
