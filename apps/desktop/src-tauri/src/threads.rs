@@ -93,43 +93,34 @@ pub fn thread_log_open(id: String) -> Result<String, String> {
     Ok(dir.display().to_string())
 }
 
-/// A name in `trash` that is not taken: `id`, `id 2`, `id 3`, …
-#[cfg(not(windows))]
-fn free_name(trash: &Path, id: &str) -> PathBuf {
-    let mut candidate = trash.join(id);
-    let mut n = 2;
-    while candidate.exists() {
-        candidate = trash.join(format!("{id} {n}"));
-        n += 1;
-    }
-    candidate
-}
-
 #[tauri::command(async)]
 pub fn thread_trash(id: String) -> Result<(), String> {
     let dir = thread_dir(&id)?;
-    move_thread_to_trash(&dir, &id)
+    move_thread_to_trash(&dir)
 }
 
-#[cfg(windows)]
-fn move_thread_to_trash(dir: &Path, _id: &str) -> Result<(), String> {
-    trash::delete(dir).map_err(recycle_bin_error)
-}
-
-#[cfg(any(windows, test))]
-fn recycle_bin_error(error: impl std::fmt::Display) -> String {
-    format!("Could not move the thread to the Recycle Bin: {error}")
-}
-
-#[cfg(not(windows))]
-fn move_thread_to_trash(dir: &Path, id: &str) -> Result<(), String> {
-    let home = std::env::var_os("HOME").ok_or("No home folder.")?;
-    let trash = PathBuf::from(home).join(".Trash");
-    if !trash.is_dir() {
-        return Err("No Trash folder.".into());
+/// The system's own Trash on every platform: the Recycle Bin on Windows, the
+/// freedesktop Trash (`~/.local/share/Trash`) on Linux, and on macOS the Trash
+/// of the volume the thread is on, through `NSFileManager` (the call Finder's
+/// own Move to Trash makes, with no Apple Events permission to ask for).
+fn move_thread_to_trash(dir: &Path) -> Result<(), String> {
+    #[allow(unused_mut)]
+    let mut context = trash::TrashContext::default();
+    #[cfg(target_os = "macos")]
+    {
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+        context.set_delete_method(DeleteMethod::NsFileManager);
     }
-    std::fs::rename(dir, free_name(&trash, id))
-        .map_err(|e| format!("Could not move the thread to the Trash: {e}"))
+    context.delete(dir).map_err(trash_error)
+}
+
+fn trash_error(error: impl std::fmt::Display) -> String {
+    let bin = if cfg!(windows) {
+        "Recycle Bin"
+    } else {
+        "Trash"
+    };
+    format!("Could not move the thread to the {bin}: {error}")
 }
 
 #[cfg(test)]
@@ -188,10 +179,26 @@ mod tests {
     }
 
     #[test]
-    fn recycle_bin_failure_keeps_the_system_error() {
+    fn trash_failure_keeps_the_system_error() {
+        let bin = if cfg!(windows) {
+            "Recycle Bin"
+        } else {
+            "Trash"
+        };
         assert_eq!(
-            recycle_bin_error("Access is denied."),
-            "Could not move the thread to the Recycle Bin: Access is denied."
+            trash_error("Access is denied."),
+            format!("Could not move the thread to the {bin}: Access is denied.")
+        );
+    }
+
+    #[test]
+    fn a_missing_folder_is_an_error_and_nothing_is_moved() {
+        let gone =
+            std::env::temp_dir().join(format!("rustcode-trash-missing-{}", std::process::id()));
+        let error = move_thread_to_trash(&gone).unwrap_err();
+        assert!(
+            error.starts_with("Could not move the thread to the"),
+            "{error}"
         );
     }
 
