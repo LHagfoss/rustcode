@@ -145,7 +145,7 @@ function AttemptItem({
   if (item.kind === "user") return <UserRow item={item} />;
   if (item.kind === "assistant") return <AssistantRow item={item} threadId={threadId} />;
   if (item.kind === "thought") return <ThoughtRow item={item} live={false} />;
-  if (item.kind === "tool") return <ToolRow item={item} cwd={cwd} />;
+  if (item.kind === "tool") return <ToolRow item={item} cwd={cwd} threadId={threadId} />;
   if (item.kind === "notice") return <NoticeRow item={item} />;
   if (item.kind === "handoff") return <HandoffRow item={item} />;
   if (item.kind === "switch") return <SwitchRow item={item} />;

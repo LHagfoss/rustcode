@@ -4,12 +4,15 @@
 // without a DOM: which content is an app, the size cap, the page the frame
 // gets and what the host answers to the app's messages.
 //
-// v1 is display-only. The frame runs with `allow-scripts` alone (an opaque
-// origin: no cookies, storage, top navigation, popups or forms), a CSP that
-// allows no network, and a message channel that accepts only that frame's
-// window and answers anything past the handshake and resizing with "not
-// supported yet". Tool calls from an app, routed through the thread's
-// permissions, come later (issue 3607).
+// The frame runs with `allow-scripts` alone (an opaque origin: no cookies,
+// storage, top navigation, popups or forms), a CSP that allows no network
+// (the resource's own `_meta.ui.csp` domains are not honoured, so an app can
+// only ever be stricter than its declaration), and a message channel that
+// accepts only that frame's window. The host answers the handshake, resizing
+// and `tools/call`; everything else is "not supported". A `tools/call` is
+// only forwarded for a built-in-harness thread, where the engine runs it on
+// the call's own MCP server, only for tools the server marks app-visible, and
+// only after the same approval an agent's tool call needs (`_rustcode/mcp/app`).
 
 import type { Json, JsonObject } from "../acp/jsonrpc";
 
@@ -121,6 +124,8 @@ export function fromApp(source: unknown, frame: unknown): boolean {
 
 export interface McpAppHost {
   theme: "light" | "dark";
+  /** Whether the app's tool calls can reach its server (built-in harness only). */
+  canCall?: boolean;
   /** The tool's arguments and result text, sent once the app says it is ready. */
   input?: Json;
   output?: string;
@@ -131,7 +136,22 @@ export interface McpAppStep {
   replies: JsonObject[];
   /** A new frame height, already clamped. */
   height?: number;
+  /** A tool the app asks the host to call; answer it with {@link callReply}. */
+  call?: AppToolCall;
 }
+
+export interface AppToolCall {
+  id: string | number;
+  tool: string;
+  arguments: JsonObject;
+}
+
+/** The longest tool name an app may ask for. */
+export const MAX_APP_TOOL_NAME = 256;
+
+export const INVALID_PARAMS = -32602;
+/** A failed or refused tool call, such as a rejected approval. */
+export const CALL_FAILED = -32000;
 
 /** A JSON-RPC error for a method this host does not offer yet. */
 export const NOT_SUPPORTED = -32601;
@@ -158,7 +178,7 @@ export function handleAppMessage(data: unknown, host: McpAppHost): McpAppStep {
           result: {
             protocolVersion: MCP_APP_PROTOCOL_VERSION,
             hostInfo: { name: "RustCode", version: "1" },
-            hostCapabilities: {},
+            hostCapabilities: host.canCall ? { serverTools: {} } : {},
             hostContext: {
               theme: host.theme,
               displayMode: "inline",
@@ -190,8 +210,25 @@ export function handleAppMessage(data: unknown, host: McpAppHost): McpAppStep {
     return Number.isFinite(height) ? { replies: [], height: clampAppHeight(height) } : { replies: [] };
   }
   if (method === "ping" && isRequest) return { replies: [{ jsonrpc: "2.0", id, result: {} }] };
+  if (method === "tools/call" && isRequest && host.canCall) {
+    const params = obj(message.params);
+    const tool = str(params?.name);
+    const args = params?.arguments === undefined ? {} : obj(params.arguments);
+    if (!tool || tool.length > MAX_APP_TOOL_NAME || !args) {
+      return {
+        replies: [
+          {
+            jsonrpc: "2.0",
+            id,
+            error: { code: INVALID_PARAMS, message: "tools/call needs a tool name and object arguments" },
+          },
+        ],
+      };
+    }
+    return { replies: [], call: { id, tool, arguments: args } };
+  }
   if (isRequest) {
-    // Tool calls, resource reads, links and messages: v1 offers none of them.
+    // Resource reads, links, messages and (without a route to the server) tool calls.
     return {
       replies: [
         { jsonrpc: "2.0", id, error: { code: NOT_SUPPORTED, message: `${method} is not supported yet` } },
@@ -204,4 +241,32 @@ export function handleAppMessage(data: unknown, host: McpAppHost): McpAppStep {
 /** The notification that tells a running app the theme changed. */
 export function themeChanged(theme: "light" | "dark"): JsonObject {
   return { jsonrpc: "2.0", method: "ui/notifications/host-context-changed", params: { theme } };
+}
+
+/** The answer to an app's tool call: the server's result, or a short error. */
+export function callReply(id: string | number, outcome: { result: Json } | { error: string }): JsonObject {
+  if ("result" in outcome) return { jsonrpc: "2.0", id, result: outcome.result };
+  return { jsonrpc: "2.0", id, error: { code: CALL_FAILED, message: outcome.error.slice(0, 300) } };
+}
+
+/** Whether a tool call may have an MCP App to read from its server: MCP calls are `mcp__server__tool`. */
+export function mayHaveApp(title: string): boolean {
+  return title.startsWith("mcp__");
+}
+
+/** The app the engine read for a call (`_rustcode/mcp/app`, `read`): nothing when the tool has none. */
+export function parseAppRead(result: Json | undefined): McpApp | undefined {
+  const app = obj(obj(result)?.app);
+  const uri = str(app?.uri);
+  const mimeType = str(app?.mimeType);
+  const totalBytes = Number(app?.totalBytes);
+  if (!isMcpApp(uri, mimeType) || !Number.isFinite(totalBytes)) return undefined;
+  const html = str(app?.html);
+  // The engine drops oversize HTML; a host that sent it anyway is held to the same cap.
+  return {
+    uri: uri as string,
+    mimeType: mimeType as string,
+    html: html !== undefined && byteLength(html) <= MCP_APP_MAX_BYTES ? html : undefined,
+    totalBytes,
+  };
 }

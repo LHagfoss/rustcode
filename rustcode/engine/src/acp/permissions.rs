@@ -388,9 +388,12 @@ impl crate::network::policy::TurnPolicy for AcpPolicy {
                     ToolCallUpdate::new(
                         call_id,
                         ToolCallUpdateFields::new()
-                            .title(mcp_approval.as_ref().map_or_else(
-                                || call.name.clone(),
-                                |approval| format!("{} {}", call.name, approval.label),
+                            .title(super::mcp_app::origin_title(
+                                call.call_id.as_deref(),
+                                &mcp_approval.as_ref().map_or_else(
+                                    || call.name.clone(),
+                                    |approval| format!("{} {}", call.name, approval.label),
+                                ),
                             ))
                             .raw_input(mcp_approval.map_or_else(
                                 || call.arguments.clone(),

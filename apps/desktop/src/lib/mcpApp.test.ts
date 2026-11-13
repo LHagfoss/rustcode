@@ -1,17 +1,24 @@
 import { expect, test } from "bun:test";
 import { parseSessionUpdate } from "../acp/types";
 import {
+  CALL_FAILED,
+  callReply,
   fromApp,
   handleAppMessage,
+  INVALID_PARAMS,
   isMcpApp,
+  MAX_APP_TOOL_NAME,
   MCP_APP_CSP,
   MCP_APP_MAX_BYTES,
   MCP_APP_MAX_HEIGHT,
+  MCP_APP_MIME_TYPE,
   MCP_APP_MIN_HEIGHT,
   MCP_APP_SANDBOX,
+  mayHaveApp,
   mcpAppOf,
   mcpAppPage,
   NOT_SUPPORTED,
+  parseAppRead,
 } from "./mcpApp";
 
 const appBlock = (text: string, mimeType = "text/html;profile=mcp-app", uri = "ui://weather/view") => ({
@@ -121,7 +128,7 @@ test("size changes are clamped", () => {
   expect(size("tall")).toBeUndefined();
 });
 
-test("tool calls and every other request are refused as not supported yet", () => {
+test("tool calls without a route to the server and every other request are refused as not supported yet", () => {
   const host = { theme: "light" as const };
   const call = handleAppMessage(
     { jsonrpc: "2.0", id: "a", method: "tools/call", params: { name: "delete_everything" } },
@@ -137,4 +144,89 @@ test("tool calls and every other request are refused as not supported yet", () =
   expect(handleAppMessage({ jsonrpc: "2.0", method: "ui/notifications/whatever" }, host).replies).toEqual([]);
   expect(handleAppMessage({ id: 3, method: "tools/call" }, host).replies).toEqual([]);
   expect(handleAppMessage("hello", host).replies).toEqual([]);
+});
+
+test("an app's tool call is handed to the host only where it can reach the server", () => {
+  const request = {
+    jsonrpc: "2.0",
+    id: 7,
+    method: "tools/call",
+    params: { name: "refresh", arguments: { a: 1 } },
+  };
+  const connected = { theme: "light" as const, canCall: true };
+  const step = handleAppMessage(request, connected);
+  expect(step.replies).toEqual([]);
+  expect(step.call).toEqual({ id: 7, tool: "refresh", arguments: { a: 1 } });
+  // Without arguments the call has none; the capability is only advertised when it can be used.
+  expect(handleAppMessage({ ...request, params: { name: "refresh" } }, connected).call?.arguments).toEqual(
+    {},
+  );
+  const init = (host: { theme: "light"; canCall?: boolean }) => {
+    const result = handleAppMessage({ jsonrpc: "2.0", id: 1, method: "ui/initialize" }, host).replies[0]
+      ?.result as { hostCapabilities: object } | undefined;
+    return result?.hostCapabilities;
+  };
+  expect(init(connected)).toEqual({ serverTools: {} });
+  expect(init({ theme: "light" })).toEqual({});
+  // Display-only hosts refuse it, and the host never sees it.
+  const refused = handleAppMessage(request, { theme: "light" as const });
+  expect(refused.call).toBeUndefined();
+  expect(refused.replies[0]?.error).toMatchObject({ code: NOT_SUPPORTED });
+});
+
+test("an app's malformed tool call is answered with invalid params", () => {
+  const host = { theme: "light" as const, canCall: true };
+  const bad = (params: unknown) =>
+    handleAppMessage({ jsonrpc: "2.0", id: 1, method: "tools/call", params }, host);
+  for (const params of [
+    undefined,
+    {},
+    { name: "" },
+    { name: 5 },
+    { name: "x".repeat(MAX_APP_TOOL_NAME + 1) },
+    { name: "t", arguments: [] },
+    { name: "t", arguments: "rm -rf" },
+  ]) {
+    const step = bad(params);
+    expect(step.call).toBeUndefined();
+    expect(step.replies[0]?.error).toMatchObject({ code: INVALID_PARAMS });
+  }
+});
+
+test("a tool call's answer carries the result, or a short error", () => {
+  expect(callReply(7, { result: { content: [] } })).toEqual({
+    jsonrpc: "2.0",
+    id: 7,
+    result: { content: [] },
+  });
+  const failed = callReply("a", { error: "x".repeat(1000) });
+  expect((failed.error as { code: number; message: string }).code).toBe(CALL_FAILED);
+  expect((failed.error as { message: string }).message).toHaveLength(300);
+});
+
+test("an app the engine read is checked like an embedded one", () => {
+  const read = (app: unknown) => parseAppRead({ app } as never);
+  expect(read({ uri: "ui://w/v", mimeType: MCP_APP_MIME_TYPE, html: "<p>x</p>", totalBytes: 8 })).toEqual({
+    uri: "ui://w/v",
+    mimeType: MCP_APP_MIME_TYPE,
+    html: "<p>x</p>",
+    totalBytes: 8,
+  });
+  // Over the cap, or without HTML: the card falls back, never draws it.
+  expect(
+    read({ uri: "ui://w/v", mimeType: MCP_APP_MIME_TYPE, totalBytes: MCP_APP_MAX_BYTES + 1 })?.html,
+  ).toBeUndefined();
+  expect(
+    read({
+      uri: "ui://w/v",
+      mimeType: MCP_APP_MIME_TYPE,
+      html: "x".repeat(MCP_APP_MAX_BYTES + 1),
+      totalBytes: 1,
+    })?.html,
+  ).toBeUndefined();
+  expect(read({ uri: "https://w/v", mimeType: MCP_APP_MIME_TYPE, html: "x", totalBytes: 1 })).toBeUndefined();
+  expect(parseAppRead({ app: null })).toBeUndefined();
+  expect(parseAppRead(null)).toBeUndefined();
+  expect(mayHaveApp("mcp__weather__show")).toBe(true);
+  expect(mayHaveApp("run_command")).toBe(false);
 });

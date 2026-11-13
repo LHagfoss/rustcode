@@ -33,6 +33,8 @@ export const Method = {
   requestPermission: "session/request_permission",
   warm: "_rustcode/warm",
   steer: "_rustcode/steer",
+  /** Read or call through the MCP App of a tool call (built-in harness). */
+  mcpApp: "_rustcode/mcp/app",
   agents: "_rustcode/agents",
   rewind: "_rustcode/rewind",
   usageLimits: "_rustcode/usage/limits",

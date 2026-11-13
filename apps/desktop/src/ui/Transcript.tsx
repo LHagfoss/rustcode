@@ -1411,7 +1411,7 @@ export function Transcript({
                         threadId={thread.id}
                       />
                     ) : item?.kind === "tool" ? (
-                      <ToolRow item={item} cwd={thread.cwd} />
+                      <ToolRow item={item} cwd={thread.cwd} threadId={thread.id} />
                     ) : item?.kind === "notice" ? (
                       <NoticeRow item={item} />
                     ) : item?.kind === "handoff" ? (

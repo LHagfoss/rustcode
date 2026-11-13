@@ -726,6 +726,7 @@ pub(crate) fn tool_result_history_message_with_prefix(
             replayed: envelope.replayed,
             inspection: envelope.inspection,
             command_status: envelope.command_status,
+            mcp_app: None,
         })
 }
 

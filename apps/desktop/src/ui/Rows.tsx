@@ -72,6 +72,7 @@ import { HarnessIcon } from "./HarnessIcon";
 import { openLightbox } from "./Lightbox";
 import { LinkStateIcon } from "./Links";
 import { COMMAND_MARK, CopyButton, Markdown } from "./Markdown";
+import { McpAppSlot } from "./McpAppView";
 import { PasteChip } from "./PasteChip";
 import { Callout, cx, Pill, Spinner, Tooltip } from "./primitives";
 import { turnActions, turnFooterHidden } from "./replyActions";
@@ -547,7 +548,16 @@ export function ToolDetail({
   );
 }
 
-export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">; cwd: string }) {
+export const ToolRow = memo(function ToolRow({
+  item,
+  cwd,
+  threadId,
+}: {
+  item: Item<"tool">;
+  cwd: string;
+  /** The thread the call is in: where an MCP App reaches its server. */
+  threadId?: string;
+}) {
   const kind = inferToolKind(item);
   const [open, setOpen] = useState(kind === "edit" && item.diffs.length > 0 && item.diffs.length <= 2);
   const Icon = KIND_ICON[kind] ?? Wrench;
@@ -655,11 +665,7 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
           </Tooltip>
         )}
       </div>
-      {item.app && !running && (
-        <div className="mt-1.5 mb-1 ml-[26px]">
-          <span className="text-caption text-fg-faint">Interactive view unavailable in this version</span>
-        </div>
-      )}
+      <McpAppSlot item={item} threadId={threadId} />
       {open && (
         <div className="rc-expand mt-1.5 mb-1 ml-[26px]">
           <ToolDetail item={item} />

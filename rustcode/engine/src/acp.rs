@@ -9,6 +9,7 @@ mod data;
 mod edit_diff;
 mod harnesses;
 mod hosted;
+mod mcp_app;
 mod permissions;
 mod presence;
 mod preview;
@@ -2762,6 +2763,32 @@ async fn serve_connection(
                         Ok(answer) => responder.respond(answer),
                         Err(error) => responder.respond_with_error(error),
                     }
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        // A tool call to an MCP server waits for the user's approval, so it
+        // runs off the dispatch loop.
+        .on_receive_request(
+            {
+                let server = server.clone();
+                async move |request: mcp_app::McpAppRequest, responder, connection| {
+                    let Some((state, _)) = server.session_handle(&request.session_id).await else {
+                        return responder.respond_with_error(unknown_session(&request.session_id));
+                    };
+                    let builtin = harnesses::get(&server.external, &request.session_id)
+                        .await
+                        .is_none();
+                    let clients = server.clients.session(&request.session_id);
+                    let auto_approve = server.auto_approve;
+                    connection.spawn(async move {
+                        match mcp_app::handle(request, builtin, state, clients, auto_approve).await
+                        {
+                            Ok(answer) => responder.respond(answer)?,
+                            Err(error) => responder.respond_with_error(error)?,
+                        }
+                        Ok(())
+                    })
                 }
             },
             agent_client_protocol::on_receive_request!(),
