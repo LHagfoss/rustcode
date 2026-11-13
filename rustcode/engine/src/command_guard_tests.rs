@@ -46,22 +46,30 @@ fn the_repository_policy_parses_with_every_rule() {
 }
 
 #[test]
-fn workspace_tests_are_denied_with_the_rule_and_the_alternative() {
-    let Verdict::Deny { rule, message } = verdict("cargo test --workspace") else {
-        panic!("cargo test --workspace is denied");
+fn local_tests_are_denied_with_the_rule_and_the_alternative() {
+    let Verdict::Deny { rule, message } = verdict("cargo test -p rustcode command_guard") else {
+        panic!("cargo test is denied");
     };
-    assert_eq!(rule, "no-workspace-tests");
-    assert!(message.contains("`no-workspace-tests`"), "{message}");
-    assert!(message.contains("cargo test -p <package>"), "{message}");
+    assert_eq!(rule, "no-local-tests");
+    assert!(message.contains("`no-local-tests`"), "{message}");
     assert!(
-        message.contains("RUSTCODE_ALLOW_WORKSPACE_TESTS=1"),
+        message.contains("cargo check --workspace --tests"),
+        "{message}"
+    );
+    assert!(message.contains("gh pr checks"), "{message}");
+    assert!(
+        message.contains("RUSTCODE_ALLOW_LOCAL_TESTS=1"),
         "{message}"
     );
 }
 
 #[test]
-fn workspace_tests_are_found_through_lists_wrappers_and_quotes() {
+fn local_tests_are_found_through_lists_wrappers_and_quotes() {
     for command in [
+        "cargo test",
+        "cargo t -p engine",
+        "cargo test --all-features",
+        "cargo nextest run -p engine",
         "cd rustcode && cargo test --workspace",
         "cargo test --workspace 2>&1 | tail -20",
         "cargo +nightly test --all",
@@ -81,17 +89,17 @@ fn workspace_tests_are_found_through_lists_wrappers_and_quotes() {
     ] {
         assert_eq!(
             denied_rule(command).as_deref(),
-            Some("no-workspace-tests"),
+            Some("no-local-tests"),
             "{command}"
         );
     }
 }
 
 #[test]
-fn package_tests_and_quoted_mentions_pass() {
+fn checks_and_quoted_mentions_pass() {
     for command in [
-        "cargo test -p rustcode command_guard",
-        "cargo test --all-features",
+        "cargo check --workspace --tests",
+        "cargo clippy --all-targets -- -D warnings",
         "echo 'cargo test --workspace'",
         "git commit -m \"never run cargo test --workspace\"",
         "rg 'git stash' docs",
@@ -103,49 +111,47 @@ fn package_tests_and_quoted_mentions_pass() {
 }
 
 #[test]
-fn the_override_variable_lets_workspace_tests_run() {
+fn the_override_variable_lets_local_tests_run() {
     let mut allowed = mac();
-    allowed.var = |name| (name == "RUSTCODE_ALLOW_WORKSPACE_TESTS").then(|| "1".to_owned());
+    allowed.var = |name| (name == "RUSTCODE_ALLOW_LOCAL_TESTS").then(|| "1".to_owned());
     assert!(!matches!(
-        policy().evaluate("cargo test --workspace", &[], &allowed),
+        policy().evaluate("cargo test -p engine", &[], &allowed),
         Verdict::Deny { .. }
     ));
     // In the command itself, or in the exec tool's `env`.
     assert!(!matches!(
-        verdict("RUSTCODE_ALLOW_WORKSPACE_TESTS=1 cargo test --workspace"),
+        verdict("RUSTCODE_ALLOW_LOCAL_TESTS=1 cargo test -p engine"),
         Verdict::Deny { .. }
     ));
     assert!(!matches!(
-        verdict("env RUSTCODE_ALLOW_WORKSPACE_TESTS=1 cargo test --workspace"),
+        verdict("env RUSTCODE_ALLOW_LOCAL_TESTS=1 cargo test -p engine"),
         Verdict::Deny { .. }
     ));
-    let extra = [("RUSTCODE_ALLOW_WORKSPACE_TESTS".to_owned(), "1".to_owned())];
+    let extra = [("RUSTCODE_ALLOW_LOCAL_TESTS".to_owned(), "1".to_owned())];
     assert!(!matches!(
-        policy().evaluate("cargo test --workspace", &extra, &mac()),
+        policy().evaluate("cargo test -p engine", &extra, &mac()),
         Verdict::Deny { .. }
     ));
     // A false value is not an override.
     assert_eq!(
-        denied_rule("RUSTCODE_ALLOW_WORKSPACE_TESTS=0 cargo test --workspace").as_deref(),
-        Some("no-workspace-tests")
+        denied_rule("RUSTCODE_ALLOW_LOCAL_TESTS=0 cargo test -p engine").as_deref(),
+        Some("no-local-tests")
     );
 }
 
 #[test]
-fn heavy_cargo_gets_background_priority_on_macos() {
+fn heavy_cargo_runs_at_low_priority_on_every_core() {
     assert_eq!(
         rewritten("cargo build").as_deref(),
-        Some("taskpolicy -b env CARGO_BUILD_JOBS=2 cargo build")
+        Some("nice -n 10 cargo build")
     );
     assert_eq!(
-        rewritten("cd rustcode && cargo test -p engine 2>&1 | tail").as_deref(),
-        Some(
-            "cd rustcode && taskpolicy -b env CARGO_BUILD_JOBS=2 cargo test -p engine 2>&1 | tail"
-        )
+        rewritten("cd rustcode && cargo check -p engine 2>&1 | tail").as_deref(),
+        Some("cd rustcode && nice -n 10 cargo check -p engine 2>&1 | tail")
     );
     assert_eq!(
         rewritten("RUST_BACKTRACE=1 cargo clippy --workspace").as_deref(),
-        Some("taskpolicy -b env CARGO_BUILD_JOBS=2 RUST_BACKTRACE=1 cargo clippy --workspace")
+        Some("nice -n 10 RUST_BACKTRACE=1 cargo clippy --workspace")
     );
 }
 
@@ -153,9 +159,7 @@ fn heavy_cargo_gets_background_priority_on_macos() {
 fn each_heavy_cargo_in_a_list_is_prefixed_once() {
     assert_eq!(
         rewritten("cargo check && cargo build").as_deref(),
-        Some(
-            "taskpolicy -b env CARGO_BUILD_JOBS=2 cargo check && taskpolicy -b env CARGO_BUILD_JOBS=2 cargo build"
-        )
+        Some("nice -n 10 cargo check && nice -n 10 cargo build")
     );
 }
 
@@ -163,7 +167,7 @@ fn each_heavy_cargo_in_a_list_is_prefixed_once() {
 fn a_script_run_by_a_shell_is_prefixed_as_a_whole() {
     assert_eq!(
         rewritten("bash -c 'cargo build'").as_deref(),
-        Some("taskpolicy -b env CARGO_BUILD_JOBS=2 bash -c 'cargo build'")
+        Some("nice -n 10 bash -c 'cargo build'")
     );
 }
 
@@ -172,17 +176,17 @@ fn linux_uses_nice() {
     assert_eq!(
         policy().evaluate("cargo build", &[], &linux()),
         Verdict::Rewrite {
-            command: "nice -n 10 env CARGO_BUILD_JOBS=2 cargo build".to_owned(),
-            rules: vec!["cargo-background-priority".to_owned()],
+            command: "nice -n 10 cargo build".to_owned(),
+            rules: vec!["cargo-low-priority".to_owned()],
         }
     );
 }
 
 #[test]
-fn cargo_already_under_background_priority_is_left_alone() {
+fn cargo_already_under_a_priority_wrapper_is_left_alone() {
     for command in [
         "taskpolicy -b env CARGO_BUILD_JOBS=2 cargo build",
-        "taskpolicy -b cargo test -p engine",
+        "taskpolicy -b cargo check -p engine",
         "nice -n 10 cargo build",
         "cargo fmt --all -- --check",
         "cargo --version",
@@ -251,7 +255,7 @@ fn ordinary_git_passes() {
 fn offsets_survive_quotes_and_multibyte_text() {
     assert_eq!(
         rewritten("echo 'ö — \"x\"' && cargo build").as_deref(),
-        Some("echo 'ö — \"x\"' && taskpolicy -b env CARGO_BUILD_JOBS=2 cargo build")
+        Some("echo 'ö — \"x\"' && nice -n 10 cargo build")
     );
 }
 
@@ -324,11 +328,8 @@ fn a_policy_above_the_repository_root_does_not_apply() {
 fn a_rewrite_is_refused_with_the_command_to_run_instead() {
     let verdict = verdict("cargo build");
     let refusal = refusal(&verdict).unwrap();
-    assert!(refusal.contains("`cargo-background-priority`"), "{refusal}");
-    assert!(
-        refusal.contains("taskpolicy -b env CARGO_BUILD_JOBS=2 cargo build"),
-        "{refusal}"
-    );
+    assert!(refusal.contains("`cargo-low-priority`"), "{refusal}");
+    assert!(refusal.contains("nice -n 10 cargo build"), "{refusal}");
     assert_eq!(super::refusal(&Verdict::Allow), None);
 }
 

@@ -61,24 +61,23 @@ instructions for work in this repository.
   (it can create a merge commit) and never forced. If the working tree is dirty,
   leave it alone and say so instead.
 - Inspect first; make the smallest scoped change and preserve unrelated work.
-- Run the checks for what the change touches, and let CI run the full
-  suites. Locally, run what catches your own mistakes quickly: the type check,
-  the formatter and the tests of the modules you changed. Push and read
-  `gh pr checks` instead of running a full `cargo test --workspace` before
-  every push. Compiling is slow and drains a laptop's battery, and CI runs
-  the same split on every push.
-  - Rust (`rustcode/`, `Cargo.*`): `cargo check --workspace --tests`,
-    `cargo fmt --all -- --check`, and `cargo test -p <package> <module>` for
-    what you changed. Without `--workspace` the check builds only the engine
-    package, and a TUI change passes unchecked. CI runs
-    `cargo test --workspace`; run it locally only to reproduce a CI failure.
-  - On a laptop, or when several threads build at once, run cargo as
-    `taskpolicy -b env CARGO_BUILD_JOBS=2 cargo …` (macOS background
-    priority, two jobs).
+- Tests run in CI, not locally. Building the engine's tests on a laptop took
+  4–7 minutes per run and drained the battery, while CI runs the full suites
+  on every push in about 6. Locally, run only what catches typos in seconds:
+  the type check and the formatter. Then push and read the result:
+  `gh pr checks <n>`, and `gh run view <run> --log-failed` for a failure. Fix
+  from the CI log and push again.
+  - Rust (`rustcode/`, `Cargo.*`): `cargo check --workspace --tests` and
+    `cargo fmt --all -- --check`. Without `--workspace` the check builds only
+    the engine package, and a TUI change passes unchecked. Do not run
+    `cargo test` or `cargo nextest`; the command guard refuses them. To
+    reproduce a CI failure you cannot read from the log, set
+    `RUSTCODE_ALLOW_LOCAL_TESTS=1` and run that one test by name.
   - Desktop app (`apps/desktop`, Tauri + React, bun): `bun run check` in
-    `apps/desktop`, and `cargo fmt --check`, `cargo clippy --all-targets --
-    -D warnings`, `cargo test` in `apps/desktop/src-tauri` (its own Cargo
-    workspace). This is the product: the RustCode orchestrator app. Start
+    `apps/desktop` (typecheck, lint, the bun unit tests and the build, all
+    seconds), and `cargo fmt --check` and `cargo clippy --all-targets --
+    -D warnings` in `apps/desktop/src-tauri` (its own Cargo workspace; CI
+    runs its tests). This is the product: the RustCode orchestrator app. Start
     from `docs/desktop.md` › "Status and roadmap", follow `docs/design.md`,
     and run it with `bun tauri dev` (it uses `target/debug/rustcode`;
     rebuild that after engine changes).
@@ -91,8 +90,13 @@ instructions for work in this repository.
 - Keep build output bounded; `target/` once grew to 500 GB. Cargo never
   prunes it, and every feature set, profile and stale dependency version
   leaves artifacts behind.
-  - Incremental compilation is off for the dev and test profiles
-    (`Cargo.toml`); do not turn it back on locally.
+  - Incremental compilation is on, so a one-file edit rechecks in seconds
+    instead of rebuilding the whole engine crate. Its state lives in
+    `target/*/incremental`; the size check below bounds it.
+  - Cargo runs at `nice -n 10` (the command guard adds it): it yields to what
+    you are doing but still uses every core. Do not wrap it in
+    `taskpolicy -b`, which on Apple silicon confines a build to the
+    efficiency cores and made it 2–5× slower.
   - Before a long cargo session and when you finish, check the size and clean
     above 50 GB:
     `[ "$(du -sk target 2>/dev/null | cut -f1)" -gt 52428800 ] && cargo clean`.
@@ -273,10 +277,14 @@ When an orchestrator thread hands work to other threads (`start_session`,
   script alive after its work is done: make scripts exit and bound them. If a
   command times out, report it and inspect the worktree before resuming; do
   not blindly rerun it.
-- Gate on `bun run check` and unit tests, run once at the end, and on CI
-  after the push. Do not run `cargo test --workspace` locally: delegates
-  build in parallel, and seven of them at once drained the user's battery.
-  Reviewers read the code and the PR's CI instead of building it. Ask for
+- Gate on `cargo check` / `bun run check` once at the end, then on CI after
+  the push. Delegates do not run `cargo test` locally: they build in
+  parallel, and seven of them at once drained the user's battery. Reviewers
+  read the code and the PR's CI instead of building it.
+- Waiting on CI is not work: after pushing, end the turn with the PR number
+  instead of polling `gh pr checks` in a sleep loop. Every poll resends the
+  whole context; one thread spent 17.7M input tokens on 70 sleeps. The
+  orchestrator watches the linked pull request and wakes the thread. Ask for
   screenshots only when the change needs them; home-made CDP drivers were the
   main time sink.
 - Name a skill's `SKILL.md` path in the prompt if it matters. Listed skills

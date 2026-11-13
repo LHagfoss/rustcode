@@ -3,7 +3,7 @@
 A project can make RustCode refuse or rewrite the shell commands its agents
 run. The rules live in the repository, so every checkout, worktree and harness
 gets the same ones. This repository's own policy encodes the shell rules of
-`AGENTS.md`: no `cargo test --workspace`, background priority for heavy
+`AGENTS.md`: no local `cargo test` (tests run in CI), `nice` for heavy
 cargo, and no `git rebase`, `git stash`, `git reset --hard` or force-push.
 
 ## The policy file
@@ -27,12 +27,12 @@ allow_env = "RUSTCODE_ALLOW_WORKSPACE_TESTS"   # a way through, see below
 message = "Run `cargo test -p <package> <module>` instead."
 
 [[rule]]
-name = "cargo-background-priority"
+name = "cargo-low-priority"
 action = "rewrite"
 program = "cargo"
 subcommand = ["build", "check", "clippy", "test"]
-prefix_macos = "taskpolicy -b env CARGO_BUILD_JOBS=2"
-prefix_linux = "nice -n 10 env CARGO_BUILD_JOBS=2"   # `prefix` for any system
+prefix_macos = "nice -n 10"
+prefix_linux = "nice -n 10"   # `prefix` for any system
 skip_if_wrapped = ["taskpolicy", "nice"]
 ```
 
