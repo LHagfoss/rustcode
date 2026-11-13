@@ -4866,26 +4866,28 @@ export class MockEngine {
           ],
         });
       }
-      const reply = /\bdashboard\b/i.test(prompt)
-        ? MOCK_DASH
-        : /\bkit\b/i.test(prompt)
-          ? MOCK_KIT
-          : /\b(hover|trend|graph)\b/i.test(prompt)
-            ? MOCK_CHARTS
-            : /\bview\b/i.test(prompt)
-              ? MOCK_VIEW
-              : /\bcharts?\b/i.test(prompt)
-                ? MOCK_VIZ
-                : [
-                    "Done. ",
-                    "I updated the greeting in `src/app.ts` ",
-                    "and the tests pass.\n\n",
-                    "```ts\n",
-                    'const greeting = "hello, world";\n',
-                    "export default greeting;\n",
-                    "```\n\n",
-                    "| Check | Result |\n|---|---|\n| tests | 24 pass |\n| lint | clean |\n",
-                  ];
+      const reply = /\bheadings?\b/i.test(prompt)
+        ? MOCK_HEADINGS
+        : /\bdashboard\b/i.test(prompt)
+          ? MOCK_DASH
+          : /\bkit\b/i.test(prompt)
+            ? MOCK_KIT
+            : /\b(hover|trend|graph)\b/i.test(prompt)
+              ? MOCK_CHARTS
+              : /\bview\b/i.test(prompt)
+                ? MOCK_VIEW
+                : /\bcharts?\b/i.test(prompt)
+                  ? MOCK_VIZ
+                  : [
+                      "Done. ",
+                      "I updated the greeting in `src/app.ts` ",
+                      "and the tests pass.\n\n",
+                      "```ts\n",
+                      'const greeting = "hello, world";\n',
+                      "export default greeting;\n",
+                      "```\n\n",
+                      "| Check | Result |\n|---|---|\n| tests | 24 pass |\n| lint | clean |\n",
+                    ];
       for (const chunk of reply) {
         if (run.cancelled) return done("cancelled");
         await this.sleep();
@@ -4947,6 +4949,15 @@ export const MOCK_VIEW = [
   "```\n",
 ];
 
+/** A reply with `h1`-`h4`, for checking the heading scale. */
+export const MOCK_HEADINGS = [
+  "# Release plan\n\nThe release has three parts; each heading below is one of them.\n\n",
+  "## Engine changes\n\nThe engine now sends a shorter Smart UI hint on every prompt.\n\n",
+  "### Prompt text\n\nThe harness hint is 2,166 bytes, up 8% from before.\n\n",
+  "#### Notes\n\nA heading groups the text under it, so a long reply scans by its headings.\n\n",
+  "## Desktop changes\n\n- The kit has a headline layout.\n- Chat headings are bigger.\n",
+];
+
 /** A Smart UI dashboard in the kit's headline style: a title and caption, one hero number, quiet stats and a banded line chart. */
 export const MOCK_DASH = [
   "Merges are at 3.4x a normal day; the last 24 hours are the busiest of the quarter.\n\n",
@@ -4986,7 +4997,7 @@ export const MOCK_DASH = [
   'const bins = ["0-50", "50-100", "100-150", "150-200", "200-300", "300+"];\n',
   'new Chart(document.getElementById("days"), { type: "bar",\n',
   '  data: { labels: bins, datasets: [{ label: "Days", data: [12, 21, 29, 17, 9, 2] }] },\n',
-  "  options: { plugins: { legend: { display: false } }, scales: { y: { ticks: { maxTicksLimit: 3 } } } } });\n",
+  "  options: { plugins: { legend: { display: false } }, scales: { x: { ticks: { maxRotation: 0 } }, y: { ticks: { maxTicksLimit: 3 } } } } });\n",
   "</script>\n",
   "```\n",
 ];

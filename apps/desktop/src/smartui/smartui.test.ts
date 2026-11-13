@@ -779,6 +779,7 @@ describe("smart ui", () => {
 
     const frames: ((at: number) => void)[] = [];
     const stops: string[] = [];
+    const texts: string[] = [];
     const vars: Record<string, string> = {
       "--rc-text": "#ededed",
       "--rc-separator": "#ffffff0f",
@@ -834,6 +835,7 @@ describe("smart ui", () => {
         "putImageData",
       ])
         ctx[method] = () => undefined;
+      ctx.fillText = (text: string) => texts.push(String(text));
       ctx.isPointInPath = () => false;
       ctx.isPointInStroke = () => false;
       ctx.getImageData = () => ({ data: [] });
@@ -864,7 +866,7 @@ describe("smart ui", () => {
       ctx.canvas = canvas;
       return canvas;
     };
-    const canvases = [makeCanvas(), makeCanvas()];
+    const canvases = [makeCanvas(), makeCanvas(), makeCanvas(), makeCanvas()];
     const empty = () => ({
       style: {},
       appendChild: () => undefined,
@@ -879,7 +881,7 @@ describe("smart ui", () => {
         documentElement: {},
         createElement: (name: string) => (name === "canvas" ? makeCanvas() : empty()),
         createElementNS: empty,
-        getElementById: () => null,
+        getElementById: (id: string) => (id === "hours" ? canvases[2] : id === "days" ? canvases[3] : null),
         querySelector: () => null,
         querySelectorAll: () => [],
         addEventListener: () => undefined,
@@ -959,6 +961,35 @@ describe("smart ui", () => {
       expect(stops[0]).toBe("rgba(10, 132, 255, 0.3)");
       line.destroy();
       donut.destroy();
+
+      // The mock dashboard's own script, with its real options: the quiet axes, the
+      // banded line and the histogram must build and draw, marks included.
+      const [part] = splitReply(MOCK_DASH.join("")).filter((p) => p.kind === "ui");
+      const scripts = [...(part?.source ?? "").matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
+      expect(scripts.length).toBe(1);
+      for (const code of scripts) new Function("Chart", "document", code)(Chart, g.document);
+      const dash = Object.values(Chart.instances as Record<string, any>).filter((c) =>
+        [canvases[2], canvases[3]].includes(c.canvas),
+      );
+      expect(dash.length).toBe(2);
+      for (const chart of dash) {
+        chart.attached = true;
+        chart.resize(720, 340);
+        chart.update();
+      }
+      for (let at = 0; at < 40 && frames.length; at++) {
+        clock += 20;
+        frames.shift()?.(clock);
+      }
+      for (const chart of dash) expect(chart.chartArea?.width ?? 0).toBeGreaterThan(100);
+      // The reference line's label and the last point's value were drawn.
+      expect(texts).toContain("normal");
+      expect(texts.some((t) => /^\d{3}$/.test(t))).toBe(true);
+      // Quiet axes: no vertical rules on the category axis, no axis line.
+      const hours = dash.find((c) => c.canvas === canvases[2]);
+      expect(hours.scales.x.options.grid.display).toBe(false);
+      expect(hours.scales.y.options.border.display).toBe(false);
+      for (const chart of dash) chart.destroy();
     } finally {
       Date.now = realNow;
       for (const [key, value] of saved) {

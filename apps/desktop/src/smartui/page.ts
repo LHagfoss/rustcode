@@ -783,7 +783,8 @@ export const CHART_THEME_SCRIPT = `(() => {
       if (d.scale.grid) d.scale.grid.drawTicks = false;
       if (d.scale.ticks) d.scale.ticks.padding = 8;
     }
-    if (d.scales && d.scales.category && d.scales.category.grid) d.scales.category.grid.display = false;
+    // The category type's defaults may carry no grid object yet, so make one.
+    if (d.scales && d.scales.category) d.scales.category.grid = Object.assign(d.scales.category.grid || {}, { display: false });
     d.elements.line.borderWidth = 2;
     d.elements.point.radius = 0;
     d.elements.point.hoverRadius = 4;
