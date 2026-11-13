@@ -75,31 +75,40 @@ pub fn clean_title(title: &str) -> Option<String> {
 pub fn thread_rename(id: String, title: String, user: Option<bool>) -> Result<String, String> {
     let title = clean_title(&title).ok_or("A title can't be empty.")?;
     let dir = thread_dir(&id)?;
-    std::fs::write(dir.join("title.txt"), &title).map_err(|e| e.to_string())?;
-    if user == Some(true) {
-        mark_user_titled(&dir).map_err(|e| e.to_string())?;
-    }
+    write_title(&dir, &title, user == Some(true)).map_err(|e| e.to_string())?;
     Ok(title)
+}
+
+fn write_title(dir: &Path, title: &str, user: bool) -> std::io::Result<()> {
+    if user {
+        mark_user_titled(dir)?;
+    }
+    std::fs::write(dir.join("title.txt"), title)
 }
 
 /// Whether the user named the thread themselves (`thread_rename` with `user`,
 /// or `/change_title` in the engine).
 #[tauri::command(async)]
 pub fn thread_user_titled(id: String) -> Result<bool, String> {
-    Ok(user_titled(&thread_dir(&id)?))
+    user_titled(&thread_dir(&id)?).map_err(|e| e.to_string())
 }
 
 const METADATA_FILE: &str = "metadata.json";
 
-fn user_titled(dir: &Path) -> bool {
-    if dir.join("user-titled").is_file() {
-        return true;
+fn user_titled(dir: &Path) -> std::io::Result<bool> {
+    if dir.join("user-titled").try_exists()? {
+        return Ok(true);
     }
-    std::fs::read(dir.join(METADATA_FILE))
-        .ok()
-        .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())
-        .and_then(|metadata| metadata.get("user_titled")?.as_bool())
-        .unwrap_or(false)
+    let raw = match std::fs::read(dir.join(METADATA_FILE)) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let metadata: serde_json::Value = serde_json::from_slice(&raw)?;
+    Ok(metadata
+        .get("user_titled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false))
 }
 
 /// Record the user's choice separately from engine metadata, which can be
@@ -182,7 +191,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         // Older threads without metadata still retain the user's choice.
         mark_user_titled(&dir).unwrap();
-        assert!(user_titled(&dir));
+        assert!(user_titled(&dir).unwrap());
         assert!(!dir.join(METADATA_FILE).exists());
         std::fs::remove_file(dir.join("user-titled")).unwrap();
 
@@ -191,13 +200,23 @@ mod tests {
             r#"{"schema_version":1,"id":"abc-1","created_at_ms":1,"yolo":true}"#,
         )
         .unwrap();
-        assert!(!user_titled(&dir));
+        assert!(!user_titled(&dir).unwrap());
         mark_user_titled(&dir).unwrap();
-        assert!(user_titled(&dir));
+        assert!(user_titled(&dir).unwrap());
         let saved: serde_json::Value =
             serde_json::from_slice(&std::fs::read(dir.join(METADATA_FILE)).unwrap()).unwrap();
         assert_eq!(saved["yolo"], true);
         assert_eq!(saved["id"], "abc-1");
+        std::fs::remove_file(dir.join("user-titled")).unwrap();
+        std::fs::write(dir.join(METADATA_FILE), b"invalid").unwrap();
+        assert!(user_titled(&dir).is_err());
+        std::fs::create_dir(dir.join("user-titled")).unwrap();
+        std::fs::write(dir.join("title.txt"), "original").unwrap();
+        assert!(write_title(&dir, "new", true).is_err());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("title.txt")).unwrap(),
+            "original"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

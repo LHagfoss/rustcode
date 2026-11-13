@@ -72,7 +72,7 @@ async function staged() {
     createdAt: Date.now(),
   };
   useApp.setState({ links: { ...emptyBook(), links: [link], counters: { [parent]: 1 } } });
-  return { parent, child, link, sent };
+  return { parent, child, link, sent, transport };
 }
 
 /** The thread answers for itself: no card, as a person's own approval would. */
@@ -400,6 +400,21 @@ describe("update_session settles a thread (issue 3529)", () => {
 });
 
 describe("an agent names its own thread (issue 3599)", () => {
+  test("keeps the title if checking the user's choice fails", async () => {
+    const { parent, transport } = await staged();
+    const title = useApp.getState().sessions.find((x) => x.id === parent)?.title;
+    const call = transport.call.bind(transport);
+    transport.call = (command, args) =>
+      command === "thread_user_titled" ? Promise.reject(new Error("unavailable")) : call(command, args);
+    const result = await answerOrchestration({
+      sessionId: parent,
+      tool: "update_session",
+      args: { title: "Replacement" },
+    });
+    expect(result.title).toBe(title);
+    expect(String(result.title_kept)).toContain("Could not check");
+  });
+
   test("an automatic title takes the agent's name; one the user typed stays", async () => {
     const { parent } = await staged();
     const named = await answerOrchestration({

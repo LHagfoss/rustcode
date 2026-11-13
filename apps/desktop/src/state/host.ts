@@ -3463,7 +3463,8 @@ async function updateSession(caller: RuleThread, call: UpdateCall, machine = fal
   }
   // An agent naming its own thread leaves a name the user chose alone (issue 3599); renaming
   // another thread is the user's own approval above.
-  const keepTitle = !!call.title && target.id === caller.id && (await userTitled(target.id));
+  const titleStatus = call.title && target.id === caller.id ? await userTitled(target.id) : false;
+  const keepTitle = titleStatus !== false;
   const applied = await applyManagedChange(target, {
     title: keepTitle ? undefined : call.title,
     pinned: call.pinned,
@@ -3484,14 +3485,19 @@ async function updateSession(caller: RuleThread, call: UpdateCall, machine = fal
     status: call.status ? STATUS_OF_CHOICE[call.status] : (after?.status ?? "idle"),
     running: !!useApp.getState().threads[target.id]?.running,
     snoozed_until: until ? new Date(until).toISOString() : null,
-    ...(keepTitle && { title_kept: "The user named this thread, so its title stays as it is." }),
+    ...(keepTitle && {
+      title_kept:
+        titleStatus === null
+          ? "Could not check whether the user named this thread; its title stays as it is."
+          : "The user named this thread, so its title stays as it is.",
+    }),
   };
 }
 
-/** Whether the user named a thread themselves (`thread_user_titled`); false when no shell can say. */
-async function userTitled(id: string): Promise<boolean> {
-  if (!hasShell()) return false;
-  return shellCall<boolean>("thread_user_titled", { id }).catch(() => false);
+/** Null means the shell could not determine whether the user named the thread. */
+async function userTitled(id: string): Promise<boolean | null> {
+  if (!hasShell()) return null;
+  return shellCall<boolean>("thread_user_titled", { id }).catch(() => null);
 }
 
 type AnswerCall = Extract<ReturnType<typeof parseCall>, { tool: "answer_request" }>;
