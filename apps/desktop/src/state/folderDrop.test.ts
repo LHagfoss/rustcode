@@ -82,3 +82,8 @@ describe("dropMessages", () => {
     expect(refused).toContain("locked could not be read (permission denied)");
   });
 });
+
+test("keeps the filesystem root as a folder", () => {
+  expect(planFolderDrop(["/"], ["folder"], []).add).toEqual(["/"]);
+  expect(planFolderDrop(["/"], ["folder"], ["/"]).open).toEqual(["/"]);
+});

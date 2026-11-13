@@ -11,6 +11,7 @@ import { folderRows, matchSpans, middleEllipsis } from "../lib/folderList";
 import { canOpenTerminal, openPath, openTerminalAt, pickFolder } from "../lib/native";
 import { fileManagerName } from "../lib/platform";
 import { pickProject } from "../state/folders";
+import { registeredProjects } from "../state/projectBook";
 import { isCurrentProject, moveBlockedReason } from "../state/projectPick";
 import { startNewThread, toast, useApp, useMachineOfThread } from "../state/store";
 import type { ThreadState } from "../state/thread";
@@ -66,11 +67,13 @@ export function ProjectPicker({
   // A thread on another computer moves among that computer's folders: its threads' projects,
   // never this computer's paths, which are meaningless there.
   const sources = useMemo(
-    () =>
-      sessions
+    () => [
+      ...sessions
         // A thread with no folder of its own lists a stand-in (its home), not a project (issue 3425).
         .filter((s) => (s.host ?? "") === host && !s.workspaceUnknown)
         .map((s) => ({ cwd: s.cwd, worktree: s.worktree, updatedAt: s.updatedAt })),
+      ...(!host ? registeredProjects().map(({ path }) => ({ cwd: path, registered: true })) : []),
+    ],
     [sessions, host],
   );
   const all = useMemo(() => folderRows(sources), [sources]);
