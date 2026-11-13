@@ -412,7 +412,7 @@ pub const START_SESSION: Tool = Tool {
                 "worktree": {"type": "boolean"},
                 "preset": {"type": "string"},
                 "access": {"type": "string", "enum": ["ask", "edits", "full"]},
-                "standalone": {"type": "boolean", "description": "A thread of the user's own at the top level, not a delegate: nothing comes back"},
+                "standalone": {"type": "boolean", "description": "The user's own top-level thread: nothing comes back"},
                 "project": {"type": "string", "description": "absolute path of another project"},
                 "machine": {"type": "string"},
                 "client_request_id": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_CLIENT_REQUEST_ID_CHARS, "description": "Retry key"}
@@ -427,7 +427,7 @@ pub const START_SESSION: Tool = Tool {
 
 pub const FAN_OUT: Tool = Tool {
     name: crate::orchestration::FAN_OUT,
-    description: "Start the same task on 2-4 harnesses, each in its own worktree thread, so the user can compare the results. Each is a delegate whose results you wait for, unless `standalone: true`: then each is a thread of the user's own and nothing comes back, so name the session ids to the user. Pass `machine` (from list_machines) to run them on another computer (with `project`, its path there). Pass the whole task as the shared prompt: they do not see this conversation. Brief each fully, as start_session's description says. Each entry may name a harness, model, effort and named account as list_harnesses lists them, or a saved `preset` (list_harnesses). The user is asked first. Returns one link per thread for wait_session, or the session ids when standalone.",
+    description: "Start the same task on 2-4 harnesses, each in its own worktree thread, so the user can compare the results. Each is a delegate whose results you wait for, unless `standalone: true`: then each is a thread of the user's own and nothing comes back, so name the session ids to the user. Pass `machine` (from list_machines) to run them on another computer (with `project`, its path there). Pass the whole task as the shared prompt: they do not see this conversation. Brief each as start_session says. Each entry may name a harness, model, effort and named account as list_harnesses lists them, or a saved `preset` (list_harnesses). The user is asked first. Returns one link per thread for wait_session, or the session ids when standalone.",
     arguments: r#"{"prompt": "the task", "harnesses": [{"harness": "codex"}, {"harness": "claude-code"}], "client_request_id": "retry key"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
@@ -447,7 +447,7 @@ pub const FAN_OUT: Tool = Tool {
                             "harness": {"type": "string", "minLength": 1},
                             "model": {"type": "string"},
                             "effort": {"type": "string"},
-                            "account": {"type": "string", "description": "Named login; omitted is inherited as on start_session"},
+                            "account": {"type": "string"},
                             "preset": {"type": "string"}
                         },
                         "additionalProperties": false
@@ -455,7 +455,7 @@ pub const FAN_OUT: Tool = Tool {
                 },
                 "preset": {"type": "string"},
                 "access": {"type": "string", "enum": ["ask", "edits", "full"]},
-                "standalone": {"type": "boolean", "description": "Threads of the user's own at the top level, not delegates: nothing comes back"},
+                "standalone": {"type": "boolean", "description": "The user's own top-level threads: nothing comes back"},
                 "project": {"type": "string", "description": "absolute path of the project on that machine"},
                 "machine": {"type": "string"},
                 "client_request_id": {"type": "string", "minLength": 1, "maxLength": crate::orchestration::MAX_CLIENT_REQUEST_ID_CHARS, "description": "Retry key"}
@@ -472,7 +472,7 @@ pub const FAN_OUT: Tool = Tool {
 /// clients that advertise `_meta.rustcode.orchestration >= 3`.
 pub const LIST_HARNESSES: Tool = Tool {
     name: crate::orchestration::LIST_HARNESSES,
-    description: "List the harnesses that can run a thread, each with its models, efforts and named accounts or why it cannot run, and what this thread runs on. Pass `machine` for another paired computer's harnesses. Each leads with the model a new thread starts on and the ones this project used recently, then caps at 12: `omitted_models` counts the rest, reachable with `model`. `harness` keeps one (id, else name); `model` matches part of a model id or name (up to 50). Every login a plan was read for carries `usage` (`windows` with `used_percent`, `resets_at`): read it before choosing an account, so a delegate skips a nearly used window. It ends with the saved delegate presets.",
+    description: "List the harnesses that can run a thread, each with its models, efforts and named accounts or why it cannot run, and what this thread runs on. Pass `machine` for another paired computer's harnesses. Each leads with the model a new thread starts on and the ones this project used recently, then caps at 12: `omitted_models` counts the rest, reachable with `model`. `harness` keeps one (id, else name); `model` matches part of a model id or name (up to 50). Every login a plan was read for carries `usage`: `{ status, as_of, windows: [{ label, used_percent, window_minutes, resets_at }] }` — read it before choosing an account, so a delegate skips a nearly used window. It ends with the saved delegate presets.",
     arguments: r#"{"harness": "codex", "model": "opus"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,
