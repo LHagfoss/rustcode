@@ -287,6 +287,20 @@ When an orchestrator thread hands work to other threads (`start_session`,
   orchestrator watches the linked pull request and wakes the thread. Ask for
   screenshots only when the change needs them; home-made CDP drivers were the
   main time sink.
+- Keep the orchestrator cheap. Every turn it takes resends its whole context
+  (120–350k tokens), and in one 42-delegate batch it woke 41 times, once per
+  delegate.
+  - Give each delegate an explicit `account` that is not the orchestrator's.
+    A delegate bills the account it runs on; with none set, 32 of 39 ran on
+    the orchestrator's account or the default sign-in.
+  - Start a wave with `fan_out` or several `start_session` calls, then either
+    end the turn or call `wait_session` once with every `link_ids` and
+    `all: true`, which answers when the whole wave has settled.
+  - Read progress with `thread_status` (no `session_id`: every delegate,
+    with branch, pull request and checks) and merge with `merge_when_green`.
+    Do not `cd` into delegate worktrees, read their CI logs, or tail
+    background merge output from the orchestrator; a delegate that needs
+    fixing gets a `message_session`.
 - Name a skill's `SKILL.md` path in the prompt if it matters. Listed skills
   went unread.
 - Local notes, if present (git-excluded):

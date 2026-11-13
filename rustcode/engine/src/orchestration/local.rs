@@ -811,6 +811,24 @@ fn delegates(targets: &[String]) -> Value {
     })
 }
 
+/// How much of each answer a `wait_session` with `all` carries: a wave of
+/// full 8 KiB answers would outgrow what a harness shows of a tool result.
+pub(crate) const ALL_ANSWER_CHARS: usize = 2048;
+
+/// One link's row in an `all` answer, its answer cut to [`ALL_ANSWER_CHARS`].
+fn cut_for_all(mut row: Value) -> Value {
+    let Some(answer) = row.get("answer").and_then(Value::as_str) else {
+        return row;
+    };
+    if answer.chars().count() <= ALL_ANSWER_CHARS {
+        return row;
+    }
+    let cut: String = answer.chars().take(ALL_ANSWER_CHARS).collect();
+    row["answer"] = Value::String(cut);
+    row["answer_truncated"] = Value::Bool(true);
+    row
+}
+
 /// `wait_session`: wait until a link the caller owns settles, reading the link
 /// book the app saves. With no app nothing updates a working link, so a wait
 /// can time out where an open app would have answered.
@@ -847,6 +865,7 @@ async fn wait_session(caller: &str, cancel: &CancellationToken, args: &Value) ->
     if mine.is_empty() {
         return error("not_found", "no such link from this thread");
     }
+    let all = args.get("all").and_then(Value::as_bool).unwrap_or(false);
     let wait = super::requested_wait(super::WAIT_SESSION, args)
         .unwrap_or(Duration::from_millis(super::DEFAULT_WAIT_MS));
     let deadline = tokio::time::Instant::now() + wait;
@@ -857,6 +876,8 @@ async fn wait_session(caller: &str, cancel: &CancellationToken, args: &Value) ->
         let links = link_book();
         let mut settled = None;
         let mut current = Vec::new();
+        let mut done = Vec::new();
+        let mut asking = false;
         for id in &mine {
             let Some(link) = links
                 .iter()
@@ -881,12 +902,21 @@ async fn wait_session(caller: &str, cancel: &CancellationToken, args: &Value) ->
             // `needs_user` is an answer, as it is in the app: the caller sees
             // the question instead of waiting out the timeout.
             if !matches!(state, "queued" | "working") {
-                settled.get_or_insert_with(|| json!({ "links": [row.clone()] }));
+                if !all {
+                    settled.get_or_insert_with(|| json!({ "links": [row.clone()] }));
+                }
+                asking |= state == "needs_user";
+                done.push(row.clone());
             }
             current.push(row);
         }
         if let Some(settled) = settled {
             return settled;
+        }
+        // With `all`, one answer for the whole wave: when every link has
+        // settled, or sooner when one waits for the user.
+        if all && !done.is_empty() && (asking || done.len() == current.len()) {
+            return json!({ "links": done.into_iter().map(cut_for_all).collect::<Vec<_>>() });
         }
         if tokio::time::Instant::now() >= deadline {
             return json!({
@@ -1450,5 +1480,25 @@ mod tests {
         assert_eq!(clean_path("/tmp/project/"), "/tmp/project");
         assert_eq!(clean_path("/private/tmp/project"), "/tmp/project");
         assert_eq!(clean_path("/a/./b"), "/a/b");
+    }
+}
+
+#[cfg(test)]
+mod wait_all_tests {
+    use super::*;
+
+    #[test]
+    fn a_wave_answer_cuts_each_long_answer_and_says_so() {
+        let long = "é".repeat(ALL_ANSWER_CHARS + 10);
+        let row = cut_for_all(json!({"link_id": "a/1", "answer": long}));
+        assert_eq!(
+            row["answer"].as_str().unwrap().chars().count(),
+            ALL_ANSWER_CHARS
+        );
+        assert_eq!(row["answer_truncated"], json!(true));
+        let short = cut_for_all(json!({"link_id": "a/2", "answer": "done"}));
+        assert_eq!(short, json!({"link_id": "a/2", "answer": "done"}));
+        let none = cut_for_all(json!({"link_id": "a/3"}));
+        assert_eq!(none, json!({"link_id": "a/3"}));
     }
 }

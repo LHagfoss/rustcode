@@ -104,6 +104,12 @@ export const WAKE_BATCH_MAX_S = 600;
 export const STALL_NOTICE_MS = 10 * 60_000;
 /** The most of one child's answer a wake message carries, per child. */
 export const WAKE_ANSWER_CHARS = 1024;
+/**
+ * The most of one child's answer a `wait_session` with `all` carries, per child: a wave of full
+ * 8 KiB answers outgrows what a harness shows of one tool result. The engine's no-app path uses the
+ * same cut (`rustcode/engine/src/orchestration/local.rs` `ALL_ANSWER_CHARS`).
+ */
+export const ALL_ANSWER_CHARS = 2048;
 
 export type LinkState = "queued" | "working" | "needs_user" | "done" | "failed" | "cancelled" | "interrupted";
 
@@ -519,7 +525,14 @@ export type Call =
       machine?: string;
     }
   /** `callId` is the engine's name for this call, so a dropped call can end its wait. */
-  | { tool: "wait_session"; links: string[]; timeoutMs: number; callId?: string; machine?: string }
+  | {
+      tool: "wait_session";
+      links: string[];
+      timeoutMs: number;
+      all?: boolean;
+      callId?: string;
+      machine?: string;
+    }
   | {
       tool: "start_session";
       prompt: string;
@@ -1036,6 +1049,7 @@ export function parseCall(params: JsonObject): Call | Failure {
         tool: "wait_session",
         links,
         timeoutMs: Math.min(Math.max(asked, 1), MAX_WAIT_MS),
+        ...(args.all === true ? { all: true } : {}),
         callId: s(params.callId),
         ...machineField(args),
       };
@@ -1983,6 +1997,15 @@ export const shownState = (link: Link, targetWaits: boolean): LinkState =>
  * the last tool it ran and how many turns it finished, so a caller that gets a
  * timeout knows whether it is thinking, stuck or over.
  */
+/** One link's row in a `wait_session` answer with `all`: its answer cut to {@link ALL_ANSWER_CHARS}. */
+export function cutForAll(row: JsonObject): JsonObject {
+  const answer = row.answer;
+  if (typeof answer !== "string") return row;
+  const chars = [...answer];
+  if (chars.length <= ALL_ANSWER_CHARS) return row;
+  return { ...row, answer: chars.slice(0, ALL_ANSWER_CHARS).join(""), answer_truncated: true };
+}
+
 export function linkResult(
   link: Link,
   state: LinkState,
