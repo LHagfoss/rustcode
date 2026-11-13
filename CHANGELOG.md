@@ -1,3 +1,21 @@
+## [v1.34.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.34.0) - 2026-11-13
+
+### Features
+- Softer, inset dividers across the app, segmented controls fit their buttons, and the model picker's effort column has rounded inner corners. (#3648)
+- Updates retry a dropped download, keep a failed install on the sidebar row with a Retry, and ask before a manual update ends running threads. (#3639)
+- Threads from other environments are now also copied to this computer's disk, read-only, so they stay readable when an environment is offline, wiped or removed; Settings › Environments › Thread copies turns it off or leaves projects out. (#3641)
+- Settings › About › System setup lists the per-OS setup steps (PATH, quarantine, launcher entry, background server) with a status and Run again, and explains the macOS prompt after each update. (#3647)
+- Settings › Remote access now says when a phone connected with a secure `wss://` address or an app version this computer does not understand, and when a pairing code expired because no device reached this computer. (#3643)
+- Renaming an environment now shows on every paired computer, and environments paired through another computer are listed with their version and last-seen time. (#3644)
+- Pi, OpenCode, Gemini CLI and custom agents can now ask you multiple-choice questions with an `ask_user_question` tool; the question appears as a card and the thread shows "Needs you". (#3640)
+- Thread folders, logs and telemetry payloads are no longer deleted automatically; old logs are compressed, and the data store records branch, commit, pull request, effort, account, diff stats and approvals. (#3646)
+- Fixed thread status drifting from the engine, Stop and Trash not working on a stuck turn, and quitting leaving running delegates behind. (#3656)
+- Delegate presets for `start_session` and `fan_out`, and an opt-in setting that moves a delegate to another provider's model when it hits a usage limit. (#3642)
+- Projects can check in `.rustcode/command-policy.toml` to make agents' shell commands denied or rewritten, with violations counted per thread. (#3657)
+- Idle harness sessions are no longer evicted for the session cap before 30 minutes unless memory is low, and a turn a restart cut off resumes once with a "Resumed after restart" note. (#3655)
+- Parallel delegates no longer block each other on cargo build locks, and a delegate compiling for a long time is no longer reported as stalled. (#3658)
+- Delegate finishes and stalls are merged into one orchestrator turn per 60 s window (setting), and orchestrator threads show a live delegate status panel and answer a bare "status" without a model turn. (#3659)
+- Connect other apps (Claude Desktop, Cursor, Codex) to RustCode's MCP tools with a scoped, revocable token from Settings › Outside agents. (#3645)
 ## [v1.33.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.33.0) - 2026-11-13
 
 ### Features
