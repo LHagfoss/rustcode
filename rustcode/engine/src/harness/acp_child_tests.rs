@@ -1474,3 +1474,15 @@ fn the_echo_filter_takes_the_block_and_keeps_the_user_text() {
         Some("before  after")
     );
 }
+
+#[test]
+fn explicit_claude_settings_are_preserved() {
+    for settings in [
+        json!("custom-settings.json"),
+        json!({"env": {"CUSTOM": "yes"}}),
+    ] {
+        let mut meta = json!({"claudeCode": {"options": {"settings": settings}}});
+        super::set_claude_option_if_absent(&mut meta, "settings", json!({"hooks": {}}));
+        assert_eq!(meta["claudeCode"]["options"]["settings"], settings);
+    }
+}

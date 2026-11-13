@@ -305,7 +305,7 @@ fn with_session_meta(
             disallow_subagent_tool(meta);
         }
         if let Some(settings) = guard {
-            set_claude_option_if_absent(meta, "settings", Value::String(settings));
+            set_claude_option_if_absent(meta, "settings", settings);
         }
     }
     params
