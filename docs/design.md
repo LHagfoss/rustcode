@@ -855,7 +855,7 @@ a raw element. `?catalog` in a dev build shows them all on one page.
   its description `text-callout leading-normal text-fg-muted`, its control at
   the right, and the control stacks under the text when the row's own
   container is narrow; wide controls can be stacked below the description at any width.
-  Buttons and segmented tracks and items are pill-rounded; controls use `h-8`
+  Buttons and segmented tracks and items are pill-rounded; controls use `h-7` (28px)
   and `bg-fill` over the card (hover and focus
   `bg-fill-strong`), with no edge, so the same control reads at every nesting
   depth; switches keep their own shape.
