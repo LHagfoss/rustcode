@@ -72,11 +72,13 @@ import {
   parseWorktreeList,
   type RestoreAnswer,
   removeRefusal,
+  STATUS_LABEL,
   statusInUpdate,
   type ThreadStatus,
   V2Method,
   type Worktree,
 } from "../acp/v2";
+import { announce, mountAnnouncer } from "../lib/announce";
 import { approvalSubject, optionScope, resolvedLine } from "../lib/approval";
 import { CHAT_WIDTH_DEFAULT, type ChatWidth, parseChatWidth } from "../lib/chatWidth";
 import { capServerLogLine } from "../lib/diagnostics";
@@ -95,6 +97,15 @@ import { trashName } from "../lib/platform";
 import { setShellTransport, shellCall } from "../lib/shell";
 import { BUILTIN_THEMES, parseThemes, ThemeMethod, type ThemesSnapshot } from "../lib/themes";
 import { titleFrom } from "../lib/title";
+import {
+  applyWindowTitle,
+  momentOf,
+  spokenTitle,
+  type ThreadMoment,
+  threadAnnouncement,
+  windowStatus,
+  windowTitle,
+} from "./announceThreads";
 import { type Attempt, splitAtTurn, transcriptTurns } from "./attempts";
 import {
   type AutoCompactMode,
@@ -214,7 +225,14 @@ import {
   storedStatus,
   useOutbox,
 } from "./machineOutbox";
-import { finishIsNews, type NotifyEvent, notifyThread, startNotifications, wakeEvent } from "./notify";
+import {
+  finishIsNews,
+  type NotifyEvent,
+  notifyThread,
+  startNotifications,
+  wakeEvent,
+  warmingUp,
+} from "./notify";
 import {
   CAPABILITY_VERSION,
   DEFAULT_DELEGATES_PER_THREAD,
@@ -8136,6 +8154,51 @@ useApp.subscribe((s) => {
 // What follows the app rather than a moment in it: the Dock badge, and a click on a notification
 // opening its thread (state/notify.ts).
 startNotifications({ get: () => useApp.getState(), subscribe: useApp.subscribe, open: selectThread });
+
+/** A thread's name as a screen reader and the window's title say it (`state/announceThreads.ts`). */
+export function spokenTitleOf(s: AppState, id: string): string {
+  return spokenTitle(sessionById(s, id)?.title, s.threads[id]?.title);
+}
+
+// What a screen reader hears without reading the transcript (issue 3609): the window's title names
+// the open thread and its status, and a thread's major moments are announced once each. The open
+// thread says them all; one in the background only what needs the user, and not while it sleeps.
+let moments = new Map<string, ThreadMoment>();
+let windowTitleShown = "";
+function announceThreads(s: AppState, prev?: AppState) {
+  const selected = s.selectedId;
+  // Review and Settled are the list's own words; the rest the thread's moment says more precisely.
+  const listed = selected ? statusOf(s, selected) : "idle";
+  const title = selected
+    ? windowTitle(
+        spokenTitleOf(s, selected),
+        windowStatus(
+          momentOf(s.threads[selected], s.failed[selected]),
+          listed === "review" || listed === "done" ? STATUS_LABEL[listed] : undefined,
+        ),
+      )
+    : windowTitle(undefined);
+  if (title !== windowTitleShown) {
+    windowTitleShown = title;
+    applyWindowTitle(title);
+  }
+  if (prev && s.threads === prev.threads && s.failed === prev.failed) return;
+  const next = new Map<string, ThreadMoment>();
+  const quiet = warmingUp();
+  for (const id of new Set([...Object.keys(s.threads), ...Object.keys(s.failed)])) {
+    const moment = momentOf(s.threads[id], s.failed[id]);
+    next.set(id, moment);
+    if (quiet) continue;
+    const active = id === selected;
+    if (!active && id in s.snoozed) continue;
+    const said = threadAnnouncement(spokenTitleOf(s, id), moments.get(id), moment, active);
+    if (said) announce(said.text, { assertive: said.assertive });
+  }
+  moments = next;
+}
+mountAnnouncer();
+announceThreads(useApp.getState());
+useApp.subscribe(announceThreads);
 
 /** The threads a restart cut off: the saved list, plus any this app still showed running. */
 function interruptedThreads(): string[] {
