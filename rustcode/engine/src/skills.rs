@@ -375,9 +375,11 @@ fn default_claude_config_dir() -> Option<PathBuf> {
 /// The note goes in every request of an external-harness thread, so it is
 /// capped in bytes as well as in entries: a machine with many deeply nested
 /// roots must not add kilobytes to each turn.
-pub(crate) const MAX_HARNESS_SKILLS_NOTE_BYTES: usize = 1500;
-/// What the root paths and the disabled names may each take of that cap.
+pub(crate) const MAX_HARNESS_SKILLS_NOTE_BYTES: usize = 2200;
+/// What the root paths, the skill names and the disabled names may each take
+/// of that cap.
 const MAX_NOTE_ROOTS_BYTES: usize = 600;
+const MAX_NOTE_SKILLS_BYTES: usize = 600;
 const MAX_NOTE_NAMES_BYTES: usize = 400;
 /// The most one root path may take: a deeper path is cut and marked with `…`,
 /// so no single directory can crowd out the rest.
@@ -398,6 +400,9 @@ pub(crate) fn harness_skills_note_from(
     let claude_code = harness == "claude-code";
     let mut roots: Vec<PathBuf> = Vec::new();
     let mut found: Vec<SkillMetadata> = Vec::new();
+    // What Claude Code loads itself is not named to it, but a skill the user
+    // turned off in RustCode is still turned off there: it has to hear which.
+    let mut loaded_itself: Vec<SkillMetadata> = Vec::new();
     for root in skill_roots_from(inputs) {
         // Claude Code loads its project root and its login's user root itself.
         // Another login's user root is hidden from it, so that one is named.
@@ -407,6 +412,7 @@ pub(crate) fn harness_skills_note_from(
             _ => false,
         };
         if claude_code && loads_itself {
+            scan_skill_dir(&root.path, &mut loaded_itself);
             continue;
         }
         let before = found.len();
@@ -416,35 +422,62 @@ pub(crate) fn harness_skills_note_from(
             roots.push(root.path);
         }
     }
-    if found.is_empty() {
-        return None;
-    }
     let mut names: Vec<String> = found
         .iter()
+        .chain(&loaded_itself)
         .filter(|skill| disabled.contains(&skill.name))
         .map(|skill| truncate_to_bytes(&skill.name, MAX_NOTE_NAME_BYTES).to_owned())
         .collect();
     names.sort_unstable();
     names.dedup();
-
-    let (root_list, more_roots) = bounded_list(
-        roots.iter().map(|root| clipped_root(root)).collect(),
-        MAX_NOTE_ROOTS_BYTES,
-    );
-    let mut note = format!("# Skills\nRustCode keeps this machine's skills here: {root_list}");
-    if more_roots > 0 {
-        note.push_str(&format!(" and {more_roots} more roots"));
+    // The skills the thread may use, by name: the harness reads the right
+    // `SKILL.md` instead of listing every root first. Turned-off ones are
+    // named below, never here.
+    let mut available: Vec<String> = found
+        .iter()
+        .filter(|skill| !disabled.contains(&skill.name))
+        .map(|skill| truncate_to_bytes(&skill.name, MAX_NOTE_NAME_BYTES).to_owned())
+        .collect();
+    available.sort_unstable();
+    available.dedup();
+    if found.is_empty() && names.is_empty() {
+        return None;
     }
-    note.push_str(
-        ". When a request names a skill or clearly matches one, read its `SKILL.md` \
-         at `<root>/<name>/SKILL.md` with your own tools; if your own skill settings \
-         already list it, use the copy you have.",
-    );
+
+    let mut note = String::from("# Skills\n");
+    if !found.is_empty() {
+        let (root_list, more_roots) = bounded_list(
+            roots.iter().map(|root| clipped_root(root)).collect(),
+            MAX_NOTE_ROOTS_BYTES,
+        );
+        note.push_str(&format!(
+            "RustCode keeps this machine's skills here: {root_list}"
+        ));
+        if more_roots > 0 {
+            note.push_str(&format!(" and {more_roots} more roots"));
+        }
+        note.push('.');
+        if !available.is_empty() {
+            let (skill_list, more_skills) = bounded_list(available, MAX_NOTE_SKILLS_BYTES);
+            note.push_str(&format!(" Skills: {skill_list}"));
+            if more_skills > 0 {
+                note.push_str(&format!(" and {more_skills} more"));
+            }
+            note.push('.');
+        }
+        note.push_str(
+            " When a request names a skill or clearly matches one, read its `SKILL.md` \
+             at `<root>/<name>/SKILL.md` with your own tools; if your own skill settings \
+             already list it, use the copy you have.",
+        );
+    }
     if !names.is_empty() {
         let (name_list, more_names) = bounded_list(names, MAX_NOTE_NAMES_BYTES);
-        note.push_str(
-            "\nTurned off in RustCode, so do not use even if your own settings list them: ",
-        );
+        note.push_str(if found.is_empty() {
+            "Turned off in RustCode, so do not use even if your own settings list them: "
+        } else {
+            "\nTurned off in RustCode, so do not use even if your own settings list them: "
+        });
         note.push_str(&name_list);
         if more_names > 0 {
             note.push_str(&format!(" and {more_names} more"));
@@ -1571,10 +1604,13 @@ mod tests {
             "{for_claude}"
         );
         assert!(for_claude.contains(&fixture.path("config/skills").display().to_string()));
+        // `deploy` is only in Claude Code's own root and turned off, so it is
+        // named once, as turned off, and never as a skill to read (#3604).
         assert!(
-            !for_claude.contains("deploy"),
-            "a skill only Claude Code has is not named to it: {for_claude}"
+            for_claude.contains("Turned off in RustCode") && for_claude.contains("deploy"),
+            "{for_claude}"
         );
+        assert!(!for_claude.contains("Skills: deploy"), "{for_claude}");
 
         // Nothing installed anywhere: no note, no empty heading.
         let empty = Fixture::new("harness_note_empty");
@@ -1634,6 +1670,70 @@ mod tests {
         assert!(
             harness_skills_note_from("claude-code", &inputs, &Default::default(), None).is_none(),
             "Claude Code needs no note for skills it loads itself"
+        );
+    }
+
+    // A harness with no skill tool of its own is told which skills exist, by
+    // name, so it reads the right `SKILL.md` without listing every root; a
+    // skill turned off is named once, as off (#3604).
+    #[test]
+    fn harness_skills_note_lists_the_skills_that_may_be_used() {
+        let fixture = Fixture::new("harness_note_names");
+        fixture.skill("home/.agents/skills/deploy", "deploy", "Ship it");
+        fixture.skill("home/.agents/skills/review", "review", "Review it");
+        fixture.skill("home/.claude/skills/claude-own", "claude-own", "Own");
+        let inputs = SkillRootInputs {
+            workspace: Some(fixture.path("workspace")),
+            config_dir: None,
+            home: Some(fixture.path("home")),
+            extra_dirs: vec![],
+            extra_dirs_env: None,
+            harness_account_dirs: Vec::new(),
+        };
+        let disabled: std::collections::HashSet<String> =
+            ["review".to_string()].into_iter().collect();
+
+        let note = harness_skills_note_from("pi", &inputs, &disabled, None).unwrap();
+        assert!(note.contains(" Skills: claude-own, deploy."), "{note}");
+        assert!(note.contains("off in RustCode"), "{note}");
+        assert!(note.contains("them: review."), "{note}");
+
+        // Claude Code loads `claude-own` itself, so only `deploy` is named.
+        let note = harness_skills_note_from("claude-code", &inputs, &disabled, None).unwrap();
+        assert!(note.contains(" Skills: deploy."), "{note}");
+        assert!(!note.contains("claude-own"), "{note}");
+    }
+
+    // Claude Code loads `~/.claude/skills` itself, but a skill turned off in
+    // RustCode is turned off for it too, so its note says so even when it has
+    // no other root (#3604).
+    #[test]
+    fn claude_code_hears_about_its_own_skills_that_are_turned_off() {
+        let fixture = Fixture::new("harness_note_claude_off");
+        fixture.skill("home/.claude/skills/deploy", "deploy", "Ship it");
+        fixture.skill("home/.claude/skills/keep", "keep", "Keep it");
+        fixture.skill(
+            "workspace/.claude/skills/project-only",
+            "project-only",
+            "Project",
+        );
+        let inputs = SkillRootInputs {
+            workspace: Some(fixture.path("workspace")),
+            config_dir: None,
+            home: Some(fixture.path("home")),
+            extra_dirs: vec![],
+            extra_dirs_env: None,
+            harness_account_dirs: Vec::new(),
+        };
+        let disabled: std::collections::HashSet<String> =
+            ["deploy".to_string(), "project-only".to_string()]
+                .into_iter()
+                .collect();
+
+        let note = harness_skills_note_from("claude-code", &inputs, &disabled, None).unwrap();
+        assert_eq!(
+            note,
+            "# Skills\nTurned off in RustCode, so do not use even if your own settings list them: deploy, project-only.\n\n"
         );
     }
 
