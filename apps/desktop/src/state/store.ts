@@ -273,6 +273,14 @@ import {
 } from "./queue";
 import { parseRecapHours, RECAP_HOURS_DEFAULT } from "./recap";
 import { challengeIsValid, makeChallenge, newPairedDevice, type PairingChallenge } from "./remotePairing";
+import {
+  markStopped,
+  pruneResumed,
+  RESUME_MAX,
+  RESUME_NOTICE,
+  type ResumeBook,
+  resumeVerdict,
+} from "./restartResume";
 import { type DriftReads, engineBusy, FORCE_STOP_MS, noDrift, pollDelay, reconcileRuns } from "./runState";
 import {
   addScheduled,
@@ -305,6 +313,7 @@ import {
   messagesAfter,
   type QueuedPrompt,
   questionItem,
+  RESUME_MARK,
   requeueSteers,
   settleCompaction,
   settledWait,
@@ -741,6 +750,10 @@ const STORAGE = {
   internetWaits: "rustcode.internetWaits",
   /** The ids of the threads running a turn, kept while the engine is up. */
   runningThreads: "rustcode.runningThreads",
+  /** The threads the user stopped and no turn has run on since: a restart does not resume them. */
+  stoppedThreads: "rustcode.stoppedThreads",
+  /** When a restart last resumed each thread, so a resume cut off again is not repeated in a loop. */
+  resumedThreads: "rustcode.resumedThreads",
   roundedFont: "rustcode.roundedFont",
   animateStreaming: "rustcode.animateStreaming",
   reduceTransparency: "rustcode.reduceTransparency",
@@ -4958,6 +4971,8 @@ export async function runPrompt(
     return "skipped";
   }
   const thread = get().threads[id];
+  // The user starting a turn again settles any stop they made before it.
+  if (!options.automatic) clearStopped(id);
   // The prompt reads as a divider both ways: live, and after a reload from the history the engine
   // kept, which carries the text and not this flag (state/thread.ts `CONTINUE_MARK`).
   if (options.continued) text = withContinueMark(text);
@@ -5227,6 +5242,9 @@ export async function cancel(id = get().selectedId): Promise<void> {
   const engineRuns =
     !!get().engineRunning[id] || (!thread?.loaded && engineBusy(sessionById(get(), id)?.status));
   if (!thread?.running && !engineRuns) return;
+  // Recorded first: a quit inside the harness's cancel grace would otherwise leave the thread
+  // listed as running, and the restart would resume a turn the user stopped.
+  noteStopped(id);
   try {
     conn.notify(Method.sessionCancel, { sessionId: splitThreadKey(id).id });
     // ACP: after `session/cancel` the client answers outstanding permission requests as cancelled.
@@ -8491,11 +8509,22 @@ function storeWaitsCleared() {
 
 // ---------------------------------------------------------------- resuming after a restart
 
+/** The user stopped this thread's turn: a restart must not bring it back (`state/restartResume.ts`). */
+function noteStopped(id: string) {
+  const stopped = markStopped(storedJson<string[]>(STORAGE.stoppedThreads, []), id);
+  store(STORAGE.stoppedThreads, JSON.stringify(stopped));
+}
+
+/** A turn starts on the thread: whatever the user stopped before it no longer holds. */
+function clearStopped(id: string) {
+  const stopped = storedJson<string[]>(STORAGE.stoppedThreads, []);
+  if (stopped.includes(id)) {
+    store(STORAGE.stoppedThreads, JSON.stringify(stopped.filter((x) => x !== id)));
+  }
+}
+
 /** What an interrupted thread is told when it continues. */
-export const RESUME_TEXT =
-  "The app restarted while you were working, so your last turn stopped. Continue where you left off.";
-/** At most this many threads continue at once after a restart. */
-const RESUME_MAX = 8;
+export const RESUME_TEXT = `${RESUME_NOTICE}.\nThe app restarted while you were working, so your last turn stopped. Continue where you left off.\n\n${RESUME_MARK}`;
 
 const runningIds = (s: AppState) =>
   Object.values(s.threads)
@@ -8586,25 +8615,41 @@ async function resumeInterrupted(ids: string[]): Promise<void> {
   const known = new Set(get().sessions.map((x) => x.id));
   // Marked before the first await: the limit waits are checked at the same moment, and a thread
   // whose continue was cut short by the restart would otherwise be sent two turns.
-  for (const id of ids) if (known.has(id)) resuming.add(id);
+  const now = Date.now();
+  const book: ResumeBook = {
+    stopped: storedJson<string[]>(STORAGE.stoppedThreads, []),
+    resumedAt: pruneResumed(storedJson<Record<string, number>>(STORAGE.resumedThreads, {}), now),
+  };
+  // The user's stops only guard the restart that just happened.
+  store(STORAGE.stoppedThreads, "[]");
+  for (const id of ids) if (resumeVerdict(id, known, book, now) === "resume") resuming.add(id);
   try {
-    await resumeAll(ids, known);
+    await resumeAll(ids, known, book, now);
   } finally {
     resuming.clear();
   }
 }
 
-async function resumeAll(ids: string[], known: ReadonlySet<string>): Promise<void> {
+async function resumeAll(
+  ids: string[],
+  known: ReadonlySet<string>,
+  book: ResumeBook,
+  now: number,
+): Promise<void> {
   let started = 0;
+  const resumedAt = { ...book.resumedAt };
   for (const id of ids) {
     if (started >= RESUME_MAX) break;
-    if (!known.has(id)) continue;
+    if (resumeVerdict(id, known, book, now) !== "resume") continue;
     await openThread(id);
     // The selected thread may already be loading from the handshake: wait for it.
     for (let i = 0; i < 100 && !get().threads[id]?.loaded; i++) await new Promise((r) => setTimeout(r, 100));
     const thread = get().threads[id];
     if (!thread?.loaded) continue;
     started++;
+    // Noted once the thread really gets the turn: a resume cut off again soon is the user's to restart.
+    resumedAt[id] = now;
+    store(STORAGE.resumedThreads, JSON.stringify(resumedAt));
     // The links the restart severed are this turn's to answer, not any later turn's
     // (state/host.ts `linksResumed`, `linksFinished`): the resume carries them, so a parent that
     // was waiting reads the answer in a wake instead of waiting for good. A thread whose turn still

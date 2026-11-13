@@ -275,21 +275,62 @@ fn disallow_subagent_tool(meta: &mut Value) {
 /// Without the orchestrator (orchestration off in Settings, or a platform where
 /// its socket is not built) there is nothing to delegate through, so Claude
 /// Code keeps its own subagent tool rather than losing delegation entirely.
+///
+/// A project with a command policy also gets the `PreToolUse` hook that
+/// enforces it (`docs/command-guard.md`).
 fn with_session_meta(
     mut params: Value,
     harness: &ResolvedHarness,
     options: &StartOptions,
 ) -> Value {
-    if harness.id != "claude-code" || options.orchestrator.is_none() {
+    if harness.id != "claude-code" {
+        return params;
+    }
+    // A project with a command policy gets Claude Code's `PreToolUse` hook
+    // that applies it (`crate::command_guard`), unless the session already
+    // carries settings of its own.
+    let guard = params
+        .get("cwd")
+        .and_then(Value::as_str)
+        .filter(|cwd| crate::command_guard::has_policy(std::path::Path::new(cwd)))
+        .and_then(|_| crate::command_guard::claude_code_settings(options.thread_id.as_deref()));
+    if options.orchestrator.is_none() && guard.is_none() {
         return params;
     }
     if !params.get("_meta").is_some_and(Value::is_object) {
         params["_meta"] = json!({});
     }
     if let Some(meta) = params.get_mut("_meta") {
-        disallow_subagent_tool(meta);
+        if options.orchestrator.is_some() {
+            disallow_subagent_tool(meta);
+        }
+        if let Some(settings) = guard {
+            set_claude_option_if_absent(meta, "settings", Value::String(settings));
+        }
     }
     params
+}
+
+/// Set one of Claude Code's session options in `_meta.claudeCode.options`
+/// unless the caller already set it.
+fn set_claude_option_if_absent(meta: &mut Value, key: &str, value: Value) {
+    let Some(options) = meta
+        .as_object_mut()
+        .and_then(|meta| {
+            meta.entry("claudeCode")
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+        })
+        .and_then(|claude| {
+            claude
+                .entry("options")
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+        })
+    else {
+        return;
+    };
+    options.entry(key).or_insert(value);
 }
 
 /// The MCP servers the child's session gets: the orchestrator when the thread has one, then the

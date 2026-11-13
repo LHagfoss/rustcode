@@ -285,6 +285,12 @@ pub enum Commands {
         #[arg(long)]
         token: Option<String>,
     },
+
+    /// Claude Code `PreToolUse` hook that applies the project's command
+    /// policy (`.rustcode/command-policy.toml`) to a Bash call read from
+    /// stdin; started by Claude Code, not by hand
+    #[command(name = "guard-command", hide = true)]
+    GuardCommand,
 }
 
 #[derive(clap::Subcommand, Debug)]

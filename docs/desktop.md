@@ -1079,7 +1079,14 @@ composer's keys stay outside the table.
   hold until then. After three waits a limit stays stopped and after four an
   overload; waits survive a restart, and the timer catches up after sleep.
   **Continue threads after a restart** is the same idea for a turn a quit, an
-  update or an engine restart cut off (`state/store.ts` `resumeInterrupted`).
+  update or an engine restart cut off (`state/store.ts` `resumeInterrupted`,
+  the decision in `state/restartResume.ts`). The turn continues once, with a
+  "Resumed after restart" divider in the transcript in place of a message that
+  reads as the user's. A turn the user stopped stays stopped, even when the
+  quit came before the harness finished cancelling, and a thread whose resume
+  was cut off again within ten minutes is left for the user instead of being
+  restarted in a loop. A turn that lost the network resumes by the internet
+  wait above.
 - **Toasts** (`src/ui/Toaster.tsx`, queue in `state/toasts.ts`, `toast()`
   in `state/store.ts`): up to three, newest on top, centred under the chat
   column's header (the window's top while Settings is open), frosted like

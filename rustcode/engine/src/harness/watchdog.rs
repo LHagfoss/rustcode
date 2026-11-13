@@ -153,6 +153,12 @@ impl Progress {
         self.lock().waiting
     }
 
+    /// How many tool calls the harness reported and has not finished: work a
+    /// stopped process would cut off (recorded by the idle reaper).
+    pub(crate) fn open_tools(&self) -> usize {
+        self.lock().tools.len()
+    }
+
     /// Whether a permission request or a question still waits on the user. The
     /// idle reaper (`session.rs`) never stops a process that is waiting for an
     /// answer, however long the answer takes.

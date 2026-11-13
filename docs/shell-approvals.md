@@ -159,3 +159,7 @@ from operating-system permissions and do not widen the sandbox.
 On Linux, the seccomp fallback preserves AF_UNIX socket creation and
 socketpairs, but blocks `connect` and server-side network syscalls, including
 for AF_UNIX.
+
+A project can also refuse or rewrite commands outright with a checked-in
+command policy, for every harness that can be guarded: see
+`docs/command-guard.md`.
