@@ -1570,6 +1570,15 @@ export function nextId(book: LinkBook, orchestrator: string): { book: LinkBook; 
 export const hasGrant = (book: LinkBook, caller: string, key: string) =>
   book.grants[caller]?.includes(key) ?? false;
 
+/** Account authority is separate from tool access, and survives restarts in the link book.
+ * IDs (not labels, models or usage readings) define exactly what the user allowed.
+ */
+export const delegateAccountKey = (machine: string, harness: string, account: string | null) =>
+  JSON.stringify(["delegate-account", machine, harness, account]);
+
+export const accountsNeedApproval = (book: LinkBook, caller: string, keys: string[]) =>
+  keys.some((key) => !hasGrant(book, caller, key));
+
 export function grant(book: LinkBook, caller: string, key: string): LinkBook {
   if (hasGrant(book, caller, key)) return book;
   return { ...book, grants: { ...book.grants, [caller]: [...(book.grants[caller] ?? []), key] } };

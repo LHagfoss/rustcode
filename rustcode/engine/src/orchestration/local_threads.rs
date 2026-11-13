@@ -528,6 +528,16 @@ async fn start_one(
     let harness = harness_for(ask.harness)?;
     let model = model_for(&harness, ask.model)?;
     let account = account_for(&harness, ask.account)?;
+    let account_dir = crate::harness::config::config_dir()
+        .map_err(|error| unavailable(format!("harness configuration is unavailable: {error}")))?;
+    let has_accounts = !crate::harness::config::accounts_of(
+        &crate::harness::config::load_accounts_in(&account_dir),
+        &harness.id,
+    )
+    .is_empty();
+    if has_accounts {
+        authorize_account(&link_book(), caller, &harness.id, account.as_deref())?;
+    }
     let title = title_of(ask);
 
     // Everything the engine reads from `session/new` sits under `_meta.rustcode`
@@ -1351,6 +1361,27 @@ fn model_for(
     ))
 }
 
+/// Full access and rate limits are not permission to spend another login.
+/// Read the same account-specific user grants the desktop persists.
+fn authorize_account(
+    book: &Value,
+    caller: &str,
+    harness: &str,
+    account: Option<&str>,
+) -> Result<(), Value> {
+    let key = json!(["delegate-account", "local", harness, account]).to_string();
+    if book["grants"][caller]
+        .as_array()
+        .is_some_and(|keys| keys.iter().any(|value| value.as_str() == Some(&key)))
+    {
+        return Ok(());
+    }
+    Err(not_allowed(format!(
+        "delegate account {} on {harness} needs the user's account-specific approval. Full access, usage pressure and rate limits do not authorize switching accounts. Open the RustCode app and approve this login; nothing was started.",
+        account.unwrap_or("default")
+    )))
+}
+
 fn account_for(
     harness: &crate::harness::ResolvedHarness,
     asked: Option<&str>,
@@ -1919,6 +1950,19 @@ mod tests {
             let _ =
                 crate::config::get_active_session_dir(id).map(|dir| std::fs::remove_dir_all(dir));
         }
+    }
+
+    #[test]
+    fn account_approval_does_not_authorize_a_fallback() {
+        let key = json!(["delegate-account", "local", "claude-code", "paral-2"]).to_string();
+        let book = json!({"grants": {"parent": ["start", key]}});
+        assert!(authorize_account(&book, "parent", "claude-code", Some("paral-2")).is_ok());
+        let refused =
+            authorize_account(&book, "parent", "claude-code", Some("personal-1")).unwrap_err();
+        assert!(refused.to_string().contains("account-specific approval"));
+        assert!(refused.to_string().contains("nothing was started"));
+        assert!(authorize_account(&book, "parent", "claude-code", None).is_err());
+        assert!(authorize_account(&book, "child", "claude-code", Some("paral-2")).is_err());
     }
 
     #[test]
