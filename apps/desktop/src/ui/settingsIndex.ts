@@ -100,6 +100,11 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   { section: "chat", title: "Link previews", keywords: "links chips title icon page" },
   {
     section: "chat",
+    title: "Suggested next prompt",
+    keywords: "suggestion follow-up next prompt ghost text composer tab autocomplete",
+  },
+  {
+    section: "chat",
     title: "Thread header buttons",
     keywords:
       "header buttons show hide reorder drag arrange customize toolbar status plan pull requests terminal details changes",

@@ -126,6 +126,7 @@ input, select, textarea { font: inherit; color: inherit; background: var(--rc-su
   border: 1px solid var(--rc-separator); border-radius: var(--rc-radius-sm); padding: 4px 8px; outline: none; }
 :root[data-keyboard-nav] :is(input, select, textarea):focus-visible { border-color: var(--rc-accent); outline: none;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--rc-accent) 22%, transparent); }
+input[type=checkbox], input[type=radio], input[type=range], select { cursor: pointer; }
 input[type=checkbox], input[type=radio], input[type=range] { accent-color: var(--rc-accent); }
 button { font: inherit; font-weight: 500; color: var(--rc-text); background: var(--rc-surface);
   border: 1px solid var(--rc-separator); border-radius: var(--rc-radius-pill); padding: 3px 12px; cursor: pointer; }
@@ -176,9 +177,9 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 .rc-bars { display: grid; grid-template-columns: fit-content(40%) minmax(32px, 1fr) max-content; gap: 6px 10px; align-items: center; }
 .rc-bar { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; position: relative;
   font-size: var(--rc-text-size-sm); line-height: 16px; }
-.rc-bar::before { content: ""; grid-area: 1 / 2; height: 6px; border-radius: var(--rc-radius-pill); background: color-mix(in srgb, var(--rc-text) 10%, transparent); }
+.rc-bar::before { content: ""; grid-area: 1 / 2; height: 8px; border-radius: var(--rc-radius-pill); background: color-mix(in srgb, var(--rc-text) 10%, transparent); }
 .rc-bar > span { grid-area: 1 / 1; color: var(--rc-muted); }
-.rc-bar > i { grid-area: 1 / 2; justify-self: start; min-width: 2px; height: 6px; border-radius: var(--rc-radius-pill); background: var(--rc-tint, var(--rc-accent)); }
+.rc-bar > i { grid-area: 1 / 2; justify-self: start; min-width: 2px; height: 8px; border-radius: var(--rc-radius-pill); background: var(--rc-tint, var(--rc-accent)); }
 .rc-bar > b { grid-area: 1 / 3; font-weight: 500; font-variant-numeric: tabular-nums; text-align: right; }
 .rc-bar:hover::before { background: color-mix(in srgb, var(--rc-text) 16%, transparent); }
 .rc-bar:hover > span, .rc-bar:hover > b { color: var(--rc-text); }
@@ -260,8 +261,9 @@ td.rc-num, th.rc-num, .rc-num td, .rc-num th { text-align: right; }
 .rc-tree .rc-details > :not(summary) { margin: 0 0 0 5px; padding-left: 12px; border-left: 1px solid var(--rc-separator); }
 .rc-sources { border-bottom: 0; font-size: var(--rc-text-size-sm); }
 .rc-sources > summary { padding: 4px 0; color: var(--rc-muted); }
+.rc-sources > summary:focus-visible { outline: 2px solid var(--rc-accent); outline-offset: 2px; }
 .rc-sources > summary:hover, .rc-sources[open] > summary { color: var(--rc-text); }
-.rc-details.rc-sources > summary > .rc-sources-count { margin-left: 0; font-size: var(--rc-text-size-xs); color: var(--rc-faint); font-variant-numeric: tabular-nums; }
+.rc-details.rc-sources > summary > .rc-sources-count { margin-left: 4px; font-size: var(--rc-text-size-xs); color: var(--rc-faint); font-variant-numeric: tabular-nums; }
 .rc-sources :is(ol, ul) { display: grid; gap: 3px; margin: 0 0 4px; padding-left: 22px; color: var(--rc-muted); }
 .rc-sources li::marker { font-variant-numeric: tabular-nums; }
 .rc-sources a { text-decoration: none; overflow-wrap: anywhere; }
@@ -756,7 +758,7 @@ export const CHART_THEME_SCRIPT = `(() => {
       d.plugins.legend.onHover = (event, item, legend) => { legend.chart.canvas.style.cursor = item ? "pointer" : ""; };
       d.plugins.legend.onLeave = (event, item, legend) => { legend.chart.canvas.style.cursor = ""; };
     }
-    d.elements.line.borderWidth = 2;
+    d.elements.line.borderWidth = 3;
     d.elements.point.radius = 0;
     d.elements.point.hoverRadius = 4;
     d.elements.point.hoverBorderWidth = 2;

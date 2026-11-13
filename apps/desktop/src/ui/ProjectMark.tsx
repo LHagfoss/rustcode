@@ -49,7 +49,7 @@ export function ProjectMark({
     <span
       aria-hidden
       title={name}
-      style={{ width: size, height: size, fontSize: Math.max(8, Math.round(size * 0.44)) }}
+      style={{ width: size + 2, height: size + 2, fontSize: Math.max(8, Math.round(size * 0.44)) }}
       className={cx(
         "flex shrink-0 items-center justify-center rounded-xs font-semibold uppercase tracking-tight",
         projectTint(name),

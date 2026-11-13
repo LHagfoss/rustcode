@@ -17,7 +17,7 @@ export const QUEUES_KEY = "rustcode.queues";
 export const MAX_ROW_TEXT = 100 * 1024;
 /** A row's command, links and attachments are kept up to this size in all: an image rides inline. */
 export const MAX_ROW_EXTRAS = 64 * 1024;
-/** At most this many rows per thread; the oldest go first. */
+/** At most this many rows per thread are kept; the head is kept, since it runs next. */
 export const MAX_ROWS = 50;
 /** At most this many threads keep a queue; the one queued longest ago goes first. */
 export const MAX_THREADS = 100;
@@ -34,6 +34,11 @@ export interface QueueRow {
   created_at: number;
   /** What went with the text (a command, link chips, pictures), when it is small enough to keep. */
   extras?: ComposeExtras;
+  /**
+   * It had extras too big to keep: the text came through a restart without them, so the queue is
+   * held when it is put back (state/host.ts) rather than sending a message missing its pictures.
+   */
+  extrasLost?: boolean;
   fromView?: boolean;
   /** Delivered for another thread (orchestration link id). */
   link?: string;
@@ -66,7 +71,8 @@ const isRow = (value: unknown): value is QueueRow => {
     typeof row.id === "string" &&
     !!row.id &&
     typeof row.text === "string" &&
-    row.text.length > 0 &&
+    // A message that is only its attachments has no text: it is kept by what rides with it.
+    (row.text.length > 0 || !!row.extras || row.extrasLost === true) &&
     row.text.length <= MAX_ROW_TEXT &&
     (row.kind === "user" || row.kind === "wake")
   );
@@ -99,6 +105,7 @@ export function parseQueueBook(raw: string | null): QueueBook {
         wakeLinks: strings(row.wakeLinks),
         wakeAsking: strings(row.wakeAsking),
         resume: strings(row.resume),
+        extrasLost: row.extrasLost === true ? true : undefined,
       }));
       if (kept.length) rows[id] = kept;
     }
@@ -109,14 +116,17 @@ export function parseQueueBook(raw: string | null): QueueBook {
 /** A queued item as the row that keeps it, or null when it is too big to keep and read back. */
 export function rowOf(item: QueuedPrompt, now: number, created?: number): QueueRow | null {
   const text = item.text;
-  if (!text.length || text.length > MAX_ROW_TEXT) return null;
+  if (text.length > MAX_ROW_TEXT || (!text.length && !item.extras)) return null;
   const row: QueueRow = {
     id: item.id,
     text,
     kind: item.wake ? "wake" : "user",
     created_at: created ?? item.queuedAt ?? now,
   };
-  if (item.extras && JSON.stringify(item.extras).length <= MAX_ROW_EXTRAS) row.extras = item.extras;
+  if (item.extras) {
+    if (JSON.stringify(item.extras).length <= MAX_ROW_EXTRAS) row.extras = item.extras;
+    else row.extrasLost = true;
+  }
   if (item.fromView) row.fromView = true;
   if (item.link) row.link = item.link;
   if (item.resume) row.resume = [...item.resume];
@@ -197,7 +207,7 @@ export function withQueue(
 /** The book as it goes to storage: bounded rows, threads and sent ids, and nothing unreadable. */
 export function persistable(book: QueueBook): QueueBook {
   const entries = Object.entries(book.threads)
-    .map(([id, rows]) => [id, rows.slice(-MAX_ROWS)] as const)
+    .map(([id, rows]) => [id, rows.slice(0, MAX_ROWS)] as const)
     .filter(([, rows]) => rows.length)
     .slice(-MAX_THREADS);
   return { threads: Object.fromEntries(entries), acked: book.acked.slice(-MAX_ACKED) };

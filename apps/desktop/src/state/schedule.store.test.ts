@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { MockTransport } from "../acp/mock";
 import { emptyExtras } from "./compose";
 import { resetQueues } from "./host";
-import { parseScheduleBook, SCHEDULED_KEY, type ScheduleBook } from "./schedule";
+import { parseScheduleBook, SCHEDULED_KEY, type ScheduleBook, type ScheduledMessage } from "./schedule";
 import {
   connect,
   continueDueScheduled,
@@ -77,9 +77,14 @@ describe("send later", () => {
     const due = Date.now() + 3_600_000;
     await withStorage(null, async () => {
       await openMockThread("mock-thread-1");
-      const item = scheduleMessage("mock-thread-1", "carry on with the diff", emptyExtras, due);
-      expect(item).not.toBeNull();
-      expect(useApp.getState().scheduled["mock-thread-1"]?.map((row) => row.id)).toEqual([item!.id]);
+      const item = scheduleMessage(
+        "mock-thread-1",
+        "carry on with the diff",
+        emptyExtras,
+        due,
+      ) as ScheduledMessage;
+      expect("refused" in item).toBe(false);
+      expect(useApp.getState().scheduled["mock-thread-1"]?.map((row) => row.id)).toEqual([item.id]);
       // Written at once, not on a timer: a quit after the press keeps it.
       expect(stored()["mock-thread-1"]?.map((row) => row.text)).toEqual(["carry on with the diff"]);
 
@@ -98,7 +103,7 @@ describe("send later", () => {
     await withStorage(null, async () => {
       await openMockThread("mock-thread-1");
       const item = scheduleMessage("mock-thread-1", "the window has reset", emptyExtras, Date.now() + 5);
-      expect(item).not.toBeNull();
+      expect("refused" in item).toBe(false);
       await sleep(10);
       await continueDueScheduled();
       await until(() => said("mock-thread-1", "the window has reset"));
@@ -154,7 +159,12 @@ describe("send later", () => {
   test("Send now sends it at once, before its time", async () => {
     await withStorage(null, async () => {
       await openMockThread("mock-thread-1");
-      const item = scheduleMessage("mock-thread-1", "send me now", emptyExtras, Date.now() + 3_600_000)!;
+      const item = scheduleMessage(
+        "mock-thread-1",
+        "send me now",
+        emptyExtras,
+        Date.now() + 3_600_000,
+      ) as ScheduledMessage;
       expect(await sendScheduledNow("mock-thread-1", item.id)).toBe(true);
       await until(() => said("mock-thread-1", "send me now"));
       expect(useApp.getState().scheduled["mock-thread-1"]).toBeUndefined();
@@ -164,7 +174,12 @@ describe("send later", () => {
   test("Delete drops it from the book and from storage", async () => {
     await withStorage(null, async () => {
       await openMockThread("mock-thread-1");
-      const item = scheduleMessage("mock-thread-1", "never mind", emptyExtras, Date.now() + 3_600_000)!;
+      const item = scheduleMessage(
+        "mock-thread-1",
+        "never mind",
+        emptyExtras,
+        Date.now() + 3_600_000,
+      ) as ScheduledMessage;
       removeScheduled("mock-thread-1", item.id);
       expect(useApp.getState().scheduled["mock-thread-1"]).toBeUndefined();
       expect(stored()["mock-thread-1"]).toBeUndefined();

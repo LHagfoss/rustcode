@@ -592,7 +592,7 @@ const SWAPPED_ON_HOVER = cx(
  * cut and one line's right part never narrows another line's left one.
  */
 const ROW_HEIGHT = 68;
-const ROW_GRID = "grid h-[68px] grid-rows-[20px_16px_16px] content-center gap-y-0.5 rounded-xl px-2";
+const ROW_GRID = "grid h-[68px] grid-rows-[20px_16px_16px] content-center gap-y-0.5 rounded-xl px-3";
 /** One line of the row: its left part and its right part. */
 const ROW_LINE = "flex min-w-0 items-center gap-2";
 /** A line's left part: truncated. */

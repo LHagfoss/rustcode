@@ -111,6 +111,7 @@ import {
   selectThread,
   sendDecisionFor,
   sendQueuedNow,
+  sendSideChatToParent,
   setActiveTheme,
   setArchived,
   setConfigOption,
@@ -4555,6 +4556,21 @@ describe("a delegated thread's place in the sidebar", () => {
     expect(topLevel({ ...summary, parent: undefined }, [], listed)).toBe("shown");
   });
 
+  test("the session model is available at creation and follows configuration updates", async () => {
+    await ready();
+    const id = await createSession({ cwd: useApp.getState().projectCwd, harness: "rustcode" });
+    const thread = useApp.getState().threads[id]!;
+    const model = thread.configOptions.find((option) => option.id === "model")!;
+    expect(useApp.getState().sessions.find((session) => session.id === id)?.model).toBe(model.current);
+    updateThread(id, (current) => ({
+      ...current,
+      configOptions: current.configOptions.map((option) =>
+        option.id === "model" ? { ...option, current: "updated-model" } : option,
+      ),
+    }));
+    expect(useApp.getState().sessions.find((session) => session.id === id)?.model).toBe("updated-model");
+  });
+
   test("a thread a person starts has no parent, and keeps its row", async () => {
     await ready();
     const id = await createSession({ cwd: useApp.getState().projectCwd, harness: "rustcode" });
@@ -4606,6 +4622,17 @@ describe("forks and side chats", () => {
     expect(useApp.getState().peekId).toBe(id ?? null);
     expect(useApp.getState().panel).toBe("peek");
     expect(useApp.getState().selectedId).toBe(parent);
+  });
+
+  test("sending a side chat reply back preserves the parent draft without sending", async () => {
+    const parent = await ready();
+    const side = (await openSideChat(parent, "selected text"))!;
+    expect(useApp.getState().drafts[side]).toBe("> selected text\n\n");
+    setDraft(parent, "Existing draft");
+    expect(sendSideChatToParent(side, "The answer")).toBe(true);
+    expect(useApp.getState().drafts[parent]).toBe("Existing draft\n\nThe answer");
+    expect(sendSideChatToParent(parent, "No parent")).toBe(false);
+    expect(sendSideChatToParent(side, "  ")).toBe(false);
   });
 
   test("closing the panel keeps the side chat, and writing in it does not give it a row of its own", async () => {
@@ -5184,6 +5211,37 @@ describe("continuing after a limit", () => {
     expect(useApp.getState().limitWaits).toEqual({});
     setContinueAfterLimit(true);
     await continueDueThreads();
+  });
+
+  test("a thread missing from a capped list keeps its wait; one missing from a whole list is gone", async () => {
+    const { connect, continueDueThreads, continueInternetThreads, threadIsGone } = await import("./store");
+    resetForTests();
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready" && useApp.getState().sessionsLoaded);
+    const later = { until: Date.now() + 3_600_000, harness: "claude-code", account: null, attempts: 1 };
+    const net = { since: Date.now(), attempts: 0, harness: "claude-code", account: null };
+    // The list stopped at its page cap: the thread may be past it, so nothing waiting on it is dropped.
+    useApp.setState({
+      sessionsCapped: true,
+      limitWaits: { "past-the-cap": later },
+      internetWaits: { "past-the-cap": net },
+    });
+    expect(threadIsGone("past-the-cap")).toBe(false);
+    await continueDueThreads();
+    await continueInternetThreads();
+    expect(useApp.getState().limitWaits["past-the-cap"]).toBeDefined();
+    expect(useApp.getState().internetWaits["past-the-cap"]).toBeDefined();
+    // A paired machine that has not listed its threads yet says nothing about them either.
+    expect(threadIsGone("machine-x/abc")).toBe(false);
+    // A list that came in whole is the truth: the thread is gone and its waits go with it.
+    useApp.setState({ sessionsCapped: false });
+    expect(threadIsGone("past-the-cap")).toBe(true);
+    expect(threadIsGone("mock-thread-1")).toBe(false);
+    await continueDueThreads();
+    await continueInternetThreads();
+    expect(useApp.getState().limitWaits).toEqual({});
+    expect(useApp.getState().internetWaits).toEqual({});
+    resetForTests();
   });
 
   test("a thread waiting for the internet is cancelled and cleared the same way", async () => {

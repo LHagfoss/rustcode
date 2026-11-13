@@ -6,6 +6,7 @@ import {
   addScheduled,
   countdown,
   dueScheduled,
+  MAX_SCHEDULED_EXTRAS,
   MAX_SCHEDULED_ROWS,
   MAX_SCHEDULED_TEXT,
   parseScheduleBook,
@@ -16,12 +17,25 @@ import {
   SEND_LATER_PRESETS,
   scheduledCount,
   scheduledSummary,
+  scheduleRefusalText,
   whenText,
   withoutScheduled,
 } from "./schedule";
 
 const at = (day: number, hour: number, minute = 0) => new Date(2024, 0, day, hour, minute, 0, 0).getTime();
 const message = (id: string, due: number, text = `message ${id}`): ScheduledMessage => ({ id, due, text });
+/** The book with a message added, for a test that expects it to be kept. */
+const added = (book: ScheduleBook, threadId: string, item: ScheduledMessage): ScheduleBook => {
+  const next = addScheduled(book, threadId, item);
+  if ("refused" in next) throw new Error(`refused: ${next.refused}`);
+  return next.book;
+};
+const picture = (bytes: number) => ({
+  links: [],
+  attachments: [
+    { id: "p", kind: "image" as const, name: "shot.png", mimeType: "image/png", data: "x".repeat(bytes) },
+  ],
+});
 
 describe("the presets", () => {
   test("the offsets send from now, to the minute", () => {
@@ -87,14 +101,14 @@ describe("the book as it is kept", () => {
 
   test("a message comes back as it went in, with what rides with it", () => {
     const extras = { links: ["src/state/store.ts"], attachments: [] };
-    const book = addScheduled(empty, "t1", { ...message("a", now + 60_000), extras })!;
+    const book = added(empty, "t1", { ...message("a", now + 60_000), extras });
     expect(parseScheduleBook(JSON.stringify(book))).toEqual(book);
   });
 
   test("a thread's messages are kept in the order they send", () => {
-    let book = addScheduled(empty, "t1", message("late", now + 120_000))!;
-    book = addScheduled(book, "t1", message("soon", now + 30_000))!;
-    book = addScheduled(book, "t1", message("later", now + 180_000))!;
+    let book = added(empty, "t1", message("late", now + 120_000));
+    book = added(book, "t1", message("soon", now + 30_000));
+    book = added(book, "t1", message("later", now + 180_000));
     expect(book.t1!.map((row) => row.id)).toEqual(["soon", "late", "later"]);
     expect(dueScheduled(book, now + 130_000).map((row) => row.item.id)).toEqual(["soon", "late"]);
   });
@@ -110,24 +124,48 @@ describe("the book as it is kept", () => {
   });
 
   test("a message too big to keep is refused rather than scheduled", () => {
-    expect(addScheduled(empty, "t1", message("huge", now, "x".repeat(MAX_SCHEDULED_TEXT + 1)))).toBeNull();
-    expect(addScheduled(empty, "t1", message("empty", now, ""))).toBeNull();
+    expect(addScheduled(empty, "t1", message("huge", now, "x".repeat(MAX_SCHEDULED_TEXT + 1)))).toEqual({
+      refused: "text",
+    });
+    expect(addScheduled(empty, "t1", message("empty", now, ""))).toEqual({ refused: "empty" });
   });
 
-  test("the book is bounded per thread", () => {
+  test("attachments too big to keep refuse the message instead of being dropped from it", () => {
+    const big = { ...message("big", now), extras: picture(MAX_SCHEDULED_EXTRAS) } as ScheduledMessage;
+    expect(addScheduled(empty, "t1", big)).toEqual({ refused: "extras" });
+    expect(scheduleRefusalText("extras")).toContain("attachments are too big");
+  });
+
+  test("a message that is only an attachment is scheduled, and comes back after a restart", () => {
+    const only = { ...message("pic", now, ""), extras: picture(100) } as ScheduledMessage;
+    const book = added(empty, "t1", only);
+    expect(parseScheduleBook(JSON.stringify(book))).toEqual(book);
+    // Without its attachment there is nothing left of it, so a stripped copy is not kept.
+    const stripped = JSON.stringify({ t1: [{ ...message("pic", now, ""), extras: { bad: true } }] });
+    expect(parseScheduleBook(stripped)).toEqual({});
+  });
+
+  test("a full thread refuses one more instead of evicting one already scheduled", () => {
     let book = empty;
-    for (let i = 0; i < MAX_SCHEDULED_ROWS + 3; i++)
-      book = addScheduled(book, "t1", message(`m${i}`, now + i))!;
-    expect(persistableSchedule(book).t1).toHaveLength(MAX_SCHEDULED_ROWS);
-    // The ones due soonest are the ones kept: they are the next to send.
-    expect(persistableSchedule(book).t1!.map((row) => row.id)).toEqual(
-      Array.from({ length: MAX_SCHEDULED_ROWS }, (_, i) => `m${i + 3}`),
+    for (let i = 0; i < MAX_SCHEDULED_ROWS; i++) book = added(book, "t1", message(`m${i}`, now + 10 + i));
+    expect(addScheduled(book, "t1", message("soonest", now))).toEqual({ refused: "full" });
+    expect(book.t1).toHaveLength(MAX_SCHEDULED_ROWS);
+  });
+
+  test("the stored book is bounded per thread, keeping the soonest", () => {
+    // An older build could hold more than the cap: what is read back keeps the next ones to send.
+    const rows = Array.from({ length: MAX_SCHEDULED_ROWS + 3 }, (_, i) => message(`m${i}`, now + i));
+    const book = persistableSchedule({ t1: rows });
+    expect(book.t1).toHaveLength(MAX_SCHEDULED_ROWS);
+    expect(book.t1!.map((row) => row.id)).toEqual(
+      Array.from({ length: MAX_SCHEDULED_ROWS }, (_, i) => `m${i}`),
     );
+    expect(parseScheduleBook(JSON.stringify({ t1: [...rows].reverse() })).t1![0]!.id).toBe("m0");
   });
 
   test("removing a message leaves the others, and a thread with none keeps no entry", () => {
-    const first = addScheduled(empty, "t1", message("a", now))!;
-    const book = addScheduled(first, "t1", message("b", now + 1))!;
+    const first = added(empty, "t1", message("a", now));
+    const book = added(first, "t1", message("b", now + 1));
     const one = withoutScheduled(book, "t1", "a");
     expect(one.t1!.map((row) => row.id)).toEqual(["b"]);
     expect(withoutScheduled(one, "t1", "b")).toEqual({});
@@ -137,8 +175,8 @@ describe("the book as it is kept", () => {
 
   test("the count is what the store's timer watches", () => {
     expect(scheduledCount({})).toBe(0);
-    const one = addScheduled(empty, "t1", message("a", now))!;
-    const book = addScheduled(one, "t2", message("b", now))!;
+    const one = added(empty, "t1", message("a", now));
+    const book = added(one, "t2", message("b", now));
     expect(scheduledCount(book)).toBe(2);
   });
 });
