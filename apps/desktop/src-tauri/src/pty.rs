@@ -3,26 +3,30 @@
 //! channel; input and size come back through `pty_write` and `pty_resize`.
 //! Every terminal is killed when its panel closes it or the app quits.
 
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc;
 use std::sync::Mutex;
 use tauri::ipc::Channel;
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum PtyEvent {
     Data { data: String },
     Exit { code: Option<u32> },
 }
 
+/// One terminal. Input goes to its own writer thread, so a shell that is
+/// not reading never holds up the app's main thread or another terminal;
+/// the reader thread owns the child, waits for it and reports its exit code.
 struct Session {
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
-    child: Box<dyn Child + Send + Sync>,
+    input: mpsc::Sender<Vec<u8>>,
+    killer: Box<dyn ChildKiller + Send + Sync>,
 }
 
 #[derive(Default)]
@@ -35,7 +39,7 @@ impl Ptys {
     pub fn close_all(&self) {
         if let Ok(mut sessions) = self.sessions.lock() {
             for (_, mut s) in sessions.drain() {
-                let _ = s.child.kill();
+                let _ = s.killer.kill();
             }
         }
     }
@@ -96,7 +100,81 @@ pub fn take_utf8(pending: &mut Vec<u8>) -> String {
     }
 }
 
-#[tauri::command]
+/// Starts `program` in a new pseudo-terminal in `cwd`, with a writer thread
+/// for its input and a reader thread that hands its output to `emit` (false
+/// when nobody listens any more) and ends with its exit code.
+fn spawn_session(
+    cwd: &Path,
+    cols: u16,
+    rows: u16,
+    program: &str,
+    args: &[&str],
+    emit: impl Fn(PtyEvent) -> bool + Send + 'static,
+) -> Result<Session, String> {
+    let pair = native_pty_system()
+        .openpty(size(cols, rows))
+        .map_err(|e| e.to_string())?;
+    // The shell owns a PTY (ConPTY on Windows); do not use CREATE_NO_WINDOW.
+    let mut command = CommandBuilder::new(program);
+    command.args(args);
+    command.cwd(cwd);
+    command.env("TERM", "xterm-256color");
+    command.env("COLORTERM", "truecolor");
+    command.env("TERM_PROGRAM", "RustCode");
+    let mut child = pair
+        .slave
+        .spawn_command(command)
+        .map_err(|e| e.to_string())?;
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+    let mut writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+    let killer = child.clone_killer();
+    let (input, queued) = mpsc::channel::<Vec<u8>>();
+    // Ends when the session is closed (its sender dropped) or the shell stops reading for good.
+    std::thread::spawn(move || {
+        for chunk in queued {
+            if writer
+                .write_all(&chunk)
+                .and_then(|_| writer.flush())
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+    std::thread::spawn(move || {
+        let mut buffer = [0u8; 16 * 1024];
+        let mut pending = Vec::new();
+        let mut listening = true;
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    pending.extend_from_slice(&buffer[..n]);
+                    let data = take_utf8(&mut pending);
+                    if !data.is_empty() && !emit(PtyEvent::Data { data }) {
+                        listening = false;
+                        break;
+                    }
+                }
+            }
+        }
+        // Nobody reads this terminal any more: stop its shell rather than wait for it.
+        if !listening {
+            let _ = child.kill();
+        }
+        // Reaped here, so a closed or killed shell leaves no zombie, and its code is reported.
+        let code = child.wait().ok().map(|status| status.exit_code());
+        let _ = emit(PtyEvent::Exit { code });
+    });
+    Ok(Session {
+        master: pair.master,
+        input,
+        killer,
+    })
+}
+
+#[tauri::command(async)]
 pub fn pty_open(
     ptys: tauri::State<'_, Ptys>,
     cwd: String,
@@ -111,9 +189,6 @@ pub fn pty_open(
     if ptys.sessions.lock().map_err(|e| e.to_string())?.len() >= MAX_SESSIONS {
         return Err("Too many terminals are open.".into());
     }
-    let pair = native_pty_system()
-        .openpty(size(cols, rows))
-        .map_err(|e| e.to_string())?;
     let (shell, args) = shell_command(
         std::env::consts::OS,
         |name| std::env::var(name).ok(),
@@ -124,58 +199,28 @@ pub fn pty_open(
                 .map(|path| path.to_string_lossy().into_owned())
         },
     );
-    // The shell owns a PTY (ConPTY on Windows); do not use CREATE_NO_WINDOW.
-    let mut command = CommandBuilder::new(&shell);
-    command.args(args);
-    command.cwd(&cwd);
-    command.env("TERM", "xterm-256color");
-    command.env("COLORTERM", "truecolor");
-    command.env("TERM_PROGRAM", "RustCode");
-    let child = pair
-        .slave
-        .spawn_command(command)
-        .map_err(|e| e.to_string())?;
-    drop(pair.slave);
-    let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+    let session = spawn_session(&cwd, cols, rows, &shell, args, move |event| {
+        on_event.send(event).is_ok()
+    })?;
     let id = ptys.next.fetch_add(1, Ordering::Relaxed) + 1;
-    ptys.sessions.lock().map_err(|e| e.to_string())?.insert(
-        id,
-        Session {
-            master: pair.master,
-            writer,
-            child,
-        },
-    );
-    std::thread::spawn(move || {
-        let mut buffer = [0u8; 16 * 1024];
-        let mut pending = Vec::new();
-        loop {
-            match reader.read(&mut buffer) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    pending.extend_from_slice(&buffer[..n]);
-                    let data = take_utf8(&mut pending);
-                    if !data.is_empty() && on_event.send(PtyEvent::Data { data }).is_err() {
-                        break;
-                    }
-                }
-            }
-        }
-        let _ = on_event.send(PtyEvent::Exit { code: None });
-    });
+    ptys.sessions
+        .lock()
+        .map_err(|e| e.to_string())?
+        .insert(id, session);
     Ok(id)
 }
 
+/// Queues input for the terminal's writer thread. Synchronous on purpose, so
+/// keystrokes reach the shell in the order they were typed, and cheap: the
+/// sessions lock is held for a lookup and a channel send, never for a write.
 #[tauri::command]
 pub fn pty_write(ptys: tauri::State<'_, Ptys>, id: u32, data: String) -> Result<(), String> {
-    let mut sessions = ptys.sessions.lock().map_err(|e| e.to_string())?;
-    let session = sessions.get_mut(&id).ok_or("No such terminal.")?;
+    let sessions = ptys.sessions.lock().map_err(|e| e.to_string())?;
+    let session = sessions.get(&id).ok_or("No such terminal.")?;
     session
-        .writer
-        .write_all(data.as_bytes())
-        .map_err(|e| e.to_string())?;
-    session.writer.flush().map_err(|e| e.to_string())
+        .input
+        .send(data.into_bytes())
+        .map_err(|_| "The terminal has stopped.".to_string())
 }
 
 #[tauri::command]
@@ -193,10 +238,12 @@ pub fn pty_resize(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+/// Stops the terminal's shell; its reader thread reaps it and reports the code.
+#[tauri::command(async)]
 pub fn pty_close(ptys: tauri::State<'_, Ptys>, id: u32) -> Result<(), String> {
-    if let Some(mut session) = ptys.sessions.lock().map_err(|e| e.to_string())?.remove(&id) {
-        let _ = session.child.kill();
+    let session = ptys.sessions.lock().map_err(|e| e.to_string())?.remove(&id);
+    if let Some(mut session) = session {
+        let _ = session.killer.kill();
     }
     Ok(())
 }
@@ -261,6 +308,55 @@ mod tests {
             assert_eq!(program, expected);
             assert!(args.is_empty(), "Windows shells must not receive -l");
         }
+    }
+
+    #[cfg(unix)]
+    fn run_shell(script: &str) -> (Session, mpsc::Receiver<PtyEvent>) {
+        let (tx, rx) = mpsc::channel();
+        let session = spawn_session(
+            &std::env::temp_dir(),
+            80,
+            24,
+            "/bin/sh",
+            &["-c", script],
+            move |event| tx.send(event).is_ok(),
+        )
+        .unwrap();
+        (session, rx)
+    }
+
+    /// Everything the terminal said until it exited, and its exit code.
+    #[cfg(unix)]
+    fn until_exit(rx: &mpsc::Receiver<PtyEvent>) -> (String, Option<u32>) {
+        let mut out = String::new();
+        loop {
+            match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+                Ok(PtyEvent::Data { data }) => out.push_str(&data),
+                Ok(PtyEvent::Exit { code }) => return (out, code),
+                Err(error) => panic!("no exit: {error}; said {out:?}"),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn input_reaches_the_shell_in_order_and_its_exit_code_is_reported() {
+        let (session, rx) = run_shell("read a; read b; echo \"got:$a$b\"; exit 3");
+        session.input.send(b"one\n".to_vec()).unwrap();
+        session.input.send(b"two\n".to_vec()).unwrap();
+        let (out, code) = until_exit(&rx);
+        assert!(out.contains("got:onetwo"), "{out:?}");
+        assert_eq!(code, Some(3));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_closed_terminal_is_killed_and_reaped() {
+        let (mut session, rx) = run_shell("sleep 30");
+        session.killer.kill().unwrap();
+        // Reaped by the reader thread: an exit is reported, not left as a zombie.
+        let (_, code) = until_exit(&rx);
+        assert!(code.is_some_and(|code| code != 0), "{code:?}");
     }
 
     #[test]

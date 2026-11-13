@@ -133,6 +133,10 @@ pub fn run() {
             // copy a service runs is refreshed here; the copies outside the app catch up with the
             // engine this build ships, which is what makes an update reach them (#3487).
             std::thread::spawn(service::catch_up_after_update);
+            // Link previews cached by earlier runs: the expired and the oldest past the cap go.
+            if let Ok(dir) = app.path().app_cache_dir() {
+                std::thread::spawn(move || links::sweep(&dir.join("links")));
+            }
             // Built here, not from the config, so it renders at 120 Hz where the display does.
             webview::build_main_window(app)?;
             // A click on a notification is only reported while something listens for it.

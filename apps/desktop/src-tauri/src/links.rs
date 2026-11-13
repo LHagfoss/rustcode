@@ -5,12 +5,14 @@
 //! so a redirect or rebinding cannot reach localhost or the LAN), at most
 //! three redirects each re-checked, 3 s per request, 512 KB of HTML and
 //! 64 KB of favicon, no cookies. Results are cached in memory and on disk
-//! for a week, failures for an hour.
+//! for a week, failures for an hour. Each disk entry names its URL and is
+//! checked against it; expired entries and the oldest past
+//! [`MAX_CACHE_FILES`] are swept when the app starts.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -20,6 +22,8 @@ const MAX_ICON: usize = 64 * 1024;
 const MAX_REDIRECTS: usize = 3;
 const TTL_OK: u64 = 7 * 24 * 3600;
 const TTL_FAILED: u64 = 3600;
+/// At most this many pages are kept on disk; the sweep drops the oldest.
+const MAX_CACHE_FILES: usize = 2000;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -36,6 +40,9 @@ pub struct LinkMeta {
 
 #[derive(Serialize, Deserialize)]
 struct Cached {
+    /// The page this entry is for: a file whose name matches another URL's
+    /// is not that page.
+    url: String,
     at: u64,
     meta: Option<LinkMeta>,
 }
@@ -53,14 +60,80 @@ fn now() -> u64 {
 }
 
 fn fresh(at: u64, meta: &Option<LinkMeta>) -> bool {
-    now().saturating_sub(at) < if meta.is_some() { TTL_OK } else { TTL_FAILED }
+    fresh_at(at, meta, now())
 }
 
-fn cache_file(dir: &std::path::Path, url: &str) -> PathBuf {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    url.hash(&mut h);
-    dir.join(format!("{:016x}.json", h.finish()))
+fn fresh_at(at: u64, meta: &Option<LinkMeta>, now: u64) -> bool {
+    now.saturating_sub(at) < if meta.is_some() { TTL_OK } else { TTL_FAILED }
+}
+
+/// The URL's file: a SHA-256 name, the same in every build (the std hasher
+/// is not stable across Rust versions).
+fn cache_file(dir: &Path, url: &str) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    let digest: String = Sha256::digest(url.as_bytes())
+        .iter()
+        .take(16)
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    dir.join(format!("{digest}.json"))
+}
+
+/// The cached entry for exactly this URL, while it is fresh.
+fn read_cached(dir: &Path, url: &str) -> Option<Cached> {
+    let text = std::fs::read_to_string(cache_file(dir, url)).ok()?;
+    let cached = serde_json::from_str::<Cached>(&text).ok()?;
+    (cached.url == url && fresh(cached.at, &cached.meta)).then_some(cached)
+}
+
+fn write_cached(dir: &Path, url: &str, at: u64, meta: &Option<LinkMeta>) {
+    if std::fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    let cached = Cached {
+        url: url.to_owned(),
+        at,
+        meta: meta.clone(),
+    };
+    if let Ok(text) = serde_json::to_string(&cached) {
+        let _ = std::fs::write(cache_file(dir, url), text);
+    }
+}
+
+/// Clears the disk cache of what can no longer be used: expired entries,
+/// files an older build wrote (no URL in them), and the oldest past
+/// [`MAX_CACHE_FILES`]. Run once at start-up, off the main thread.
+pub fn sweep(dir: &Path) {
+    sweep_at(dir, now(), MAX_CACHE_FILES);
+}
+
+fn sweep_at(dir: &Path, now: u64, max: usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut kept = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "json") {
+            continue;
+        }
+        let cached = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<Cached>(&text).ok());
+        match cached {
+            Some(cached) if fresh_at(cached.at, &cached.meta, now) => kept.push((cached.at, path)),
+            _ => {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+    if kept.len() > max {
+        kept.sort();
+        let over = kept.len() - max;
+        for (_, path) in kept.into_iter().take(over) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 /// Whether an address is on the public internet.
@@ -409,19 +482,13 @@ pub async fn link_meta(
         }
     }
     let dir = app.path().app_cache_dir().ok().map(|d| d.join("links"));
-    if let Some(dir) = &dir {
-        if let Ok(text) = std::fs::read_to_string(cache_file(dir, &url)) {
-            if let Ok(cached) = serde_json::from_str::<Cached>(&text) {
-                if fresh(cached.at, &cached.meta) {
-                    cache
-                        .memory
-                        .lock()
-                        .map_err(|e| e.to_string())?
-                        .insert(url.clone(), (cached.at, cached.meta.clone()));
-                    return Ok(cached.meta);
-                }
-            }
-        }
+    if let Some(cached) = dir.as_deref().and_then(|dir| read_cached(dir, &url)) {
+        cache
+            .memory
+            .lock()
+            .map_err(|e| e.to_string())?
+            .insert(url.clone(), (cached.at, cached.meta.clone()));
+        return Ok(cached.meta);
     }
     let meta = fetch(&url).await;
     let at = now();
@@ -433,15 +500,7 @@ pub async fn link_meta(
         memory.insert(url.clone(), (at, meta.clone()));
     }
     if let Some(dir) = dir {
-        if std::fs::create_dir_all(&dir).is_ok() {
-            let cached = Cached {
-                at,
-                meta: meta.clone(),
-            };
-            if let Ok(text) = serde_json::to_string(&cached) {
-                let _ = std::fs::write(cache_file(&dir, &url), text);
-            }
-        }
+        write_cached(&dir, &url, at, &meta);
     }
     Ok(meta)
 }
@@ -449,6 +508,92 @@ pub async fn link_meta(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("rc-links-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    fn page(title: &str) -> Option<LinkMeta> {
+        Some(LinkMeta {
+            title: Some(title.into()),
+            ..LinkMeta::default()
+        })
+    }
+
+    #[test]
+    fn the_file_name_is_stable_and_the_entry_names_its_url() {
+        let dir = Path::new("/cache");
+        // SHA-256 of the URL: the same name in every build and Rust version.
+        assert_eq!(
+            cache_file(dir, "https://example.com"),
+            dir.join("100680ad546ce6a577f42f52df33b4cf.json")
+        );
+        let dir = scratch("url");
+        write_cached(&dir, "https://a.example", now(), &page("A"));
+        assert_eq!(
+            read_cached(&dir, "https://a.example").unwrap().meta,
+            page("A")
+        );
+        // Another URL's entry under this URL's name is not this page.
+        std::fs::copy(
+            cache_file(&dir, "https://a.example"),
+            cache_file(&dir, "https://b.example"),
+        )
+        .unwrap();
+        assert!(read_cached(&dir, "https://b.example").is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_sweep_drops_expired_old_and_overflowing_entries() {
+        let dir = scratch("sweep");
+        let now = now();
+        write_cached(
+            &dir,
+            "https://old-ok.example",
+            now - TTL_OK - 1,
+            &page("old"),
+        );
+        write_cached(
+            &dir,
+            "https://old-failed.example",
+            now - TTL_FAILED - 1,
+            &None,
+        );
+        for i in 0..4 {
+            write_cached(
+                &dir,
+                &format!("https://p{i}.example"),
+                now - 10 + i,
+                &page("p"),
+            );
+        }
+        // An older build's file: no URL in it.
+        std::fs::write(dir.join("0123456789abcdef.json"), r#"{"at":1,"meta":null}"#).unwrap();
+        std::fs::write(dir.join("notes.txt"), "not ours").unwrap();
+        sweep_at(&dir, now, 3);
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        let mut expected: Vec<String> = (1..4)
+            .map(|i| {
+                cache_file(&dir, &format!("https://p{i}.example"))
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .chain(["notes.txt".to_owned()])
+            .collect();
+        expected.sort();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(left, expected);
+    }
 
     #[test]
     fn reads_the_head() {
