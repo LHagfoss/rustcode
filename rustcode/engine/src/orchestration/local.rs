@@ -85,6 +85,8 @@ pub(crate) async fn answer_json(
     let answer = match name {
         super::LIST_SESSIONS => list_sessions(session_id, args),
         super::READ_SESSION => read_session(session_id, args),
+        super::SEARCH_SESSIONS => search_sessions(session_id, args).await,
+        super::LIST_PROJECTS => list_projects(args),
         super::LIST_HARNESSES => list_harnesses(args).await,
         super::LIST_MACHINES => list_machines(args).await,
         super::THREAD_STATUS => thread_status(session_id, args),
@@ -259,6 +261,149 @@ fn list_sessions(session_id: &str, args: &Value) -> Value {
         "machine_id": LOCAL_MACHINE_ID,
         "sessions": sessions,
     })
+}
+
+/// The most projects `list_projects` returns, as the app's.
+const MAX_PROJECTS: usize = 50;
+/// The most threads `search_sessions` returns, as the app's.
+const MAX_SEARCH_HITS: usize = 30;
+
+/// `search_sessions`: threads whose title or text matches, newest first, with
+/// a snippet of what was said. Like `list_sessions`, it covers the caller's
+/// project unless `all_projects` is set, and a whole-store search follows the
+/// cross-project setting.
+async fn search_sessions(session_id: &str, args: &Value) -> Value {
+    if let Err(remote) = local_machine(args) {
+        return remote;
+    }
+    let all_projects = args
+        .get("all_projects")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if all_projects && !read_across_projects() {
+        return error("not_allowed", reach_refused());
+    }
+    let query = args
+        .get("query")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    let request = crate::thread_index::SearchRequest {
+        query: query.clone(),
+        limit: Some(100),
+    };
+    // The index is a convenience: a title match still answers without it.
+    let said: HashMap<String, String> =
+        tokio::task::spawn_blocking(move || crate::thread_index::answer_search(&request))
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .and_then(|found| found.get("results").and_then(Value::as_array).cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|hit| {
+                Some((
+                    hit.get("session_id")?.as_str()?.to_owned(),
+                    hit.get("snippet")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                ))
+            })
+            .collect();
+    let words: Vec<String> = query
+        .to_lowercase()
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect();
+    let caller = crate::config::session_meta_by_id(session_id);
+    let caller_reach = caller.as_ref().map(|meta| reach_of(session_id, meta));
+    let mut rows: Vec<(String, Value)> = Vec::new();
+    for meta in crate::config::list_sessions() {
+        let Some(id) = crate::config::session_id_from_path(&meta.path) else {
+            continue;
+        };
+        if id == session_id {
+            continue;
+        }
+        let title = meta.title.to_lowercase();
+        if !said.contains_key(&id) && !words.iter().all(|word| title.contains(word)) {
+            continue;
+        }
+        if !all_projects {
+            let started_by_caller = crate::config::load_session_parent(&id)
+                .and_then(|parent| parent.id)
+                .is_some_and(|parent| parent == session_id);
+            if !same_project(caller_reach.as_deref(), &reach_of(&id, &meta)) && !started_by_caller {
+                continue;
+            }
+        }
+        let mut row = json!({
+            "session_id": id,
+            "title": meta.title.clone(),
+            "status": crate::thread_status::current(&id).as_str(),
+        });
+        if all_projects {
+            row["project"] = json!(project_of(&id, &meta));
+        }
+        if let Some(snippet) = said.get(&id).filter(|snippet| !snippet.is_empty()) {
+            row["snippet"] = json!(snippet);
+        }
+        rows.push((updated_at(&meta).unwrap_or_default(), row));
+    }
+    rows.sort_by(|left, right| right.0.cmp(&left.0));
+    let sessions: Vec<Value> = rows
+        .into_iter()
+        .take(MAX_SEARCH_HITS)
+        .map(|(_, row)| row)
+        .collect();
+    json!({
+        "machine": local_name(),
+        "machine_id": LOCAL_MACHINE_ID,
+        "sessions": sessions,
+    })
+}
+
+/// `list_projects`: the projects this computer has threads in, most recently
+/// updated first, with how many threads each has and whether one is running.
+/// The app also lists folders it registered before their first thread; with
+/// no app, only a project with a thread shows.
+fn list_projects(args: &Value) -> Value {
+    if let Err(remote) = local_machine(args) {
+        return remote;
+    }
+    let mut by_path: HashMap<String, (usize, bool, String)> = HashMap::new();
+    for meta in crate::config::list_sessions() {
+        let Some(id) = crate::config::session_id_from_path(&meta.path) else {
+            continue;
+        };
+        let path = project_of(&id, &meta);
+        if path.is_empty() || path == "/" {
+            continue;
+        }
+        let entry = by_path.entry(path).or_default();
+        entry.0 += 1;
+        entry.1 |= crate::thread_status::current(&id).as_str() == "running";
+        entry.2 = entry.2.clone().max(updated_at(&meta).unwrap_or_default());
+    }
+    let mut rows: Vec<(String, usize, bool, String)> = by_path
+        .into_iter()
+        .map(|(path, (threads, working, updated))| (path, threads, working, updated))
+        .collect();
+    rows.sort_by(|left, right| right.3.cmp(&left.3).then_with(|| left.0.cmp(&right.0)));
+    let projects: Vec<Value> = rows
+        .into_iter()
+        .take(MAX_PROJECTS)
+        .map(|(path, threads, working, _)| {
+            let name = Path::new(&path)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.clone());
+            json!({ "path": path, "name": name, "threads": threads, "working": working })
+        })
+        .collect();
+    json!({ "projects": projects })
 }
 
 /// `read_session`: the last turns of one thread as text, paged by byte offset.
@@ -1461,6 +1606,92 @@ mod tests {
             crate::config::get_active_session_dir(&caller).map(|dir| std::fs::remove_dir_all(dir));
         let _ =
             crate::config::get_active_session_dir(&target).map(|dir| std::fs::remove_dir_all(dir));
+    }
+
+    #[tokio::test]
+    async fn search_sessions_finds_a_title_and_follows_the_cross_project_setting() {
+        let caller = full_access_caller();
+        let target = crate::config::create_detached_session();
+        let word = format!(
+            "zebrafinch{}",
+            &target[..target.len().min(8)].replace('-', "")
+        );
+        crate::config::save_session_title(&target, &format!("Fix {word} parsing"));
+        crate::config::save_session_history(
+            &target,
+            &vec![
+                ChatMessage::new("user", "start"),
+                ChatMessage::new("assistant", "done"),
+            ],
+        );
+        crate::config::flush_history();
+
+        set_setting("read-across-projects", json!(true));
+        let found = answer_json(
+            &caller,
+            &CancellationToken::new(),
+            super::super::SEARCH_SESSIONS,
+            &json!({"query": word, "all_projects": true}),
+        )
+        .await;
+        let ids: Vec<&str> = found["sessions"]
+            .as_array()
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|row| row["session_id"].as_str())
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(ids.contains(&target.as_str()), "{found}");
+        assert!(found["sessions"][0]["project"].is_string(), "{found}");
+
+        let none = answer_json(
+            &caller,
+            &CancellationToken::new(),
+            super::super::SEARCH_SESSIONS,
+            &json!({"query": "no-such-thread-anywhere-xyzzy", "all_projects": true}),
+        )
+        .await;
+        assert_eq!(none["sessions"], json!([]), "{none}");
+
+        set_setting("read-across-projects", json!(false));
+        let refused = answer_json(
+            &caller,
+            &CancellationToken::new(),
+            super::super::SEARCH_SESSIONS,
+            &json!({"query": word, "all_projects": true}),
+        )
+        .await;
+        assert_eq!(refused["error"]["code"], json!("not_allowed"), "{refused}");
+        set_setting("read-across-projects", json!(true));
+        let _ =
+            crate::config::get_active_session_dir(&caller).map(|dir| std::fs::remove_dir_all(dir));
+        let _ =
+            crate::config::get_active_session_dir(&target).map(|dir| std::fs::remove_dir_all(dir));
+    }
+
+    #[tokio::test]
+    async fn list_projects_answers_without_the_app_and_names_another_machine_as_unavailable() {
+        let listed = answer_json(
+            "",
+            &CancellationToken::new(),
+            super::super::LIST_PROJECTS,
+            &json!({}),
+        )
+        .await;
+        let projects = listed["projects"].as_array().expect("a projects list");
+        for project in projects {
+            assert!(project["path"].is_string() && project["name"].is_string());
+            assert!(project["threads"].as_u64().unwrap_or(0) >= 1);
+        }
+        let remote = answer_json(
+            "",
+            &CancellationToken::new(),
+            super::super::LIST_PROJECTS,
+            &json!({"machine": "some-other-machine"}),
+        )
+        .await;
+        assert_eq!(remote["error"]["code"], json!("unavailable"), "{remote}");
     }
 
     #[test]

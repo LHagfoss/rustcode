@@ -30,7 +30,7 @@ keeps only the token's SHA-256, in `<config>/outside-agents.json` (mode 0600).
 
 | Level | May |
 | --- | --- |
-| Read-only (default) | `whoami`, `list_sessions`, `read_session`, `wait_session`, `thread_status`, `thread_usage`, `query_data`, `read_activity`, `list_harnesses`, `list_machines` |
+| Read-only (default) | `whoami`, `list_sessions`, `search_sessions`, `list_projects`, `read_session`, `wait_session`, `thread_status`, `thread_usage`, `query_data`, `read_activity`, `list_harnesses`, `list_machines` |
 | Delegate | Read-only, plus `start_session` and `message_session` |
 | Manage | Delegate, plus the management tools (merge, clean up, settings) |
 
@@ -39,7 +39,7 @@ revoking it applies to its next call. A tool that is not classified in
 `orchestration/outside.rs` (`required_scope`) is refused to every level, so a
 new internal tool is never exposed by accident. A tool that is allowed by level
 but that the engine cannot run without a thread behind it (today: the Manage
-tools, `fan_out`, `search_sessions`, `list_projects`, ...) is not listed, and a
+tools, `fan_out`, `interrupt_session`, ...) is not listed, and a
 call says so. `whoami` lists the projects the app can start threads in.
 
 Work an outside agent starts is the ceiling of its level: threads are
@@ -92,4 +92,10 @@ reads them.
 - Management tools for outside agents (merge, cleanup, settings): the Manage
   level and its classification exist; the tools need a path that does not run
   through a calling thread.
-- `fan_out`, `search_sessions` and `list_projects` for outside agents.
+- `fan_out` and `interrupt_session` for outside agents.
+
+`search_sessions` matches titles and what was said; across projects it follows
+the "Let agents read threads in other projects" setting, as `list_sessions`
+does. `list_projects` lists the projects that have a thread on this computer;
+a folder registered in the app but with no thread yet shows only in the app's
+own answer.
