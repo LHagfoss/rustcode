@@ -782,9 +782,32 @@ Built in the app (`apps/desktop/src/state/host.ts`, rules in
 `state/orchestration.ts`). A thread that starts or messages others is told when
 they finish or ask, instead of having to poll with sleeps.
 
+- **Batched (issue 3649).** Every wake is a model turn that resends the
+  parent's whole context, and one wake per finished delegate was about a fifth
+  of all reported spend. So wakes are merged: the parent hears nothing until the
+  *oldest* unreported finish or stall of its delegates is `wake-batch-seconds`
+  old (default **60**, Settings › Harnesses › Delegation › *Merge delegate wakes
+  within*, 0 to 600; 0 is off), and then one turn lists every delegate that
+  finished, failed or stalled in that window, each with its answer summary. The
+  window runs from the first event, not from the last, so a steady trickle
+  cannot hold a wake back forever, and an event after the flush starts the next
+  window. A delegate that **asks the user** is never held: it goes at once and
+  takes whatever else is waiting along. A busy parent still gets one queued row
+  that later wakes fold into (`queueWake`). A stall is announced once per
+  silence: the mark is the activity timestamp it covered (`stallNotifiedFor`),
+  so it repeats only after the delegate showed new activity and went quiet
+  again, and a delegate that finished inside the window is reported as
+  finished, not as stalled. The silence that counts is still
+  `STALL_NOTICE_MS` (10 minutes). The app cannot tell a stalled turn from a
+  child process that is still running a long command, so no stall is withheld on
+  that ground; that signal belongs to issue 3650. Each wake the engine sees is
+  recorded as a `thread.wake` event with the delegate counts
+  (`docs/data-store.md`), and its tokens and cost are on that turn's `turns`
+  row. The rules are pure (`wakesDue`, `nextWakeAt` in `state/orchestration.ts`,
+  `batchMs` on `WakeContext`) and tested there.
 - **Done or failed.** When every link under a parent has settled, the parent
-  gets one message in a turn of its own. While any of its links is still
-  running, a settled child waits in a coalescing window of 3 s
+  gets one message in a turn of its own (with the window off). While any of its
+  links is still running, a settled child waits in a coalescing window of 3 s
   (`WAKE_COALESCE_MS`) for its siblings, so a fan-out that finishes together is
   one message. A settled child is reported only when its own subtree is quiet:
   no link of its is active, none of its own children waits to be reported to
@@ -931,6 +954,33 @@ they finish or ask, instead of having to poll with sleeps.
   delegates show up to three harness marks, their titles and the longest worked
   time. A wake steered into a running turn is a steer row there, which says the
   turn reads it after its current step.
+
+## Live delegate status and `status` (issue 3651)
+
+An orchestrator thread (one with delegates) shows where they stand without a
+model turn:
+
+- **The panel.** While any delegate works or waits on the user, a panel is
+  pinned above the composer (`ui/DelegateStatus.tsx`, mounted in `ChatView`),
+  with a header line (`Status · 2 working · 1 needs you`) that folds it. Each
+  delegate is a row: its state and, while it works, how long it has shown
+  nothing (`active`, `idle 2m 5s`), then its last tool, model and account,
+  branch, and pull request number with its checks (`#3649 · checks passing`,
+  `· 2 failing`, `· 3 pending`, `· merged`). Clicking a row opens that thread.
+  Everything but the pull request is read from the app's own state every two
+  seconds; the pull request is the same read `thread_status` makes
+  (`readDelegatePull` in `state/host.ts`, `_rustcode/pulls/state`), shared and
+  kept for 30 s, repeated every 25 s while the panel is open and the window is
+  visible, and skipped for a delegate outside a worktree.
+- **A bare `status`.** Typing `status` or `status?` (any case, nothing else) in a
+  thread with delegates is answered by the app: the message and a *Status* card
+  go into the transcript, marked **Local reply · no model turn**, and nothing is
+  sent to the harness. The card carries the same rows as the panel and fills in
+  the pull requests as they arrive. Any longer message (`status of the PR?`)
+  goes to the model as before, and so does `status` in a thread with no
+  delegates. The card is the app's, not the thread's: it is not stored by the
+  engine, so a reload drops it. The matcher and the rows are pure
+  (`state/delegateStatus.ts`).
 
 ## Orchestration tools v3
 

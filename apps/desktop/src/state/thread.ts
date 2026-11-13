@@ -125,6 +125,11 @@ export type TranscriptItem =
       answer: string;
       at?: number;
     }
+  /**
+   * The app's own answer to a bare "status" (issue 3651): where each delegate stands. No model
+   * turn ran for it, and the row says so. Not kept by the engine, so a reload drops it.
+   */
+  | { kind: "status"; id: string; at: number; rows: import("./delegateStatus").DelegateStatusRow[] }
   /** Where the thread moved to another harness, which got the conversation so far. */
   | { kind: "handoff"; id: string; from: string; to: string; model?: string }
   /** Where the thread's model or effort changed. */

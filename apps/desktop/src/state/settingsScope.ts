@@ -172,6 +172,7 @@ function localValues(): Record<ServerSettingKey, Json> {
     "delegate-presets": [],
     "limit-fallback": state.limitFallback,
     "limit-fallback-map": state.limitFallbackMap as unknown as Json,
+    "wake-batch-seconds": state.wakeBatchSeconds,
   };
 }
 
@@ -296,6 +297,8 @@ function applyLocalSettings(values: Record<string, Json | undefined>): void {
     const fallback = bool("limit-fallback");
     if (fallback !== undefined) store.setLimitFallback(fallback);
     if (Array.isArray(values["limit-fallback-map"])) store.setLimitFallbackMap(values["limit-fallback-map"]);
+    const batch = number("wake-batch-seconds");
+    if (batch !== undefined) store.setWakeBatchSeconds(batch);
   });
 }
 

@@ -143,6 +143,7 @@ function staysVisible(item: TranscriptItem): boolean {
     item.kind === "user" ||
     item.kind === "turnEnd" ||
     item.kind === "handoff" ||
+    item.kind === "status" ||
     item.kind === "switch" ||
     item.kind === "notice" ||
     // What was asked and answered is part of the record, folded turns or not.

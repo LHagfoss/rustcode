@@ -1264,6 +1264,89 @@ describe("waking a parent", () => {
     expect(wakesDue(mixed, later)[0]!.settled.map((l) => l.target)).toEqual(["b"]);
   });
 
+  describe("batch window (issue 3649)", () => {
+    const WINDOW = 60_000;
+    const batched = (over: Partial<WakeContext> = {}): WakeContext => ctx({ batchMs: WINDOW, ...over });
+
+    test("a finish waits for the window, and the finishes inside it arrive as one wake", () => {
+      const two = book([done("a", "b", 1_000), done("a", "c", 40_000)]);
+      // Nothing goes while the oldest finish is younger than the window, however many arrived.
+      expect(wakesDue(two, batched({ now: 1_000 + WINDOW - 1 }))).toEqual([]);
+      expect(nextWakeAt(two, batched({ now: 50_000 }))).toBe(1_000 + WINDOW);
+      const wakes = wakesDue(two, batched({ now: 1_000 + WINDOW }));
+      expect(wakes).toHaveLength(1);
+      expect(wakes[0]!.settled.map((l) => l.target)).toEqual(["b", "c"]);
+    });
+
+    test("a finish after the window starts the next one", () => {
+      const first = book([done("a", "b", 1_000)]);
+      const sent = read(first, wakesDue(first, batched({ now: 61_000 }))[0]!, ctx(), 61_000);
+      const next: LinkBook = { ...sent, links: [...sent.links, done("a", "c", 70_000)] };
+      expect(wakesDue(next, batched({ now: 100_000 }))).toEqual([]);
+      expect(nextWakeAt(next, batched({ now: 100_000 }))).toBe(70_000 + WINDOW);
+    });
+
+    test("a running sibling does not hold a finish past the window", () => {
+      const mixed = book([done("a", "b", 1_000), link("a", "c", "working")]);
+      expect(wakesDue(mixed, batched({ now: 1_000 + WINDOW }))[0]!.settled.map((l) => l.target)).toEqual([
+        "b",
+      ]);
+    });
+
+    test("a question for the user goes at once and takes the finishes with it", () => {
+      const asked = book([done("a", "b", 9_000), link("a", "c", "needs_user")]);
+      const [wake] = wakesDue(asked, batched({ states: { "a/c": "needs_user" }, pending: { "a/c": "7" } }));
+      expect(wake!.asking.map((l) => l.target)).toEqual(["c"]);
+      expect(wake!.settled.map((l) => l.target)).toEqual(["b"]);
+    });
+
+    test("a window of 0 keeps the short coalescing rule", () => {
+      const lone = book([done("a", "b", 9_500)]);
+      expect(wakesDue(lone, ctx({ batchMs: 0 }))).toHaveLength(1);
+    });
+
+    test("a stall joins the finishes of its window and is announced once", () => {
+      const at = 1_000;
+      const stuck = { ...link("a", "s", "working"), startedAt: at };
+      const stallCtx = (now: number, over: Partial<WakeContext> = {}): WakeContext =>
+        batched({
+          now,
+          threads: {
+            a: { title: "Parent a", running: false },
+            s: { title: "Thread s", running: true },
+          },
+          activity: { s: { lastAt: at, lastTool: "bash", turns: 0 } },
+          ...over,
+        });
+      const stalledAt = at + STALL_NOTICE_MS;
+      const both = book([stuck, done("a", "b", stalledAt + 5_000)]);
+      // The stall is the oldest event: the window runs from the silence reaching the notice.
+      expect(wakesDue(both, stallCtx(stalledAt + WINDOW - 1))).toEqual([]);
+      expect(nextWakeAt(both, stallCtx(stalledAt + 10))).toBe(stalledAt + WINDOW);
+      const [wake] = wakesDue(both, stallCtx(stalledAt + WINDOW));
+      expect(wake!.stalled?.map((n) => n.link.target)).toEqual(["s"]);
+      expect(wake!.settled.map((l) => l.target)).toEqual(["b"]);
+      // Once told, the same silence is not told again; new activity is a new state.
+      const told = updateLink(both, "a/s", { stallNotifiedFor: at });
+      expect(wakesDue(told, stallCtx(stalledAt + 5 * WINDOW))[0]?.stalled ?? []).toEqual([]);
+    });
+
+    test("a stalled child that finished inside the window is not announced as stalled", () => {
+      const at = 1_000;
+      const finished = { ...done("a", "s", at + STALL_NOTICE_MS + 10_000), startedAt: at };
+      const [wake] = wakesDue(
+        book([finished]),
+        batched({
+          now: at + STALL_NOTICE_MS + WINDOW + 10_000,
+          threads: { a: { title: "Parent a", running: false }, s: { title: "Thread s", running: false } },
+          activity: { s: { lastAt: at, turns: 1 } },
+        }),
+      );
+      expect(wake!.stalled ?? []).toEqual([]);
+      expect(wake!.settled.map((l) => l.target)).toEqual(["s"]);
+    });
+  });
+
   test("a mark a dropped call leaves behind is taken back, and a newer one stands", () => {
     const heard = (id: string, at: number): Link => ({ ...done("a", id), notifiedAt: at });
     const b = book([heard("b", 1_000), heard("c", 1_000)]);
