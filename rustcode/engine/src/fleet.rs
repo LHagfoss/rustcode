@@ -124,11 +124,9 @@ fn merge_entry(current: &mut FleetEntry, incoming: &FleetEntry) -> bool {
     if incoming.last_seen_at > current.last_seen_at {
         if incoming.platform != "unknown" && current.platform != incoming.platform {
             current.platform = incoming.platform.clone();
-            changed = true;
         }
         if incoming.version.is_some() && current.version != incoming.version {
             current.version = incoming.version.clone();
-            changed = true;
         }
         current.last_seen_at = incoming.last_seen_at;
         current.via = incoming.via.clone();
@@ -153,6 +151,7 @@ impl Fleet {
         publish_private_json(&dir.join(FLEET_FILE), self)
     }
 
+    #[cfg(test)]
     pub fn get(&self, host_id: &str) -> Option<&FleetEntry> {
         self.entries.iter().find(|entry| entry.host_id == host_id)
     }
@@ -478,10 +477,8 @@ mod tests {
         assert_eq!(given.name, "Desk");
         // And a name nobody chose never replaces one somebody did.
         let mut chosen = renamed.clone();
-        assert!(!merge_entry(
-            &mut chosen,
-            &entry("b", "studio.local", None, Some(9))
-        ));
+        // A later report still refreshes last-seen, but never the name.
+        merge_entry(&mut chosen, &entry("b", "studio.local", None, Some(9)));
         assert_eq!(chosen.name, "Desk");
     }
 

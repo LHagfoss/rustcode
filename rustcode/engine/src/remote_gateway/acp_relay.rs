@@ -361,6 +361,7 @@ mod tests {
                 "_rustcode/project/read",
                 "_rustcode/project/clone",
                 "_rustcode/worktrees/state",
+                "_rustcode/environment/sync",
             ]
         );
         assert_eq!(
