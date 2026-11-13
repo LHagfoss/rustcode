@@ -102,24 +102,10 @@ fn user_titled(dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Sets `user_titled` in the thread's metadata, keeping every other field the
-/// engine wrote. A thread with no metadata uses a marker, leaving the engine-owned file shape intact.
+/// Record the user's choice separately from engine metadata, which can be
+/// updated concurrently by the engine.
 fn mark_user_titled(dir: &Path) -> std::io::Result<()> {
-    let path = dir.join(METADATA_FILE);
-    let Ok(raw) = std::fs::read(&path) else {
-        return std::fs::write(dir.join("user-titled"), []);
-    };
-    let Ok(serde_json::Value::Object(mut metadata)) = serde_json::from_slice(&raw) else {
-        return Ok(());
-    };
-    if metadata.get("user_titled") == Some(&serde_json::Value::Bool(true)) {
-        return Ok(());
-    }
-    metadata.insert("user_titled".into(), serde_json::Value::Bool(true));
-    let contents = serde_json::to_vec_pretty(&metadata).map_err(std::io::Error::other)?;
-    let temporary = path.with_extension(format!("json.tmp{}", std::process::id()));
-    std::fs::write(&temporary, contents)?;
-    std::fs::rename(temporary, path)
+    std::fs::write(dir.join("user-titled"), [])
 }
 
 /// Opens the thread's `logs/debug.log` in the text editor, or its folder when
