@@ -2870,12 +2870,13 @@ mod tests {
     use super::super::{GroundedArtifactEvidence, TurnContext};
     use super::{
         BatchOutcomeCounts, REVERIFICATION_ACTION, append_finalized_tool_batch,
-        apply_round_stagnation, apply_stale_round, batch_invalidates_read_recovery,
-        benign_shell_wrapper_failure, bounded_malformed_tool_history,
-        content_bearing_inspection_status, grounded_artifact_recovery_message,
-        incomplete_tool_result, loop_signal_event, mutation_batch_guidance, record_round_output,
-        scheduled_tool_calls, selected_tool_call_indices, should_apply_loop_recovery,
-        take_deferred_batch, targeted_no_progress_guidance, tool_changes_workspace,
+        append_pending_steers, apply_round_stagnation, apply_stale_round,
+        batch_invalidates_read_recovery, benign_shell_wrapper_failure,
+        bounded_malformed_tool_history, content_bearing_inspection_status,
+        grounded_artifact_recovery_message, incomplete_tool_result, loop_signal_event,
+        mutation_batch_guidance, record_round_output, scheduled_tool_calls,
+        selected_tool_call_indices, should_apply_loop_recovery, take_deferred_batch,
+        targeted_no_progress_guidance, tool_changes_workspace,
     };
     use crate::app::{AppState, AppStatus, ChatMessage, ToolCallRef, ToolResultRecord};
     use crate::network::events::ToolResultMetadata;

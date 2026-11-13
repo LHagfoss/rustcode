@@ -538,9 +538,16 @@ pub(crate) fn waits_for_reply(args: &Value) -> bool {
     args.get("return_to").and_then(Value::as_str) == Some("me")
 }
 
-/// Older apps cannot safely implement the default one-way message.
+/// Whether a call asks for a one-way message by name, which only a
+/// [`ONE_WAY_VERSION`] client can deliver without a link. An older client never
+/// sees `return_to`, so a call without it is the message it always sent (with
+/// a link the client makes), not a refusal.
 pub(crate) fn names_wait(name: &str, args: &Value) -> bool {
-    name == MESSAGE_SESSION && args.get("return_to").and_then(Value::as_str) != Some("me")
+    name == MESSAGE_SESSION
+        && args
+            .get("return_to")
+            .and_then(Value::as_str)
+            .is_some_and(|to| to != "me")
 }
 
 /// Whether a call asks for a standalone thread, which only a version 14 client
@@ -1500,6 +1507,12 @@ mod tests {
         assert!(waits_for_reply(&args(json!("me"))));
         assert!(!waits_for_reply(&args(json!("none"))));
         assert!(names_wait(MESSAGE_SESSION, &args(json!("none"))));
+        // An older app never sees `return_to`: its calls leave it out, and are not refused.
+        assert!(!names_wait(
+            MESSAGE_SESSION,
+            &json!({"session_id": "b", "message": "x"})
+        ));
+        assert!(!names_wait(MESSAGE_SESSION, &args(json!("me"))));
         let schema = (tool(MESSAGE_SESSION).schema)();
         assert!(
             schema_for(MESSAGE_SESSION, 16, schema.clone())["properties"]["return_to"].is_null()
