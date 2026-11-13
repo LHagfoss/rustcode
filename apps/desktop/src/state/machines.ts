@@ -22,6 +22,7 @@ import { hasShell, shellCall, shellCallWithin } from "../lib/shell";
 import { readStorage, writeStorage } from "../lib/storage";
 import { appVersion } from "../lib/updater";
 import { forgetMachineCache, forgetTranscript, loadThreadList, saveThreadList } from "./machineCache";
+import { loadMirroredList, mirrorThreadList, withMirroredRows } from "./machineMirror";
 import { forgetMachineOutbox, forgetThreadOutbox } from "./machineOutbox";
 import {
   APP_VERSION,
@@ -311,7 +312,13 @@ export const useMachines = create<MachinesStore>(() => ({
 useMachines.subscribe((state, prev) => {
   if (state.sessions === prev.sessions) return;
   for (const [host, rows] of Object.entries(state.sessions)) {
-    if (rows !== prev.sessions[host]) saveThreadList(host, rows);
+    if (rows === prev.sessions[host]) continue;
+    saveThreadList(host, rows);
+    // Only a machine that answers is mirrored: the rows of one that is away are this computer's
+    // own copy, not something the machine said (`state/machineMirror.ts`).
+    if (state.machines.find((machine) => machine.id === host)?.state === "connected") {
+      mirrorThreadList(host, rows);
+    }
   }
 });
 
@@ -355,6 +362,11 @@ export interface MachineIdentity {
   displayName: string | null;
   icon: MachineIcon | null;
   tint: MachineTint | null;
+  /**
+   * When `displayName` was chosen, here or on another computer, as an ISO time. The environment
+   * sync (`state/fleet.ts`) keeps the newest rename: a name without a time stays on this computer.
+   */
+  nameUpdatedAt?: string | null;
 }
 
 const LOCAL_IDENTITY_KEY = "rustcode.localMachineIdentity";
@@ -413,9 +425,10 @@ function readLocalIdentity(): MachineIdentity {
       displayName: cleanMachineName(typeof root?.displayName === "string" ? root.displayName : null),
       icon: machineIconOf(typeof root?.icon === "string" ? root.icon : null),
       tint: machineTintOf(typeof root?.tint === "string" ? root.tint : null),
+      nameUpdatedAt: typeof root?.nameUpdatedAt === "string" ? root.nameUpdatedAt : null,
     };
   } catch {
-    return { displayName: null, icon: null, tint: null };
+    return { displayName: null, icon: null, tint: null, nameUpdatedAt: null };
   }
 }
 
@@ -429,13 +442,21 @@ export function useLocalIdentity(): MachineIdentity {
   return useMachines((state) => state.local);
 }
 
-/** Rename this computer here, or give it a glyph. Stored on this computer only. */
+/**
+ * Rename this computer, or give it a glyph. A rename is stamped, so the environment sync
+ * (`state/fleet.ts`) tells every paired computer and the newest rename wins; a name another
+ * computer chose arrives with its own `nameUpdatedAt` and is not stamped again.
+ */
 export function setLocalIdentity(patch: Partial<MachineIdentity>): void {
   const current = localIdentity();
+  const renamed = patch.displayName !== undefined;
   const next: MachineIdentity = {
     displayName: patch.displayName === undefined ? current.displayName : cleanMachineName(patch.displayName),
     icon: patch.icon === undefined ? current.icon : machineIconOf(patch.icon),
     tint: patch.tint === undefined ? current.tint : machineTintOf(patch.tint),
+    nameUpdatedAt: renamed
+      ? (patch.nameUpdatedAt ?? new Date().toISOString())
+      : (current.nameUpdatedAt ?? null),
   };
   // A full or disabled store keeps the choice for this run only.
   writeStorage(LOCAL_IDENTITY_KEY, JSON.stringify(next));
@@ -463,7 +484,7 @@ export function selfName(): string {
   return localIdentity().displayName ?? defaultSelfName();
 }
 
-/** Rename a paired machine on this computer. The machine keeps its own name. */
+/** Rename a paired machine. The newest name wins across every paired computer (`state/fleet.ts`). */
 export async function setMachineDisplayName(
   machine: Pick<Machine, "id">,
   displayName: string | null,
@@ -923,6 +944,11 @@ export async function refreshMachines(): Promise<void> {
       error: null,
       ...(Object.keys(cached).length ? { sessions: { ...state.sessions, ...cached } } : {}),
     });
+    // A machine that is away also draws what this computer's disk mirrored from it, past the 200
+    // newest the web view keeps (`state/machineMirror.ts`).
+    for (const machine of machines) {
+      if (machine.state !== "connected") void drawMirrored(machine.id);
+    }
     for (const machine of machines) void attach(machine);
     for (const id of [...links.keys()]) {
       if (!machines.some((machine) => machine.id === id)) detach(id);
@@ -930,6 +956,19 @@ export async function refreshMachines(): Promise<void> {
   } catch (error) {
     useMachines.setState({ ready: true, error: errorText(error) });
   }
+}
+
+/** Adds the mirrored rows a machine that is away lacks; a live read still replaces them all. */
+async function drawMirrored(host: string): Promise<void> {
+  const mirrored = await loadMirroredList(host);
+  if (!mirrored.length) return;
+  useMachines.setState((state) => {
+    // The machine came back while the disk was read: its own list is the truth now.
+    if (state.machines.find((machine) => machine.id === host)?.state === "connected") return {};
+    const current = state.sessions[host] ?? [];
+    const merged = withMirroredRows(current, mirrored);
+    return merged.length === current.length ? {} : { sessions: { ...state.sessions, [host]: merged } };
+  });
 }
 
 /**

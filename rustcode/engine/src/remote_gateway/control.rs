@@ -221,6 +221,13 @@ pub struct PairingStatus {
     /// The last challenge that ended before it expired.
     #[serde(default)]
     pub ended: Option<EndedChallenge>,
+    /// Whether any socket reached this gateway since the most recent challenge
+    /// was issued. `Some(false)` on a challenge that is gone means no device
+    /// even got as far as connecting, which is a network problem, not a wrong
+    /// code. `None` before any challenge, or from a gateway that does not track
+    /// it.
+    #[serde(default)]
+    pub last_challenge_reached: Option<bool>,
 }
 
 /// Where the connect code stands, without any secret.
@@ -375,6 +382,13 @@ pub enum RefusalReason {
     /// refused before a single frame arrived: a browser, or an app build older
     /// than the one that sends the native app origin.
     UnexpectedOrigin,
+    /// The device opened a TLS connection (`wss://`, `https://`) to a gateway
+    /// that speaks plain WebSocket, so nothing it sent could be read.
+    SecureConnection,
+    /// The first frame was JSON text the gateway could not read as a pair,
+    /// authenticate or connect request: an app build whose handshake differs
+    /// from this host's.
+    UnrecognizedRequest,
 }
 
 impl RefusalReason {
@@ -387,6 +401,8 @@ impl RefusalReason {
             Self::Unauthorized => "unknown or revoked device",
             Self::TokenReplayed => "pairing revoked (a retired token was used)",
             Self::UnexpectedOrigin => "unexpected app origin, refused before any frame",
+            Self::SecureConnection => "TLS (wss://) dial to a plain WebSocket gateway",
+            Self::UnrecognizedRequest => "first frame not understood (different app version?)",
         }
     }
 
@@ -400,9 +416,12 @@ impl RefusalReason {
             ErrorCode::RateLimited => Self::RateLimited,
             ErrorCode::Unauthorized => Self::Unauthorized,
             ErrorCode::TokenReplayed => Self::TokenReplayed,
-            // A malformed frame is a bug on the device that its owner cannot
-            // act on; a full gateway or a slow one is not about the device
-            // either. Recording those would crowd out the ones that help.
+            // A first frame that is not the handshake is what an app build with
+            // a different handshake sends, and its owner can update it. Binary,
+            // oversized and doubled frames are refused before they get here.
+            ErrorCode::InvalidFrame => Self::UnrecognizedRequest,
+            // A full gateway or a slow one is not about the device. Recording
+            // those would crowd out the ones that help.
             _ => return None,
         })
     }

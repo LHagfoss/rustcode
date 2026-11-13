@@ -86,7 +86,15 @@ A machine that is away keeps its threads listed and read-only, also after the
 app restarted: the app keeps what it last read from each machine in its own
 storage (`state/machineCache.ts`: the 200 newest threads per machine, and the
 transcript of each thread opened in the last 30 days, capped in size; never a
-token), and a live read replaces it when the machine is back. The chat says
+token), and a live read replaces it when the machine is back. The same reads also go to this
+computer's disk, through its own engine (`state/machineMirror.ts`, `docs/data-store.md`
+› Thread mirror): every thread a machine listed and the last transcript read
+from each, without the web view's caps, so a wiped web view, a reinstall or a
+machine that is wiped or removed does not take its threads with it. A machine that is away
+draws the mirrored threads its 200 cached rows lack, and a thread whose transcript
+the web view no longer holds opens from the mirror. It is read-only, never deleted
+and never sent back; Settings › Environments › **Thread copies** switches it off
+and lists projects to leave out. The chat says
 "‹Machine› is offline since HH:MM. This is the last copy this computer saw; it
 updates when the machine is back.", the composer is disabled, and the
 header shows `Runs on ‹machine› · ‹harness› · ‹model›`; the controls that read
@@ -111,12 +119,16 @@ the page without a second computer; `paired` is a Mac, a Windows PC with
 threads, and an offline Linux box, so the sidebar shows three headings, the
 Linux box folded to a muted row.
 
-A machine's name and glyph are this app's own: Settings › Environments (and the
-same row for this computer) gives each one a **Rename** popover (name and icon). A name
-is stored as `display_name` in `machines.json` and never sent to the other
-computer, so it keeps the name it reports; **Reset** (or a blank field) shows
-that name again, and pairing the same machine again keeps the local name. The
-glyph is one of a small fixed set (laptop, desktop, Mac Studio/mini, server,
+A machine's name is shared across the fleet and its glyph is this app's own:
+Settings › Environments (and the same row for this computer) gives each one a
+**Rename** popover (name and icon). A rename is stamped with the time and spread
+to the machine itself and to every other paired computer (`state/fleet.ts`,
+[Environment names and the fleet](remote.md#environment-names-and-the-fleet)),
+where the newest rename wins; a computer that was offline shows it after its next
+sync. The name is stored as `display_name` with `name_updated_at` in
+`machines.json`; **Reset** (or a blank field) goes back to the name the machine
+reports, which spreads the same way, and pairing the same machine again keeps the
+name. The glyph is one of a small fixed set (laptop, desktop, Mac Studio/mini, server,
 Windows tower, Linux, cloud, phone), defaulting to the platform's own, with an
 optional tint from the chart palette. Everywhere a machine is named uses both:
 a thread row's machine tag, a thread's `Runs on ‹name›` header, the composer's
@@ -1677,6 +1689,9 @@ off (`rustcode.haptics`).
 
 ### Updater
 
+Per-OS first-run and post-update steps (PATH, quarantine, launcher entry, the
+background server) and their Settings page are in [system-setup.md](system-setup.md).
+
 The app checks for an update 5 s after launch, every 30 seconds while its
 window is in front (every 30 minutes behind it), when its window comes back,
 and 30 s after a failed check, doubling to 5 minutes (`src/state/updates.ts`).
@@ -1730,8 +1745,21 @@ as usual. **Install updates automatically** (Settings › About, on by default,
 thread is working: no running turn, no background command a turn waits on, no
 pending approval or question (`autoInstallDecision` in `state/updates.ts`).
 While something works it asks again every 10 seconds and never interrupts a
-turn; a skipped beta stays skipped, a dev build never installs, and an install
-that failed is left to the sidebar row. It shows *Updating to X…*, installs and
+turn; a skipped beta stays skipped and a dev build never installs. An automatic
+install that fails is tried again after 1, 5 and 15 minutes
+(`AUTO_INSTALL_BACKOFF_MS`), and then left to the sidebar row; every failure
+stays on the row (*Retry update to X*, with the reason under it) until the next
+install starts. A click on **Update to X** while a thread is working asks
+first (`requestUpdate`): **Update When Idle** waits for the threads and then
+installs by itself (the row reads *Waiting for threads to finish*), **Update
+Now** quits and ends their turns. The download itself is tried up to three
+times when the network drops or GitHub answers 5xx/429 (waits of 2 and 6
+seconds, the bar starting over), has no cap on its total time but fails after
+30 seconds without a byte, and a 404 says the release has no app for this
+platform yet instead of a bare status. Each step (`update.started`,
+`download.retry`, `update.verified`, `update.installing`, `update.failed`)
+is written as a line to `updates.log` in the config folder, next to
+`debug.log`. It shows *Updating to X…*, installs and
 reopens like **Update to X** does, so the app starts its bundled engine anew
 and, in a release build, its start-up catch-up restarts a background server
 onto the new binary with `rustcode server restart --when-idle`. **Update to X** installs in place on macOS, Linux (AppImage and

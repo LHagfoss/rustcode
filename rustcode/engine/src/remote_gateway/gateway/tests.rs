@@ -381,6 +381,105 @@ async fn browser_origins_are_refused_at_the_upgrade() {
     harness.stop().await;
 }
 
+/// The refusals the gateway holds once one with `reason` shows up; a refusal is
+/// recorded by the connection's own task, so it can trail the client's last write.
+async fn refusals_with(harness: &Harness, reason: RefusalReason) -> Vec<RefusedConnection> {
+    for _ in 0..100 {
+        let refused = harness.status().await.refused_connections;
+        if refused.iter().any(|entry| entry.reason == reason) {
+            return refused;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("no {reason:?} refusal was recorded");
+}
+
+#[tokio::test]
+async fn a_tls_dial_to_the_plain_gateway_is_kept_for_the_owner() {
+    let harness = Harness::start().await;
+    // The start of a TLS ClientHello, as a phone dialing `wss://` sends it.
+    let mut stream = bounded(TcpStream::connect(harness.addr)).await.unwrap();
+    bounded(stream.write_all(&[0x16, 0x03, 0x01, 0x00, 0x05, 0x01, 0x00, 0x00, 0x01, 0x00]))
+        .await
+        .unwrap();
+    let refused = refusals_with(&harness, RefusalReason::SecureConnection).await;
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert_eq!(refused[0].remote_addr, "127.0.0.1");
+    assert!(refused[0].device_name.is_none());
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn a_first_frame_the_gateway_cannot_read_is_kept_for_the_owner() {
+    let harness = Harness::start().await;
+    // An app whose handshake differs from this host's: it speaks JSON, and
+    // names itself, but its first frame is none of the requests.
+    let mut client = Client::connect(harness.addr).await;
+    client
+        .send(json!({
+            "type": "hello",
+            "protocol_version": 1,
+            "device_name": "Lars's iPhone",
+            "platform": "ios",
+        }))
+        .await;
+    client.expect_error("invalid_frame").await;
+    let refused = refusals_with(&harness, RefusalReason::UnrecognizedRequest).await;
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert_eq!(refused[0].device_name.as_deref(), Some("Lars's iPhone"));
+    assert_eq!(refused[0].platform, "ios");
+    harness.stop().await;
+}
+
+#[tokio::test]
+async fn a_code_that_nobody_dialed_in_for_says_so() {
+    let harness = Harness::start().await;
+    assert_eq!(
+        harness
+            .status()
+            .await
+            .pairing
+            .unwrap()
+            .last_challenge_reached,
+        None,
+        "no code has been shown yet"
+    );
+    let _offer = harness.offer().await;
+    assert_eq!(
+        harness
+            .status()
+            .await
+            .pairing
+            .unwrap()
+            .last_challenge_reached,
+        Some(false),
+        "a code is showing and no socket has reached the gateway"
+    );
+    // Any socket counts: the point is that the network path works.
+    let _client = Client::connect(harness.addr).await;
+    assert_eq!(
+        harness
+            .status()
+            .await
+            .pairing
+            .unwrap()
+            .last_challenge_reached,
+        Some(true)
+    );
+    // A newer code starts over.
+    let _again = harness.offer().await;
+    assert_eq!(
+        harness
+            .status()
+            .await
+            .pairing
+            .unwrap()
+            .last_challenge_reached,
+        Some(false)
+    );
+    harness.stop().await;
+}
+
 #[tokio::test]
 async fn refusals_are_kept_for_the_owner_with_a_reason_and_no_secret() {
     let harness = Harness::start().await;

@@ -43,7 +43,7 @@ export function ScopedHarnessList({ targets, writes }: { targets: ScopeMachine[]
   const failed = snapshots.filter((entry) => entry.error && !entry.snapshot);
   const nameOf = (host: string) => targets.find((machine) => machine.host === host)?.name ?? "That machine";
   return (
-    <div className="divide-y divide-border">
+    <div className="rule-rows">
       {failed.map((entry) => (
         <Row
           key={`error-${entry.host}`}

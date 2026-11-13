@@ -375,7 +375,7 @@ function TraitsColumn({
           onSearch();
         } else menuKeys(event);
       }}
-      className="flex w-[208px] shrink-0 flex-col border-border border-s bg-fill-subtle max-sm:w-[160px]"
+      className="ms-1 flex w-[208px] shrink-0 flex-col rounded-lg bg-fill-subtle max-sm:w-[160px]"
     >
       <div className="scroll-stable min-h-0 flex-1 p-1">
         {(showLevels || effortReason) && (
@@ -1197,7 +1197,7 @@ export function ModelPicker({ thread, compact }: { thread?: ThreadState; compact
           />
         </div>
         {modelReason && (
-          <p className="flex shrink-0 items-start gap-1.5 border-border border-t px-3 py-2 text-caption text-fg-faint">
+          <p className="rule-t [--rc-rule-inset:0.75rem] flex shrink-0 items-start gap-1.5 px-3 py-2 text-caption text-fg-faint">
             <Lock size={10} className="mt-[2px] shrink-0" />
             <span>{modelReason}</span>
           </p>

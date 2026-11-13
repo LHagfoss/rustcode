@@ -225,6 +225,12 @@ async fn read_status() -> Result<ServiceStatus, String> {
     }
 }
 
+/// Whether the server is installed as a background service, as `server status`
+/// says; `None` when the status cannot be read.
+pub(crate) fn server_installed() -> Option<bool> {
+    read_report().map(|report| report.installed)
+}
+
 /// `rustcode server status --json` on a plain thread, for the catch-up at app
 /// start: no settings page is waiting for it.
 fn read_report() -> Option<Report> {
@@ -243,7 +249,7 @@ pub async fn run(args: &[&str], timeout: Duration) -> Result<std::process::Outpu
 
 /// [`run`] on a plain thread, for the catches that run at app start before any
 /// page asks (`catch_up_after_update`).
-fn run_sync(args: &[&str], timeout: Duration) -> Result<std::process::Output, String> {
+pub(crate) fn run_sync(args: &[&str], timeout: Duration) -> Result<std::process::Output, String> {
     run_program(&prepare_program()?, args, timeout)
 }
 
@@ -260,7 +266,7 @@ pub fn refresh_program() {
 /// the user's data directory that [`refresh_program`] keeps current. A
 /// definition naming this is one this app manages. Nothing is copied here:
 /// this is the path a definition names, not the copy itself.
-fn service_program() -> PathBuf {
+pub(crate) fn service_program() -> PathBuf {
     let engine = resolve_engine();
     let appimage = std::env::var_os("APPIMAGE").map(PathBuf::from);
     stable_program(
@@ -835,7 +841,7 @@ fn copy_program(source: &Path, target: &Path, appimage: Option<&Path>) -> Result
 
 /// [`run`] with the program named, so a test can watch the deadline without a
 /// `rustcode` binary.
-fn run_program(
+pub(crate) fn run_program(
     program: &std::path::Path,
     args: &[&str],
     timeout: Duration,

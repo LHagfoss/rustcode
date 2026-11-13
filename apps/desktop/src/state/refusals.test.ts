@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { RemoteRefusedConnection } from "../acp/remote";
-import { refusalAgo, refusalCopy } from "./refusals";
+import { expiredCodeCopy, refusalAgo, refusalCopy } from "./refusals";
 
 function refused(overrides: Partial<RemoteRefusedConnection> = {}): RemoteRefusedConnection {
   return {
@@ -45,6 +45,18 @@ describe("a refused connection", () => {
     expect(copy.detail).toContain("Pair it again");
   });
 
+  test("a secure dial to the plain gateway says to drop https/wss", () => {
+    const copy = refusalCopy(refused({ reason: "secure_connection" }));
+    expect(copy.title).toContain("wss://");
+    expect(copy.detail).toContain("plain WebSocket");
+  });
+
+  test("a first message nobody understands points at the app version on both sides", () => {
+    const copy = refusalCopy(refused({ reason: "unrecognized_request", deviceName: "Lars's iPhone" }));
+    expect(copy.title).toBe("Lars's iPhone sent a first message this computer does not understand");
+    expect(copy.detail).toContain("Update RustCode on the device and on this computer");
+  });
+
   test("every reason has words of its own, and never repeats the raw code", () => {
     const reasons: RemoteRefusedConnection["reason"][] = [
       "unsupported_version",
@@ -53,6 +65,8 @@ describe("a refused connection", () => {
       "unauthorized",
       "token_replayed",
       "unexpected_origin",
+      "secure_connection",
+      "unrecognized_request",
       "unknown",
     ];
     const titles = reasons.map((reason) => refusalCopy(refused({ reason })).title);
@@ -65,5 +79,21 @@ describe("a refused connection", () => {
     expect(refusalAgo(44)).toBe("just now");
     expect(refusalAgo(60)).toBe("1 min ago");
     expect(refusalAgo(300)).toBe("5 min ago");
+  });
+});
+
+describe("an expired pairing code", () => {
+  test("a code nobody dialed in for names the network, with the address", () => {
+    const copy = expiredCodeCopy(false, "192.168.1.20:7878");
+    expect(copy).toContain("no device connected");
+    expect(copy).toContain("same network");
+    expect(copy).toContain("192.168.1.20:7878");
+  });
+
+  test("a code the phone did reach keeps the plain message", () => {
+    expect(expiredCodeCopy(true, "192.168.1.20:7878")).toBe(
+      "The last code expired. Pair again for a fresh one.",
+    );
+    expect(expiredCodeCopy(undefined, undefined)).toBe("The last code expired. Pair again for a fresh one.");
   });
 });

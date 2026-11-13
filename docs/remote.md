@@ -373,7 +373,14 @@ newer challenge, or gone because the gateway stopped or restarted. In the
 (Ctrl-C leaves earlier, the challenge stays valid). When output is not a
 terminal, `rustcode remote pair` prints the details once and exits. If pairing
 is already locked when the challenge is issued, the details say so first.
-`rustcode remote status` shows the same numbers at any time. An expired or
+`rustcode remote status` shows the same numbers at any time.
+
+A code that runs out is not always a wrong code. The gateway notes whether any
+socket reached it while the latest code was showing (`pairing.last_challenge_reached`
+in status, `pairing.lastChallengeReached` over ACP). When none did, the desktop
+and `rustcode remote pair` say that no device connected, and that the phone must
+be on the same network as the address shown (or reach it over NetBird or a VPN):
+the failure is the route, so no refusal could be recorded for it. An expired or
 used-up challenge is replaced by running `/remote pair` or
 `rustcode remote pair` again.
 
@@ -478,13 +485,15 @@ address and app counted rather than listed again.
 | `unauthorized` | A pairing this host does not accept: unknown, revoked or expired. | Pair the device again. |
 | `token_replayed` | A retired refresh token was presented, so the whole pairing was removed. | Pair the device again. |
 | `unexpected_origin` | The WebSocket upgrade carried an `Origin` no native app sends, so it was refused before a frame arrived. | That is a RustCode app from before it sent the native app origin, or a web page trying the port: update the app. Nothing was shared either way. |
+| `secure_connection` | The device opened a TLS connection (`wss://`, `https://`) to the gateway, which speaks plain WebSocket, so its first bytes could not be read. | Update the app on the device, or enter the address without `https://` or `wss://`. |
+| `unrecognized_request` | The device reached the gateway and sent JSON text, but its first frame is not a `pair`, `authenticate` or `connect_request` this host reads: an app build whose handshake differs. | Update RustCode on the device and on this computer so both are the latest. |
 
 Settings › Remote access lists them under *Refused connections*, with the
 device's own label when its frame named one, its kind and platform, the
 address it came from, how many tries and how long ago. `rustcode remote status`
 prints the same lines, and `refusedConnections` carries them to any ACP client.
-Nothing that is only a bug on the device (a malformed frame, a binary frame, an
-oversized one) is recorded, so it cannot crowd out the reasons a person can fix.
+Nothing that is only a bug on the device (a binary frame, an oversized one, a
+handshake that never arrives) is recorded, so it cannot crowd out the reasons a person can fix.
 Secrets never reach the record: only the label, kind, platform, protocol
 version and address a refused frame named are read from it.
 
@@ -607,6 +616,48 @@ holds until encrypted transport (#2651) lands.
   route can never answer, and telling the owner to check Radmin's firewall
   would send them to a network they are not on. Those routes are still kept
   and dialled, but only after every route that can answer.
+
+### Environment names and the fleet
+
+Pairing is trust between two computers. On top of it, paired computers share
+*metadata* about themselves and about each other, so a name chosen on one
+computer shows on all of them and every computer can see the whole fleet, not
+only the computers it paired with directly. Nothing here grants access: a
+computer that is only *known* through a peer has no address, token or route
+saved, and is paired on its own (**Pair** in Settings › Environments).
+
+- **What travels:** a computer's id (its gateway id), its name and the time that
+  name was chosen, its platform, its RustCode version and when some computer
+  last had word from it. Nothing else.
+- **How:** `_rustcode/environment/sync`, an ACP request over the connection a
+  pairing already opened (`engine/src/acp/environment.rs`; it is on the gateway's
+  relay allowlist). The caller sends itself and everything it knows; the other
+  computer merges that and answers with itself and everything *it* knows. The
+  desktop app runs it against its own engine and every connected environment
+  when a connection comes up, when a name changes and every minute
+  (`apps/desktop/src/state/fleet.ts`).
+- **Merge:** last writer wins per computer (`engine/src/fleet.rs`). A name is a
+  pair of *name* and *chosen at*; the later time wins, and on a tie the greater
+  name does, so every computer ends on the same one. A name nobody chose (the
+  operating system's) has no time and loses to any rename. Platform, version
+  and last-seen come from the more recent report. An entry about a computer
+  that was never reported on for 90 days is forgotten.
+- **Storage:** a computer's own name is `environment.json` in the configuration
+  directory (without it the gateway announces the operating system's name; a
+  gateway reads it when it starts, so a new pairing sees the new name).
+  What it learned of the others is `fleet.json`. A paired machine's name is its
+  `display_name` with `name_updated_at` in `machines.json`.
+- **Rename:** renaming an environment stamps the name with the time. The next
+  sync sends it to that computer, which adopts it as its own name when it is
+  newer than the one it has, and from there it spreads to every computer that
+  syncs with either. A computer that was offline keeps its old name until it
+  syncs; the first sync after it reconnects brings the newest one. Renaming
+  this computer announces it the same way, to every connected environment.
+- **Known through another:** a computer this one is not paired with is listed
+  read-only, with who told us and when it was last seen. The list is only as
+  fresh as that last report, so its row says *last seen*, never *online*.
+- **Older RustCode:** a computer that does not know the request answers with an
+  error, which the app ignores; it simply does not take part until it is updated.
 
 ### Connect codes
 
@@ -1179,6 +1230,8 @@ Client requests and notifications are restricted to these exact methods:
 - `_rustcode/harnesses`, `_rustcode/harnesses/default`, `_rustcode/harnesses/set`
 - `_rustcode/settings/get`, `_rustcode/settings/set`
 - `_rustcode/skills/add`, `_rustcode/skills/get`
+- `_rustcode/environment/sync`: names, versions and last-seen times of the fleet
+  ([Environment names and the fleet](#environment-names-and-the-fleet))
 - `_rustcode/threads/search`, `_rustcode/data/activity`, `_rustcode/project/read`,
   `_rustcode/project/clone` and `_rustcode/worktrees/state`: what an agent on the
   paired computer reads and does here (`docs/orchestrator.md` › Machines)
