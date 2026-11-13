@@ -104,6 +104,7 @@ pub fn run() {
             banner::banner_remove,
             links::link_meta,
             threads::thread_rename,
+            threads::thread_user_titled,
             threads::thread_trash,
             threads::thread_log_open,
             diagnostics::server_status,

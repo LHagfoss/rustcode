@@ -729,7 +729,7 @@ pub(crate) fn execute_command(
                     "Usage: /title <title> (one line, up to 512 bytes)",
                 ));
             }
-            crate::config::save_session_title(&state.active_session_id, arguments);
+            crate::config::save_user_session_title(&state.active_session_id, arguments);
             state.invalidate_session_title_cache();
             state.request_redraw();
             ("Session title", format!("Renamed to {arguments}"))

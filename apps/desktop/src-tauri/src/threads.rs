@@ -67,12 +67,59 @@ pub fn clean_title(title: &str) -> Option<String> {
     Some(title.chars().take(200).collect())
 }
 
+/// Renames a thread. `user` is a name the user typed: it is recorded in the
+/// thread's `metadata.json` (`user_titled`), so an agent naming its own thread
+/// leaves it alone (issue 3599). A rename an agent asked for leaves the record as
+/// it is.
 #[tauri::command(async)]
-pub fn thread_rename(id: String, title: String) -> Result<String, String> {
+pub fn thread_rename(id: String, title: String, user: Option<bool>) -> Result<String, String> {
     let title = clean_title(&title).ok_or("A title can't be empty.")?;
     let dir = thread_dir(&id)?;
     std::fs::write(dir.join("title.txt"), &title).map_err(|e| e.to_string())?;
+    if user == Some(true) {
+        mark_user_titled(&dir).map_err(|e| e.to_string())?;
+    }
     Ok(title)
+}
+
+/// Whether the user named the thread themselves (`thread_rename` with `user`,
+/// or `/change_title` in the engine).
+#[tauri::command(async)]
+pub fn thread_user_titled(id: String) -> Result<bool, String> {
+    Ok(user_titled(&thread_dir(&id)?))
+}
+
+const METADATA_FILE: &str = "metadata.json";
+
+fn user_titled(dir: &Path) -> bool {
+    if dir.join("user-titled").is_file() {
+        return true;
+    }
+    std::fs::read(dir.join(METADATA_FILE))
+        .ok()
+        .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())
+        .and_then(|metadata| metadata.get("user_titled")?.as_bool())
+        .unwrap_or(false)
+}
+
+/// Sets `user_titled` in the thread's metadata, keeping every other field the
+/// engine wrote. A thread with no metadata uses a marker, leaving the engine-owned file shape intact.
+fn mark_user_titled(dir: &Path) -> std::io::Result<()> {
+    let path = dir.join(METADATA_FILE);
+    let Ok(raw) = std::fs::read(&path) else {
+        return std::fs::write(dir.join("user-titled"), []);
+    };
+    let Ok(serde_json::Value::Object(mut metadata)) = serde_json::from_slice(&raw) else {
+        return Ok(());
+    };
+    if metadata.get("user_titled") == Some(&serde_json::Value::Bool(true)) {
+        return Ok(());
+    }
+    metadata.insert("user_titled".into(), serde_json::Value::Bool(true));
+    let contents = serde_json::to_vec_pretty(&metadata).map_err(std::io::Error::other)?;
+    let temporary = path.with_extension(format!("json.tmp{}", std::process::id()));
+    std::fs::write(&temporary, contents)?;
+    std::fs::rename(temporary, path)
 }
 
 /// Opens the thread's `logs/debug.log` in the text editor, or its folder when
@@ -135,6 +182,38 @@ fn move_thread_to_trash(dir: &Path, id: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_the_user_typed_is_recorded_beside_the_engines_metadata() {
+        let dir = std::env::temp_dir().join(format!(
+            "rustcode-user-titled-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Older threads without metadata still retain the user's choice.
+        mark_user_titled(&dir).unwrap();
+        assert!(user_titled(&dir));
+        assert!(!dir.join(METADATA_FILE).exists());
+        std::fs::remove_file(dir.join("user-titled")).unwrap();
+
+        std::fs::write(
+            dir.join(METADATA_FILE),
+            r#"{"schema_version":1,"id":"abc-1","created_at_ms":1,"yolo":true}"#,
+        )
+        .unwrap();
+        assert!(!user_titled(&dir));
+        mark_user_titled(&dir).unwrap();
+        assert!(user_titled(&dir));
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join(METADATA_FILE)).unwrap()).unwrap();
+        assert_eq!(saved["yolo"], true);
+        assert_eq!(saved["id"], "abc-1");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn accepts_only_a_thread_folder_in_the_configured_store() {

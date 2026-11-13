@@ -532,7 +532,7 @@ pub const LIST_WORKTREES: Tool = Tool {
 
 pub const UPDATE_SESSION: Tool = Tool {
     name: crate::orchestration::UPDATE_SESSION,
-    description: "Rename, pin, mark unread or read, snooze or change the status of a thread. unread: true marks it unread, false marks it read. Omit session_id for this thread; changing another thread asks the user first. Status: active (back in the list), review (needs a look), settled (done). snoozed_until: how long it leaves the list: 1h, evening, tomorrow, next_week or an ISO 8601 time; null brings it back.",
+    description: "Rename, pin, mark unread or read, snooze or change the status of a thread. unread: true marks it unread, false marks it read. Omit session_id for this thread; changing another thread asks the user first. Name this thread once when you start its task, with a short title of 6 words or fewer; a title the user chose stays, and title_kept says so. Status: active (back in the list), review (needs a look), settled (done). snoozed_until: how long it leaves the list: 1h, evening, tomorrow, next_week or an ISO 8601 time; null brings it back.",
     arguments: r#"{"title": "Fix login", "pinned": true, "status": "settled"}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,

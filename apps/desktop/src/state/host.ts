@@ -3461,8 +3461,11 @@ async function updateSession(caller: RuleThread, call: UpdateCall, machine = fal
     });
     if (no) return failureJson(no);
   }
+  // An agent naming its own thread leaves a name the user chose alone (issue 3599); renaming
+  // another thread is the user's own approval above.
+  const keepTitle = !!call.title && target.id === caller.id && (await userTitled(target.id));
   const applied = await applyManagedChange(target, {
-    title: call.title,
+    title: keepTitle ? undefined : call.title,
     pinned: call.pinned,
     unread: call.unread,
   });
@@ -3481,7 +3484,14 @@ async function updateSession(caller: RuleThread, call: UpdateCall, machine = fal
     status: call.status ? STATUS_OF_CHOICE[call.status] : (after?.status ?? "idle"),
     running: !!useApp.getState().threads[target.id]?.running,
     snoozed_until: until ? new Date(until).toISOString() : null,
+    ...(keepTitle && { title_kept: "The user named this thread, so its title stays as it is." }),
   };
+}
+
+/** Whether the user named a thread themselves (`thread_user_titled`); false when no shell can say. */
+async function userTitled(id: string): Promise<boolean> {
+  if (!hasShell()) return false;
+  return shellCall<boolean>("thread_user_titled", { id }).catch(() => false);
 }
 
 type AnswerCall = Extract<ReturnType<typeof parseCall>, { tool: "answer_request" }>;

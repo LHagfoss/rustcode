@@ -18,6 +18,7 @@ import {
   markFinished,
   markUnread,
   openThread,
+  renameThread,
   resetForTests,
   selectThread,
   setOrchestration,
@@ -395,6 +396,35 @@ describe("update_session settles a thread (issue 3529)", () => {
     expect(settled.status).toBe("done");
     expect(parent in useApp.getState().finished).toBe(false);
     expect(statusOf(useApp.getState(), parent)).toBe("done");
+  });
+});
+
+describe("an agent names its own thread (issue 3599)", () => {
+  test("an automatic title takes the agent's name; one the user typed stays", async () => {
+    const { parent } = await staged();
+    const named = await answerOrchestration({
+      sessionId: parent,
+      tool: "update_session",
+      args: { title: "Fix the login redirect" },
+    });
+    expect(errorOf(named)).toEqual({});
+    expect(named.title).toBe("Fix the login redirect");
+    expect(named.title_kept).toBeUndefined();
+    expect(useApp.getState().sessions.find((x) => x.id === parent)?.title).toBe("Fix the login redirect");
+
+    // The user renames it from the sidebar: the agent's next name leaves it as it is, and says so.
+    expect(await renameThread(parent, "My own name", { user: true })).toBe(true);
+    const kept = await answerOrchestration({
+      sessionId: parent,
+      tool: "update_session",
+      args: { title: "Something else", pinned: true },
+    });
+    expect(errorOf(kept)).toEqual({});
+    expect(kept.title).toBe("My own name");
+    expect(String(kept.title_kept)).toContain("user named this thread");
+    // The rest of the call still applies.
+    expect(kept.pinned).toBe(true);
+    expect(useApp.getState().sessions.find((x) => x.id === parent)?.title).toBe("My own name");
   });
 });
 

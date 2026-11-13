@@ -736,6 +736,11 @@ pub struct SessionMetadata {
     /// it without running git per thread (#3162). Absent for older threads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<PathBuf>,
+    /// Whether the user named the thread themselves (the app's rename, or
+    /// `/change_title`). An agent leaves such a title alone instead of
+    /// renaming its own thread (issue 3599). False for older threads.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub user_titled: bool,
 }
 
 /// The thread above a related one. `id` is absent for a thread an older
@@ -840,6 +845,7 @@ impl SessionMetadata {
             compaction: None,
             parent: None,
             repo: None,
+            user_titled: false,
         }
     }
 }
@@ -1505,6 +1511,20 @@ impl SessionStore {
             metadata.yolo = Some(enabled);
             changed
         })
+    }
+
+    /// Record that the user named the session themselves, so an agent leaves
+    /// the title alone (issue 3599).
+    pub fn mark_session_user_titled(&self, session_id: &str) -> std::io::Result<()> {
+        self.update_session_metadata(session_id, |metadata| {
+            !std::mem::replace(&mut metadata.user_titled, true)
+        })
+    }
+
+    /// Whether the user named the session themselves.
+    pub fn session_user_titled(&self, session_id: &str) -> bool {
+        self.load_session_metadata(session_id)
+            .is_some_and(|metadata| metadata.user_titled)
     }
 
     /// Record the session's model profile and reasoning effort, so reopening
@@ -2775,6 +2795,37 @@ mod tests {
         store.save_session_yolo(fresh, true).expect("record yolo");
         assert_eq!(store.load_session_yolo(fresh), Some(true));
         assert!(store.save_session_yolo("../escape", true).is_err());
+    }
+
+    #[test]
+    fn a_title_the_user_chose_is_recorded_and_old_metadata_reads_as_automatic() {
+        let root = tempfile::tempdir().expect("temp root");
+        let store = SessionStore::new(root.path());
+        let id = "018d6b28-0000-7000-8000-000000000005";
+
+        // Metadata written before the field existed reads as an automatic title.
+        let dir = store.ensure_session(id);
+        std::fs::write(
+            dir.join(SESSION_METADATA_FILE),
+            format!(
+                r#"{{"schema_version":{SESSION_METADATA_SCHEMA_VERSION},"id":"{id}","created_at_ms":1,"yolo":true}}"#
+            ),
+        )
+        .unwrap();
+        assert!(!store.session_user_titled(id));
+
+        store.mark_session_user_titled(id).expect("mark");
+        assert!(store.session_user_titled(id));
+        // The rest of the record is kept, and the flag survives another write.
+        store.save_session_yolo(id, false).expect("record yolo");
+        assert!(store.session_user_titled(id));
+        assert_eq!(store.load_session_yolo(id), Some(false));
+        // An automatic title writes no field at all.
+        let fresh = "018d6b28-0000-7000-8000-000000000006";
+        store.save_session_yolo(fresh, true).expect("record yolo");
+        let raw =
+            std::fs::read_to_string(store.session_dir(fresh).join(SESSION_METADATA_FILE)).unwrap();
+        assert!(!raw.contains("user_titled"), "{raw}");
     }
 
     #[test]

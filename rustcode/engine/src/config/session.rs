@@ -475,6 +475,18 @@ pub fn save_session_title(session_id: &str, title: &str) {
     }
 }
 
+/// Save a title the user typed (`/change_title`), and record that they chose
+/// it so an agent leaves it alone (issue 3599).
+pub fn save_user_session_title(session_id: &str, title: &str) {
+    save_session_title(session_id, title);
+    if rustcode_session::valid_session_id(session_id)
+        && let Some(session_store) = store()
+        && let Err(error) = session_store.mark_session_user_titled(session_id)
+    {
+        crate::dbg_log!("failed to record the user's title for {session_id}: {error}");
+    }
+}
+
 /// The most a title a `session/new` asked for may be: the app's own titles are
 /// short, and a request is trimmed to this rather than trusted whole.
 pub const MAX_REQUESTED_TITLE_CHARS: usize = 200;
