@@ -48,15 +48,15 @@ portable-pty = "0.9"
 arboard = { version = "3.6", features = ["wayland-data-control"] }
 # A clipboard image arrives as raw RGBA and attaches as PNG (src/native.rs).
 png = "0.18"
+# A trashed thread goes to the system's own Trash (Recycle Bin, freedesktop
+# Trash, the macOS volume's Trash), where it can be put back.
+trash = "5.3"
 
 # The web view's frame-rate preference (src/webview.rs); the versions tauri/wry already use.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "=0.6.5"
 objc2-web-kit = { version = "=0.3.2", default-features = false, features = ["WKWebViewConfiguration", "WKPreferences"] }
 
-[target.'cfg(windows)'.dependencies]
-# Native, recoverable deletion into the Windows Recycle Bin.
-trash = "5.3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }

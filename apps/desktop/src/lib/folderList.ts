@@ -15,6 +15,7 @@ import { basename, dirname, isInside, normalize } from "./paths";
 /** Where a folder was seen: a thread's folder, its worktree, and when that thread last ran. */
 export interface FolderSource {
   cwd: string;
+  registered?: boolean;
   worktree?: { path: string; repo?: string; branch?: string };
   /** When the thread last ran, in ms: the newest one in a project is how recent it is. */
   updatedAt?: number;
@@ -152,6 +153,7 @@ export function folderRows(
   const threads = new Map<string, number>();
   const newest = new Map<string, number>();
   const projects: string[] = [];
+  const registered = new Set<string>();
   const worktrees: { path: string; repo: string; branch: string }[] = [];
   for (const raw of sources) {
     // One folder is one row, however Windows spelled it (`\\?\C:\…` is `C:\…`, issue 3425), and
@@ -159,6 +161,7 @@ export function folderRows(
     const source = plainSource(raw);
     const path = source.cwd;
     if (!path) continue;
+    if (source.registered) registered.add(path);
     // Worktrees live inside the data folder too, and are rows; anything else there is not.
     if (isDataFolder(path) && source.worktree?.path !== path && !cutFrom(path)) continue;
     threads.set(path, (threads.get(path) ?? 0) + 1);
@@ -191,7 +194,7 @@ export function folderRows(
     if (repo && !worktreePaths.has(repo) && !projects.includes(repo)) projects.push(repo);
   }
   // What is left of the projects: no root, no home folder, nothing that only holds other projects.
-  const real = projects.filter((path) => !isPlace(path, projects));
+  const real = projects.filter((path) => registered.has(path) || !isPlace(path, projects));
   // A worktree nests under its repo: the one the engine named, or else the one named like the
   // folder it was cut from.
   const repoOf = (worktree: { repo: string; branch: string }, path: string) => {

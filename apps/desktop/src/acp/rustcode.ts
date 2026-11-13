@@ -160,7 +160,27 @@ export interface PullDetail extends PullRequest {
   body: string;
   checkRuns: { name: string; status: string; url?: string }[];
   files: { path: string; additions: number; deletions: number }[];
-  activity: { author: string; kind: string; at?: number; body: string }[];
+  activity: { author: string; kind: string; at?: number; body: string; url?: string }[];
+  /** Review comments on lines of the diff; empty from an engine that does not read them. */
+  reviewComments: PullLineComment[];
+  /** Why the line comments could not be read, when they could not. */
+  reviewCommentsError?: string;
+}
+
+/** One review comment on a line of the diff. */
+export interface PullLineComment {
+  id: number;
+  author: string;
+  path: string;
+  /** Its line now, or where it was when `outdated`. */
+  line?: number;
+  startLine?: number;
+  /** The line it was left on is no longer in the diff. */
+  outdated: boolean;
+  at?: number;
+  body: string;
+  url?: string;
+  replyTo?: number;
 }
 
 export interface PullError {
@@ -331,17 +351,40 @@ export function parsePullDetail(result: Json | undefined): PullDetail | null {
       additions: num(obj(f)?.additions) ?? 0,
       deletions: num(obj(f)?.deletions) ?? 0,
     })),
-    activity: arr(p.activity).map((a) => {
-      // A saved copy carries the parsed number, the wire an ISO timestamp.
-      const at = num(obj(a)?.at) ?? Date.parse(str(obj(a)?.at) ?? "");
-      return {
-        author: str(obj(a)?.author) ?? "",
-        kind: str(obj(a)?.kind) ?? "",
-        at: Number.isFinite(at) ? at : undefined,
-        body: str(obj(a)?.body) ?? "",
-      };
+    activity: arr(p.activity).map((a) => ({
+      author: str(obj(a)?.author) ?? "",
+      kind: str(obj(a)?.kind) ?? "",
+      at: timeOf(obj(a)?.at),
+      body: str(obj(a)?.body) ?? "",
+      url: str(obj(a)?.url),
+    })),
+    reviewComments: arr(p.reviewComments).flatMap((c) => {
+      const o = obj(c);
+      const id = num(o?.id);
+      if (!o || id === undefined) return [];
+      return [
+        {
+          id,
+          author: str(o.author) ?? "",
+          path: str(o.path) ?? "",
+          line: num(o.line),
+          startLine: num(o.startLine),
+          outdated: bool(o.outdated) ?? false,
+          at: timeOf(o.at),
+          body: str(o.body) ?? "",
+          url: str(o.url),
+          replyTo: num(o.replyTo),
+        },
+      ];
     }),
+    reviewCommentsError: str(p.reviewCommentsError),
   };
+}
+
+/** A saved copy carries the parsed number, the wire an ISO timestamp. */
+function timeOf(value: Json | undefined): number | undefined {
+  const at = num(value) ?? Date.parse(str(value) ?? "");
+  return Number.isFinite(at) ? at : undefined;
 }
 
 /** `owner/name` from a pull request's GitHub URL. */

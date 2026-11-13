@@ -3570,6 +3570,27 @@ export class MockEngine {
                 body: "Looks good so far.",
               },
             ],
+            reviewComments: [
+              {
+                id: 101,
+                author: "reviewer",
+                path: "apps/desktop/src/ui/Composer.tsx",
+                line: 42,
+                outdated: false,
+                at: new Date(minutes(35)).toISOString(),
+                body: "Restore the focus ring after sending.",
+                url: `https://github.com/LHagfoss/rustcode/pull/${params.number}#discussion_r101`,
+              },
+              {
+                id: 102,
+                author: "reviewer",
+                path: "apps/desktop/src/ui/Composer.tsx",
+                line: 18,
+                outdated: true,
+                at: new Date(minutes(38)).toISOString(),
+                body: "This import is unused.",
+              },
+            ],
           },
         };
       case "_rustcode/pulls/diff":
@@ -6112,6 +6133,13 @@ export class MockTransport implements Transport {
     if (command === "skill_create") return `~/.config/rustcode/skills/${String(args.name)}/SKILL.md`;
     // The mock window has no system clipboard to paste from, and no picture to stand in for.
     if (command === "clipboard_image") return null;
+    // A dropped path is a folder unless it has an extension; nothing on the mock's disk is missing.
+    if (command === "path_kinds") {
+      const paths = Array.isArray(args.paths) ? args.paths.map(String) : [];
+      return paths.map((path) =>
+        !path.startsWith("/") ? "missing" : /\.[a-z0-9]+$/i.test(path) ? "file" : "folder",
+      );
+    }
     throw new Error(`The mock does not run ${command}.`);
   }
 

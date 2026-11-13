@@ -511,6 +511,17 @@ export interface BlockOptions {
   /** The built-in harness reads only text and images; others also take `resource_link` blocks. */
   builtin: boolean;
   cwd: string;
+  /**
+   * The commands the thread's harness advertised itself (`available_commands_update`), without the
+   * skills RustCode adds to its drawer. A skill named here is the harness's own command.
+   */
+  advertised?: readonly SlashCommand[];
+}
+
+/** Whether the harness advertised a command named `name` itself, letter case aside. */
+export function harnessAdvertises(advertised: readonly SlashCommand[] | undefined, name: string): boolean {
+  const wanted = name.replace(/^\/+/, "").toLowerCase();
+  return !!advertised?.some((command) => command.name.replace(/^\/+/, "").toLowerCase() === wanted);
 }
 
 /**
@@ -521,14 +532,20 @@ export interface BlockOptions {
  * already in the text, at the offset it was pasted (`composedText`), so it
  * needs no block of its own.
  *
- * A skill is RustCode's own (the harness did not advertise it): the built-in
- * harness reads `/name` as a prompt and routes it to `use_skill`, but another
- * harness may reject a leading slash command it does not know, so it is sent as
- * words naming the skill instead. What the transcript shows is unchanged.
+ * A skill picked from RustCode's catalog goes as `/name …`, verbatim, to the built-in harness (it
+ * routes it to `use_skill`) and to a harness that advertises a command of that name (Claude Code runs
+ * its skills as slash commands), even when the harness advertised it only after the skill was picked.
+ * Another harness may reject a leading slash command it does not know, so there it is sent as words
+ * naming the skill instead, which the thread's skills note lets it find. What the transcript shows
+ * is unchanged.
  */
 export function promptBlocks(text: string, extras: ComposeExtras, options: BlockOptions): Json[] {
   let body = composedText(text, extras);
-  if (!options.builtin && extras.command?.action === "skill") {
+  if (
+    !options.builtin &&
+    extras.command?.action === "skill" &&
+    !harnessAdvertises(options.advertised, extras.command.name)
+  ) {
     const name = extras.command.name.replace(/^\/+/, "");
     const rest = composedText(text, { ...extras, command: undefined });
     body = rest ? `Use the ${name} skill. ${rest}` : `Use the ${name} skill.`;
