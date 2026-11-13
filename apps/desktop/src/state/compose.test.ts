@@ -347,6 +347,28 @@ describe("command suggestions", () => {
     ]);
   });
 
+  test("letters in order find a name, and a description finds a command its name does not", () => {
+    expect(commandSuggestions("rlsa", commands).map((c) => c.name)).toEqual(["/release-automation"]);
+    expect(commandSuggestions("diff", commands).map((c) => c.name)).toEqual(["/review"]);
+  });
+
+  test("a name that starts with what is typed beats one that only contains it", () => {
+    const named = [
+      { name: "/preview", description: "", takesArguments: false, report: false, action: "execute" },
+      { name: "/review", description: "", takesArguments: false, report: false, action: "execute" },
+    ];
+    expect(commandSuggestions("rev", named).map((c) => c.name)).toEqual(["/review", "/preview"]);
+  });
+
+  test("a command and a skill of the same name are listed once", () => {
+    const twice = [
+      ...commands,
+      { name: "/Review", description: "A skill", takesArguments: false, report: false, action: "skill" },
+    ];
+    expect(commandSuggestions("rev", twice).map((c) => c.name)).toEqual(["/review"]);
+    expect(commandSuggestions("", twice)).toHaveLength(3);
+  });
+
   test("it keeps to a bound and drops what does not match", () => {
     expect(commandSuggestions("zzz", commands)).toEqual([]);
     expect(commandSuggestions("", commands, 2)).toHaveLength(2);

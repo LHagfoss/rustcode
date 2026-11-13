@@ -293,7 +293,7 @@ type DrawerEntry = { kind: "command"; command: SlashCommand } | MentionEntry;
  */
 type DrawerRowItem =
   | { kind: "heading"; label: string }
-  | { kind: "harness"; harness: string; name: string }
+  | { kind: "harness"; harness: string; name: string; account?: string; plan?: string }
   | { kind: "row"; entry: DrawerEntry; index: number }
   | { kind: "more"; section: MentionSection; hidden: number; index: number }
   | { kind: "less"; section: MentionSection; index: number };
@@ -423,7 +423,7 @@ const MENTION_TINT: Record<MentionState, string> = {
 };
 
 // The drawer's row, shared by all four kinds: one line, the mark first, what it is last.
-const DRAWER_ROW = "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left";
+const DRAWER_ROW = "flex w-full items-center gap-2 rounded-lg px-2 py-1 text-left";
 const DRAWER_NAME = "min-w-[96px] max-w-[45%] shrink-0 truncate font-medium text-fg text-sub";
 
 /** `text` with the letters the query matched marked, as the folder picker marks a folder's name. */
@@ -1377,9 +1377,6 @@ export const Composer = memo(function Composer({
             <FileText size={16} className="shrink-0 text-fg-muted" />
             <span className={DRAWER_NAME}>{entry.path.slice(cut)}</span>
             <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">{entry.path.slice(0, cut)}</span>
-            <span className="ml-auto shrink-0 rounded-xs bg-fill px-1.5 text-caption text-fg-muted">
-              Project
-            </span>
           </button>
         );
       }
@@ -1393,9 +1390,11 @@ export const Composer = memo(function Composer({
               <Marked text={keyword.label} query={drawerQuery} />
             </span>
             <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">{keyword.hint}</span>
-            <span className="ml-auto shrink-0 rounded-xs bg-fill px-1.5 font-mono text-caption text-fg-muted">
-              @{keyword.word}
-            </span>
+            {i === selected && (
+              <span className="ml-auto shrink-0 rounded-xs bg-fill px-1.5 font-mono text-caption text-fg-muted">
+                @{keyword.word}
+              </span>
+            )}
           </button>
         );
       }
@@ -1411,26 +1410,16 @@ export const Composer = memo(function Composer({
             <span className={DRAWER_NAME}>
               <Marked text={entry.agent.name} query={drawerQuery} />
             </span>
-            {/* Which harness, at which effort: what the row delegates to. */}
-            <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">
-              {entry.agent.model
-                ? `${entry.agent.harnessName}${entry.agent.effort ? ` · ${entry.agent.effort}` : ""}`
-                : entry.agent.effort}
-            </span>
-            <span className="ml-auto flex shrink-0 items-center gap-2">
-              {entry.agent.account && (
-                <span className="max-w-[120px] truncate text-caption text-fg-muted">
-                  {entry.agent.account}
-                </span>
-              )}
-              {entry.agent.plan && (
-                <span className="text-caption text-fg-faint tabular">{entry.agent.plan}</span>
-              )}
-              {/* The token the row writes, so what it will say in the message is no surprise. */}
-              <span className="max-w-[220px] truncate rounded-xs bg-fill px-1.5 font-mono text-caption text-fg-muted">
+            {/* One muted detail: the effort it would start on. The harness is the group's header, the
+                login and plan are said there once. */}
+            <span className="min-w-0 flex-1 truncate text-fg-muted text-sub">{entry.agent.effort}</span>
+            {/* The token the row writes, on the row under the keys only, so what the message will
+                say is no surprise without every row carrying it. */}
+            {i === selected && (
+              <span className="ml-auto max-w-[220px] shrink-0 truncate rounded-xs bg-fill px-1.5 font-mono text-caption text-fg-muted">
                 @{entry.agent.token}
               </span>
-            </span>
+            )}
           </button>
         );
       case "thread": {
@@ -1480,7 +1469,7 @@ export const Composer = memo(function Composer({
         {drawer && (
           <div
             ref={drawerRef}
-            className="rc-composer-drawer rc-in absolute inset-x-6 bottom-[calc(100%-1rem)] z-0 flex max-h-72 flex-col gap-0.5 overflow-y-auto px-1.5 pt-1.5 pb-[calc(1rem+6px)]"
+            className="rc-composer-drawer rc-in absolute inset-x-6 bottom-[calc(100%-1rem)] z-0 flex max-h-64 flex-col overflow-y-auto px-1.5 pt-1.5 pb-[calc(1rem+6px)]"
             role="listbox"
             aria-label={drawerLabel}
           >
@@ -1509,6 +1498,13 @@ export const Composer = memo(function Composer({
                   >
                     <HarnessIcon id={item.harness} name={item.name} size={12} />
                     <span className="truncate">{item.name}</span>
+                    {/* The login and what its plan has left, once for the group's rows. */}
+                    {(item.account || item.plan) && (
+                      <span className="ml-auto flex shrink-0 items-center gap-2 text-fg-faint">
+                        {item.account && <span className="max-w-[140px] truncate">{item.account}</span>}
+                        {item.plan && <span className="tabular">{item.plan}</span>}
+                      </span>
+                    )}
                   </div>
                 );
               }

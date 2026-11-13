@@ -296,3 +296,64 @@ describe("one group at a time", () => {
     expect(shape(nodes)).toEqual(["t:t0"]);
   });
 });
+
+describe("one header per harness", () => {
+  test("the login and plan are said once on the harness's header, not on its rows", () => {
+    const nodes = mentionNodes({
+      query: "",
+      agents: [
+        { ...agent("claude-code", "opus", "Claude Code"), account: "Paral 2", plan: "97% left" },
+        { ...agent("claude-code", "sonnet", "Claude Code"), account: "Paral 2", plan: "97% left" },
+      ],
+      delegates: [],
+      threads: [],
+      files: [],
+    });
+    const headers = nodes.filter((node) => node.kind === "harness");
+    expect(headers).toEqual([
+      { kind: "harness", harness: "claude-code", name: "Claude Code", account: "Paral 2", plan: "97% left" },
+    ]);
+  });
+
+  test("a harness with one login names none", () => {
+    const nodes = mentionNodes({
+      query: "",
+      agents: [agent("pi", "pi-pro", "Pi"), agent("pi", "pi-lite", "Pi")],
+      delegates: [],
+      threads: [],
+      files: [],
+    });
+    expect(nodes[0]).toEqual({
+      kind: "harness",
+      harness: "pi",
+      name: "Pi",
+      account: undefined,
+      plan: undefined,
+    });
+  });
+});
+
+describe("typing across the sections", () => {
+  test("the section with the closest match comes first", () => {
+    const nodes = mentionNodes({
+      query: "deploy",
+      agents: [],
+      delegates: [],
+      threads: [{ ...thread("x", "pi"), title: "Plan to deploy" }],
+      files: ["src/deploy.ts"],
+    });
+    expect(shape(nodes)).toEqual(["# Files", "f:src/deploy.ts", "# Threads", "t:x"]);
+  });
+
+  test("a keyword being typed follows the matches, and leads nothing", () => {
+    const nodes = mentionNodes({
+      query: "th",
+      keywords: ["threads"],
+      agents: [],
+      delegates: [],
+      threads: [thread("t0", "pi")],
+      files: [],
+    });
+    expect(shape(nodes)).toEqual(["t:t0", "k:threads"]);
+  });
+});
