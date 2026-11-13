@@ -5,6 +5,7 @@
 // is the link book, the thread list and the transcripts, so nothing here asks the engine.
 
 import type { DelegatePull } from "../acp/rustcode";
+import type { StackAgent } from "./agentStack";
 import { AGENT_WORD, type AgentState } from "./delegates";
 import { formatDuration } from "./thread";
 
@@ -142,4 +143,36 @@ export function statusReply(rows: readonly DelegateStatusRow[]): string {
     return `- **${row.title}** — ${bits.join(" · ")}`;
   });
   return `${statusSummary(rows)}\n\n${lines.join("\n")}`;
+}
+
+/** Whether a row is work the reader can still stop: working or waiting on them. */
+export function canStop(row: Pick<DelegateStatusRow, "state">): boolean {
+  return row.state === "working" || row.state === "needs";
+}
+
+/**
+ * The collapsed panel's one line: `3 delegates · 2 working · 1 needs you`. The count comes first, so
+ * the line reads the same whatever the states; it is `statusSummary` after it.
+ */
+export function panelLabel(rows: readonly DelegateStatusRow[]): string {
+  const count = `${rows.length} ${rows.length === 1 ? "delegate" : "delegates"}`;
+  return rows.length ? `${count} · ${statusSummary(rows)}` : count;
+}
+
+/** What needs the reader first, so the collapsed line can say it in its own tint. */
+export function panelAttention(rows: readonly DelegateStatusRow[]): "needs" | "failed" | undefined {
+  if (rows.some((row) => row.state === "needs")) return "needs";
+  if (rows.some((row) => row.state === "failed")) return "failed";
+  return undefined;
+}
+
+/** The harness marks the collapsed panel draws: the delegates working or waiting, one icon each. */
+export function panelMarks(rows: readonly DelegateStatusRow[]): StackAgent[] {
+  return rows.filter(canStop).map((row) => ({
+    id: row.id,
+    state: row.state === "needs" ? "needs" : "working",
+    kind: "thread" as const,
+    harness: row.harness,
+    label: row.title,
+  }));
 }

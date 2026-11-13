@@ -6078,6 +6078,16 @@ export function clearWaitingLinks(ids: readonly string[]) {
   }));
 }
 
+/** Stops the work `orchestrator` gave one delegate (its status row's Stop); the thread's own messages stay. */
+export async function stopDelegate(orchestrator: string, target: string): Promise<number> {
+  let stopped = 0;
+  for (const link of book().links) {
+    if (link.orchestrator !== orchestrator || link.target !== target || !isActive(link.state)) continue;
+    if (await stopLink(link.id)) stopped += 1;
+  }
+  return stopped;
+}
+
 /** The threads whose work is being stopped right now: a cascade stops each one once. */
 const stopping = new Set<string>();
 

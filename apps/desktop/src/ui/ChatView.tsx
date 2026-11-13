@@ -1007,7 +1007,7 @@ export function ChatView() {
               )}
               {thread && (
                 <LaneItem over>
-                  <DelegateStatusPanel threadId={thread.id} />
+                  <DelegateStatusPanel key={thread.id} threadId={thread.id} />
                   <LinkedThreads threadId={thread.id} />
                 </LaneItem>
               )}
