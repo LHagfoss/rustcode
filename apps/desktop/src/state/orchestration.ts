@@ -628,7 +628,7 @@ export type Call =
       machine?: string;
     }
   | { tool: "thread_status"; target?: string; machine?: string }
-  | { tool: "merge_when_green"; target: string; timeoutMs: number; callId?: string }
+  | { tool: "merge_when_green"; target: string; number?: number; timeoutMs: number; callId?: string }
   | { tool: "cleanup_worktree"; target: string; settle: boolean }
   /** Where worktrees stand: one thread's, or every worktree this thread reaches. */
   | { tool: "worktree_status"; target?: string; allProjects: boolean; machine?: string }
@@ -896,11 +896,17 @@ export function parseCall(params: JsonObject): Call | Failure {
     }
     case "merge_when_green": {
       const target = s(args.session_id) ?? "";
-      if (!target) return failure("invalid", "session_id is required");
+      const number =
+        typeof args.number === "number" && Number.isSafeInteger(args.number) && args.number > 0
+          ? args.number
+          : undefined;
+      if ((!target && !number) || (target && args.number !== undefined))
+        return failure("invalid", "give session_id or a positive PR number");
       const asked = typeof args.timeout_ms === "number" ? Math.floor(args.timeout_ms) : DEFAULT_MERGE_MS;
       return {
         tool: "merge_when_green",
         target,
+        ...(number ? { number } : {}),
         timeoutMs: Math.min(Math.max(asked, 1), MAX_MERGE_MS),
         callId: s(params.callId),
       };

@@ -3108,11 +3108,8 @@ async function mergeTracked(
   call: Extract<ReturnType<typeof parseCall>, { tool: "merge_when_green" }>,
   tracked: Droppable | undefined,
 ): Promise<JsonObject> {
-  const target = manageTarget(caller, call.target);
+  const target = call.number ? caller : manageTarget(caller, call.target);
   if (isFailure(target)) return failureJson(target);
-  if (target.id === caller.id) {
-    return failureJson(failure("not_allowed", "a thread merges a delegate's pull request, not its own"));
-  }
   const state = await delegatePull(target);
   if (tracked?.dropped) return failureJson(droppedFailure());
   if (state.error) return failureJson(state.error);
@@ -3123,6 +3120,8 @@ async function mergeTracked(
       failure("not_found", `“${target.title}” has no pull request on ${state.branch ?? "its branch"} yet`),
     );
   }
+  if (call.number && pull.number !== call.number)
+    return failureJson(failure("not_allowed", "the PR number must match this thread’s current branch"));
   if (pull.merged) {
     return {
       session_id: target.id,
@@ -3147,50 +3146,63 @@ async function mergeTracked(
   if (no) return failureJson(no);
   // Nothing merges for a call that was dropped while it waited for the approval.
   if (tracked?.dropped) return failureJson(droppedFailure());
-  // The engine's merge loop runs under the call's id, so a drop ends it before it merges.
-  const mergeId = call.callId;
-  const stopMerge = () => {
-    if (mergeId) void request(Method.pullMergeCancel, { mergeId }, 10_000).catch(() => {});
+  const finishMerge = async (): Promise<JsonObject> => {
+    // The engine's merge loop runs under the call's id, so a drop ends it before it merges.
+    const mergeId = call.number ? undefined : call.callId;
+    const stopMerge = () => {
+      if (mergeId) void request(Method.pullMergeCancel, { mergeId }, 10_000).catch(() => {});
+    };
+    if (tracked) tracked.onDrop.add(stopMerge);
+    let result: Json;
+    try {
+      result = await request(
+        Method.pullMerge,
+        {
+          cwd: projectOf(target),
+          number: pull.number,
+          ...(state.branch ? { branch: state.branch } : {}),
+          timeoutMs: call.timeoutMs,
+          ...(mergeId ? { mergeId } : {}),
+        },
+        call.timeoutMs + 120_000,
+      );
+    } catch (error) {
+      // The app gives up on the answer, so the loop must not go on to merge unseen.
+      stopMerge();
+      return failureJson(failure("failed", `the merge did not answer: ${errorText(error)}`));
+    } finally {
+      tracked?.onDrop.delete(stopMerge);
+    }
+    const error = parsePullError(result);
+    if (error) return failureJson(pullFailure(error));
+    const outcome = parseMergeOutcome(result);
+    if (!outcome) return failureJson(failure("failed", "the engine answered without a merge result"));
+    if (outcome.merged) {
+      // The branch's story is part of the link's: the chip's list says it merged.
+      setBook((b) => noteLinkEvent(b, caller.id, target.id, "merged"));
+    }
+    return {
+      session_id: target.id,
+      number: outcome.number,
+      state: outcome.state,
+      merged: outcome.merged,
+      ...(outcome.url ? { url: outcome.url } : {}),
+      ...(outcome.failing.length ? { failing: outcome.failing } : {}),
+      waited_secs: outcome.waitedSecs,
+      detail: outcome.message,
+    };
   };
-  if (tracked) tracked.onDrop.add(stopMerge);
-  let result: Json;
-  try {
-    result = await request(
-      Method.pullMerge,
-      {
-        cwd: projectOf(target),
-        number: pull.number,
-        ...(state.branch ? { branch: state.branch } : {}),
-        timeoutMs: call.timeoutMs,
-        ...(mergeId ? { mergeId } : {}),
-      },
-      call.timeoutMs + 120_000,
+  if (call.number) {
+    void finishMerge().then((result) =>
+      deliver(caller.id, `Pull request #${pull.number}: ${JSON.stringify(result)}`, "", ""),
     );
-  } catch (error) {
-    // The app gives up on the answer, so the loop must not go on to merge unseen.
-    stopMerge();
-    return failureJson(failure("failed", `the merge did not answer: ${errorText(error)}`));
-  } finally {
-    tracked?.onDrop.delete(stopMerge);
+    return {
+      number: pull.number,
+      state: "watching",
+      detail: "Merge approved and handed to RustCode. End the turn; the result will wake this thread.",
+    };
   }
-  const error = parsePullError(result);
-  if (error) return failureJson(pullFailure(error));
-  const outcome = parseMergeOutcome(result);
-  if (!outcome) return failureJson(failure("failed", "the engine answered without a merge result"));
-  if (outcome.merged) {
-    // The branch's story is part of the link's: the chip's list says it merged.
-    setBook((b) => noteLinkEvent(b, caller.id, target.id, "merged"));
-  }
-  return {
-    session_id: target.id,
-    number: outcome.number,
-    state: outcome.state,
-    merged: outcome.merged,
-    ...(outcome.url ? { url: outcome.url } : {}),
-    ...(outcome.failing.length ? { failing: outcome.failing } : {}),
-    waited_secs: outcome.waitedSecs,
-    detail: outcome.message,
-  };
+  return finishMerge();
 }
 
 /**

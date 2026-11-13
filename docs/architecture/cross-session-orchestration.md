@@ -397,3 +397,18 @@ macOS (`swift test` in `macos/`, RustCodeKit):
   built in v2, see [orchestrator.md](../orchestrator.md)); resuming an
   existing thread is not covered.
 - M4: terminal-owned sessions through the remote gateway; TUI chips.
+
+### Own-PR CI handoff
+
+A successful desktop tool result for `gh pr create` links the returned GitHub
+PR URL through the durable pull-watch store. Repeated updates preserve the
+link’s delivery cursor. Threads end their turn; watch notifications deliver
+changes through the existing notice queue. Newly observed failed checks fetch
+bounded `gh run view --log-failed` tails where GitHub Actions URLs are available.
+
+`merge_when_green({number})` targets the calling thread’s current-branch PR,
+rejects a mismatching number, and uses the existing merge approval. After approval
+it returns immediately; the app delivers the engine’s result as a queued message.
+The delegate `session_id` form retains its cancellable synchronous behavior.
+Own-PR merges currently require the app to remain connected; durable release
+phase execution and restart recovery are separate follow-ups.

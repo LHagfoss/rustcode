@@ -1063,7 +1063,18 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
             Ok(())
         }
         MERGE_WHEN_GREEN => {
-            required_name(args, "session_id")?;
+            if args.get("number").is_some() {
+                if args
+                    .get("number")
+                    .and_then(Value::as_u64)
+                    .is_none_or(|n| n == 0)
+                    || args.get("session_id").is_some()
+                {
+                    return Err("give session_id or a positive PR number".to_owned());
+                }
+            } else {
+                required_name(args, "session_id")?;
+            }
             match args.get("timeout_ms") {
                 None | Some(Value::Null) => Ok(()),
                 // A wait over the cap is cut to it (see `timeout`), not refused.
@@ -1996,6 +2007,12 @@ mod tests {
             json!({"session_id": "d1", "timeout_ms": 60000})
         ));
         assert!(!ok(MERGE_WHEN_GREEN, json!({})));
+        assert!(ok(MERGE_WHEN_GREEN, json!({"number": 42})));
+        assert!(!ok(MERGE_WHEN_GREEN, json!({"number": 0})));
+        assert!(!ok(
+            MERGE_WHEN_GREEN,
+            json!({"number": 42, "session_id": "d1"})
+        ));
         assert!(!ok(
             MERGE_WHEN_GREEN,
             json!({"session_id": "d1", "timeout_ms": 0})

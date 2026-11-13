@@ -1881,6 +1881,36 @@ describe("engine controller with the mock engine", () => {
     });
   });
 
+  test("an own-PR merge returns after one approval while the engine continues", async () => {
+    const { parent, transport } = await stagedMerge();
+    const pending = answerOrchestration({
+      sessionId: parent,
+      tool: "merge_when_green",
+      callId: "own-merge",
+      args: { number: 2790 },
+    });
+    await until(() => useApp.getState().grant !== null, 3000);
+    expect(transport.asked(Method.pullMerge)).toHaveLength(0);
+    resolveGrant("once");
+    expect(await pending).toMatchObject({ number: 2790, state: "watching" });
+    expect(transport.asked(Method.pullMerge)).toHaveLength(1);
+    orchestrationCallDropped({ sessionId: parent, callId: "own-merge" });
+    expect(transport.asked(Method.pullMergeCancel)).toHaveLength(0);
+    transport.release();
+  });
+
+  test("an own-PR merge refuses a number from another branch before approval", async () => {
+    const { parent, transport } = await stagedMerge();
+    const result = await answerOrchestration({
+      sessionId: parent,
+      tool: "merge_when_green",
+      args: { number: 999 },
+    });
+    expect(result).toMatchObject({ error: { code: "not_allowed" } });
+    expect(useApp.getState().grant).toBeNull();
+    expect(transport.asked(Method.pullMerge)).toHaveLength(0);
+  });
+
   test("a merge whose call is dropped while it waits for the approval never merges", async () => {
     const { parent, target, transport } = await stagedMerge();
     const merged = answerOrchestration({

@@ -367,6 +367,11 @@ impl Watch {
                     ),
                 );
             }
+            None if self.link => {
+                for (kind, message) in changes(&Snapshot::default(), &new, &[], self.interests) {
+                    fresh.push(self.push_event(kind, message, now));
+                }
+            }
             None => {}
         }
         if new.state != "open" {
@@ -808,7 +813,7 @@ where
             None
         };
         for mut watch in group {
-            let events = if watch.past_limit(now) {
+            let mut events = if watch.past_limit(now) {
                 watch.expire(now)
             } else {
                 match &answer {
@@ -827,6 +832,26 @@ where
                     None => Vec::new(),
                 }
             };
+            if events.iter().any(|event| event.kind == "checks_failed") {
+                if let Some(Ok(value)) = &answer {
+                    let tail = failed_log_tail(&watch.cwd, &watch.repo, value).await;
+                    if !tail.is_empty() {
+                        for event in events
+                            .iter_mut()
+                            .filter(|event| event.kind == "checks_failed")
+                        {
+                            event.message.push_str(&format!("\n{tail}"));
+                            if let Some(saved) = watch
+                                .events
+                                .iter_mut()
+                                .find(|saved| saved.at == event.at && saved.kind == event.kind)
+                            {
+                                saved.message = event.message.clone();
+                            }
+                        }
+                    }
+                }
+            }
             if let Some(snapshot) = watch.snapshot.as_ref() {
                 crate::data_store::record_thread_pull_request(
                     &watch.session_id,
@@ -905,6 +930,57 @@ fn number_of(args: &Value) -> Result<Option<u64>, String> {
         Some(number) if number > 0 => Ok(Some(number)),
         _ => Err("number must be a pull request number, 1 or more".to_owned()),
     }
+}
+
+// Fetch diagnostics only for a newly observed failure, never on every round.
+async fn failed_log_tail(cwd: &Path, repo: &str, value: &Value) -> String {
+    let Some(detail) = crate::pull_requests::detail(value) else {
+        return String::new();
+    };
+    let mut tails = Vec::new();
+    let mut seen = BTreeSet::new();
+    for check in detail
+        .check_runs
+        .iter()
+        .filter(|check| check.status == "failed")
+    {
+        let Some(url) = &check.url else { continue };
+        let Some(run) = url
+            .split("/actions/runs/")
+            .nth(1)
+            .and_then(|rest| rest.split('/').next())
+        else {
+            continue;
+        };
+        if run.is_empty()
+            || !run.bytes().all(|b| b.is_ascii_digit())
+            || !seen.insert(run.to_owned())
+        {
+            continue;
+        }
+        if seen.len() > 3 {
+            break;
+        }
+        let mut args = vec!["run", "view", run, "--log-failed"];
+        if !repo.is_empty() {
+            args.extend(["--repo", repo]);
+        }
+        if let Ok(bytes) = crate::pull_requests::gh(cwd, &args, None).await {
+            let text = String::from_utf8_lossy(&bytes);
+            let lines: Vec<_> = text.lines().rev().take(20).collect();
+            tails.push(
+                lines
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    .chars()
+                    .take(6000)
+                    .collect::<String>(),
+            );
+        }
+    }
+    tails.join("\n")
 }
 
 /// The `manage_pull_links` answer (#3369), shared by the built-in tool and the
@@ -1240,10 +1316,41 @@ mod tests {
         )
     }
 
+    // These lifecycle tests start before CI settles. Already-green linking is
+    // covered separately by linking_after_checks_finish_reports_the_result_once.
     fn linked(store: &WatchStore, session: &str, cwd: &str, now: i64) -> Watch {
+        let pending = view(
+            "open",
+            "a1",
+            json!([check("test", "PENDING")]),
+            "MERGEABLE",
+            json!([]),
+        );
         store
-            .link(session, Path::new(cwd), "o/r", 7, &open(), now)
+            .link(session, Path::new(cwd), "o/r", 7, &pending, now)
             .unwrap()
+    }
+
+    #[test]
+    fn linking_after_checks_finish_reports_the_result_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WatchStore::new(dir.path());
+        let value = view(
+            "open",
+            "abc",
+            json!([{"__typename": "CheckRun", "name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"}]),
+            "MERGEABLE",
+            json!([]),
+        );
+        store
+            .link("s", Path::new("/repo"), "o/r", 7, &value, 100)
+            .unwrap();
+        let (_, events) = store.take("s", 7).unwrap().unwrap();
+        assert_eq!(events[0].kind, "checks_passed");
+        store
+            .link("s", Path::new("/repo"), "o/r", 7, &value, 101)
+            .unwrap();
+        assert!(store.take("s", 7).unwrap().unwrap().1.is_empty());
     }
 
     #[test]
@@ -1262,7 +1369,7 @@ mod tests {
         assert_eq!(link.checked_at, Some(now));
         assert!(
             link.events.is_empty(),
-            "a link's first read reports nothing"
+            "a link with pending checks has no result to report yet"
         );
 
         // Another engine, or this one after a restart, reads the same link.
@@ -1404,7 +1511,14 @@ mod tests {
         watch.apply(&merged, now + 120);
         assert!(!watch.is_watching());
         assert_eq!(watch.stop_reason.as_deref(), Some("merged"));
-        assert_eq!(watch.pending()[0].kind, "closed");
+        assert_eq!(
+            watch
+                .pending()
+                .iter()
+                .map(|event| event.kind.as_str())
+                .collect::<Vec<_>>(),
+            ["checks_passed", "closed"]
+        );
         store.put(&watch).unwrap();
         assert!(store.due(now + 10 * INTERVAL_SECS).is_empty());
         assert!(store.stop("s1", 7, true).unwrap().is_some());
@@ -1424,8 +1538,14 @@ mod tests {
 
         // The next read that works clears the failure and says so once.
         let events = watch.apply(&open(), now + 240);
-        assert_eq!(events[0].kind, "sync_recovered");
-        assert!(events[0].message.contains("1 failed check"));
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.kind.as_str())
+                .collect::<Vec<_>>(),
+            ["checks_passed", "sync_recovered"]
+        );
+        assert!(events[1].message.contains("1 failed check"));
         assert_eq!(watch.failures, 0);
         assert!(watch.last_error.is_none());
         assert!(watch.apply(&open(), now + 360).is_empty());
