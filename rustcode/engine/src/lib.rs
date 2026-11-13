@@ -14,6 +14,7 @@ pub mod benchmark;
 pub mod capabilities;
 mod checkpoints;
 pub mod clipboard;
+pub mod command_guard;
 pub mod config;
 pub mod connections;
 mod context;

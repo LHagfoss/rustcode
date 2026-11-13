@@ -713,6 +713,45 @@ pub(crate) fn reap_once(
     reaped
 }
 
+/// The answer to an approval request for a shell command the project's command
+/// policy refuses: the harness's reject option, with the violation counted
+/// against the thread. `None` for anything else, which goes on to the user.
+fn guard_refusal(
+    request: &RequestPermissionRequest,
+    cwd: &Path,
+    thread_id: &str,
+    harness_id: &str,
+) -> Option<RequestPermissionResponse> {
+    use agent_client_protocol::schema::v1::{
+        PermissionOptionKind, SelectedPermissionOutcome, ToolKind,
+    };
+    if !matches!(request.tool_call.fields.kind, Some(ToolKind::Execute)) {
+        return None;
+    }
+    let command =
+        crate::command_guard::requested_command(request.tool_call.fields.raw_input.as_ref()?)?;
+    let verdict = crate::command_guard::check(cwd, &command, &[]);
+    let reason = crate::command_guard::refusal(&verdict)?;
+    crate::command_guard::record_violation(thread_id, harness_id, &verdict);
+    crate::dbg_log!("harness {harness_id}: {reason}");
+    let reject = request
+        .options
+        .iter()
+        .find(|option| matches!(option.kind, PermissionOptionKind::RejectOnce))
+        .or_else(|| {
+            request
+                .options
+                .iter()
+                .find(|option| matches!(option.kind, PermissionOptionKind::RejectAlways))
+        });
+    Some(RequestPermissionResponse::new(match reject {
+        Some(option) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+            option.option_id.clone(),
+        )),
+        None => RequestPermissionOutcome::Cancelled,
+    }))
+}
+
 pub(crate) struct ExternalSession {
     pub id: String,
     pub harness: ResolvedHarness,
@@ -759,6 +798,7 @@ impl ExternalSession {
         let idle = IdleState::share();
         let thread_id = id.clone();
         let harness_id = harness.id.clone();
+        let guard_cwd = record.cwd.clone();
         {
             let transcript = Arc::clone(&transcript);
             let progress = Arc::clone(&progress);
@@ -784,6 +824,14 @@ impl ExternalSession {
                         }
                         Output::Marker(update) => sink.update(update),
                         Output::Permission { request, reply } => {
+                            // A command the project's policy refuses is
+                            // answered here, without asking the user.
+                            if let Some(refused) =
+                                guard_refusal(&request, &guard_cwd, &thread_id, &harness_id)
+                            {
+                                let _ = reply.send(refused);
+                                continue;
+                            }
                             let waiting = progress.waiting();
                             let asked = sink.request_permission(request);
                             let answered = Arc::clone(&idle);

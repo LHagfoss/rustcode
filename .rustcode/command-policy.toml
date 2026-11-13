@@ -1,0 +1,54 @@
+# Shell rules for agents working in this repository (AGENTS.md, "Workflow").
+# RustCode's command guard reads this file: see docs/command-guard.md.
+# A deny rule refuses the command and tells the agent why; a rewrite rule runs
+# it with a prefix. Rules look through quotes, `&&` lists, `VAR=x` prefixes and
+# wrappers such as `timeout`, `env` or `sh -c`.
+
+[[rule]]
+name = "no-workspace-tests"
+action = "deny"
+program = "cargo"
+subcommand = ["test", "t", "nextest"]
+flags = ["--workspace", "--all"]
+allow_env = "RUSTCODE_ALLOW_WORKSPACE_TESTS"
+message = "`cargo test --workspace` builds and runs every crate and drains the laptop's battery; CI runs it on every push. Run `cargo test -p <package> <module>` for what you changed, then push and read `gh pr checks`. Reproducing a CI failure is the one reason to run it locally."
+
+[[rule]]
+name = "cargo-background-priority"
+action = "rewrite"
+program = "cargo"
+subcommand = ["build", "b", "check", "c", "clippy", "test", "t", "nextest", "run", "r", "bench", "doc", "fix", "install", "rustc"]
+prefix_macos = "taskpolicy -b env CARGO_BUILD_JOBS=2"
+prefix_linux = "nice -n 10 env CARGO_BUILD_JOBS=2"
+skip_if_wrapped = ["taskpolicy", "nice"]
+message = "Cargo runs at background priority with two jobs so several agents can build on one laptop."
+
+[[rule]]
+name = "no-git-rebase"
+action = "deny"
+program = "git"
+subcommand = ["rebase"]
+message = "Never rebase a task branch. Merge `origin/main` with `git merge origin/main --no-edit` when the branch needs updating."
+
+[[rule]]
+name = "no-git-stash"
+action = "deny"
+program = "git"
+subcommand = ["stash"]
+message = "The stash is shared with every worktree and other threads. Set work aside with a temporary WIP commit instead."
+
+[[rule]]
+name = "no-git-reset-hard"
+action = "deny"
+program = "git"
+subcommand = ["reset"]
+flags = ["--hard"]
+message = "`git reset --hard` discards work. Use `git restore <path>` for one file, or ask the user."
+
+[[rule]]
+name = "no-force-push"
+action = "deny"
+program = "git"
+subcommand = ["push"]
+flags = ["--force", "-f", "--force-with-lease"]
+message = "Never force-push. Merge `origin/main` into the branch and push normally."
