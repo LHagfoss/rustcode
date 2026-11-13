@@ -150,6 +150,28 @@ fn apply_priority(builder: &mut tokio::process::Command, priority: super::build_
     }
 }
 
+/// A stale inherited OpenSSL directory override suppresses platform roots in
+/// rustls-native-certs even when none of its directories exists. Explicit
+/// harness choices stay intact, so Codex can report their configuration errors.
+fn discard_missing_codex_cert_dirs(
+    builder: &mut tokio::process::Command,
+    harness_id: &str,
+    inherited: Option<&std::ffi::OsStr>,
+    env: &[(String, String)],
+) {
+    if harness_id != "codex" || env.iter().any(|(name, _)| name == "SSL_CERT_DIR") {
+        return;
+    }
+    if let Some(dirs) = inherited {
+        if !std::env::split_paths(dirs).any(|dir| !dir.as_os_str().is_empty() && dir.is_dir()) {
+            builder.env_remove("SSL_CERT_DIR");
+            crate::dbg_log!(
+                "ignoring inherited SSL_CERT_DIR for Codex: no directory exists; using platform roots or the configured CA file"
+            );
+        }
+    }
+}
+
 /// [`spawn`] at `priority`.
 pub(crate) fn spawn_with(
     harness_id: &str,
@@ -185,6 +207,12 @@ pub(crate) fn spawn_with(
     }
     // No TTY: an editor or pager would wait forever. These first, so an
     // explicit `env` below still wins.
+    discard_missing_codex_cert_dirs(
+        &mut builder,
+        harness_id,
+        std::env::var_os("SSL_CERT_DIR").as_deref(),
+        env,
+    );
     builder.envs(NON_INTERACTIVE_ENV);
     builder.envs(env.iter().map(|(name, value)| (name, value)));
     #[cfg(unix)]
@@ -230,6 +258,45 @@ pub(crate) fn spawn_with(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_drops_only_missing_inherited_certificate_directories() {
+        use std::ffi::OsStr;
+        let existing = tempfile::tempdir().unwrap();
+        let missing = existing.path().join("missing");
+        let mixed = std::env::join_paths([missing.as_path(), existing.path()]).unwrap();
+        for (harness, inherited, explicit, removed) in [
+            (
+                "codex",
+                Some(OsStr::new("$ZEROBREW_PREFIX/share/ca-certificates")),
+                vec![],
+                true,
+            ),
+            ("codex", Some(missing.as_os_str()), vec![], true),
+            ("codex", Some(OsStr::new("")), vec![], true),
+            ("codex", Some(existing.path().as_os_str()), vec![], false),
+            ("codex", Some(mixed.as_os_str()), vec![], false),
+            ("codex", None, vec![], false),
+            ("claude", Some(missing.as_os_str()), vec![], false),
+            (
+                "codex",
+                Some(missing.as_os_str()),
+                vec![("SSL_CERT_DIR".into(), "chosen".into())],
+                false,
+            ),
+        ] {
+            let mut builder = tokio::process::Command::new("unused");
+            discard_missing_codex_cert_dirs(&mut builder, harness, inherited, &explicit);
+            assert_eq!(
+                builder
+                    .as_std()
+                    .get_envs()
+                    .any(|(key, value)| key == "SSL_CERT_DIR" && value.is_none()),
+                removed,
+                "harness={harness}, inherited={inherited:?}"
+            );
+        }
+    }
 
     #[cfg(unix)]
     #[tokio::test]
