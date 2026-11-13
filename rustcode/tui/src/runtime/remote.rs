@@ -1106,6 +1106,9 @@ mod tests {
             }
         }
         if failed {
+            if released.wait_for(|released| *released).await.is_err() {
+                return;
+            }
             let body = r#"{"error":{"message":"test provider failure"}}"#;
             let _ = socket.write_all(format!("HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await;
             return;
@@ -1836,12 +1839,40 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn remote_provider_failure_retains_authoritative_terminal_timing() {
-        let provider = FakeProvider::start_mode(false, true).await;
+        let provider = FakeProvider::start_mode(true, true).await;
         let (mut runtime, gateway) = shared_runtime(provider.state(), 64);
         let (_, mut link, _) = share(&mut runtime, &gateway).await;
         enter(&mut runtime, "fail this turn").await;
+        // Publish the start before allowing failure: otherwise a completed-turn
+        // snapshot can legitimately replace the events this test asserts.
+        let started = tokio::time::timeout(WAIT, runtime.agent_ui_event_receiver.recv())
+            .await
+            .expect("turn starts")
+            .expect("UI events open");
+        assert!(matches!(started, AgentUiEvent::PromptStarted { .. }));
+        runtime.remote.observe(&started);
+        runtime.run_remote_iteration().await;
+        provider.release();
         let mut received = Vec::new();
-        publish_until(&mut runtime, &mut link, &mut received, turn_ended).await;
+        tokio::time::timeout(WAIT, async {
+            loop {
+                while let Ok(message) = link.messages.try_recv() {
+                    received.push(message);
+                }
+                if turn_ended(&received) {
+                    break;
+                }
+                let event = runtime
+                    .agent_ui_event_receiver
+                    .recv()
+                    .await
+                    .expect("UI events open");
+                runtime.remote.observe(&event);
+                runtime.run_remote_iteration().await;
+            }
+        })
+        .await
+        .expect("failed turn is published");
         let failed = events(&received)
             .into_iter()
             .find_map(|(_, event)| match event {

@@ -313,7 +313,8 @@ async fn a_failed_start_keeps_the_entry_and_does_not_quote_its_secrets() {
         manage_mcp_servers_in(
             &json!({
                 "operation": "add", "name": "leaky",
-                "target": ["sh", "-c", "echo \"refusing key $API_KEY\" >&2; exit 3"],
+                // Reply to initialize explicitly; stdout EOF races the stderr reader.
+                "target": ["sh", "-c", "read request; printf '{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32000,\"message\":\"refusing key %s\"}}\n' \"$API_KEY\"; exit 3"],
                 "env": [format!("API_KEY={SECRET}")],
             }),
             &config_dir,
