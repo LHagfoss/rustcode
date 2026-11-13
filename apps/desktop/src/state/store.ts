@@ -7823,7 +7823,44 @@ function schedulePlanReset(cache: Record<string, CachedPlan>) {
     planResetDue = 0;
     if (typeof document !== "undefined" && document.hidden) return;
     void refreshPlanCache();
+    refreshSelectedPlanUsage(true);
   }, delay);
+}
+
+/**
+ * Whether the thread on screen's own limits want another read: never read, a
+ * read that failed (marked stale), or one as old as the poll. The footer meter
+ * shows a thread's own windows before the harness's cache (`shownPlan`), so a
+ * poll that only refreshed the cache left a Codex thread's numbers where the
+ * last turn put them.
+ */
+export function ownPlanUsageDue(own: PlanUsage | null | undefined, now = Date.now()): boolean {
+  return own === undefined || own === null || own.stale === true || planIsStale(own, now);
+}
+
+/**
+ * Re-reads the limits of the thread on screen when they are due (`force`: at
+ * once). `refreshPlanUsage` already keeps one request per thread in flight, and
+ * it never touches the Keychain: Claude Code's limits answer null, so the plans
+ * read (`refreshPlanCache`) stays the only thing that does.
+ */
+function refreshSelectedPlanUsage(force = false, now = Date.now()): void {
+  const s = get();
+  const id = s.selectedId;
+  if (!id || s.status !== "ready" || !s.threads[id]?.loaded) return;
+  if (force || ownPlanUsageDue(s.planUsage[id], now)) void refreshPlanUsage(id);
+}
+
+/**
+ * One poll of everything the composer footer and the usage limiter draw: the
+ * shared plan cache when anything in it is old, and the selected thread's own
+ * limits when they are. A hidden window asks for nothing. Runs on the timer and
+ * when the window comes back.
+ */
+export function pollPlans(now = Date.now()): void {
+  if (typeof document !== "undefined" && document.hidden) return;
+  refreshSelectedPlanUsage(false, now);
+  if (planCacheStale(get().planCache, now)) void refreshPlanCache();
 }
 
 /**
@@ -7834,17 +7871,10 @@ function schedulePlanReset(cache: Record<string, CachedPlan>) {
  */
 export function startPlanPolling() {
   if (planTimer) return;
-  planTimer = setInterval(() => {
-    if (typeof document !== "undefined" && document.hidden) return;
-    if (!planCacheStale(get().planCache)) return;
-    void refreshPlanCache();
-  }, PLAN_CACHE_POLL_MS);
+  planTimer = setInterval(() => pollPlans(), PLAN_CACHE_POLL_MS);
   if (typeof document === "undefined") return;
-  plansOnVisible = () => {
-    if (document.hidden) return;
-    // Back after a while: catch up now rather than at the next tick.
-    if (planCacheStale(get().planCache)) void refreshPlanCache();
-  };
+  // Back after a while: catch up now rather than at the next tick.
+  plansOnVisible = () => pollPlans();
   document.addEventListener("visibilitychange", plansOnVisible);
 }
 

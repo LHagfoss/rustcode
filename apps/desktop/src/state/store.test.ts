@@ -71,6 +71,7 @@ import {
   onlyCachedPlan,
   openSideChat,
   openThread,
+  ownPlanUsageDue,
   PLAN_CACHE_MAX_AGE_MS,
   PLAN_CACHE_POLL_MS,
   PLAN_STALE_MARGIN_MS,
@@ -85,6 +86,7 @@ import {
   planKeyFor,
   planNow,
   plansToCache,
+  pollPlans,
   projectThreadChoice,
   prunePanels,
   prunePlans,
@@ -1543,6 +1545,53 @@ describe("engine controller with the mock engine", () => {
     expect(history.items.map((i) => i.kind)).toEqual(["user", "tool", "assistant"]);
     await until(() => useApp.getState().planUsage[id] !== undefined);
     expect(useApp.getState().planUsage[id]?.windows).toHaveLength(2);
+  });
+
+  test("the plan poll re-reads the open thread's own limits without a message", async () => {
+    await connect(new MockTransport({ delayMs: 0 }));
+    await until(() => useApp.getState().status === "ready");
+    setProjectCwd("/tmp/project");
+    await submit("yolo hello");
+    await until(() => selected()?.items.at(-1)?.kind === "turnEnd");
+    const id = selected()!.id;
+    await until(() => useApp.getState().planUsage[id] !== undefined);
+    const windows = (used: number) => [{ usedPercent: used, minutes: 300 }];
+    // The numbers the last turn left, a poll interval old: the footer draws them.
+    const old = Date.now() - PLAN_CACHE_POLL_MS - 1_000;
+    useApp.setState((s) => ({
+      planUsage: { ...s.planUsage, [id]: { source: "codex", windows: windows(5), fetchedAt: old } },
+    }));
+    expect(shownPlan(useApp.getState().planUsage[id], undefined).plan?.windows[0]?.usedPercent).toBe(5);
+    // The timer fires; nobody sends anything.
+    pollPlans();
+    await until(() => useApp.getState().planUsage[id]?.windows[0]?.usedPercent === 42);
+    const fresh = useApp.getState().planUsage[id];
+    expect(shownPlan(fresh, undefined).plan?.windows[0]?.usedPercent).toBe(42);
+    // The harness's cache moved with it, for the limiter and every thread on that harness.
+    expect(useApp.getState().planCache.codex?.windows[0]?.usedPercent).toBe(42);
+    // Numbers read a moment ago are left alone: one request per interval, not per tick.
+    useApp.setState((s) => ({
+      planUsage: { ...s.planUsage, [id]: { source: "codex", windows: windows(9), fetchedAt: Date.now() } },
+    }));
+    pollPlans();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(useApp.getState().planUsage[id]?.windows[0]?.usedPercent).toBe(9);
+  });
+
+  test("an own-limits read is due when missing, failed or a poll old", () => {
+    const now = 10_000_000;
+    const own = (fetchedAt: number, stale?: boolean) => ({
+      source: "codex",
+      windows: [{ usedPercent: 10 }],
+      fetchedAt,
+      ...(stale ? { stale } : {}),
+    });
+    expect(ownPlanUsageDue(undefined, now)).toBe(true);
+    expect(ownPlanUsageDue(null, now)).toBe(true);
+    expect(ownPlanUsageDue(own(now - 1_000), now)).toBe(false);
+    // A failed read keeps its numbers, marked stale, and the next tick tries again.
+    expect(ownPlanUsageDue(own(now - 1_000, true), now)).toBe(true);
+    expect(ownPlanUsageDue(own(now - PLAN_CACHE_POLL_MS), now)).toBe(true);
   });
 
   test("a new thread gets the chosen effort even when session/new ignores it", async () => {

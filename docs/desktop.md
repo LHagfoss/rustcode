@@ -676,6 +676,13 @@ composer's keys stay outside the table.
   Keychain refusal is remembered while the engine runs: the background reads
   then use the credentials file only, so a denial cannot prompt again even when
   that file answers and its numbers keep showing; Refresh asks macOS once more.
+- **Composer meter poll.** The app's one poll (`startPlanPolling`, every three
+  minutes while the window is visible, and when it comes back) also re-reads the
+  limits of the thread on screen (`_rustcode/usage/limits`, `pollPlans` in
+  `state/store.ts`) when they are a poll old, never read or marked stale, since
+  the footer draws a thread's own windows before the harness's cache. Claude
+  Code answers none there, so its meter keeps coming from the plans read; the
+  limits read never touches the Keychain.
 - **Settings › Statistics.** What the local data store recorded of every
   turn, by harness and model and by thread: `_rustcode/data/usage`
   (`engine/src/acp/data.rs`) read three times, once `group_by=model`, once
