@@ -611,7 +611,11 @@ function savedDetail(detail: PullDetail): JsonObject {
       kind: line.kind,
       ...(line.at !== undefined ? { at: line.at } : {}),
       body: line.body,
+      ...(line.url ? { url: line.url } : {}),
     })),
+    // Undefined fields drop out of the saved JSON.
+    reviewComments: detail.reviewComments.map((c) => ({ ...c }) as unknown as JsonObject),
+    ...(detail.reviewCommentsError ? { reviewCommentsError: detail.reviewCommentsError } : {}),
   };
 }
 
