@@ -40,6 +40,7 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::fs::File;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use tokio::io::BufReader;
@@ -318,6 +319,11 @@ pub(super) struct Shared {
     /// Refusals for the owner's UI; never part of a security decision, so it
     /// is a lock of its own rather than part of `state`.
     refusals: Mutex<Refusals>,
+    /// Whether any socket has reached the gateway since the latest pairing
+    /// challenge was issued. A challenge that ends with this still false means
+    /// no device got as far as connecting: the wrong network or address, not a
+    /// wrong code. Owner-facing only, never part of a security decision.
+    reached_since_challenge: AtomicBool,
 }
 
 /// One of the bounded slots for sockets that have not authenticated.
@@ -424,6 +430,7 @@ impl Shared {
     /// Reserve a slot for a newly accepted socket, or refuse it.
     pub(super) fn admit_socket(self: &Arc<Self>, ip: IpAddr) -> Option<UnauthenticatedSlot> {
         let ip = ip.to_canonical();
+        self.reached_since_challenge.store(true, Ordering::Relaxed);
         let mut slots = self
             .unauthenticated
             .lock()
@@ -1246,6 +1253,8 @@ impl Shared {
         let mut state = self.state();
         replace_approved(&mut state, now);
         let offer = state.pairing.issue(now);
+        // Nothing has dialed in for this code yet.
+        self.reached_since_challenge.store(false, Ordering::Relaxed);
         let mut details = OfferDetails::with_alternates(
             &advertised,
             &self.gateway_id,
@@ -1547,6 +1556,7 @@ impl Gateway {
             }),
             unauthenticated: Mutex::new(Unauthenticated::default()),
             refusals: Mutex::new(Refusals::default()),
+            reached_since_challenge: AtomicBool::new(false),
         });
         Ok(Self {
             listener,
@@ -2030,6 +2040,10 @@ fn status(shared: &Shared, started: Instant) -> GatewayStatus {
                 .pairing
                 .last_ended()
                 .map(|(challenge, end)| EndedChallenge { challenge, end }),
+            last_challenge_reached: state
+                .pairing
+                .last_serial()
+                .map(|_| shared.reached_since_challenge.load(Ordering::Relaxed)),
         }),
         machine_offer: Some(MachineOfferStatus {
             open: state

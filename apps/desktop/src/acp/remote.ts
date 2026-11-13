@@ -86,6 +86,8 @@ export type RemoteRefusalReason =
   | "unauthorized"
   | "token_replayed"
   | "unexpected_origin"
+  | "secure_connection"
+  | "unrecognized_request"
   | "unknown";
 
 const REFUSAL_REASONS: readonly RemoteRefusalReason[] = [
@@ -95,6 +97,8 @@ const REFUSAL_REASONS: readonly RemoteRefusalReason[] = [
   "unauthorized",
   "token_replayed",
   "unexpected_origin",
+  "secure_connection",
+  "unrecognized_request",
 ];
 
 /**
@@ -156,6 +160,11 @@ export interface RemotePairing {
   /** Seconds pairing stays locked after too many wrong codes, when it is. */
   lockedForSecs?: number;
   challenge?: number;
+  /**
+   * Whether any device connected to the gateway since the latest code was shown. `false` on a code
+   * that ran out means nothing arrived: the phone is on another network or dials another address.
+   */
+  lastChallengeReached?: boolean;
 }
 
 /** How a device reaches this Mac over one route. */
@@ -429,6 +438,7 @@ function parsePairing(value: Json | undefined): RemotePairing | undefined {
     attemptsLeft: num(pairing.attemptsLeft),
     lockedForSecs: num(pairing.lockedForSecs),
     challenge: num(pairing.challenge),
+    lastChallengeReached: bool(pairing.lastChallengeReached),
   };
 }
 

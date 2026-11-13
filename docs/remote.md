@@ -373,7 +373,14 @@ newer challenge, or gone because the gateway stopped or restarted. In the
 (Ctrl-C leaves earlier, the challenge stays valid). When output is not a
 terminal, `rustcode remote pair` prints the details once and exits. If pairing
 is already locked when the challenge is issued, the details say so first.
-`rustcode remote status` shows the same numbers at any time. An expired or
+`rustcode remote status` shows the same numbers at any time.
+
+A code that runs out is not always a wrong code. The gateway notes whether any
+socket reached it while the latest code was showing (`pairing.last_challenge_reached`
+in status, `pairing.lastChallengeReached` over ACP). When none did, the desktop
+and `rustcode remote pair` say that no device connected, and that the phone must
+be on the same network as the address shown (or reach it over NetBird or a VPN):
+the failure is the route, so no refusal could be recorded for it. An expired or
 used-up challenge is replaced by running `/remote pair` or
 `rustcode remote pair` again.
 
@@ -478,13 +485,15 @@ address and app counted rather than listed again.
 | `unauthorized` | A pairing this host does not accept: unknown, revoked or expired. | Pair the device again. |
 | `token_replayed` | A retired refresh token was presented, so the whole pairing was removed. | Pair the device again. |
 | `unexpected_origin` | The WebSocket upgrade carried an `Origin` no native app sends, so it was refused before a frame arrived. | That is a RustCode app from before it sent the native app origin, or a web page trying the port: update the app. Nothing was shared either way. |
+| `secure_connection` | The device opened a TLS connection (`wss://`, `https://`) to the gateway, which speaks plain WebSocket, so its first bytes could not be read. | Update the app on the device, or enter the address without `https://` or `wss://`. |
+| `unrecognized_request` | The device reached the gateway and sent JSON text, but its first frame is not a `pair`, `authenticate` or `connect_request` this host reads: an app build whose handshake differs. | Update RustCode on the device and on this computer so both are the latest. |
 
 Settings › Remote access lists them under *Refused connections*, with the
 device's own label when its frame named one, its kind and platform, the
 address it came from, how many tries and how long ago. `rustcode remote status`
 prints the same lines, and `refusedConnections` carries them to any ACP client.
-Nothing that is only a bug on the device (a malformed frame, a binary frame, an
-oversized one) is recorded, so it cannot crowd out the reasons a person can fix.
+Nothing that is only a bug on the device (a binary frame, an oversized one, a
+handshake that never arrives) is recorded, so it cannot crowd out the reasons a person can fix.
 Secrets never reach the record: only the label, kind, platform, protocol
 version and address a refused frame named are read from it.
 
