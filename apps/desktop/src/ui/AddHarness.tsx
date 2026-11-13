@@ -115,7 +115,7 @@ export function AddHarnessForm({ onClose }: { onClose: () => void }) {
 
   return (
     <form
-      className="flex flex-col gap-3 border-border border-b px-4 py-3"
+      className="rule-b flex flex-col gap-3 px-4 py-3"
       onSubmit={(e) => {
         e.preventDefault();
         void add();

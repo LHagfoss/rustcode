@@ -1391,6 +1391,13 @@ pub(crate) fn cleanup(
             ),
         });
     }
+    // The code stays in git; record where, on every thread that ran here,
+    // before the checkout goes.
+    if let (Some(record), Ok(head)) = (record.as_ref(), git_line(&path, &["rev-parse", "HEAD"])) {
+        for session_id in &record.session_ids {
+            crate::data_store::record_thread_outcome(session_id, &branch, &head);
+        }
+    }
     let path_text = path.to_string_lossy().into_owned();
     if path.exists() {
         git(&repo, &["worktree", "remove", &path_text]).map_err(|message| {

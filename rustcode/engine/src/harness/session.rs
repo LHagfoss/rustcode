@@ -848,6 +848,21 @@ impl ExternalSession {
             .is_some()
     }
 
+    /// How `ask_user_question` asks this thread's user (#3393): through the
+    /// same permission channel the harness's own requests take, so the client
+    /// shows its question card and the thread waits on the user. It holds the
+    /// channel weakly: a closed thread asks nobody.
+    pub(crate) fn question_asker(&self) -> crate::orchestration::ask_user::Asker {
+        let out = self.out.downgrade();
+        Arc::new(move |request| {
+            let (reply, answer) = oneshot::channel();
+            let sent = out
+                .upgrade()
+                .is_some_and(|out| out.send(Output::Permission { request, reply }).is_ok());
+            Box::pin(async move { if sent { answer.await.ok() } else { None } })
+        })
+    }
+
     /// Give the harness the orchestration tools from its next start.
     pub(crate) fn set_orchestrator(&self, launch: Option<crate::orchestration::hub::Launch>) {
         *self
@@ -1610,7 +1625,10 @@ impl ExternalSession {
                 context_tokens,
                 context_window,
                 stop_reason: Some(stop_reason.to_owned()),
+                effort: record.effort.clone(),
+                account: record.account.clone(),
                 tool_calls,
+                ..Default::default()
             },
             cumulative,
             series.as_deref(),

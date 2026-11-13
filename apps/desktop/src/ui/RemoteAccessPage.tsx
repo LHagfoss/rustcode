@@ -22,7 +22,7 @@ import {
 import { encodeQr } from "../lib/qr";
 import { deviceLabel, lastSeenLabel } from "../state/connectRequests";
 import { gatewayLine, installServer, refreshServerService, serverLine, useMachines } from "../state/machines";
-import { refusalAgo, refusalCopy } from "../state/refusals";
+import { expiredCodeCopy, refusalAgo, refusalCopy } from "../state/refusals";
 import { activeChallenge, remainingPairingSeconds } from "../state/remotePairing";
 import {
   askConfirm,
@@ -246,7 +246,7 @@ export function RemoteAccessPage() {
               : pending
                 ? "Asking the gateway for a code…"
                 : expired
-                  ? "The last code expired. Pair again for a fresh one."
+                  ? expiredCodeCopy(pairing?.lastChallengeReached, gateway?.advertisedAddress)
                   : undefined
           }
         >

@@ -827,6 +827,14 @@ where
                     None => Vec::new(),
                 }
             };
+            if let Some(snapshot) = watch.snapshot.as_ref() {
+                crate::data_store::record_thread_pull_request(
+                    &watch.session_id,
+                    &watch.url,
+                    &snapshot.state,
+                    &snapshot.head,
+                );
+            }
             if store.put(&watch).unwrap_or(false) {
                 changed(&watch, &events);
             }

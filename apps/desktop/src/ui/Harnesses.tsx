@@ -531,7 +531,7 @@ export function HarnessCard({ harness }: { harness: Harness }) {
 /** Where the cards will be: each one's icon, name and status line, and its switch. */
 export function HarnessListSkeleton({ rows = 3 }: { rows?: number }) {
   return (
-    <div role="status" aria-label="Loading" className="divide-y divide-border">
+    <div role="status" aria-label="Loading" className="rule-rows">
       {Array.from({ length: rows }, (_, i) => (
         <div key={i} className="flex items-center gap-3 px-4 py-3">
           <Skeleton className="size-8 shrink-0 rounded-lg" />
@@ -550,7 +550,7 @@ export function HarnessList({ snapshot }: { snapshot: HarnessSnapshot }) {
   // The agents RustCode ships with, then the ones the user added by hand.
   const { standard, custom } = groupHarnesses(snapshot.harnesses);
   return (
-    <div className="divide-y divide-border">
+    <div className="rule-rows">
       {standard.map((h) => (
         <HarnessCard key={h.id} harness={h} />
       ))}
@@ -632,7 +632,7 @@ export function DefaultsForm({
   };
   return (
     <div className="flex flex-col">
-      <div className="divide-y divide-border">
+      <div className="rule-rows">
         <SelectRow
           label="Harness"
           value={value.harness}

@@ -1,6 +1,6 @@
-//Naming a computer here and choosing its glyph (docs/desktop.md › Several
-// machines). A name is local: the machine keeps the name it reports, and Reset
-// shows that again. The glyph is one of a small fixed set plus a tint from the
+// Naming a computer here and choosing its glyph (docs/desktop.md › Several
+// machines). A name is shared: every paired computer shows the newest rename
+// (state/fleet.ts), and Reset returns to the name the machine reports. The glyph is one of a small fixed set plus a tint from the
 // app's chart palette, so a list of machines reads at a glance and no value is
 // ever a colour literal.
 
@@ -90,7 +90,7 @@ export function MachineIdentityEditor({
             />
             <div className="flex items-center justify-between gap-2">
               <span className="min-w-0 truncate text-caption text-fg-muted">
-                Blank shows {reportedName}. The machine keeps its own name.
+                Blank shows {reportedName}. Every paired computer shows this name.
               </span>
               {identity.displayName && (
                 <button

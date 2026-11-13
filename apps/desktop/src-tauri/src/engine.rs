@@ -109,8 +109,12 @@ const BACKOFF_START: Duration = Duration::from_millis(500);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
 /// A run that stayed up this long resets the backoff.
 const STABLE_AFTER: Duration = Duration::from_secs(60);
-/// How long a stopping engine gets after its stdin closes before it is killed.
+/// How long a restarting engine gets after its stdin closes before it is killed.
 const GRACE: Duration = Duration::from_secs(2);
+/// How long an engine gets when the app quits. Closing its sessions cancels every running turn and
+/// ends each harness (and the delegates it started); a kill before that is done leaves those
+/// processes running with nothing in the app that can reach them (issue 3652).
+const QUIT_GRACE: Duration = Duration::from_secs(10);
 
 #[derive(Default)]
 pub struct Engine {
@@ -313,19 +317,19 @@ impl Engine {
     /// Stop the current engine; the supervisor starts a fresh one at once.
     pub fn restart(&self) {
         self.restart_now.store(true, Ordering::SeqCst);
-        self.shutdown_child();
+        self.shutdown_child(GRACE);
     }
 
     /// Stop the engine and do not start another.
     pub fn stop(&self) {
         self.stopping.store(true, Ordering::SeqCst);
-        self.shutdown_child();
+        self.shutdown_child(QUIT_GRACE);
     }
 
     /// Close stdin (the engine's cue to clean up its sessions), then kill it if it lingers.
-    fn shutdown_child(&self) {
+    fn shutdown_child(&self, grace: Duration) {
         self.stdin.lock().unwrap().take();
-        let deadline = Instant::now() + GRACE;
+        let deadline = Instant::now() + grace;
         loop {
             let mut guard = self.child.lock().unwrap();
             let Some(child) = guard.as_mut() else { return };

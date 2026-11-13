@@ -429,6 +429,12 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     title: "Install updates automatically",
     keywords: "auto update upgrade install background restart relaunch idle",
   },
+  {
+    section: "about",
+    title: "System setup",
+    keywords:
+      "path quarantine launcher desktop entry git long paths webview server background service run again setup post-install",
+  },
 ];
 
 /** How many results the nav shows at once. */

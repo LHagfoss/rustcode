@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::orchestration::hub::{
-    Launch, ORCHESTRATION_VERSION_ENV, ORCHESTRATOR_TOKEN_ENV, SMART_UI_ENV,
+    ASK_USER_ENV, Launch, ORCHESTRATION_VERSION_ENV, ORCHESTRATOR_TOKEN_ENV, SMART_UI_ENV,
 };
 
 const EXTENSION: &str = include_str!("pi_extension.ts");
@@ -79,6 +79,10 @@ pub(crate) fn environment(launch: &Launch, dir: &Path) -> Vec<(String, String)> 
     if launch.smart_ui {
         env.push((SMART_UI_ENV.to_owned(), "1".to_owned()));
     }
+    // Pi has no question tool of its own: the server offers `ask_user_question`.
+    if launch.ask_user {
+        env.push((ASK_USER_ENV.to_owned(), "1".to_owned()));
+    }
     env
 }
 
@@ -116,6 +120,7 @@ mod tests {
             args: vec!["mcp-orchestrator".into(), "--session".into(), "t".into()],
             token: "secret".into(),
             smart_ui: false,
+            ask_user: true,
             version: crate::orchestration::VERSION,
         };
         let env = environment(&launch, dir.path());
@@ -125,6 +130,7 @@ mod tests {
                 .map(|(_, value)| value.as_str())
         };
         assert_eq!(get(ORCHESTRATOR_TOKEN_ENV), Some("secret"));
+        assert_eq!(get(ASK_USER_ENV), Some("1"));
         assert_eq!(
             get(ORCHESTRATION_VERSION_ENV),
             Some(crate::orchestration::VERSION.to_string().as_str())

@@ -119,6 +119,9 @@ const EXACT_METHODS: &[&str] = &[
     "_rustcode/project/read",
     "_rustcode/project/clone",
     "_rustcode/worktrees/state",
+    // The environment fleet's names, versions and last-seen times, exchanged
+    // between paired computers (`crate::fleet`): metadata only.
+    "_rustcode/environment/sync",
 ];
 const METHOD_PREFIXES: &[&str] = &["session/", "_rustcode/pulls", "_rustcode/capabilities"];
 
@@ -358,6 +361,7 @@ mod tests {
                 "_rustcode/project/read",
                 "_rustcode/project/clone",
                 "_rustcode/worktrees/state",
+                "_rustcode/environment/sync",
             ]
         );
         assert_eq!(

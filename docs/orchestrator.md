@@ -572,6 +572,68 @@ does not move it.
   children it already started as they were — the grant was made when they
   started, as with every other grant in the link book.
 
+### Delegate presets
+
+A preset is a named set of `start_session` / `fan_out` arguments the user keeps
+in Settings › Harnesses › Delegate presets (#3391), so an orchestrator does not
+restate the harness, model, effort, account, access, worktree and the same
+boilerplate instructions in every call. They are the `delegate-presets` server
+setting (`acp/settings.rs`), a list of
+`{ name, harness?, model?, effort?, account?, access?, worktree?, instructions? }`,
+empty by default, edited per machine or on all of them like any other server
+setting (`ui/DelegatePresets.tsx`, `state/delegatePresets.ts`).
+
+- `start_session` takes `preset`; each `fan_out` entry takes `preset` for its
+  harness, model, effort and account, and a top-level `fan_out` `preset` gives
+  the shared prompt's instructions and the access (every `fan_out` thread has
+  its own worktree anyway).
+- The engine expands the name before the call is forwarded to the app or
+  answered with no app attached (`orchestration/presets.rs`, called from
+  `orchestration::execute` and the hub), so every client version sees ordinary
+  arguments, and checks the result like any other call.
+- An argument the call passes itself (non-empty) wins over the preset's. The
+  preset's `instructions` go before the prompt, with a blank line between.
+- An unknown name is an `InvalidArguments` error that lists the saved names;
+  nothing is sent. Names match without regard to case.
+- `access` (`ask`, `edits` or `full`, also a plain argument now) only lowers
+  what the thread gets: the app takes the lower of it and the access above
+  (`narrowed` in `state/host.ts`).
+- `list_harnesses` ends with the saved presets, by name and what each sets, so
+  an agent learns what it can pass.
+
+### Switching a delegate at a limit
+
+By default a delegate that stops on a subscription limit waits for the reset
+and carries on (Settings › General › Continue threads on their own,
+`state/limitResume.ts`). With the opt-in `limit-fallback` server setting
+(Settings › Harnesses › Switch a delegate at a limit, #3392) it instead goes on
+at once on the other provider, at the same tier, from a table the user keeps.
+
+- The table is the `limit-fallback-map` server setting, a list of
+  `{ from: { harness, model? }, to: { harness, model?, effort?, account? } }`,
+  empty by default. A row's `from.model` matches part of the thread's model id or
+  name, without regard to case, and beats a row for the harness alone; the
+  harnesses of a row must differ (moving between the user's own accounts of one
+  harness stays manual). The reading and checking live in
+  `state/limitFallback.ts`.
+- Only a plan limit, not an overload or a network stop, and only a delegate
+  (a thread another one drives, that the user has not written in) on this
+  computer. The thread must have a row for what it ran on, and the target must
+  be an installed harness; otherwise it waits for the reset as before.
+- The app does it as `transfer_session` does, with `_rustcode/session/harness`
+  and the mapped model, effort and account (the target harness's usual account
+  when the row names none), then sends the thread the turn's continuation. The
+  links the stop settled are reopened and answered by that turn, exactly as
+  after a reset (`switchOnLimit` in `state/store.ts`). A thread never goes back
+  to a harness it already left on a limit, so two providers at their limits do
+  not trade it; the one it ends on waits for its reset.
+- The thread shows the harness divider the engine writes and a notice, “Moved to
+  Codex · gpt-5.5 because Claude Code hit its usage limit.”, and the engine
+  records a `thread.limit_switch` event (`from_harness`, `from_model`,
+  `to_harness`, `to_model`, `reason`) that `read_activity` returns
+  (`docs/data-store.md`). `_rustcode/session/harness` takes the optional
+  `reason: "limit"` for it.
+
 ### Forks and side chats
 
 The parent record carries a `relationship`: `delegate` (an agent started the
@@ -1521,6 +1583,24 @@ each with its line. The server answers it itself, without the socket, so it
 works on a thread whose client never advertised Smart UI at all; the engine and
 the harness pay one tool description for it. It does not run the page, so it
 returns no script errors, height or screenshot (`docs/smart-ui.md`).
+
+A harness with no question tool of its own (Pi, OpenCode, Gemini CLI, a custom
+ACP agent; `harness::needs_question_tool`) also gets **`ask_user_question`**
+(`orchestration/ask_user.rs`, #3393), through `RUSTCODE_ASK_USER=1` in the same
+environment. Claude Code (`AskUserQuestion`), Codex (`request_user_input`) and
+the built-in harness (`ask_question`) never see it. A call carries 1 to 4
+questions, each with 2 to 4 options (`label`, `description`), `multi_select`
+and an optional `header`; the app adds the free-text answer itself, so the
+agent does not list an "Other". The server checks the call and forwards it to
+the hub, and the hub asks it through the thread's own permission channel as the
+same question card Codex's `request_user_input` uses (`docs/acp.md`,
+"Questions"). The thread reads "Needs you" and the question is in
+`list_pending_requests` like any other. The agent gets
+`{"answers": [{"question", "selected": [labels], "text"?}]}`. If the user
+dismisses a question the call fails with a message to continue on its own
+judgement and say which choice it made. A question sets no time limit of its own: it waits until the
+user answers or the harness gives up the call, and cancelling the call or the
+turn withdraws it.
 
 Every thread that has the server also gets **`manage_pull_links`**
 ([Linked pull requests](#linked-pull-requests)), answered by the server
