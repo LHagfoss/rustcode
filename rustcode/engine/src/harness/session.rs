@@ -2,6 +2,7 @@
 //! on demand and restarted after it dies), the turn in flight, and the
 //! transcript recorded with the thread.
 
+use super::pressure::Pressure;
 use super::rpc::RpcPeer;
 use super::rpc_capture::RpcRecorder;
 use super::store::{self, HarnessRecord};
@@ -35,8 +36,14 @@ pub(crate) const LIVE_USAGE_INTERVAL: Duration = Duration::from_secs(3);
 pub(crate) const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 /// The most harness processes the engine keeps running
 /// (`[harness_defaults].max_live_harnesses`); above it the least recently used
-/// are stopped first.
+/// are stopped first, once they have been idle for [`CAP_MIN_IDLE`] or the
+/// machine is short of memory.
 pub(crate) const DEFAULT_MAX_LIVE: usize = 12;
+/// How long a process must have been idle before the cap alone may stop it.
+/// Under 30 minutes it keeps its state and its prompt cache unless the machine
+/// is short of memory (`pressure.rs`): a stop is only a cost when the user
+/// comes back soon.
+pub(crate) const CAP_MIN_IDLE: Duration = Duration::from_secs(30 * 60);
 /// How often the idle reaper looks. A pass costs one `try_lock` per open
 /// thread and starts no work.
 const REAP_INTERVAL: Duration = Duration::from_secs(60);
@@ -670,6 +677,12 @@ fn reap_pass() {
     if timeout.is_none() && cap.is_none() {
         return;
     }
+    // Read only when a cap may need it: the machine's counters cost a syscall or two.
+    let pressure = if cap.is_some() {
+        super::pressure::current()
+    } else {
+        Pressure::Unknown
+    };
     let sessions = {
         let mut open = open_threads()
             .lock()
@@ -677,16 +690,65 @@ fn reap_pass() {
         open.retain(|known| known.strong_count() > 0);
         open.iter().filter_map(Weak::upgrade).collect::<Vec<_>>()
     };
-    reap_once(&sessions, timeout, cap);
+    reap_once(&sessions, timeout, cap, pressure);
+}
+
+/// Why the reaper stops one idle process, or `None` to leave it running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Eviction {
+    /// Idle for the whole idle timeout.
+    Idle,
+    /// More processes than the cap, and the machine is short of memory.
+    Memory,
+    /// More processes than the cap, the process has been idle for
+    /// [`CAP_MIN_IDLE`], or the machine did not say how it is on memory.
+    Cap,
+}
+
+impl Eviction {
+    pub(crate) fn reason(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Memory => "memory",
+            Self::Cap => "cap",
+        }
+    }
+}
+
+/// Whether a process idle for `quiet` is stopped, with `running` processes
+/// alive against `cap`. The idle timeout always applies. The cap alone stops
+/// only a process idle for [`CAP_MIN_IDLE`] while memory is plentiful, so a
+/// thread the user left a few minutes ago is not evicted for being the 13th;
+/// under memory pressure, or with no reading of it, the least recently used go
+/// at once, as they did before.
+pub(crate) fn eviction(
+    quiet: Duration,
+    running: usize,
+    timeout: Option<Duration>,
+    cap: Option<usize>,
+    pressure: Pressure,
+) -> Option<Eviction> {
+    if timeout.is_some_and(|timeout| quiet >= timeout) {
+        return Some(Eviction::Idle);
+    }
+    if !cap.is_some_and(|cap| running > cap) {
+        return None;
+    }
+    match pressure {
+        Pressure::High => Some(Eviction::Memory),
+        Pressure::Unknown => Some(Eviction::Cap),
+        Pressure::Low => (quiet >= CAP_MIN_IDLE).then_some(Eviction::Cap),
+    }
 }
 
 /// Stop the processes that have been idle for `timeout`, then — while more than
-/// `cap` run — the least recently used ones. Answers the threads whose process
-/// was stopped, so a caller (or a test) can say which.
+/// `cap` run — the least recently used ones that [`eviction`] allows. Answers
+/// the threads whose process was stopped, so a caller (or a test) can say which.
 pub(crate) fn reap_once(
     sessions: &[Arc<ExternalSession>],
     timeout: Option<Duration>,
     cap: Option<usize>,
+    pressure: Pressure,
 ) -> Vec<String> {
     let now = tokio::time::Instant::now();
     let mut idle = sessions
@@ -699,13 +761,10 @@ pub(crate) fn reap_once(
     let mut reaped = Vec::new();
     for (since, session) in idle {
         let quiet = now.saturating_duration_since(since);
-        let too_idle = timeout.is_some_and(|timeout| quiet >= timeout);
-        let over_cap = cap.is_some_and(|cap| running > cap);
-        if !too_idle && !over_cap {
+        let Some(why) = eviction(quiet, running, timeout, cap, pressure) else {
             continue;
-        }
-        let reason = if too_idle { "idle" } else { "cap" };
-        if session.reap(reason, quiet) {
+        };
+        if session.reap(why, quiet, running, pressure) {
             running = running.saturating_sub(1);
             reaped.push(session.id.clone());
         }
@@ -1132,7 +1191,7 @@ impl ExternalSession {
     /// session: `harness.json` still names its native session id, account,
     /// model and effort. The thread is asleep, not crashed — nothing is sent to
     /// the client and no turn fails.
-    fn reap(&self, reason: &str, quiet: Duration) -> bool {
+    fn reap(&self, why: Eviction, quiet: Duration, live: usize, pressure: Pressure) -> bool {
         // A running turn holds `turn` for as long as it runs, so this can never
         // cut one off; a turn that starts now simply gets a new process.
         let Ok(_turn) = self.turn.try_lock() else {
@@ -1152,6 +1211,9 @@ impl ExternalSession {
         else {
             return false;
         };
+        // Read before the process goes: a tool call the last turn left open is
+        // work the stop cuts off, which a reap that finds none does not.
+        let work_in_flight = self.progress.open_tools() > 0;
         // A process that had already gone needs no reaping; the next prompt
         // restarts it anyway.
         let alive = adapter.is_alive();
@@ -1167,15 +1229,24 @@ impl ExternalSession {
                 "session_id": self.id,
                 "harness": self.harness.id,
                 "native_session_id": self.record().native_session_id,
-                "reason": reason,
+                "reason": why.reason(),
                 "idle_ms": quiet.as_millis() as u64,
+                "work_in_flight": work_in_flight,
+                "pressure": pressure.label(),
+                "live": live,
             }),
         );
         crate::dbg_log_for_session!(
             self.id,
-            "harness {} idle for {}; process stopped, the next message resumes its session",
+            "harness {} idle for {} ({}{}); process stopped, the next message resumes its session",
             self.harness.id,
-            waited(quiet)
+            waited(quiet),
+            why.reason(),
+            if work_in_flight {
+                ", work in flight"
+            } else {
+                ""
+            }
         );
         true
     }

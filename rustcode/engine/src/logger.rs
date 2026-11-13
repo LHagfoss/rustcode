@@ -1153,7 +1153,15 @@ const ALLOWED_EVENT_FIELDS: &[(&str, &[&str])] = &[
     ),
     (
         "harness.reaped",
-        &["harness", "native_session_id", "reason", "idle_ms"],
+        &[
+            "harness",
+            "native_session_id",
+            "reason",
+            "idle_ms",
+            "work_in_flight",
+            "pressure",
+            "live",
+        ],
     ),
     ("harness.resumed", &["harness", "native_session_id"]),
     ("shell_env.probe", &["outcome", "duration_ms", "phase"]),

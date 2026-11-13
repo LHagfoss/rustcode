@@ -7,6 +7,7 @@
 
 use super::*;
 use crate::harness::HarnessKind;
+use crate::harness::pressure::Pressure;
 use crate::harness::rpc::{Incoming, RpcError, RpcPeer};
 use crate::harness::session::test_support::{harness, pipe};
 use crate::harness::store::HarnessRecord;
@@ -258,7 +259,7 @@ async fn an_idle_process_is_stopped_after_the_timeout() {
     // 29 minutes of nothing is not enough.
     tokio::time::advance(DEFAULT_IDLE_TIMEOUT - Duration::from_secs(60)).await;
     assert!(
-        reap_once(&fixture.sessions(), timeout, None).is_empty(),
+        reap_once(&fixture.sessions(), timeout, None, Pressure::Unknown).is_empty(),
         "the process is still inside its idle timeout"
     );
     assert!(session.has_adapter().await, "still running");
@@ -266,7 +267,7 @@ async fn an_idle_process_is_stopped_after_the_timeout() {
 
     tokio::time::advance(Duration::from_secs(120)).await;
     assert_eq!(
-        reap_once(&fixture.sessions(), timeout, None),
+        reap_once(&fixture.sessions(), timeout, None, Pressure::Unknown),
         vec![fixture.id.clone()]
     );
     assert!(!session.has_adapter().await, "the process is gone");
@@ -287,7 +288,13 @@ async fn a_running_turn_is_never_reaped() {
 
     tokio::time::advance(Duration::from_secs(3 * 60 * 60)).await;
     assert!(
-        reap_once(&fixture.sessions(), Some(DEFAULT_IDLE_TIMEOUT), None).is_empty(),
+        reap_once(
+            &fixture.sessions(),
+            Some(DEFAULT_IDLE_TIMEOUT),
+            None,
+            Pressure::Unknown
+        )
+        .is_empty(),
         "a turn that runs for hours is not idle"
     );
     assert!(fixture.session.has_adapter().await);
@@ -298,7 +305,12 @@ async fn a_running_turn_is_never_reaped() {
     assert_eq!(turn.await.unwrap(), Ok(StopReason::EndTurn));
     tokio::time::advance(DEFAULT_IDLE_TIMEOUT + Duration::from_secs(60)).await;
     assert_eq!(
-        reap_once(&fixture.sessions(), Some(DEFAULT_IDLE_TIMEOUT), None),
+        reap_once(
+            &fixture.sessions(),
+            Some(DEFAULT_IDLE_TIMEOUT),
+            None,
+            Pressure::Unknown
+        ),
         vec![fixture.id.clone()]
     );
 }
@@ -318,7 +330,13 @@ async fn a_thread_waiting_on_the_user_is_never_reaped() {
 
     tokio::time::advance(Duration::from_secs(2 * 60 * 60)).await;
     assert!(
-        reap_once(&fixture.sessions(), Some(DEFAULT_IDLE_TIMEOUT), None).is_empty(),
+        reap_once(
+            &fixture.sessions(),
+            Some(DEFAULT_IDLE_TIMEOUT),
+            None,
+            Pressure::Unknown
+        )
+        .is_empty(),
         "a card waiting on the user keeps the process"
     );
     assert!(fixture.session.has_adapter().await);
@@ -331,7 +349,12 @@ async fn a_thread_waiting_on_the_user_is_never_reaped() {
     assert_eq!(turn.await.unwrap(), Ok(StopReason::EndTurn));
     tokio::time::advance(DEFAULT_IDLE_TIMEOUT + Duration::from_secs(60)).await;
     assert_eq!(
-        reap_once(&fixture.sessions(), Some(DEFAULT_IDLE_TIMEOUT), None),
+        reap_once(
+            &fixture.sessions(),
+            Some(DEFAULT_IDLE_TIMEOUT),
+            None,
+            Pressure::Unknown
+        ),
         vec![fixture.id.clone()]
     );
 }
@@ -340,7 +363,15 @@ async fn a_thread_waiting_on_the_user_is_never_reaped() {
 async fn an_update_from_the_harness_renews_the_timer() {
     let mut fixture = Fixture::start("active-thread").await;
     tokio::time::advance(Duration::from_secs(25 * 60)).await;
-    assert!(reap_once(&fixture.sessions(), Some(DEFAULT_IDLE_TIMEOUT), None).is_empty());
+    assert!(
+        reap_once(
+            &fixture.sessions(),
+            Some(DEFAULT_IDLE_TIMEOUT),
+            None,
+            Pressure::Unknown
+        )
+        .is_empty()
+    );
 
     // A thought is activity like anything else.
     fixture.step(Step::Update(json!({
@@ -351,13 +382,24 @@ async fn an_update_from_the_harness_renews_the_timer() {
 
     tokio::time::advance(Duration::from_secs(10 * 60)).await;
     assert!(
-        reap_once(&fixture.sessions(), Some(DEFAULT_IDLE_TIMEOUT), None).is_empty(),
+        reap_once(
+            &fixture.sessions(),
+            Some(DEFAULT_IDLE_TIMEOUT),
+            None,
+            Pressure::Unknown
+        )
+        .is_empty(),
         "10 minutes since the thought, not 35"
     );
 
     tokio::time::advance(Duration::from_secs(25 * 60)).await;
     assert_eq!(
-        reap_once(&fixture.sessions(), Some(DEFAULT_IDLE_TIMEOUT), None),
+        reap_once(
+            &fixture.sessions(),
+            Some(DEFAULT_IDLE_TIMEOUT),
+            None,
+            Pressure::Unknown
+        ),
         vec![fixture.id.clone()]
     );
 }
@@ -367,14 +409,14 @@ async fn a_disabled_reaper_keeps_every_process() {
     let fixture = Fixture::start("kept-thread").await;
     tokio::time::advance(Duration::from_secs(24 * 60 * 60)).await;
     assert!(
-        reap_once(&fixture.sessions(), None, None).is_empty(),
+        reap_once(&fixture.sessions(), None, None, Pressure::Unknown).is_empty(),
         "a timeout of 0 and no cap stop nothing"
     );
     assert!(fixture.session.has_adapter().await);
 }
 
 #[tokio::test(start_paused = true)]
-async fn the_least_recently_used_processes_are_stopped_above_the_cap() {
+async fn the_least_recently_used_processes_are_stopped_above_the_cap_under_pressure() {
     let first = Fixture::start("first-thread").await;
     tokio::time::advance(Duration::from_secs(60)).await;
     let second = Fixture::start("second-thread").await;
@@ -386,9 +428,15 @@ async fn the_least_recently_used_processes_are_stopped_above_the_cap() {
         third.session.clone(),
     ];
 
-    // Well inside the idle timeout, but three processes against a cap of two.
+    // Well inside the idle timeout, but three processes against a cap of two
+    // and a machine short of memory.
     assert_eq!(
-        reap_once(&sessions, Some(DEFAULT_IDLE_TIMEOUT), Some(2)),
+        reap_once(
+            &sessions,
+            Some(DEFAULT_IDLE_TIMEOUT),
+            Some(2),
+            Pressure::High
+        ),
         vec![first.id.clone()],
         "the least recently used one goes first"
     );
@@ -397,16 +445,149 @@ async fn the_least_recently_used_processes_are_stopped_above_the_cap() {
     assert!(!third.session.sleeping());
 
     // At the cap, nothing else goes.
-    assert!(reap_once(&sessions, Some(DEFAULT_IDLE_TIMEOUT), Some(2)).is_empty());
+    assert!(
+        reap_once(
+            &sessions,
+            Some(DEFAULT_IDLE_TIMEOUT),
+            Some(2),
+            Pressure::High
+        )
+        .is_empty()
+    );
     assert!(second.session.has_adapter().await);
     assert!(third.session.has_adapter().await);
 
     // A lower cap takes the least recently used of what runs.
     assert_eq!(
-        reap_once(&sessions, Some(DEFAULT_IDLE_TIMEOUT), Some(1)),
+        reap_once(
+            &sessions,
+            Some(DEFAULT_IDLE_TIMEOUT),
+            Some(1),
+            Pressure::High
+        ),
         vec![second.id.clone()]
     );
     assert!(third.session.has_adapter().await, "the newest one stays");
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_cap_alone_spares_a_recently_used_process_while_memory_is_plentiful() {
+    let first = Fixture::start("recent-first").await;
+    tokio::time::advance(Duration::from_secs(60)).await;
+    let second = Fixture::start("recent-second").await;
+    let sessions = [first.session.clone(), second.session.clone()];
+
+    // Eight minutes of idle time and one process over the cap: the case the
+    // reaper used to evict, losing the session's state and prompt cache.
+    tokio::time::advance(Duration::from_secs(8 * 60)).await;
+    assert!(
+        reap_once(
+            &sessions,
+            Some(DEFAULT_IDLE_TIMEOUT),
+            Some(1),
+            Pressure::Low
+        )
+        .is_empty(),
+        "under 30 minutes idle with memory to spare, the cap leaves it running"
+    );
+    assert!(first.session.has_adapter().await);
+    assert!(second.session.has_adapter().await);
+
+    // The same pass with no reading of memory keeps the old cap.
+    assert_eq!(
+        reap_once(
+            &sessions,
+            Some(DEFAULT_IDLE_TIMEOUT),
+            Some(1),
+            Pressure::Unknown
+        ),
+        vec![first.id.clone()]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_cap_stops_the_least_recently_used_once_idle_for_half_an_hour() {
+    let first = Fixture::start("old-first").await;
+    tokio::time::advance(Duration::from_secs(60)).await;
+    let second = Fixture::start("old-second").await;
+    let sessions = [first.session.clone(), second.session.clone()];
+
+    // No idle timeout (0), so only the cap acts; memory is plentiful.
+    tokio::time::advance(CAP_MIN_IDLE + Duration::from_secs(120)).await;
+    assert_eq!(
+        reap_once(&sessions, None, Some(1), Pressure::Low),
+        vec![first.id.clone()],
+        "idle for 30 minutes, the oldest goes down to the cap"
+    );
+    assert!(
+        second.session.has_adapter().await,
+        "at the cap, the other stays"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_process_with_a_tool_call_left_open_is_still_reaped() {
+    let mut fixture = Fixture::start("open-tool-thread").await;
+    let turn = fixture.run("start the build");
+    fixture.prompted().await;
+    fixture.step(Step::Update(json!({
+        "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Run the build",
+        "kind": "execute", "status": "in_progress",
+    })));
+    fixture.update("tool_call").await;
+    fixture.step(Step::Finish);
+    assert_eq!(turn.await.unwrap(), Ok(StopReason::EndTurn));
+    assert_eq!(
+        fixture.session.progress.open_tools(),
+        1,
+        "the finished turn left a call open: work a stop would cut off"
+    );
+
+    tokio::time::advance(DEFAULT_IDLE_TIMEOUT + Duration::from_secs(60)).await;
+    assert_eq!(
+        reap_once(
+            &fixture.sessions(),
+            Some(DEFAULT_IDLE_TIMEOUT),
+            None,
+            Pressure::Low
+        ),
+        vec![fixture.id.clone()]
+    );
+    assert_eq!(fixture.session.progress.open_tools(), 0);
+}
+
+#[test]
+fn the_eviction_choice() {
+    let minutes = |n: u64| Duration::from_secs(n * 60);
+    let timeout = Some(minutes(30));
+    let cap = Some(2);
+    let pick = eviction;
+
+    // The idle timeout always applies, whatever the memory.
+    assert_eq!(
+        pick(minutes(31), 1, timeout, cap, Pressure::Low),
+        Some(Eviction::Idle)
+    );
+    // Under the cap, nothing else stops a process.
+    assert_eq!(pick(minutes(29), 2, timeout, cap, Pressure::High), None);
+    // Over the cap, memory plentiful: only a half-hour idle process goes.
+    assert_eq!(pick(minutes(8), 3, timeout, cap, Pressure::Low), None);
+    assert_eq!(
+        pick(minutes(30), 3, None, cap, Pressure::Low),
+        Some(Eviction::Cap)
+    );
+    // Over the cap and short of memory: at once, as the memory.
+    assert_eq!(
+        pick(minutes(8), 3, timeout, cap, Pressure::High),
+        Some(Eviction::Memory)
+    );
+    // No reading of memory: the old cap.
+    assert_eq!(
+        pick(minutes(8), 3, timeout, cap, Pressure::Unknown),
+        Some(Eviction::Cap)
+    );
+    // Both turned off: nothing stops.
+    assert_eq!(pick(minutes(600), 50, None, None, Pressure::High), None);
 }
 
 #[tokio::test(start_paused = true)]
@@ -415,7 +596,12 @@ async fn a_reaped_thread_starts_again_and_resumes_its_recorded_session() {
     let session = Arc::clone(&fixture.session);
     tokio::time::advance(DEFAULT_IDLE_TIMEOUT + Duration::from_secs(60)).await;
     assert_eq!(
-        reap_once(&fixture.sessions(), Some(DEFAULT_IDLE_TIMEOUT), None),
+        reap_once(
+            &fixture.sessions(),
+            Some(DEFAULT_IDLE_TIMEOUT),
+            None,
+            Pressure::Unknown
+        ),
         vec![fixture.id.clone()]
     );
 
