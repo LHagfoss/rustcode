@@ -57,6 +57,7 @@ import { CHAT_WIDTH_LABEL, type ChatWidth } from "../lib/chatWidth";
 import { HAPTICS_DEFAULT, haptic, hapticsEnabled, setHaptics } from "../lib/haptics";
 import { LINK_PREVIEWS_DEFAULT, linkPreviewsEnabled, setLinkPreviews } from "../lib/links";
 import { openExternal, pickFolder, revealPath } from "../lib/native";
+import { NEXT_PROMPT_DEFAULT, nextPromptEnabled, setNextPrompt } from "../lib/nextPrompt";
 import { hasShell } from "../lib/shell";
 import { BUILTIN_THEMES, cssName, type Theme, TOKENS } from "../lib/themes";
 import { canUpdate } from "../lib/updater";
@@ -504,6 +505,7 @@ function ChatPage() {
   const chatWidth = useApp((s) => s.chatWidth);
   const anyRunning = useApp((s) => Object.values(s.threads).some((t) => t.running));
   const [linkPreviews, setLinkPreviewsState] = useState(linkPreviewsEnabled);
+  const [nextPrompt, setNextPromptState] = useState(nextPromptEnabled);
   return (
     <Group title="In the chat">
       <Row
@@ -561,6 +563,27 @@ function ChatPage() {
           onChange={(v) => {
             setLinkPreviews(v);
             setLinkPreviewsState(v);
+          }}
+        />
+      </Row>
+      <Row
+        title="Suggested next prompt"
+        reset={
+          nextPrompt === NEXT_PROMPT_DEFAULT
+            ? undefined
+            : () => {
+                setNextPrompt(NEXT_PROMPT_DEFAULT);
+                setNextPromptState(NEXT_PROMPT_DEFAULT);
+              }
+        }
+        subtitle="When a reply ends by offering something (“Want me to add tests?”), the empty composer suggests the answer. Tab puts it in the field to edit, Esc dismisses it; it is never sent on its own. Read from the reply on this computer, with no extra model requests."
+      >
+        <Switch
+          label="Suggested next prompt"
+          checked={nextPrompt}
+          onChange={(v) => {
+            setNextPrompt(v);
+            setNextPromptState(v);
           }}
         />
       </Row>
