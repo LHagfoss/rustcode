@@ -314,11 +314,26 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   events (Settings › Diagnostics shows them). When the engine exits it restarts
   with backoff (0.5 s doubling to 30 s, reset after a minute up) and the UI
   initializes a fresh connection. Quitting closes the engine's stdin so it
-  cleans up its sessions, then kills it after 2 s. The shell does not read or
+  cleans up its sessions (every running turn is cancelled and each harness and
+  delegate ended), then kills it after 10 s; a restart gives it 2 s. The
+  shell does not read or
   forward credentials; the webview sees only what the engine prints. The
   engine starts with the app, while the page loads; the first page adopts
   it. Lines already buffered on stdout go out together as one `lines`
   message (up to 1,024 lines or 4 MB).
+- **Run state follows the engine** (`state/runState.ts`, issue 3652). The
+  engine's thread list is the truth about what runs. While the window is
+  visible it is read every 5 s when anything runs or is in doubt and every 30 s
+  otherwise (and on focus, on every turn end and on each reconnect). A thread
+  the window shows running that the list calls idle on two reads in a row,
+  more than 10 s into the turn, is closed locally and read again; a thread
+  the list shows running that the window holds no turn for reads as running
+  (`engineRunning`) until the engine says otherwise. **Stop** always answers:
+  with the engine away it says so, it reaches a turn this window lost track of,
+  and a turn still running 10 s after `session/cancel` is forced (the thread is
+  closed in the engine and read again). Moving a running thread to the Trash
+  stops it first the same way. The link book is read again from the data store
+  on every connect.
 - **Native helpers**, each validated in Rust:
   - `native.rs`: `open_url` (http, https, mailto only), `reveal_path`,
     `git_changes` (the Changes panel: `git diff HEAD` plus untracked files),
