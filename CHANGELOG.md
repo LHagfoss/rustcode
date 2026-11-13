@@ -1,3 +1,14 @@
+## [v1.32.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.32.0) - 2026-11-13
+
+### Features
+- Settle, review, unsettle and pin a disconnected machine's threads; the change shows at once and syncs when the machine is back. (#3588)
+- macOS no longer asks for the login keychain password for machine tokens after every update, reconnect, or for each of the app and CLI; existing pairings are moved over with one last prompt. (#3589)
+- Agents can now hand a whole task to another paired computer: they answer its prompts, manage its queue, search it, read its worktrees and pull requests, and clone projects there. A remote delegate starts in the project with the same git repository, never an unrelated one. (#3591)
+- Pair two computers with a connect code (Settings › Machines › Create connect code, or `rustcode machines code` / `connect`), with no accept step; a saved machine's token now only goes to an address that proves it is that machine. (#3593)
+- Paired machines reconnect as soon as any route answers (also after sleep, on app focus and when the network returns), a machine that answers but refuses says why instead of "Offline", and `list_machines` reports the reason and reconnects on `probe: true`. (#3590)
+- Paired machines no longer need pairing again after months of use, or when the app and the CLI connect at the same time. (#3592)
+- A RustCode server restarted over SSH on Windows no longer dies when the SSH session closes, and a machine's gateway restarts a server that has stopped, so paired machines reconnect without anyone touching it. (#3594)
+- Connect to a computer you reach over SSH in one step (Settings › Machines › Connect over SSH, or `rustcode machines add-ssh user@host`): RustCode is installed there at this version if needed, its server started, and the two paired. New `rustcode up` sets up a headless machine and prints a connect code; the installers take `--version`. (#3595)
 ## [v1.31.4](https://github.com/LHagfoss/rustcode/releases/tag/v1.31.4) - 2026-11-12
 
 ### Fixes

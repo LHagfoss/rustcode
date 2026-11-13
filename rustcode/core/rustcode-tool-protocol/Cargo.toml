@@ -1,6 +1,6 @@
 [package]
 name = "rustcode-tool-protocol"
-version = "1.31.4"
+version = "1.32.0"
 edition = "2024"
 license = "Apache-2.0"
 
