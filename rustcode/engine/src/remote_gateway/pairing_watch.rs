@@ -29,6 +29,9 @@ pub enum PairingProgress {
     /// Every wrong code it tolerates was used.
     UsedUp,
     Expired,
+    /// It expired and no device even connected to this host while it was
+    /// showing: the device is on another network, or dials another address.
+    ExpiredUnreached,
     /// A newer challenge (another `/remote pair`) replaced it.
     Replaced,
     /// The gateway restarted, so the challenge is gone.
@@ -102,6 +105,7 @@ impl PairingWatch {
             _ if pairing.last_challenge.is_some_and(|last| last > ours) => {
                 PairingProgress::Replaced
             }
+            _ if pairing.last_challenge_reached == Some(false) => PairingProgress::ExpiredUnreached,
             _ => PairingProgress::Expired,
         }
     }
@@ -139,6 +143,9 @@ pub fn format_progress(progress: &PairingProgress, again: &str) -> Option<String
             "This code is used up: {ATTEMPTS_PER_CHALLENGE} wrong codes were entered. Run {again} for a new code."
         ),
         PairingProgress::Expired => format!("This code expired. Run {again} for a new code."),
+        PairingProgress::ExpiredUnreached => format!(
+            "This code expired and no device connected to this computer while it showed. The device must be on the same network as the address above (or reach it over NetBird or a VPN). Run {again} for a new code."
+        ),
         PairingProgress::Replaced => {
             "A newer pairing code replaced this one; use the code shown with it.".to_owned()
         }
