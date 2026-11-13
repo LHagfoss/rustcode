@@ -44,7 +44,15 @@ import type { Link } from "../state/orchestration";
 import { type ChildRequest, useChildRequests } from "../state/pending";
 import { queueView, type SteeringCapabilities, type TurnState } from "../state/queue";
 import { type PlanClocks, planCardShown, type SteerNote, steerMarks } from "../state/steer";
-import { RESUME_TEXT, rewindCheckpoint, shortcutFor, steeringOf, turnState, useApp } from "../state/store";
+import {
+  openSideChat,
+  RESUME_TEXT,
+  rewindCheckpoint,
+  shortcutFor,
+  steeringOf,
+  turnState,
+  useApp,
+} from "../state/store";
 import {
   type QueuedPrompt,
   splitSubagentSteps,
@@ -401,6 +409,50 @@ const TurnFooter = memo(function TurnFooter({
     />
   );
 });
+
+/** Offer an action only for a selection contained in this message. */
+function SelectableMessage({ threadId, children }: { threadId: string; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [selection, setSelection] = useState("");
+  const supported = useApp((s) => !!s.agent?.lineage);
+  const capture = useCallback(() => {
+    const selected = window.getSelection();
+    const element = ref.current;
+    setSelection(
+      selected &&
+        element &&
+        selected.anchorNode &&
+        selected.focusNode &&
+        element.contains(selected.anchorNode) &&
+        element.contains(selected.focusNode)
+        ? selected.toString()
+        : "",
+    );
+  }, []);
+  useEffect(() => {
+    if (!selection) return;
+    document.addEventListener("selectionchange", capture);
+    return () => document.removeEventListener("selectionchange", capture);
+  }, [selection, capture]);
+  return (
+    <div ref={ref} onMouseUp={capture} onKeyUp={capture}>
+      {children}
+      {supported && selection.trim() && (
+        <button
+          type="button"
+          className="rounded-md px-2 py-1 text-caption text-fg-muted hover:bg-fill hover:text-fg"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => {
+            void openSideChat(threadId, selection);
+            setSelection("");
+          }}
+        >
+          Ask in a side chat
+        </button>
+      )}
+    </div>
+  );
+}
 
 export function Transcript({
   thread,
@@ -1327,20 +1379,24 @@ export function Transcript({
                         <span className="h-px flex-1 bg-border" />
                       </div>
                     ) : item?.kind === "user" ? (
-                      <UserRow
-                        item={item}
-                        threadId={thread.running || peek ? undefined : thread.id}
-                        rewind={rewind}
-                        // Consecutive messages from the same side soften the corners they share.
-                        after={rows[v.index - 1]?.item?.kind === "user"}
-                        before={rows[v.index + 1]?.item?.kind === "user"}
-                      />
+                      <SelectableMessage threadId={thread.id}>
+                        <UserRow
+                          item={item}
+                          threadId={thread.running || peek ? undefined : thread.id}
+                          rewind={rewind}
+                          // Consecutive messages from the same side soften the corners they share.
+                          after={rows[v.index - 1]?.item?.kind === "user"}
+                          before={rows[v.index + 1]?.item?.kind === "user"}
+                        />
+                      </SelectableMessage>
                     ) : item?.kind === "assistant" ? (
-                      <AssistantRow
-                        item={item}
-                        threadId={thread.id}
-                        streaming={thread.running && v.index === lastIndex}
-                      />
+                      <SelectableMessage threadId={thread.id}>
+                        <AssistantRow
+                          item={item}
+                          threadId={thread.id}
+                          streaming={thread.running && v.index === lastIndex}
+                        />
+                      </SelectableMessage>
                     ) : item?.kind === "thought" ? (
                       <ThoughtRow item={item} live={thread.running && !item.done && v.index === lastIndex} />
                     ) : item?.kind === "tool" && (subagentOf(item) || subagentSteps.has(item.id)) ? (

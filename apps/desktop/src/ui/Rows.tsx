@@ -52,6 +52,7 @@ import {
   openSideChat,
   retryMessage,
   selectThread,
+  sendSideChatToParent,
   useApp,
 } from "../state/store";
 import {
@@ -1030,6 +1031,9 @@ export function TurnEndRow({
   // chip. It is the turn's only action row (nothing hovers in, nothing holds room): the reply
   // above it draws none, and a turn still running has no footer yet.
   const row = turnActions({ text: reply, at: item.at, threadId });
+  const sideChat = useApp(
+    (s) => s.sessions.find((session) => session.id === threadId)?.parent?.relationship === "side_chat",
+  );
   const traced = hasTimeline(item) && !!trace;
   // An empty turn that folded its work: its header already says the time, and there is no reply
   // to copy or fork, so a footer row of icons would sit over nothing.
@@ -1062,6 +1066,18 @@ export function TurnEndRow({
         {(row.copy || row.fork || row.sideChat) && (
           <span className="flex items-center gap-1 [&>button]:size-5 [&>button]:text-fg-faint">
             {row.copy && <CopyButton text={row.copy} iconOnly label="Copy reply" />}
+            {sideChat && row.copy && (
+              <Tooltip label="Send to main thread">
+                <button
+                  type="button"
+                  aria-label="Send to main thread"
+                  className="inline-flex size-5 items-center justify-center rounded-md text-fg-faint hover:bg-fill hover:text-fg"
+                  onClick={() => sendSideChatToParent(threadId!, row.copy!)}
+                >
+                  <ArrowRight size={12} />
+                </button>
+              </Tooltip>
+            )}
             {row.fork && <ReplyForkButton threadId={threadId!} />}
             {row.sideChat && row.copy && <ReplySideChatButton threadId={threadId!} reply={row.copy} />}
           </span>

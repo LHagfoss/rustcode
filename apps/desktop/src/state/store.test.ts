@@ -111,6 +111,7 @@ import {
   selectThread,
   sendDecisionFor,
   sendQueuedNow,
+  sendSideChatToParent,
   setActiveTheme,
   setArchived,
   setConfigOption,
@@ -4606,6 +4607,17 @@ describe("forks and side chats", () => {
     expect(useApp.getState().peekId).toBe(id ?? null);
     expect(useApp.getState().panel).toBe("peek");
     expect(useApp.getState().selectedId).toBe(parent);
+  });
+
+  test("sending a side chat reply back preserves the parent draft without sending", async () => {
+    const parent = await ready();
+    const side = (await openSideChat(parent, "selected text"))!;
+    expect(useApp.getState().drafts[side]).toBe("> selected text\n\n");
+    setDraft(parent, "Existing draft");
+    expect(sendSideChatToParent(side, "The answer")).toBe(true);
+    expect(useApp.getState().drafts[parent]).toBe("Existing draft\n\nThe answer");
+    expect(sendSideChatToParent(parent, "No parent")).toBe(false);
+    expect(sendSideChatToParent(side, "  ")).toBe(false);
   });
 
   test("closing the panel keeps the side chat, and writing in it does not give it a row of its own", async () => {
