@@ -518,6 +518,8 @@ export type Call =
       /** Named login of that harness; omitted is the caller's own, else a new thread's default. */
       account?: string;
       worktree?: boolean;
+      /** Lowers the new thread's access (a delegate preset's, issue 3391); never raises it. */
+      access?: PermissionMode;
       /**
        * A thread of the user's own at the top level, not a delegate (issue 3443):
        * no parent link, nothing delivered back, `wait_session` does not apply.
@@ -532,6 +534,8 @@ export type Call =
       prompt: string;
       title?: string;
       harnesses: HarnessChoice[];
+      /** Lowers each new thread's access, as on `start_session`. */
+      access?: PermissionMode;
       /** Each is a thread of the user's own at the top level, not a delegate. */
       standalone?: boolean;
       /** The project on that machine; without one, the caller's path there or its only project. */
@@ -690,6 +694,14 @@ const bytes = (text: string) => new TextEncoder().encode(text).length;
 /** The paired machine a call acts on: an id or name `list_machines` gave, absent for this one. */
 const machineOf = (args: JsonObject) => s(args.machine)?.trim() || undefined;
 /** The optional field, present only when the call named a machine. */
+/**
+ * The access a call asks its new thread to start at (a delegate preset's,
+ * issue 3391). It only ever lowers what the thread would get: the caller's own limit
+ * and Default access still bound it.
+ */
+const accessArg = (value: Json | undefined): PermissionMode | undefined =>
+  value === "ask" || value === "edits" || value === "full" ? value : undefined;
+
 const machineField = (args: JsonObject) => {
   const machine = machineOf(args);
   return machine ? { machine } : {};
@@ -1025,6 +1037,7 @@ export function parseCall(params: JsonObject): Call | Failure {
         effort: s(args.effort),
         account: s(args.account)?.trim() || undefined,
         worktree: typeof args.worktree === "boolean" ? args.worktree : undefined,
+        access: accessArg(args.access),
         // A thread of the user's own, not a delegate: no link, nothing delivered back.
         standalone: args.standalone === true ? true : undefined,
         project: s(args.project),
@@ -1055,6 +1068,7 @@ export function parseCall(params: JsonObject): Call | Failure {
         prompt,
         title: s(args.title)?.trim() || undefined,
         harnesses,
+        access: accessArg(args.access),
         standalone: args.standalone === true ? true : undefined,
         project: s(args.project),
         ...machineField(args),

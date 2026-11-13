@@ -26,6 +26,7 @@ pub mod hub;
 pub mod local;
 mod local_threads;
 pub mod mcp_server;
+pub mod presets;
 
 pub const METHOD: &str = "_rustcode/orchestration";
 /// Told to the client when a call was dropped before its answer arrived: the
@@ -680,6 +681,16 @@ fn required_name(args: &Value, key: &str) -> Result<(), String> {
     }
 }
 
+/// An optional `access` for a new thread: it can only lower what the thread
+/// would get (#3391).
+fn optional_access(args: &Value) -> Result<(), String> {
+    match args.get("access") {
+        None | Some(Value::Null) => Ok(()),
+        Some(Value::String(mode)) if matches!(mode.as_str(), "ask" | "edits" | "full") => Ok(()),
+        Some(_) => Err("access must be ask, edits or full".to_owned()),
+    }
+}
+
 fn optional_name(args: &Value, key: &str) -> Result<(), String> {
     match args.get(key) {
         None | Some(Value::Null) => Ok(()),
@@ -1112,9 +1123,10 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
         START_SESSION => {
             bounded_text(args, "prompt")?;
             optional_title(args)?;
-            for key in ["harness", "model", "effort", "account"] {
+            for key in ["harness", "model", "effort", "account", presets::ARG] {
                 optional_name(args, key)?;
             }
+            optional_access(args)?;
             if !matches!(
                 args.get("worktree"),
                 None | Some(Value::Null | Value::Bool(_))
@@ -1139,12 +1151,18 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
                     "harnesses takes {MIN_FAN_OUT} to {MAX_FAN_OUT} entries"
                 ));
             }
+            optional_name(args, presets::ARG)?;
+            optional_access(args)?;
             let mut seen = Vec::with_capacity(harnesses.len());
             for entry in harnesses {
-                if !entry.is_object() || text(entry, "harness").is_none() {
-                    return Err("each harnesses entry needs a harness".to_owned());
+                // A delegate preset may give the harness (#3391); it is
+                // expanded, and the call checked again, before it is sent.
+                if !entry.is_object()
+                    || (text(entry, "harness").is_none() && text(entry, presets::ARG).is_none())
+                {
+                    return Err("each harnesses entry needs a harness or a preset".to_owned());
                 }
-                for key in ["harness", "model", "effort", "account"] {
+                for key in ["harness", "model", "effort", "account", presets::ARG] {
                     optional_name(entry, key)?;
                 }
                 // The same harness on two models, or on two named accounts, is a fair comparison.
@@ -1153,6 +1171,7 @@ pub fn validate(name: &str, args: &Value) -> Result<(), String> {
                     text(entry, "model"),
                     text(entry, "effort"),
                     text(entry, "account"),
+                    text(entry, presets::ARG),
                 );
                 if seen.contains(&key) {
                     return Err("harnesses has the same entry twice".to_owned());
@@ -1254,13 +1273,52 @@ pub async fn execute(
             state.active_session_id.clone(),
         )
     };
+    let expanded = match with_preset(name, args) {
+        Ok(expanded) => expanded,
+        Err(refusal) => return refusal,
+    };
+    let args = expanded.as_ref().unwrap_or(args);
     // No client hosts the tools: the engine answers what it can itself and
     // names the app for the rest (#3422), instead of saying the tool does not
     // exist.
-    if client.is_none() && local {
-        return local::answer(&session_id, cancel, name, args).await;
+    let output = if client.is_none() && local {
+        local::answer(&session_id, cancel, name, args).await
+    } else {
+        execute_versioned(client, version, cancel, name, args).await
+    };
+    with_preset_listing(name, output)
+}
+
+/// The call with its delegate `preset` expanded (#3391), before anything reads
+/// it: the app and the no-app path see ordinary arguments. `None` when the call
+/// names no preset.
+pub(crate) fn with_preset(name: &str, args: &Value) -> Result<Option<Value>, ToolExecutionOutput> {
+    let refuse = |reason: String| {
+        ToolExecutionOutput::failure_with_kind(
+            format!("error: invalid {name} call: {reason}. Nothing was sent."),
+            ToolErrorKind::InvalidArguments,
+            false,
+        )
+    };
+    let expanded = presets::expand(name, args).map_err(refuse)?;
+    // What the preset gave is checked like arguments the call passed: a
+    // fan_out entry whose preset names no harness still needs one.
+    if let Some(expanded) = &expanded {
+        validate(name, expanded).map_err(refuse)?;
     }
-    execute_versioned(client, version, cancel, name, args).await
+    Ok(expanded)
+}
+
+/// `list_harnesses` ends with the saved delegate presets, so an agent learns
+/// the names it can pass as `preset`.
+pub(crate) fn with_preset_listing(name: &str, mut output: ToolExecutionOutput) -> ToolExecutionOutput {
+    if name == LIST_HARNESSES
+        && output.success
+        && let Some(listing) = presets::listing(&presets::saved())
+    {
+        output.content = format!("{}\n\n{listing}", output.content.trim_end());
+    }
+    output
 }
 
 /// Run one call for a client of `version`: a version 1 client never gets
