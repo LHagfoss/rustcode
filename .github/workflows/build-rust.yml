@@ -53,6 +53,11 @@ jobs:
                   # ThinLTO makes the Windows MSVC release link disproportionately slow.
                   # Keep the optimized release profile, but skip LTO for this platform.
                   CARGO_PROFILE_RELEASE_LTO: ${{ runner.os == 'Windows' && 'off' || 'thin' }}
+                  # No sccache on Windows: the engine's rustc command line is
+                  # past Windows' 32 KiB limit, and cargo's @argfile fallback
+                  # does not survive the wrapper ("The filename or extension
+                  # is too long", os error 206). An empty wrapper turns it off.
+                  RUSTC_WRAPPER: ${{ runner.os != 'Windows' && 'sccache' || '' }}
               # The `rustcode` binary is built by the rustcode-tui package;
               # the root package is a library since the TUI extraction.
               run: cargo build --locked --release --target ${{ matrix.target }} -p rustcode-tui
