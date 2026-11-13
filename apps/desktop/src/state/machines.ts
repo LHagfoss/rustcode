@@ -19,6 +19,7 @@ import { isTauri, MachineTransport } from "../acp/transport";
 import { initializeParams, Method, parseSessionList, type SessionSummary } from "../acp/types";
 import { currentPlatform } from "../lib/platform";
 import { hasShell, shellCall, shellCallWithin } from "../lib/shell";
+import { readStorage, writeStorage } from "../lib/storage";
 import { appVersion } from "../lib/updater";
 import { forgetMachineCache, forgetTranscript, loadThreadList, saveThreadList } from "./machineCache";
 import { forgetMachineOutbox, forgetThreadOutbox } from "./machineOutbox";
@@ -403,7 +404,7 @@ export function machineTint(machine: Pick<Machine, "iconTint">): MachineTint | n
 
 function readLocalIdentity(): MachineIdentity {
   try {
-    const raw = JSON.parse(localStorage.getItem(LOCAL_IDENTITY_KEY) ?? "null") as unknown;
+    const raw = JSON.parse(readStorage(LOCAL_IDENTITY_KEY) ?? "null") as unknown;
     const root = obj(raw);
     return {
       displayName: cleanMachineName(typeof root?.displayName === "string" ? root.displayName : null),
@@ -433,11 +434,8 @@ export function setLocalIdentity(patch: Partial<MachineIdentity>): void {
     icon: patch.icon === undefined ? current.icon : machineIconOf(patch.icon),
     tint: patch.tint === undefined ? current.tint : machineTintOf(patch.tint),
   };
-  try {
-    localStorage.setItem(LOCAL_IDENTITY_KEY, JSON.stringify(next));
-  } catch {
-    // A full or disabled store keeps the choice for this run only.
-  }
+  // A full or disabled store keeps the choice for this run only.
+  writeStorage(LOCAL_IDENTITY_KEY, JSON.stringify(next));
   useMachines.setState({ local: next });
 }
 

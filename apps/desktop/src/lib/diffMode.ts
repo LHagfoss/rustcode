@@ -5,6 +5,7 @@
 
 import { type RefObject, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { observeSize } from "./resize";
+import { readStorage, writeStorage } from "./storage";
 
 export type DiffMode = "unified" | "split";
 
@@ -15,11 +16,7 @@ const KEY = "rustcode.diffMode";
 const listeners = new Set<() => void>();
 
 function read(): DiffMode {
-  try {
-    return localStorage.getItem(KEY) === "split" ? "split" : "unified";
-  } catch {
-    return "unified";
-  }
+  return readStorage(KEY) === "split" ? "split" : "unified";
 }
 
 let mode: DiffMode | null = null;
@@ -37,11 +34,8 @@ export function diffMode(): DiffMode {
 export function setDiffMode(next: DiffMode) {
   if (next === current()) return;
   mode = next;
-  try {
-    localStorage.setItem(KEY, next);
-  } catch {
-    // Not kept in a private window; the session still remembers it.
-  }
+  // Not kept in a private window; the session still remembers it.
+  writeStorage(KEY, next);
   for (const listener of listeners) listener();
 }
 

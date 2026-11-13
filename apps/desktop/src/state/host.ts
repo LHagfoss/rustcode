@@ -42,6 +42,7 @@ import {
 import { optionScope } from "../lib/approval";
 import { currentPlatform } from "../lib/platform";
 import { hasShell, shellCall } from "../lib/shell";
+import { readStorage, writeStorage } from "../lib/storage";
 import { childTitle, titleFrom } from "../lib/title";
 import {
   type AttachedFile,
@@ -264,7 +265,7 @@ const SAVE_DEBOUNCE_MS = 250;
  */
 export function loadBook(): LinkBook {
   try {
-    const raw = localStorage.getItem(BOOK_KEY);
+    const raw = readStorage(BOOK_KEY);
     if (!raw) return emptyBook();
     const parsed = JSON.parse(raw) as Partial<LinkBook>;
     return interruptActive({ ...emptyBook(), ...parsed });
@@ -283,11 +284,8 @@ const text = (book: LinkBook) => JSON.stringify(book);
 
 /** Stores a book, without a save: the first paint and the fallback for an old engine. */
 function keepLocally(book: LinkBook) {
-  try {
-    localStorage.setItem(BOOK_KEY, text(book));
-  } catch {
-    // Not persisted in a private window.
-  }
+  // Not persisted in a private window.
+  writeStorage(BOOK_KEY, text(book));
 }
 
 /** Writes the book to the store once the changes settle; only when it changed. */
@@ -5035,22 +5033,15 @@ let watchingQueues = false;
 /** At most this many threads are opened at start-up for the queue each kept. */
 const RESTORE_MAX = 8;
 
-const storedQueues = (): string | null => {
-  try {
-    return localStorage.getItem(QUEUES_KEY);
-  } catch {
-    // No storage (a private window): the queue is this window's only, as before.
-    return null;
-  }
-};
+// No storage (a private window): the queue is this window's only, as before. A web view whose
+// storage is full keeps the queue in memory instead.
+function storedQueues(): string | null {
+  return readStorage(QUEUES_KEY);
+}
 
-const keepQueues = (text: string): void => {
-  try {
-    localStorage.setItem(QUEUES_KEY, text);
-  } catch {
-    // A web view whose storage is full keeps the queue in memory instead.
-  }
-};
+function keepQueues(text: string): void {
+  writeStorage(QUEUES_KEY, text);
+}
 
 /**
  * Takes the queues the last run left, and watches this one: called once at start-up, after the

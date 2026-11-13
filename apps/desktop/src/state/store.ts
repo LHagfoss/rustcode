@@ -95,6 +95,7 @@ import {
 import { dismissOverlays } from "../lib/overlays";
 import { trashName } from "../lib/platform";
 import { setShellTransport, shellCall } from "../lib/shell";
+import { readStorage, writeStorage } from "../lib/storage";
 import { BUILTIN_THEMES, parseThemes, ThemeMethod, type ThemesSnapshot } from "../lib/themes";
 import { titleFrom } from "../lib/title";
 import {
@@ -775,11 +776,7 @@ export const SETTINGS_DEFAULTS = {
 };
 
 function stored(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
+  return readStorage(key);
 }
 
 /** A boolean kept as "1"/"0", or the default when it was never set. */
@@ -834,12 +831,9 @@ export function loadTotalLimit(): number {
   return total;
 }
 
+/** Storage can be unavailable (private window); the setting just does not persist. */
 export function store(key: string, value: string) {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    // Storage can be unavailable (private window); the setting just does not persist.
-  }
+  writeStorage(key, value);
 }
 
 function storedJson<T>(key: string, fallback: T): T {

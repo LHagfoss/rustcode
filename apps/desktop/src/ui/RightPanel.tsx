@@ -31,6 +31,7 @@ import {
 } from "react";
 import { relationshipOf } from "../acp/types";
 import { observeSize } from "../lib/resize";
+import { readStorage, writeStorage } from "../lib/storage";
 import { type AppState, setPanel, showPanel, useApp, useShortcutHint } from "../state/store";
 import { HEADER_HEIGHT } from "./MainHeader";
 import { cx, Segments, Tooltip } from "./primitives";
@@ -123,14 +124,10 @@ export function panelIsSheet(viewport: number): boolean {
 
 /** The width kept for a thread, else the one last kept for any thread. */
 function storedWidth(threadId: string | null): number {
-  try {
-    const own = Number(threadId ? localStorage.getItem(`${KEY}:${threadId}`) : null);
-    if (own >= MIN && own <= MAX) return own;
-    const shared = Number(localStorage.getItem(KEY));
-    if (shared >= MIN && shared <= MAX) return shared;
-  } catch {
-    // Not kept in a private window.
-  }
+  const own = Number(threadId ? readStorage(`${KEY}:${threadId}`) : null);
+  if (own >= MIN && own <= MAX) return own;
+  const shared = Number(readStorage(KEY));
+  if (shared >= MIN && shared <= MAX) return shared;
   return DEFAULT_WIDTH;
 }
 
@@ -139,12 +136,9 @@ function storedWidth(threadId: string | null): number {
  * is kept for this thread, and as the width a thread that has none starts at.
  */
 function persist(threadId: string | null, width: number) {
-  try {
-    if (threadId) localStorage.setItem(`${KEY}:${threadId}`, String(width));
-    localStorage.setItem(KEY, String(width));
-  } catch {
-    // Not kept in a private window.
-  }
+  // Not kept in a private window.
+  if (threadId) writeStorage(`${KEY}:${threadId}`, String(width));
+  writeStorage(KEY, String(width));
 }
 
 /** Focus inside the panel that a key should not take for closing it. */

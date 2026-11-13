@@ -3,6 +3,7 @@
 // them (ui/CommandPalette.tsx), so both read one store rather than two copies of a flag.
 
 import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { readStorage, writeStorage } from "../lib/storage";
 
 export const PREF = {
   groupByProject: "rustcode.sidebar.groupByProject",
@@ -16,11 +17,7 @@ const listeners = new Set<() => void>();
 const memory = new Map<string, string>();
 
 function rawPref(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return memory.get(key) ?? null;
-  }
+  return readStorage(key) ?? memory.get(key) ?? null;
 }
 
 function parse<T>(raw: string | null, initial: T): T {
@@ -39,11 +36,7 @@ export function readPref<T>(key: string, initial: T): T {
 
 export function writePref<T>(key: string, value: T): void {
   const raw = JSON.stringify(value);
-  try {
-    localStorage.setItem(key, raw);
-  } catch {
-    memory.set(key, raw);
-  }
+  if (!writeStorage(key, raw)) memory.set(key, raw);
   for (const listener of listeners) listener();
 }
 
