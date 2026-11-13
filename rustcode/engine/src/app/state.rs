@@ -64,6 +64,7 @@ pub(crate) const STALL_WATCHDOG_TIMEOUT_SECS: u64 = 5 * 60;
 pub struct PendingSteer {
     pub session_id: String,
     pub text: String,
+    pub origin: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -2707,13 +2708,14 @@ impl AppState {
         self.pending_steers.push(PendingSteer {
             session_id: self.active_session_id.clone(),
             text,
+            origin: None,
         });
         true
     }
 
     /// Atomically remove the complete steer batch for `session_id` so callers
     /// can append it to history under the same state lock.
-    pub(crate) fn take_steers_for_history(&mut self, session_id: &str) -> Vec<String> {
+    pub(crate) fn take_steer_records_for_history(&mut self, session_id: &str) -> Vec<PendingSteer> {
         if self.active_turn_steerable_session.as_deref() != Some(session_id)
             || self
                 .pending_steers
@@ -2722,8 +2724,13 @@ impl AppState {
         {
             return Vec::new();
         }
-        self.pending_steers
-            .drain(..)
+        self.pending_steers.drain(..).collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn take_steers_for_history(&mut self, session_id: &str) -> Vec<String> {
+        self.take_steer_records_for_history(session_id)
+            .into_iter()
             .map(|steer| steer.text)
             .collect()
     }

@@ -438,7 +438,15 @@ impl SessionPublisher {
                                 turn_id: Some(turn_id.clone()),
                                 timing: timing.as_ref().map(project_turn_timing),
                                 prompt: bound_text(&prompt, self.limits.text_bytes, None),
-                                origin: Some(super::projection::prompt_origin(&prompt)),
+                                origin: state
+                                    .history
+                                    .iter()
+                                    .rev()
+                                    .find(|message| {
+                                        message.is_user_request() && message.content == prompt
+                                    })
+                                    .and_then(super::projection::project_origin)
+                                    .or_else(|| Some(super::projection::prompt_origin(&prompt))),
                             };
                             messages.push(self.event(started));
                         }

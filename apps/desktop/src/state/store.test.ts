@@ -4234,7 +4234,7 @@ describe("retrying a call that starts or messages a thread", () => {
     const params = {
       sessionId: caller,
       tool: "message_session",
-      args: { session_id: child, message: "one more thing", client_request_id: "m1" },
+      args: { session_id: child, message: "one more thing", return_to: "me", client_request_id: "m1" },
       clientRequestId: "m1",
       argsHash: "hm",
     };
@@ -4283,7 +4283,7 @@ describe("what an agent may do with the messages it queued", () => {
     const answer = await answerOrchestration({
       sessionId: caller,
       tool: "message_session",
-      args: { session_id: target, message },
+      args: { session_id: target, message, return_to: "me" },
     });
     expect(answer.error).toBeUndefined();
     return String(answer.link_id);
@@ -4292,6 +4292,31 @@ describe("what an agent may do with the messages it queued", () => {
     answerOrchestration({ sessionId: caller, tool: "manage_queue", args: { session_id: target, ...args } });
   const said = (answer: JsonObject) => (answer.error as { message: string } | undefined)?.message ?? "";
   const queue = (target: string) => useApp.getState().threads[target]!.queue;
+
+  test("a message without return_to creates no waiting link", async () => {
+    const caller = await ready();
+    const target = await busy(caller);
+    const before = useApp.getState().links.links.length;
+    const result = await answerOrchestration({
+      sessionId: caller,
+      tool: "message_session",
+      args: { session_id: target, message: "for your information" },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.link_id).toBeUndefined();
+    expect(useApp.getState().links.links).toHaveLength(before);
+    expect(queue(target)).toHaveLength(1);
+  });
+
+  test("settling a sender clears its waiting link and ignores the late reply", async () => {
+    const caller = await ready();
+    const target = await busy(caller);
+    const link = await queueOn(caller, target, "finish later");
+    await setThreadStatus(caller, "done");
+    expect(useApp.getState().links.links.find((row) => row.id === link)?.state).toBe("cancelled");
+    linksFinished([link], target, "completed", undefined, []);
+    expect(useApp.getState().links.links.find((row) => row.id === link)?.state).toBe("cancelled");
+  });
 
   test("a list shows this thread's own messages in send order, and counts the rest", async () => {
     const caller = await ready();
@@ -4454,7 +4479,7 @@ describe("what an agent may do with the messages it queued", () => {
       answerOrchestration({
         sessionId: caller,
         tool: "message_session",
-        args: { session_id: target, message: "cross-project task", steer: true },
+        args: { session_id: target, message: "cross-project task", return_to: "me", steer: true },
       });
     const denied = call();
     await until(() => useApp.getState().grant !== null);
@@ -4482,7 +4507,7 @@ describe("what an agent may do with the messages it queued", () => {
     const result = await answerOrchestration({
       sessionId: caller,
       tool: "message_session",
-      args: { session_id: target, message: "change direction now", steer: true },
+      args: { session_id: target, message: "change direction now", return_to: "me", steer: true },
     });
     expect(result.error).toBeUndefined();
     expect(result.delivered).toBe("steered");
@@ -5315,6 +5340,22 @@ async function readyWithFailingTurns() {
 /** The words a turn was started with, as the request carries them (content blocks). */
 const prompted = (request: JsonObject) => JSON.stringify((request.params as JsonObject | undefined)?.prompt);
 
+test("a delivered prompt carries the sender and link as structured metadata", async () => {
+  const { id, sent } = await readyWithFailingTurns();
+  await runPrompt(id, "From thread “same title” (agent):\n\nReview this", undefined, {
+    sender: "sender-2",
+    link: "sender-2/1",
+  });
+  const request = sent().at(-1)!;
+  const params = request.params as JsonObject;
+  const meta = params._meta as JsonObject;
+  const rustcode = meta.rustcode as JsonObject;
+  expect(rustcode.origin).toEqual({
+    kind: "agent",
+    threads: [{ sessionId: "sender-2", title: "same title", linkId: "sender-2/1" }],
+  });
+});
+
 describe("a turn that stopped on something other than a limit", () => {
   test("an overload waits out a backoff, then sends the turn again", async () => {
     const { continueDueThreads } = await import("./store");
@@ -5528,7 +5569,7 @@ describe("a delegate whose turn failed", () => {
     answerOrchestration({
       sessionId: caller,
       tool: "message_session",
-      args: { session_id: target, message },
+      args: { session_id: target, message, return_to: "me" },
     });
 
   test("an interrupted delegate runs the next message as a new turn", async () => {

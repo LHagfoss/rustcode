@@ -23,6 +23,11 @@ use crate::app::ChatMessage;
 /// The heading every agent-delivered message starts with (`delivered` in the app).
 pub(crate) const AGENT_HEADING: &str = "From thread “";
 const AFTER_TITLE: &str = "” (agent):";
+/// The line right under the heading that names the sender by id:
+/// `session <id>`, then ` · link_id <id>` when the sender waits for a reply
+/// (`delivered` in the app). Older messages have none, and keep their title.
+const SENDER_LINE: &str = "session ";
+const LINK_BIT: &str = " · link_id ";
 /// What a wake message ends with (`WAKE_MARK` in the app).
 const WAKE_MARK: &str = "<!-- rustcode:wake -->";
 /// What the app's continue-after-a-compaction prompt ends with (`CONTINUE_MARK`).
@@ -122,25 +127,88 @@ pub(crate) fn delivered_title(text: &str) -> Option<&str> {
     (!title.is_empty()).then_some(title)
 }
 
+/// The sender's session and link ids on the line right under a delivered
+/// message's heading; `None` for a message without one (older ones).
+pub(crate) fn delivered_sender(text: &str) -> Option<(String, Option<String>)> {
+    let rest = text.trim_start().strip_prefix(AGENT_HEADING)?;
+    let (_, after) = rest.split_once(AFTER_TITLE)?;
+    let line = after.strip_prefix('\n')?.lines().next()?;
+    let ids = line.strip_prefix(SENDER_LINE)?;
+    let (session, link) = match ids.split_once(LINK_BIT) {
+        Some((session, link)) => (session, Some(link)),
+        None => (ids, None),
+    };
+    let id = |text: &str| {
+        let text = text.trim();
+        (!text.is_empty() && !text.contains(char::is_whitespace)).then(|| text.to_owned())
+    };
+    let session = id(session)?;
+    Some((session, link.and_then(id)))
+}
+
 /// The origin of a message of `history`: `None` for anything that is not a
 /// user request (replies, tool results, a tool's attachment).
 pub(crate) fn of_message(message: &ChatMessage) -> Option<MessageOrigin> {
-    message.is_user_request().then(|| of_text(&message.content))
+    message.is_user_request().then(|| {
+        message
+            .origin
+            .as_ref()
+            .and_then(from_meta)
+            .unwrap_or_else(|| of_text(&message.content))
+    })
+}
+
+/// Decode a structured ACP origin, falling back to text when it is absent or invalid.
+pub(crate) fn from_meta(value: &Value) -> Option<MessageOrigin> {
+    let kind = match value.get("kind")?.as_str()? {
+        "user" => OriginKind::User,
+        "agent" => OriginKind::Agent,
+        "delegate" => OriginKind::Delegate,
+        "system" => OriginKind::System,
+        _ => return None,
+    };
+    let threads = value
+        .get("threads")
+        .and_then(Value::as_array)
+        .map(|threads| {
+            threads
+                .iter()
+                .filter_map(|entry| {
+                    let entry = entry.as_object()?;
+                    let get = |key: &str| entry.get(key).and_then(Value::as_str).map(str::to_owned);
+                    Some(OriginThread {
+                        session_id: get("sessionId"),
+                        title: get("title"),
+                        status: get("status"),
+                        link_id: get("linkId"),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(MessageOrigin { kind, threads })
 }
 
 /// The origin of a prompt's text.
 pub(crate) fn of_text(text: &str) -> MessageOrigin {
     // The heading comes first: a delegated task may quote a mark in its body.
     if text.trim_start().starts_with(AGENT_HEADING) {
+        // The ids the app writes under the heading come first; a message
+        // from before them names its sender by title alone.
+        let (session_id, link_id) = delivered_sender(text).unzip();
+        let title = delivered_title(text).map(str::to_owned);
+        let threads = (title.is_some() || session_id.is_some())
+            .then(|| OriginThread {
+                session_id,
+                title,
+                link_id: link_id.flatten(),
+                ..OriginThread::default()
+            })
+            .into_iter()
+            .collect();
         return MessageOrigin {
             kind: OriginKind::Agent,
-            threads: delivered_title(text)
-                .map(|title| OriginThread {
-                    title: Some(title.to_owned()),
-                    ..OriginThread::default()
-                })
-                .into_iter()
-                .collect(),
+            threads,
         };
     }
     if text.contains(WAKE_MARK) {
@@ -203,8 +271,13 @@ pub(crate) fn user_chunk(
     meta: Option<serde_json::Map<String, Value>>,
 ) -> agent_client_protocol::schema::v1::ContentChunk {
     use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk, TextContent};
-    let origin = of_text(&text).to_meta();
     let mut meta = meta.unwrap_or_default();
+    let origin = meta
+        .get("rustcode")
+        .and_then(|v| v.get("origin"))
+        .and_then(from_meta)
+        .unwrap_or_else(|| of_text(&text))
+        .to_meta();
     let rustcode = meta.entry("rustcode").or_insert_with(|| json!({}));
     if !rustcode.is_object() {
         *rustcode = json!({});
@@ -287,6 +360,59 @@ The rest is in read_session on a child's session id.\n\
         let untitled = of_text("From thread “” (agent):\n\nx");
         assert_eq!(untitled.kind, OriginKind::Agent);
         assert!(untitled.threads.is_empty());
+    }
+
+    #[test]
+    fn structured_origin_survives_history_and_overrides_text() {
+        let mut message =
+            ChatMessage::new("user", "From thread “same title” (agent):\n\nsome task");
+        message.origin = Some(
+            json!({"kind": "agent", "threads": [{"sessionId": "sender-2", "linkId": "sender-2/1"}]}),
+        );
+        let saved = serde_json::to_string(&message).unwrap();
+        let restored: ChatMessage = serde_json::from_str(&saved).unwrap();
+        let origin = of_message(&restored).unwrap();
+        assert_eq!(origin.threads[0].session_id.as_deref(), Some("sender-2"));
+        assert_eq!(origin.threads[0].link_id.as_deref(), Some("sender-2/1"));
+        let meta =
+            serde_json::Map::from_iter([("rustcode".into(), json!({"origin": restored.origin}))]);
+        let chunk = user_chunk(restored.content, Some(meta));
+        assert_eq!(
+            chunk.meta.unwrap()["rustcode"]["origin"]["threads"][0]["sessionId"],
+            "sender-2"
+        );
+    }
+
+    #[test]
+    fn a_delivered_message_with_ids_names_the_sender_by_id() {
+        let origin = of_text(
+            "From thread “Ship it” (agent):\nsession 20261113-aaaa · link_id 20261113-aaaa/2\n\nReview the rules.",
+        );
+        assert_eq!(origin.kind, OriginKind::Agent);
+        assert_eq!(
+            origin.threads,
+            vec![OriginThread {
+                session_id: Some("20261113-aaaa".to_owned()),
+                title: Some("Ship it".to_owned()),
+                link_id: Some("20261113-aaaa/2".to_owned()),
+                status: None,
+            }]
+        );
+        // A one-way message has no link.
+        let one_way = of_text("From thread “Ship it” (agent):\nsession 20261113-aaaa\n\nFYI.");
+        assert_eq!(
+            one_way.threads[0].session_id.as_deref(),
+            Some("20261113-aaaa")
+        );
+        assert_eq!(one_way.threads[0].link_id, None);
+        // A body that starts with the word after the blank line is not a sender line.
+        let body = of_text("From thread “a” (agent):\n\nsession notes are below");
+        assert_eq!(body.threads[0].session_id, None);
+        // The heading still reads on its own, so the title survives for older readers.
+        assert_eq!(
+            delivered_title("From thread “Ship it” (agent):\nsession x\n\nbody"),
+            Some("Ship it")
+        );
     }
 
     #[test]
