@@ -423,6 +423,9 @@ async fn attach_orchestrator(
     if !harness::capabilities(&session.harness).orchestration {
         return false;
     }
+    // A harness without its own question tool also gets `ask_user_question`,
+    // asked through this thread's permission channel (#3393).
+    let ask_user = harness::needs_question_tool(&session.harness);
     // No app hosts the tools: this engine answers the reads itself and names
     // the app for the calls that need it (#3422). An app that turned them off
     // still turns them off, so nothing is attached then.
@@ -436,9 +439,7 @@ async fn attach_orchestrator(
             smart_ui,
         )
         .await;
-        let attached = launch.is_some();
-        session.set_orchestrator(launch);
-        return attached;
+        return set_launch(session, launch, ask_user).await;
     }
     if orchestration < 2 {
         return false;
@@ -448,6 +449,20 @@ async fn attach_orchestrator(
     };
     let launch =
         crate::orchestration::hub::launch_for(&session.id, client, orchestration, smart_ui).await;
+    set_launch(session, launch, ask_user).await
+}
+
+/// Start the thread's orchestration server with `launch`, offering
+/// `ask_user_question` when `ask_user`. Whether there is a server.
+async fn set_launch(
+    session: &ExternalSession,
+    launch: Option<crate::orchestration::hub::Launch>,
+    ask_user: bool,
+) -> bool {
+    let ask_user = ask_user
+        && launch.is_some()
+        && crate::orchestration::hub::set_questions(&session.id, session.question_asker()).await;
+    let launch = launch.map(|launch| launch.with_ask_user(ask_user));
     let attached = launch.is_some();
     session.set_orchestrator(launch);
     attached

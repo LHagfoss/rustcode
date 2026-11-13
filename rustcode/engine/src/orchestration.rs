@@ -22,6 +22,7 @@ use tokio::sync::Mutex;
 use crate::preview::PreviewClient;
 use crate::tools::{ToolErrorKind, ToolExecutionOutput};
 
+pub mod ask_user;
 pub mod hub;
 pub mod local;
 pub(crate) mod local_threads;
