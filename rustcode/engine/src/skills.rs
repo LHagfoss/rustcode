@@ -344,9 +344,32 @@ pub fn skill_roots() -> Vec<SkillRoot> {
 ///
 /// Claude Code is the exception: it loads its own `.claude/skills` roots with
 /// its own Skill tool, so those roots are not named to it, and with nothing
-/// else installed it gets no note at all.
-pub fn harness_skills_note(harness: &str) -> Option<String> {
-    harness_skills_note_from(harness, &current_root_inputs(), &disabled_skill_names())
+/// else installed it gets no note at all. Only the user root the thread's
+/// login reads is its own: a named login (`CLAUDE_CONFIG_DIR`) reads
+/// `<account dir>/skills` and not `~/.claude/skills`, so `claude_config_dir`
+/// names the login's directory and the other user roots stay in the note.
+pub fn harness_skills_note(harness: &str, claude_config_dir: Option<&Path>) -> Option<String> {
+    let own_user_root = (harness == "claude-code").then(|| {
+        claude_config_dir
+            .map(Path::to_path_buf)
+            .or_else(default_claude_config_dir)
+            .map(|dir| dir.join("skills"))
+    });
+    harness_skills_note_from(
+        harness,
+        &current_root_inputs(),
+        &disabled_skill_names(),
+        own_user_root.flatten().as_deref(),
+    )
+}
+
+/// The directory the default Claude Code login reads: `CLAUDE_CONFIG_DIR`
+/// when the environment sets it, else `~/.claude`.
+fn default_claude_config_dir() -> Option<PathBuf> {
+    crate::shell_env::env_var("CLAUDE_CONFIG_DIR")
+        .filter(|dir| !dir.trim().is_empty())
+        .map(PathBuf::from)
+        .or_else(|| crate::home::home_dir().map(|home| home.join(".claude")))
 }
 
 /// The note goes in every request of an external-harness thread, so it is
@@ -368,6 +391,7 @@ pub(crate) fn harness_skills_note_from(
     harness: &str,
     inputs: &SkillRootInputs,
     disabled: &std::collections::HashSet<String>,
+    own_user_root: Option<&Path>,
 ) -> Option<String> {
     // One pass over the roots: which exist and hold a skill, and what is in
     // them. Roots are never scanned twice for one note.
@@ -375,7 +399,14 @@ pub(crate) fn harness_skills_note_from(
     let mut roots: Vec<PathBuf> = Vec::new();
     let mut found: Vec<SkillMetadata> = Vec::new();
     for root in skill_roots_from(inputs) {
-        if claude_code && root.kind.is_harness_owned() {
+        // Claude Code loads its project root and its login's user root itself.
+        // Another login's user root is hidden from it, so that one is named.
+        let loads_itself = match root.kind {
+            SkillRootKind::HarnessProject => true,
+            SkillRootKind::HarnessUser => own_user_root.is_none_or(|own| own == root.path),
+            _ => false,
+        };
+        if claude_code && loads_itself {
             continue;
         }
         let before = found.len();
@@ -1517,7 +1548,7 @@ mod tests {
                 .into_iter()
                 .collect();
 
-        let note = harness_skills_note_from("codex", &inputs, &disabled)
+        let note = harness_skills_note_from("codex", &inputs, &disabled, None)
             .expect("a note when skills exist");
 
         assert!(note.starts_with("# Skills\n"));
@@ -1533,7 +1564,7 @@ mod tests {
 
         // Claude Code loads its own roots with its own Skill tool, so naming
         // them would only send it after files it already has.
-        let for_claude = harness_skills_note_from("claude-code", &inputs, &disabled)
+        let for_claude = harness_skills_note_from("claude-code", &inputs, &disabled, None)
             .expect("the RustCode root is still named");
         assert!(
             !for_claude.contains(&fixture.path("home/.claude/skills").display().to_string()),
@@ -1555,7 +1586,7 @@ mod tests {
             extra_dirs_env: None,
             harness_account_dirs: Vec::new(),
         };
-        assert!(harness_skills_note_from("codex", &empty_inputs, &disabled).is_none());
+        assert!(harness_skills_note_from("codex", &empty_inputs, &disabled, None).is_none());
     }
 
     // Only Claude Code's own skills are installed, so a Claude Code thread has
@@ -1585,7 +1616,8 @@ mod tests {
 
         // Another harness is told about all of them, including the login's.
         let note =
-            harness_skills_note_from("gemini", &inputs, &std::collections::HashSet::new()).unwrap();
+            harness_skills_note_from("gemini", &inputs, &std::collections::HashSet::new(), None)
+                .unwrap();
         assert!(
             note.contains(&fixture.path("accounts/work/skills").display().to_string()),
             "{note}"
@@ -1600,9 +1632,54 @@ mod tests {
         );
 
         assert!(
-            harness_skills_note_from("claude-code", &inputs, &Default::default()).is_none(),
+            harness_skills_note_from("claude-code", &inputs, &Default::default(), None).is_none(),
             "Claude Code needs no note for skills it loads itself"
         );
+    }
+
+    // A thread on a named Claude Code login does not see `~/.claude/skills`
+    // (#3604): the note names that root and other logins' roots to it, and
+    // leaves out only the project root and the login's own.
+    #[test]
+    fn a_named_claude_code_login_is_told_about_the_user_roots_it_cannot_see() {
+        let fixture = Fixture::new("harness_note_claude_login");
+        fixture.skill("home/.claude/skills/deploy", "deploy", "Ship it");
+        fixture.skill(
+            "workspace/.claude/skills/project-only",
+            "project-only",
+            "Project skill",
+        );
+        fixture.skill("accounts/work/skills/work-only", "work-only", "Work");
+        fixture.skill("accounts/home/skills/home-only", "home-only", "Home");
+        let inputs = SkillRootInputs {
+            workspace: Some(fixture.path("workspace")),
+            config_dir: Some(fixture.path("config")),
+            home: Some(fixture.path("home")),
+            extra_dirs: vec![],
+            extra_dirs_env: None,
+            harness_account_dirs: vec![
+                fixture.path("accounts/work"),
+                fixture.path("accounts/home"),
+            ],
+        };
+        let shown = |path: &str| fixture.path(path).display().to_string();
+
+        let own = fixture.path("accounts/work/skills");
+        let note =
+            harness_skills_note_from("claude-code", &inputs, &Default::default(), Some(&own))
+                .expect("the roots this login cannot see are named");
+        assert!(note.contains(&shown("home/.claude/skills")), "{note}");
+        assert!(note.contains(&shown("accounts/home/skills")), "{note}");
+        assert!(!note.contains(&shown("accounts/work/skills")), "{note}");
+        assert!(!note.contains(&shown("workspace/.claude/skills")), "{note}");
+
+        // The default login reads `~/.claude/skills` itself.
+        let own = fixture.path("home/.claude/skills");
+        let note =
+            harness_skills_note_from("claude-code", &inputs, &Default::default(), Some(&own))
+                .expect("the logins' roots are named");
+        assert!(!note.contains(&shown("home/.claude/skills")), "{note}");
+        assert!(note.contains(&shown("accounts/work/skills")), "{note}");
     }
 
     // A named Claude Code login reads `<CLAUDE_CONFIG_DIR>/skills`, not
@@ -1715,7 +1792,7 @@ mod tests {
             .chain((0..120).map(|i| format!("skill-{i}")))
             .collect();
 
-        let note = harness_skills_note_from("codex", &inputs, &disabled).unwrap();
+        let note = harness_skills_note_from("codex", &inputs, &disabled, None).unwrap();
 
         assert!(
             note.len() <= MAX_HARNESS_SKILLS_NOTE_BYTES,
