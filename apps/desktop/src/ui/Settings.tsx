@@ -1814,7 +1814,7 @@ export function Settings() {
   };
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="Settings" className="fixed inset-0 z-30">
+    <div role="dialog" aria-modal="true" aria-label="Settings" data-tab-free className="fixed inset-0 z-30">
       {/* The app behind, dimmed; a press on it (not on the panel) closes Settings. */}
       <div aria-hidden className="absolute inset-0 bg-bg/60" />
       <div
