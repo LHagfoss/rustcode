@@ -74,7 +74,7 @@ function StatusLine({ row, onOpen }: { row: DelegateStatusRow; onOpen: (id: stri
  */
 export function DelegateStatusPanel({ threadId }: { threadId: string }) {
   const [rows, setRows] = useState<DelegateStatusRow[]>([]);
-  const [folded, setFolded] = useState(false);
+  const [folded, setFolded] = useState(true);
   useEffect(() => {
     const read = () => {
       const state = useApp.getState();

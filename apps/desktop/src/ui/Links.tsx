@@ -12,32 +12,18 @@ import {
   GitBranch,
   Hand,
   Laptop,
-  ListTree,
   LoaderCircle,
   PauseCircle,
   Rows3,
   X,
 } from "lucide-react";
 import { Dialog, Popover } from "radix-ui";
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { useEffect, useMemo } from "react";
 import { agentActive, agentElapsed, type SubagentInfo, spawnedAgentId } from "../acp/rustcode";
-import type { StackAgent, StackState } from "../state/agentStack";
+import { stripCount, stripCounts, stripSummary } from "../state/delegateStrip";
 import {
-  foldStrip,
-  type StripCounts,
-  stripCollapsed,
-  stripCount,
-  stripCounts,
-  stripDoing,
-  stripFolded,
-  stripSummary,
-  subscribeStripFold,
-} from "../state/delegateStrip";
-import {
-  type AgentState,
   addBranch,
   type BranchTotal,
-  branchBar,
   type DelegateView,
   flattenViews,
   forestTotal,
@@ -58,18 +44,11 @@ import {
 } from "../state/orchestration";
 import { modeLabel } from "../state/permissions";
 import { emptyCost } from "../state/pricing";
-import { selectThread, setView, showPanel, useApp } from "../state/store";
+import { selectThread, setView, useApp } from "../state/store";
 import { startedLinks } from "../state/thread";
-import {
-  AgentGroupHeader,
-  AgentRow,
-  LINK_AGENT_STATE,
-  SubagentRow,
-  ThreadAgentRow,
-  useNow,
-} from "./AgentViews";
+import { AgentRow, LINK_AGENT_STATE, SubagentRow, ThreadAgentRow, useNow } from "./AgentViews";
 import { useDelegateBranch } from "./DelegateTree";
-import { unfoldSection } from "./overview";
+import { HarnessIcon } from "./HarnessIcon";
 import { cx, Pill, Spinner, Tooltip } from "./primitives";
 
 const NO_AGENTS: SubagentInfo[] = [];
@@ -176,140 +155,6 @@ function readStrip(views: DelegateView[], inTree: ReadonlySet<string>, rows: rea
   return { views, inTree, rows, total, runningSince };
 }
 
-/**
- * Three or more linked threads in the strip fold into one card header, the same
- * header a group of agents has in the transcript: the strip above the composer
- * has about 800px, and a third of it spent on a made-up title tells the reader
- * nothing. Two stay as rows of their own; they fit. The header is also the strip's
- * folded form — its own count and live summary — so a strip of this many rows has
- * one header with one chevron, which opens the popover.
- */
-function ManyLinks({
-  rows,
-  threadId,
-  strip,
-  counts,
-}: {
-  rows: readonly LinkThread[];
-  threadId: string;
-  strip: Strip;
-  /** What the strip's rows add up to, the words this header says after the avatars. */
-  counts: StripCounts;
-}) {
-  const { views, inTree, total, runningSince } = strip;
-  // A live clock, not the branch's summed work time: how long the longest thread working now has
-  // been at it. Nothing runs once the branch finished, so nothing ticks there.
-  const now = useNow(total.counts.working > 0);
-  const bar = branchBar(total, runningSince, now);
-  // The marks are who is live now, working or waiting: the finished ones are the popover's "Done",
-  // not a wall of avatars.
-  const mark = (view: DelegateView): StackAgent => ({
-    id: view.id,
-    state: view.state === "stopped" ? "done" : view.state,
-    kind: "thread",
-    harness: view.harness,
-    label: view.title,
-    since: view.link.createdAt,
-  });
-  const isLive = (state: AgentState) => state === "working" || state === "needs";
-  const marks: StackAgent[] = [
-    ...flattenViews(views).flatMap((view) => (isLive(view.state) ? [mark(view)] : [])),
-    ...rows.flatMap((row): StackAgent[] => {
-      if (inTree.has(row.link.target)) return [];
-      const state = LINK_AGENT_STATE[row.state];
-      if (!isLive(state)) return [];
-      return [
-        {
-          id: row.link.target,
-          state: state as StackState,
-          kind: "thread" as const,
-          harness: row.link.harness,
-          label: row.link.targetTitle,
-          since: row.link.createdAt,
-        },
-      ];
-    }),
-  ];
-  // What settled after the live rows: one row per thread, newest first, capped, with a count for the
-  // rest. A thread the strip still shows above is not listed twice.
-  const book = useApp((s) => s.links.links);
-  const settled = doneLinks(book, threadId);
-  const above = new Set(rows.map((row) => row.target));
-  const done = settled.shown.filter((link) => !above.has(link.target));
-  const doneRows: LinkThread[] = done.map((link) => ({
-    target: link.target,
-    link,
-    state: link.state,
-    links: [link],
-  }));
-  const more = settled.more + (settled.shown.length - done.length);
-  // Nothing runs and nothing waits: a settled branch is history the details panel keeps, not a
-  // header over the composer.
-  if (!bar.show) return null;
-  // The threads the tree holds below the ones the strip draws: the header cannot list them, so it
-  // says how many there are and opens the tree that does (the overview's Delegates section).
-  const nested = Math.max(0, flattenViews(views).length - views.length);
-  const openTree = () => {
-    showPanel("details");
-    unfoldSection("delegates");
-  };
-  return (
-    <Popover.Root>
-      <Popover.Trigger asChild>
-        <button
-          type="button"
-          className="group flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-fill-subtle data-[state=open]:bg-fill-subtle"
-        >
-          <AgentGroupHeader
-            agents={marks.length ? marks : undefined}
-            state={bar.state}
-            label={stripCount(counts)}
-            // What the branch does now, nested delegates included: the avatars carry their marks, so
-            // the words beside them must count them too.
-            status={stripDoing({ delegates: counts.delegates, running: bar.working, needs: bar.needs })}
-            elapsedMs={bar.longestMs}
-            open={false}
-            chevron="down"
-          />
-        </button>
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content
-          side="top"
-          align="start"
-          sideOffset={8}
-          aria-label="Linked threads"
-          className="elevated z-50 flex max-h-[min(420px,60vh)] w-[min(420px,calc(100vw-48px))] flex-col overflow-y-auto p-2 rc-in"
-        >
-          {rows.map((row) => (
-            <LinkRow key={row.target} row={row} popover />
-          ))}
-          {doneRows.length > 0 && (
-            <>
-              <div className="px-3 pt-2 pb-1 text-caption text-fg-faint">Done</div>
-              {doneRows.map((row) => (
-                <LinkRow key={row.target} row={row} popover />
-              ))}
-              {more > 0 && <div className="px-3 py-1 text-caption text-fg-faint">{more} more</div>}
-            </>
-          )}
-          {nested > 0 && (
-            <Popover.Close asChild>
-              <button
-                type="button"
-                onClick={openTree}
-                className="mt-1 flex h-7 w-full shrink-0 items-center gap-1.5 rounded-lg px-3 text-left text-caption text-fg-muted hover:bg-fill-subtle active:bg-fill-strong"
-              >
-                <ListTree size={11} aria-hidden className="shrink-0 text-fg-faint" />+{nested} nested
-              </button>
-            </Popover.Close>
-          )}
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
-  );
-}
-
 /** Above the composer: the delegates this one is working with, and the thread it works for. */
 export function LinkedThreads({ threadId }: { threadId: string }) {
   const book = useApp((s) => s.links);
@@ -365,80 +210,86 @@ export function LinkedThreads({ threadId }: { threadId: string }) {
     rows.map((row) => LINK_AGENT_STATE[row.state]),
     natives.length + builtins.length,
   );
-  // Folded for the session, per thread: the rows a reader put away stay away while they move
-  // between threads, and come back when the app opens again. A fold only holds while the header is
-  // there to unfold it: a strip of one row draws that row, folded thread or not, and a group card is
-  // its own header (and already one line), so it has nothing to fold.
-  const group = rows.length > 2;
-  const folded = useSyncExternalStore(subscribeStripFold, () => stripFolded(threadId));
-  const collapsed = !group && stripCollapsed(counts, folded);
   const { working, needs } = strip.total.counts;
   const news = rows.length > 0 && working + needs > 0;
   if (!news && !drivenBy && !fanOuts.length && !natives.length && !builtins.length) return null;
+  const settled = doneLinks(book.links, threadId);
+  const done = settled.shown.filter((link) => !rows.some((row) => row.target === link.target));
   const rowsId = `delegate-strip-${threadId}`;
   return (
-    // The one surface this strip shares with the jump-to-latest pill above it and its own group card
-    // (`index.css` `.rc-glass-overlay`): the transcript keeps showing through, so a run of threads
-    // reads as an overlay on the chat rather than a hole cut in it. Its rows are transparent over it.
-    <div className="rc-glass-overlay relative flex flex-col gap-0.5 rounded-xl p-1 rc-in">
+    <div className="relative flex flex-col gap-0.5">
       {drivenBy && <WorkingFor link={drivenBy} />}
-      {/* The strip folds to this one line: what it holds and what that work does now. Two rows get
-          it, because one row is already one line; folding leaves the header alone, and the
-          transcript takes back the room the rows had (`ChatView.tsx`, the measured stack height). A
-          group card draws that line itself, so it has no fold row of its own. */}
-      {!group && counts.delegates > 1 && (
-        <Tooltip label={folded ? "Show the delegates" : "Fold the delegates into one line"}>
+      <Popover.Root key={threadId}>
+        <Popover.Trigger asChild>
           <button
             type="button"
-            aria-expanded={!collapsed}
-            // Only when there is a list to point at: a folded strip draws no rows.
-            aria-controls={collapsed ? undefined : rowsId}
-            onClick={() => foldStrip(threadId, !folded)}
-            className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-lg px-2 text-left text-caption text-fg-muted hover:bg-fill-subtle active:bg-fill-strong"
+            aria-label={`Delegates: ${stripSummary(counts)}`}
+            className="flex h-7 w-fit max-w-full items-center gap-1.5 rounded-full px-2 text-caption text-fg-muted hover:bg-fill-subtle data-[state=open]:bg-fill-subtle"
           >
-            <ChevronDown
-              size={12}
-              aria-hidden
-              className={cx(
-                "shrink-0 text-fg-faint transition-transform duration-200",
-                folded && "-rotate-90",
-              )}
-            />
-            <span className="min-w-0 truncate">{stripSummary(counts)}</span>
-            {counts.running > 0 && <Spinner size={9} className="text-accent" />}
-          </button>
-        </Tooltip>
-      )}
-      {!collapsed && (rows.length > 0 || fanOuts.length > 0 || natives.length > 0 || builtins.length > 0) && (
-        // Capped and scrolled on its own: a long run of delegates stops growing over the chat and
-        // the strip keeps one height, whatever the branch does.
-        <div id={rowsId} className="flex max-h-[min(320px,45vh)] flex-col gap-0.5 overflow-y-auto">
-          {group ? (
-            <ManyLinks rows={rows} threadId={threadId} strip={strip} counts={counts} />
-          ) : (
-            rows.map((row) => <LinkRow key={row.target} row={row} />)
-          )}
-          {fanOuts.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 px-2 pt-0.5">
-              {fanOuts.map((f) => (
-                <Pill
-                  key={f.id}
-                  onClick={() => setView({ kind: "compare", fanOut: f.id })}
-                  className="shrink-0"
-                >
-                  <Rows3 size={12} /> Compare
-                </Pill>
+            <span aria-hidden className="flex items-center gap-1">
+              {[...new Set(rows.map((row) => row.link.harness))].slice(0, 3).map((id) => (
+                <HarnessIcon key={id} id={id ?? ""} size={12} />
               ))}
-            </div>
-          )}
-          {natives.map(({ item, steps }) => (
-            <SubagentRow key={item.id} item={item} steps={steps} threadId={threadId} />
-          ))}
-          {builtins.map((agent) => (
-            <BuiltinAgentRow key={agent.id} agent={agent} threadId={threadId} />
-          ))}
-        </div>
-      )}
+            </span>
+            <span className="truncate">{stripCount(counts)}</span>
+            {needs > 0 && <span className="text-warning">{needs} needs you</span>}
+            {counts.running > 0 && <Spinner size={9} className="text-accent" />}
+            <ChevronDown size={12} aria-hidden />
+          </button>
+        </Popover.Trigger>
+        <Popover.Portal>
+          <Popover.Content
+            side="top"
+            align="start"
+            sideOffset={8}
+            collisionPadding={16}
+            aria-label="Delegates"
+            className="elevated z-50 w-[min(420px,calc(100vw-32px))] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto p-2 rc-in"
+          >
+            {(rows.length > 0 || fanOuts.length > 0 || natives.length > 0 || builtins.length > 0) && (
+              // Capped and scrolled on its own: a long run of delegates stops growing over the chat and
+              // the strip keeps one height, whatever the branch does.
+              <div id={rowsId} className="flex max-h-[min(320px,45vh)] flex-col gap-0.5 overflow-y-auto">
+                {rows.map((row) => (
+                  <LinkRow key={row.target} row={row} popover />
+                ))}
+                {done.length > 0 && <div className="px-2 pt-2 pb-1 text-caption text-fg-muted">Done</div>}
+                {done.map((link) => (
+                  <LinkRow
+                    key={link.target}
+                    row={{ target: link.target, link, state: link.state, links: [link] }}
+                    popover
+                  />
+                ))}
+                {settled.more > 0 && (
+                  <div className="px-2 py-1 text-caption text-fg-muted">
+                    {settled.more} more in thread details
+                  </div>
+                )}
+                {fanOuts.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 px-2 pt-0.5">
+                    {fanOuts.map((f) => (
+                      <Pill
+                        key={f.id}
+                        onClick={() => setView({ kind: "compare", fanOut: f.id })}
+                        className="shrink-0"
+                      >
+                        <Rows3 size={12} /> Compare
+                      </Pill>
+                    ))}
+                  </div>
+                )}
+                {natives.map(({ item, steps }) => (
+                  <SubagentRow key={item.id} item={item} steps={steps} threadId={threadId} />
+                ))}
+                {builtins.map((agent) => (
+                  <BuiltinAgentRow key={agent.id} agent={agent} threadId={threadId} />
+                ))}
+              </div>
+            )}
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover.Root>
     </div>
   );
 }
