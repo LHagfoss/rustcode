@@ -1246,6 +1246,28 @@ pub const SMART_UI_CHECK: Tool = Tool {
     safety: ToolSafety::ReadOnly,
 };
 
+/// A multiple-choice question for an external harness with no question tool
+/// of its own (#3393). Offered through the `rustcode` MCP server only to such
+/// a harness; the engine's hub asks it (`orchestration/ask_user.rs`). A
+/// RustCode thread asks with `ask_question` instead.
+pub const ASK_USER_QUESTION: Tool = Tool {
+    name: crate::orchestration::ask_user::TOOL_NAME,
+    description: "Stop and ask the user 1 to 4 multiple-choice questions when a decision is theirs to make, instead of guessing or asking in prose. Each question has 2 to 4 options with a label and a description; set multi_select to let them pick several. Do not add an 'Other' option: the app offers a free-text answer itself. Blocks until they answer and returns {\"answers\": [{\"question\", \"selected\": [labels], \"text\"?}]}; if they dismiss it, continue on your own judgement.",
+    arguments: r#"{"questions": [{"header": "Data source", "question": "Where should the version data come from?", "options": [{"label": "CHANGELOG.md", "description": "Curated release notes"}, {"label": "Releases API", "description": "Live GitHub data"}], "multi_select": false}]}"#,
+    handler: ask_user_question_unavailable,
+    requires_confirmation: false,
+    schema: crate::orchestration::ask_user::schema,
+    capabilities: &[ToolCapability::UserInteraction],
+    safety: ToolSafety::Interactive,
+};
+
+fn ask_user_question_unavailable(_args: &Value) -> Result<String, String> {
+    Err(
+        "error: ask_user_question is answered by the rustcode MCP server; use ask_question here"
+            .to_owned(),
+    )
+}
+
 fn smart_ui_check_unavailable(_args: &Value) -> Result<String, String> {
     Err(
         "error: smart_ui_check is answered by the rustcode MCP server; this thread does not have it"

@@ -100,6 +100,10 @@ pub(crate) struct Capabilities {
     /// The thread can start in its own git worktree (`session/new`
     /// `_meta.rustcode.worktree`); the engine prepares the cwd for any harness.
     pub worktree: bool,
+    /// The harness can stop and ask the user a multiple-choice question,
+    /// with its own tool or with the `ask_user_question` tool RustCode's MCP
+    /// server adds for one without (#3393).
+    pub questions: bool,
 }
 
 impl Capabilities {
@@ -138,6 +142,7 @@ impl Capabilities {
             orchestration: true,
             checkpoints: true,
             worktree: true,
+            questions: true,
         }
     }
 
@@ -179,6 +184,10 @@ impl Capabilities {
             orchestration: cfg!(unix),
             checkpoints: true,
             worktree: true,
+            // Codex has `request_user_input`; an ACP agent either has its own
+            // tool (`KnownHarness::native_questions`, set in `capabilities`)
+            // or gets ours with the orchestration server (`session_meta`).
+            questions: kind == HarnessKind::Codex,
         }
     }
 }
@@ -222,6 +231,10 @@ pub(crate) struct KnownHarness {
     /// `npx -y pi-acp` starts, but the `pi` it spawns does not. Missing means
     /// not installed, not a turn that fails at start.
     pub requires: Option<&'static str>,
+    /// The harness has its own tool to stop and ask the user a
+    /// multiple-choice question (Claude Code's `AskUserQuestion`); without
+    /// one the thread gets RustCode's `ask_user_question` (#3393).
+    pub native_questions: bool,
 }
 
 pub(crate) const KNOWN: &[KnownHarness] = &[
@@ -237,6 +250,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         version: Some(("codex", &["--version"])),
         auth_probe: Some(AuthProbe::Text(&["codex", "login", "status"])),
         requires: None,
+        native_questions: true,
     },
     KnownHarness {
         id: "claude-code",
@@ -250,6 +264,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         version: Some(("claude", &["--version"])),
         auth_probe: Some(AuthProbe::Json(&["claude", "auth", "status", "--json"])),
         requires: None,
+        native_questions: true,
     },
     KnownHarness {
         id: "gemini",
@@ -263,6 +278,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         version: Some(("gemini", &["--version"])),
         auth_probe: None,
         requires: None,
+        native_questions: false,
     },
     KnownHarness {
         id: "opencode",
@@ -276,6 +292,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         version: Some(("opencode", &["--version"])),
         auth_probe: None,
         requires: None,
+        native_questions: false,
     },
     // Pi speaks its own RPC protocol; `pi-acp` adapts it to ACP, as claude-agent-acp does for
     // Claude Code. Pi keeps its own models, logins, skills and sessions (~/.pi).
@@ -291,6 +308,7 @@ pub(crate) const KNOWN: &[KnownHarness] = &[
         version: Some(("pi", &["--version"])),
         auth_probe: None,
         requires: Some("pi"),
+        native_questions: false,
     },
 ];
 
@@ -622,6 +640,9 @@ pub(crate) fn capabilities(harness: &ResolvedHarness) -> Capabilities {
         return Capabilities::builtin();
     }
     let mut capabilities = Capabilities::external(harness.kind);
+    if harness.known.is_some_and(|known| known.native_questions) {
+        capabilities.questions = true;
+    }
     let learned = learned_for(&harness.id);
     if let Some(resume) = learned.resume {
         capabilities.resume = resume;
@@ -649,6 +670,17 @@ pub(crate) fn capabilities(harness: &ResolvedHarness) -> Capabilities {
     capabilities
 }
 
+/// Whether a thread on `harness` should get RustCode's `ask_user_question`
+/// tool: an external harness with no question tool of its own (#3393). The
+/// built-in harness has `ask_question`, Codex `request_user_input`, Claude
+/// Code `AskUserQuestion`.
+pub(crate) fn needs_question_tool(harness: &ResolvedHarness) -> bool {
+    match harness.kind {
+        HarnessKind::Builtin | HarnessKind::Codex => false,
+        HarnessKind::Acp => !harness.known.is_some_and(|known| known.native_questions),
+    }
+}
+
 /// `session_meta` of a built-in thread.
 pub(crate) fn builtin_session_meta() -> serde_json::Map<String, Value> {
     session_meta(&builtin_resolved(), true)
@@ -662,6 +694,9 @@ pub(crate) fn session_meta(
 ) -> serde_json::Map<String, Value> {
     let mut capabilities = capabilities(harness);
     capabilities.orchestration = orchestration;
+    // A harness without its own question tool asks through the
+    // orchestration server's `ask_user_question` (#3393).
+    capabilities.questions |= orchestration && needs_question_tool(harness);
     serde_json::Map::from_iter([(
         "rustcode".to_owned(),
         json!({ "harness": { "id": harness.id, "capabilities": capabilities } }),
@@ -1394,6 +1429,39 @@ mod tests {
                 "{id} takes text only when it takes no pictures"
             );
             forget_learned(id);
+        }
+    }
+
+    #[test]
+    fn only_a_harness_without_a_question_tool_gets_ask_user_question() {
+        let entries = vec![config::HarnessEntry {
+            id: "my-agent".into(),
+            command: Some(vec!["my-agent".into(), "--acp".into()]),
+            ..Default::default()
+        }];
+        for (id, needs) in [
+            (BUILTIN_ID, false),
+            ("codex", false),
+            ("claude-code", false),
+            ("pi", true),
+            ("opencode", true),
+            ("gemini", true),
+            ("my-agent", true),
+        ] {
+            let harness = resolve(&entries, id).unwrap();
+            assert_eq!(needs_question_tool(&harness), needs, "{id}");
+            // Every harness can ask once it has the server; one that needs
+            // the tool cannot without it.
+            let meta = session_meta(&harness, true);
+            assert_eq!(
+                meta["rustcode"]["harness"]["capabilities"]["questions"], true,
+                "{id}"
+            );
+            let without = session_meta(&harness, false);
+            assert_eq!(
+                without["rustcode"]["harness"]["capabilities"]["questions"], !needs,
+                "{id} without the orchestration server"
+            );
         }
     }
 

@@ -999,6 +999,9 @@ fn builtin_is_advertised(tool: &super::Tool, policy: ToolSchemaPolicy) -> bool {
         // (`orchestration/mcp_server.rs`); a RustCode turn has no renderer for
         // it, so it never reaches a built-in schema.
         || tool.name == crate::smart_ui::CHECK_TOOL_NAME
+        // The same for the question tool of a harness without one (#3393):
+        // a RustCode turn asks with `ask_question`.
+        || tool.name == crate::orchestration::ask_user::TOOL_NAME
         || (crate::orchestration::is_tool(tool.name) && !policy.include_orchestration_tools)
         || (crate::orchestration::is_v2_tool(tool.name) && !policy.include_orchestration_v2_tools)
         || (crate::orchestration::is_v3_tool(tool.name) && !policy.include_orchestration_v3_tools)
