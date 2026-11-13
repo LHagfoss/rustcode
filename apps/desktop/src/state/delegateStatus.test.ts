@@ -3,8 +3,12 @@
 import { describe, expect, test } from "bun:test";
 import type { DelegatePull } from "../acp/rustcode";
 import {
+  canStop,
   idleText,
   isStatusQuery,
+  panelAttention,
+  panelLabel,
+  panelMarks,
   pullText,
   runsOn,
   type StatusInput,
@@ -145,5 +149,40 @@ describe("what a row says", () => {
       ].join("\n"),
     );
     expect(statusReply([])).toBe("No delegates yet.");
+  });
+});
+
+describe("the collapsed panel", () => {
+  const rows = statusRows(
+    [
+      input({ id: "a", state: "done" }),
+      input({ id: "b", state: "working", harness: "codex" }),
+      input({ id: "c", state: "needs", harness: "claude" }),
+      input({ id: "d", state: "failed" }),
+    ],
+    0,
+  );
+
+  test("says the count, then what the delegates do", () => {
+    expect(panelLabel(rows)).toBe("4 delegates · 1 working · 1 needs you · 1 failed · 1 done");
+    expect(panelLabel(statusRows([input()], 0))).toBe("1 delegate · 1 working");
+    expect(panelLabel([])).toBe("0 delegates");
+  });
+
+  test("puts what needs the reader first, then what failed", () => {
+    expect(panelAttention(rows)).toBe("needs");
+    expect(panelAttention(rows.filter((row) => row.state !== "needs"))).toBe("failed");
+    expect(panelAttention(rows.filter((row) => row.state === "working"))).toBeUndefined();
+  });
+
+  test("draws one harness mark per live delegate, what needs you first, and none for the settled", () => {
+    expect(panelMarks(rows).map((m) => [m.id, m.state, m.harness])).toEqual([
+      ["c", "needs", "claude"],
+      ["b", "working", "codex"],
+    ]);
+  });
+
+  test("offers Stop only on work under way or waiting", () => {
+    expect(rows.filter(canStop).map((row) => row.id)).toEqual(["c", "b"]);
   });
 });
