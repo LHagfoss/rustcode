@@ -52,6 +52,18 @@ pub struct LinkCache {
     memory: Mutex<HashMap<String, (u64, Option<LinkMeta>)>>,
 }
 
+const MAX_MEMORY: usize = 2000;
+fn remember(
+    memory: &mut HashMap<String, (u64, Option<LinkMeta>)>,
+    url: String,
+    at: u64,
+    meta: Option<LinkMeta>,
+) {
+    if !memory.contains_key(&url) && memory.len() >= MAX_MEMORY {
+        memory.clear();
+    }
+    memory.insert(url, (at, meta));
+}
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -483,21 +495,15 @@ pub async fn link_meta(
     }
     let dir = app.path().app_cache_dir().ok().map(|d| d.join("links"));
     if let Some(cached) = dir.as_deref().and_then(|dir| read_cached(dir, &url)) {
-        cache
-            .memory
-            .lock()
-            .map_err(|e| e.to_string())?
-            .insert(url.clone(), (cached.at, cached.meta.clone()));
+        let mut memory = cache.memory.lock().map_err(|e| e.to_string())?;
+        remember(&mut memory, url.clone(), cached.at, cached.meta.clone());
         return Ok(cached.meta);
     }
     let meta = fetch(&url).await;
     let at = now();
     {
         let mut memory = cache.memory.lock().map_err(|e| e.to_string())?;
-        if memory.len() > 2000 {
-            memory.clear();
-        }
-        memory.insert(url.clone(), (at, meta.clone()));
+        remember(&mut memory, url.clone(), at, meta.clone());
     }
     if let Some(dir) = dir {
         write_cached(&dir, &url, at, &meta);
@@ -520,6 +526,15 @@ mod tests {
             title: Some(title.into()),
             ..LinkMeta::default()
         })
+    }
+
+    #[test]
+    fn memory_insertions_stay_bounded() {
+        let mut memory = HashMap::new();
+        for i in 0..=MAX_MEMORY {
+            remember(&mut memory, i.to_string(), 1, None);
+            assert!(memory.len() <= MAX_MEMORY);
+        }
     }
 
     #[test]

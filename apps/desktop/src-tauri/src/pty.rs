@@ -25,7 +25,7 @@ pub enum PtyEvent {
 /// the reader thread owns the child, waits for it and reports its exit code.
 struct Session {
     master: Box<dyn MasterPty + Send>,
-    input: mpsc::Sender<Vec<u8>>,
+    input: mpsc::SyncSender<Vec<u8>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
 }
 
@@ -33,19 +33,42 @@ struct Session {
 pub struct Ptys {
     next: AtomicU32,
     sessions: Mutex<HashMap<u32, Session>>,
+    slots: AtomicU32,
 }
 
 impl Ptys {
     pub fn close_all(&self) {
         if let Ok(mut sessions) = self.sessions.lock() {
             for (_, mut s) in sessions.drain() {
+                self.slots.fetch_sub(1, Ordering::Relaxed);
                 let _ = s.killer.kill();
             }
         }
     }
 }
 
-const MAX_SESSIONS: usize = 8;
+const MAX_SESSIONS: u32 = 8;
+const MAX_INPUT_CHUNKS: usize = 32;
+const MAX_INPUT_BYTES: usize = 1024 * 1024;
+struct SlotReservation<'a>(&'a AtomicU32);
+impl Drop for SlotReservation<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+fn reserve_slot(slots: &AtomicU32) -> Result<SlotReservation<'_>, String> {
+    let mut count = slots.load(Ordering::Relaxed);
+    loop {
+        if count >= MAX_SESSIONS {
+            return Err("Too many terminals are open.".into());
+        }
+        match slots.compare_exchange_weak(count, count + 1, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(actual) => count = actual,
+        }
+    }
+    Ok(SlotReservation(slots))
+}
 
 /// Inject lookups so every platform's policy can be tested on any host.
 fn shell_command(
@@ -129,7 +152,7 @@ fn spawn_session(
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let mut writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     let killer = child.clone_killer();
-    let (input, queued) = mpsc::channel::<Vec<u8>>();
+    let (input, queued) = mpsc::sync_channel::<Vec<u8>>(MAX_INPUT_CHUNKS);
     // Ends when the session is closed (its sender dropped) or the shell stops reading for good.
     std::thread::spawn(move || {
         for chunk in queued {
@@ -186,9 +209,7 @@ pub fn pty_open(
     if !cwd.is_absolute() || !cwd.is_dir() {
         return Err("The terminal needs an existing folder.".into());
     }
-    if ptys.sessions.lock().map_err(|e| e.to_string())?.len() >= MAX_SESSIONS {
-        return Err("Too many terminals are open.".into());
-    }
+    let reservation = reserve_slot(&ptys.slots)?;
     let (shell, args) = shell_command(
         std::env::consts::OS,
         |name| std::env::var(name).ok(),
@@ -207,6 +228,7 @@ pub fn pty_open(
         .lock()
         .map_err(|e| e.to_string())?
         .insert(id, session);
+    std::mem::forget(reservation);
     Ok(id)
 }
 
@@ -215,12 +237,18 @@ pub fn pty_open(
 /// sessions lock is held for a lookup and a channel send, never for a write.
 #[tauri::command]
 pub fn pty_write(ptys: tauri::State<'_, Ptys>, id: u32, data: String) -> Result<(), String> {
+    if data.len() > MAX_INPUT_BYTES {
+        return Err("Terminal input is too large.".into());
+    }
     let sessions = ptys.sessions.lock().map_err(|e| e.to_string())?;
     let session = sessions.get(&id).ok_or("No such terminal.")?;
     session
         .input
-        .send(data.into_bytes())
-        .map_err(|_| "The terminal has stopped.".to_string())
+        .try_send(data.into_bytes())
+        .map_err(|error| match error {
+            mpsc::TrySendError::Full(_) => "Terminal input is full; try again.".to_string(),
+            mpsc::TrySendError::Disconnected(_) => "The terminal has stopped.".to_string(),
+        })
 }
 
 #[tauri::command]
@@ -243,6 +271,7 @@ pub fn pty_resize(
 pub fn pty_close(ptys: tauri::State<'_, Ptys>, id: u32) -> Result<(), String> {
     let session = ptys.sessions.lock().map_err(|e| e.to_string())?.remove(&id);
     if let Some(mut session) = session {
+        ptys.slots.fetch_sub(1, Ordering::Relaxed);
         let _ = session.killer.kill();
     }
     Ok(())
@@ -357,6 +386,17 @@ mod tests {
         // Reaped by the reader thread: an exit is reported, not left as a zombie.
         let (_, code) = until_exit(&rx);
         assert!(code.is_some_and(|code| code != 0), "{code:?}");
+    }
+
+    #[test]
+    fn reservations_enforce_limit_and_release_on_failure() {
+        let slots = AtomicU32::new(0);
+        let reservations: Vec<_> = (0..MAX_SESSIONS)
+            .map(|_| reserve_slot(&slots).unwrap())
+            .collect();
+        assert!(reserve_slot(&slots).is_err());
+        drop(reservations);
+        assert!(reserve_slot(&slots).is_ok());
     }
 
     #[test]
