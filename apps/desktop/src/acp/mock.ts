@@ -2080,6 +2080,10 @@ function configOptions(thread: MockThread, harnesses: HarnessSnapshot): Json[] {
 }
 
 export class MockEngine {
+  /** What this computer knows of the others (`fleet.json`), by host id. */
+  private fleet = new Map<string, JsonObject>();
+  /** This computer's own chosen name and when it was chosen (`environment.json`). */
+  private ownName: { name: string; at: string } | null = null;
   private threads: MockThread[];
   private harnesses: HarnessSnapshot;
   private running = new Map<string, { cancelled: boolean; steers: string[] }>();
@@ -2256,6 +2260,37 @@ export class MockEngine {
             error: "MCP server 'fagbrev' failed to start: spawn npx ENOENT",
           },
     ];
+  }
+
+  /** `_rustcode/environment/sync` (`rustcode/engine/src/fleet.rs`): merge a report, answer with ours. */
+  private environmentSync(ask: JsonObject): JsonObject {
+    const from = obj(ask.from);
+    const fromId = str(from?.hostId) ?? "";
+    for (const raw of [...arr(ask.entries), ...(from ? [from as Json] : [])]) {
+      const entry = obj(raw);
+      const id = str(entry?.hostId);
+      if (!entry || !id) continue;
+      if (id === MOCK_LOCAL_HOST.id) {
+        const at = str(entry.nameUpdatedAt);
+        const name = str(entry.name);
+        if (at && name && (!this.ownName || at > this.ownName.at)) this.ownName = { name, at };
+        continue;
+      }
+      if (mockNameWins(entry, this.fleet.get(id)) || !this.fleet.has(id)) {
+        const told: JsonObject = { ...entry };
+        delete told.via;
+        if (fromId && id !== fromId) told.via = fromId;
+        this.fleet.set(id, told);
+      }
+    }
+    const host = mockHostEntry({
+      ...MOCK_LOCAL_HOST,
+      name: this.ownName?.name ?? MOCK_LOCAL_HOST.name,
+    });
+    return {
+      host: this.ownName ? { ...host, nameUpdatedAt: this.ownName.at } : host,
+      entries: [...this.fleet.values()],
+    };
   }
 
   constructor(
@@ -3285,6 +3320,8 @@ export class MockEngine {
         }
         return { watches: [watch] };
       }
+      case "_rustcode/environment/sync":
+        return this.environmentSync(obj(params) ?? {});
       case "_rustcode/pulls":
         return {
           list: {
@@ -5446,6 +5483,41 @@ function mockServerService(installed: boolean): JsonObject {
  * `_rustcode/harnesses` and `session/new`, which is what the app reads and does
  * of a connected machine (docs/desktop.md › Several machines).
  */
+/** This computer's id in the mock fleet. */
+const MOCK_LOCAL_HOST = {
+  id: "gw-0a1b2c3d4e5f6071",
+  name: "Lars's MacBook",
+  platform: "macos",
+  version: "1.28.0",
+};
+
+/** Whether a report's name replaces the known one: the later time, then the greater name. */
+function mockNameWins(incoming: JsonObject, known: JsonObject | undefined): boolean {
+  if (!known) return true;
+  const [leftAt, leftName] = [str(incoming.nameUpdatedAt) ?? "", str(incoming.name) ?? ""];
+  const [rightAt, rightName] = [str(known.nameUpdatedAt) ?? "", str(known.name) ?? ""];
+  return leftAt === rightAt ? leftName > rightName : leftAt > rightAt;
+}
+
+/** What a computer in the mock fleet says about itself. */
+function mockHostEntry(host: { id: string; name: string; platform: string; version: string }): JsonObject {
+  return {
+    hostId: host.id,
+    name: host.name,
+    platform: host.platform,
+    version: host.version,
+    lastSeenAt: new Date().toISOString(),
+  };
+}
+
+/** A computer the Studio knows and this one is not paired with, for the "known via" row. */
+const MOCK_FLEET_PI = {
+  hostId: "gw-5d1e9a3c7b2f4086",
+  name: "Raspberry Pi",
+  platform: "linux",
+  version: "1.26.0",
+};
+
 export class MockMachine {
   /** The threads this window started on the machine, newest first (`session/new`). */
   private readonly created: {
@@ -5466,6 +5538,9 @@ export class MockMachine {
   private skills: JsonObject[];
   /** Its MCP servers, with key names but no secret values. */
   private mcpServers: JsonObject[];
+  /** The name it was given from another computer, and when. */
+  private ownName: string | null = null;
+  private ownNameAt: string | null = null;
 
   constructor(
     private readonly name: string,
@@ -5740,6 +5815,41 @@ export class MockMachine {
         ];
       }
       return [JSON.stringify({ jsonrpc: "2.0", id, result: { content: skill.content } })];
+    }
+    if (frame.method === "_rustcode/environment/sync") {
+      const known = [MOCK_MACHINE, MOCK_STUDIO, MOCK_WINDOWS].find((machine) => machine.name === this.name);
+      const version = known && "version" in known ? known.version : "1.28.0";
+      const host = known
+        ? { id: known.id, name: this.ownName ?? known.name, platform: known.platform, version }
+        : { id: `gw-mock-${this.name}`, name: this.ownName ?? this.name, platform: "linux", version };
+      const params = obj(frame.params);
+      const about = arr(params?.entries)
+        .map((entry) => obj(entry))
+        .find((entry) => str(entry?.hostId) === host.id);
+      if (
+        about &&
+        str(about.nameUpdatedAt) &&
+        mockNameWins(about, { name: host.name, nameUpdatedAt: this.ownNameAt ?? "" })
+      ) {
+        this.ownName = str(about.name) ?? this.ownName;
+        this.ownNameAt = str(about.nameUpdatedAt) ?? this.ownNameAt;
+        host.name = this.ownName ?? host.name;
+      }
+      const entry = mockHostEntry(host);
+      return [
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            host: this.ownNameAt ? { ...entry, nameUpdatedAt: this.ownNameAt } : entry,
+            // The Studio is paired with a Pi this computer has never met.
+            entries:
+              this.name === MOCK_STUDIO.name
+                ? [{ ...MOCK_FLEET_PI, lastSeenAt: new Date(Date.now() - 3 * 3_600_000).toISOString() }]
+                : [],
+          },
+        }),
+      ];
     }
     if (frame.method === "_rustcode/skills/add") {
       const params = obj(frame.params);

@@ -7,6 +7,7 @@ mod connections;
 mod cursor;
 mod data;
 mod edit_diff;
+mod environment;
 mod harnesses;
 mod hosted;
 mod mcp_app;
@@ -2654,6 +2655,19 @@ async fn serve_connection(
                         Ok(answer) => responder.respond(answer),
                         Err(error) => responder
                             .respond_with_error(agent_client_protocol::Error::invalid_params().data(error)),
+                    }?;
+                    Ok(())
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: environment::EnvironmentSyncRequest, responder, connection| {
+                connection.spawn(async move {
+                    match environment::sync(request) {
+                        Ok(answer) => responder.respond(answer),
+                        Err(error) => responder
+                            .respond_with_error(agent_client_protocol::Error::internal_error().data(error)),
                     }?;
                     Ok(())
                 })

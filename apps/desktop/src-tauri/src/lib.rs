@@ -77,6 +77,7 @@ pub fn run() {
             machines::machines_retry,
             machines::machines_set_paused,
             machines::machines_set_display_name,
+            machines::machines_apply_fleet,
             machines::machines_set_icon,
             machines::machine_connect,
             machines::machine_send,

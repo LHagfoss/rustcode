@@ -355,6 +355,11 @@ export interface MachineIdentity {
   displayName: string | null;
   icon: MachineIcon | null;
   tint: MachineTint | null;
+  /**
+   * When `displayName` was chosen, here or on another computer, as an ISO time. The environment
+   * sync (`state/fleet.ts`) keeps the newest rename: a name without a time stays on this computer.
+   */
+  nameUpdatedAt?: string | null;
 }
 
 const LOCAL_IDENTITY_KEY = "rustcode.localMachineIdentity";
@@ -413,9 +418,10 @@ function readLocalIdentity(): MachineIdentity {
       displayName: cleanMachineName(typeof root?.displayName === "string" ? root.displayName : null),
       icon: machineIconOf(typeof root?.icon === "string" ? root.icon : null),
       tint: machineTintOf(typeof root?.tint === "string" ? root.tint : null),
+      nameUpdatedAt: typeof root?.nameUpdatedAt === "string" ? root.nameUpdatedAt : null,
     };
   } catch {
-    return { displayName: null, icon: null, tint: null };
+    return { displayName: null, icon: null, tint: null, nameUpdatedAt: null };
   }
 }
 
@@ -429,13 +435,21 @@ export function useLocalIdentity(): MachineIdentity {
   return useMachines((state) => state.local);
 }
 
-/** Rename this computer here, or give it a glyph. Stored on this computer only. */
+/**
+ * Rename this computer, or give it a glyph. A rename is stamped, so the environment sync
+ * (`state/fleet.ts`) tells every paired computer and the newest rename wins; a name another
+ * computer chose arrives with its own `nameUpdatedAt` and is not stamped again.
+ */
 export function setLocalIdentity(patch: Partial<MachineIdentity>): void {
   const current = localIdentity();
+  const renamed = patch.displayName !== undefined;
   const next: MachineIdentity = {
     displayName: patch.displayName === undefined ? current.displayName : cleanMachineName(patch.displayName),
     icon: patch.icon === undefined ? current.icon : machineIconOf(patch.icon),
     tint: patch.tint === undefined ? current.tint : machineTintOf(patch.tint),
+    nameUpdatedAt: renamed
+      ? (patch.nameUpdatedAt ?? new Date().toISOString())
+      : (current.nameUpdatedAt ?? null),
   };
   // A full or disabled store keeps the choice for this run only.
   writeStorage(LOCAL_IDENTITY_KEY, JSON.stringify(next));
@@ -463,7 +477,7 @@ export function selfName(): string {
   return localIdentity().displayName ?? defaultSelfName();
 }
 
-/** Rename a paired machine on this computer. The machine keeps its own name. */
+/** Rename a paired machine. The newest name wins across every paired computer (`state/fleet.ts`). */
 export async function setMachineDisplayName(
   machine: Pick<Machine, "id">,
   displayName: string | null,

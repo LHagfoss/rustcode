@@ -114,7 +114,15 @@ pub struct GatewayConfig {
 
 /// This machine's name as its user knows it, for a device to show next to
 /// the address. Printable characters only, and short.
+///
+/// A name the owner gave this environment (`crate::fleet`) replaces the one
+/// the operating system gave; it is read when a gateway starts.
 pub(super) fn host_name() -> Option<String> {
+    crate::fleet::own_name_override().or_else(os_host_name)
+}
+
+/// The name the operating system gives this computer.
+pub fn os_host_name() -> Option<String> {
     static NAME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     NAME.get_or_init(read_host_name).clone()
 }
@@ -1370,13 +1378,13 @@ fn rfc3339(at: chrono::DateTime<chrono::Utc>) -> String {
 /// on the LAN plus overlay listeners it opened.
 /// The RustCode version this host answers as, reported in `paired` and
 /// `authenticated` so a client can say which machine needs updating.
-fn host_version() -> String {
+pub fn host_version() -> String {
     env!("CARGO_PKG_VERSION").to_owned()
 }
 
 /// What this host runs, reported in `paired` and `authenticated` so a device's
 /// machine list can name the platform instead of `unknown`.
-fn host_platform() -> &'static str {
+pub fn host_platform() -> &'static str {
     if cfg!(target_os = "macos") {
         "macos"
     } else if cfg!(target_os = "windows") {

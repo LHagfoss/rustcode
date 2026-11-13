@@ -111,12 +111,16 @@ the page without a second computer; `paired` is a Mac, a Windows PC with
 threads, and an offline Linux box, so the sidebar shows three headings, the
 Linux box folded to a muted row.
 
-A machine's name and glyph are this app's own: Settings › Environments (and the
-same row for this computer) gives each one a **Rename** popover (name and icon). A name
-is stored as `display_name` in `machines.json` and never sent to the other
-computer, so it keeps the name it reports; **Reset** (or a blank field) shows
-that name again, and pairing the same machine again keeps the local name. The
-glyph is one of a small fixed set (laptop, desktop, Mac Studio/mini, server,
+A machine's name is shared across the fleet and its glyph is this app's own:
+Settings › Environments (and the same row for this computer) gives each one a
+**Rename** popover (name and icon). A rename is stamped with the time and spread
+to the machine itself and to every other paired computer (`state/fleet.ts`,
+[Environment names and the fleet](remote.md#environment-names-and-the-fleet)),
+where the newest rename wins; a computer that was offline shows it after its next
+sync. The name is stored as `display_name` with `name_updated_at` in
+`machines.json`; **Reset** (or a blank field) goes back to the name the machine
+reports, which spreads the same way, and pairing the same machine again keeps the
+name. The glyph is one of a small fixed set (laptop, desktop, Mac Studio/mini, server,
 Windows tower, Linux, cloud, phone), defaulting to the platform's own, with an
 optional tint from the chart palette. Everywhere a machine is named uses both:
 a thread row's machine tag, a thread's `Runs on ‹name›` header, the composer's

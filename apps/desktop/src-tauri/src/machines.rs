@@ -1505,8 +1505,10 @@ pub async fn machines_remove(
     Ok(())
 }
 
-/// Rename a machine here: a local display name, never sent to that machine.
-/// `None` or a blank name shows the name the machine reports again.
+/// Rename a machine. The name is stamped with the time, so the environment
+/// sync (`state/fleet.ts`) carries it to the machine and the rest of the fleet,
+/// where the newest rename wins. `None` or a blank name shows the name the
+/// machine reports again.
 #[tauri::command(async)]
 pub fn machines_set_display_name(id: String, name: Option<String>) -> Result<(), String> {
     let config_dir = config_dir()?;
@@ -1514,6 +1516,40 @@ pub fn machines_set_display_name(id: String, name: Option<String>) -> Result<(),
     registry
         .set_display_name(&id, name.as_deref())
         .map_err(chain)
+}
+
+/// A name the fleet agreed on for one machine: what `_rustcode/environment/sync`
+/// answered, with the time it was chosen.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FleetName {
+    id: String,
+    name: String,
+    /// RFC 3339.
+    updated_at: String,
+}
+
+/// Take the names the fleet agreed on for the machines saved here, where they
+/// are newer than the saved ones. Answers the ids whose name changed. A name
+/// with a time that does not parse, or for a machine not saved, is skipped.
+#[tauri::command(async)]
+pub fn machines_apply_fleet(names: Vec<FleetName>) -> Result<Vec<String>, String> {
+    let config_dir = config_dir()?;
+    let mut registry = MachineRegistry::load(&config_dir).map_err(chain)?;
+    let mut changed = Vec::new();
+    for fleet in names {
+        let Ok(at) = chrono::DateTime::parse_from_rfc3339(&fleet.updated_at) else {
+            continue;
+        };
+        let at = at.with_timezone(&chrono::Utc);
+        if registry
+            .apply_fleet_name(&fleet.id, &fleet.name, at)
+            .map_err(chain)?
+        {
+            changed.push(fleet.id);
+        }
+    }
+    Ok(changed)
 }
 
 /// Choose the glyph and series tint this app draws for a machine. `icon` of
