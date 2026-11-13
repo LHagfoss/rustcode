@@ -97,6 +97,10 @@ pub(crate) struct SwitchHarnessRequest {
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<String>,
+    /// Why the client moves the thread, for its activity: `limit` when it
+    /// continues a delegate on another provider at a usage limit (#3392).
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 /// Add a named account: a config directory of its own.
@@ -298,9 +302,52 @@ impl ClientSink for AcpClientSink {
         request.session_id = self.clients.session_id().to_owned().into();
         let clients = self.clients.clone();
         let waiting = crate::thread_status::waiting(clients.session_id());
+        // What kind of tool is asking and what each option means, never the
+        // call's title or arguments, which can hold a command or a path.
+        let tool_kind = request
+            .tool_call
+            .fields
+            .kind
+            .as_ref()
+            .map(|kind| format!("{kind:?}").to_lowercase());
+        let option_kinds: Vec<(String, String)> = request
+            .options
+            .iter()
+            .map(|option| {
+                (
+                    option.option_id.0.to_string(),
+                    format!("{:?}", option.kind).to_lowercase(),
+                )
+            })
+            .collect();
         Box::pin(async move {
             let _waiting = waiting;
-            match clients.request(None, request).await {
+            let started = std::time::Instant::now();
+            let asked = chrono::Utc::now();
+            let answer = clients.request(None, request).await;
+            let decision = match &answer {
+                Ok(response) => match &response.outcome {
+                    RequestPermissionOutcome::Selected(selected) => option_kinds
+                        .iter()
+                        .find(|(id, _)| id.as_str() == selected.option_id.0.as_ref())
+                        .map_or_else(|| "selected".to_owned(), |(_, kind)| kind.clone()),
+                    _ => "cancelled".to_owned(),
+                },
+                Err(_) => "cancelled".to_owned(),
+            };
+            let stamp = |at: chrono::DateTime<chrono::Utc>| {
+                at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+            };
+            crate::data_store::record_approval(&crate::data_store::ApprovalRow {
+                thread_id: clients.session_id().to_owned(),
+                source: "harness".to_owned(),
+                tool_name: tool_kind,
+                requested_at: stamp(asked),
+                decided_at: Some(stamp(chrono::Utc::now())),
+                wait_ms: Some(started.elapsed().as_millis() as i64),
+                decision,
+            });
+            match answer {
                 Ok(response) => response,
                 Err(error) => {
                     crate::dbg_log!("harness permission request failed: {error}");
@@ -724,6 +771,7 @@ pub(crate) async fn switch(
     remote: &super::remote::RemoteManager,
 ) -> Result<Value, agent_client_protocol::Error> {
     let session_id = request.session_id.clone();
+    let reason = request.reason.clone();
     let to = request.harness.trim().to_owned();
     if to == harness::BUILTIN_ID {
         return Err(failure(
@@ -792,6 +840,7 @@ pub(crate) async fn switch(
         &entries,
         &harness::learned_for(&to).models.unwrap_or_default(),
     );
+    let from_model = record.model.clone();
     record.harness = to.clone();
     record.account = account.as_ref().map(|account| account.id.clone());
     record.native_session_id = None;
@@ -815,6 +864,19 @@ pub(crate) async fn switch(
     );
     let divider = harness::handoff::divider(&marker);
     history.push(marker);
+    if reason.as_deref() == Some("limit") {
+        crate::logger::operational_event(
+            "thread.limit_switch",
+            serde_json::json!({
+                "session_id": session_id,
+                "from_harness": from,
+                "from_model": from_model,
+                "to_harness": to,
+                "to_model": record.model,
+                "reason": "limit",
+            }),
+        );
+    }
 
     let clients = peer.attach(&session_id);
     let sink = remote.wrap_sink(Arc::new(AcpClientSink::new(clients.clone())), &session_id);

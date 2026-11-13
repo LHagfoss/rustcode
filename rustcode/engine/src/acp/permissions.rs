@@ -110,6 +110,47 @@ enum PermissionChoice {
     Reject,
 }
 
+impl PermissionChoice {
+    fn decision(&self) -> &'static str {
+        match self {
+            Self::AllowOnce => "allow_once",
+            Self::AllowHour => "allow_hour",
+            Self::AllowAlways => "allow_always",
+            Self::Reject => "reject",
+        }
+    }
+}
+
+/// Keep what was asked and what the user decided in the data store: the tool's
+/// name and the decision, never its arguments.
+fn record_approval_decision(
+    session_id: &str,
+    source: &str,
+    tool_name: &str,
+    wait: std::time::Duration,
+    choice: &PermissionChoice,
+    failed: bool,
+) {
+    let decided = chrono::Utc::now();
+    let asked = decided - chrono::Duration::from_std(wait).unwrap_or_default();
+    let stamp =
+        |at: chrono::DateTime<chrono::Utc>| at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    crate::data_store::record_approval(&crate::data_store::ApprovalRow {
+        thread_id: session_id.to_owned(),
+        source: source.to_owned(),
+        tool_name: Some(tool_name.to_owned()),
+        requested_at: stamp(asked),
+        decided_at: Some(stamp(decided)),
+        wait_ms: Some(wait.as_millis() as i64),
+        decision: if failed {
+            "cancelled"
+        } else {
+            choice.decision()
+        }
+        .to_owned(),
+    });
+}
+
 fn permission_choice(outcome: &RequestPermissionOutcome) -> PermissionChoice {
     match outcome {
         RequestPermissionOutcome::Selected(selected) => match selected.option_id.0.as_ref() {
@@ -308,8 +349,11 @@ pub(crate) fn external_tool_approver(
                     ),
             );
             let _waiting = crate::thread_status::waiting(&session_id);
-            let request =
-                RequestPermissionRequest::new(session_id, tool_call, permission_options(&call));
+            let request = RequestPermissionRequest::new(
+                session_id.clone(),
+                tool_call,
+                permission_options(&call),
+            );
             let started = std::time::Instant::now();
             let response = clients.request(None, request).await;
             let choice = response
@@ -317,6 +361,14 @@ pub(crate) fn external_tool_approver(
                 .map_or(PermissionChoice::Reject, |response| {
                     permission_choice(&response.outcome)
                 });
+            record_approval_decision(
+                &session_id,
+                "subagent",
+                &call.name,
+                started.elapsed(),
+                &choice,
+                response.is_err(),
+            );
             crate::dbg_log!(
                 "ACP approval for {} answered after {} ms: {:?}{}",
                 title,
@@ -420,6 +472,14 @@ impl crate::network::policy::TurnPolicy for AcpPolicy {
                     .map_or(PermissionChoice::Reject, |response| {
                         permission_choice(&response.outcome)
                     });
+                record_approval_decision(
+                    &session_id,
+                    "builtin",
+                    &call.name,
+                    wait,
+                    &choice,
+                    response.is_err(),
+                );
                 crate::dbg_log!(
                     "ACP approval for {} answered after {} ms: {:?}{}",
                     call.name,

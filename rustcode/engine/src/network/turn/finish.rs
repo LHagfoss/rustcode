@@ -432,7 +432,11 @@ fn record_data_store_turn(
             .map(|tokens| i64::from(tokens.total_tokens)),
         context_window: Some(i64::from(s.active_context_window())),
         stop_reason: Some(stop_reason.to_string()),
+        effort: s
+            .active_model_profile()
+            .and_then(|profile| profile.reasoning_effort),
         tool_calls,
+        ..Default::default()
     });
 }
 

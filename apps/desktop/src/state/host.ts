@@ -1418,7 +1418,7 @@ async function startOnMachine(machine: MachineRef, caller: RuleThread, call: Sta
   const harness = harnessOn(snapshot, call.harness, machine);
   if (isFailure(harness)) return failureJson(harness);
   const title = call.title ?? titleFrom(call.prompt, 60);
-  const access = standalone ? ownMode() : childMode(caller);
+  const access = narrowed(standalone ? ownMode() : childMode(caller), call.access);
   const other = !sameProject(project, projectOf(caller));
   const no = await permitted(caller, `start@${machine.id}${other ? `:${project}` : ""}`, {
     kind: "start",
@@ -1528,7 +1528,7 @@ async function fanOutOnMachine(
     chosen.push({ harness: h, model: entry.model, effort: entry.effort, account: entry.account ?? null });
   }
   const title = call.title ?? titleFrom(call.prompt, 60);
-  const access = standalone ? ownMode() : childMode(caller);
+  const access = narrowed(standalone ? ownMode() : childMode(caller), call.access);
   const other = !sameProject(project, projectOf(caller));
   const no = await permitted(caller, `start@${machine.id}${other ? `:${project}` : ""}`, {
     kind: "fan_out",
@@ -4493,6 +4493,10 @@ function childMode(caller: RuleThread): PermissionMode {
   return effectiveMode(permissionModeOf(s, caller.id), s.defaultPermissionMode);
 }
 
+/** `mode`, lowered to what the call asked for (a delegate preset's access, issue 3391); never raised. */
+const narrowed = (mode: PermissionMode, asked: PermissionMode | undefined): PermissionMode =>
+  asked ? effectiveMode(mode, asked) : mode;
+
 /** What a thread may do without asking, as the orchestration answers report it. */
 const accessOf = (id: string): PermissionMode => permissionModeOf(useApp.getState(), id);
 
@@ -4580,7 +4584,7 @@ async function startNow(caller: RuleThread, call: StartCall): Promise<JsonObject
   const other = !sameProject(project, projectOf(caller));
   // Fixed before the user is asked, so the card says what the thread runs at and the thread gets
   // exactly that, however long the card waits.
-  const access = standalone ? ownMode() : childMode(caller);
+  const access = narrowed(standalone ? ownMode() : childMode(caller), call.access);
   const no = await permitted(caller, other ? `start:${project}` : "start", {
     kind: "start",
     caller: caller.id,
@@ -4688,7 +4692,7 @@ async function fanOutNow(caller: RuleThread, call: FanOutCall): Promise<JsonObje
   const project = projectFor(caller, call.project);
   if (isFailure(project)) return failureJson(project);
   const title = call.title ?? titleFrom(call.prompt, 60);
-  const access = standalone ? ownMode() : childMode(caller);
+  const access = narrowed(standalone ? ownMode() : childMode(caller), call.access);
   const other = !sameProject(project, projectOf(caller));
   const no = await permitted(caller, other ? `start:${project}` : "start", {
     kind: "fan_out",

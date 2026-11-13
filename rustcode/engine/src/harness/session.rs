@@ -1696,7 +1696,10 @@ impl ExternalSession {
                 context_tokens,
                 context_window,
                 stop_reason: Some(stop_reason.to_owned()),
+                effort: record.effort.clone(),
+                account: record.account.clone(),
                 tool_calls,
+                ..Default::default()
             },
             cumulative,
             series.as_deref(),

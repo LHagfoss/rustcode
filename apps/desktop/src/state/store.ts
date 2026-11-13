@@ -34,6 +34,7 @@ import {
   delegateParent,
   displayPath,
   fallbackHarnessSnapshot,
+  type Harness,
   type HarnessAccount,
   type HarnessLast,
   type HarnessSnapshot,
@@ -204,6 +205,7 @@ import {
   networkStop,
   nextInternetWait,
 } from "./internetWait";
+import { type FallbackRule, movedNotice, parseRules, pickFallback, switchText } from "./limitFallback";
 import {
   type LimitWait,
   limitReset,
@@ -279,6 +281,7 @@ import {
   type ResumeBook,
   resumeVerdict,
 } from "./restartResume";
+import { type DriftReads, engineBusy, FORCE_STOP_MS, noDrift, pollDelay, reconcileRuns } from "./runState";
 import {
   addScheduled,
   dueScheduled,
@@ -295,6 +298,7 @@ import { beginSetup, dismissSetup, type PendingSetup, setupFailed, setupSucceede
 import { keepThreads, type SidebarOrder, withoutThreads } from "./sidebarOrder";
 import { dueSnoozes } from "./snooze";
 import {
+  appendNotice,
   appendSteer,
   applyUpdate,
   beginQuietTurn,
@@ -568,6 +572,12 @@ export interface AppState {
   totalLimit: number;
   /** Agents may read threads of every project, not only the calling thread's (Settings › Harnesses). */
   readAcrossProjects: boolean;
+  /**
+   * A delegate that stops on a usage limit goes on at once on the table's model of the other
+   * provider instead of waiting for the reset (issue 3392). Server settings; read at start.
+   */
+  limitFallback: boolean;
+  limitFallbackMap: FallbackRule[];
   /** Threads that were running when the app quit or the engine restarted continue on their own. */
   resumeAfterRestart: boolean;
   /** A system notification when a thread needs you or finishes (Settings › General). */
@@ -615,6 +625,12 @@ export interface AppState {
   };
   /** Review / done marks kept by the app when the engine does not store them. */
   statusMarks: Record<string, ThreadStatus>;
+  /**
+   * Threads the engine's list has said are running two reads in a row while this window holds no
+   * running turn for them (another client's turn, a wake, a turn started before a reload): they
+   * read as running until the engine says otherwise (state/runState.ts).
+   */
+  engineRunning: Record<string, true>;
   /** How RustCode compacts a thread on its own (Settings › General › Threads). */
   autoCompact: AutoCompactSettings;
   /** Threads whose menu turned auto-compaction off, by thread id. */
@@ -883,6 +899,9 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   // On unless turned off: reading knows no project boundary, so an agent asked
   // about the user's work is not answered with a fragment of it.
   readAcrossProjects: storedFlag(STORAGE.readAcrossProjects, SETTINGS_DEFAULTS.readAcrossProjects),
+  // Kept on the server only (`limit-fallback`, `limit-fallback-map`); hydrated at start.
+  limitFallback: false,
+  limitFallbackMap: [],
   resumeAfterRestart: storedFlag(STORAGE.resumeAfterRestart, SETTINGS_DEFAULTS.resumeAfterRestart),
   systemNotifications: storedFlag(STORAGE.systemNotifications, SETTINGS_DEFAULTS.systemNotifications),
   notificationsBackgroundOnly: storedFlag(
@@ -907,6 +926,7 @@ export const useApp = create<AppState>((_set, _get, api) => ({
   grant: null,
   features: {},
   statusMarks: storedJson<Record<string, ThreadStatus>>(STORAGE.statusMarks, {}),
+  engineRunning: {},
   autoCompact: parseAutoCompactSettings(stored(STORAGE.autoCompact)),
   autoCompactOff: storedJson<Record<string, boolean>>(STORAGE.autoCompactOff, {}),
   snoozed: storedJson<Record<string, number>>(STORAGE.snoozed, {}),
@@ -1782,6 +1802,7 @@ export async function connect(next: Transport): Promise<void> {
   setShellTransport(next);
   startAgentPolling();
   startPlanPolling();
+  startRunStatePoll();
   bootProgress = 0.15;
   set({ status: "connecting", transport: next.name, statusDetail: undefined });
   watchEngine();
@@ -1844,7 +1865,9 @@ async function handshake(): Promise<void> {
       orchestrationPending: false,
     });
     // Threads that were open lost their engine-side state with the old process.
+    driftReads = noDrift;
     set((s) => ({
+      engineRunning: {},
       threads: Object.fromEntries(
         Object.entries(s.threads).map(([id, t]) => [
           id,
@@ -2314,7 +2337,7 @@ export function threadIsGone(id: string): boolean {
   return wholeLists.has(host);
 }
 
-export async function refreshSessions(): Promise<void> {
+export async function refreshSessions(options: { quiet?: boolean } = {}): Promise<void> {
   const conn = connection;
   if (!conn || !get().agent?.listSessions) {
     noteThreadList(LOCAL_HOST, false);
@@ -2340,8 +2363,9 @@ export async function refreshSessions(): Promise<void> {
     for (const x of all)
       if (x.snoozedUntil !== undefined)
         applySnooze(x.id, x.snoozedUntil !== null && x.snoozedUntil > Date.now() ? x.snoozedUntil : null);
-    // Another computer's list is its own read: ask each connected machine again, too.
-    void import("./machines").then((m) => m.refreshMachineThreads());
+    // Another computer's list is its own read: ask each connected machine again, too. The poll
+    // (`startRunStatePoll`) reads this computer's engine only: a machine reports its own turns.
+    if (!options.quiet) void import("./machines").then((m) => m.refreshMachineThreads());
     // A thread the engine does not list yet stays while the app keeps it; one it names now (or
     // one whose keep expired) needs nothing kept.
     const listed = new Set(all.map((x) => x.id));
@@ -2367,12 +2391,89 @@ export async function refreshSessions(): Promise<void> {
     // A thread the engine no longer lists keeps no place in the arrangement. A capped list is not
     // the whole list, so it prunes nothing: the rows of the rest are still there.
     if (!capped) pruneSidebarOrder(get().sessions.map((x) => x.id));
+    // The window's run flags give way to the engine's list where they have drifted (issue 3652).
+    reconcileRunState(all);
     // A link still Working beside a thread the engine says is idle is settled (issue 3541).
     reconcileLinks();
   } catch (error) {
     set({ sessionsLoaded: true });
-    toast(`Could not list threads: ${errorText(error)}`, "error");
+    if (!options.quiet) toast(`Could not list threads: ${errorText(error)}`, "error");
   }
+}
+
+// ---------------------------------------------------------------- run state
+
+/** What the last list reads said about threads that disagree with this window, by thread. */
+let driftReads: DriftReads = noDrift;
+
+/**
+ * Compares one read of this computer's thread list with the window's own `running` flags
+ * (state/runState.ts). A turn the window still shows running after the engine called its thread
+ * idle on two reads has ended unseen (a sleep, a dropped connection): it is closed here and read
+ * again from the engine, so the row and the composer stop saying Working. A thread the engine runs
+ * and the window does not know of reads as running (`engineRunning`) until the engine says it stopped.
+ */
+function reconcileRunState(listed: readonly SessionSummary[]): void {
+  const state = get();
+  const local = Object.values(state.threads)
+    .filter((t) => !isRemoteThread(t.id))
+    .map((t) => ({ id: t.id, running: t.running, startedAt: t.turnStartedAt }));
+  const result = reconcileRuns(
+    local,
+    listed.filter((x) => !x.host).map((x) => ({ id: x.id, status: x.status })),
+    driftReads,
+    Date.now(),
+  );
+  driftReads = result.reads;
+  const adopted = new Set(result.adopt);
+  const before = Object.keys(state.engineRunning);
+  if (before.length !== adopted.size || before.some((id) => !adopted.has(id))) {
+    set({ engineRunning: Object.fromEntries(result.adopt.map((id) => [id, true as const])) });
+  }
+  for (const id of result.settle) {
+    updateThread(id, (t) => (t.running ? finishTurn(t, "completed", Date.now()) : t));
+    // What the turn left is the engine's to say: read the thread again.
+    if (get().threads[id]?.loaded) void reloadThread(id);
+  }
+}
+
+/** Whether something runs, or is in doubt, so the list is worth reading often. */
+function runStateActive(): boolean {
+  const s = get();
+  if (Object.keys(s.engineRunning).length) return true;
+  if (Object.keys(driftReads.stale).length || Object.keys(driftReads.missed).length) return true;
+  if (Object.values(s.threads).some((t) => t.running)) return true;
+  return s.sessions.some((x) => !x.host && engineBusy(x.status));
+}
+
+let runPollTimer: ReturnType<typeof setTimeout> | undefined;
+let runPollReading = false;
+
+/**
+ * Reads the engine's thread list on a timer while the window is visible, so the sidebar follows
+ * the engine within a few seconds without a focus or a turn to prompt it: every 5 s while anything
+ * runs, every 30 s otherwise (a thread another client starts). Started once; each handshake (a
+ * restart or a reconnect) also reads the list itself.
+ */
+export function startRunStatePoll(): void {
+  if (runPollTimer !== undefined) return;
+  const tick = async () => {
+    if (
+      !runPollReading &&
+      connection &&
+      get().status === "ready" &&
+      (typeof document === "undefined" || !document.hidden)
+    ) {
+      runPollReading = true;
+      try {
+        await refreshSessions({ quiet: true });
+      } finally {
+        runPollReading = false;
+      }
+    }
+    runPollTimer = setTimeout(() => void tick(), pollDelay(runStateActive()));
+  };
+  runPollTimer = setTimeout(() => void tick(), pollDelay(false));
 }
 
 /**
@@ -3811,8 +3912,10 @@ export function threadDeleted(params: unknown) {
 
 /** Move a thread's folder to the Trash, closing it in the engine first, as the SwiftUI app does. */
 export async function trashThread(id: string): Promise<boolean> {
-  if (get().threads[id]?.running) {
-    toast(`Stop the running turn before moving this thread to the ${trashName()}.`, "info");
+  // A thread that still runs is stopped first, forced when it will not stop, so moving it to the
+  // Trash works in every state (issue 3652).
+  if (get().threads[id]?.running && !(await stopNow(id))) {
+    toast(`Could not stop the running turn before moving this thread to the ${trashName()}.`, "error");
     return false;
   }
   // Its delegates stop with it: forgetting their links would free slots they still hold.
@@ -5080,7 +5183,18 @@ export async function runPrompt(
   if (id === get().selectedId) void refreshPlanCache();
   void refreshAgents(id);
   void refreshCheckpoints(id);
-  if (!options.autoCompact && !options.continued && (outcome === "completed" || outcome === "failed")) {
+  // A delegate stopped on a plan limit may go on elsewhere at once (issue 3392); the move says so.
+  const move = waiting && !options.autoCompact ? limitMoveFor(id, waiting) : null;
+  const moved = move && waiting ? await switchOnLimit(id, waiting, move) : false;
+  if (move && !moved) {
+    notifyThread({ threadId: id, kind: "limit", key: String(waiting!.until), title: threadName(id) }, get());
+  }
+  if (
+    !moved &&
+    !options.autoCompact &&
+    !options.continued &&
+    (outcome === "completed" || outcome === "failed")
+  ) {
     finishToast(id, outcome, { waiting, offline, link: options.link });
   }
   // A queued message starts at once, so "working" stays up across the hand-off. A turn that was
@@ -5088,7 +5202,7 @@ export async function runPrompt(
   // Resume starts them.
   // Nor does one go out into a wait: it waits for the turn that continues.
   const after = get().threads[id];
-  const next = after && !waiting && !offline ? nextQueued(after.queue, after) : undefined;
+  const next = after && !waiting && !moved && !offline ? nextQueued(after.queue, after) : undefined;
   if (next) {
     removeQueued(id, next.id);
     await runPrompt(id, next.text, next.extras, {
@@ -5111,23 +5225,84 @@ export async function runPrompt(
 export type TurnOutcome = "completed" | "cancelled" | "failed" | "skipped";
 
 export async function cancel(id = get().selectedId): Promise<void> {
-  const conn = id ? connectionForThread(id) : null;
-  if (!id || !conn) return;
+  if (!id) return;
+  const conn = connectionForThread(id);
+  // A stop that finds nothing to send it on says so, instead of doing nothing.
+  if (!conn) {
+    toast(threadIsRemote(id) ? "That computer is not connected." : "The server is not connected.", "error");
+    return;
+  }
   const thread = get().threads[id];
   // Stopping a thread stops the work it gave other threads (M1); turns the user started there go on.
   void stopLinksFrom(id);
-  if (!thread?.running) return;
+  // The engine may run a turn this window lost track of (`engineRunning`, the list's status): Stop
+  // still stops it.
+  const engineRuns =
+    !!get().engineRunning[id] || (!thread?.loaded && engineBusy(sessionById(get(), id)?.status));
+  if (!thread?.running && !engineRuns) return;
   // Recorded first: a quit inside the harness's cancel grace would otherwise leave the thread
   // listed as running, and the restart would resume a turn the user stopped.
   noteStopped(id);
   try {
     conn.notify(Method.sessionCancel, { sessionId: splitThreadKey(id).id });
     // ACP: after `session/cancel` the client answers outstanding permission requests as cancelled.
-    for (const request of thread.permissions) conn.respond(request.rpcId, permissionCancelled);
-    updateThread(id, (t) => settleEveryWait({ ...t, permissions: [] }, Date.now()));
-    if (thread.permissions.length) linkWaitEnded(id);
+    for (const request of thread?.permissions ?? []) conn.respond(request.rpcId, permissionCancelled);
+    if (thread) {
+      updateThread(id, (t) => settleEveryWait({ ...t, permissions: [] }, Date.now()));
+      if (thread.permissions.length) linkWaitEnded(id);
+    }
   } catch (error) {
     toast(errorText(error), "error");
+    return;
+  }
+  void forceStopIfStuck(id, thread?.turnStartedAt);
+}
+
+/**
+ * Stops a thread's turn and waits for it to end, forcing it after a short wait: `cancel` for a
+ * turn that obeys, closing the thread in the engine for one that does not. True once it runs nothing.
+ */
+export async function stopNow(id: string, waitMs = 3_000): Promise<boolean> {
+  await cancel(id);
+  const until = Date.now() + waitMs;
+  while (get().threads[id]?.running && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
+  if (get().threads[id]?.running) {
+    await closeThread(id);
+    updateThread(id, (t) => (t.running ? finishTurn(t, "cancelled", Date.now()) : t));
+  }
+  return !get().threads[id]?.running;
+}
+
+/** The stops waiting to be forced: one per thread, however many times Stop is pressed. */
+const forcingStops = new Set<string>();
+
+/**
+ * `session/cancel` is a notification: nothing says it landed. A harness that ignores it, or a turn
+ * wedged on a tool, would leave Stop doing nothing for good. When the turn is still the same one
+ * after `FORCE_STOP_MS`, the thread is closed in the engine (which ends its harness) and the window
+ * settles it as stopped and reads it again, so the thread can be used and closed (issue 3652).
+ */
+async function forceStopIfStuck(id: string, turnStartedAt: number | undefined): Promise<void> {
+  if (forcingStops.has(id)) return;
+  forcingStops.add(id);
+  try {
+    await new Promise((resolve) => setTimeout(resolve, FORCE_STOP_MS));
+    const now = get();
+    const thread = now.threads[id];
+    // Ended, or a new turn began since: nothing is stuck.
+    const sameTurn = !!thread?.running && thread.turnStartedAt === turnStartedAt;
+    const engineStill = !thread?.running && !!now.engineRunning[id];
+    if (!sameTurn && !engineStill) return;
+    toast("The turn did not stop, so it was ended.", "info");
+    await closeThread(id);
+    updateThread(id, (t) => (t.running ? finishTurn(t, "cancelled", Date.now()) : t));
+    set((s) => {
+      const { [id]: _gone, ...rest } = s.engineRunning;
+      return _gone ? { engineRunning: rest } : {};
+    });
+    if (get().agent?.closeSession) void reloadThread(id);
+  } finally {
+    forcingStops.delete(id);
   }
 }
 
@@ -5816,6 +5991,7 @@ export async function switchThreadHarness(
   id: string,
   harness: string,
   account?: string | null,
+  choice: { model?: string; effort?: string; reason?: "limit"; quiet?: boolean } = {},
 ): Promise<boolean> {
   const thread = get().threads[id];
   if (!thread || thread.running) return false;
@@ -5830,8 +6006,10 @@ export async function switchThreadHarness(
         sessionId: splitThreadKey(id).id,
         harness,
         account: account ?? null,
-        model: last?.model ?? null,
-        effort: last?.effort ?? null,
+        model: choice.model ?? last?.model ?? null,
+        effort: choice.effort ?? last?.effort ?? null,
+        // The engine records why in the thread's activity (`thread.limit_switch`).
+        ...(choice.reason ? { reason: choice.reason } : {}),
       },
       30_000,
     )) as JsonObject | null;
@@ -5855,9 +6033,76 @@ export async function switchThreadHarness(
     void refreshPlanCache();
     return true;
   } catch (error) {
-    toast(`Could not switch harness: ${errorText(error)}`, "error");
+    if (!choice.quiet) toast(`Could not switch harness: ${errorText(error)}`, "error");
     return false;
   }
+}
+
+// ---------------------------------------------------------------- switching at a limit
+
+// The harnesses a thread left on a limit, by thread: a row never sends it back to one of them, so two
+// providers at their limits do not hand it to each other. Memory only: a restart starts afresh.
+const leftOnLimit = new Map<string, Set<string>>();
+
+interface LimitMove {
+  rule: FallbackRule;
+  fromName: string;
+  to: Harness;
+}
+
+/**
+ * Where a delegate that just stopped on a plan limit would go on instead of waiting (issue 3392), or
+ * null: the setting is off, the stop is not a limit, the thread is not a delegate of this machine, or
+ * no row of the table names an available harness for what it ran on.
+ */
+function limitMoveFor(id: string, wait: LimitWait): LimitMove | null {
+  const s = get();
+  if (!s.limitFallback || (wait.reason ?? "limit") !== "limit") return null;
+  if (threadIsRemote(id) || !isDelegated(id)) return null;
+  const ran = harnessOf(s, id);
+  const model = selectOption(s.threads[id]?.configOptions ?? [], "model")?.current;
+  const rule = pickFallback(s.limitFallbackMap, { harness: ran, model }, leftOnLimit.get(id));
+  if (!rule) return null;
+  const listed = s.harnesses?.harnesses ?? [];
+  const to = listed.find((h) => h.id === rule.to.harness);
+  if (!to || unavailableReason(to)) return null;
+  return { rule, fromName: listed.find((h) => h.id === ran)?.name ?? ran ?? "The harness", to };
+}
+
+/**
+ * Move a limited delegate to the table's model and carry on there with the turn it was in, in the
+ * same way `continueDueThreads` carries on after a reset: the links the stop settled are reopened and
+ * answered by it. The thread says which model it moved to and why, and the engine records the move
+ * in its activity. False when the move did not happen; the thread then waits for the reset as before.
+ */
+async function switchOnLimit(id: string, wait: LimitWait, move: LimitMove): Promise<boolean> {
+  const { rule, fromName, to } = move;
+  const from = harnessOf(get(), id);
+  const account = rule.to.account ?? newThreadAccountOn(to, lastAccountFor(to.id), get().signedOutLogins);
+  const moved = await switchThreadHarness(id, to.id, account, {
+    model: rule.to.model,
+    effort: rule.to.effort,
+    reason: "limit",
+    quiet: true,
+  });
+  if (!moved) return false;
+  if (from) leftOnLimit.set(id, new Set([...(leftOnLimit.get(id) ?? []), from]));
+  dropLimitWait(id);
+  const options = get().threads[id]?.configOptions ?? [];
+  const modelOption = selectOption(options, "model");
+  const model =
+    modelOption?.choices.find((c) => c.value === modelOption.current)?.name ?? modelOption?.current;
+  const target = model ? `${to.name} · ${model}` : to.name;
+  updateThread(id, (t) => appendNotice(t, movedNotice(fromName, target), "info"));
+  toast(`“${threadName(id)}” hit its limit and moved to ${target}`, "info", {
+    action: { label: "Open", run: () => selectThread(id) },
+  });
+  void runPrompt(id, switchText(fromName, target), undefined, {
+    automatic: true,
+    autoResume: true,
+    resumeLinks: wait.links,
+  });
+  return true;
 }
 
 // ---------------------------------------------------------------- subagents and usage
@@ -5987,6 +6232,14 @@ export function setReadAcrossProjects(on: boolean) {
   store(STORAGE.readAcrossProjects, on ? "1" : "0");
 }
 
+export function setLimitFallback(on: boolean) {
+  set({ limitFallback: on });
+}
+
+export function setLimitFallbackMap(value: Parameters<typeof parseRules>[0]) {
+  set({ limitFallbackMap: parseRules(value) });
+}
+
 export function setOrchestration(on: boolean) {
   set((s) => ({
     orchestration: on,
@@ -6033,7 +6286,12 @@ export function statusOf(s: AppState, id: string): ThreadStatus {
   const t = s.threads[id];
   if (t?.permissions.length) return "needs_input";
   if (t?.running) return "running";
+  // The engine's list says it works and this window has no turn for it (`reconcileRunState`).
+  if (s.engineRunning[id]) return "running";
   const listed = sessionById(s, id)?.status;
+  // A thread this window holds no stream for (never opened, or reset by a restart) has only the
+  // engine's list to go by, and the list is read every few seconds (`startRunStatePoll`).
+  if (!t?.loaded && !threadIsRemote(id) && engineBusy(listed)) return listed as ThreadStatus;
   const pending = remoteStatusPending.get(id);
   if (pending) return pending.status;
   const queued = threadIsRemote(id) ? pendingStatus(id) : undefined;
@@ -7828,6 +8086,11 @@ export function resetForTests() {
   for (const record of lostTurns.values()) clearTimeout(record.timer);
   lostTurns.clear();
   lostMachineMs = LOST_MACHINE_MS;
+  driftReads = noDrift;
+  clearTimeout(runPollTimer);
+  runPollTimer = undefined;
+  runPollReading = false;
+  forcingStops.clear();
   engineWatch?.();
   engineWatch = undefined;
   crashed = false;
@@ -7850,6 +8113,7 @@ export function resetForTests() {
     sessionsLoaded: false,
     sessionsCapped: false,
     threads: {},
+    engineRunning: {},
     selectedId: null,
     projectCwd: "",
     defaultCwd: "",
@@ -8049,7 +8313,8 @@ function settleStopWait(
     return null;
   }
   storeLimitWaits({ ...get().limitWaits, [id]: wait });
-  if (!overload)
+  // A delegate that goes on elsewhere at once is told about by the move, not by a wait (`switchOnLimit`).
+  if (!overload && !limitMoveFor(id, wait))
     notifyThread({ threadId: id, kind: "limit", key: String(wait.until), title: threadName(id) }, get());
   return wait;
 }

@@ -28,7 +28,6 @@ pub const SESSION_METADATA_FILE: &str = "metadata.json";
 pub const SESSION_WORKSPACE_FILE: &str = "workspace.json";
 pub const SESSION_METADATA_SCHEMA_VERSION: u32 = 1;
 const HISTORY_WRITE_DEBOUNCE: Duration = Duration::from_millis(250);
-const MAX_SESSIONS: usize = 30;
 
 /// The thread store under `config_dir`: `threads/`, or the legacy
 /// `sessions/` while only that exists (the migration has not run yet).
@@ -1323,33 +1322,7 @@ impl SessionStore {
         let path = session_dir.join(HISTORY_FILE);
         let json = serde_json::to_string_pretty(history).ok()?;
         std::fs::write(&path, json).ok()?;
-        self.prune_sessions();
         Some(path)
-    }
-
-    fn prune_sessions(&self) {
-        let mut targets = self
-            .session_history_paths()
-            .into_iter()
-            .map(|path| session_storage_root(&path))
-            .collect::<Vec<_>>();
-        targets.sort();
-        targets.dedup();
-        if targets.len() <= MAX_SESSIONS {
-            return;
-        }
-        targets.sort_by(|left, right| {
-            session_sort_key(left)
-                .cmp(&session_sort_key(right))
-                .then_with(|| left.cmp(right))
-        });
-        for old in &targets[..targets.len() - MAX_SESSIONS] {
-            if old.is_dir() {
-                let _ = std::fs::remove_dir_all(old);
-            } else {
-                let _ = std::fs::remove_file(old);
-            }
-        }
     }
 
     /// Remove the folders that title and compaction requests left in the

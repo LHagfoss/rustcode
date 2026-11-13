@@ -14,10 +14,12 @@ use std::{
 /// Keep each active debug log bounded. The current and previous files are
 /// retained (`debug.log` and `debug.log.1`).
 const MAX_DEBUG_LOG_BYTES: u64 = 50 * 1024 * 1024;
-/// Keep all per-session debug logs together below the 240 MiB allowance.
+/// Plain-text per-session debug logs of inactive threads are gzipped, oldest
+/// first, once they total more than this. Compressing keeps the evidence; a
+/// log is never deleted to make room.
 const MAX_SESSION_LOGS_BYTES: u64 = 240 * 1024 * 1024;
 /// Recheck the aggregate budget after each 16 MiB written in this process.
-const SESSION_LOG_PRUNE_INTERVAL_BYTES: u64 = 16 * 1024 * 1024;
+const SESSION_LOG_COMPRESS_INTERVAL_BYTES: u64 = 16 * 1024 * 1024;
 const OVERSIZED_LINE_MARKER: &str = "[logger] dropped oversized line";
 const DEBUG_LOG_LOCK_NAME: &str = "debug.log.lock";
 const ACTIVE_LOG_MARKERS_DIR: &str = ".active-log-locks";
@@ -38,7 +40,7 @@ pub(crate) fn set_active_session_id(session_id: Option<&str>) {
         let marker_registered = update_active_session_marker(&config_dir, next.as_deref());
         set_active_session_id_memory(next.clone());
         if changed && (next.is_none() || marker_registered) {
-            prune_session_logs(&config_dir, next.as_deref(), MAX_SESSION_LOGS_BYTES);
+            compress_session_logs(&config_dir, next.as_deref(), MAX_SESSION_LOGS_BYTES);
         }
         return;
     }
@@ -269,7 +271,7 @@ pub fn rotate_if_oversized() {
             rotate_log_dir_if_oversized(&session_dir.join("logs"), MAX_DEBUG_LOG_BYTES);
         }
         if active_session_id.is_none() || marker_registered {
-            prune_session_logs(
+            compress_session_logs(
                 &config_dir,
                 active_session_id.as_deref(),
                 MAX_SESSION_LOGS_BYTES,
@@ -324,6 +326,10 @@ fn rotate_log_dir_if_oversized(log_dir: &std::path::Path, limit_bytes: u64) {
         return;
     };
     if meta.len() > limit_bytes {
+        // The rotation replaces `debug.log.1`; keep what it held, compressed.
+        if rotated_path.exists() {
+            let _ = gzip_log_file_keeping_original(&rotated_path);
+        }
         let _ = replace_rotated_log(&log_path, &rotated_path, limit_bytes);
     }
 }
@@ -653,13 +659,13 @@ fn append_line_to_logs_with_limit(
         let logs_dir = session_dir.join("logs");
         append_bounded_line(&logs_dir, &line, append_bytes, limit_bytes);
         if marker_registered {
-            maybe_prune_session_logs(config_dir, append_bytes);
+            maybe_compress_session_logs(config_dir, append_bytes);
         }
     }
 }
 
-fn maybe_prune_session_logs(config_dir: &Path, bytes_written: u64) {
-    maybe_prune_session_logs_with_limit(
+fn maybe_compress_session_logs(config_dir: &Path, bytes_written: u64) {
+    maybe_compress_session_logs_with_limit(
         config_dir,
         active_session_id().as_deref(),
         bytes_written,
@@ -667,7 +673,7 @@ fn maybe_prune_session_logs(config_dir: &Path, bytes_written: u64) {
     );
 }
 
-fn maybe_prune_session_logs_with_limit(
+fn maybe_compress_session_logs_with_limit(
     config_dir: &Path,
     active_session_id: Option<&str>,
     bytes_written: u64,
@@ -679,11 +685,11 @@ fn maybe_prune_session_logs_with_limit(
     // amounts of new log data.
     static BYTES_SINCE_PRUNE: AtomicU64 = AtomicU64::new(0);
     let bytes_since_prune = BYTES_SINCE_PRUNE.fetch_add(bytes_written, Ordering::Relaxed);
-    if bytes_since_prune.saturating_add(bytes_written) < SESSION_LOG_PRUNE_INTERVAL_BYTES {
+    if bytes_since_prune.saturating_add(bytes_written) < SESSION_LOG_COMPRESS_INTERVAL_BYTES {
         return;
     }
     BYTES_SINCE_PRUNE.store(0, Ordering::Relaxed);
-    prune_session_logs(config_dir, active_session_id, limit_bytes);
+    compress_session_logs(config_dir, active_session_id, limit_bytes);
 }
 
 #[derive(Debug, Clone)]
@@ -695,7 +701,7 @@ struct SessionLogFile {
     modified: SystemTime,
 }
 
-fn prune_session_logs(config_dir: &Path, active_session_id: Option<&str>, limit_bytes: u64) {
+fn compress_session_logs(config_dir: &Path, active_session_id: Option<&str>, limit_bytes: u64) {
     let Some(protected_sessions) = active_session_ids(config_dir, active_session_id) else {
         // If a live marker cannot be inspected reliably, retain all session
         // logs instead of risking deletion from an active session.
@@ -716,10 +722,58 @@ fn prune_session_logs(config_dir: &Path, active_session_id: Option<&str>, limit_
         if total_bytes <= limit_bytes {
             break;
         }
-        if std::fs::remove_file(&log.path).is_ok() {
+        if gzip_log_file(&log.path).is_ok() {
             total_bytes = total_bytes.saturating_sub(log.size);
         }
     }
+}
+
+/// [`gzip_log_file`] for a file the caller is about to replace itself.
+fn gzip_log_file_keeping_original(path: &Path) -> std::io::Result<PathBuf> {
+    let target = gzip_target(path);
+    let mut input = std::fs::File::open(path)?;
+    let output = std::fs::File::create(&target)?;
+    let mut encoder = flate2::write::GzEncoder::new(output, flate2::Compression::default());
+    std::io::copy(&mut input, &mut encoder)?;
+    encoder.finish()?.sync_all()?;
+    Ok(target)
+}
+
+/// Where `path` is compressed to: `<path>.gz`, or `<path>.<n>.gz` when an
+/// earlier compression of the same log is already there, so a log that grew
+/// again after being compressed never overwrites older evidence.
+fn gzip_target(path: &Path) -> PathBuf {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+    let name = name.unwrap_or_default();
+    let first = path.with_file_name(format!("{name}.gz"));
+    if !first.exists() {
+        return first;
+    }
+    (1_u32..)
+        .map(|n| path.with_file_name(format!("{name}.{n}.gz")))
+        .find(|candidate| !candidate.exists())
+        .unwrap_or(first)
+}
+
+/// Compress `path` into [`gzip_target`] and remove the plain file only after
+/// the compressed copy is flushed. On any error the plain file stays.
+fn gzip_log_file(path: &Path) -> std::io::Result<PathBuf> {
+    let target = gzip_target(path);
+    let staged = target.with_extension("gz.partial");
+    let result = (|| {
+        let mut input = std::fs::File::open(path)?;
+        let output = std::fs::File::create(&staged)?;
+        let mut encoder = flate2::write::GzEncoder::new(output, flate2::Compression::default());
+        std::io::copy(&mut input, &mut encoder)?;
+        encoder.finish()?.sync_all()?;
+        std::fs::rename(&staged, &target)?;
+        std::fs::remove_file(path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&staged);
+        return result.map(|()| target);
+    }
+    Ok(target)
 }
 
 fn active_session_ids(
@@ -1182,6 +1236,16 @@ const ALLOWED_EVENT_FIELDS: &[(&str, &[&str])] = &[
     (
         "subagent.finish",
         &["agent_id", "status", "reason", "rounds"],
+    ),
+    (
+        "thread.limit_switch",
+        &[
+            "from_harness",
+            "from_model",
+            "to_harness",
+            "to_model",
+            "reason",
+        ],
     ),
 ];
 
@@ -2004,7 +2068,7 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_session_log_cap_prunes_oldest_inactive_segments_first() {
+    fn aggregate_session_log_cap_compresses_oldest_inactive_segments_first() {
         let dir = tempfile::tempdir().expect("tempdir");
         let sessions = dir.path().join("threads");
         let active_logs = sessions.join("active/logs");
@@ -2020,7 +2084,7 @@ mod tests {
         std::fs::write(old_session.join("metadata.json"), b"{}").expect("metadata");
         std::fs::write(old_session.join("artifact.bin"), b"artifact").expect("artifact");
 
-        prune_session_logs(dir.path(), Some("active"), 12);
+        compress_session_logs(dir.path(), Some("active"), 12);
 
         let remaining_bytes = collect_session_log_files(dir.path())
             .iter()
@@ -2031,6 +2095,12 @@ mod tests {
         assert!(active_logs.join("debug.log.1").exists());
         assert!(old_logs.join("debug.log").exists());
         assert!(!old_logs.join("debug.log.1").exists());
+        // Compressed, not deleted: the evidence is still there.
+        let archived = std::fs::File::open(old_logs.join("debug.log.1.gz")).expect("gz kept");
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut flate2::read::GzDecoder::new(archived), &mut text)
+            .expect("gz reads back");
+        assert_eq!(text, "arch");
         assert!(old_session.join("history.json").exists());
         assert!(old_session.join("metadata.json").exists());
         assert!(old_session.join("artifact.bin").exists());
@@ -2047,11 +2117,26 @@ mod tests {
         std::fs::write(active_logs.join("debug.log"), b"active").expect("active log");
         std::fs::write(old_logs.join("debug.log"), b"inactive").expect("old log");
 
-        prune_session_logs(dir.path(), Some("active"), 6);
+        compress_session_logs(dir.path(), Some("active"), 6);
 
         assert_eq!(collect_session_log_files(dir.path()).len(), 1);
         assert!(active_logs.join("debug.log").exists());
         assert!(!old_logs.join("debug.log").exists());
+        assert!(old_logs.join("debug.log.gz").exists(), "kept compressed");
+    }
+
+    #[test]
+    fn compressing_twice_never_overwrites_an_earlier_archive() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let logs = dir.path().join("threads/old/logs");
+        std::fs::create_dir_all(&logs).expect("logs");
+        std::fs::write(logs.join("debug.log"), b"first").expect("first");
+        compress_session_logs(dir.path(), None, 0);
+        std::fs::write(logs.join("debug.log"), b"second").expect("second");
+        compress_session_logs(dir.path(), None, 0);
+        assert!(!logs.join("debug.log").exists());
+        assert!(logs.join("debug.log.gz").exists());
+        assert!(logs.join("debug.log.1.gz").exists());
     }
 
     /// Regression for #2215: one ACP engine ran turns for three sessions at
@@ -2129,16 +2214,17 @@ mod tests {
         // A delayed async request can still log under stale-owner after the
         // UI has switched to current. The prune decision must consult the
         // process's active session, not the event's owning session.
-        maybe_prune_session_logs_with_limit(
+        maybe_compress_session_logs_with_limit(
             dir.path(),
             active_session_id().as_deref(),
-            SESSION_LOG_PRUNE_INTERVAL_BYTES,
+            SESSION_LOG_COMPRESS_INTERVAL_BYTES,
             8,
         );
 
         assert!(active_logs.join("debug.log").exists());
         assert!(active_logs.join("debug.log.1").exists());
         assert!(!stale_logs.join("debug.log").exists());
+        assert!(stale_logs.join("debug.log.gz").exists());
         *active_session_lock()
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = previous_active;
@@ -2163,7 +2249,7 @@ mod tests {
         let owner_b = acquire_active_session_marker(dir.path(), 202, "current")
             .expect("second active process marker");
 
-        prune_session_logs(dir.path(), None, 8);
+        compress_session_logs(dir.path(), None, 8);
 
         assert!(active_logs.join("debug.log").exists());
         assert!(active_logs.join("debug.log.1").exists());
@@ -2176,7 +2262,7 @@ mod tests {
         owner_a.unlock().expect("release first active marker");
         owner_b.unlock().expect("release second active marker");
         drop((owner_a, owner_b));
-        prune_session_logs(dir.path(), None, 4);
+        compress_session_logs(dir.path(), None, 4);
 
         assert!(active_logs.join("debug.log").exists());
         assert!(!active_logs.join("debug.log.1").exists());
@@ -2195,7 +2281,7 @@ mod tests {
 
         // Production pruning calls this while holding the cross-process
         // logger lock, which serializes marker registration with cleanup.
-        prune_session_logs(dir.path(), None, 0);
+        compress_session_logs(dir.path(), None, 0);
 
         let marker_dir = active_log_markers_dir(dir.path());
         let remaining = std::fs::read_dir(&marker_dir)
