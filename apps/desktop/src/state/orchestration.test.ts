@@ -76,6 +76,7 @@ import {
   renderRead,
   reopenLinks,
   restateLinks,
+  retireCleanedLinks,
   STALL_NOTICE_MS,
   sameProject,
   sameReach,
@@ -2398,4 +2399,27 @@ describe("delegate account authority", () => {
       accountsNeedApproval(book, "parent", [delegateAccountKey("remote", "claude-code", "paral-2")]),
     ).toBe(true);
   });
+});
+
+test("cleanup retires old failures and survives delayed failure records and restart", () => {
+  const old = { ...link("parent", "child", "failed"), id: "parent/1", createdAt: 1, settledAt: 2 };
+  const latest = { ...link("parent", "child", "working"), id: "parent/2", createdAt: 3 };
+  const unrelated = { ...link("other", "elsewhere", "working"), id: "other/1" };
+  const retired = retireCleanedLinks(book([old, latest, unrelated]), "child", 10);
+  expect(retired.links.slice(0, 2).map((l) => l.state)).toEqual(["cancelled", "cancelled"]);
+  expect(retired.links.slice(0, 2).every((l) => l.notifiedAt === 10)).toBe(true);
+  expect(retired.links[2]).toEqual(unrelated);
+  const restored = interruptActive(parseBook(JSON.parse(JSON.stringify(retired)))!, 20);
+  const delayed = mergeBooks(restored, book([old, latest]));
+  expect(delayed.links.filter((l) => l.target === "child").every((l) => l.state === "cancelled")).toBe(true);
+  expect(reopenLinks(delayed, "child", [old.id, latest.id], 40)).toBe(delayed);
+  expect(
+    wakesDue(delayed, {
+      states: {},
+      pending: {},
+      waiting: {},
+      threads: { parent: { title: "Parent", running: false } },
+      now: 50_000,
+    }),
+  ).toEqual([]);
 });
