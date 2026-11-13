@@ -855,6 +855,35 @@
       ],
       "type": "object"
     },
+    "RemoteMcpApp": {
+      "description": "What a tool result's MCP App is, without its HTML.",
+      "properties": {
+        "available": {
+          "description": "False when the HTML was over the host's size cap and was not kept.",
+          "type": "boolean"
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "total_bytes": {
+          "description": "Size of the app's HTML in bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "uri": {
+          "description": "The app's `ui://` resource URI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "mime_type",
+        "total_bytes",
+        "available"
+      ],
+      "type": "object"
+    },
     "RemoteMessage": {
       "properties": {
         "completed_at": {
@@ -986,6 +1015,17 @@
             "string",
             "null"
           ]
+        },
+        "mcp_app": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RemoteMcpApp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The interactive view (MCP App) the result offered. Its HTML stays on\nthe host for now; a client says the view is available elsewhere."
         },
         "name": {
           "type": "string"
