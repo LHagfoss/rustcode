@@ -216,7 +216,7 @@ describe("Tab in surfaces that are dialogs only for assistive tech", () => {
 
 test("the setting persists and announces itself so frames re-read it", async () => {
   const store = new Map<string, string>();
-  const originalStorage = globalThis.localStorage;
+  const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
   const originalWindow = (globalThis as { window?: unknown }).window;
   const target = new EventTarget();
   Object.defineProperty(globalThis, "localStorage", {
@@ -239,7 +239,8 @@ test("the setting persists and announces itself so frames re-read it", async () 
     expect(tabMovesFocus()).toBe(false);
     expect(announced).toBe(2);
   } finally {
-    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: originalStorage });
+    if (storageDescriptor) Object.defineProperty(globalThis, "localStorage", storageDescriptor);
+    else delete (globalThis as { localStorage?: unknown }).localStorage;
     (globalThis as { window?: unknown }).window = originalWindow;
   }
 });
