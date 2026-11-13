@@ -1176,8 +1176,9 @@ mod tests {
         // (#3304). The skill is read once, when a view is written, not on
         // every turn like the harness hint, so it stays under 2,300. The
         // dashboard layout (headline, context, stats, chart) and the chart
-        // marks add about 250 more, so the ceiling is 2,500.
-        assert!(tokens < 2_500, "the smart-ui skill is {tokens} tokens");
+        // marks add about 150 more once three examples are cut, so the
+        // ceiling is 2,400.
+        assert!(tokens < 2_400, "the smart-ui skill is {tokens} tokens");
         // The runtime the clients inject (docs/smart-ui.md), named exactly.
         for name in [
             "--rc-series-8",

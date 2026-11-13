@@ -109,9 +109,8 @@ tabular, so keep exact numbers in `.rc-num` text beside it.
 - Stacked bar: `type: "bar"`, `options: { scales: { x: { stacked: true }, y: { stacked: true } } }`.
 - Donut with a centre total: `type: "doughnut"` and
   `<div class="rc-donut-total"><b>128</b><span>runs</span></div>` in the same `.rc-chart`.
-- Line marks: `options: { plugins: { rcMarks: { band: [75, 270], line: 150, lineLabel: "normal", end: true } } }`
-  shades a normal range of the y scale, draws a labelled reference line, and
-  puts a dot and the value on the last point.
+- Line marks: `options.plugins.rcMarks = { band: [75, 270], line: 150, lineLabel: "normal", end: true }`
+  shades a y range, draws a labelled reference line, dots the last point with its value.
 - Sparkline, no script: `<span class="rc-spark" data-values="1,4,2,8"></span>`.
 
 From a script: `window.rustcode?.send(text, context?)` only in a click or key
@@ -132,12 +131,7 @@ and a large `data-size="xl"` line chart with `rcMarks`. All in one `.rc-dash`.
 
 All kit, no CSS: the same intent reads the same way in every turn.
 
-- Status: `<div class="rc-stats"><div class="rc-stat rc-bad"><span class="rc-stat-value">7</span><span class="rc-stat-label">Failed</span></div></div>`
-  then a `.rc-callout rc-warn` with the cause.
-- Comparison: `<table class="rc-table" data-rc-sort"><thead><tr><th>Suite</th><th>Status</th></tr></thead><tbody><tr><td>engine</td><td><span class="rc-badge rc-ok">Passing</span></td></tr></tbody></table>`
 - Ranking: `<div class="rc-bars"><div class="rc-bar"><span>engine</span><i style="width:100%"></i><b>42 s</b></div><div class="rc-bar rc-bad"><span>auth</span><i style="width:25%"></i><b>10.5 s</b></div></div>`
-- Trend: `<p class="rc-lead">Failures fell to zero.</p><div class="rc-chart"><canvas role="img" aria-label="Failures per day"></canvas></div>`
-- Plan: `<ol class="rc-steps"><li class="rc-step rc-done">Bump the version</li><li class="rc-step rc-active">Refresh the fixture</li><li class="rc-step rc-todo">Publish</li></ol>`
 
 ## Design
 
