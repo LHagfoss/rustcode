@@ -3691,7 +3691,15 @@ export function setArchived(id: string, on: boolean) {
   if (on && get().selectedId === id) startNewThread();
 }
 
-export async function renameThread(id: string, title: string): Promise<boolean> {
+/**
+ * Renames a thread. `user` is a name the user typed: the thread records that they chose it, and an
+ * agent naming its own thread with `update_session` leaves it alone (issue 3599).
+ */
+export async function renameThread(
+  id: string,
+  title: string,
+  options: { user?: boolean } = {},
+): Promise<boolean> {
   // A thread's name lives on the computer that owns it, and renaming one is that computer's
   // folder (`thread_rename` is this shell's): another machine's thread is not renamed from here.
   if (threadIsRemote(id)) {
@@ -3699,7 +3707,7 @@ export async function renameThread(id: string, title: string): Promise<boolean> 
     return false;
   }
   try {
-    const saved = await shellCall<string>("thread_rename", { id, title });
+    const saved = await shellCall<string>("thread_rename", { id, title, user: !!options.user });
     set((s) => ({ sessions: s.sessions.map((x) => (x.id === id ? { ...x, title: saved } : x)) }));
     updateThread(id, (t) => ({ ...t, title: saved }));
     return true;

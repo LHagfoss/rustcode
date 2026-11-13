@@ -792,7 +792,7 @@ const ThreadRow = memo(function ThreadRow({
   };
   const commit = () => {
     setRenaming(false);
-    if (title.trim() && title.trim() !== session.title) void renameThread(session.id, title);
+    if (title.trim() && title.trim() !== session.title) void renameThread(session.id, title, { user: true });
   };
   // Renaming edits the title in place, over the row's first line: the row keeps its height and
   // its other lines, so the list does not jump while you type.

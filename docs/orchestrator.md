@@ -841,13 +841,22 @@ validated like the others; the client carries them out (`state/host.ts`).
 | `list_harnesses` | `{ harness?, model? }` | `{ current, harnesses: [{ id, name, available, reason?, usage?, accounts? (v5), efforts?, models?, omitted_models?, filter? }] }`, at most 12 models each (50 with `model`): each harness leads with the model a new thread on it starts with, then the models this project's threads used recently, then its own order, and `omitted_models` counts the rest (`filter` says to pass `model` for them, or that nothing matched); `efforts` sits once on the harness when every listed model shares them, else on each model. `harness` (an id, else a display name; a name several harnesses share is refused, naming their ids) narrows to one harness, `model` a case-insensitive substring of a model id or name and lists every match. `accounts` is `[{ id, name, auth, signed_out?, usage? }]` for a harness with named logins, where `signed_out` is what the plan read found (and what makes naming it fail), `usage` is a login's plan windows (below), and `current` names the harness, account, model and effort this thread runs on | None |
 | `search_sessions` | `{ query, all_projects? }` | `{ sessions: [{ session_id, title, status, project?, snippet? }] }`: this project, or every project with `all_projects`, title and full text, at most 30 | None |
 | `list_worktrees` | `{ all_projects? }` | `{ worktrees: [{ session_id, title, project?, branch, path }] }`: this project, or every project with `all_projects` | None |
-| `update_session` | `{ session_id?, title?, pinned?, unread?, status?, snoozed_until? }` (`active`, `review`, `settled`; `1h`, `evening`, `tomorrow`, `next_week`, an ISO 8601 time, or `null` to wake). `unread` is two-way: `true` marks it unread, `false` marks it read | `{ session_id, title, pinned, status, snoozed_until }` | Own thread none. Another: asked, allowed by Auto-edit and Full access |
+| `update_session` | `{ session_id?, title?, pinned?, unread?, status?, snoozed_until? }` (`active`, `review`, `settled`; `1h`, `evening`, `tomorrow`, `next_week`, an ISO 8601 time, or `null` to wake). `unread` is two-way: `true` marks it unread, `false` marks it read | `{ session_id, title, pinned, status, snoozed_until, title_kept? }`; `title_kept` when the caller renamed its own thread and the user had named it (the title stays) | Own thread none. Another: asked, allowed by Auto-edit and Full access |
 | `interrupt_session` | `{ session_id }` | `{ session_id, interrupted, stopped, status? }`, with `stopped` the links under it that stopped too; a thread cannot stop itself | Asked, allowed by Full access |
 | `configure_session` | `{ session_id?, model?, effort? }` | `{ session_id, harness, access, model?, effort? }`; no `model` or `effort` only reads | Reading and its own thread none. Another: asked, allowed by Full access |
 | `transfer_session` | `{ session_id, harness }` | `{ session_id, harness, moved, model?, effort? }`; the thread must be idle, and a thread cannot move itself | Asked, allowed by Full access |
 | `list_pending_requests` | none | `{ requests: [{ session_id, request_id, title, kind, asks, options }] }`: approvals and questions this project's open threads wait on, oldest first. `request_id` is what `answer_request` (v10) takes, and `options` the choices an approval and the answers a question offer, in the order its card lists them | None |
 | `list_projects` | none | `{ projects: [{ path, name, threads, working }] }`: every project the user has a thread in, most recently updated first, at most 50 | None |
 | `list_pull_requests` | `{ state?: "open" \| "closed" \| "merged" \| "all" }` (default `open`) | `{ pull_requests: [{ number, title, state, branch, url? }] }`: this project's, at most 30 | None |
+
+**Agents name their thread** (#3599). The hint every agent gets asks it to
+call `update_session` once, when it starts work on a thread whose title is
+still automatic, with a short title (6 words or fewer) describing the task;
+the sidebar shows it at once. A name the user typed (the sidebar's Rename, or
+`/change_title`) is recorded as `user_titled: true` in the thread's
+`metadata.json` (absent, so false, for older threads), and an agent renaming
+its own thread then leaves the title alone and answers `title_kept`. Renaming
+another thread is the user's approval, so it is not held back.
 
 Every tool that writes, or that hands work to another thread, stays within the
 caller's project. A project is the repository a thread runs for — a main
