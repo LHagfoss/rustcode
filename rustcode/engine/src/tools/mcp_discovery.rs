@@ -699,6 +699,7 @@ pub(crate) fn current_server_statuses() -> Vec<McpServerStatus> {
                     .get_tools()
                     .unwrap_or_default()
                     .iter()
+                    .filter(|tool| crate::mcp::tool_visible_to(tool, "model"))
                     .filter_map(|tool| tool.get("name").and_then(Value::as_str))
                     .map(str::trim)
                     .filter(|name| !name.is_empty())

@@ -572,6 +572,9 @@ pub(super) fn collect_mcp_tools_with_servers() -> Vec<(String, String, String, S
         for client in &clients {
             if let Ok(mcp_tools) = client.get_tools() {
                 for tool in mcp_tools {
+                    if !crate::mcp::tool_visible_to(&tool, "model") {
+                        continue;
+                    }
                     let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
                     if name.is_empty() {
                         continue;

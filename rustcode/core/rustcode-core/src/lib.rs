@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 pub mod activity;
 pub mod input;
+pub mod mcp_app;
 pub mod paste;
 pub mod status;
 pub mod update;
@@ -252,6 +253,9 @@ pub struct ToolResultRecord {
     pub inspection: Option<InspectionResultMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_status: Option<CommandResultMetadata>,
+    /// The interactive view (MCP App) the result offered, next to its text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_app: Option<mcp_app::McpAppResource>,
 }
 
 /// The stable identity of the first message retained after a compaction.

@@ -635,6 +635,11 @@ export const ToolRow = memo(function ToolRow({ item, cwd }: { item: Item<"tool">
           </Tooltip>
         )}
       </div>
+      {item.app && !running && (
+        <div className="mt-1.5 mb-1 ml-[26px]">
+          <span className="text-caption text-fg-faint">Interactive view unavailable in this version</span>
+        </div>
+      )}
       {open && (
         <div className="rc-expand mt-1.5 mb-1 ml-[26px]">
           <ToolDetail item={item} />

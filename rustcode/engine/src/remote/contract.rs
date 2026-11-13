@@ -981,6 +981,7 @@ fn golden_messages() -> Vec<RemoteMessage> {
                 detail: Some("cargo test parser".to_owned()),
                 success: false,
                 pending: false,
+                mcp_app: None,
             }),
             timestamp: Some("2026-10-09T18:41:10+02:00".to_owned()),
             response_time_ms: None,

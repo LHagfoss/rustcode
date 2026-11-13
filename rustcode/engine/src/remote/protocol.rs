@@ -1312,6 +1312,33 @@ pub struct RemoteMessageTool {
     pub detail: Option<String>,
     pub success: bool,
     pub pending: bool,
+    /// The interactive view (MCP App) the result offered. Its HTML stays on
+    /// the host for now; a client says the view is available elsewhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_app: Option<RemoteMcpApp>,
+}
+
+/// What a tool result's MCP App is, without its HTML.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoteMcpApp {
+    /// The app's `ui://` resource URI.
+    pub uri: String,
+    pub mime_type: String,
+    /// Size of the app's HTML in bytes.
+    pub total_bytes: u64,
+    /// False when the HTML was over the host's size cap and was not kept.
+    pub available: bool,
+}
+
+impl From<&rustcode_core::mcp_app::McpAppResource> for RemoteMcpApp {
+    fn from(app: &rustcode_core::mcp_app::McpAppResource) -> Self {
+        Self {
+            uri: app.uri.clone(),
+            mime_type: app.mime_type.clone(),
+            total_bytes: app.total_bytes,
+            available: app.html.is_some(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

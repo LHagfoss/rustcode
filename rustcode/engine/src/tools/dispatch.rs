@@ -278,6 +278,9 @@ pub(crate) fn execute_with_metadata_cancellable_for_call(
                 && tools
                     .iter()
                     .find_map(|t| {
+                        if !crate::mcp::tool_visible_to(t, "model") {
+                            return None;
+                        }
                         let raw = t.get("name").and_then(|n| n.as_str())?;
                         let canonical = mcp_canonical_name_for_clients(&client.name, raw, &clients);
                         (name == canonical
@@ -293,6 +296,9 @@ pub(crate) fn execute_with_metadata_cancellable_for_call(
                 let raw_name = tools
                     .iter()
                     .find_map(|tool| {
+                        if !crate::mcp::tool_visible_to(tool, "model") {
+                            return None;
+                        }
                         let raw = tool.get("name").and_then(|n| n.as_str())?;
                         let canonical = mcp_canonical_name_for_clients(&client.name, raw, &clients);
                         (name == canonical

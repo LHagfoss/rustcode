@@ -501,6 +501,7 @@ fn project_messages(
                     detail: details[index].clone(),
                     success: record.success,
                     pending: record.pending,
+                    mcp_app: record.mcp_app.as_ref().map(Into::into),
                 }),
             timestamp: chrono::DateTime::parse_from_rfc3339(&message.timestamp)
                 .ok()

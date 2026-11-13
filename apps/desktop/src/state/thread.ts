@@ -13,6 +13,7 @@ import type {
   ToolStatus,
 } from "../acp/types";
 import { unwrapShell } from "../lib/command";
+import type { McpApp } from "../lib/mcpApp";
 import { type ComposeExtras, type SentAttachment, splitImageMarkers } from "./compose";
 import type { Link } from "./orchestration";
 import { activeStep, advancePlanClocks, type PlanClocks, type SteerNote } from "./steer";
@@ -62,6 +63,8 @@ export type TranscriptItem =
       detail?: string;
       summary?: string;
       output?: string;
+      /** The interactive view (MCP App) the result embeds (`lib/mcpApp.ts`). */
+      app?: McpApp;
       diffs: FileDiff[];
       exitCode?: number;
       /** The harness's own tool name, such as Claude Code's `Agent`. */
@@ -602,6 +605,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
         summary: update.summary,
         diffs: update.diffs,
         output: update.output,
+        app: update.app,
         toolName: update.toolName,
         parent: update.parent,
         startedAt: now,
@@ -614,6 +618,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
           ...before,
           ...tool,
           toolName: tool.toolName ?? before.toolName,
+          app: tool.app ?? before.app,
           parent: tool.parent ?? before.parent,
           startedAt: before.startedAt,
           endedAt: tool.endedAt ?? before.endedAt,
@@ -648,6 +653,7 @@ export function applyUpdate(state: ThreadState, update: SessionUpdate, now = Dat
         // a background agent is the one whose call stays open.
         background: background ?? (update.backgrounded ? "command" : item.background),
         output,
+        app: update.app ?? item.app,
         diffs: update.diffs.length ? update.diffs : item.diffs,
         exitCode: update.exitCode ?? item.exitCode,
       };

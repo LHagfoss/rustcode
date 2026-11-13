@@ -315,9 +315,11 @@ impl Mirror {
         fields: &agent_client_protocol::schema::v1::ToolCallUpdateFields,
     ) {
         let extra_output = tool_output(fields);
+        let app = tool_app(fields);
         let Some(slot) = self.tools.get_mut(id) else {
             return;
         };
+        let app_result = slot.result;
         if let Some(title) = &fields.title {
             slot.title = title.clone();
         }
@@ -337,10 +339,29 @@ impl Mirror {
         let success = slot.success();
         let output = slot.output.clone();
         let result = slot.result;
+        if let Some(app) = app {
+            self.attach_app(app_result, app);
+        }
         if finished {
             self.finish_tool_message(result, success, &output);
         }
         self.touch();
+    }
+
+    /// Keep the interactive view a result offered on its record, next to
+    /// the text, so a client that renders MCP Apps finds it.
+    fn attach_app(&mut self, index: usize, app: rustcode_core::mcp_app::McpAppResource) {
+        let Some(record) = self
+            .history
+            .get_mut(index)
+            .and_then(|message| message.tool_result.as_mut())
+        else {
+            return;
+        };
+        if record.mcp_app.as_ref() != Some(&app) {
+            record.mcp_app = Some(app);
+            self.revision += 1;
+        }
     }
 
     fn plan(&mut self, plan: &agent_client_protocol::schema::v1::Plan) {
@@ -386,6 +407,28 @@ fn arguments_hash(input: Option<&Value>) -> String {
         .unwrap_or_default()
         .hash(&mut hasher);
     format!("{:016x}", hasher.finish())
+}
+
+/// The MCP App a tool call's content embeds: a `ui://` HTML resource. Its
+/// HTML is never part of the text the phone shows.
+fn tool_app(
+    fields: &agent_client_protocol::schema::v1::ToolCallUpdateFields,
+) -> Option<rustcode_core::mcp_app::McpAppResource> {
+    use agent_client_protocol::schema::v1::{
+        ContentBlock, EmbeddedResourceResource, ToolCallContent,
+    };
+    fields.content.as_ref()?.iter().find_map(|block| {
+        let ToolCallContent::Content(content) = block else {
+            return None;
+        };
+        let ContentBlock::Resource(resource) = &content.content else {
+            return None;
+        };
+        let EmbeddedResourceResource::TextResourceContents(text) = &resource.resource else {
+            return None;
+        };
+        rustcode_core::mcp_app::mcp_app_resource(&text.uri, text.mime_type.as_deref(), &text.text)
+    })
 }
 
 /// The text a tool call's content carries. The adapters put a command's
@@ -1235,6 +1278,7 @@ fn project_messages(
                     }),
                     success: record.success,
                     pending: record.pending,
+                    mcp_app: record.mcp_app.as_ref().map(Into::into),
                 }),
             timestamp: chrono::DateTime::parse_from_rfc3339(&message.timestamp)
                 .ok()
@@ -1298,6 +1342,46 @@ mod tests {
         SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::v1::ContentChunk::new(
             ContentBlock::Text(agent_client_protocol::schema::v1::TextContent::new(text)),
         ))
+    }
+
+    #[test]
+    fn a_tool_result_keeps_its_mcp_app_next_to_the_text() {
+        use agent_client_protocol::schema::v1::{
+            EmbeddedResource, EmbeddedResourceResource, TextContent, TextResourceContents,
+            ToolCallContent, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+        };
+        let mirror = mirror();
+        mirror.note_prompt("weather");
+        assert!(mirror.sync_turn(true));
+        let app = TextResourceContents::new("<p>Sunny</p>", "ui://weather/view")
+            .mime_type("text/html;profile=mcp-app".to_owned());
+        mirror.observe(&SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            "call-1",
+            ToolCallUpdateFields::new()
+                .title("mcp__weather__show")
+                .status(ToolCallStatus::Completed)
+                .content(vec![
+                    ToolCallContent::from(ContentBlock::Text(TextContent::new("Sunny, 21C"))),
+                    ToolCallContent::from(ContentBlock::Resource(EmbeddedResource::new(
+                        EmbeddedResourceResource::TextResourceContents(app),
+                    ))),
+                ]),
+        )));
+        let snapshot = mirror.snapshot(&registration(), 1, &ProjectionLimits::default());
+        let result = snapshot
+            .transcript
+            .iter()
+            .find(|message| message.role == "tool")
+            .expect("the result was kept");
+        assert_eq!(
+            result.content.text, "Sunny, 21C",
+            "the HTML is not the text"
+        );
+        let tool = result.tool.as_ref().expect("a tool record");
+        let app = tool.mcp_app.as_ref().expect("the app was carried");
+        assert_eq!(app.uri, "ui://weather/view");
+        assert!(app.available);
+        assert_eq!(app.total_bytes, "<p>Sunny</p>".len() as u64);
     }
 
     #[test]
