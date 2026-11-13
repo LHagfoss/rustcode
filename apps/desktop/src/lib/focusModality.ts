@@ -3,7 +3,7 @@
 // (Radix handing focus back to a trigger when its menu closes, our own `.focus()` after Enter or
 // Escape). So <html> carries `data-keyboard-nav` from a Tab until the next pointer press, and every
 // ring in index.css is drawn under it (docs/design.md › Focus). Tab is suppressed outside
-// editing and modal contexts unless the user enables navigation between controls.
+// form and modal contexts unless the user enables navigation between controls.
 
 const TAB_FOCUS = "rustcode.tabMovesFocus";
 export function tabMovesFocus(): boolean {
@@ -47,7 +47,7 @@ export function installFocusModality(
       typeof Element !== "undefined" &&
       element instanceof Element &&
       !!element.closest(
-        'input, textarea, select, [contenteditable]:not([contenteditable="false"]), form, dialog, [role="dialog"], [role="alertdialog"], [aria-modal="true"], [role="menu"], [role="menuitem"], [role="listbox"], [data-radix-popper-content-wrapper]',
+        'form, dialog, [role="dialog"], [role="alertdialog"], [aria-modal="true"], [role="menu"], [role="menuitem"], [role="listbox"], [data-radix-popper-content-wrapper]',
       );
     if (shouldBlockTab(key, enabled(), protectedContext, ctrlKey || metaKey || altKey)) {
       event.preventDefault();

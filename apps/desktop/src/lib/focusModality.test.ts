@@ -112,3 +112,33 @@ test("with the setting off a bare Tab is cancelled and shows no rings; Ctrl+Tab 
   target.dispatchEvent(chord);
   expect(chord.defaultPrevented).toBe(false);
 });
+
+test("Tab from fields respects the setting and dialog context", () => {
+  const originalElement = globalThis.Element;
+  class FakeElement extends EventTarget {
+    constructor(private inDialog: boolean) {
+      super();
+    }
+    closest(selector: string) {
+      expect(selector).not.toContain("textarea");
+      expect(selector).not.toContain("input");
+      return this.inDialog ? this : null;
+    }
+  }
+  globalThis.Element = FakeElement as unknown as typeof Element;
+  try {
+    for (const [inDialog, enabled, blocked] of [
+      [false, false, true],
+      [true, false, false],
+      [false, true, false],
+    ] as const) {
+      const field = new FakeElement(inDialog);
+      installFocusModality(fakeRoot(), field, () => enabled);
+      const event = Object.assign(new Event("keydown", { cancelable: true }), { key: "Tab" });
+      field.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(blocked);
+    }
+  } finally {
+    globalThis.Element = originalElement;
+  }
+});
