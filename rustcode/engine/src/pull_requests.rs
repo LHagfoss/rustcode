@@ -273,7 +273,16 @@ async fn gh(cwd: &Path, args: &[&str], stdin: Option<Vec<u8>>) -> Result<Vec<u8>
     if !output.status.success() {
         // `gh api` prints the provider's answer on stdout and a summary on
         // stderr; both say why.
-        let mut error = classify(&String::from_utf8_lossy(&output.stderr));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let mut error = classify(&stderr);
+        if error.code == "no_provider" {
+            if let Some(host) = provider_host(cwd, &ProviderHosts::load()).await {
+                error.code = "not_connected";
+                error.message = format!(
+                    "GitHub is not connected. Sign in with `gh auth login --hostname {host}`"
+                );
+            }
+        }
         let body = String::from_utf8_lossy(&output.stdout);
         if let Some(message) = serde_json::from_str::<Value>(&body).ok().and_then(|value| {
             value
@@ -913,6 +922,82 @@ pub async fn merge_when_green(
     }
 }
 
+/// Known GitHub hosts, kept separate from discovery so classification can be tested
+/// without reading the user's configuration.
+struct ProviderHosts(Vec<String>);
+
+impl ProviderHosts {
+    fn from_config(config: &str, gh_host: Option<&str>) -> Self {
+        let mut hosts = vec!["github.com".to_owned()];
+        hosts.extend(config.lines().filter_map(|line| {
+            if line.starts_with(char::is_whitespace) || line.starts_with('#') {
+                return None;
+            }
+            let key = line.trim().strip_suffix(':')?.trim_matches(['\"', '\'']);
+            if key.is_empty() {
+                None
+            } else {
+                Some(key.to_ascii_lowercase())
+            }
+        }));
+        if let Some(host) = gh_host.filter(|h| !h.is_empty()) {
+            hosts.push(host.to_ascii_lowercase());
+        }
+        Self(hosts)
+    }
+
+    fn load() -> Self {
+        let dir = std::env::var_os("GH_CONFIG_DIR")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("XDG_CONFIG_HOME").map(|p| std::path::PathBuf::from(p).join("gh"))
+            })
+            .or_else(|| {
+                std::env::var_os("HOME").map(|p| std::path::PathBuf::from(p).join(".config/gh"))
+            });
+        let config = dir
+            .and_then(|p| std::fs::read_to_string(p.join("hosts.yml")).ok())
+            .unwrap_or_default();
+        Self::from_config(&config, std::env::var("GH_HOST").ok().as_deref())
+    }
+
+    fn match_remotes(&self, remotes: &str) -> Option<String> {
+        remotes
+            .lines()
+            .filter_map(|line| {
+                let url = line.split_whitespace().nth(1)?;
+                let authority = url
+                    .split_once("://")
+                    .map(|(_, rest)| rest.split('/').next().unwrap_or(""))
+                    .unwrap_or_else(|| url.split(':').next().unwrap_or(""));
+                let host = authority
+                    .rsplit('@')
+                    .next()?
+                    .split(':')
+                    .next()?
+                    .to_ascii_lowercase();
+                self.0.contains(&host).then_some(host)
+            })
+            .next()
+    }
+}
+
+async fn provider_host(cwd: &Path, hosts: &ProviderHosts) -> Option<String> {
+    let mut command = crate::platform::tokio_command(crate::platform::resolve_bin("git"));
+    command
+        .args(["remote", "-v"])
+        .current_dir(cwd)
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(TIMEOUT, command.output())
+        .await
+        .ok()?
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    hosts.match_remotes(&String::from_utf8_lossy(&output.stdout))
+}
+
 /// The error `gh` printed, with the cases the app explains on its own.
 fn classify(stderr: &str) -> PullError {
     let message = stderr.trim().to_owned();
@@ -1436,6 +1521,28 @@ mod tests {
         let mut bad = comments.clone();
         bad[0].side = "MIDDLE".into();
         assert!(review_payload("da4593b", "COMMENT", "", &bad).is_err());
+    }
+
+    #[test]
+    fn configured_provider_hosts_match_remotes() {
+        let hosts = super::ProviderHosts::from_config("enterprise.example:\n  users:\n", None);
+        assert_eq!(
+            hosts.match_remotes("origin https://github.com/a/b (fetch)"),
+            Some("github.com".into())
+        );
+        assert_eq!(
+            hosts.match_remotes("origin git@enterprise.example:a/b (fetch)"),
+            Some("enterprise.example".into())
+        );
+        assert_eq!(
+            hosts.match_remotes("origin https://gitlab.example/a/b (fetch)"),
+            None
+        );
+        assert_eq!(
+            super::ProviderHosts::from_config("", Some("ghe.example"))
+                .match_remotes("origin https://ghe.example/a/b (fetch)"),
+            Some("ghe.example".into())
+        );
     }
 
     #[tokio::test]

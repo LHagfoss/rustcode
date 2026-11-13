@@ -2773,6 +2773,11 @@ async function listPullRequests(
     return failureJson(failure("target_unavailable", `pull requests could not be read: ${errorText(error)}`));
   }
   const error = parsePullError(result);
+  const unsupported = noProviderPullList(
+    error,
+    machine.host ? { ...machineFields(machine), project: cwd } : {},
+  );
+  if (unsupported) return unsupported;
   if (error) return failureJson(pullFailure(error));
   const pulls = parsePullList(result).pulls;
   // The answer also seeds the panel's header: a pull opened after the agent's
@@ -2788,6 +2793,13 @@ async function listPullRequests(
       ...(p.url ? { url: p.url } : {}),
     })),
   };
+}
+/** An unsupported remote is an empty list with an explanation, not a failed read. */
+export function noProviderPullList(
+  error: { code: string } | null | undefined,
+  machine: JsonObject,
+): JsonObject | null {
+  return error?.code === "no_provider" ? { ...machine, pull_requests: [], note: NO_PROVIDER_NOTE } : null;
 }
 /** What a read says when the project's remote is not on GitHub: no pull requests exist to read. */
 const NO_PROVIDER_NOTE = "no pull request provider for this remote";
