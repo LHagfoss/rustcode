@@ -1,15 +1,14 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { BUILTIN_CAPABILITIES, type ConfigOption, type Harness } from "../acp/types";
+import type { CachedPlan } from "../state/store";
 import {
-  type CardSize,
+  accountLeft,
   clampEffort,
   dedupeModels,
   filterModelRows,
-  measureCard,
   modelDisplayName,
   modelProviderOf,
   modelThreadWrites,
-  moveChip,
   movePickerIndex,
   orderEfforts,
   panelHeight,
@@ -219,10 +218,9 @@ describe("the effort pill", () => {
 });
 
 describe("the card's height", () => {
-  test("reserves space for the effort and account header", () => {
-    const groups = [{ models: [1, 2] }];
-    // The row is 28px tall on the card's 4px gutter.
-    expect(panelHeight(groups, true)).toBe(panelHeight(groups) + 32);
+  test("leaves the effort and account column room even beside a short list", () => {
+    // Two models would be 104px tall; the column's levels and logins need more than that.
+    expect(panelHeight([{ models: [1, 2] }])).toBeGreaterThanOrEqual(264);
   });
   test("follows the longest harness's list, so moving along the rail does not resize it", () => {
     const groups = [{ models: [1, 2] }, { models: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] }];
@@ -344,22 +342,36 @@ describe("account rows", () => {
   });
 });
 
-describe("account chips", () => {
-  const chip = (name: string, extra = {}) => ({ id: name, name, selected: false, ...extra });
-  const chips = [chip("A"), chip("B", { signedOut: true }), chip("C"), chip("D", { gone: true })];
-
-  test("→ and ← skip chips that cannot be pressed", () => {
-    expect(moveChip(chips, 0, 1, false)).toBe(2);
-    expect(moveChip(chips, 2, -1, false)).toBe(0);
+describe("what is left of an account", () => {
+  const plan = (used: number, minutes: number): CachedPlan => ({
+    source: "test",
+    windows: [{ label: "Usage", usedPercent: used, minutes }],
+    fetchedAt: Date.now(),
   });
 
-  test("the row does not wrap: past either end there is no chip", () => {
-    expect(moveChip(chips, 2, 1, false)).toBe(-1);
-    expect(moveChip(chips, 0, -1, false)).toBe(-1);
+  test("reads the shortest window of the login's own plan", () => {
+    const cache: Record<string, CachedPlan> = {
+      "claude-code#work": {
+        source: "test",
+        windows: [
+          { label: "Weekly", usedPercent: 90, minutes: 10080 },
+          { label: "5-hour", usedPercent: 25, minutes: 300 },
+        ],
+        fetchedAt: Date.now(),
+      },
+    };
+    expect(accountLeft(cache, "claude-code", "work")).toBe(75);
   });
 
-  test("a running turn disables them all", () => {
-    expect(moveChip(chips, 0, 1, true)).toBe(-1);
+  test("the harness's own login and a named one never share numbers", () => {
+    const cache = { "claude-code": plan(10, 300), "claude-code#work": plan(60, 300) };
+    expect(accountLeft(cache, "claude-code", null)).toBe(90);
+    expect(accountLeft(cache, "claude-code", "work")).toBe(40);
+    expect(accountLeft(cache, "claude-code", "other")).toBeNull();
+  });
+
+  test("a login that is gone has nothing left to say", () => {
+    expect(accountLeft({ "claude-code": plan(10, 300) }, "claude-code", undefined)).toBeNull();
   });
 });
 
@@ -445,110 +457,5 @@ describe("model picker navigation", () => {
     expect(pillLabel("Sonnet 5.5")).toBe("Sonnet 5.5");
     expect(pillLabel(null)).toBe("Default model");
     expect(pillLabel("claude-sonnet-5-5-long", true)).toBe("claude-sonnet…");
-  });
-});
-
-describe("measuring the card", () => {
-  const g = globalThis as Record<string, unknown>;
-  const saved = {
-    observer: g.ResizeObserver,
-    frame: g.requestAnimationFrame,
-    cancel: g.cancelAnimationFrame,
-  };
-
-  afterEach(() => {
-    g.ResizeObserver = saved.observer;
-    g.requestAnimationFrame = saved.frame;
-    g.cancelAnimationFrame = saved.cancel;
-  });
-
-  /** A stand-in for the browser's observer: it holds its callback until the test delivers a frame. */
-  function stubObservers() {
-    const frames = new Map<number, () => void>();
-    let nextFrame = 1;
-    const watched: { element: Element | null; notify: () => void; stopped: boolean }[] = [];
-    g.requestAnimationFrame = (callback: () => void) => {
-      const id = nextFrame++;
-      frames.set(id, callback);
-      return id;
-    };
-    g.cancelAnimationFrame = (id: number) => {
-      frames.delete(id);
-    };
-    g.ResizeObserver = class {
-      private readonly entry: { element: Element | null; notify: () => void; stopped: boolean };
-      constructor(callback: () => void) {
-        this.entry = { element: null, notify: callback, stopped: false };
-        watched.push(this.entry);
-      }
-      observe(element: Element) {
-        this.entry.element = element;
-      }
-      disconnect() {
-        this.entry.stopped = true;
-      }
-    };
-    /** The frames the observer asked for, run once each, as the browser would. */
-    const frame = () => {
-      for (const [id, callback] of [...frames]) {
-        frames.delete(id);
-        callback();
-      }
-    };
-    return { watched, frame };
-  }
-
-  /** A node whose box the test can change, as the card's own element reads to the browser. */
-  function node(size: { width: number; height: number }) {
-    const own = { ...size };
-    const element = {
-      getBoundingClientRect: () => ({ ...own, top: 0, left: 0, right: 0, bottom: 0, x: 0, y: 0 }),
-    };
-    return {
-      element: element as unknown as HTMLElement,
-      resize: (w: number, h: number) => Object.assign(own, { width: w, height: h }),
-    };
-  }
-
-  test("reports the node's size the moment it mounts, without a frame", () => {
-    stubObservers();
-    const sizes: CardSize[] = [];
-    const { element } = node({ width: 360, height: 320 });
-    measureCard(element, (size) => sizes.push(size));
-    // The card's first open is painted from this measurement, so it cannot wait for the observer.
-    expect(sizes).toEqual([{ width: 360, height: 320 }]);
-  });
-
-  test("reports a changed size on a frame of its own, not inside the observer's delivery", () => {
-    const { watched, frame } = stubObservers();
-    const sizes: CardSize[] = [];
-    const box = node({ width: 360, height: 320 });
-    measureCard(box.element, (size) => sizes.push(size));
-    box.resize(240, 209);
-    watched[0]!.notify();
-    // Writing the measured size inside the delivery is what the browser reports as a loop.
-    expect(sizes).toHaveLength(1);
-    frame();
-    expect(sizes[1]).toEqual({ width: 240, height: 209 });
-  });
-
-  test("stops when the node goes, so a closed card is not measured", () => {
-    const { watched } = stubObservers();
-    const sizes: CardSize[] = [];
-    const box = node({ width: 240, height: 209 });
-    const stop = measureCard(box.element, (size) => sizes.push(size));
-    stop();
-    expect(watched[0]!.stopped).toBe(true);
-    watched[0]!.notify();
-    expect(sizes).toHaveLength(1);
-  });
-
-  test("no node, no observer, and nothing to call back", () => {
-    const { watched } = stubObservers();
-    const stop = measureCard(null, () => {
-      throw new Error("a card that mounted nothing has nothing to report");
-    });
-    expect(watched).toHaveLength(0);
-    expect(() => stop()).not.toThrow();
   });
 });

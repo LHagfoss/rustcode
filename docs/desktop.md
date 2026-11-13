@@ -405,8 +405,9 @@ React UI (webview)  ──Transport──▶  Tauri shell (src-tauri)  ──std
   `account_login_command`), so the app holds no per-harness copy of them.
   *Found on this Mac* lists the logins the engine found for that harness
   (`~/.claude`, `~/.claude-personal`; `~/.codex`, `~/.codex-paral`), each added
-  by its own path. RustCode never reads or copies those tokens. The model pill's
-  effort step lists the harness's named accounts while it has more
+  by its own path. RustCode never reads or copies those tokens. The model card's
+  effort column lists the harness's named accounts, each with what is left of
+  its plan, and offers a choice while there is more
   than one: a row starts a new thread on it, moves an idle thread with the
   conversation so far as a summary, and a running thread shows the rows
   disabled with *Stop the turn to switch*. A thread from before accounts shows its own login as
@@ -763,12 +764,15 @@ composer's keys stay outside the table.
   composer's ↑ does not recall it, and a reloaded thread replays it as the same
   divider (`state/thread.ts` `CONTINUE_MARK`).
 - **Model picker.** One pill names the model and its effort (*Opus 5.5
-  Medium*) and opens a narrow card (a harness icon rail and a searchable model
-  list). Picking a model with levels turns the card to its second step, and an
-  *Effort and account* row at the list's foot goes there too; the step's header
-  (or ←) goes back to the models, and picking a level closes the card. The step
-  holds the model's levels, *Reset to default*, *Fast mode* (when the thread's
-  model has the `fast` option) and the harness's logins. Each model keeps the
+  Medium*) and opens one card with no step between its parts: a harness icon
+  rail, a searchable model list and, docked at the right, the current model's
+  effort column. The column holds the model's levels, *Reset to default*,
+  *Fast mode* (when the thread's model has the `fast` option) and the
+  harness's logins, each with the share of its plan left. Picking a level or a
+  login keeps the card open; picking a model that has levels moves the
+  keyboard to them. Keys: ↑↓ and ⏎ in the list, → at the end of the search
+  (or after a pick) into the column, ← back to the search, a printed character
+  in the column goes to the search to filter, Esc closes. Each model keeps the
   effort it was last left on (one record per harness, which its logins share),
   so picking the model again returns to that level; a level the model no longer
   offers falls back to its default. The harness row shows only when more than
