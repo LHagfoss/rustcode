@@ -1149,9 +1149,11 @@ fn ignored_files(path: &Path) -> Result<Vec<String>, String> {
         // Any component counts: `apps/desktop/node_modules` and
         // `apps/desktop/src-tauri/target` are the same build output as the
         // root's, not a user file to refuse.
-        if entry
-            .split('/')
-            .any(|component| IGNORED_BUILD_DIRS.contains(&component))
+        if entry == "apps/desktop/src-tauri/gen"
+            || entry.starts_with("apps/desktop/src-tauri/gen/")
+            || entry
+                .split('/')
+                .any(|component| IGNORED_BUILD_DIRS.contains(&component))
         {
             continue;
         }
@@ -1789,13 +1791,19 @@ pub(crate) fn detach(session_id: &str) {
 /// Nothing else is guessed: a missing folder with no living repository stays
 /// the error it was.
 pub(crate) fn recover_missing_worktree(session_id: &str, cwd: &Path) -> Option<std::path::PathBuf> {
-    if cwd.is_dir() {
+    let worktree = of_session(session_id)?;
+    if worktree.path.exists() {
         return None;
     }
-    let worktree = of_session(session_id)?;
-    let same = rustcode_session::canonicalize_best_effort(&worktree.path)
-        == rustcode_session::canonicalize_best_effort(cwd);
-    if !same || !worktree.repo.is_dir() {
+    let canonical = rustcode_session::canonicalize_best_effort;
+    let recorded = crate::config::load_session_workspace(session_id)?;
+    // A refreshed thread list may already offer the repository. Recover only
+    // the exact removed workspace, and accept only it or its recorded repo.
+    if canonical(&recorded.cwd) != canonical(&worktree.path)
+        || (canonical(cwd) != canonical(&worktree.path)
+            && canonical(cwd) != canonical(&worktree.repo))
+        || !worktree.repo.is_dir()
+    {
         return None;
     }
     crate::acp::session_move::move_session(session_id, worktree.repo.clone()).ok()?;
@@ -2384,7 +2392,7 @@ pub(crate) mod tests {
         let gitignore = std::fs::read_to_string(repo.join(".gitignore")).unwrap();
         std::fs::write(
             repo.join(".gitignore"),
-            format!("{gitignore}target/\nnode_modules/\ndist/\n"),
+            format!("{gitignore}target/\nnode_modules/\ndist/\napps/desktop/src-tauri/gen/\n"),
         )
         .unwrap();
         git(&repo, &["add", "-A"]).unwrap();
@@ -2413,6 +2421,7 @@ pub(crate) mod tests {
             ("apps/desktop/node_modules/left-pad", "index.js"),
             ("apps/desktop/dist/assets", "app.js"),
             ("apps/desktop/src-tauri/target/debug", "build"),
+            ("apps/desktop/src-tauri/gen/schemas", "desktop-schema.json"),
         ] {
             std::fs::create_dir_all(worktree.path.join(dir)).unwrap();
             std::fs::write(worktree.path.join(dir).join(file), "built\n").unwrap();
@@ -2931,7 +2940,7 @@ pub(crate) mod tests {
         // Only the worktree's own folder falls back, not any missing folder.
         assert!(recover_missing_worktree(&session_id, &dir.path().join("elsewhere")).is_none());
         assert_eq!(
-            recover_missing_worktree(&session_id, &worktree.path),
+            recover_missing_worktree(&session_id, &repo),
             Some(repo.clone())
         );
         assert_eq!(

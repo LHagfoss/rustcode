@@ -1617,6 +1617,23 @@ export function noteLinkEvent(
   return { ...book, links: book.links.map((l) => (l.id === newest.id ? noted : l)) };
 }
 
+/** Cleanup retires every outstanding result for the target, including older
+ * failed turns. Cancellation and heard marks survive delayed finishes/restarts. */
+export function retireCleanedLinks(book: LinkBook, target: string, at = Date.now()): LinkBook {
+  return {
+    ...book,
+    links: book.links.map((link) =>
+      link.target === target
+        ? noteEvent(
+            advanceLink(link, { state: "cancelled", settledAt: at, notifiedAt: at }, at),
+            "cleaned",
+            at,
+          )
+        : link,
+    ),
+  };
+}
+
 /** After a restart: work that was queued or running did not finish here, and nothing restarts by itself. */
 export function interruptActive(
   book: LinkBook,

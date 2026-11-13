@@ -151,6 +151,7 @@ import {
   renderRead,
   reopenLinks,
   restateLinks,
+  retireCleanedLinks,
   sameProject,
   sameReach,
   shownState,
@@ -3288,6 +3289,7 @@ async function cleanupWorktree(
   }
   setBook((b) => noteLinkEvent(b, caller.id, target.id, "cleaned"));
   if (call.settle) {
+    setBook((b) => retireCleanedLinks(b, target.id));
     await setThreadStatus(target.id, "done");
     answer.settled = true;
   }
