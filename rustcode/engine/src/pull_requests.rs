@@ -90,6 +90,33 @@ pub struct Activity {
     pub kind: String,
     pub at: String,
     pub body: String,
+    /// The comment on GitHub, when the read names one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+/// One comment a review left on a line of the diff (#3610).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InlineComment {
+    pub id: u64,
+    pub author: String,
+    pub path: String,
+    /// The line it is on now, or where it was when the code has since moved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<u64>,
+    /// The first line of a comment on a range of lines.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_line: Option<u64>,
+    /// The line it was left on is no longer in the diff.
+    pub outdated: bool,
+    pub at: String,
+    pub body: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// The comment this one answers, in the same conversation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -103,6 +130,11 @@ pub struct PullDetail {
     pub files: Vec<ChangedFile>,
     /// Reviews and comments, oldest first.
     pub activity: Vec<Activity>,
+    /// Line comments of reviews, oldest first.
+    pub review_comments: Vec<InlineComment>,
+    /// Why the line comments could not be read; the rest of the detail stands.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_comments_error: Option<String>,
 }
 
 /// Why the pull requests could not be read, said so the app can show it.
@@ -165,11 +197,56 @@ pub async fn list(
 /// One pull request with its description, checks, files and activity.
 pub async fn view(cwd: &Path, number: u64) -> Result<PullDetail, PullError> {
     let number = number.to_string();
-    let value = gh_json(cwd, &["pr", "view", &number, "--json", VIEW_FIELDS]).await?;
-    detail(&value).ok_or_else(|| PullError {
+    // `{owner}/{repo}` is the repository `gh pr view` reads in this folder.
+    let endpoint = format!("repos/{{owner}}/{{repo}}/pulls/{number}/comments");
+    let view_args = ["pr", "view", &number, "--json", VIEW_FIELDS];
+    let comment_args = ["api", "--paginate", "--jq", ".[]", &endpoint];
+    let (value, lines) = tokio::join!(gh_json(cwd, &view_args), gh(cwd, &comment_args, None),);
+    let mut detail = detail(&value?).ok_or_else(|| PullError {
         code: "failed",
         message: "gh answered without a pull request".to_owned(),
-    })
+    })?;
+    match lines {
+        Ok(output) => detail.review_comments = inline_comments(&String::from_utf8_lossy(&output)),
+        Err(error) => detail.review_comments_error = Some(error.message),
+    }
+    Ok(detail)
+}
+
+/// The line comments `gh api --paginate --jq '.[]'` printed, one JSON object
+/// a line, oldest first. A line that does not read is skipped.
+pub(crate) fn inline_comments(output: &str) -> Vec<InlineComment> {
+    let mut comments: Vec<InlineComment> = output
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|comment| comment.is_object())
+        .map(|comment| {
+            let current = comment.get("line").and_then(Value::as_u64);
+            let original = comment.get("original_line").and_then(Value::as_u64);
+            let start = if current.is_some() {
+                comment.get("start_line")
+            } else {
+                comment.get("original_start_line")
+            };
+            InlineComment {
+                id: number(&comment, "id"),
+                author: comment
+                    .get("user")
+                    .map(|user| text(user, "login"))
+                    .unwrap_or_default(),
+                path: text(&comment, "path"),
+                line: current.or(original),
+                start_line: start.and_then(Value::as_u64),
+                outdated: current.is_none(),
+                at: text(&comment, "created_at"),
+                body: text(&comment, "body"),
+                url: Some(text(&comment, "html_url")).filter(|url| !url.is_empty()),
+                reply_to: comment.get("in_reply_to_id").and_then(Value::as_u64),
+            }
+        })
+        .collect();
+    comments.sort_by(|a, b| a.at.cmp(&b.at));
+    comments
 }
 
 /// What a watch compares (#2648): the pull request's state, checks,
@@ -1170,6 +1247,7 @@ pub(crate) fn detail(value: &Value) -> Option<PullDetail> {
             kind: text(review, "state").to_lowercase(),
             at: text(review, "submittedAt"),
             body: text(review, "body"),
+            url: None,
         })
         .chain(
             value
@@ -1182,6 +1260,7 @@ pub(crate) fn detail(value: &Value) -> Option<PullDetail> {
                     kind: "commented".to_owned(),
                     at: text(comment, "createdAt"),
                     body: text(comment, "body"),
+                    url: Some(text(comment, "url")).filter(|url| !url.is_empty()),
                 }),
         )
         .collect();
@@ -1193,6 +1272,8 @@ pub(crate) fn detail(value: &Value) -> Option<PullDetail> {
         check_runs: checks(value),
         files,
         activity,
+        review_comments: Vec::new(),
+        review_comments_error: None,
         summary,
     })
 }
@@ -1240,7 +1321,7 @@ mod tests {
             "body": "Why.",
             "files": [{"path": "a.rs", "additions": 3, "deletions": 1}],
             "reviews": [{"author": {"login": "rev"}, "state": "APPROVED", "submittedAt": "2026-10-30T15:00:00Z", "body": "ok"}],
-            "comments": [{"author": {"login": "me"}, "createdAt": "2026-10-30T14:30:00Z", "body": "first"}]
+            "comments": [{"author": {"login": "me"}, "createdAt": "2026-10-30T14:30:00Z", "body": "first", "url": "https://gh/c/9"}]
         })
     }
 
@@ -1296,6 +1377,40 @@ mod tests {
         let json = serde_json::to_value(&detail).unwrap();
         assert_eq!(json["number"], 2701);
         assert_eq!(json["checkRuns"][0]["name"], "label");
+        assert_eq!(json["activity"][0]["url"], "https://gh/c/9");
+        assert!(json["activity"][1].get("url").is_none());
+        assert_eq!(json["reviewComments"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn line_comments_keep_their_file_line_and_outdated_state() {
+        let output = [
+            json!({"id": 2, "user": {"login": "rev"}, "path": "src/b.rs", "line": null, "original_line": 7,
+                   "created_at": "2026-10-30T16:00:00Z", "body": "gone", "html_url": "https://gh/c/2",
+                   "in_reply_to_id": 1}).to_string(),
+            "not json".to_owned(),
+            json!({"id": 1, "user": null, "path": "src/a.rs", "line": 12, "start_line": 10,
+                   "created_at": "2026-10-30T15:00:00Z", "body": "rename this"}).to_string(),
+        ]
+        .join("\n");
+        let comments = inline_comments(&output);
+        assert_eq!(comments.len(), 2);
+        let first = &comments[0];
+        assert_eq!(
+            (first.id, first.path.as_str(), first.line, first.start_line),
+            (1, "src/a.rs", Some(12), Some(10))
+        );
+        assert!(!first.outdated);
+        // A deleted account has no login; the comment still reads.
+        assert_eq!(first.author, "");
+        assert_eq!(first.url, None);
+        let second = &comments[1];
+        assert!(second.outdated);
+        assert_eq!(second.line, Some(7));
+        assert_eq!(second.reply_to, Some(1));
+        let json = serde_json::to_value(second).unwrap();
+        assert_eq!(json["replyTo"], 1);
+        assert_eq!(json["url"], "https://gh/c/2");
     }
 
     fn check(name: &str, status: &'static str) -> Check {

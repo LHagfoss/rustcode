@@ -3570,6 +3570,27 @@ export class MockEngine {
                 body: "Looks good so far.",
               },
             ],
+            reviewComments: [
+              {
+                id: 101,
+                author: "reviewer",
+                path: "apps/desktop/src/ui/Composer.tsx",
+                line: 42,
+                outdated: false,
+                at: new Date(minutes(35)).toISOString(),
+                body: "Restore the focus ring after sending.",
+                url: `https://github.com/LHagfoss/rustcode/pull/${params.number}#discussion_r101`,
+              },
+              {
+                id: 102,
+                author: "reviewer",
+                path: "apps/desktop/src/ui/Composer.tsx",
+                line: 18,
+                outdated: true,
+                at: new Date(minutes(38)).toISOString(),
+                body: "This import is unused.",
+              },
+            ],
           },
         };
       case "_rustcode/pulls/diff":
