@@ -243,7 +243,8 @@ where
                 let asked = params.get("protocolVersion").and_then(Value::as_str);
                 let version = asked
                     .filter(|asked| PROTOCOL_VERSIONS.contains(asked))
-                    .unwrap_or(PROTOCOL_VERSIONS[0]);
+                    .unwrap_or(PROTOCOL_VERSIONS[0])
+                    .to_owned();
                 let sender = sender.clone();
                 let forward = Arc::clone(&forward);
                 let identity = identity.clone();
