@@ -185,6 +185,75 @@ The app asks through `_rustcode/data/links/load` and
 `_rustcode/data/links/save` (`engine/src/acp/data.rs`); an engine without them
 answers `unknown method`, and the app keeps its local copy as before.
 
+## Thread mirror
+
+Beside the store, not in it: `~/.config/rustcode/mirror/` is this computer's
+own copy of the threads it reads from other environments (paired machines;
+`docs/terminology.md` › Environment = machine). The app already keeps a small
+copy in its web view's storage so an offline machine still draws
+(`docs/desktop.md` › Several machines); that copy is capped (200 threads per
+machine, transcripts of threads opened in the last 30 days, 2 MB in all) and a
+wiped web view or a reinstall takes it away. The mirror is the durable one.
+
+```text
+mirror/settings.json              the switch and the project opt-outs
+mirror/<machine id>/index.json    one entry per thread the machine listed
+mirror/<machine id>/threads/<id>.json   the transcript last read from it
+```
+
+- **The origin owns the thread.** The mirror is written only from what the
+  machine reported to this computer, never edited here, never sent back, and
+  read-only in the app (a mirrored thread opens like one on an offline machine:
+  *Runs on ‹environment›*, composer disabled). It never moves, changes or deletes
+  the original, and it never deletes a mirrored thread either: a thread the
+  machine stops listing (deleted there, or the machine wiped) stays.
+- **Conflict-free.** A machine is the only writer of its own folder, and writes
+  commute. An incoming row replaces the stored one only when it is at least as
+  new by the origin's own `updatedAt` (a tie breaks on the row's JSON, so the
+  order is total); an incoming transcript replaces the stored one only when its
+  `revision` (the time the app read it) is not older. Replaying a read, or
+  applying reads in any order, leaves the same files. Two machines never share a
+  folder, so the same thread id on two machines cannot collide.
+- **Incremental and throttled.** The app sends a machine's list at most every
+  five seconds while it changes (only while the machine answers: the rows of an
+  away machine are this computer's own copy, not something it said), and a
+  thread's transcript at most every two seconds while it changes. The engine
+  skips a row that did not change and a transcript whose sha256 fingerprint is
+  the stored one, so a repeated read writes nothing. A transcript over 32 MiB
+  is not mirrored, and the previous copy stays. Files are written to a
+  temporary file and renamed; an `index.json` that cannot be read is kept as
+  `index.json.broken` before the next write, so nothing is overwritten blind.
+- **What is in a transcript.** The conversation the app drew from the machine
+  (messages, tool calls with their output), without attachment bytes. It is not
+  the machine's `history.json` byte for byte; it is what a client can read over
+  the connection today (see "Not yet" below).
+- **Settings › Environments › Thread copies** holds the switch (on by default)
+  and **Projects left out**, one folder per line. A thread whose folder is
+  one of those, or inside one, is not copied (matched by path components,
+  case-insensitively). Turning the switch off stops new copies; what was
+  already copied stays and stays readable. Removing an environment forgets its
+  pairing and keeps its mirror (delete `mirror/<machine id>` to drop it).
+- **Metadata only is not promised here.** Unlike `data.sqlite`, the mirror holds
+  message text, because a copy of a conversation is the point. Treat the folder
+  as private as `threads/`.
+
+The app drives it through `_rustcode/mirror` on its own engine
+(`engine/src/acp/mirror.rs`, `apps/desktop/src/state/machineMirror.ts`), one
+method with an `action`: `status`, `setSettings` (`enabled`, `excludedProjects`),
+`putList` (`host`, `sessions`), `putTranscript` (`host`, `id`, `cwd`,
+`revision`, `transcript`), `list` (optional `host`) and `transcript` (`host`,
+`id`). A write while the switch is off is refused with "thread mirroring is
+off"; reads always work. An older engine answers `unknown method` and the app
+keeps its web-view copy as before.
+
+Not yet: replicating a machine's raw `history.json`, `performance.json` and
+usage rows (the remote protocol has no call that reads them; the mirror holds
+what `session/load` replays); mirroring from a computer that has no app or
+terminal client paired with the others (every computer mirrors the machines it
+is paired with, so a fleet where each pair is paired both ways holds every copy
+on every computer); a "Continue here as a fork" action on a mirrored thread;
+and a sidebar filter by environment.
+
 ## Command receipts
 
 An orchestration call that can start a thread or deliver a message

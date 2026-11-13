@@ -31,7 +31,7 @@ function SideChatField({ id }: { id: string }) {
     void runPrompt(id, text);
   };
   return (
-    <div className="shrink-0 border-border border-t p-2">
+    <div className="rule-t [--rc-rule-inset:0.5rem] shrink-0 p-2">
       <textarea
         ref={start}
         value={draft}
@@ -70,7 +70,7 @@ export function ThreadPeek() {
   if (!id) return <div className="flex-1" />;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-border border-b px-3">
+      <div className="rule-b [--rc-rule-inset:0.75rem] flex h-9 shrink-0 items-center gap-2 px-3">
         {sideChat && <MessageSquareQuote size={13} className="shrink-0 text-fg-muted" />}
         {session?.harness && <HarnessIcon id={session.harness} size={13} />}
         <span className="min-w-0 flex-1 truncate font-medium text-callout">

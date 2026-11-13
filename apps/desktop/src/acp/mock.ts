@@ -2108,6 +2108,8 @@ export class MockEngine {
   };
   /** The payload-capture switches (docs/data-store.md › Captured payloads), off as `config.toml` defaults them. */
   private payloadCapture = { providerPayloads: false, harnessRpcPayloads: false };
+  /** The thread mirror's switch and opt-outs (`engine/src/acp/mirror.rs`). */
+  private mirror = { enabled: true, excludedProjects: [] as string[] };
   /**
   /**
    * Remote access (docs/remote.md), as the engine's gateway reports it: a
@@ -3887,6 +3889,32 @@ export class MockEngine {
           harnessRpcPayloads: asked.harnessRpcPayloads,
         };
         return { ...this.payloadCapture };
+      }
+      case "_rustcode/mirror": {
+        // Only the switch and the opt-outs: the mock mirrors nothing, so the page reads "Nothing
+        // copied yet." (engine/src/acp/mirror.rs).
+        const status = () => ({ ...this.mirror, hosts: {} });
+        switch (params.action) {
+          case "setSettings":
+            if (typeof params.enabled === "boolean") this.mirror.enabled = params.enabled;
+            if (Array.isArray(params.excludedProjects)) {
+              this.mirror.excludedProjects = params.excludedProjects.filter(
+                (path): path is string => typeof path === "string",
+              );
+            }
+            return status();
+          case "status":
+            return status();
+          case "list":
+            return { enabled: this.mirror.enabled, hosts: {} };
+          case "transcript":
+            return { found: false };
+          default:
+            if (!this.mirror.enabled) {
+              throw Object.assign(new Error("thread mirroring is off"), { code: -32602 });
+            }
+            return { stored: 0, unchanged: 0, stale: 0, skipped: 0, excluded: 0 };
+        }
       }
       case "_rustcode/presence":
         return { enabled: this.presence, discordDetected: true };

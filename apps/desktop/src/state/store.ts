@@ -216,6 +216,7 @@ import {
 } from "./limitResume";
 import { newThreadAccountOn, type SignedOutLogins, signedOutFrom } from "./logins";
 import { loadTranscript, saveTranscript, threadFromTranscript } from "./machineCache";
+import { loadMirroredTranscript, mirrorTranscript, setMirrorRequest } from "./machineMirror";
 import {
   changesFor,
   forgetThreadOutbox,
@@ -1124,6 +1125,9 @@ function keepRemoteTranscript(key: string): void {
   const thread = get().threads[key];
   if (!thread?.loaded || thread.loading || !machineConnections.has(splitThreadKey(key).host)) return;
   saveTranscript(thread, key);
+  // The same read also goes to this computer's disk, where nothing ages out (docs/data-store.md ›
+  // Thread mirror).
+  mirrorTranscript(thread, key);
 }
 
 function watchRemoteTranscripts(next: AppState, prev: AppState): void {
@@ -1143,6 +1147,13 @@ let machineReset: (() => void) | null = null;
 export function connectionFor(host: string): AcpConnection | null {
   return host ? (machineConnections.get(host) ?? null) : connection;
 }
+
+// The thread mirror writes through this computer's own engine (`state/machineMirror.ts`).
+setMirrorRequest(async (params) => {
+  const engine = connectionFor("");
+  if (!engine) throw new Error("This computer's engine is not connected.");
+  return engine.request(Method.mirror, params as JsonObject, 15_000);
+});
 
 /** The same, from a thread key (`state/threadKeys.ts`). */
 export function connectionForThread(key: string): AcpConnection | null {
@@ -2871,6 +2882,22 @@ export function openThread(id: string): Promise<string | null> {
           [id]: { ...base, cwd: summary?.cwd || base.cwd, title: summary?.title ?? base.title },
         },
       }));
+      // Past what the web view's storage keeps (a transcript older than 30 days, a wiped web
+      // view), this computer's disk still has the last read (`state/machineMirror.ts`).
+      if (!cached) {
+        void loadMirroredTranscript(id).then((mirrored) => {
+          if (!mirrored || connectionForThread(id)) return;
+          const now = get().threads[id];
+          if (!now || now.loaded || now.items.length) return;
+          const copy = threadFromTranscript(mirrored);
+          set((s) => ({
+            threads: {
+              ...s.threads,
+              [id]: { ...copy, cwd: summary?.cwd || copy.cwd, title: summary?.title ?? copy.title },
+            },
+          }));
+        });
+      }
     }
     return Promise.resolve(null);
   }

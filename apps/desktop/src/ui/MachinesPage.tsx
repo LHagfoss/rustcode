@@ -67,6 +67,7 @@ import { DeviceGlyphIcon } from "./MachineGlyph";
 import { MachineIdentityEditor } from "./MachineProfile";
 import { Spinner } from "./primitives";
 import { Action, Chip, Group, Loading, Row } from "./settingsKit";
+import { ThreadMirrorGroup } from "./ThreadMirrorGroup";
 
 /** How often the page asks the shell where the environments stand. */
 const POLL_MS = 3000;
@@ -142,6 +143,8 @@ export function MachinesPage() {
           </Row>
         )}
       </Group>
+
+      {machines.length > 0 && <ThreadMirrorGroup />}
 
       <AddEnvironmentDialog open={addOpen} onOpenChange={setAddEnvironmentOpen} local={local} />
     </>

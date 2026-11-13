@@ -14,7 +14,9 @@ mod process;
 mod pty;
 mod service;
 mod smartui;
+mod system_setup;
 mod threads;
+mod update_log;
 mod updater;
 mod webview;
 
@@ -113,6 +115,8 @@ pub fn run() {
             service::server_service_status,
             service::server_service_install,
             service::server_link_path,
+            system_setup::system_setup_status,
+            system_setup::system_setup_run,
             diagnostics::resolve_binaries,
             diagnostics::logs_folder_open,
             diagnostics::diagnostics_save,
@@ -135,6 +139,9 @@ pub fn run() {
             // copy a service runs is refreshed here; the copies outside the app catch up with the
             // engine this build ships, which is what makes an update reach them (#3487).
             std::thread::spawn(service::catch_up_after_update);
+            // The per-OS setup steps (docs/system-setup.md), once for each version of the app.
+            let version = app.package_info().version.to_string();
+            std::thread::spawn(move || system_setup::run_after_update(&version));
             // Link previews cached by earlier runs: the expired and the oldest past the cap go.
             if let Ok(dir) = app.path().app_cache_dir() {
                 std::thread::spawn(move || links::sweep(&dir.join("links")));
