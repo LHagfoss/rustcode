@@ -309,11 +309,11 @@ export function Row({
 // ---------------------------------------------------------------- controls
 
 /**
- * The field shape a row's control takes: 32px high, `rounded-lg` and a step of
+ * The field shape a row's control takes: 28px high, `rounded-lg` and a step of
  * its own over the card, so it reads as a control and not as a block.
  */
 export const fieldClass =
-  "h-8 rounded-lg bg-fill px-3 text-callout text-fg placeholder:text-fg-faint hover:bg-fill-strong focus:bg-fill-strong";
+  "h-7 rounded-lg bg-fill px-3 text-callout text-fg placeholder:text-fg-faint hover:bg-fill-strong focus:bg-fill-strong";
 
 /**
  * A labelled action in a row: the quiet default (a translucent fill over the
@@ -339,7 +339,7 @@ export function Action({
       type="button"
       className={cx(
         "inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full font-medium whitespace-nowrap text-callout disabled:opacity-40",
-        size === "sm" ? "h-6 px-2" : "h-8 px-3",
+        size === "sm" ? "h-6 px-2" : "h-7 px-3",
         prominent
           ? "bg-fg text-bg enabled:hover:bg-fg/90 enabled:active:bg-fg/80"
           : danger
@@ -467,13 +467,13 @@ export function Choice<T extends string>({
       ref={group}
       role="radiogroup"
       aria-label={label}
-      className="relative inline-flex w-fit shrink-0 rounded-full bg-fill p-1"
+      className="relative inline-flex w-fit shrink-0 rounded-full bg-fill p-0.5"
     >
       {thumb && (
         <span
           aria-hidden
           className="absolute top-0 left-0 h-6 rounded-full bg-knob shadow-knob transition-[transform,width] duration-200 ease-snappy"
-          style={{ transform: `translate(${thumb.left}px, 4px)`, width: thumb.width }}
+          style={{ transform: `translate(${thumb.left}px, 2px)`, width: thumb.width }}
         />
       )}
       {options.map((o) => (

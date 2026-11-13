@@ -390,6 +390,7 @@ export function RightPanel() {
           role="dialog"
           aria-modal="true"
           aria-label="Side panel"
+          data-tab-free
           tabIndex={-1}
           onKeyDown={onSurfaceKey}
           onTransitionEnd={(e) => {

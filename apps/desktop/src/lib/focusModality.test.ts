@@ -124,6 +124,9 @@ test("Tab from fields respects the setting and dialog context", () => {
       expect(selector).not.toContain("input");
       return this.inDialog ? this : null;
     }
+    hasAttribute() {
+      return false;
+    }
   }
   globalThis.Element = FakeElement as unknown as typeof Element;
   try {
@@ -140,5 +143,104 @@ test("Tab from fields respects the setting and dialog context", () => {
     }
   } finally {
     globalThis.Element = originalElement;
+  }
+});
+
+describe("Tab in surfaces that are dialogs only for assistive tech", () => {
+  const originalElement = globalThis.Element;
+  // A minimal tree: `closest` walks up to the first ancestor whose tag the selector names.
+  class FakeElement extends EventTarget {
+    constructor(
+      readonly tag: string,
+      readonly parent: FakeElement | null = null,
+      readonly attrs: string[] = [],
+    ) {
+      super();
+    }
+    hasAttribute(name: string) {
+      return this.attrs.includes(name);
+    }
+    closest(selector: string): FakeElement | null {
+      const tags = selector.split(",").map((part) => part.trim());
+      for (let node: FakeElement | null = this; node; node = node.parent)
+        if (tags.includes(node.tag)) return node;
+      return null;
+    }
+  }
+
+  function tabIn(field: FakeElement, enabled: boolean) {
+    const target = new EventTarget();
+    const root = fakeRoot();
+    installFocusModality(root, target, () => enabled);
+    const event = Object.assign(new Event("keydown", { cancelable: true }), { key: "Tab" });
+    Object.defineProperty(event, "target", { value: field });
+    target.dispatchEvent(event);
+    return { blocked: event.defaultPrevented, keyboard: root.attrs.has(KEYBOARD_NAV) };
+  }
+
+  test("a tab-free dialog (Settings) honors the setting, in both states", () => {
+    globalThis.Element = FakeElement as unknown as typeof Element;
+    try {
+      const settings = new FakeElement('[role="dialog"]', null, ["data-tab-free"]);
+      const button = new FakeElement("button", settings);
+      expect(tabIn(button, false)).toEqual({ blocked: true, keyboard: false });
+      expect(tabIn(button, true)).toEqual({ blocked: false, keyboard: true });
+    } finally {
+      globalThis.Element = originalElement;
+    }
+  });
+
+  test("a form inside a tab-free dialog still lets Tab through", () => {
+    globalThis.Element = FakeElement as unknown as typeof Element;
+    try {
+      const settings = new FakeElement('[role="dialog"]', null, ["data-tab-free"]);
+      const form = new FakeElement("form", settings);
+      expect(tabIn(new FakeElement("input", form), false).blocked).toBe(false);
+    } finally {
+      globalThis.Element = originalElement;
+    }
+  });
+
+  test("an ordinary dialog and the plain app keep their behavior", () => {
+    globalThis.Element = FakeElement as unknown as typeof Element;
+    try {
+      const alert = new FakeElement('[role="alertdialog"]');
+      expect(tabIn(new FakeElement("button", alert), false).blocked).toBe(false);
+      expect(tabIn(new FakeElement("button"), false).blocked).toBe(true);
+      expect(tabIn(new FakeElement("button"), true).blocked).toBe(false);
+    } finally {
+      globalThis.Element = originalElement;
+    }
+  });
+});
+
+test("the setting persists and announces itself so frames re-read it", async () => {
+  const store = new Map<string, string>();
+  const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const originalWindow = (globalThis as { window?: unknown }).window;
+  const target = new EventTarget();
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    },
+  });
+  (globalThis as { window?: unknown }).window = target;
+  try {
+    const { setTabMovesFocus, tabMovesFocus, TAB_FOCUS_EVENT } = await import("./focusModality");
+    let announced = 0;
+    target.addEventListener(TAB_FOCUS_EVENT, () => announced++);
+    expect(tabMovesFocus()).toBe(false);
+    setTabMovesFocus(true);
+    expect(tabMovesFocus()).toBe(true);
+    setTabMovesFocus(false);
+    expect(tabMovesFocus()).toBe(false);
+    expect(announced).toBe(2);
+  } finally {
+    if (storageDescriptor) Object.defineProperty(globalThis, "localStorage", storageDescriptor);
+    else delete (globalThis as { localStorage?: unknown }).localStorage;
+    (globalThis as { window?: unknown }).window = originalWindow;
   }
 });
