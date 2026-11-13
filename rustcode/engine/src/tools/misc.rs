@@ -788,7 +788,7 @@ pub const THREAD_STATUS: Tool = Tool {
 
 pub const MERGE_WHEN_GREEN: Tool = Tool {
     name: crate::orchestration::MERGE_WHEN_GREEN,
-    description: "Pass number for this thread’s current-branch PR: after user approval returns immediately and wakes the thread with the merge result; end the turn instead of polling. Or pass session_id to wait for a delegate's pull request checks to pass, then squash-merge it and delete its branch, the way scripts/pr-merge.sh does: advisory portability jobs are ignored, a cancelled or superseded run does not block, a failing check stops it before anything merges (the failing names come back), and two quiet rounds catch a job that registers late. A pull request with no checks stops at once as no_checks instead of waiting. Returns merged, failing, closed, no_checks or pending. Waits at most 25 minutes per call; call again to keep waiting. The user approves it; nothing merges without that.",
+    description: "Squash-merge a PR and delete its branch after checks pass, with user approval. Pass number for this thread's current-branch PR: returns after approval and wakes this thread with the outcome; end the turn, do not poll. Or pass session_id for a delegate: waits up to timeout_ms (default/max 25 minutes). Advisory portability jobs and cancelled/superseded runs do not block; two quiet rounds catch late jobs. Failing checks stop the merge and report their names. Returns merged, failing, closed, no_checks or pending; no checks stops immediately.",
     arguments: r#"{"session_id": "the delegate whose PR should merge", "timeout_ms": 1500000}"#,
     handler: orchestration_unavailable,
     requires_confirmation: false,

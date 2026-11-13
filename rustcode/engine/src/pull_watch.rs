@@ -1316,9 +1316,18 @@ mod tests {
         )
     }
 
+    // These lifecycle tests start before CI settles. Already-green linking is
+    // covered separately by linking_after_checks_finish_reports_the_result_once.
     fn linked(store: &WatchStore, session: &str, cwd: &str, now: i64) -> Watch {
+        let pending = view(
+            "open",
+            "a1",
+            json!([check("test", "PENDING")]),
+            "MERGEABLE",
+            json!([]),
+        );
         store
-            .link(session, Path::new(cwd), "o/r", 7, &open(), now)
+            .link(session, Path::new(cwd), "o/r", 7, &pending, now)
             .unwrap()
     }
 
@@ -1360,7 +1369,7 @@ mod tests {
         assert_eq!(link.checked_at, Some(now));
         assert!(
             link.events.is_empty(),
-            "a link's first read reports nothing"
+            "a link with pending checks has no result to report yet"
         );
 
         // Another engine, or this one after a restart, reads the same link.
@@ -1502,7 +1511,14 @@ mod tests {
         watch.apply(&merged, now + 120);
         assert!(!watch.is_watching());
         assert_eq!(watch.stop_reason.as_deref(), Some("merged"));
-        assert_eq!(watch.pending()[0].kind, "closed");
+        assert_eq!(
+            watch
+                .pending()
+                .iter()
+                .map(|event| event.kind.as_str())
+                .collect::<Vec<_>>(),
+            ["checks_passed", "closed"]
+        );
         store.put(&watch).unwrap();
         assert!(store.due(now + 10 * INTERVAL_SECS).is_empty());
         assert!(store.stop("s1", 7, true).unwrap().is_some());
