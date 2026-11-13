@@ -124,9 +124,8 @@ export function AddHarnessForm({ onClose }: { onClose: () => void }) {
       <div>
         <div className="font-semibold text-body">Local ACP command</div>
         <p className="text-caption text-fg-muted">
-          For an agent that speaks the Agent Client Protocol over stdin and stdout. RustCode starts it
-          directly, with no shell, so <code className="font-mono">~</code>,{" "}
-          <code className="font-mono">$VAR</code> and quotes are passed as typed.
+          For an agent that speaks ACP over stdin and stdout. Started with no shell: ~, $VAR and quotes pass
+          as typed.
         </p>
       </div>
       <Field label="Name" error={shown.name}>

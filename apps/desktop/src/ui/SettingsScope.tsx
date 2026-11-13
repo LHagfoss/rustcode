@@ -48,8 +48,8 @@ export function SettingsScopeBar({ machineOnly = false }: { machineOnly?: boolea
           <div className="font-medium text-body text-fg">{machineOnly ? "Showing" : "Applying to"}</div>
           <div className="max-w-[70ch] text-callout text-fg-muted">
             {machineOnly
-              ? "These settings belong to the machine you pick. Credentials, accounts and paths stay on it."
-              : "Server settings on this page change on the machine you pick. App preferences stay on this computer."}
+              ? "These settings belong to the machine you pick."
+              : "Server settings change on the machine you pick. App preferences stay here."}
           </div>
         </div>
         <Select
@@ -71,8 +71,7 @@ export function SettingsScopeBar({ machineOnly = false }: { machineOnly?: boolea
       )}
       {shown && !shown.online && (
         <p className="m-0 text-caption text-warning">
-          {shown.name} is offline. Its last values are shown; it keeps them until it connects, and a change
-          here is not sent.
+          {shown.name} is offline. Its last values are shown, and a change here is not sent.
         </p>
       )}
     </div>

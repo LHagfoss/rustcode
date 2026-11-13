@@ -66,7 +66,8 @@ export function ShortcutsPage() {
     <>
       <Group
         title="Shortcuts"
-        footer="Click a key to change it, then press the new combination; Esc leaves it as it was. A shortcut needs a modifier unless it is a function key or one of the thread list's marking keys, which only fire while a thread row has the keyboard, and it may not take a key another command answers."
+        footer="Click a key to change it, then press the new combination. Esc leaves it as it was."
+        hint="A shortcut needs a modifier unless it is a function key or one of the thread list's marking keys, and it may not take a key another command answers."
       >
         {APP_COMMANDS.filter((command) => command.remappable).map((command) => (
           <ShortcutRow
@@ -90,10 +91,7 @@ export function ShortcutsPage() {
           />
         ))}
       </Group>
-      <Group
-        title="While typing"
-        footer="The message box and the approvals it shows keep these: they are not changed here."
-      >
+      <Group title="While typing" footer="The message box and approvals keep these; they cannot be changed.">
         {APP_COMMANDS.filter((command) => !command.remappable).map((command) => (
           <Row key={command.id} title={command.label}>
             <Kbd>{commandHint(command.binding, command)}</Kbd>

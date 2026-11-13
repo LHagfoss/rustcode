@@ -22,7 +22,7 @@
 // defaults" for everything on the page that changed (it disappears again as
 // the rows go back to their defaults).
 
-import { Check, ChevronDown, RotateCcw } from "lucide-react";
+import { Check, ChevronDown, Info, RotateCcw } from "lucide-react";
 import { Select as RadixSelect } from "radix-ui";
 import {
   type ButtonHTMLAttributes,
@@ -75,12 +75,15 @@ export function Group({
   title,
   children,
   footer,
+  hint,
   action,
   disabled,
 }: {
   title?: ReactNode;
   children: ReactNode;
   footer?: ReactNode;
+  /** What the one-line footer leaves out: a tip behind an info mark after the title. */
+  hint?: ReactNode;
   /** A control at the right of the title (a filter, "New…"). */
   action?: ReactNode;
   /** The group has no effect right now: its controls are disabled and it reads as off. */
@@ -92,7 +95,19 @@ export function Group({
       data-setting={typeof title === "string" ? title : undefined}
       aria-disabled={disabled || undefined}
     >
-      <SectionTitle title={title} action={action} />
+      <SectionTitle
+        title={
+          hint && title ? (
+            <>
+              {title}
+              <HintTip label={typeof title === "string" ? title : "this section"}>{hint}</HintTip>
+            </>
+          ) : (
+            title
+          )
+        }
+        action={action}
+      />
       <fieldset
         disabled={disabled}
         className={cx(
@@ -179,9 +194,28 @@ export function useRowResets(): RowResetsState {
   return useContext(RowResetsContext);
 }
 
+/**
+ * What a row's one short line leaves out, behind a small info mark after its title: it opens on
+ * hover or keyboard focus, so the row itself stays one line (docs/design.md › Settings section and row).
+ */
+export function HintTip({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <Tooltip label={children}>
+      <button
+        type="button"
+        aria-label={`More about ${label}`}
+        className="flex size-4 shrink-0 items-center justify-center rounded-full text-fg-faint hover:text-fg focus-visible:text-fg"
+      >
+        <Info size={12} />
+      </button>
+    </Tooltip>
+  );
+}
+
 export function Row({
   title,
   subtitle,
+  hint,
   status,
   badge,
   children,
@@ -190,7 +224,10 @@ export function Row({
   stacked = false,
 }: {
   title: ReactNode;
+  /** One short line (about 90 characters): what the row does that its title does not say. */
   subtitle?: ReactNode;
+  /** Anything longer a person may need: a tip behind an info mark after the title. */
+  hint?: ReactNode;
   /** A live value shown under the description (a path, why a control is off). */
   status?: ReactNode;
   /**
@@ -235,9 +272,12 @@ export function Row({
             reset && (stacked ? "pr-7" : "@max-[34rem]:pr-7"),
           )}
         >
-          <div className="flex min-h-5 items-center gap-1.5 font-medium text-body text-fg">{title}</div>
+          <div className="flex min-h-5 items-center gap-1.5 font-medium text-body text-fg">
+            {title}
+            {hint && <HintTip label={typeof title === "string" ? title : "this setting"}>{hint}</HintTip>}
+          </div>
           {subtitle && (
-            <div className="max-w-[70ch] pt-1 text-balance text-callout text-fg-muted leading-normal">
+            <div className="max-w-[90ch] pt-1 text-balance text-callout text-fg-muted leading-normal">
               {subtitle}
             </div>
           )}
