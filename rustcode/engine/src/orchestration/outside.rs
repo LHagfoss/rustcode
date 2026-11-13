@@ -162,6 +162,8 @@ pub fn implemented(tool: &str) -> bool {
         WHOAMI
             | LIST_SESSIONS
             | READ_SESSION
+            | SEARCH_SESSIONS
+            | LIST_PROJECTS
             | LIST_HARNESSES
             | LIST_MACHINES
             | THREAD_STATUS
@@ -631,7 +633,7 @@ impl Runner for EngineRunner {
             match tool {
                 // An outside agent has no project of its own: list everything,
                 // as far as the cross-project setting allows.
-                super::LIST_SESSIONS => {
+                super::LIST_SESSIONS | super::SEARCH_SESSIONS => {
                     if args.get("all_projects").is_none() {
                         args["all_projects"] = json!(true);
                     }
@@ -1213,6 +1215,22 @@ mod tests {
             assert!(required_scope(name).is_some(), "{name}");
         }
         assert_eq!(required_scope("not_a_tool"), None);
+    }
+
+    #[test]
+    fn discovery_tools_are_read_only_and_listed_for_every_level() {
+        for name in [super::super::SEARCH_SESSIONS, super::super::LIST_PROJECTS] {
+            assert_eq!(required_scope(name), Some(Scope::ReadOnly), "{name}");
+            assert!(implemented(name), "{name}");
+            assert!(!changes_things(name), "{name}");
+            let listed = tools_for(Scope::ReadOnly);
+            assert!(
+                listed.iter().any(|tool| tool["name"] == json!(name)),
+                "{name} is listed to Read-only"
+            );
+        }
+        // Interrupting needs a running thread's handle the engine alone lacks.
+        assert!(!implemented(super::super::INTERRUPT_SESSION));
     }
 
     #[test]
