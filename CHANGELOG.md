@@ -1,3 +1,30 @@
+## [v1.33.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.33.0) - 2026-11-13
+
+### Features
+- Show the model while a thread is running. (#3611)
+- Honor the Tab focus navigation setting from text fields. (#3612)
+- Polish Smart UI charts and controls and improve sidebar and project icon spacing. (#3613)
+- Ask about selected message text in a side chat and add its answer to the main thread draft. (#3614)
+- Scheduled and queued messages keep their attachments, and a thread past the thread-list cap keeps its scheduled messages and limit waits. (#3615)
+- Settings › Chat › Suggested next prompt: after a reply that offers a next step, the empty composer suggests the answer; Tab inserts it to edit, Esc dismisses it. (#3616)
+- Screen readers hear when the open thread finishes, asks a question, needs approval or fails, and the window title names the thread and its status. (#3617)
+- Pull requests on a GitHub Enterprise remote you have not signed in to now show the sign-in hint, and unsupported remotes list no pull requests instead of failing. (#3618)
+- Trashing a thread works on Linux and on a thread store on another macOS volume. (#3621)
+- Change a thread's project from the header or composer project picker, and add projects by dropping folders on the sidebar. (#3620)
+- Add selected pull request review feedback to a thread draft. (#3622)
+- Fix invoking skills by name and slash command across harnesses. (#3623)
+- Keep a Codex thread working until its own turn finishes. (#3626)
+- The terminal no longer freezes the app when a shell stops reading input, and the link preview cache stays bounded. (#3627)
+- The thread overview and compare cards no longer read the whole diff to count changes. (#3625)
+- Send one-way thread messages by default and identify their sender on remote clients. (#3630)
+- Let agents give their threads useful names while keeping names you choose. (#3628)
+- The `@` and `/` menus in the composer are more compact and rank the best match first. (#3631)
+- Settings pages are less wordy: descriptions are one line, with the detail in a tip. (#3632)
+- The model card now sets model, effort and account in one place, the + icon is crisp, and threads on another machine name it in the composer. (#3633)
+- Settings › Machines is now Settings › Environments, with live status and Reconnect on each row, one Add environment dialog (connect code, SSH, address) with steps and Try again, and a Run on selector for new threads that shows each environment's status and address. (#3634)
+- Every harness is now told which skills exist, and a skill turned off in Settings stays off for Claude Code and for resumed Gemini CLI, OpenCode and Pi threads. (#3635)
+- MCP Apps: a tool result's interactive view appears in the thread in an isolated frame, and its tool calls ask for approval. (#3636)
+- Smart UI views can lead with a headline number, quiet stats and a banded chart, and chat Markdown headings are bigger. (#3637)
 ## [v1.32.0](https://github.com/LHagfoss/rustcode/releases/tag/v1.32.0) - 2026-11-13
 
 ### Features
