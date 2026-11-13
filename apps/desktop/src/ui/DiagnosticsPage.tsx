@@ -247,12 +247,10 @@ export function DiagnosticsPage() {
     <>
       <Group
         title="Debug report"
-        footer={`The server, the system, the harnesses, the last ${REPORT_LOG_LINES} server log lines and recent events as Markdown. Tokens, API keys, email addresses and your home folder are taken out; read it before you post it.`}
+        footer="Tokens, API keys, email addresses and your home folder are taken out. Read it before you post it."
+        hint={`The server, the system, the harnesses, the last ${REPORT_LOG_LINES} server log lines and recent events, as Markdown.`}
       >
-        <Row
-          title="Copy debug report"
-          subtitle="Everything on this page in one block, to paste into a GitHub issue."
-        >
+        <Row title="Copy debug report" subtitle="This page in one block, to paste into a GitHub issue.">
           <Action onClick={() => void saveReport()}>
             <Download size={13} />
             Save…
@@ -272,7 +270,7 @@ export function DiagnosticsPage() {
               {SERVER_STATE_LABEL[state]}
             </>
           }
-          subtitle="The RustCode server (rustcode --acp) runs every thread. The app starts it again when it crashes."
+          subtitle="Runs every thread. The app starts it again when it crashes."
           status={detail ?? TRANSPORT_LABEL[transport ?? ""]}
         >
           {shell && (
@@ -313,7 +311,7 @@ export function DiagnosticsPage() {
         ) : (
           <Row
             title="Only the app sees the server's process"
-            subtitle="Its process ID, binary and exits are reported by the desktop app, not in the browser."
+            subtitle="Process ID, binary and exits show only in the desktop app."
           />
         )}
       </Group>
@@ -347,10 +345,7 @@ export function DiagnosticsPage() {
         />
       </Group>
 
-      <Group
-        title="Harnesses"
-        footer="What Settings › Harnesses last detected. The binary is where this app's PATH finds the command; the server may see a fuller PATH."
-      >
+      <Group title="Harnesses" footer="What Settings › Harnesses last detected, found on this app's PATH.">
         {harnesses.length ? (
           harnesses.map((h) => (
             <div key={h.id}>
@@ -428,7 +423,8 @@ function ServerLog() {
   return (
     <Group
       title="Server log"
-      footer={`The server's stderr since the app started (the last ${SERVER_LOG_LINES} lines). Each thread also logs its turns to its own logs/debug.log. Copy and Save keep only the lines shown, with secrets and your home folder taken out.`}
+      footer={`The server's stderr since the app started (the last ${SERVER_LOG_LINES} lines).`}
+      hint="Each thread also logs its turns to its own logs/debug.log. Copy and Save keep only the lines shown, with secrets and your home folder taken out."
     >
       <div className={cx("flex flex-wrap items-center gap-2", rowInset)}>
         <Select
@@ -512,7 +508,8 @@ function ThreadLogGroup() {
     <Group title="Thread log">
       <Row
         title="Open thread log"
-        subtitle="The open thread's logs/debug.log: each turn's rounds, tool calls, retries and errors. Every thread's menu in the sidebar has it too."
+        subtitle="The open thread's logs/debug.log: rounds, tool calls, retries and errors."
+        hint="Every thread's menu in the sidebar has it too."
         status={selected ? `${title || "New thread"} · ${selected}` : "Open a thread first."}
       >
         <Action

@@ -277,8 +277,9 @@ export function HeaderButtonsSetting() {
             ? undefined
             : () => setHeaderButtons([...DEFAULT_HEADER_BUTTONS])
         }
-        subtitle="Which buttons the thread header shows, and in what order. A button whose thread has nothing to show (no plan, no pull requests) still stays out of the way."
-        status={`Drag a row to move it, or press ${formatBinding("alt+up")} or ${formatBinding("alt+down")} on a focused row. Show and Hide work too.`}
+        subtitle="Which buttons the thread header shows, and in what order."
+        hint="A button with nothing to show (no plan, no pull requests) stays out of the way."
+        status={`Drag a row to move it, or press ${formatBinding("alt+up")} or ${formatBinding("alt+down")}.`}
       />
       <div className="@container px-4 pt-3 pb-4">
         <div className="grid grid-cols-1 gap-4 @min-[34rem]:grid-cols-2">

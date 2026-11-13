@@ -69,8 +69,7 @@ function SignIn({ harness }: { harness: Harness }) {
           className="elevated z-[60] flex w-[340px] flex-col gap-2 p-3 rc-in"
         >
           <p className="text-callout text-fg-muted">
-            {harness.name} signs in with its own login. Run this in a terminal; RustCode never sees the
-            credentials.
+            Run this in a terminal to sign in. RustCode never sees the credentials.
           </p>
           <div className="flex items-center gap-2 rounded-md bg-fill-subtle py-1 pr-1 pl-2">
             <code className="selectable flex-1 truncate font-mono text-callout" title={line}>
@@ -281,7 +280,7 @@ export function AccountsList({ harness }: { harness: Harness }) {
         </ul>
       ) : (
         <p className="text-caption text-fg-muted">
-          Runs on {harness.name}'s own sign-in. Add an account to choose between subscriptions.
+          Uses {harness.name}'s own sign-in. Add an account to switch subscriptions.
         </p>
       )}
       {adding ? (
