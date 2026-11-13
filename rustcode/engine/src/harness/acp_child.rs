@@ -14,7 +14,7 @@ use super::{HarnessModel, ResolvedHarness, process::HarnessProcess};
 use agent_client_protocol::schema::v1::{
     ContentBlock, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory,
-    SessionConfigSelectOptions, SessionUpdate, StopReason, TextContent,
+    SessionConfigSelectOptions, SessionUpdate, StopReason,
 };
 use serde_json::{Value, json};
 use std::path::Path;
