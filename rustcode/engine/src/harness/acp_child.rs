@@ -569,10 +569,11 @@ impl AcpAdapter {
             let mut state = lock(&self.state);
             state.prompted = true;
             // An agent with no client system prompt reads RustCode's setup text
-            // here instead: once, at the head of the first prompt. The user's
-            // own text is already recorded, so this never reaches history.
+            // here instead: once, at the head of the first prompt (after a
+            // leading slash command, which must stay first). The user's own
+            // text is already recorded, so this never reaches history.
             if let Some(reminder) = state.reminder.take() {
-                prompt.insert(0, ContentBlock::Text(TextContent::new(reminder)));
+                super::session::prepend_text(&mut prompt, reminder);
             }
         }
         let answer = self

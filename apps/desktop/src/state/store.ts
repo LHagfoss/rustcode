@@ -4315,6 +4315,7 @@ export async function steer(id: string, text: string, extras?: ComposeExtras): P
           images: conditions.images,
           builtin: conditions.builtin,
           cwd: thread?.cwd ?? "",
+          advertised: advertisedCommands(get(), id),
         })
       : undefined;
   try {
@@ -4835,6 +4836,7 @@ export async function runPrompt(
     images: acceptsImages(thread),
     builtin: harness?.builtin ?? true,
     cwd: thread?.cwd ?? "",
+    advertised: advertisedCommands(get(), id),
   });
   // A new prompt starts a new report, if it is one.
   if (get().report?.threadId === id) set({ report: null });
@@ -6999,6 +7001,24 @@ export function commandsFor(s: CommandsSource, threadId?: string | null): SlashC
     // Before the harnesses are listed the engine answers the thread, so its catalog applies.
     builtin: known?.builtin ?? (!s.harnesses || harness === undefined || harness === "rustcode"),
   });
+}
+
+/**
+ * The commands a thread's harness advertised itself: its session's own list, or before the session
+ * has advertised, the harness's last list. `promptBlocks` sends a catalog skill one of them names as
+ * the harness's own `/name` command.
+ */
+export function advertisedCommands(
+  s: Pick<
+    CommandsSource,
+    "threads" | "sessions" | "newThread" | "harnesses" | "harnessCommands" | "sessionCommands"
+  >,
+  threadId: string,
+): SlashCommand[] | undefined {
+  const own = s.sessionCommands[threadId];
+  if (own) return own;
+  const harness = harnessOf(s, threadId);
+  return harness ? s.harnessCommands[harness] : undefined;
 }
 
 /** How often the app asks for every plan while its window is visible. */

@@ -35,6 +35,7 @@ import { QUEUE_REASON } from "./queue";
 import {
   type AppState,
   addHarnessAccount,
+  advertisedCommands,
   agentHistory,
   answerConnectRequest,
   answerPermission,
@@ -6015,5 +6016,30 @@ describe("a thread whose record names another folder", () => {
     );
     expect(await openThread(target)).toBeNull();
     expect(transport.count(Method.sessionRepair)).toBe(0);
+  });
+});
+
+describe("advertisedCommands", () => {
+  const claude = (name: string) => ({
+    name,
+    description: "",
+    takesArguments: true,
+    report: false,
+    action: "execute",
+  });
+  const base = {
+    threads: { t1: { harness: { id: "claude-code" } } },
+    sessions: [],
+    newThread: null,
+    harnesses: null,
+    harnessCommands: { "claude-code": [claude("/remembered")] },
+    sessionCommands: {},
+  } as unknown as Parameters<typeof advertisedCommands>[0];
+
+  test("a thread's session list wins, else its harness's last list (#3604)", () => {
+    expect(advertisedCommands(base, "t1")?.map((c) => c.name)).toEqual(["/remembered"]);
+    const advertised = { ...base, sessionCommands: { t1: [claude("/deploy")] } };
+    expect(advertisedCommands(advertised, "t1")?.map((c) => c.name)).toEqual(["/deploy"]);
+    expect(advertisedCommands({ ...base, harnessCommands: {} }, "t1")).toBeUndefined();
   });
 });

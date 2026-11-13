@@ -64,6 +64,39 @@ describe("compose", () => {
     ]);
   });
 
+  test("a skill the harness advertises goes to it as its own slash command (#3604)", () => {
+    const skill = { ...command, name: "/deploy", action: "skill" };
+    const extras = { ...emptyExtras, command: skill };
+    const options = { images: false, cwd: "/p", builtin: false };
+    // Claude Code advertises its skills by name without a slash; letter case aside, it is the same.
+    const advertised = [{ ...command, name: "/Deploy", action: "execute" }];
+    expect(promptBlocks("to staging", extras, { ...options, advertised })).toEqual([
+      { type: "text", text: "/deploy to staging" },
+    ]);
+    expect(promptBlocks("", extras, { ...options, advertised })).toEqual([{ type: "text", text: "/deploy" }]);
+    // A harness that advertises other commands only, or none yet, is told in words.
+    expect(promptBlocks("to staging", extras, { ...options, advertised: [command] })).toEqual([
+      { type: "text", text: "Use the deploy skill. to staging" },
+    ]);
+    expect(promptBlocks("to staging", extras, options)).toEqual([
+      { type: "text", text: "Use the deploy skill. to staging" },
+    ]);
+  });
+
+  test("a typed /name that is no command of RustCode's reaches the harness as typed", () => {
+    for (const builtin of [true, false]) {
+      expect(promptBlocks("/deploy to staging", emptyExtras, { images: false, cwd: "/p", builtin })).toEqual([
+        { type: "text", text: "/deploy to staging" },
+      ]);
+    }
+  });
+
+  test("a skill named in words, without a slash, is passed through unchanged", () => {
+    expect(
+      promptBlocks("use the deploy skill to ship", emptyExtras, { images: false, cwd: "/p", builtin: false }),
+    ).toEqual([{ type: "text", text: "use the deploy skill to ship" }]);
+  });
+
   test("picking /state delivers a skill invocation on every harness", () => {
     const skill = { ...command, name: "/state", action: "skill" };
     const message = commandSubmission(skill);
