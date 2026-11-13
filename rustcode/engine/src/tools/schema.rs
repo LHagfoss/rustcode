@@ -2735,6 +2735,16 @@ pub(crate) fn runtime_reminder(instructions: &str) -> String {
     )
 }
 
+/// The current skills note alone, as the opening block of the first prompt after a harness without a
+/// client system prompt loaded a saved session: that session holds the setup text it was first sent,
+/// so a skill turned off since is only heard of here. Tagged like [`runtime_reminder`] so the engine
+/// drops the agent's echo of it.
+pub(crate) fn skills_reminder(note: &str) -> String {
+    format!(
+        "{RUNTIME_REMINDER_START}\nRustCode's current skills for this thread (replaces the Skills section of its setup instructions), not the user's message.\n\n{note}{RUNTIME_REMINDER_END}"
+    )
+}
+
 /// Smart UI for a harness that has no root prompt and no `use_skill`: the
 /// fence, when to write a view, the kit's names, and what the sandbox blocks.
 /// The format itself is `docs/smart-ui.md`.

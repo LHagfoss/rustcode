@@ -178,7 +178,7 @@ which RustCode shows as *server not running*.
     is remembered, and the next start asks again. Only a refusal, or a server
     that came back on the old engine, is remembered.
   - The unit runs another `rustcode`, and it is still the one **the app
-    installed the service with** (Settings › Machines › *Install server* writes
+    installed the service with** (Settings › Environments › *Install server* writes
     that program to `<config dir>/service/installed-by-app`; the app moved, or
     an AppImage's copy did): `rustcode server install` rewrites the definition to
     this app's engine, then the same `--when-idle` restart. A definition a
@@ -206,7 +206,7 @@ which RustCode shows as *server not running*.
   app runs the same `rustcode server install` with the `rustcode` the app
   itself runs, so a development build is refused there with the reason shown,
   and a server another process runs is never stopped while a turn is running —
-  `--yes` stays a decision for a terminal. Settings › Machines shows the
+  `--yes` stays a decision for a terminal. Settings › Environments shows the
   result on *This computer* as *Server: Installed · Running*, with **Install
   server** while it is not installed, and the `Gateway` line beneath it;
   Settings › Remote access shows the same and its version. Installed, the

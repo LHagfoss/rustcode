@@ -1,6 +1,6 @@
 import { formatBinding } from "../lib/keys";
 import { basename } from "../lib/paths";
-import { appPlatform, primaryModifier } from "../lib/platform";
+import { primaryModifier } from "../lib/platform";
 // The composer, after ContentView.swift's Composer: one glass box floating over
 // the transcript, holding the attachments, the field (with a slash-command token
 // in front of it; pasted links stay inline as text) and its foot: + on the left,
@@ -95,17 +95,7 @@ import { atToken, insertKeyword, insertRef, type MentionScope, rankFiles, SCOPES
 import { controlDisabledReason, defaultEffort, orderHarnesses, unavailableReason } from "../state/harness";
 import { usageOf } from "../state/harnessUsage";
 import { childAccountOn, type SignedOutLogins } from "../state/logins";
-import {
-  type MachineState,
-  machineGlyph,
-  machineName,
-  machineTint,
-  platformIcon,
-  selfName,
-  useLocalIdentity,
-  useMachineReconnecting,
-  useMachines,
-} from "../state/machines";
+import { useMachineReconnecting, useMachines } from "../state/machines";
 import {
   type MentionEntry,
   type MentionNode,
@@ -137,7 +127,6 @@ import {
   sendDecisionFor,
   setDraft,
   setExtras,
-  setNewThreadHost,
   setNewWorktree,
   setPermissionMode,
   setProjectCwd,
@@ -152,10 +141,11 @@ import {
   useThreadOffline,
 } from "../state/store";
 import { localId, shortAge, type ThreadState } from "../state/thread";
-import { LOCAL_HOST, splitThreadKey } from "../state/threadKeys";
+import { splitThreadKey } from "../state/threadKeys";
 import { UsageMeter } from "./ComposerUsage";
 import { CardMenuItem, CardPopover, menuKeys } from "./cardPopover";
 import { threadMachine } from "./composerFooterLayout";
+import { EnvironmentSelector } from "./EnvironmentSelector";
 import { overFolderDrop } from "./folderDropTarget";
 import { HarnessIcon } from "./HarnessIcon";
 import { openLightbox } from "./Lightbox";
@@ -1848,7 +1838,7 @@ export const Composer = memo(function Composer({
           what it says. */}
       <div className="rc-composer-footer relative z-0 mx-3 -mt-2 flex items-center gap-4 px-2 pt-[14px] pb-1.5 text-callout text-fg-muted">
         <div className="flex min-w-0 items-center gap-1">
-          {!thread && <RunOnMenu />}
+          {!thread && <EnvironmentSelector />}
           {thread && <ThreadMachineChip host={host} />}
           <FolderMenu thread={thread} cwd={cwd} host={host} />
           {!thread && !newThreadHost && <WorktreeToggle draft={draft} compact={compact} />}
@@ -2072,119 +2062,6 @@ function WorktreeToggle({ draft, compact }: { draft: string; compact?: boolean }
 }
 
 /**
- * **Run on**: the computer the next new thread runs on (docs/desktop.md › Several machines).
- * This computer first, then each paired machine in the order Settings › Machines lists them,
- * with the state of its connection. A machine that is away cannot start a thread, so its row
- * says "Offline" and stays disabled. Hidden until a second computer is paired: a picker with one
- * choice is noise. A thread that exists already has its machine, so this is the new-thread strip's
- * own control.
- */
-function RunOnMenu() {
-  const machines = useMachines((s) => s.machines);
-  const local = useLocalIdentity();
-  const platform = appPlatform();
-  const host = useApp((s) => s.newThreadHost);
-  if (!machines.length) return null;
-  const current = machines.find((machine) => machine.id === host);
-  const label = current ? machineName(current) : (local.displayName ?? selfName());
-  const row = (
-    id: string,
-    name: string,
-    state: MachineState,
-    selected: boolean,
-    glyph: ReturnType<typeof machineGlyph>,
-    tint: ReturnType<typeof machineTint>,
-    paused = false,
-  ) => {
-    const online = state === "connected" && !paused;
-    return (
-      <CardMenuItem
-        key={id || "local"}
-        role="menuitemradio"
-        aria-checked={selected}
-        disabled={!online}
-        onSelect={() => void setNewThreadHost(id)}
-        className={cx("gap-2", selected && "bg-fill-subtle", !online && "opacity-60")}
-      >
-        <span
-          aria-hidden
-          className={cx(
-            "shrink-0 text-[9px] leading-none",
-            online ? "text-success" : state === "needsPairing" ? "text-warn" : "text-fg-faint",
-          )}
-        >
-          {online ? "●" : state === "needsPairing" ? "⚠" : "○"}
-        </span>
-        <DeviceGlyphIcon glyph={glyph} tint={tint} size={14} />
-        <span className="min-w-0 flex-1 truncate text-body text-fg">{name}</span>
-        {!online && (
-          <span className="shrink-0 text-caption text-fg-faint">
-            {paused ? "Paused" : state === "needsPairing" ? "Revoked" : "Offline"}
-          </span>
-        )}
-        {selected && <Check size={13} className="shrink-0 text-fg-muted" />}
-      </CardMenuItem>
-    );
-  };
-  return (
-    <CardPopover
-      role="menu"
-      label="Run on"
-      tooltip={`Run on ${label}`}
-      onKeyDown={menuKeys}
-      side="top"
-      className="min-w-[220px]"
-      trigger={
-        <button
-          type="button"
-          aria-label={`Run on: ${label}`}
-          className={cx(
-            footerButton,
-            "min-w-0 shrink data-[state=open]:bg-fill disabled:hover:bg-transparent",
-          )}
-        >
-          <DeviceGlyphIcon
-            glyph={
-              current
-                ? machineGlyph(current)
-                : (local.icon ?? platformIcon(platform === "mac" ? "macos" : platform))
-            }
-            tint={current ? machineTint(current) : local.tint}
-            size={14}
-          />
-          <span className="min-w-0 max-w-[200px] truncate @max-lg/composer:max-w-[96px] @max-sm/composer:hidden">
-            {label}
-          </span>
-          <ChevronDown size={12} className="shrink-0 text-fg-faint" />
-        </button>
-      }
-    >
-      <div role="menu" aria-label="Run on">
-        {row(
-          LOCAL_HOST,
-          local.displayName ?? selfName(),
-          "connected",
-          !host,
-          local.icon ?? platformIcon(platform === "mac" ? "macos" : platform),
-          local.tint,
-        )}
-        {machines.map((machine) =>
-          row(
-            machine.id,
-            machineName(machine),
-            machine.state,
-            machine.id === host,
-            machineGlyph(machine),
-            machineTint(machine),
-            machine.paused === true,
-          ),
-        )}
-      </div>
-    </CardPopover>
-  );
-}
-
-/**
  * Where an open thread runs, when that is a paired machine: its glyph and name before the folder,
  * a quiet label rather than a button (the machine is fixed once a thread exists). A thread on this
  * computer shows nothing, as in the sidebar. The name is the first label to give way under a
@@ -2215,6 +2092,7 @@ function ThreadMachineChip({ host }: { host: string }) {
   );
 }
 
+/**
 /**
  * The folder button under the composer: the project picker (ui/ProjectPicker.tsx), which starts a
  * new thread in a project or moves the open thread to another one.

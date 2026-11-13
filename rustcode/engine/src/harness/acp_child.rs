@@ -507,6 +507,16 @@ impl AcpAdapter {
                 let reminder = crate::tools::schema::runtime_reminder(&instructions);
                 state.echo_reminder = Some(reminder.clone());
                 state.reminder = Some(reminder);
+            } else if !created && !takes_system_prompt {
+                // A loaded session holds the setup text it was first sent, with
+                // the skills note of that day: a skill turned off since would
+                // stay on for it. The current note follows once, on the first
+                // prompt of this process, so a toggle reaches the thread.
+                if let Some(note) = options.skills_note.as_deref() {
+                    let reminder = crate::tools::schema::skills_reminder(note);
+                    state.echo_reminder = Some(reminder.clone());
+                    state.reminder = Some(reminder);
+                }
             }
         }
         let adapter = Self {

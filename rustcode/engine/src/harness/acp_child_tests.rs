@@ -1382,6 +1382,65 @@ async fn the_agents_echo_of_the_setup_block_is_not_a_user_message() {
     );
 }
 
+/// A harness with no client system prompt (pi-acp, OpenCode) that loads a saved
+/// session holds the setup text it was first sent, so a skill turned off since
+/// is only heard of in the first prompt of the new process (#3604).
+#[tokio::test]
+async fn a_resumed_session_without_a_system_prompt_gets_the_current_skills_note() {
+    let note = "# Skills\nTurned off in RustCode, so do not use even if your own settings list them: deploy.\n\n";
+    let fake = Fake {
+        system_prompt: false,
+        echo: false,
+    };
+    let (thread, mut seen) = start_with(
+        fake,
+        Some("allow"),
+        StartOptions {
+            resume: Some("child-1".into()),
+            skills_note: Some(note.to_owned()),
+            ..StartOptions::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        thread.session.prompt(text("first")).await,
+        Ok(StopReason::EndTurn)
+    );
+    assert_eq!(
+        thread.session.prompt(text("second")).await,
+        Ok(StopReason::EndTurn)
+    );
+    let sent = prompts(&mut seen);
+    let first = sent[0][0]["text"].as_str().unwrap();
+    assert!(first.starts_with("<rustcode_runtime>"), "{first}");
+    assert!(first.contains(note), "{first}");
+    assert!(
+        !first.contains("running in RustCode through"),
+        "the setup text is already in the loaded session: {first}"
+    );
+    assert_eq!(sent[0][1]["text"], "first");
+    assert_eq!(sent[1].len(), 1, "once per process, not on every prompt");
+
+    // No skills at all: nothing to add to the loaded session.
+    let (thread, mut seen) = start_with(
+        Fake {
+            system_prompt: false,
+            echo: false,
+        },
+        Some("allow"),
+        StartOptions {
+            resume: Some("child-1".into()),
+            ..StartOptions::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        thread.session.prompt(text("first")).await,
+        Ok(StopReason::EndTurn)
+    );
+    assert_eq!(prompts(&mut seen)[0].len(), 1);
+}
+
 #[test]
 fn the_echo_filter_takes_the_block_and_keeps_the_user_text() {
     let whole = crate::tools::schema::runtime_reminder("setup text");

@@ -229,38 +229,17 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     keywords: "not shared held back refused limit 32 most recently used why",
   },
 
-  // ------------------------------------------------------------ Machines
+  // ------------------------------------------------------------ Environments
   {
     section: "machines",
-    title: "Machines",
+    title: "Environments",
     keywords:
-      "this computer this mac this pc local server runs here install background service route lan netbird tailscale vpn unencrypted encrypted connected offline retrying pairing expired revoked last seen threads remove forget pair again version update",
+      "machines machine computers other computer add environment pair pairing connect code ssh address tailscale netbird zerotier vpn bonjour discover found nearby network run on this computer this mac this pc local server runs here install background service route lan unencrypted encrypted online offline connecting reconnect retrying expired revoked last seen threads rename remove forget pair again version update",
   },
   {
     section: "machines",
-    title: "No other computers yet",
-    keywords: "add machine computer remote other pair empty",
-  },
-  {
-    section: "machines",
-    title: "Add machine",
-    keywords: "add machine pair pairing computer other network nearby",
-  },
-  {
-    section: "machines",
-    title: "Machines found",
-    keywords:
-      "bonjour discover find look network lan nearby machine add netbird tailscale zerotier overlay vpn saved version update older",
-  },
-  {
-    section: "machines",
-    title: "Enter an address",
-    keywords: "address ip host port tailscale vpn overlay add machine connect ask lan unencrypted encrypted",
-  },
-  {
-    section: "machines",
-    title: "Enter the code",
-    keywords: "code eight digit pairing digits type pair machine accept",
+    title: "No other environments yet",
+    keywords: "add environment machine computer remote other pair empty",
   },
 
   // ------------------------------------------------------------ Appearance
